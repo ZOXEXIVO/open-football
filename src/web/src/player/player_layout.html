@@ -14,7 +14,7 @@
         <i class="fa fa-{% if is_on_watchlist %}minus{% else %}plus{% endif %}"></i>
     </button>
     <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}" data-club-id="{{ club_id }}" data-is-loan="{{ is_on_loan }}" data-is-injured="{{ is_injured }}" data-is-unhappy="{{ is_unhappy }}">
-        <button class="fm-tabbar-dropdown-toggle" onclick="var p=this.parentElement;p.classList.toggle('fm-dd-open');if(p.classList.contains('fm-dd-open')){var t=this.closest('.fm-tabbar').getBoundingClientRect();var m=document.getElementById('player-edit-menu');m.style.top=t.bottom+'px';if(window.innerWidth>=576){var b=this.getBoundingClientRect();m.style.right=(window.innerWidth-b.right)+'px';m.style.left='';m.style.width=''}else{m.style.right='';m.style.left='0';m.style.width='100%'}}">
+        <button class="fm-tabbar-dropdown-toggle" id="player-edit-toggle">
             {{ i18n.t("edit") }} <span class="fm-dd-arrow">&#9660;</span>
         </button>
         <div class="fm-tabbar-dropdown-menu" id="player-edit-menu"></div>
@@ -34,6 +34,48 @@
     var playerId = dd.dataset.playerId;
     var clubId = dd.dataset.clubId;
     var menu = document.getElementById('player-edit-menu');
+    var toggle = document.getElementById('player-edit-toggle');
+    var backdrop = null;
+
+    function isMobile() { return window.innerWidth < 576; }
+
+    function positionMenu() {
+        if (isMobile()) {
+            // Bottom sheet — CSS drives the layout, clear desktop inline styles.
+            menu.style.top = '';
+            menu.style.right = '';
+            menu.style.left = '';
+            menu.style.width = '';
+        } else {
+            var t = toggle.closest('.fm-tabbar').getBoundingClientRect();
+            var b = toggle.getBoundingClientRect();
+            menu.style.top = t.bottom + 'px';
+            menu.style.right = (window.innerWidth - b.right) + 'px';
+            menu.style.left = '';
+            menu.style.width = '';
+        }
+    }
+
+    function showBackdrop() {
+        if (!isMobile()) return;
+        if (!backdrop) {
+            backdrop = document.createElement('div');
+            backdrop.className = 'fm-dd-backdrop';
+            backdrop.addEventListener('click', closeMenu);
+            document.body.appendChild(backdrop);
+        }
+        backdrop.classList.add('show');
+    }
+
+    function hideBackdrop() { if (backdrop) backdrop.classList.remove('show'); }
+
+    function closeMenu() { dd.classList.remove('fm-dd-open'); hideBackdrop(); }
+
+    toggle.addEventListener('click', function() {
+        var opening = !dd.classList.contains('fm-dd-open');
+        if (opening) { dd.classList.add('fm-dd-open'); positionMenu(); showBackdrop(); }
+        else closeMenu();
+    });
 
     // Watchlist toggle — reuses /api/watchlist/{add,remove}. Initial state
     // comes from the server-rendered data-in attribute; click swaps + <-> -.
@@ -87,7 +129,7 @@
 
     // Close dropdown on outside click
     document.addEventListener('click', function(e) {
-        if (!dd.contains(e.target)) dd.classList.remove('fm-dd-open');
+        if (!dd.contains(e.target) && !(backdrop && backdrop.contains(e.target))) closeMenu();
     });
 
     // Disable edit menu during game processing
@@ -97,7 +139,7 @@
         if (!processBtn || !toggle) return;
         var processing = processBtn.classList.contains('fm-processing');
         toggle.disabled = processing;
-        if (processing) dd.classList.remove('fm-dd-open');
+        if (processing) closeMenu();
     }
     var processBtn = document.getElementById('process-btn');
     if (processBtn) {
@@ -136,7 +178,7 @@
     menu.innerHTML = groups.join(sep);
 
     window.playerMoveOnFree = function(pid) {
-        dd.classList.remove('fm-dd-open');
+        closeMenu();
         OpenFootballDialog.confirm({
             title: '{{ i18n.t("move_on_free") }}',
             message: '{{ i18n.t("move_on_free_confirm") }}',
@@ -150,19 +192,19 @@
     };
 
     window.playerClearUnhappy = function(pid) {
-        dd.classList.remove('fm-dd-open');
+        closeMenu();
         fetch('/api/players/' + pid + '/clear-unhappy', { method: 'POST' })
             .then(function() { refreshContent(); });
     };
 
     window.playerClearInjury = function(pid) {
-        dd.classList.remove('fm-dd-open');
+        closeMenu();
         fetch('/api/players/' + pid + '/clear-injury', { method: 'POST' })
             .then(function() { refreshContent(); });
     };
 
     window.playerCancelLoan = function(pid) {
-        dd.classList.remove('fm-dd-open');
+        closeMenu();
         OpenFootballDialog.confirm({
             title: '{{ i18n.t("cancel_loan") }}',
             message: '{{ i18n.t("cancel_loan_confirm") }}',
@@ -176,7 +218,7 @@
     };
 
     window.playerTransfer = function(pid) {
-        dd.classList.remove('fm-dd-open');
+        closeMenu();
         var fields = [
             {
                 name: 'to_club_id', label: '{{ i18n.t("destination_club") }}', type: 'autocomplete',
@@ -203,7 +245,7 @@
     };
 
     window.playerLoan = function(pid) {
-        dd.classList.remove('fm-dd-open');
+        closeMenu();
         OpenFootballDialog.open({
             title: '{{ i18n.t("loan_player") }}',
             fields: [

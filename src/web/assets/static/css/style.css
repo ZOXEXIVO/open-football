@@ -5614,12 +5614,23 @@ a:link, a:visited, a:hover, a:active {
 
     .fm-dd-open .fm-tabbar-dropdown-menu {
         display: block;
+        position: fixed;
         left: 0;
         right: 0;
-        min-width: 0;
+        top: auto;
+        bottom: 0;
         width: 100%;
-        border-left: none;
-        border-right: none;
+        min-width: 0;
+        border: none;
+        border-top: 1px solid var(--header-border, #e0e3e6);
+        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
+        padding: 6px 0 calc(6px + env(safe-area-inset-bottom, 0px));
+        z-index: 1001;
+    }
+
+    .fm-tabbar-dropdown-menu button {
+        padding: 14px 18px;
+        font-size: 12px;
     }
 
     .fm-tabbar-dropdown-toggle {
@@ -6147,6 +6158,18 @@ a:link, a:visited, a:hover, a:active {
     height: 1px;
     background: var(--header-border, #e0e3e6);
     margin: 4px 0;
+}
+
+.fm-dd-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 1000;
+}
+
+.fm-dd-backdrop.show {
+    display: block;
 }
 
 /* ============================================
