@@ -39,6 +39,7 @@ pub struct PlayerDecisionsTemplate {
     pub is_on_loan: bool,
     pub is_injured: bool,
     pub is_unhappy: bool,
+    pub is_on_watchlist: bool,
     pub decisions: Vec<PlayerDecisionItem>,
 }
 
@@ -167,6 +168,7 @@ pub async fn player_decisions_action(
         is_on_loan: player.is_on_loan(),
         is_injured: player.player_attributes.is_injured,
         is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
+        is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         decisions,
     }.into_response())
 }

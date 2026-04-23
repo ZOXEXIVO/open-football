@@ -43,7 +43,6 @@ pub struct TeamGetTemplate {
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
     pub players: Vec<TeamPlayer>,
-    pub watchlist_ids: Vec<u32>,
 }
 
 pub struct TeamPlayer {
@@ -245,7 +244,6 @@ pub async fn team_get_action(
     let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main);
     let title = team.name.clone();
 
-    let watchlist_ids = simulator_data.watchlist.clone();
     let league_title = league.map(|l| views::league_display_name(l, &i18n, simulator_data)).unwrap_or_default();
 
     Ok(TeamGetTemplate {
@@ -267,7 +265,6 @@ pub async fn team_get_action(
         show_finances_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::B,
         show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
         players,
-        watchlist_ids,
     })
 }
 

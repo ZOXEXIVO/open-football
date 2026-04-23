@@ -108,6 +108,10 @@ impl CountryResult {
                     }
                 }
             }
+            // A freshly-released player is no longer a transfer target at his
+            // old club, and he cannot be on any other club's loan-out list —
+            // drop shortlist, scouting, and loan-out entries everywhere.
+            PipelineProcessor::clear_player_interest(country, player_id);
         }
 
         if candidates.is_empty() {

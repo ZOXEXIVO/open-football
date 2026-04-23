@@ -54,6 +54,7 @@ pub struct PlayerGetTemplate {
     pub is_on_loan: bool,
     pub is_injured: bool,
     pub is_unhappy: bool,
+    pub is_on_watchlist: bool,
     pub debug: Option<PlayerDebugDto>,
 }
 
@@ -370,6 +371,7 @@ pub async fn player_get_action(
         let is_on_loan = player.is_on_loan();
         let is_injured = player.player_attributes.is_injured;
         let is_unhappy = player.statuses.get().contains(&PlayerStatusType::Unh);
+        let is_on_watchlist = simulator_data.watchlist.contains(&player.id);
         let debug = if debug_enabled { Some(build_debug_dto(player)) } else { None };
 
         return Ok(PlayerGetTemplate {
@@ -400,6 +402,7 @@ pub async fn player_get_action(
             is_on_loan,
             is_injured,
             is_unhappy,
+            is_on_watchlist,
             debug,
         }.into_response());
     }
@@ -473,6 +476,7 @@ pub async fn player_get_action(
         is_on_loan: false,
         is_injured: false,
         is_unhappy: false,
+        is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         debug,
     }.into_response())
 }

@@ -710,6 +710,10 @@ impl PipelineProcessor {
 
             // Staff recommendations
             plan.staff_recommendations.retain(|r| r.player_id != player_id);
+
+            // Loan-out candidates: a free-agent / moved player is no longer
+            // at this club's disposal to be loaned out.
+            plan.loan_out_candidates.retain(|c| c.player_id != player_id);
         }
     }
 

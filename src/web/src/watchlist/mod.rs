@@ -8,9 +8,11 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use core::utils::{DateUtils, FormattingUtils};
+use chrono::NaiveDate;
 use core::Player;
 use core::PlayerPositionType;
 use core::PlayerStatusType;
+use core::SimulatorData;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -88,84 +90,42 @@ pub async fn watchlist_page_action(
         .watchlist
         .iter()
         .filter_map(|&player_id| {
-            // Try active player first, then retired
             if let Some((player, team)) = simulator_data.player_with_team(player_id) {
-                let (country_code, country_name, country_slug) = simulator_data.country(player.country_id)
-                    .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
-                    .or_else(|| simulator_data.country_info.get(&player.country_id)
-                        .map(|i| (i.code.clone(), i.name.clone(), i.slug.clone())))
-                    .unwrap_or_default();
-                let position = player.positions.display_positions_compact();
                 let league = team.league_id.and_then(|id| simulator_data.league(id));
                 let head_coach = team.staffs.head_coach();
-
                 Some(WatchlistPlayerDto {
-                    id: player.id,
-                    slug: player.slug(),
-                    first_name: player.full_name.display_first_name().to_string(),
-                    last_name: player.full_name.display_last_name().to_string(),
-                    position,
-                    position_sort: player.position(),
-                    country_code,
-                    country_name,
-                    country_slug,
-                    age: DateUtils::age(player.birth_date, now),
-                    current_ability: get_current_ability_stars(player),
                     potential_ability: get_potential_ability_stars_by_staff(
                         player,
                         head_coach.staff_attributes.knowledge.judging_player_potential,
                         head_coach.id,
                     ),
-                    conditions: get_conditions(player),
                     team_name: team.name.clone(),
                     team_slug: team.slug.clone(),
                     league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
                     league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
-                    played: player.statistics.played,
-                    played_subs: player.statistics.played_subs,
                     value: FormattingUtils::format_money(player.value(
                         now,
                         league.map(|l| l.reputation).unwrap_or(0),
                         team.reputation.world,
                     )),
-                    injured: player.player_attributes.is_injured,
                     unhappy: !player.happiness.is_happy(),
                     transfer_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
-                    retired: false,
+                    ..base_watchlist_dto(player, simulator_data, now)
                 })
             } else if let Some(player) = simulator_data.retired_player(player_id) {
-                let (country_code, country_name, country_slug) = simulator_data.country(player.country_id)
-                    .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
-                    .or_else(|| simulator_data.country_info.get(&player.country_id)
-                        .map(|i| (i.code.clone(), i.name.clone(), i.slug.clone())))
-                    .unwrap_or_default();
-                let position = player.positions.display_positions_compact();
-
                 Some(WatchlistPlayerDto {
-                    id: player.id,
-                    slug: player.slug(),
-                    first_name: player.full_name.display_first_name().to_string(),
-                    last_name: player.full_name.display_last_name().to_string(),
-                    position,
-                    position_sort: player.position(),
-                    country_code,
-                    country_name,
-                    country_slug,
-                    age: DateUtils::age(player.birth_date, now),
-                    current_ability: get_current_ability_stars(player),
-                    potential_ability: get_potential_ability_stars(player),
                     conditions: 0,
                     team_name: i18n.t("retired").to_string(),
-                    team_slug: String::new(),
-                    league_name: String::new(),
-                    league_slug: String::new(),
-                    played: player.statistics.played,
-                    played_subs: player.statistics.played_subs,
-                    value: "-".to_string(),
-                    injured: false,
-                    unhappy: false,
-                    transfer_listed: false,
                     retired: true,
+                    ..base_watchlist_dto(player, simulator_data, now)
+                })
+            } else if let Some(player) = simulator_data.free_agents.iter().find(|p| p.id == player_id) {
+                // Player was released to the global free-agent pool (via the
+                // "move to free agent" action) — no team, not retired. Without
+                // this branch the watchlist silently drops him on next render.
+                Some(WatchlistPlayerDto {
+                    team_name: i18n.t("free_agent").to_string(),
+                    ..base_watchlist_dto(player, simulator_data, now)
                 })
             } else {
                 None
@@ -235,6 +195,52 @@ pub async fn watchlist_remove_action(
     }
 
     StatusCode::OK
+}
+
+/// DTO filled from fields that don't depend on the player's current team.
+/// Caller overrides team/league/value/potential/etc via struct-update syntax.
+fn base_watchlist_dto(
+    player: &Player,
+    simulator_data: &SimulatorData,
+    now: NaiveDate,
+) -> WatchlistPlayerDto {
+    let (country_code, country_name, country_slug) = simulator_data
+        .country(player.country_id)
+        .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
+        .or_else(|| {
+            simulator_data
+                .country_info
+                .get(&player.country_id)
+                .map(|i| (i.code.clone(), i.name.clone(), i.slug.clone()))
+        })
+        .unwrap_or_default();
+
+    WatchlistPlayerDto {
+        id: player.id,
+        slug: player.slug(),
+        first_name: player.full_name.display_first_name().to_string(),
+        last_name: player.full_name.display_last_name().to_string(),
+        position: player.positions.display_positions_compact(),
+        position_sort: player.position(),
+        country_code,
+        country_name,
+        country_slug,
+        age: DateUtils::age(player.birth_date, now),
+        current_ability: get_current_ability_stars(player),
+        potential_ability: get_potential_ability_stars(player),
+        conditions: get_conditions(player),
+        team_name: String::new(),
+        team_slug: String::new(),
+        league_name: String::new(),
+        league_slug: String::new(),
+        played: player.statistics.played,
+        played_subs: player.statistics.played_subs,
+        value: "-".to_string(),
+        injured: player.player_attributes.is_injured,
+        unhappy: false,
+        transfer_listed: false,
+        retired: false,
+    }
 }
 
 fn get_conditions(player: &Player) -> u8 {

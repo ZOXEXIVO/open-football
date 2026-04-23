@@ -26,7 +26,7 @@
             </thead>
             <tbody>
                 {% for player in players %}
-                <tr data-player-id="{{ player.id }}" data-in-watchlist="{% if watchlist_ids.contains(&player.id) %}true{% else %}false{% endif %}"{% if player.is_loan %} class="sq-loan-in"{% endif %}{% if player.is_loaned_out %} class="sq-loan-out"{% endif %}>
+                <tr data-player-id="{{ player.id }}"{% if player.is_loan %} class="sq-loan-in"{% endif %}{% if player.is_loaned_out %} class="sq-loan-out"{% endif %}>
                     <td class="sq-inf">
                         <div class="fm-badge-deck">
                             {% if player.injured %}
@@ -88,85 +88,4 @@
         </table>
     </section>
 </div>
-
-<div id="fm-ctx-menu" class="fm-ctx-menu" style="display:none;">
-    <div id="fm-ctx-add" class="fm-ctx-item"><i class="fa fa-eye"></i> {{ i18n.t("add_to_watchlist") }}</div>
-    <div id="fm-ctx-remove" class="fm-ctx-item"><i class="fa fa-eye-slash"></i> {{ i18n.t("remove_from_watchlist") }}</div>
-</div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-(function() {
-    var menu = document.getElementById('fm-ctx-menu');
-    var addItem = document.getElementById('fm-ctx-add');
-    var removeItem = document.getElementById('fm-ctx-remove');
-    var currentRow = null;
-    var longPressTimer = null;
-    var LONG_PRESS_MS = 500;
-
-    function showMenu(row, pageX, pageY) {
-        currentRow = row;
-        var inWatchlist = row.dataset.inWatchlist === 'true';
-        addItem.style.display = inWatchlist ? 'none' : '';
-        removeItem.style.display = inWatchlist ? '' : 'none';
-        menu.style.left = pageX + 'px';
-        menu.style.top = pageY + 'px';
-        menu.style.display = 'block';
-    }
-
-    function hideMenu() {
-        menu.style.display = 'none';
-    }
-
-    // Desktop: right-click
-    document.querySelector('.fm-squad tbody').addEventListener('contextmenu', function(e) {
-        var row = e.target.closest('tr[data-player-id]');
-        if (!row) return;
-        e.preventDefault();
-        showMenu(row, e.pageX, e.pageY);
-    });
-
-    // Touch: long-press
-    document.querySelector('.fm-squad tbody').addEventListener('touchstart', function(e) {
-        var row = e.target.closest('tr[data-player-id]');
-        if (!row) return;
-        var touch = e.touches[0];
-        var px = touch.pageX, py = touch.pageY;
-        longPressTimer = setTimeout(function() {
-            longPressTimer = null;
-            e.preventDefault();
-            showMenu(row, px, py);
-        }, LONG_PRESS_MS);
-    }, { passive: false });
-
-    document.querySelector('.fm-squad tbody').addEventListener('touchmove', function() {
-        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-    });
-
-    document.querySelector('.fm-squad tbody').addEventListener('touchend', function() {
-        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-    });
-
-    document.addEventListener('click', hideMenu);
-    document.addEventListener('touchstart', function(e) {
-        if (!menu.contains(e.target)) hideMenu();
-    });
-
-    addItem.addEventListener('click', function(e) {
-        e.stopPropagation();
-        if (!currentRow) return;
-        fetch('/api/watchlist/add/' + currentRow.dataset.playerId, { method: 'POST' })
-            .then(function() { location.reload(); });
-    });
-
-    removeItem.addEventListener('click', function(e) {
-        e.stopPropagation();
-        if (!currentRow) return;
-        fetch('/api/watchlist/remove/' + currentRow.dataset.playerId, { method: 'POST' })
-            .then(function() { location.reload(); });
-    });
-
-})();
-</script>
 {% endblock %}

@@ -10,6 +10,9 @@
     <a class="fm-tab{% if active_tab == "events" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/events">{{ i18n.t("events") }}</a>
     <a class="fm-tab{% if active_tab == "matches" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/matches">{{ i18n.t("matches") }}</a>
     <a class="fm-tab{% if active_tab == "history" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/history">{{ i18n.t("history") }}</a>
+    <button type="button" id="player-watchlist-toggle" class="fm-watchlist-toggle" data-player-id="{{ player_id }}" data-in="{% if is_on_watchlist %}true{% else %}false{% endif %}" aria-pressed="{% if is_on_watchlist %}true{% else %}false{% endif %}" aria-label="{% if is_on_watchlist %}{{ i18n.t("remove_from_watchlist") }}{% else %}{{ i18n.t("add_to_watchlist") }}{% endif %}" data-tooltip="{% if is_on_watchlist %}{{ i18n.t("remove_from_watchlist") }}{% else %}{{ i18n.t("add_to_watchlist") }}{% endif %}">
+        <i class="fa fa-{% if is_on_watchlist %}minus{% else %}plus{% endif %}"></i>
+    </button>
     <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}" data-club-id="{{ club_id }}" data-is-loan="{{ is_on_loan }}" data-is-injured="{{ is_injured }}" data-is-unhappy="{{ is_unhappy }}">
         <button class="fm-tabbar-dropdown-toggle" onclick="var p=this.parentElement;p.classList.toggle('fm-dd-open');if(p.classList.contains('fm-dd-open')){var t=this.closest('.fm-tabbar').getBoundingClientRect();var m=document.getElementById('player-edit-menu');m.style.top=t.bottom+'px';if(window.innerWidth>=576){var b=this.getBoundingClientRect();m.style.right=(window.innerWidth-b.right)+'px';m.style.left='';m.style.width=''}else{m.style.right='';m.style.left='0';m.style.width='100%'}}">
             {{ i18n.t("edit") }} <span class="fm-dd-arrow">&#9660;</span>
@@ -31,6 +34,56 @@
     var playerId = dd.dataset.playerId;
     var clubId = dd.dataset.clubId;
     var menu = document.getElementById('player-edit-menu');
+
+    // Watchlist toggle — reuses /api/watchlist/{add,remove}. Initial state
+    // comes from the server-rendered data-in attribute; click swaps + <-> -.
+    var wlBtn = document.getElementById('player-watchlist-toggle');
+    if (wlBtn) {
+        var labelAdd = '{{ i18n.t("add_to_watchlist") }}';
+        var labelRemove = '{{ i18n.t("remove_from_watchlist") }}';
+
+        // Floating tooltip: body-level node so the tabbar's overflow-x:auto
+        // can't clip it (which was triggering a vertical scrollbar).
+        var tipEl = null;
+        function showTip() {
+            var text = wlBtn.dataset.tooltip;
+            if (!text) return;
+            if (!tipEl) {
+                tipEl = document.createElement('div');
+                tipEl.className = 'fm-tooltip';
+                document.body.appendChild(tipEl);
+            }
+            tipEl.textContent = text;
+            var r = wlBtn.getBoundingClientRect();
+            tipEl.style.left = (r.left + r.width / 2) + 'px';
+            tipEl.style.top = (r.bottom + 8) + 'px';
+            tipEl.classList.add('show');
+        }
+        function hideTip() { if (tipEl) tipEl.classList.remove('show'); }
+        wlBtn.addEventListener('mouseenter', showTip);
+        wlBtn.addEventListener('mouseleave', hideTip);
+        wlBtn.addEventListener('focus', showTip);
+        wlBtn.addEventListener('blur', hideTip);
+
+        wlBtn.addEventListener('click', function() {
+            if (wlBtn.disabled) return;
+            var isIn = wlBtn.dataset.in === 'true';
+            var next = !isIn;
+            var url = '/api/watchlist/' + (isIn ? 'remove' : 'add') + '/' + playerId;
+            wlBtn.disabled = true;
+            fetch(url, { method: 'POST' })
+                .then(function() {
+                    wlBtn.dataset.in = next ? 'true' : 'false';
+                    wlBtn.setAttribute('aria-pressed', next ? 'true' : 'false');
+                    var label = next ? labelRemove : labelAdd;
+                    wlBtn.setAttribute('aria-label', label);
+                    wlBtn.dataset.tooltip = label;
+                    wlBtn.innerHTML = next ? '<i class="fa fa-minus"></i>' : '<i class="fa fa-plus"></i>';
+                    if (tipEl && tipEl.classList.contains('show')) tipEl.textContent = label;
+                })
+                .finally(function() { wlBtn.disabled = false; });
+        });
+    }
 
     // Close dropdown on outside click
     document.addEventListener('click', function(e) {

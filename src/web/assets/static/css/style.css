@@ -5608,7 +5608,7 @@ a:link, a:visited, a:hover, a:active {
         font-size: 9px;
     }
 
-    .fm-tabbar-dropdown {
+    .fm-watchlist-toggle {
         margin-left: 0;
     }
 
@@ -5673,40 +5673,8 @@ a:link, a:visited, a:hover, a:active {
 }
 
 /* ============================================
-   CONTEXT MENU & WATCHLIST
+   WATCHLIST
    ============================================ */
-
-.fm-ctx-menu {
-    position: absolute;
-    z-index: 9999;
-    background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
-    border: 1px solid #263340;
-    border-radius: 4px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    min-width: 180px;
-    padding: 4px 0;
-}
-
-.fm-ctx-item {
-    padding: 8px 14px;
-    font-size: 12px;
-    color: #b0bac2;
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
-    white-space: nowrap;
-}
-
-.fm-ctx-item:hover {
-    background: rgba(74, 157, 91, 0.15);
-    color: #fff;
-}
-
-.fm-ctx-item i {
-    margin-right: 8px;
-    width: 14px;
-    text-align: center;
-    color: #4a9d5b;
-}
 
 .fm-watchlist-remove {
     background: none;
@@ -6020,9 +5988,76 @@ a:link, a:visited, a:hover, a:active {
    FM DROPDOWN (tab-bar action menu)
    ============================================ */
 
+.fm-watchlist-toggle {
+    margin-left: auto;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 12px;
+    font-size: 12px;
+    line-height: 1;
+    color: var(--tab-fg, #8a939b);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-family: inherit;
+    transition: color 0.15s, background 0.15s;
+}
+
+/* Floating tooltip — rendered at body level so .fm-tabbar's overflow-x:auto
+   can't clip it or trigger a vertical scrollbar. Positioned by JS. */
+.fm-tooltip {
+    position: fixed;
+    padding: 5px 9px;
+    background: #1e272d;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    border-radius: 3px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 2px);
+    transition: opacity 0.12s ease-out, transform 0.12s ease-out;
+    z-index: 2000;
+}
+
+.fm-tooltip::before {
+    content: "";
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-bottom-color: #1e272d;
+}
+
+.fm-tooltip.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.fm-watchlist-toggle:hover {
+    color: var(--tab-fg-active, #1e272d);
+    background: var(--tab-hover-bg, #f5f6f7);
+}
+
+.fm-watchlist-toggle:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.fm-watchlist-toggle[data-in="true"] {
+    color: var(--tab-active-border, #4a9d5b);
+}
+
 .fm-tabbar-dropdown {
     position: relative;
-    margin-left: auto;
     flex-shrink: 0;
     display: flex;
     align-items: stretch;

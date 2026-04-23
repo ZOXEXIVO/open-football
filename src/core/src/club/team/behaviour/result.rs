@@ -40,12 +40,12 @@ impl TeamBehaviourResult {
     fn process_contract_terminations(&self, data: &mut SimulatorData) {
         let date = data.date.date();
         for termination in &self.contract_terminations {
-            let club_id = match data
+            let (country_id, club_id) = match data
                 .indexes
                 .as_ref()
                 .and_then(|i| i.get_player_location(termination.player_id))
             {
-                Some((_, _, club_id, _)) => club_id,
+                Some((_, country_id, club_id, _)) => (country_id, club_id),
                 None => continue,
             };
             if let Some(player) = data.player_mut(termination.player_id) {
@@ -55,6 +55,15 @@ impl TeamBehaviourResult {
                 if let Some(club) = data.club_mut(club_id) {
                     club.finance.balance.push_expense_player_wages(termination.payout as i64);
                 }
+            }
+            // Now a free agent — drop him from every club's shortlist,
+            // scouting, and loan-out lists in this country so stale interest
+            // records don't linger.
+            if let Some(country) = data.country_mut(country_id) {
+                crate::transfers::pipeline::PipelineProcessor::clear_player_interest(
+                    country,
+                    termination.player_id,
+                );
             }
             log::debug!(
                 "Contract terminated: player {} by club {} — payout {} ({})",
