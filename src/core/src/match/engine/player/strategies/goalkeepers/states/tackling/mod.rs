@@ -18,6 +18,9 @@ pub struct GoalkeeperTacklingState {}
 
 impl StateProcessingHandler for GoalkeeperTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        #[cfg(feature = "match-logs")]
+        crate::tackle_stats::GK_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         // Shared tackle cooldown. Without it the keeper re-attempts every
         // tick while the attacker is in range, generating fouls and/or
         // compounding the inflated tackle count.
@@ -39,9 +42,13 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
                 ));
             }
 
+            #[cfg(feature = "match-logs")]
+            crate::tackle_stats::GK_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let (tackle_success, committed_foul, foul_severity) = self.attempt_tackle(ctx);
 
             if tackle_success {
+                #[cfg(feature = "match-logs")]
+                crate::tackle_stats::GK_SUCCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut state_change =
                     StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
                 state_change

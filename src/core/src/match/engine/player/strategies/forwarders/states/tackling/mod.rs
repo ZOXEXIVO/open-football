@@ -9,8 +9,8 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::RngExt;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 20.0; // Maximum distance to attempt a tackle
-const CLOSE_TACKLE_DISTANCE: f32 = 10.0; // Distance for immediate tackle attempt
+const TACKLE_DISTANCE_THRESHOLD: f32 = 12.0; // ~1.5m — forwards close ball at press range.
+const CLOSE_TACKLE_DISTANCE: f32 = 7.0; // Immediate-attempt range when right on top of the ball carrier.
 const FOUL_CHANCE_BASE: f32 = 0.15; // Base chance of committing a foul
 const CHASE_DISTANCE_THRESHOLD: f32 = 100.0; // Maximum distance to chase for tackle
 const PRESSURE_DISTANCE: f32 = 20.0; // Distance to apply pressure without tackling
@@ -20,6 +20,9 @@ pub struct ForwardTacklingState {}
 
 impl StateProcessingHandler for ForwardTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        #[cfg(feature = "match-logs")]
+        crate::tackle_stats::FWD_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         // If player has gained possession, transition to running
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
@@ -42,6 +45,15 @@ impl StateProcessingHandler for ForwardTacklingState {
             ));
         }
 
+        // Closest-teammate duel gate — see def/mid tackling for rationale.
+        // Forwards rarely lead the team in chase-score, so this mostly
+        // defers the counter-press to whichever midfielder is closer.
+        if !ctx.team().is_best_player_to_chase_ball() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Pressing,
+            ));
+        }
+
         let opponents = ctx.players().opponents();
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
@@ -50,6 +62,8 @@ impl StateProcessingHandler for ForwardTacklingState {
 
             // Immediate tackle if very close
             if opponent_distance <= CLOSE_TACKLE_DISTANCE {
+                #[cfg(feature = "match-logs")]
+                crate::tackle_stats::FWD_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let (tackle_success, committed_foul, foul_severity) =
                     self.attempt_tackle(ctx, opponent);
 
@@ -68,6 +82,8 @@ impl StateProcessingHandler for ForwardTacklingState {
                 if tackle_success {
                     // Double-check ball is not in flight before claiming
                     if !ctx.ball().is_in_flight() {
+                        #[cfg(feature = "match-logs")]
+                        crate::tackle_stats::FWD_SUCCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let mut result = StateChangeResult::with_forward_state_and_event(
                             ForwardState::Running,
                             Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
@@ -87,6 +103,8 @@ impl StateProcessingHandler for ForwardTacklingState {
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
                 // Wait for better opportunity or attempt tackle based on situation
                 if self.should_attempt_tackle_now(ctx, opponent) {
+                    #[cfg(feature = "match-logs")]
+                    crate::tackle_stats::FWD_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let (tackle_success, committed_foul, foul_severity) =
                         self.attempt_tackle(ctx, opponent);
 
@@ -105,6 +123,8 @@ impl StateProcessingHandler for ForwardTacklingState {
                     if tackle_success {
                         // Double-check ball is not in flight before claiming
                         if !ctx.ball().is_in_flight() {
+                            #[cfg(feature = "match-logs")]
+                            crate::tackle_stats::FWD_SUCCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let mut result = StateChangeResult::with_forward_state_and_event(
                                 ForwardState::Running,
                                 Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
@@ -291,10 +311,12 @@ impl ForwardTacklingState {
         let opponent_evasion_ability = (opponent_dribbling * 0.4) + (opponent_agility * 0.3) +
             (opponent_balance * 0.2) + (opponent_composure * 0.1);
 
-        // Final success calculation
+        // Final success calculation. Base dropped 0.50 → 0.35 — forwards
+        // don't win sliding duels as often as specialists; counter-press
+        // tackle success in real football is ~30–40%.
         let base_success = player_tackle_ability - opponent_evasion_ability;
         let situational_bonus = distance_factor * 0.3 + tackle_angle_factor * 0.2;
-        let success_chance = (0.5 + base_success * 0.4 + situational_bonus).clamp(0.05, 0.95);
+        let success_chance = (0.35 + base_success * 0.4 + situational_bonus).clamp(0.05, 0.85);
 
         let tackle_success = rng.random::<f32>() < success_chance;
 

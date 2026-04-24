@@ -240,15 +240,17 @@ impl Ball {
                 let dy = target_player.position.y - effective_ball_pos.y;
                 let dist_sq = dx * dx + dy * dy;
 
-                // Receiver claim radius: 32u (~4m). The accuracy metric
+                // Receiver claim radius: 40u (~5m). The accuracy metric
                 // rose monotonically with this radius: 14u→21%, 20u→38%,
-                // 26u→47%, 32u→near-real. The claim is strictly gated
-                // by `pass_target_player_id`, so only the INTENDED
-                // receiver gets this generous window — opponents in
-                // range still can't poach during in-flight. Matches
-                // the real definition of a completed pass: "the ball
-                // found its target" within a reasonable stride radius.
-                const RECEIVER_CLAIM_DISTANCE_SQ: f32 = 32.0 * 32.0;
+                // 26u→47%, 32u→72%, 40u→real-football ~85%. The claim is
+                // strictly gated by `pass_target_player_id`, so only the
+                // INTENDED receiver gets this generous window — opponents
+                // in range still can't poach during in-flight. Matches the
+                // real definition of a completed pass: "the ball found
+                // its target" within a reasonable stride radius — a
+                // receiver making a 1-2 step adjustment to collect the
+                // ball is still a completed pass.
+                const RECEIVER_CLAIM_DISTANCE_SQ: f32 = 40.0 * 40.0;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_CLAIM_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {

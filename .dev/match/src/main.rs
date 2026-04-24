@@ -316,6 +316,12 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     let mut total_xg = 0.0f32;
     let mut score_histogram: std::collections::BTreeMap<u8, u32> = std::collections::BTreeMap::new();
 
+    // Reset the shot-gate waterfall counters once at run start. They
+    // accumulate across all matches in the batch so we see which gate
+    // is suppressing shots at population scale, not match-to-match noise.
+    core::shot_gate_stats::reset();
+    core::tackle_stats::reset();
+
     let total_start = std::time::Instant::now();
     for i in 0..n_matches {
         let match_level_a = level_a.unwrap_or_else(random_level);
@@ -384,6 +390,82 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let bar: String = std::iter::repeat('#').take(*count as usize).collect();
         println!("  {:>2}: {:>3} {}", total, count, bar);
     }
+
+    // Shot-gate waterfall — each row is the absolute count of forward-has-ball
+    // ticks that survived every gate so far. The % drop column is the share
+    // of ticks that gate killed, measured against the tick count one row up.
+    // The gate with the largest drop is the dominant shot suppressor.
+    // Layout: index 3 (PASSED_NOT_POSSESSION) is informational — the
+    // engine no longer gates shots on `prefer_possession`, but we still
+    // observe how often the team is in tempo-management mode when a
+    // forward has the ball in range. Print it separately so the
+    // waterfall drops reflect the real gate chain.
+    let s = core::shot_gate_stats::snapshot();
+    let chain_order = [0usize, 1, 2, 4, 5, 6, 7, 8];
+    let chain_labels = [
+        "has_ball_in_range (dist <= 90)",
+        "can_shoot (not on cooldown)",
+        "has_settled (ownership >= 30)",
+        "!defer_to_teammate",
+        "dist <= max_shot_distance",
+        "has_clear_shot()",
+        "willingness roll passed",
+        "FIRED (Shooting state entered)",
+    ];
+    println!();
+    println!("--- SHOT-GATE WATERFALL (cumulative pass counts, all matches) ---");
+    let base = s[0].max(1);
+    for (row_idx, &i) in chain_order.iter().enumerate() {
+        let drop_from_prior = if row_idx == 0 {
+            0.0
+        } else {
+            let prior = s[chain_order[row_idx - 1]] as f64;
+            if prior > 0.0 { (1.0 - s[i] as f64 / prior) * 100.0 } else { 0.0 }
+        };
+        let share_of_base = s[i] as f64 / base as f64 * 100.0;
+        println!(
+            "  {:>10}  ({:>5.1}% of start, drop {:>5.1}%)  {}",
+            s[i], share_of_base, drop_from_prior, chain_labels[row_idx]
+        );
+    }
+    // Informational observation, not part of chain.
+    let poss_share = s[3] as f64 / base as f64 * 100.0;
+    println!(
+        "  [info]   {:>5.1}% of in-range ticks had prefer_possession=false",
+        poss_share
+    );
+
+    // Tackle flow per role: entries (state process() calls), attempts
+    // (dice rolled), successes (TacklingBall emitted). The success→stat
+    // mapping is 1:1 so the sum of role successes should match the
+    // tackles/team column in the AGGREGATE block above.
+    let t = core::tackle_stats::snapshot();
+    println!();
+    println!("--- TACKLE FLOW per role (cumulative, all matches) ---");
+    let roles = ["DEF", "MID", "FWD", "GK"];
+    let total_entries: u64 = t[0..4].iter().sum();
+    let total_attempts: u64 = t[4..8].iter().sum();
+    let total_successes: u64 = t[8..12].iter().sum();
+    println!(
+        "  {:<4}  {:>10}  {:>10}  {:>10}",
+        "role", "entries", "attempts", "successes"
+    );
+    for (i, role) in roles.iter().enumerate() {
+        println!(
+            "  {:<4}  {:>10}  {:>10}  {:>10}",
+            role, t[i], t[i + 4], t[i + 8]
+        );
+    }
+    println!(
+        "  {:<4}  {:>10}  {:>10}  {:>10}",
+        "ALL", total_entries, total_attempts, total_successes
+    );
+    let success_per_match_per_team =
+        total_successes as f64 / (n_matches as f64 * 2.0);
+    println!(
+        "  per-match per-team successes: {:.1}  (real football ~18)",
+        success_per_match_per_team
+    );
 }
 
 fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {

@@ -390,11 +390,13 @@ impl PlayerEventDispatcher {
         // Vision = how well we anticipate the receiver's run.
         // Passing = technical precision on the pass itself.
         let anticipation = (skills.vision * 0.6 + skills.passing * 0.4).clamp(0.0, 1.0);
-        // Skilled passers lead fully; poor passers lead only 40-50% of
-        // the ideal. Spread is wide enough that a pass from a skilled
-        // midfielder actually lands in stride, while a defender hoof
-        // regularly misses by a couple of yards.
-        let lead_fraction = 0.40 + anticipation * 0.55; // 0.40..0.95
+        // Skilled passers lead fully; poor passers lead most of the way.
+        // Widened base from 0.40 → 0.60 after the pass-accuracy audit
+        // showed average-anticipation passers were under-leading by
+        // enough that receivers arrived at the ball 3-6u short — just
+        // outside the tightest receiver claim windows, enough passes
+        // failed to push team accuracy to 72% instead of the 85% target.
+        let lead_fraction = 0.60 + anticipation * 0.35; // 0.60..0.95
         let lead_ticks = flight_time_est * lead_fraction;
         let ideal_target = receiver_pos + receiver_velocity * lead_ticks;
 
@@ -418,11 +420,13 @@ impl PlayerEventDispatcher {
         // skilled players, while 200u passes lose significant accuracy.
         let distance_error_factor = (horizontal_distance / 250.0).clamp(0.1, 1.8);
 
-        // Max error scales from 0.3u (elite) to 9u (poor), modulated
-        // by distance. Previous constant 5.0 was too low for poor
-        // passers and too high for elite ones — so skill barely
-        // affected outcome.
-        let max_position_error = (0.3 + (1.0 - precision) * 9.0) * distance_error_factor;
+        // Max error scales from 0.3u (elite) to 5.5u (poor), modulated
+        // by distance. Narrowed from 9.0 → 5.5 — the old ceiling was
+        // large enough that an average passer's random 6-8u error
+        // combined with a 3-5u lead underestimation pushed the ball
+        // consistently just outside the receiver claim radius. Real
+        // football average passers deliver within ~1.5m, not ~4m.
+        let max_position_error = (0.3 + (1.0 - precision) * 5.5) * distance_error_factor;
 
         // Add random targeting error
         let mut target_error_x = if max_position_error > f32::EPSILON {

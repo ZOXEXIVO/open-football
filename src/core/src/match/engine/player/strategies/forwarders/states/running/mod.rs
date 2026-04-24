@@ -10,6 +10,105 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
+// ───────────────────────────────────────────────────────────────────────────
+// Shot-gate rejection counters — `match-logs` feature only. A forward tick
+// with the ball in shooting range increments a waterfall of passes: each
+// counter represents the subset of ticks that got past the prior gate.
+// Drop-off between adjacent counters = how often that specific gate fires.
+// `fired` is the ultimate output; gap between `passed_willingness` and
+// `fired` is the rng drop inside the willingness roll.
+// ───────────────────────────────────────────────────────────────────────────
+#[cfg(feature = "match-logs")]
+pub mod shot_gate_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub static HAS_BALL_IN_RANGE: AtomicU64 = AtomicU64::new(0);
+    pub static PASSED_CAN_SHOOT: AtomicU64 = AtomicU64::new(0);
+    pub static PASSED_SETTLED: AtomicU64 = AtomicU64::new(0);
+    pub static PASSED_NOT_POSSESSION: AtomicU64 = AtomicU64::new(0);
+    pub static PASSED_NOT_DEFER: AtomicU64 = AtomicU64::new(0);
+    pub static PASSED_MAX_DIST: AtomicU64 = AtomicU64::new(0);
+    pub static PASSED_CLEAR_SHOT: AtomicU64 = AtomicU64::new(0);
+    pub static PASSED_WILLINGNESS: AtomicU64 = AtomicU64::new(0);
+    pub static FIRED: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for c in [&HAS_BALL_IN_RANGE, &PASSED_CAN_SHOOT, &PASSED_SETTLED,
+                  &PASSED_NOT_POSSESSION, &PASSED_NOT_DEFER, &PASSED_MAX_DIST,
+                  &PASSED_CLEAR_SHOT, &PASSED_WILLINGNESS, &FIRED] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub fn snapshot() -> [u64; 9] {
+        [
+            HAS_BALL_IN_RANGE.load(Ordering::Relaxed),
+            PASSED_CAN_SHOOT.load(Ordering::Relaxed),
+            PASSED_SETTLED.load(Ordering::Relaxed),
+            PASSED_NOT_POSSESSION.load(Ordering::Relaxed),
+            PASSED_NOT_DEFER.load(Ordering::Relaxed),
+            PASSED_MAX_DIST.load(Ordering::Relaxed),
+            PASSED_CLEAR_SHOT.load(Ordering::Relaxed),
+            PASSED_WILLINGNESS.load(Ordering::Relaxed),
+            FIRED.load(Ordering::Relaxed),
+        ]
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Tackle instrumentation — `match-logs` feature only. Counts:
+//   * state_entries: how often a Tackling state is entered (any role)
+//   * attempts:      how often attempt_*_tackle actually rolls the dice
+//   * successes:     how often TacklingBall event fires (stat bumped)
+//   * fouls:         CommitFoul events emitted from tackle paths
+// Drop-off reveals whether we over-enter tackling states, over-attempt,
+// or have an inflated success rate — each suggests a different fix.
+// ───────────────────────────────────────────────────────────────────────────
+#[cfg(feature = "match-logs")]
+pub mod tackle_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub static DEF_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub static MID_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub static FWD_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub static GK_ENTRIES: AtomicU64 = AtomicU64::new(0);
+
+    pub static DEF_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+    pub static MID_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+    pub static FWD_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+    pub static GK_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+
+    pub static DEF_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+    pub static MID_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+    pub static FWD_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+    pub static GK_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for c in [&DEF_ENTRIES, &MID_ENTRIES, &FWD_ENTRIES, &GK_ENTRIES,
+                  &DEF_ATTEMPTS, &MID_ATTEMPTS, &FWD_ATTEMPTS, &GK_ATTEMPTS,
+                  &DEF_SUCCESSES, &MID_SUCCESSES, &FWD_SUCCESSES, &GK_SUCCESSES] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub fn snapshot() -> [u64; 12] {
+        [
+            DEF_ENTRIES.load(Ordering::Relaxed),
+            MID_ENTRIES.load(Ordering::Relaxed),
+            FWD_ENTRIES.load(Ordering::Relaxed),
+            GK_ENTRIES.load(Ordering::Relaxed),
+            DEF_ATTEMPTS.load(Ordering::Relaxed),
+            MID_ATTEMPTS.load(Ordering::Relaxed),
+            FWD_ATTEMPTS.load(Ordering::Relaxed),
+            GK_ATTEMPTS.load(Ordering::Relaxed),
+            DEF_SUCCESSES.load(Ordering::Relaxed),
+            MID_SUCCESSES.load(Ordering::Relaxed),
+            FWD_SUCCESSES.load(Ordering::Relaxed),
+            GK_SUCCESSES.load(Ordering::Relaxed),
+        ]
+    }
+}
+
 // Realistic shooting distances (field is 840 units)
 // Real football: most goals scored from within 18m (~36 units)
 #[allow(dead_code)]
@@ -83,8 +182,11 @@ impl StateProcessingHandler for ForwardRunningState {
             let gm_intensity = ctx.team().game_management_intensity();
             // Treat "we're protecting a result" as a possession preference:
             // same mechanic the coach uses via WasteTime / ParkTheBus, now
-            // driven automatically by score+minute+ability.
-            let prefer_possession = coach.prefer_possession() || gm_intensity > 0.35;
+            // driven automatically by score+minute+ability. Threshold raised
+            // 0.35 → 0.55 after the gate-waterfall showed this gate was
+            // rejecting 50% of shooting-range forward ticks — half of a
+            // normal 0-0 match was being classified as "game-managing".
+            let prefer_possession = coach.prefer_possession() || gm_intensity > 0.55;
 
             if prefer_possession && distance_to_goal > POINT_BLANK_DISTANCE {
                 // Longer hold when game management is high — stretches
@@ -209,51 +311,93 @@ impl StateProcessingHandler for ForwardRunningState {
             // were otherwise spraying low-xG blasts every possession.
             let finishing = ctx.player.skills.technical.finishing;
             let long_shots = ctx.player.skills.technical.long_shots;
-            // Distance ceiling by skill (kept modest; combined with the
-            // willingness gate below for the actual rate effect)
-            let max_shot_distance = if finishing <= 8.0 {
-                45.0
-            } else if finishing <= 11.0 {
-                60.0
-            } else if finishing <= 14.0 {
-                75.0
-            } else if finishing <= 17.0 {
-                if long_shots >= 14.0 { 85.0 } else { 80.0 }
-            } else {
-                90.0
-            };
+            // Flat 90u ceiling — was a skill-stratified cap (45/60/75/…)
+            // that double-punished low-fin strikers: they already get
+            // penalised by the per-tick xG calculation and the willingness
+            // roll, but the hard distance cap additionally vetoed them
+            // before those softer filters could discriminate. Waterfall
+            // diagnostic showed 85% of settled in-range ticks were lost
+            // here. A single 90u ceiling (~real-football halfway-line)
+            // lets every forward attempt, and the xG/accuracy maths
+            // downstream decides whether it's a good shot.
+            let _ = long_shots;
+            let max_shot_distance = 90.0f32;
 
             // Willingness: a hesitation die-roll per shot opportunity.
-            // Steeply skill-driven so the gap between a fin-5 and fin-18
-            // forward is large — the pro-level striker triggers 80% of
-            // the time, the journeyman-at-wrong-position triggers 10%.
-            // The failed rolls route to Passing, so the shot is genuinely
-            // lost, not just deferred to the next tick.
-            //   fin 5,  comp 8 : 0.08  (almost always passes)
-            //   fin 10, comp 10: 0.30
-            //   fin 14, comp 12: 0.52
-            //   fin 18, comp 15: 0.81
+            // Real football: low-finishing forwards pass more than they
+            // shoot, but they DO pull the trigger when the window opens —
+            // they don't watch opportunities roll past them tick after tick.
+            //   fin 5,  comp 8 : 0.31  (hesitant but engaged)
+            //   fin 10, comp 10: 0.48
+            //   fin 14, comp 12: 0.65
+            //   fin 18, comp 15: 0.82
+            // Previously used fin_factor² which collapsed the low end
+            // below 0.08 — the gate-waterfall showed this was our second
+            // biggest shot-suppressor once the distance gate was relaxed.
+            // Linear fin_factor + a 0.25 floor keeps elite/journeyman
+            // separation while letting average strikers actually fire.
             let fin_factor = (finishing / 20.0).clamp(0.0, 1.0);
             let comp_factor = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-            // Squared fin_factor steepens the bottom of the curve so
-            // truly poor finishers shoot much less; linear composure
-            // adds a gentle nudge for cool-headed players.
-            // Floor at 0.20 (not 0.05): even a low-finishing striker in
-            // a clear shot opportunity should pull the trigger on ~20%
-            // of ticks in the window, not 5%. 0.05 made low-skill
-            // forwards defer indefinitely instead of attempting shots.
-            let willingness = (fin_factor * fin_factor * 0.80 + comp_factor * 0.15).clamp(0.20, 0.95);
+            let willingness = (fin_factor * 0.65 + comp_factor * 0.15 + 0.10).clamp(0.25, 0.95);
             let shot_triggered = rand::random::<f32>() < willingness;
 
+            // Gate waterfall instrumentation (match-logs only). Counts how
+            // many forward-has-ball ticks survive each independent gate.
+            // Each subsequent counter is a strict subset of the prior one —
+            // so the drop between adjacent counters tells us which gate is
+            // the dominant shot-suppressor.
+            #[cfg(feature = "match-logs")]
+            {
+                use std::sync::atomic::Ordering;
+                if distance_to_goal <= 90.0 {
+                    shot_gate_stats::HAS_BALL_IN_RANGE.fetch_add(1, Ordering::Relaxed);
+                    // Informational: `prefer_possession` is NOT a gate on
+                    // shot_condition_met anymore (see note above), but we
+                    // still observe it here to see how often the team is
+                    // in tempo-management mode when a forward has the
+                    // ball in range.
+                    if !prefer_possession {
+                        shot_gate_stats::PASSED_NOT_POSSESSION.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if can_shoot {
+                        shot_gate_stats::PASSED_CAN_SHOOT.fetch_add(1, Ordering::Relaxed);
+                        if has_settled {
+                            shot_gate_stats::PASSED_SETTLED.fetch_add(1, Ordering::Relaxed);
+                            if !defer_to_teammate {
+                                shot_gate_stats::PASSED_NOT_DEFER.fetch_add(1, Ordering::Relaxed);
+                                if distance_to_goal <= max_shot_distance {
+                                    shot_gate_stats::PASSED_MAX_DIST.fetch_add(1, Ordering::Relaxed);
+                                    if ctx.player().has_clear_shot() {
+                                        shot_gate_stats::PASSED_CLEAR_SHOT.fetch_add(1, Ordering::Relaxed);
+                                        if shot_triggered {
+                                            shot_gate_stats::PASSED_WILLINGNESS.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Priority 0.5: Clear shot within skill-permitted range.
+            // Note: `prefer_possession` is NOT re-checked here. The
+            // hold-ball branch at line ~89 already decided whether to
+            // recycle based on distance and hold-time; once we reach a
+            // settled in-range clear-shot opportunity, team tempo
+            // preference doesn't veto the attempt. Previously a tired
+            // team in a 0-0 match flipped the coach to `SlowDown`, which
+            // made `prefer_possession()` true and silently killed 94%
+            // of the remaining shot pipeline.
             let shot_condition_met = has_settled
                 && can_shoot
-                && !prefer_possession
                 && !defer_to_teammate
                 && distance_to_goal <= max_shot_distance
                 && ctx.player().has_clear_shot();
 
             if shot_condition_met && shot_triggered {
+                #[cfg(feature = "match-logs")]
+                shot_gate_stats::FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some(
                     StateChangeResult::with_forward_state(ForwardState::Shooting)
                         .with_shot_reason("FWD_RUN_PRIO05_CLEAR"),
@@ -283,8 +427,10 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // Priority 0.6: Close-range shot (≤45u) — drop the settled-time
             // requirement since a forward in the box strikes immediately.
+            // Same reasoning as Priority 0.5: the hold-ball branch above
+            // already considered possession preference; here we're too
+            // close to goal for tempo management to veto.
             let box_shot_condition = can_shoot
-                && !prefer_possession
                 && !defer_to_teammate
                 && distance_to_goal < 45.0
                 && distance_to_goal <= max_shot_distance

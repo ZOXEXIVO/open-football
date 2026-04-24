@@ -9,7 +9,13 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::RngExt;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 25.0; // Close down earlier — aggressive defending
+const TACKLE_DISTANCE_THRESHOLD: f32 = 14.0; // ~1.75m — realistic lunge/slide range.
+// Previously 25u (~3m) which let defenders commit to tackles while still
+// a full stride away; every tick inside the 25u bubble rolled a 62%
+// success chance, and two defenders both within 25u both rolled in the
+// same tick. Tightening to 14u forces a proper engagement distance
+// before the dice roll, which — combined with the team-best-chaser gate
+// — drops tackle events from 400/team/match toward the real ~18.
 const PRESSING_DISTANCE: f32 = 80.0;
 const RETURN_DISTANCE: f32 = 120.0;
 
@@ -18,6 +24,9 @@ pub struct DefenderTacklingState {}
 
 impl StateProcessingHandler for DefenderTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        #[cfg(feature = "match-logs")]
+        crate::tackle_stats::DEF_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         // If we have the ball or our team controls it, transition to running
         if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_defender_state(
@@ -64,12 +73,29 @@ impl StateProcessingHandler for DefenderTacklingState {
                 ));
             }
 
+            // Closest-teammate duel gate. Without this, 3-4 defenders
+            // within `TACKLE_DISTANCE_THRESHOLD` of the same ball carrier
+            // all enter Tackling in the same tick and each rolls their
+            // own attempt. Instrumentation showed this path was the
+            // primary driver of ~370 tackle events/team/match (real
+            // football: ~18). Only the best-positioned teammate
+            // engages; the rest fall back to Pressing to cover angles.
+            if !ctx.team().is_best_player_to_chase_ball() {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+
             // We're close enough to tackle! One shot per Tackling entry,
             // enforced by the cooldown.
+            #[cfg(feature = "match-logs")]
+            crate::tackle_stats::DEF_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let (tackle_success, committed_foul, foul_severity) =
                 self.attempt_sliding_tackle(ctx, &opponent);
 
             return if tackle_success {
+                #[cfg(feature = "match-logs")]
+                crate::tackle_stats::DEF_SUCCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut result = StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
@@ -212,9 +238,14 @@ impl DefenderTacklingState {
 
         let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
 
-        // Defenders have home advantage in tackles — they pick the moment
-        let success_chance = 0.62 + skill_difference * 0.40;
-        let clamped_success_chance = success_chance.clamp(0.18, 0.95);
+        // Defenders have home advantage in tackles — they pick the moment.
+        // Base dropped 0.62 → 0.45 after instrumentation showed 62% per
+        // attempt combined with the old 25u attempt distance produced
+        // ~370 tackle events/team/match. Real football defenders win
+        // ~50% of challenges at close range; 45% base + skill_diff
+        // spread gives a realistic 30–75% window across the skill gap.
+        let success_chance = 0.45 + skill_difference * 0.40;
+        let clamped_success_chance = success_chance.clamp(0.15, 0.85);
 
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 

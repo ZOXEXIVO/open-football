@@ -9,13 +9,16 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::RngExt;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 20.0; // Midfielders engage tackles aggressively
+const TACKLE_DISTANCE_THRESHOLD: f32 = 12.0; // ~1.5m — midfielder ball-winner engagement range.
 
 #[derive(Default, Clone)]
 pub struct MidfielderTacklingState {}
 
 impl StateProcessingHandler for MidfielderTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        #[cfg(feature = "match-logs")]
+        crate::tackle_stats::MID_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
@@ -61,17 +64,32 @@ impl StateProcessingHandler for MidfielderTacklingState {
             ));
         }
 
+        // Closest-teammate duel gate. Midfielders were the single biggest
+        // tackle-event source (208/team/match vs real ~8) because 3-4 of
+        // them inside the 50u pressing radius simultaneously entered
+        // Tackling. Only the best-positioned one actually engages; the
+        // rest revert to Pressing to cover passing lanes.
+        if !ctx.team().is_best_player_to_chase_ball() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Pressing,
+            ));
+        }
+
         let opponents = ctx.players().opponents();
         let mut opponents_with_ball = opponents.with_ball();
 
         if let Some(opponent) = opponents_with_ball.next() {
             let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
+                #[cfg(feature = "match-logs")]
+                crate::tackle_stats::MID_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let (tackle_success, committed_foul, foul_severity) =
                     self.attempt_tackle(ctx, &opponent);
                 if tackle_success {
                     // Double-check ball is not in flight before claiming.
                     if !ctx.ball().is_in_flight() {
+                        #[cfg(feature = "match-logs")]
+                        crate::tackle_stats::MID_SUCCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let mut result = StateChangeResult::with_midfielder_state_and_event(
                             MidfielderState::Standing,
                             Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
@@ -154,8 +172,12 @@ impl MidfielderTacklingState {
 
         let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
 
-        let success_chance = 0.55 + skill_difference * 0.35;
-        let clamped_success_chance = success_chance.clamp(0.15, 0.92);
+        // Midfielders contest rather than commit — 40% base vs the
+        // defender's 45%. Combined with the tighter 12u attempt distance
+        // and the team-best-chaser gate, this drops MID successes from
+        // ~80/team/match toward the realistic ~10.
+        let success_chance = 0.40 + skill_difference * 0.35;
+        let clamped_success_chance = success_chance.clamp(0.12, 0.82);
 
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 
