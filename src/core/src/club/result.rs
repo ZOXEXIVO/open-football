@@ -77,9 +77,9 @@ impl ClubResult {
         // week the player is salary-unhappy. Without a gate here, the
         // club would send a fresh proposal each tick and pile up
         // rejection entries. Reuse the same retry rules as the proactive
-        // ContractRenewalManager: 30-day cooldown after an offer, 120-day
+        // ContractRenewalManager: 60-day cooldown after an offer, 120-day
         // cooldown after a rejection, max 3 attempts per rolling year.
-        const OFFER_COOLDOWN_DAYS: i64 = 30;
+        const OFFER_COOLDOWN_DAYS: i64 = 60;
         const REJECT_COOLDOWN_DAYS: i64 = 120;
         const MAX_ATTEMPTS_PER_YEAR: usize = 3;
         const OFFERED_LABEL: &str = "dec_contract_renewal_offered";

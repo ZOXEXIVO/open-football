@@ -52,6 +52,7 @@ pub async fn game_process_action(
 
         // Deep clone outside any lock
         let mut simulator_data = Arc::unwrap_or_clone(data_arc);
+        let mut days_since_sync: u32 = 0;
 
         for _ in 0..days {
             // Check cancellation before each day
@@ -62,6 +63,21 @@ pub async fn game_process_action(
             let result = handle.block_on(FootballSimulator::simulate(&mut simulator_data));
             if result.has_match_results() && core::is_match_recordings_mode() {
                 handle.block_on(write_match_results(result));
+            }
+
+            // During multi-day runs (e.g. holiday), publish progress every
+            // simulated week so the UI and readers observe intermediate state
+            // instead of waiting for the whole range to finish.
+            days_since_sync += 1;
+            if days_since_sync >= 7 {
+                days_since_sync = 0;
+                i18n.set_date(simulator_data.date);
+                let arc = Arc::new(simulator_data);
+                handle.block_on(async {
+                    let mut guard = data.write().await;
+                    *guard = Some(Arc::clone(&arc));
+                });
+                simulator_data = Arc::unwrap_or_clone(arc);
             }
         }
 

@@ -31,7 +31,7 @@ impl StaffGenerator {
 }
 
 impl StaffGenerator {
-    pub fn generate(&mut self, country_id: u32, position: StaffPosition, team_reputation: u16) -> Staff {
+    pub fn generate(&self, country_id: u32, position: StaffPosition, team_reputation: u16) -> Staff {
         let now = Utc::now();
 
         let rep_factor = (team_reputation as f32 / 10000.0).clamp(0.0, 1.0);

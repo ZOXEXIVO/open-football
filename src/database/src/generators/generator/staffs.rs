@@ -5,7 +5,7 @@ use core::{Staff, StaffPosition, TeamType};
 use super::DatabaseGenerator;
 
 impl DatabaseGenerator {
-    pub(super) fn generate_staffs(staff_generator: &mut StaffGenerator, country_id: u32, continent_id: u32, country_code: &str, team_reputation: u16, team_type: &TeamType) -> Vec<Staff> {
+    pub(super) fn generate_staffs(staff_generator: &StaffGenerator, country_id: u32, continent_id: u32, country_code: &str, team_reputation: u16, team_type: &TeamType) -> Vec<Staff> {
         let mut staffs = Vec::with_capacity(30);
 
         if *team_type == TeamType::Main {

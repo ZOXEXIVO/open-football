@@ -172,12 +172,12 @@ impl MidfielderTacklingState {
 
         let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
 
-        // Midfielders contest rather than commit — 40% base vs the
-        // defender's 45%. Combined with the tighter 12u attempt distance
-        // and the team-best-chaser gate, this drops MID successes from
-        // ~80/team/match toward the realistic ~10.
-        let success_chance = 0.40 + skill_difference * 0.35;
-        let clamped_success_chance = success_chance.clamp(0.12, 0.82);
+        // Midfielders contest rather than commit — base anchored 0.05
+        // below the defender's. Tracks the second defender base drop
+        // 0.35→0.25 to keep MID/DEF success ratios stable while total
+        // tackles converge on the real ~18/team/match.
+        let success_chance = 0.20 + skill_difference * 0.35;
+        let clamped_success_chance = success_chance.clamp(0.05, 0.62);
 
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 

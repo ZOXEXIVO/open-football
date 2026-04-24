@@ -40,7 +40,9 @@ async fn main() {
 
     info!("database loaded: {} ms", estimated);
 
-    let game_data = DatabaseGenerator::generate(&database);
+    let (game_data, gen_ms) = TimeEstimation::estimate(|| DatabaseGenerator::generate(&database));
+
+    info!("database generated: {} ms", gen_ms);
 
     let i18n = Arc::new(I18nManager::new());
     i18n.set_date(game_data.date);

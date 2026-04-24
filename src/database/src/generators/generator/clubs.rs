@@ -11,6 +11,7 @@ use core::{
     TeamReputation, TeamType, TrainingSchedule, TeamCollection,
 };
 use core::transfers::pipeline::ClubTransferPlan;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -23,15 +24,21 @@ impl DatabaseGenerator {
         country_code: &str,
         country_reputation: u16,
         data: &DatabaseEntity,
-        player_generator: &mut PlayerGenerator,
-        staff_generator: &mut StaffGenerator,
+        player_generator: &PlayerGenerator,
+        staff_generator: &StaffGenerator,
     ) -> Vec<Club> {
         let odb = data.players_odb.as_ref();
         let now_year = Utc::now().date_naive().year();
 
+        // Parallelise club construction: each club hydrates or generates 25-200
+        // players across 1-5 teams plus 10-15 staff. Work is dominated by
+        // player skill generation (CPU-bound, no I/O) and is fully independent
+        // per club, so par_iter scales near-linearly with cores. The RNG is
+        // thread-local (see core::utils::random::engine), and both generators
+        // now take &self, so no further synchronisation is needed.
         data
             .clubs
-            .iter()
+            .par_iter()
             .filter(|c| c.country_id == country_id)
             .map(|club| {
                 // Pre-distribute ODB players for this club into TeamType buckets.
@@ -172,7 +179,7 @@ impl DatabaseGenerator {
 /// back to the procedural generator. U18/U19 squads always go through the
 /// academy path — those players are owned by the youth/intake system.
 fn build_team_players(
-    player_generator: &mut PlayerGenerator,
+    player_generator: &PlayerGenerator,
     country_id: u32,
     continent_id: u32,
     country_code: &str,
@@ -195,8 +202,13 @@ fn build_team_players(
         return buckets
             .get(team_type)
             .map(|records| {
+                // ODB hydration is per-record skill generation — the same
+                // CPU-bound pipeline as procedural players. Parallelise the
+                // per-record mapping so large squads (main teams carry 25+
+                // records) don't serialise one whole club's hydration on a
+                // single thread.
                 records
-                    .iter()
+                    .par_iter()
                     .map(|r| PlayerGenerator::generate_from_odb(r, continent_id, country_code, data))
                     .collect()
             })

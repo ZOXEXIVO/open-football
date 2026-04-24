@@ -199,10 +199,17 @@ fn compute_game_management_intensity(
     let ability_gap = ((opp_avg_ability as f32 - my_avg_ability as f32) / 40.0).clamp(-1.0, 1.0);
 
     if score_diff > 0 {
-        let lead_base = 0.15 + 0.15 * ((score_diff - 1).clamp(0, 2) as f32);
+        // Leading — defend the score. A 1-goal lead in the final
+        // 5 minutes should push teams firmly into possession mode; the
+        // previous curve (0.15 lead_base + 0.35 late_bonus = 0.50 max
+        // for an equal-squad 1-goal lead) sat just under the 0.55
+        // prefer_possession threshold, so teams kept attacking like the
+        // match was balanced. Bumped to 0.22 base + 0.48 late so an
+        // equal-squad 1-goal lead at minute 90 reaches 0.70.
+        let lead_base = 0.22 + 0.18 * ((score_diff - 1).clamp(0, 2) as f32);
         let weaker_bonus = 0.25 * ability_gap.max(0.0);
-        let late_bonus = 0.35 * late_factor;
-        (lead_base + weaker_bonus + late_bonus).clamp(0.0, 0.9)
+        let late_bonus = 0.48 * late_factor;
+        (lead_base + weaker_bonus + late_bonus).clamp(0.0, 0.95)
     } else if score_diff == 0 && ability_gap > 0.2 && late_factor > 0.5 {
         // Weaker team late in a draw plays for the point.
         (0.15 + 0.20 * late_factor).clamp(0.0, 0.5)
@@ -359,6 +366,6 @@ mod tests {
     #[test]
     fn intensity_is_clamped_below_one() {
         let v = compute_game_management_intensity(5, 90.0, 100, 160);
-        assert!(v <= 0.9, "got {v}");
+        assert!(v <= 0.95, "got {v}");
     }
 }

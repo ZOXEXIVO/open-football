@@ -14,6 +14,7 @@ use core::{
 use crate::DatabaseEntity;
 use crate::generators::convert::convert_national_competition;
 use crate::generators::player::seed_player_id_sequence;
+use rayon::prelude::*;
 
 pub struct DatabaseGenerator;
 
@@ -53,9 +54,14 @@ impl DatabaseGenerator {
 
         let global_competitions = GlobalCompetitions::new(global_configs);
 
+        // Parallelise at the continent level too: only ~6 continents, but
+        // each one drives an independent par_iter over its countries, so the
+        // overall tree is rayon-parallel at three levels (continent →
+        // country → club). Rayon's work-stealing keeps all cores saturated
+        // even when one continent's country/club mix dwarfs the others.
         let continents = data
             .continents
-            .iter()
+            .par_iter()
             .map(|continent| {
                 // Filter configs relevant to this continent:
                 // - continental configs where continent_id matches

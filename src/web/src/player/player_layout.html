@@ -81,7 +81,10 @@
                     wlBtn.innerHTML = next ? '<i class="fa fa-minus"></i>' : '<i class="fa fa-plus"></i>';
                     if (tipEl && tipEl.classList.contains('show')) tipEl.textContent = label;
                 })
-                .finally(function() { wlBtn.disabled = false; });
+                .finally(function() {
+                    var processBtn = document.getElementById('process-btn');
+                    wlBtn.disabled = processBtn && processBtn.classList.contains('fm-processing');
+                });
         });
     }
 
@@ -97,6 +100,7 @@
         if (!processBtn || !toggle) return;
         var processing = processBtn.classList.contains('fm-processing');
         toggle.disabled = processing;
+        if (wlBtn) wlBtn.disabled = processing;
         if (processing) dd.classList.remove('fm-dd-open');
     }
     var processBtn = document.getElementById('process-btn');
@@ -113,16 +117,20 @@
     var sep = '<div class="fm-dd-sep"></div>';
     var groups = [];
 
-    // Group 1: Move on Free
+    // Group 1: Clear Injury (top priority when injured)
+    if (isInjured) {
+        groups.push('<button onclick="playerClearInjury(' + playerId + ')">Clear Injury</button>');
+    }
+
+    // Group 2: Move on Free
     if (!isFreeAgent) {
         groups.push('<button onclick="playerMoveOnFree(' + playerId + ')">{{ i18n.t("move_on_free") }}</button>');
     }
 
-    // Group 2: Clear actions
-    var clearItems = [];
-    if (isUnhappy) clearItems.push('<button onclick="playerClearUnhappy(' + playerId + ')">{{ i18n.t("clear_unhappy") }}</button>');
-    if (isInjured) clearItems.push('<button onclick="playerClearInjury(' + playerId + ')">Clear Injury</button>');
-    if (clearItems.length > 0) groups.push(clearItems.join(''));
+    // Group 3: Clear Unhappy
+    if (isUnhappy) {
+        groups.push('<button onclick="playerClearUnhappy(' + playerId + ')">{{ i18n.t("clear_unhappy") }}</button>');
+    }
 
     // Group 3: Transfer actions
     var transferItems = [];

@@ -248,15 +248,17 @@ impl MatchCoach {
         // within ~1 second. Real football: even elite counter-attacks
         // need at least one progressive pass before a shot arrives.
         let settled = current_tick.saturating_sub(self.last_possession_gain_tick) >= 100;
-        // Possession-phase shot cap: at most ONE shot per possession.
-        // This is the single biggest natural-logic lever for shot
-        // volume. Real football: a possession produces a chance OR a
-        // turnover, not "three chances over seven seconds of box
-        // scramble." The counter resets on possession change; rebounds
-        // where the team keeps control DON'T count as a new possession,
-        // so rebound-spam is naturally capped. Sets the realistic
-        // "one good look per attack" rhythm.
-        let phase_allows = self.shots_this_possession < 1;
+        // Possession-phase shot cap: at most TWO shots per possession.
+        // Real football: a possession typically produces ONE chance,
+        // but rebounds (saved/blocked → ball comes back to attackers)
+        // are a real and common path to goals — Klopp-era Liverpool
+        // and most pressing teams convert plenty from rebounds.
+        // Cap of 1 forbade ALL rebound shots, including legitimate ones
+        // where the GK parries to a striker's feet. Cap of 2 paired
+        // with the 5s team-shot cooldown still rules out box-scramble
+        // spam (4 shots in 2s) but unlocks the realistic "shoot →
+        // parry → tap-in" pattern.
+        let phase_allows = self.shots_this_possession < 2;
         shot_spaced && settled && phase_allows
     }
 

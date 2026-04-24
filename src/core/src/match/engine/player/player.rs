@@ -140,17 +140,16 @@ impl MatchPlayer {
     /// resolves (success, miss, or foul).
     #[inline]
     pub fn start_tackle_cooldown(&mut self) {
-        // 1500 ticks ≈ 15 seconds. Real football: a player contests 2-4
-        // tackles per 90 minutes — one every ~25 minutes. Instrumentation
-        // (`core::tackle_stats`) showed attempts running at 653/team/match
-        // (25x real) at the previous 4s cooldown — defenders who missed a
-        // tackle re-entered and re-attempted within 5-6s, multiplied
-        // across 4 DEF + 4 MID + 2 FWD = 10 potential tacklers per team.
-        // 15s reflects "commit, resolve, regroup, reposition" — a more
-        // realistic duel cadence. Combined with the pressing path (only
-        // the closest player presses) this drops attempts to the real
-        // football ~25-30 range.
-        self.tackle_cooldown = 1500;
+        // 3000 ticks ≈ 30 seconds. Real football: a player contests 2-4
+        // tackles per 90 minutes — one every ~25 minutes. The previous
+        // 15-second cooldown still let attempts run at 205/team/match
+        // (5x real) because 10 outfield players × 15s allowed up to one
+        // attempt per second team-wide. 30s halves the team-wide ceiling
+        // and matches the realistic "commit, resolve, regroup,
+        // reposition" cadence — a defender who lunges and either wins,
+        // misses, or fouls is realistically out of the next play for
+        // half a minute, not 15 seconds.
+        self.tackle_cooldown = 3000;
     }
 
     pub fn rebuild_waypoint_cache(&mut self) {

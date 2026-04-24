@@ -282,6 +282,22 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
+            // can_shoot CONTENTION SKIP. If we're in shooting range but
+            // the shot gate is blocked (team cooldown, per-player cooldown,
+            // or shots_this_possession cap already reached), don't loiter
+            // on the ball hoping the gate opens — it won't during this
+            // possession. Lay the ball off so either (a) a teammate with
+            // a fresh cooldown becomes the shooter, or (b) the possession
+            // resets faster and the whole attack can be restarted. Without
+            // this branch the gate-waterfall showed ~82% of in-range ticks
+            // stalled at can_shoot=false while the forward held the ball,
+            // which is exactly the dead time that produces 0-0 matches.
+            if !can_shoot {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Passing,
+                ));
+            }
+
             // Build-up gate: forwards can't fire within 300ms of gaining
             // possession. Real football demands 2-3s of build-up — shots
             // that fly in the first half-second of ownership are how
@@ -327,18 +343,45 @@ impl StateProcessingHandler for ForwardRunningState {
             // Real football: low-finishing forwards pass more than they
             // shoot, but they DO pull the trigger when the window opens —
             // they don't watch opportunities roll past them tick after tick.
-            //   fin 5,  comp 8 : 0.31  (hesitant but engaged)
-            //   fin 10, comp 10: 0.48
-            //   fin 14, comp 12: 0.65
-            //   fin 18, comp 15: 0.82
-            // Previously used fin_factor² which collapsed the low end
-            // below 0.08 — the gate-waterfall showed this was our second
-            // biggest shot-suppressor once the distance gate was relaxed.
-            // Linear fin_factor + a 0.25 floor keeps elite/journeyman
-            // separation while letting average strikers actually fire.
+            // Targeting ~65% per-tick base for average players so the
+            // clear-shot → fire conversion lands near real shot volume
+            // (~13 shots/team). The previous tighter curve (fin*0.65 +
+            // comp*0.15 + 0.10, clamp 0.25..0.95) averaged 0.50 for a
+            // median player and left the waterfall's willingness drop at
+            // 58.7% — the single biggest remaining shot-suppressor once
+            // the can_shoot contention-skip landed.
+            //   fin 5,  comp 8 : 0.55  (floor — hesitant but still fires)
+            //   fin 10, comp 10: 0.65
+            //   fin 14, comp 12: 0.77
+            //   fin 18, comp 15: 0.87
             let fin_factor = (finishing / 20.0).clamp(0.0, 1.0);
             let comp_factor = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-            let willingness = (fin_factor * 0.65 + comp_factor * 0.15 + 0.10).clamp(0.25, 0.95);
+            // Pushed floor 0.55 → 0.70 and constant 0.35 → 0.45 — even
+            // poor finishers pull the trigger when given a clear shot
+            // in a tight, structured opportunity (the gates above already
+            // exclude long-range fliers, defended angles, and rushed
+            // possessions). The willingness gate was dropping 41% of
+            // qualified opportunities, the largest remaining post-gate
+            // shot-suppressor. Average player now fires ~0.80/tick.
+            let base_willingness = (fin_factor * 0.40 + comp_factor * 0.10 + 0.45).clamp(0.70, 0.95);
+
+            // GAME-MANAGEMENT SHOT SUPPRESSION. When the team is protecting
+            // a score (lead, late, underdog clinging to a draw) the coach
+            // wants the squad to STOP forcing shots and keep the ball.
+            // `gm_intensity` already models this as a [0, 1] signal; here
+            // we translate it into per-tick shot willingness directly so
+            // the "stop shooting, defend the score" instruction actually
+            // reaches the striker. Scale kicks in from 0.40 — earlier than
+            // the old 0.55 prefer_possession threshold — so a 1-goal late
+            // lead (~0.50 intensity) noticeably dampens shot rate.
+            // Point-blank shots are unaffected (they ran their own branch
+            // well above this block).
+            let gm_suppression = if gm_intensity > 0.40 {
+                (1.0 - (gm_intensity - 0.40) / 0.60 * 0.70).clamp(0.30, 1.0)
+            } else {
+                1.0
+            };
+            let willingness = base_willingness * gm_suppression;
             let shot_triggered = rand::random::<f32>() < willingness;
 
             // Gate waterfall instrumentation (match-logs only). Counts how

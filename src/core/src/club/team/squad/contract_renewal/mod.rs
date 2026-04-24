@@ -8,8 +8,10 @@ use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
 /// Minimum gap between proactive offers when the previous one hasn't
-/// actually been turned down yet.
-const RENEWAL_COOLDOWN_DAYS: i64 = 30;
+/// actually been turned down yet. Set above 30 so the proactive (month
+/// start) and reactive (daily) paths can't chain a fresh offer every
+/// single month — clubs typically regroup for longer between attempts.
+const RENEWAL_COOLDOWN_DAYS: i64 = 60;
 /// Longer cooldown after the player rejects. Real clubs don't hammer the
 /// same player every month with the same deal — they regroup, raise, and
 /// try again after a while.

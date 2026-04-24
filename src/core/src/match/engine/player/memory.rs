@@ -159,13 +159,28 @@ impl PlayerMemory {
     pub fn record_shot(&mut self, tick: u64, on_target: bool) {
         self.last_shot_tick = tick;
         self.shots_taken += 1;
+        // Confidence still moves at launch based on intent (did we aim
+        // correctly?). The `shots_on_target` stat is NOT credited here
+        // anymore — it's credited lazily by `credit_shot_on_target` when
+        // the ball actually reaches the goal frame (keeper save or
+        // goal). Before this split, any shot aimed between the posts
+        // counted as on-target even when a defender blocked it or it
+        // sailed over the bar, leaving ~49% of "on-target" shots with
+        // no corresponding save-or-goal outcome.
         if on_target {
-            self.shots_on_target += 1;
             self.confidence = (self.confidence + 0.05).min(1.0);
         } else {
             self.confidence = (self.confidence - 0.03).max(0.0);
         }
         self.record_event(MemoryEventType::ShotTaken);
+    }
+
+    /// Post-hoc on-target credit. Called when a shot actually reaches
+    /// the goal frame (keeper save or goal). Kept separate from
+    /// `record_shot` because the outcome isn't known at launch — the
+    /// ball has to travel, and a defender can still block it in flight.
+    pub fn credit_shot_on_target(&mut self) {
+        self.shots_on_target += 1;
     }
 
     pub fn record_shot_xg(&mut self, tick: u64, xg: f32) {

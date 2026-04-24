@@ -10,7 +10,7 @@ use super::DatabaseGenerator;
 
 impl DatabaseGenerator {
     pub(super) fn generate_players(
-        player_generator: &mut PlayerGenerator,
+        player_generator: &PlayerGenerator,
         country_id: u32,
         team_reputation: u16,
         country_reputation: u16,
@@ -126,7 +126,7 @@ impl DatabaseGenerator {
             .map(|c| c.continent_id)
             .unwrap_or(1);
 
-        let mut generate_one = |pos: PositionType| -> Player {
+        let generate_one = |pos: PositionType| -> Player {
             // 10-20% chance this player is a youth gem with boosted skills
             let effective_rep = if is_non_main && IntegerUtils::random(0, 100) < 15 {
                 gem_rep
@@ -155,7 +155,7 @@ impl DatabaseGenerator {
                                     nicknames: Vec::new(),
                                 },
                             };
-                            let mut foreign_gen = PlayerGenerator::with_people_names(&people_names);
+                            let foreign_gen = PlayerGenerator::with_people_names(&people_names);
                             let foreign_country = data.countries.iter()
                                 .find(|c| c.id == fp.country_id);
                             let foreign_country_rep = foreign_country.map(|c| c.reputation).unwrap_or(3000);

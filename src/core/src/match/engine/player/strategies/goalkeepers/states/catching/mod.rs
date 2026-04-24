@@ -154,34 +154,33 @@ impl GoalkeeperCatchingState {
             if lateral_error > reach {
                 return false; // Out of reach — shot beats the keeper.
             }
-            // Base save chance — quadratic falloff rather than linear.
-            // A shot straight at the keeper is ~95% saved (reflex), a
-            // shot at half-reach still ~80%, only at full stretch does
-            // it drop to ~30%. Previous linear curve saved too few of
-            // the central shots — real keepers save the middle reliably
-            // and lose placement to the corners.
-            //   ratio 0.0 → 0.95   (on the line)
-            //   ratio 0.3 → 0.89
-            //   ratio 0.5 → 0.79
-            //   ratio 0.7 → 0.63
-            //   ratio 1.0 → 0.30   (fully stretched)
+            // Base save chance — quadratic falloff. This formula is
+            // ROLLED PER TICK during shot flight, so per-tick rates
+            // accumulate over 2-5 ticks of approach. Calibrated for
+            // ~70% effective overall save rate (real ~67%): elite
+            // central per-tick 0.30, cumulative across 3 ticks ~66%;
+            // corner per-tick 0.08, cumulative ~22%.
+            //   ratio 0.0 → 0.30
+            //   ratio 0.3 → 0.27
+            //   ratio 0.5 → 0.24
+            //   ratio 0.7 → 0.18
+            //   ratio 1.0 → 0.08
             let reach_ratio = (lateral_error / reach).clamp(0.0, 1.0);
-            let base = 0.95 - reach_ratio * reach_ratio * 0.65;
+            let base = 0.30 - reach_ratio * reach_ratio * 0.22;
 
             // Shot-speed penalty — the dominant footballing reason
             // keepers don't save everything is that elite shooters
             // generate 100+ km/h shots the keeper can't react to
-            // quickly enough. Ball velocity 3.0 is a tame shot, 5.0+
-            // is elite power. Every unit of speed over 3 knocks a
-            // skill-mitigated chunk off the save probability.
+            // quickly enough.
             let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
             let speed_excess = (ball_speed - 3.0).max(0.0);
-            // Reflexes mitigate fast shots — elite keeper loses ~half
-            // as much to a piledriver as a mediocre one.
-            let speed_penalty = (speed_excess * 0.10 * (1.0 - scaled_reflexes * 0.5)).min(0.45);
+            let speed_penalty = (speed_excess * 0.04 * (1.0 - scaled_reflexes * 0.5)).min(0.15);
 
             let skill = scaled_handling * 0.4 + scaled_reflexes * 0.4 + scaled_agility * 0.2;
-            let save_prob = ((base - speed_penalty) * (0.6 + skill * 0.5)).clamp(0.05, 0.95);
+            // Per-tick skill multiplier 0.55 (weak) to 1.05 (elite);
+            // cap final per-tick at 0.40 so cumulative across the
+            // shot flight tops out near real-world ~75% save rate.
+            let save_prob = ((base - speed_penalty) * (0.55 + skill * 0.50)).clamp(0.02, 0.40);
             return rand::random::<f32>() < save_prob;
         }
 

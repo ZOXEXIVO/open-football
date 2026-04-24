@@ -5,6 +5,7 @@ use core::league::LeagueCollection;
 use core::{
     Country, CountryGeneratorData, CountryPricing, CountrySettings, SkinColorDistribution,
 };
+use rayon::prelude::*;
 
 use super::DatabaseGenerator;
 
@@ -19,9 +20,15 @@ impl DatabaseGenerator {
             .map(|c| c.id)
             .collect();
 
+        // Each country is fully independent: its own name pools, its own
+        // clubs, and no shared mutable state — perfect shape for par_iter.
+        // Inner club generation also parallelises, so the nested split
+        // keeps cores busy even when one continent has few countries but
+        // big leagues (e.g. Europe: 50 countries, but Spain/Italy/England
+        // carry the bulk of the per-country work).
         data
             .countries
-            .iter()
+            .par_iter()
             .filter(|cn| cn.continent_id == continent.id)
             .filter(|cn| data.leagues.iter().any(|l| l.country_id == cn.id))
             .map(|country| {
@@ -38,10 +45,10 @@ impl DatabaseGenerator {
                     None => CountryGeneratorData::empty(),
                 };
 
-                let mut player_generator =
+                let player_generator =
                     PlayerGenerator::with_people_names(&generator_data.people_names);
 
-                let mut staff_generator =
+                let staff_generator =
                     StaffGenerator::with_people_names(&generator_data.people_names);
 
                 let mut clubs = Self::generate_clubs(
@@ -50,8 +57,8 @@ impl DatabaseGenerator {
                     &country.code,
                     country.reputation,
                     data,
-                    &mut player_generator,
-                    &mut staff_generator,
+                    &player_generator,
+                    &staff_generator,
                 );
 
                 let mut leagues_vec = Self::generate_leagues(country.id, country.reputation, data);

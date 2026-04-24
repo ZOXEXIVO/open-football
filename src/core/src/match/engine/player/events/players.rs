@@ -298,6 +298,13 @@ impl PlayerEventDispatcher {
 
         player.statistics.add_goal(context.total_match_time, is_auto_goal);
 
+        // Goal stands → credit on-target to the real scorer. Own goals
+        // aren't counted as an on-target shot for the defender that
+        // deflected the ball.
+        if !is_auto_goal {
+            player.memory.credit_shot_on_target();
+        }
+
         context.score.add_goal_detail(GoalDetail {
             player_id,
             stat_type: MatchStatisticType::Goal,
@@ -1244,10 +1251,16 @@ impl PlayerEventDispatcher {
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        // Base error: elite close-range ±4-8 units, poor long-range ±35-70 units
-        let base_position_error = 50.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let min_error = if horizontal_distance < 30.0 { 4.0 } else if horizontal_distance < 60.0 { 7.0 } else { 12.0 };
-        let max_y_error = base_position_error.clamp(min_error, 90.0);
+        // Base error: elite close-range ±2-5 units, poor long-range ±20-40 units.
+        // Goal half-width is 29u — a y-error spread larger than that
+        // pushes most shots wide regardless of where they were aimed,
+        // so prior 50× multiplier (close avg-player ±20, long ±35)
+        // dominated the on-target outcome and held the rate at ~19%.
+        // Cut to 30× and tightened mins so accuracy → on-target rate
+        // tracks more linearly toward the real ~33%.
+        let base_position_error = 30.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        let min_error = if horizontal_distance < 30.0 { 2.0 } else if horizontal_distance < 60.0 { 4.0 } else { 8.0 };
+        let max_y_error = base_position_error.clamp(min_error, 60.0);
 
         // Add random error to y-coordinate
         let y_error = rng.random_range(-max_y_error..max_y_error);
@@ -1255,20 +1268,24 @@ impl PlayerEventDispatcher {
 
         // Wide miss chance: distance-dependent. Calibrated to real-
         // football shot data — Opta/Statsbomb have ~33% of shots on
-        // target overall. Previous bases (0.10-0.40) + 0.45 accuracy
-        // scaling produced ~50-60% Y-wide misses which kept the
-        // engine's on-target rate stuck at 18% (vs real 33%).
-        // Rebalanced: close shots ~15% Y-wide, medium ~25%, long ~45%.
+        // target overall. After the prior cut (0.06/0.12/0.20/0.28 →
+        // 0.04/0.08/0.14/0.20) on-target landed at ~19% — still well
+        // below real. The y-error noise (line ~1248) already
+        // randomises around the aimed point; the wide_miss_chance
+        // is an additional "force the ball off-frame" path that was
+        // adding ~25-30% of misses on top. Halving bases again and
+        // pulling scaling 0.22 → 0.14 should move on-target toward
+        // 30%.
         let wide_miss_base = if horizontal_distance < 30.0 {
-            0.06
+            0.025
         } else if horizontal_distance < 60.0 {
-            0.12
+            0.05
         } else if horizontal_distance < 100.0 {
-            0.20
+            0.09
         } else {
-            0.28
+            0.14
         };
-        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.30 + wide_miss_base;
+        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.14 + wide_miss_base;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
             // Shot goes wide — force y outside goal posts
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
@@ -1346,22 +1363,25 @@ impl PlayerEventDispatcher {
         let vertical_spin_variation = rng.random_range(0.90..1.10);
 
         // Over-the-bar miss chance: distance-dependent. Real football
-        // data: close-range shots go over ~5%, long range ~20%. Prior
-        // bases (0.06-0.30) + 0.40 accuracy scaling landed at ~25-45%
-        // over-bar rate, which combined with the high wide-miss rate
-        // meant only 12% of all shots ever truly reached the frame.
-        // Rebalanced to match real-world distribution.
+        // data: close-range shots go over ~5%, long range ~20%. Earlier
+        // 0.04/0.08/0.14/0.20 bases + 0.20 accuracy scaling were OK when
+        // over-bar shots were silently counted on-target (the counting
+        // bug just fixed). Now that over-bar shots correctly do nothing,
+        // the same bases produce too many accuracy-less misses. Cut
+        // bases ~40% and scaling 0.20 → 0.12 so the on-target rate can
+        // recover toward the real ~33%.
         let over_bar_base = if horizontal_distance < 30.0 {
-            0.04
+            0.025
         } else if horizontal_distance < 60.0 {
-            0.08
+            0.05
         } else if horizontal_distance < 100.0 {
-            0.14
+            0.09
         } else {
-            0.20
+            0.13
         };
-        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.20 + over_bar_base;
-        let z_velocity = if rng.random_range(0.0f32..1.0) < over_bar_chance {
+        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.12 + over_bar_base;
+        let shot_goes_over_bar = rng.random_range(0.0f32..1.0) < over_bar_chance;
+        let z_velocity = if shot_goes_over_bar {
             // Shot goes over the bar — set z high enough to clear crossbar (GOAL_HEIGHT = 8.0)
             // Ball needs to reach height > 8.0 during flight, so z_velocity must be significant
             rng.random_range(3.0..6.0) // Guaranteed to fly high over the bar
@@ -1396,8 +1416,17 @@ impl PlayerEventDispatcher {
             final_velocity = final_velocity * (MAX_SHOT_VELOCITY / velocity_magnitude);
         }
 
-        // Record shot in player memory
-        let on_target = clamped_y_target >= goal_left_post && clamped_y_target <= goal_right_post;
+        // Record shot in player memory. A shot counts as "on target" only
+        // if the frame of the goal is actually threatened — the y-aim lies
+        // between the posts AND we didn't just roll "over the bar" above.
+        // The over-bar branch sets z-velocity to 3.0-6.0 (guaranteed clear
+        // of crossbar at 8.0), so those shots fly into the stands. Before
+        // this check, `on_target` counted them because it only looked at y,
+        // producing a ~49% conversion leak where on-target shots were
+        // neither saved nor scored — they just sailed over, off-screen.
+        let on_target = clamped_y_target >= goal_left_post
+            && clamped_y_target <= goal_right_post
+            && !shot_goes_over_bar;
         if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
             // Quick xG from distance + finishing skill. Full-context xG with
             // pressure/angle lives in ShotQualityEvaluator (player strategy
@@ -1489,9 +1518,24 @@ impl PlayerEventDispatcher {
             .and_then(|prev_id| field.players.iter().find(|p| p.id == prev_id).map(|p| p.team_id));
         let gk_team = field.players.iter().find(|p| p.id == player_id).map(|p| p.team_id);
 
+        // Keeper caught a ball that was moving from an opponent — that's a
+        // save. Credit the save AND credit on-target to the shooter
+        // (previous_owner) only now: the shot actually reached the
+        // goalmouth. Gated on `cached_shot_target.is_some()` so a pass
+        // or random clearance the keeper happens to intercept doesn't
+        // count as an on-target shot.
         if ball_was_moving && last_owner_team.is_some() && last_owner_team != gk_team {
+            let was_shot = field.ball.cached_shot_target.is_some();
+            let shooter_id = field.ball.previous_owner;
             if let Some(player) = field.get_player_mut(player_id) {
                 player.statistics.saves += 1;
+            }
+            if was_shot {
+                if let Some(sid) = shooter_id {
+                    if let Some(shooter) = field.get_player_mut(sid) {
+                        shooter.memory.credit_shot_on_target();
+                    }
+                }
             }
         }
 

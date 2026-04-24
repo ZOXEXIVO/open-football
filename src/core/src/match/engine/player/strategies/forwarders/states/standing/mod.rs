@@ -35,15 +35,13 @@ impl StateProcessingHandler for ForwardStandingState {
 
             // Skill-gated trigger: see running/mod.rs for rationale.
             // Poor finishers hesitate, elite finishers pull the trigger
-            // confidently. Reduces total shot rate across the squad in
-            // proportion to skill rather than concentrating shots in
-            // a few high-skill hands.
+            // confidently. Linear curve + floor matches the loosened
+            // Running-state willingness so the two entry points don't
+            // disagree on when a forward should strike.
             let finishing = ctx.player.skills.technical.finishing;
             let fin_factor = (finishing / 20.0).clamp(0.0, 1.0);
             let comp_factor = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-            // See running/mod.rs for curve rationale. Squared fin_factor
-            // makes truly poor finishers shoot far less often.
-            let willingness = (fin_factor * fin_factor * 0.80 + comp_factor * 0.15).clamp(0.05, 0.95);
+            let willingness = (fin_factor * 0.55 + comp_factor * 0.15 + 0.25).clamp(0.45, 0.95);
             let shot_triggered = rand::random::<f32>() < willingness;
 
             if has_settled

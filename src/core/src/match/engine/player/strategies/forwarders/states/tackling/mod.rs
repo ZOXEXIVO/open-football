@@ -311,12 +311,13 @@ impl ForwardTacklingState {
         let opponent_evasion_ability = (opponent_dribbling * 0.4) + (opponent_agility * 0.3) +
             (opponent_balance * 0.2) + (opponent_composure * 0.1);
 
-        // Final success calculation. Base dropped 0.50 → 0.35 — forwards
-        // don't win sliding duels as often as specialists; counter-press
-        // tackle success in real football is ~30–40%.
+        // Final success calculation. Forward counter-press tackle
+        // success in real football is the lowest of the three roles —
+        // ~15-25% — because forwards are ahead of the play, off-balance,
+        // and don't drill defensive technique. Base 0.15.
         let base_success = player_tackle_ability - opponent_evasion_ability;
         let situational_bonus = distance_factor * 0.3 + tackle_angle_factor * 0.2;
-        let success_chance = (0.35 + base_success * 0.4 + situational_bonus).clamp(0.05, 0.85);
+        let success_chance = (0.15 + base_success * 0.4 + situational_bonus).clamp(0.03, 0.60);
 
         let tackle_success = rng.random::<f32>() < success_chance;
 

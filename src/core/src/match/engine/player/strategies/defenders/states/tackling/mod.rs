@@ -9,13 +9,12 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::RngExt;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 14.0; // ~1.75m — realistic lunge/slide range.
-// Previously 25u (~3m) which let defenders commit to tackles while still
-// a full stride away; every tick inside the 25u bubble rolled a 62%
-// success chance, and two defenders both within 25u both rolled in the
-// same tick. Tightening to 14u forces a proper engagement distance
-// before the dice roll, which — combined with the team-best-chaser gate
-// — drops tackle events from 400/team/match toward the real ~18.
+const TACKLE_DISTANCE_THRESHOLD: f32 = 10.0; // ~1.25m — proper engagement range.
+// Previously 14u (~1.75m). Even with that, attempts ran at 174/team/match
+// because longer possessions in attacking zones create more chances to
+// hit the gate. 10u forces actual contact range — a defender who's
+// still half a stride away has to keep pressing rather than committing
+// to a slide that won't connect.
 const PRESSING_DISTANCE: f32 = 80.0;
 const RETURN_DISTANCE: f32 = 120.0;
 
@@ -238,14 +237,15 @@ impl DefenderTacklingState {
 
         let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
 
-        // Defenders have home advantage in tackles — they pick the moment.
-        // Base dropped 0.62 → 0.45 after instrumentation showed 62% per
-        // attempt combined with the old 25u attempt distance produced
-        // ~370 tackle events/team/match. Real football defenders win
-        // ~50% of challenges at close range; 45% base + skill_diff
-        // spread gives a realistic 30–75% window across the skill gap.
-        let success_chance = 0.45 + skill_difference * 0.40;
-        let clamped_success_chance = success_chance.clamp(0.15, 0.85);
+        // Total tackles/team/match converges on real football's ~18 by
+        // suppressing both attempt rate (10u distance + 30s cooldown)
+        // and per-attempt success (0.25 base). At 174 attempts × 0.25
+        // = ~43, then with skill_diff distribution and the tighter
+        // attempt gate landing closer to ~80 attempts × 0.25 ≈ 20.
+        // The skill_diff spread (±0.20 around base) preserves the
+        // elite-vs-journeyman gap.
+        let success_chance = 0.25 + skill_difference * 0.40;
+        let clamped_success_chance = success_chance.clamp(0.08, 0.65);
 
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 

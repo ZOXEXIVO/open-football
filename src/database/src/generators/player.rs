@@ -446,7 +446,7 @@ pub enum PositionType {
 
 impl PlayerGenerator {
     pub fn generate(
-        &mut self,
+        &self,
         country_id: u32,
         continent_id: u32,
         position: PositionType,
