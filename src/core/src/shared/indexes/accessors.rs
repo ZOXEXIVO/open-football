@@ -373,6 +373,17 @@ impl SimulatorData {
         }
     }
 
+    /// Rebuild indexes only if a transfer actually moved a player today.
+    /// Resets `dirty_player_index` after a successful refresh so the next
+    /// tick starts clean. Walking the world every day is wasteful — this
+    /// is the cheap default the orchestrator should call.
+    pub fn rebuild_indexes_if_dirty(&mut self) {
+        if self.dirty_player_index {
+            self.rebuild_indexes();
+            self.dirty_player_index = false;
+        }
+    }
+
     pub fn staff_with_team(&self, staff_id: u32) -> Option<(&Staff, &Team)> {
         // Fast path: indexed lookup
         if let Some((continent_id, country_id, club_id, team_id)) =

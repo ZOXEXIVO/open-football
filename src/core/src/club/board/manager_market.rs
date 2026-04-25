@@ -14,10 +14,37 @@
 
 use crate::club::board::ClubBoard;
 use crate::club::staff::contract::StaffPosition;
+use crate::club::staff::free_pool;
 use crate::utils::DateUtils;
 use crate::{SimulatorData, Staff, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
+
+/// Run one daily tick of the world-level manager market in the canonical
+/// order: harvest expired contracts → age the pool → refresh shortlists →
+/// initiate fresh approaches → advance in-flight approaches.
+///
+/// The order is load-bearing:
+///   1. Sacked / contract-lapsed staff must hit the free-agent pool *before*
+///      shortlists refresh, otherwise the freshly-vacated seats look like
+///      they have no candidates.
+///   2. Pool aging (satisfaction decay, retirement) runs before shortlists
+///      so retiring coaches don't appear as candidates this tick.
+///   3. Shortlists must exist before fresh approaches initiate (an approach
+///      picks from the shortlist).
+///   4. Approach ticks must run *after* fresh initiation so a brand-new
+///      approach starts at state 0 and doesn't get advanced on the same tick.
+///
+/// Wrapping these in one function localises the contract — adding a sixth
+/// step now means editing one place rather than three call sites scattered
+/// around the orchestrator.
+pub fn tick_daily(data: &mut SimulatorData, today: NaiveDate) {
+    free_pool::harvest_expired_staff(data, today);
+    free_pool::tick_free_agent_staff_pool(&mut data.free_agent_staff, today);
+    refresh_shortlists(data);
+    initiate_approaches(data);
+    tick_approaches(data);
+}
 
 /// Maximum candidates kept on a club's shortlist. Five is enough to
 /// model "first-choice falls through, board moves to backup" without

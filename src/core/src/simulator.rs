@@ -1,7 +1,6 @@
 use crate::ai::{Ai, AiBatchProcessor};
 use crate::club::ai::apply_ai_responses;
 use crate::club::board::manager_market;
-use crate::club::staff::free_pool;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::competitions::GlobalCompetitions;
 use crate::context::{GlobalContext, SimulationContext};
@@ -9,14 +8,15 @@ use crate::continent::{Continent, ContinentResult};
 use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
+use crate::simulator_config::SimulatorConfig;
 use crate::transfers::TransferPool;
 use crate::utils::random::engine as rng_engine;
 use crate::{Player, Staff, TeamInfo, TeamType};
-use chrono::{Datelike, Duration, NaiveDateTime};
+use chrono::{Duration, NaiveDateTime};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
-use std::time::Duration as StdDuration;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Lightweight country info for nationality lookups.
 /// Covers ALL countries (not just simulation participants).
@@ -28,11 +28,6 @@ pub struct CountryInfo {
     pub name: String,
 }
 
-/// Upper bound on one Phase-B AI batch. Long enough for a cross-continent
-/// monthly run with a slow provider; short enough that a hung service
-/// still yields within a minute and the sim keeps ticking.
-const AI_BATCH_TIMEOUT: StdDuration = StdDuration::from_secs(60);
-
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> &'static str {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         s
@@ -43,10 +38,32 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &'static str {
     }
 }
 
+/// Cumulative count of continent panics swallowed by the simulator. The
+/// `simulate` loop catches a panicking continent and substitutes an empty
+/// result so the rest of the world keeps ticking — this counter exposes
+/// that silent failure to operators and tests. Read from anywhere via
+/// `panicked_continents_total()`.
+static PANICKED_CONTINENTS: AtomicU64 = AtomicU64::new(0);
+
+/// Total continent panics swallowed since process start.
+pub fn panicked_continents_total() -> u64 {
+    PANICKED_CONTINENTS.load(Ordering::Relaxed)
+}
+
 pub struct FootballSimulator;
 
 impl FootballSimulator {
+    /// Tick the simulator one day with default tunables. Use `simulate_with`
+    /// to plumb a `SimulatorConfig` (per-save overrides, faster timeouts in
+    /// tests, etc.).
     pub async fn simulate(data: &mut SimulatorData) -> SimulationResult {
+        Self::simulate_with(data, &SimulatorConfig::default()).await
+    }
+
+    pub async fn simulate_with(
+        data: &mut SimulatorData,
+        config: &SimulatorConfig,
+    ) -> SimulationResult {
         let mut result = SimulationResult::new();
 
         let current_date = data.date;
@@ -66,9 +83,15 @@ impl FootballSimulator {
         //
         // A panic inside one continent must not kill the whole tick — a
         // single buggy state machine or malformed save row would otherwise
-        // unwind the Rayon pool and dump the player's save. We catch,
-        // log, and substitute an empty result so the surviving continents
-        // still advance.
+        // unwind the Rayon pool and dump the player's save. `AssertUnwindSafe`
+        // is sound here because the closure mutates only its own continent
+        // (no shared `&mut` state) and doesn't hold any locks; the Rayon
+        // worker doesn't carry poisoned state across iterations. Panic is
+        // surfaced via the `PANICKED_CONTINENTS` counter and a structured
+        // log line; surviving continents still advance. Per-tick count
+        // is recovered as the delta on the atomic since map closures
+        // running in parallel can't share a `&mut u32`.
+        let panicks_before = PANICKED_CONTINENTS.load(Ordering::Relaxed);
         let results: Vec<ContinentResult> = data
             .continents
             .par_iter_mut()
@@ -79,16 +102,19 @@ impl FootballSimulator {
                 panic::catch_unwind(AssertUnwindSafe(|| {
                     continent.simulate(ctx_ref.with_continent(cid))
                 }))
-                    .unwrap_or_else(|payload| {
-                        let msg = panic_message(&payload);
-                        log::error!(
-                        "continent {} ({}) panicked during simulate: {}. tick continues with empty result.",
+                .unwrap_or_else(|payload| {
+                    PANICKED_CONTINENTS.fetch_add(1, Ordering::Relaxed);
+                    let msg = panic_message(&payload);
+                    log::error!(
+                        "event=continent_panic continent_id={} continent_name={:?} message={:?} tick_action=continue_with_empty_result",
                         cid, name, msg
                     );
-                        ContinentResult::new(cid, Vec::new(), Vec::new())
-                    })
+                    ContinentResult::new(cid, Vec::new(), Vec::new())
+                })
             })
             .collect();
+        result.panicked_continents =
+            (PANICKED_CONTINENTS.load(Ordering::Relaxed) - panicks_before) as u32;
 
         // Phase B: collect and batch-execute all AI requests. Guarded by
         // a timeout so a hung upstream provider can't stall the whole
@@ -98,11 +124,11 @@ impl FootballSimulator {
         let ai_count = all_requests.len();
         if !all_requests.is_empty() {
             let fut = AiBatchProcessor::execute(all_requests);
-            match tokio::time::timeout(AI_BATCH_TIMEOUT, fut).await {
+            match tokio::time::timeout(config.ai_batch_timeout, fut).await {
                 Ok(completed) => apply_ai_responses(completed, data),
                 Err(_) => log::error!(
                     "AI batch timed out after {:?} ({} requests dropped), tick continues",
-                    AI_BATCH_TIMEOUT, ai_count
+                    config.ai_batch_timeout, ai_count
                 ),
             }
         }
@@ -112,49 +138,26 @@ impl FootballSimulator {
             continent_result.process(data, &mut result);
         }
 
-        // Phase D: world-level manager market.
-        //
-        // Runs once per day after every continent's BoardResult.process has
-        // applied sackings (so freshly-vacated seats and freshly-pooled
-        // staff are visible in this same tick). Five steps:
-        //   1. Sweep naturally-expired non-manager contracts into the pool.
-        //   2. Age the pool (decay satisfaction, retire elderly coaches).
-        //   3. Refresh shortlists for clubs in active manager search.
-        //      Combined builder pulls from the free-agent pool AND
-        //      enumerates poach-candidates at smaller clubs.
-        //   4. Initiate fresh approaches for top employed candidates
-        //      that don't already have a pursuit in flight.
-        //   5. Advance every in-flight approach by one state — sources
-        //      respond, candidates accept terms, signings finalize
-        //      with their cascade source-club search.
+        // Phase D: world-level manager market. Order is load-bearing —
+        // see `manager_market::tick_daily` for the dependency rationale.
         let today = data.date.date();
-        free_pool::harvest_expired_staff(data, today);
-        free_pool::tick_free_agent_staff_pool(&mut data.free_agent_staff, today);
-        manager_market::refresh_shortlists(data);
-        manager_market::initiate_approaches(data);
-        manager_market::tick_approaches(data);
+        manager_market::tick_daily(data, today);
 
         // Global competitions (Champions League, World Cup, etc.)
         GlobalCompetitionSimulator::simulate(data);
 
         // Refresh player indexes only if a transfer actually moved a player
         // between clubs today. Walking the world every day is wasteful.
-
-        if data.dirty_player_index {
-            if let Some(mut indexes) = data.indexes.take() {
-                indexes.refresh_player_indexes(data);
-                data.indexes = Some(indexes);
-            }
-            data.dirty_player_index = false;
-        }
+        data.rebuild_indexes_if_dirty();
 
         // Seed history for any players created today that haven't been seeded
         // (youth intake, regens, new clubs) — catches them within one tick.
         data.seed_missing_player_histories();
 
-        // Once a month, prune the global match store to its retention window.
-        // Cheap — BTreeMap range walk over evicted dates only.
-        if current_date.day() == 1 {
+        // Periodic prune of the global match store. Cadence lives on the
+        // config (default: first of every month). Cheap — BTreeMap range
+        // walk over evicted dates only.
+        if config.is_trim_day(current_date.date()) {
             data.match_store.trim(current_date.date());
         }
 
@@ -210,6 +213,13 @@ impl SimulatorData {
     /// Passing a non-zero seed makes the util-layer RNG stream reproducible
     /// per worker thread; Rayon scheduling still reorders draws across
     /// threads, so this is a debugging aid, not a replay tool.
+    ///
+    /// **Note: the seed is process-global state.** `set_seed` writes to
+    /// the RNG engine's static; building two `SimulatorData` back-to-back
+    /// means the second silently inherits whatever seed the first left
+    /// behind unless this function (or `set_seed`) is called again.
+    /// Don't rely on this constructor to fully isolate two simulators
+    /// running in the same process.
     pub fn new_seeded(
         date: NaiveDateTime,
         continents: Vec<Continent>,
@@ -220,6 +230,16 @@ impl SimulatorData {
         Self::new(date, continents, global_competitions)
     }
 
+    /// Build a SimulatorData populated from `continents`.
+    ///
+    /// **`country_info` lifecycle:** the constructor seeds the nationality
+    /// lookup map only with countries that participate in the simulation
+    /// (i.e. countries whose continents are passed in). Some nationalities
+    /// belong to countries that have no active leagues — those need to be
+    /// added explicitly via [`add_country_info`] by the database loader
+    /// before the first `simulate()` call. A nationality lookup that misses
+    /// returns `None` silently, so a forgotten generator step manifests as
+    /// blank flags / empty country names in the UI rather than a panic.
     pub fn new(date: NaiveDateTime, continents: Vec<Continent>, global_competitions: GlobalCompetitions) -> Self {
         // Build country_info from simulation participants
         let country_info: HashMap<u32, CountryInfo> = continents.iter()
@@ -272,24 +292,18 @@ impl SimulatorData {
 
     /// Initial population of league tables at construction time.
     /// Per-season rebuilds happen inside `League::simulate` when a new
-    /// schedule is generated — see `league/league.rs:119`. The skip-if-
-    /// non-empty guard below is therefore intentional: it only prevents
-    /// the initial seed from clobbering an already-populated table.
+    /// schedule is generated. The skip-if-non-empty guard below is
+    /// therefore intentional: it only prevents the initial seed from
+    /// clobbering an already-populated table.
     fn init_league_tables(&mut self) {
         for continent in &mut self.continents {
             for country in &mut continent.countries {
                 let clubs = &country.clubs;
-
                 for league in &mut country.leagues.leagues {
                     if !league.table.rows.is_empty() {
                         continue;
                     }
-
-                    let team_ids: Vec<u32> = clubs
-                        .iter()
-                        .flat_map(|c| c.teams.with_league(league.id))
-                        .collect();
-
+                    let team_ids = team_ids_for_league(clubs, league.id);
                     if !team_ids.is_empty() {
                         league.table = LeagueTable::new(&team_ids);
                     }
@@ -298,95 +312,56 @@ impl SimulatorData {
         }
     }
 
-    /// Seed statistics history for every player (called on construction).
+    /// Seed statistics history for every player. Called once at
+    /// construction time — touches every player unconditionally.
     fn seed_player_histories(&mut self) {
-        self.seed_player_histories_inner(false);
+        let date = self.date.date();
+        for continent in &mut self.continents {
+            for country in &mut continent.countries {
+                let league_lookup = build_league_lookup(country);
+                for club in &mut country.clubs {
+                    let club_ctx = ClubSeedingContext::resolve(club, &league_lookup);
+                    for team in club.teams.iter_mut() {
+                        let team_info = club_ctx.team_info_for(team);
+                        for player in &mut team.players.players {
+                            let is_loan = player.is_on_loan();
+                            player
+                                .statistics_history
+                                .seed_initial_team(&team_info, date, is_loan);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Seed any players whose history is still empty — catches youth intake,
     /// regens, and newly-generated clubs within one simulated tick.
+    /// Skip-fast at club AND team level so the steady-state cost is close
+    /// to zero when nothing needs seeding.
     pub fn seed_missing_player_histories(&mut self) {
-        self.seed_player_histories_inner(true);
-    }
-
-    fn seed_player_histories_inner(&mut self, only_empty: bool) {
         let date = self.date.date();
-
         for continent in &mut self.continents {
             for country in &mut continent.countries {
-                // Pre-compute league (name, slug) lookup once per country.
-                // Before: per-club closure did a linear scan of leagues,
-                // costing ~N_clubs × N_leagues per country on affected days.
-                let league_info: HashMap<u32, (String, String)> = country
-                    .leagues
-                    .leagues
-                    .iter()
-                    .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
-                    .collect();
-                let lookup = |league_id: u32| -> (&str, &str) {
-                    league_info
-                        .get(&league_id)
-                        .map(|(n, s)| (n.as_str(), s.as_str()))
-                        .unwrap_or(("", ""))
-                };
-
+                let league_lookup = build_league_lookup(country);
                 for club in &mut country.clubs {
-                    // In the `only_empty` path (steady state) most teams have
-                    // zero players needing seeding — skip the whole club as
-                    // cheaply as possible before we pay any allocation cost.
-                    if only_empty
-                        && !club.teams.iter().any(|t| {
-                        t.players.iter().any(|p| p.statistics_history.needs_current_season_seed())
-                    })
-                    {
+                    if !club_has_players_needing_seed(club) {
                         continue;
                     }
-
-                    // Resolve the main team's identity once per club.
-                    let main_team = club.teams.main();
-                    let main_name = main_team.map(|t| t.name.clone());
-                    let main_slug = main_team.map(|t| t.slug.clone());
-                    let main_reputation = main_team.map(|t| t.reputation.world);
-                    let (main_league_name, main_league_slug) = main_team
-                        .and_then(|t| t.league_id)
-                        .map(|lid| {
-                            let (n, s) = lookup(lid);
-                            (n.to_owned(), s.to_owned())
-                        })
-                        .unwrap_or_default();
-
+                    let club_ctx = ClubSeedingContext::resolve(club, &league_lookup);
                     for team in club.teams.iter_mut() {
-                        // Cheap per-team scan — skip if no seeding needed.
-                        if only_empty
-                            && !team.players.iter().any(|p| p.statistics_history.needs_current_season_seed())
-                        {
+                        if !team_has_players_needing_seed(team) {
                             continue;
                         }
-
-                        let team_info = if team.team_type == TeamType::Main || main_name.is_none() {
-                            TeamInfo {
-                                name: team.name.clone(),
-                                slug: team.slug.clone(),
-                                reputation: team.reputation.world,
-                                league_name: main_league_name.clone(),
-                                league_slug: main_league_slug.clone(),
-                            }
-                        } else {
-                            TeamInfo {
-                                name: main_name.clone().unwrap_or_default(),
-                                slug: main_slug.clone().unwrap_or_default(),
-                                reputation: main_reputation.unwrap_or(0),
-                                league_name: main_league_name.clone(),
-                                league_slug: main_league_slug.clone(),
-                            }
-                        };
-
+                        let team_info = club_ctx.team_info_for(team);
                         for player in &mut team.players.players {
-                            if only_empty && !player.statistics_history.needs_current_season_seed() {
+                            if !player.statistics_history.needs_current_season_seed() {
                                 continue;
                             }
                             let is_loan = player.is_on_loan();
-                            player.statistics_history.seed_initial_team(&team_info, date, is_loan);
+                            player
+                                .statistics_history
+                                .seed_initial_team(&team_info, date, is_loan);
                         }
                     }
                 }
@@ -401,6 +376,11 @@ impl SimulatorData {
 
 pub struct SimulationResult {
     pub match_results: Vec<MatchResult>,
+    /// Number of continents whose `simulate` call panicked during this
+    /// tick. Surfaces silent failures the orchestrator catches and
+    /// substitutes empty results for. Sum across ticks via the
+    /// process-global `panicked_continents_total()`.
+    pub panicked_continents: u32,
 }
 
 impl Default for SimulationResult {
@@ -413,10 +393,114 @@ impl SimulationResult {
     pub fn new() -> Self {
         SimulationResult {
             match_results: Vec::new(),
+            panicked_continents: 0,
         }
     }
 
     pub fn has_match_results(&self) -> bool {
         !self.match_results.is_empty()
+    }
+}
+
+// ============================================================
+// Internal: league-seeding helpers
+// ============================================================
+
+/// Collect every team id that participates in `league_id` across the
+/// given clubs. Extracted so `init_league_tables`'s outer loop reads as
+/// "for each league, install a table from the team ids" without an inline
+/// `flat_map` chain.
+fn team_ids_for_league(clubs: &[crate::Club], league_id: u32) -> Vec<u32> {
+    clubs
+        .iter()
+        .flat_map(|c| c.teams.with_league(league_id))
+        .collect()
+}
+
+// ============================================================
+// Internal: history-seeding helpers
+// ============================================================
+
+/// Per-country `league_id -> (name, slug)` cache. Built once at the start
+/// of a country's seeding sweep so the per-club main-team lookup is O(1).
+fn build_league_lookup(country: &crate::Country) -> HashMap<u32, (String, String)> {
+    country
+        .leagues
+        .leagues
+        .iter()
+        .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
+        .collect()
+}
+
+/// True if any team in the club has at least one player needing a current-
+/// season seed entry. Cheap traversal — exits as soon as one is found.
+fn club_has_players_needing_seed(club: &crate::Club) -> bool {
+    club.teams
+        .iter()
+        .any(|t| team_has_players_needing_seed(t))
+}
+
+fn team_has_players_needing_seed(team: &crate::club::Team) -> bool {
+    team.players
+        .iter()
+        .any(|p| p.statistics_history.needs_current_season_seed())
+}
+
+/// Snapshot of the club's main-team identity for stats-seeding purposes.
+/// Resolved once per club so non-main teams (reserve, U21) inherit the
+/// main brand consistently across all their players.
+struct ClubSeedingContext {
+    main_name: Option<String>,
+    main_slug: Option<String>,
+    main_reputation: u16,
+    main_league_name: String,
+    main_league_slug: String,
+}
+
+impl ClubSeedingContext {
+    fn resolve(
+        club: &crate::Club,
+        league_lookup: &HashMap<u32, (String, String)>,
+    ) -> Self {
+        let main_team = club.teams.main();
+        let main_name = main_team.map(|t| t.name.clone());
+        let main_slug = main_team.map(|t| t.slug.clone());
+        let main_reputation = main_team.map(|t| t.reputation.world).unwrap_or(0);
+        let (main_league_name, main_league_slug) = main_team
+            .and_then(|t| t.league_id)
+            .and_then(|lid| league_lookup.get(&lid))
+            .map(|(n, s)| (n.clone(), s.clone()))
+            .unwrap_or_default();
+        ClubSeedingContext {
+            main_name,
+            main_slug,
+            main_reputation,
+            main_league_name,
+            main_league_slug,
+        }
+    }
+
+    /// Build the `TeamInfo` that the seeder writes onto the player's
+    /// history. Main teams use their own identity; non-main teams inherit
+    /// the main brand so stats aggregate correctly under one club name.
+    fn team_info_for(&self, team: &crate::club::Team) -> TeamInfo {
+        let inherit = team.team_type != TeamType::Main && self.main_name.is_some();
+        if inherit {
+            TeamInfo {
+                name: self.main_name.clone().unwrap_or_default(),
+                slug: self.main_slug.clone().unwrap_or_default(),
+                reputation: self.main_reputation,
+                league_name: self.main_league_name.clone(),
+                league_slug: self.main_league_slug.clone(),
+            }
+        } else {
+            TeamInfo {
+                name: team.name.clone(),
+                slug: team.slug.clone(),
+                reputation: team.reputation.world,
+                league_name: self.main_league_name.clone(),
+                league_slug: self.main_league_slug.clone(),
+            }
+        }
     }
 }

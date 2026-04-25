@@ -56,7 +56,9 @@ pub use crate::r#match::engine::player::strategies::forwarders::states::running:
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
 
 pub mod simulator;
+pub mod simulator_config;
 pub use simulator::*;
+pub use simulator_config::SimulatorConfig;
 
 pub mod club;
 pub mod context;
