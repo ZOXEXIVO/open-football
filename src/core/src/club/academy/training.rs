@@ -1,6 +1,6 @@
+use super::{AcademyDevelopmentIdentity, ClubAcademy};
 use crate::context::GlobalContext;
 use crate::{Person, Player, PlayerFieldPositionGroup};
-use super::ClubAcademy;
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Youth Development Phases — mirrors real-life academy structures
@@ -31,6 +31,24 @@ impl YouthDevelopmentPhase {
     }
 }
 
+fn identity_training_multipliers(
+    identity: AcademyDevelopmentIdentity,
+    group: PlayerFieldPositionGroup,
+) -> (f32, f32, f32) {
+    match identity {
+        AcademyDevelopmentIdentity::Balanced => (1.0, 1.0, 1.0),
+        AcademyDevelopmentIdentity::TechnicalSchool => (1.14, 1.04, 0.94),
+        AcademyDevelopmentIdentity::TacticalSchool => (1.02, 1.15, 0.96),
+        AcademyDevelopmentIdentity::AthleticDevelopment => (0.96, 1.0, 1.16),
+        AcademyDevelopmentIdentity::PlayerTrading => match group {
+            PlayerFieldPositionGroup::Forward | PlayerFieldPositionGroup::Midfielder => {
+                (1.10, 1.04, 1.02)
+            }
+            _ => (1.04, 1.04, 1.04),
+        },
+    }
+}
+
 impl ClubAcademy {
     /// Apply weekly training to all academy players based on their development phase.
     ///
@@ -57,6 +75,7 @@ impl ClubAcademy {
         // Sessions per week by academy level → normalized to base of 4
         let sessions = self.settings.sessions_per_week(self.level) as f32;
         let session_mult = sessions / 4.0;
+        let identity = self.development_identity;
 
         for player in &mut self.players.players {
             if player.player_attributes.is_injured {
@@ -76,7 +95,8 @@ impl ClubAcademy {
             let variance = 0.85 + rand::random::<f32>() * 0.30;
             let gain_mult = base_mult * variance;
 
-            let is_gk = player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper;
+            let group = player.position().position_group();
+            let is_gk = group == PlayerFieldPositionGroup::Goalkeeper;
 
             match phase {
                 YouthDevelopmentPhase::Foundation => {
@@ -101,6 +121,8 @@ impl ClubAcademy {
                     }
                 }
             }
+
+            Self::apply_identity_emphasis(player, group, identity, gain_mult);
 
             // Puberty growth spurts (ages 13-15): physical gains with temporary
             // coordination disruption — a well-known phenomenon in youth development
@@ -149,6 +171,41 @@ impl ClubAcademy {
         // Weighted: professionalism matters most for youth development
         let weighted = professionalism * 0.45 + determination * 0.30 + work_rate * 0.25;
         0.4 + (weighted / 20.0) * 1.0
+    }
+
+    fn apply_identity_emphasis(
+        player: &mut Player,
+        group: PlayerFieldPositionGroup,
+        identity: AcademyDevelopmentIdentity,
+        m: f32,
+    ) {
+        let (technical, mental, physical) = identity_training_multipliers(identity, group);
+        let tech_bonus = (technical - 1.0).max(0.0) * m;
+        let mental_bonus = (mental - 1.0).max(0.0) * m;
+        let physical_bonus = (physical - 1.0).max(0.0) * m;
+
+        if tech_bonus > 0.0 {
+            player.skills.technical.technique += 0.018 * tech_bonus;
+            player.skills.technical.first_touch += 0.015 * tech_bonus;
+            player.skills.technical.passing += 0.012 * tech_bonus;
+            if group == PlayerFieldPositionGroup::Forward {
+                player.skills.technical.finishing += 0.012 * tech_bonus;
+            }
+        }
+
+        if mental_bonus > 0.0 {
+            player.skills.mental.decisions += 0.018 * mental_bonus;
+            player.skills.mental.anticipation += 0.014 * mental_bonus;
+            player.skills.mental.teamwork += 0.012 * mental_bonus;
+            player.skills.mental.positioning += 0.012 * mental_bonus;
+        }
+
+        if physical_bonus > 0.0 {
+            player.skills.physical.stamina += 0.016 * physical_bonus;
+            player.skills.physical.acceleration += 0.014 * physical_bonus;
+            player.skills.physical.agility += 0.012 * physical_bonus;
+            player.skills.physical.strength += 0.010 * physical_bonus;
+        }
     }
 
     // ───────────────────────────────────────────────────────────────────────

@@ -3,9 +3,16 @@ use crate::club::board::manager_market;
 use crate::club::board::BoardMoodState;
 use crate::club::staff::free_pool;
 use crate::club::{StaffClubContract, StaffPosition, StaffStatus};
-use crate::TeamType;
+use crate::{StaffEventType, TeamType};
 use chrono::Datelike;
 use log::{debug, info};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardManagerMeeting {
+    Backing,
+    Warning,
+    Crisis,
+}
 
 pub struct BoardResult {
     pub club_id: u32,
@@ -34,6 +41,9 @@ pub struct BoardResult {
     /// manager — set at season start when board confidence is high
     /// and the contract is approaching its tail end.
     pub offer_manager_renewal: bool,
+    /// Monthly board contact with the head coach: public backing, a formal
+    /// warning, or a crisis meeting before/around dismissal risk.
+    pub manager_meeting: Option<BoardManagerMeeting>,
 }
 
 impl BoardResult {
@@ -54,6 +64,7 @@ impl BoardResult {
             confirm_new_manager: false,
             manager_satisfaction_delta: 0.0,
             offer_manager_renewal: false,
+            manager_meeting: None,
         }
     }
 
@@ -108,6 +119,19 @@ impl BoardResult {
                     mgr.job_satisfaction = (mgr.job_satisfaction
                         + self.manager_satisfaction_delta)
                         .clamp(0.0, 100.0);
+                }
+            }
+        }
+
+        if let Some(meeting) = self.manager_meeting {
+            if let Some(main_team) = club.teams.main_mut() {
+                if let Some(mgr) = main_team.staffs.find_mut_by_position(StaffPosition::Manager) {
+                    let event = match meeting {
+                        BoardManagerMeeting::Backing => StaffEventType::TrustBuilt,
+                        BoardManagerMeeting::Warning => StaffEventType::PerformanceDeclined,
+                        BoardManagerMeeting::Crisis => StaffEventType::Conflict,
+                    };
+                    mgr.add_event(event);
                 }
             }
         }

@@ -1,13 +1,14 @@
 use chrono::NaiveDate;
 use log::debug;
+use std::collections::HashMap;
 
+use crate::club::BoardTransferProposal;
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
     DetailedScoutingReport, ReportRiskFlag, ScoutingAssignment, ScoutingRecommendation,
-    ShortlistCandidate, ShortlistCandidateStatus, TransferNeedPriority, TransferRequestStatus,
-    TransferShortlist,
+    ShortlistCandidate, ShortlistCandidateStatus, TransferRequestStatus, TransferShortlist,
 };
-use crate::{Club, Country, PlayerFieldPositionGroup, StaffPosition, TeamType};
+use crate::{Club, Country, Person, PlayerFieldPositionGroup, StaffPosition, TeamType};
 
 struct ShortlistResult {
     club_id: u32,
@@ -302,9 +303,12 @@ impl PipelineProcessor {
     /// drifts down, and the manager takes a job_satisfaction hit. Named
     /// targets that DO pass the filter get `board_approved = Some(true)`
     /// so the downstream negotiation pipeline can pin them as priority #1.
-    pub fn evaluate_board_approvals(country: &mut Country, _date: NaiveDate) {
-        use crate::club::board::FinancialStance;
-
+    pub fn evaluate_board_approvals(country: &mut Country, date: NaiveDate) {
+        #[derive(Clone, Copy)]
+        struct PlayerApprovalSnapshot {
+            age: u8,
+            ability: u8,
+        }
         struct Decision {
             club_id: u32,
             request_id: u32,
@@ -314,10 +318,35 @@ impl PipelineProcessor {
             loyalty_delta: i16,
         }
         let mut decisions: Vec<Decision> = Vec::new();
+        let mut player_snapshots: HashMap<u32, PlayerApprovalSnapshot> = HashMap::new();
 
         for club in &country.clubs {
-            let stance = club.board.vision.financial_stance;
+            for team in &club.teams.teams {
+                for player in &team.players.players {
+                    player_snapshots.insert(
+                        player.id,
+                        PlayerApprovalSnapshot {
+                            age: player.age(date),
+                            ability: player.player_attributes.current_ability,
+                        },
+                    );
+                }
+            }
+        }
+
+        for club in &country.clubs {
             let plan = &club.transfer_plan;
+            let remaining_transfer_budget = club
+                .finance
+                .transfer_budget
+                .as_ref()
+                .map(|b| b.amount)
+                .unwrap_or(plan.total_budget);
+            let squad_avg_ability = club
+                .teams
+                .main()
+                .map(|t| t.players.current_ability_avg())
+                .unwrap_or(0);
 
             for shortlist in &plan.shortlists {
                 // Skip anything already approved / vetoed / drained.
@@ -338,15 +367,26 @@ impl PipelineProcessor {
 
                 let alloc = req.budget_allocation.max(1.0);
                 let fee = top.estimated_fee;
-                let over_run = fee / alloc;
 
-                // Veto rules — escalating by stance strictness.
-                let veto_reason: Option<&str> = match stance {
-                    FinancialStance::Austerity if over_run > 0.9 => Some("austerity"),
-                    FinancialStance::Conservative if over_run > 1.3 => Some("conservative"),
-                    FinancialStance::Balanced if over_run > 1.8 => Some("over-budget"),
-                    FinancialStance::Ambitious if over_run > 2.5 => Some("over-budget"),
-                    _ => None,
+                // Veto rules live on the board so chairman temperament,
+                // confidence, and long-term vision stay in one domain.
+                let snapshot = player_snapshots.get(&top.player_id).copied();
+                let proposal = BoardTransferProposal {
+                    fee,
+                    allocated_budget: alloc,
+                    remaining_transfer_budget,
+                    priority: req.priority.clone(),
+                    reason: req.reason.clone(),
+                    player_age: snapshot.map(|s| s.age),
+                    player_ability: snapshot.map(|s| s.ability),
+                    squad_avg_ability,
+                    shortlist_score: top.score,
+                };
+                let board_decision = club.board.review_transfer_proposal(&proposal);
+                let veto_reason: Option<&str> = if board_decision.is_approved() {
+                    None
+                } else {
+                    Some("board")
                 };
 
                 if let Some(_reason) = veto_reason {
@@ -355,18 +395,11 @@ impl PipelineProcessor {
                         request_id: req.id,
                         approved: false,
                         named_target: Some(top.player_id),
-                        satisfaction_delta: match req.priority {
-                            TransferNeedPriority::Critical => -4.0,
-                            TransferNeedPriority::Important => -2.5,
-                            TransferNeedPriority::Optional => -1.0,
-                        },
+                        satisfaction_delta: board_decision
+                            .manager_satisfaction_delta(&req.priority),
                         // Vetoing a manager's top target is a public
                         // disagreement — shifts the chairman-manager bond.
-                        loyalty_delta: match req.priority {
-                            TransferNeedPriority::Critical => -4,
-                            TransferNeedPriority::Important => -2,
-                            TransferNeedPriority::Optional => -1,
-                        },
+                        loyalty_delta: board_decision.loyalty_delta(&req.priority),
                     });
                 } else {
                     // Green-lit target. Pin it so downstream can fast-track.
@@ -375,8 +408,9 @@ impl PipelineProcessor {
                         request_id: req.id,
                         approved: true,
                         named_target: Some(top.player_id),
-                        satisfaction_delta: 0.0,
-                        loyalty_delta: 0,
+                        satisfaction_delta: board_decision
+                            .manager_satisfaction_delta(&req.priority),
+                        loyalty_delta: board_decision.loyalty_delta(&req.priority),
                     });
                 }
             }
@@ -397,22 +431,20 @@ impl PipelineProcessor {
                     }
                 }
 
-                if !d.approved {
-                    // Fire the manager hit + loyalty drift once per veto.
-                    if d.loyalty_delta != 0 {
-                        let cur = club.board.chairman.manager_loyalty as i16;
-                        club.board.chairman.manager_loyalty =
-                            (cur + d.loyalty_delta).clamp(0, 100) as u8;
-                    }
-                    if d.satisfaction_delta.abs() > 0.01 {
-                        if let Some(main_team) = club.teams.main_mut() {
-                            if let Some(mgr) = main_team
-                                .staffs
-                                .find_mut_by_position(StaffPosition::Manager)
-                            {
-                                mgr.job_satisfaction =
-                                    (mgr.job_satisfaction + d.satisfaction_delta).clamp(0.0, 100.0);
-                            }
+                // Fire the manager hit/boost + loyalty drift once per board review.
+                if d.loyalty_delta != 0 {
+                    let cur = club.board.chairman.manager_loyalty as i16;
+                    club.board.chairman.manager_loyalty =
+                        (cur + d.loyalty_delta).clamp(0, 100) as u8;
+                }
+                if d.satisfaction_delta.abs() > 0.01 {
+                    if let Some(main_team) = club.teams.main_mut() {
+                        if let Some(mgr) = main_team
+                            .staffs
+                            .find_mut_by_position(StaffPosition::Manager)
+                        {
+                            mgr.job_satisfaction =
+                                (mgr.job_satisfaction + d.satisfaction_delta).clamp(0.0, 100.0);
                         }
                     }
                 }

@@ -1,8 +1,9 @@
+use crate::MatchTacticType;
 use crate::club::board::manager_market::ManagerCandidate;
 use crate::club::team::reputation::AchievementType;
 use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClubContract};
 use crate::context::{GlobalContext, SimulationContext};
-use crate::MatchTacticType;
+use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
@@ -151,6 +152,81 @@ impl ChairmanProfile {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardTransferDecision {
+    Approved,
+    Conditional(BoardTransferConcern),
+    Vetoed(BoardTransferConcern),
+}
+
+impl BoardTransferDecision {
+    pub fn is_approved(self) -> bool {
+        matches!(
+            self,
+            BoardTransferDecision::Approved | BoardTransferDecision::Conditional(_)
+        )
+    }
+
+    pub fn manager_satisfaction_delta(self, priority: &TransferNeedPriority) -> f32 {
+        match self {
+            BoardTransferDecision::Approved => match priority {
+                TransferNeedPriority::Critical => 0.8,
+                TransferNeedPriority::Important => 0.4,
+                TransferNeedPriority::Optional => 0.1,
+            },
+            BoardTransferDecision::Conditional(_) => match priority {
+                TransferNeedPriority::Critical => -0.8,
+                TransferNeedPriority::Important => -0.4,
+                TransferNeedPriority::Optional => 0.0,
+            },
+            BoardTransferDecision::Vetoed(_) => match priority {
+                TransferNeedPriority::Critical => -4.5,
+                TransferNeedPriority::Important => -2.75,
+                TransferNeedPriority::Optional => -1.0,
+            },
+        }
+    }
+
+    pub fn loyalty_delta(self, priority: &TransferNeedPriority) -> i16 {
+        match self {
+            BoardTransferDecision::Approved => match priority {
+                TransferNeedPriority::Critical => 1,
+                _ => 0,
+            },
+            BoardTransferDecision::Conditional(_) => match priority {
+                TransferNeedPriority::Critical => -1,
+                _ => 0,
+            },
+            BoardTransferDecision::Vetoed(_) => match priority {
+                TransferNeedPriority::Critical => -5,
+                TransferNeedPriority::Important => -3,
+                TransferNeedPriority::Optional => -1,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardTransferConcern {
+    ExceedsTransferBudget,
+    FinancialDiscipline,
+    WeakSportingCase,
+    ConflictsWithVision,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoardTransferProposal {
+    pub fee: f64,
+    pub allocated_budget: f64,
+    pub remaining_transfer_budget: f64,
+    pub priority: TransferNeedPriority,
+    pub reason: TransferNeedReason,
+    pub player_age: Option<u8>,
+    pub player_ability: Option<u8>,
+    pub squad_avg_ability: u8,
+    pub shortlist_score: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct SeasonTargets {
     pub transfer_budget: i32,
@@ -266,6 +342,124 @@ impl ClubBoard {
         }
     }
 
+    /// Board/chairman review of a proposed incoming transfer. This is the
+    /// football committee layer: the head coach can ask, the recruitment team
+    /// can shortlist, but ownership still weighs budget, urgency, squad level,
+    /// chairman temperament, and club vision before negotiations start.
+    pub fn review_transfer_proposal(
+        &self,
+        proposal: &BoardTransferProposal,
+    ) -> BoardTransferDecision {
+        let allocated_budget = proposal.allocated_budget.max(1.0);
+        let over_allocated = proposal.fee / allocated_budget;
+        let remaining_budget = proposal.remaining_transfer_budget.max(0.0);
+
+        if remaining_budget > 0.0 && proposal.fee > remaining_budget * 1.05 {
+            return BoardTransferDecision::Vetoed(BoardTransferConcern::ExceedsTransferBudget);
+        }
+
+        let mut tolerance: f64 = match self.vision.financial_stance {
+            FinancialStance::Austerity => 0.90,
+            FinancialStance::Conservative => 1.25,
+            FinancialStance::Balanced => 1.75,
+            FinancialStance::Ambitious => 2.35,
+        };
+
+        tolerance += match self.chairman.ambition {
+            ChairmanAmbition::Reckless => 0.45,
+            ChairmanAmbition::Ambitious => 0.20,
+            ChairmanAmbition::Balanced => 0.0,
+            ChairmanAmbition::Conservative => -0.15,
+        };
+
+        tolerance += match proposal.priority {
+            TransferNeedPriority::Critical => 0.35,
+            TransferNeedPriority::Important => 0.15,
+            TransferNeedPriority::Optional => 0.0,
+        };
+
+        if self.confidence.level >= 75 {
+            tolerance += 0.15;
+        } else if self.confidence.level < 35 {
+            tolerance -= 0.25;
+        }
+
+        if is_board_urgent_reason(&proposal.reason) {
+            tolerance += 0.20;
+        }
+
+        if proposal.shortlist_score >= 1.15 {
+            tolerance += 0.10;
+        } else if proposal.shortlist_score < 0.75 {
+            tolerance -= 0.15;
+        }
+
+        if over_allocated > tolerance.max(0.50) {
+            return BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline);
+        }
+
+        if !self.is_sporting_case_credible(proposal) {
+            return BoardTransferDecision::Vetoed(BoardTransferConcern::WeakSportingCase);
+        }
+
+        if self.transfer_conflicts_with_vision(proposal) {
+            return BoardTransferDecision::Conditional(BoardTransferConcern::ConflictsWithVision);
+        }
+
+        if over_allocated > 1.0 || remaining_budget <= allocated_budget * 0.25 {
+            return BoardTransferDecision::Conditional(BoardTransferConcern::FinancialDiscipline);
+        }
+
+        BoardTransferDecision::Approved
+    }
+
+    fn is_sporting_case_credible(&self, proposal: &BoardTransferProposal) -> bool {
+        if matches!(
+            proposal.reason,
+            TransferNeedReason::DevelopmentSigning
+                | TransferNeedReason::CheapReinforcement
+                | TransferNeedReason::SquadPadding
+                | TransferNeedReason::InjuryCoverLoan
+                | TransferNeedReason::LoanToFillSquad
+        ) {
+            return true;
+        }
+
+        let Some(ability) = proposal.player_ability else {
+            return true;
+        };
+
+        let squad_avg = proposal.squad_avg_ability;
+        ability.saturating_add(12) >= squad_avg || proposal.shortlist_score >= 0.95
+    }
+
+    fn transfer_conflicts_with_vision(&self, proposal: &BoardTransferProposal) -> bool {
+        let Some(age) = proposal.player_age else {
+            return false;
+        };
+
+        match self.vision.youth_focus {
+            VisionYouthFocus::DevelopYouth => {
+                age >= 30
+                    && matches!(
+                        proposal.reason,
+                        TransferNeedReason::DevelopmentSigning
+                            | TransferNeedReason::SuccessionPlanning
+                            | TransferNeedReason::StaffRecommendation
+                    )
+            }
+            VisionYouthFocus::SignExperienced => {
+                age <= 20
+                    && !matches!(
+                        proposal.reason,
+                        TransferNeedReason::DevelopmentSigning
+                            | TransferNeedReason::SuccessionPlanning
+                    )
+            }
+            VisionYouthFocus::Balanced => false,
+        }
+    }
+
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> BoardResult {
         let mut result = BoardResult::new();
         result.club_id = ctx.club.as_ref().map(|c| c.id).unwrap_or(0);
@@ -284,7 +478,11 @@ impl ClubBoard {
         }
 
         // Season start: calculate season targets and expectations
-        let season = ctx.country.as_ref().map(|c| c.season_dates).unwrap_or_default();
+        let season = ctx
+            .country
+            .as_ref()
+            .map(|c| c.season_dates)
+            .unwrap_or_default();
         if ctx.simulation.is_season_start(&season) {
             if let Some(board_ctx) = &ctx.board {
                 let current_year = ctx.simulation.date.date().year();
@@ -501,7 +699,13 @@ impl ClubBoard {
         let squad_bloated = total_squad > (targets.max_squad_size as usize + 5);
         let squad_thin = board_ctx.main_squad_size < targets.min_squad_size as usize;
 
-        let squad_health: i32 = if squad_bloated { -1 } else if squad_thin { -1 } else { 0 };
+        let squad_health: i32 = if squad_bloated {
+            -1
+        } else if squad_thin {
+            -1
+        } else {
+            0
+        };
 
         // ── Factor 5: Style fit ──
         // How much does the chosen formation embody the board's preferred
@@ -513,12 +717,11 @@ impl ClubBoard {
         };
 
         // ── Update confidence (cumulative, carries across months) ──
-        let confidence_change =
-            performance_delta * 3     // League position is most important
+        let confidence_change = performance_delta * 3     // League position is most important
             + form_score * 2          // Recent form matters
             + financial_health * 2    // Financial stability
             + squad_health            // Squad management
-            - style_drag;             // Vision / tactics alignment
+            - style_drag; // Vision / tactics alignment
 
         self.confidence.level = (self.confidence.level + confidence_change).clamp(0, 100);
 
@@ -567,9 +770,8 @@ impl ClubBoard {
         } else {
             0
         };
-        self.chairman.manager_loyalty = ((self.chairman.manager_loyalty as i16
-            + loyalty_delta)
-            .clamp(0, 100)) as u8;
+        self.chairman.manager_loyalty =
+            ((self.chairman.manager_loyalty as i16 + loyalty_delta).clamp(0, 100)) as u8;
 
         // Manager's own morale tracks the board mood. A manager working
         // for a happy chairman feels secure; a manager under Poor mood
@@ -637,10 +839,16 @@ impl ClubBoard {
             self.poor_mood_months >= patience_threshold && result.underperforming;
         let sustained_poor_absolute = self.poor_mood_months >= patience_threshold + 2;
 
+        if sustained_poor_with_underperformance || sustained_poor_absolute {
+            result.manager_meeting = Some(crate::club::board::BoardManagerMeeting::Crisis);
+        } else if result.underperforming || matches!(self.mood.state, BoardMoodState::Poor) {
+            result.manager_meeting = Some(crate::club::board::BoardManagerMeeting::Warning);
+        } else if matches!(self.mood.state, BoardMoodState::Excellent) && performance_delta >= 3 {
+            result.manager_meeting = Some(crate::club::board::BoardManagerMeeting::Backing);
+        }
+
         if enough_data
-            && (zero_confidence
-                || sustained_poor_with_underperformance
-                || sustained_poor_absolute)
+            && (zero_confidence || sustained_poor_with_underperformance || sustained_poor_absolute)
         {
             result.manager_sacked = true;
             // Reset confidence so the successor starts from a neutral base
@@ -667,7 +875,9 @@ impl ClubBoard {
             ChairmanAmbition::Balanced => 120_000,
             ChairmanAmbition::Conservative => 80_000,
         };
-        let expires = ctx.date.date()
+        let expires = ctx
+            .date
+            .date()
             .with_year(ctx.date.date().year() + 4)
             .unwrap_or(ctx.date.date());
         self.director = Some(StaffClubContract::new(
@@ -694,7 +904,9 @@ impl ClubBoard {
             ChairmanAmbition::Balanced => 150_000,
             ChairmanAmbition::Conservative => 100_000,
         };
-        let expires = ctx.date.date()
+        let expires = ctx
+            .date
+            .date()
             .with_year(ctx.date.date().year() + 3)
             .unwrap_or(ctx.date.date());
         self.sport_director = Some(StaffClubContract::new(
@@ -704,6 +916,19 @@ impl ClubBoard {
             StaffStatus::Active,
         ));
     }
+}
+
+fn is_board_urgent_reason(reason: &TransferNeedReason) -> bool {
+    matches!(
+        reason,
+        TransferNeedReason::FormationGap
+            | TransferNeedReason::QualityUpgrade
+            | TransferNeedReason::DepthCover
+            | TransferNeedReason::LoanToFillSquad
+            | TransferNeedReason::SquadPadding
+            | TransferNeedReason::InjuryCoverLoan
+            | TransferNeedReason::OpportunisticLoanUpgrade
+    )
 }
 
 /// How poorly does `tactic` embody `style`? 0 = fine, up to 2 = strong
@@ -747,6 +972,25 @@ fn style_mismatch_drag(style: VisionPlayingStyle, tactic: MatchTacticType) -> i3
 mod style_fit_tests {
     use super::*;
 
+    fn transfer_proposal(
+        fee: f64,
+        allocated_budget: f64,
+        priority: TransferNeedPriority,
+        reason: TransferNeedReason,
+    ) -> BoardTransferProposal {
+        BoardTransferProposal {
+            fee,
+            allocated_budget,
+            remaining_transfer_budget: 10_000_000.0,
+            priority,
+            reason,
+            player_age: Some(25),
+            player_ability: Some(65),
+            squad_avg_ability: 60,
+            shortlist_score: 1.0,
+        }
+    }
+
     #[test]
     fn balanced_vision_never_drags() {
         for t in MatchTacticType::all() {
@@ -756,33 +1000,115 @@ mod style_fit_tests {
 
     #[test]
     fn attacking_vision_punishes_defensive_formations() {
-        assert!(style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T451) > 0);
-        assert!(style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T1333) > 0);
+        assert!(
+            style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T451) > 0
+        );
+        assert!(
+            style_mismatch_drag(
+                VisionPlayingStyle::AttackingFootball,
+                MatchTacticType::T1333
+            ) > 0
+        );
     }
 
     #[test]
     fn attacking_vision_accepts_attacking_formations() {
-        assert_eq!(style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T343), 0);
-        assert_eq!(style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T4222), 0);
+        assert_eq!(
+            style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T343),
+            0
+        );
+        assert_eq!(
+            style_mismatch_drag(
+                VisionPlayingStyle::AttackingFootball,
+                MatchTacticType::T4222
+            ),
+            0
+        );
     }
 
     #[test]
     fn defensive_vision_punishes_attacking_formations() {
         assert!(style_mismatch_drag(VisionPlayingStyle::DefensiveSolid, MatchTacticType::T343) > 0);
-        assert!(style_mismatch_drag(VisionPlayingStyle::DefensiveSolid, MatchTacticType::T4222) > 0);
+        assert!(
+            style_mismatch_drag(VisionPlayingStyle::DefensiveSolid, MatchTacticType::T4222) > 0
+        );
     }
 
     #[test]
     fn possession_vision_accepts_possession_formations() {
-        assert_eq!(style_mismatch_drag(VisionPlayingStyle::Possession, MatchTacticType::T433), 0);
-        assert_eq!(style_mismatch_drag(VisionPlayingStyle::Possession, MatchTacticType::T4231), 0);
+        assert_eq!(
+            style_mismatch_drag(VisionPlayingStyle::Possession, MatchTacticType::T433),
+            0
+        );
+        assert_eq!(
+            style_mismatch_drag(VisionPlayingStyle::Possession, MatchTacticType::T4231),
+            0
+        );
     }
 
     #[test]
     fn counter_attack_vision_prefers_modest_formations() {
         // T442 = balanced → fits counter-attack fine.
-        assert_eq!(style_mismatch_drag(VisionPlayingStyle::CounterAttack, MatchTacticType::T442), 0);
+        assert_eq!(
+            style_mismatch_drag(VisionPlayingStyle::CounterAttack, MatchTacticType::T442),
+            0
+        );
         // T343 = all-out attack → clashes with counter-attack's defensive base.
         assert!(style_mismatch_drag(VisionPlayingStyle::CounterAttack, MatchTacticType::T343) > 0);
+    }
+
+    #[test]
+    fn conservative_board_vetoes_excessive_transfer_overrun() {
+        let mut board = ClubBoard::new();
+        board.vision.financial_stance = FinancialStance::Conservative;
+        board.chairman.ambition = ChairmanAmbition::Conservative;
+
+        let proposal = transfer_proposal(
+            2_000_000.0,
+            1_000_000.0,
+            TransferNeedPriority::Important,
+            TransferNeedReason::QualityUpgrade,
+        );
+
+        assert!(matches!(
+            board.review_transfer_proposal(&proposal),
+            BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline)
+        ));
+    }
+
+    #[test]
+    fn ambitious_board_backs_critical_squad_gap_within_cash_limit() {
+        let mut board = ClubBoard::new();
+        board.vision.financial_stance = FinancialStance::Ambitious;
+        board.chairman.ambition = ChairmanAmbition::Ambitious;
+        board.confidence.level = 80;
+
+        let proposal = transfer_proposal(
+            2_250_000.0,
+            1_000_000.0,
+            TransferNeedPriority::Critical,
+            TransferNeedReason::FormationGap,
+        );
+
+        assert!(board.review_transfer_proposal(&proposal).is_approved());
+    }
+
+    #[test]
+    fn youth_vision_marks_old_development_signing_as_conditional() {
+        let mut board = ClubBoard::new();
+        board.vision.youth_focus = VisionYouthFocus::DevelopYouth;
+
+        let mut proposal = transfer_proposal(
+            750_000.0,
+            1_000_000.0,
+            TransferNeedPriority::Optional,
+            TransferNeedReason::DevelopmentSigning,
+        );
+        proposal.player_age = Some(31);
+
+        assert!(matches!(
+            board.review_transfer_proposal(&proposal),
+            BoardTransferDecision::Conditional(BoardTransferConcern::ConflictsWithVision)
+        ));
     }
 }

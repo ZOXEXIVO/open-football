@@ -1,13 +1,16 @@
+use super::ClubAcademy;
 use crate::academy::result::ProduceYouthPlayersResult;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
 use crate::{PlayerGenerator, PlayerPositionType};
 use chrono::Datelike;
 use log::debug;
-use super::ClubAcademy;
 
 impl ClubAcademy {
-    pub(super) fn produce_youth_players(&mut self, ctx: GlobalContext<'_>) -> ProduceYouthPlayersResult {
+    pub(super) fn produce_youth_players(
+        &mut self,
+        ctx: GlobalContext<'_>,
+    ) -> ProduceYouthPlayersResult {
         let current_year = ctx.simulation.date.year();
         let current_month = ctx.simulation.date.month();
 
@@ -41,7 +44,9 @@ impl ClubAcademy {
         let academy_quality = ctx.club_academy_quality();
 
         for i in 0..players_to_produce {
-            let position = self.select_position_for_youth_player(i, players_to_produce);
+            let position = self
+                .recruitment_priority_position(i)
+                .unwrap_or_else(|| self.select_position_for_youth_player(i, players_to_produce));
 
             let generated_player = PlayerGenerator::generate_with_facilities(
                 country_id,
@@ -114,7 +119,9 @@ impl ClubAcademy {
         let recruitment_quality = ctx.club_recruitment_quality();
 
         for i in 0..needed {
-            let position = self.select_position_for_youth_player(i, needed);
+            let position = self
+                .recruitment_priority_position(i)
+                .unwrap_or_else(|| self.select_position_for_youth_player(i, needed));
             let player = PlayerGenerator::generate_with_facilities(
                 country_id,
                 date,

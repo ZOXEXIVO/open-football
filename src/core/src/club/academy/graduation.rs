@@ -1,7 +1,7 @@
+use super::ClubAcademy;
 use crate::{Person, Player, PlayerClubContract};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
-use super::ClubAcademy;
 
 impl ClubAcademy {
     /// Graduate the best academy players aged 14+ for promotion to the lowest youth team.
@@ -11,27 +11,30 @@ impl ClubAcademy {
             return Vec::new();
         }
 
-        let mut candidates: Vec<(u32, u8)> = self
+        let mut candidates: Vec<(u32, i16, u8)> = self
             .players
             .players
             .iter()
-            .filter(|p| p.age(date) >= 14)
-            .map(|p| (p.id, p.player_attributes.current_ability))
+            .filter_map(|p| {
+                let readiness = self.pathway_readiness_score(p, date);
+                if readiness <= 0 {
+                    return None;
+                }
+                Some((p.id, readiness, p.player_attributes.current_ability))
+            })
             .collect();
 
-        // Best first
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        // Best pathway fit first: readiness blends CA, PA runway,
+        // personality, age, and academy policy.
+        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
         candidates.truncate(count);
 
         let mut graduated = Vec::new();
-        for (player_id, _) in candidates {
+        for (player_id, _, _) in candidates {
             if let Some(mut player) = self.players.take_player(&player_id) {
-                let expiration = NaiveDate::from_ymd_opt(
-                    date.year() + 3,
-                    date.month(),
-                    date.day().min(28),
-                )
-                .unwrap_or(date);
+                let expiration =
+                    NaiveDate::from_ymd_opt(date.year() + 3, date.month(), date.day().min(28))
+                        .unwrap_or(date);
                 let salary = graduation_salary(player.player_attributes.current_ability);
                 player.contract = Some(PlayerClubContract::new_youth(salary, expiration));
 
