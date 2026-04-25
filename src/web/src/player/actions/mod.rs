@@ -50,6 +50,29 @@ fn get_team_info_by_club_id(sim: &core::SimulatorData, club_id: u32) -> Option<E
     get_team_info(sim, ci, coi, cli)
 }
 
+/// Reputation inputs needed to install a permanent contract for a signing:
+/// `(club_main_team_world_rep, league_rep)`. Drives `WageCalculator` via
+/// `Player::install_permanent_contract`. Missing data falls through to 0
+/// — `WageCalculator` will still produce a sensible wage at the bottom
+/// of its scale rather than panicking.
+fn signing_reputation_inputs(
+    sim: &core::SimulatorData,
+    ci: usize,
+    coi: usize,
+    cli: usize,
+) -> (u16, u16) {
+    let country = &sim.continents[ci].countries[coi];
+    let club = &country.clubs[cli];
+    let main_team = club.teams.main();
+    let club_world_rep = main_team.map(|t| t.reputation.world).unwrap_or(0);
+    let league_rep = main_team
+        .and_then(|t| t.league_id)
+        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+        .map(|l| l.reputation)
+        .unwrap_or(0);
+    (club_world_rep, league_rep)
+}
+
 // ── Move on free ───────────────────────────────────────────────
 
 pub async fn move_on_free_action(
@@ -289,25 +312,33 @@ pub async fn transfer_action(
         // frustrations don't carry over from the previous club.
         player.happiness.clear();
 
-        let expiration = chrono::NaiveDate::from_ymd_opt(date.year() + 3, 6, 30)
-            .unwrap_or(date);
-        let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
-        let mut new_contract = PlayerClubContract::new(salary, expiration);
+        // Wage and length come from the canonical contract policy on
+        // `Player` — the same one the AI pipeline uses. `agreed_wage =
+        // None` means "let the wage calculator decide from ability /
+        // age / club + league reputation," which is what we want for a
+        // manual signing (the user didn't dictate a number).
+        let (club_rep, league_rep) = signing_reputation_inputs(sim, dci, dcoi, dcli);
+        player.install_permanent_contract(date, club_rep, league_rep, None);
 
+        // Squad status is club-roster-aware: it depends on the destination
+        // team's existing position-group depth. Compute against the
+        // pre-add roster (the player isn't in the team yet) and pin it
+        // on the freshly-installed contract so the UI shows a sensible
+        // value immediately rather than waiting for the monthly batch.
         let player_ca = player.player_attributes.current_ability;
         let player_age = core::utils::DateUtils::age(player.birth_date, date);
         let player_group = player.position().position_group();
-        let mut dest_cas: Vec<u8> = sim.continents[dci].countries[dcoi].clubs[dcli]
+        let mut group_cas: Vec<u8> = sim.continents[dci].countries[dcoi].clubs[dcli]
             .teams.teams[dti].players.players.iter()
             .filter(|p| p.position().position_group() == player_group)
             .map(|p| p.player_attributes.current_ability)
             .collect();
-        dest_cas.push(player_ca);
-        dest_cas.sort_unstable_by(|a, b| b.cmp(a));
-        new_contract.squad_status = core::PlayerSquadStatus::calculate(player_ca, player_age, &dest_cas);
-
-        player.contract = Some(new_contract);
-        player.contract_loan = None;
+        group_cas.push(player_ca);
+        group_cas.sort_unstable_by(|a, b| b.cmp(a));
+        if let Some(contract) = player.contract.as_mut() {
+            contract.squad_status =
+                core::PlayerSquadStatus::calculate(player_ca, player_age, &group_cas);
+        }
 
         sim.continents[dci].countries[dcoi].clubs[dcli]
             .teams.teams[dti].players.add(player);
@@ -315,7 +346,7 @@ pub async fn transfer_action(
         // Record in transfer history
         let transfer_type = if fee > 0.0 { TransferType::Permanent } else { TransferType::Free };
 
-        if let Some((ci, coi, ref source)) = source_info {
+        if let Some((_ci, _coi, ref source)) = source_info {
             let completed = CompletedTransfer::new(
                 params.player_id, player_name,
                 source.club_id, source.team_id, source.info.name.clone(),
@@ -325,13 +356,13 @@ pub async fn transfer_action(
                 transfer_type,
             ).with_reason("Manual".to_string());
 
-            sim.continents[ci].countries[coi]
-                .transfer_market.transfer_history.push(completed.clone());
-
-            if (dci, dcoi) != (ci, coi) {
-                sim.continents[dci].countries[dcoi]
-                    .transfer_market.transfer_history.push(completed);
-            }
+            // Convention (matches the AI pipeline at `transfers/market.rs`):
+            // a transfer-history entry lives in the *buying* country only.
+            // Pushing to both sides would double-render on the buying
+            // team's transfer page, which iterates every country's history
+            // to make foreign sales visible.
+            sim.continents[dci].countries[dcoi]
+                .transfer_market.transfer_history.push(completed);
         } else {
             // Free agent signing — record only in destination country
             let completed = CompletedTransfer::new(
@@ -483,7 +514,11 @@ pub async fn loan_action(
         sim.continents[dest_pos.0].countries[dest_pos.1].clubs[dest_pos.2]
             .teams.teams[dest_pos.3].players.add(player);
 
-        // Record in transfer history (both countries if cross-country)
+        // Record in transfer history. Convention (matches the AI
+        // pipeline at `transfers/market.rs`): the entry lives in the
+        // *borrowing* country only — same rule as permanent transfers,
+        // since the team transfers page iterates every country and
+        // double-pushing renders the same loan twice.
         let completed = CompletedTransfer::new(
             params.player_id, player_name,
             source.club_id, source.team_id, source.info.name.clone(),
@@ -493,13 +528,8 @@ pub async fn loan_action(
             TransferType::Loan(expiration),
         ).with_reason("Manual".to_string());
 
-        sim.continents[ci].countries[coi]
-            .transfer_market.transfer_history.push(completed.clone());
-
-        if (ci, coi) != (dest_pos.0, dest_pos.1) {
-            sim.continents[dest_pos.0].countries[dest_pos.1]
-                .transfer_market.transfer_history.push(completed);
-        }
+        sim.continents[dest_pos.0].countries[dest_pos.1]
+            .transfer_market.transfer_history.push(completed);
 
         sim.rebuild_indexes();
         return StatusCode::OK;

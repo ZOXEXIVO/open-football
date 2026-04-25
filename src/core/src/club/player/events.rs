@@ -161,7 +161,29 @@ fn stats_bucket_mut(player: &mut Player, is_cup: bool, is_friendly: bool) -> &mu
 }
 
 impl Player {
-    fn install_permanent_contract(
+    /// Install a fresh permanent contract on this player at the buying club.
+    ///
+    /// This is the canonical contract-installation policy used by both the
+    /// AI transfer pipeline (via `complete_transfer`) and the manual web
+    /// UI. The single source of truth for two decisions:
+    ///
+    ///  - **Length:** age-banded (5y under 24, 4y under 28, 3y under 32,
+    ///    otherwise 2y). Younger players get longer deals.
+    ///  - **Salary:** `agreed_wage` if `Some` (for AI deals where the
+    ///    negotiation already settled on a number); otherwise computed
+    ///    via `WageCalculator::expected_annual_wage` from the player's
+    ///    profile and the buying club's reputation.
+    ///
+    /// Inputs `buying_club_reputation` and `buying_league_reputation` are
+    /// raw 0–10000 reputation values for the club's main team and its
+    /// league. The wage calculator normalises them internally.
+    ///
+    /// Side effects: `self.contract` is set to a fresh
+    /// `PlayerClubContract` with `squad_status = NotYetSet`; callers that
+    /// know the destination roster should update `squad_status`
+    /// afterwards. `self.contract_loan` is cleared to drop any prior
+    /// borrowing-club contract.
+    pub fn install_permanent_contract(
         &mut self,
         date: NaiveDate,
         buying_club_reputation: u16,
