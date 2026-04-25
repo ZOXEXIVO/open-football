@@ -9,7 +9,6 @@ use crate::transfers::pipeline::{
     ShortlistCandidateStatus, TransferApproach, TransferNeedPriority, TransferNeedReason,
     TransferRequest, TransferRequestStatus,
 };
-use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::TransferWindowManager;
 use crate::utils::FormattingUtils;
 use crate::SimulatorData;
@@ -313,9 +312,7 @@ impl PipelineProcessor {
                     );
 
                     // Resolve negotiator staff and build reason
-                    let negotiator_staff_id = StaffResolver::resolve(&team.staffs)
-                        .negotiator
-                        .map(|s| s.id);
+                    let negotiator_staff_id = team.staffs.find_negotiator().map(|s| s.id);
 
                     let scout_report = plan
                         .scouting_reports

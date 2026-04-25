@@ -7,7 +7,6 @@ use crate::simulator::SimulatorData;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationStatus, TransferNegotiation};
 use crate::transfers::offer::TransferOffer;
 use crate::transfers::pipeline::{PipelineProcessor, TransferRequest, TransferRequestStatus};
-use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::utils::IntegerUtils;
 use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType, TeamInfo};
@@ -338,7 +337,7 @@ impl CountryResult {
                 .iter()
                 .find(|c| c.id == signing.to_club_id)
                 .and_then(|c| c.teams.teams.first())
-                .and_then(|t| StaffResolver::resolve(&t.staffs).negotiator.map(|s| s.id));
+                .and_then(|t| t.staffs.find_negotiator().map(|s| s.id));
 
             let neg_id = country.transfer_market.next_negotiation_id;
             country.transfer_market.next_negotiation_id += 1;

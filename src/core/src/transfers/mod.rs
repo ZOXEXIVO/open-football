@@ -5,7 +5,6 @@ pub mod negotiation;
 pub mod offer;
 pub mod window;
 pub mod pipeline;
-pub mod staff_resolver;
 pub mod scouting_region;
 
 pub use market::*;
@@ -15,5 +14,4 @@ pub use pool::*;
 pub use transfer::*;
 pub use window::*;
 pub use pipeline::*;
-pub use staff_resolver::*;
 pub use scouting_region::*;

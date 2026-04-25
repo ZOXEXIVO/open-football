@@ -6,7 +6,6 @@ use crate::transfers::pipeline::{
     StaffRecommendation, TransferNeedPriority, TransferNeedReason, TransferRequest,
     TransferRequestStatus, TransferShortlist,
 };
-use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::TransferWindowManager;
 use crate::utils::IntegerUtils;
@@ -140,7 +139,7 @@ impl PipelineProcessor {
             }
 
             let team = &club.teams.teams[0];
-            let resolved = StaffResolver::resolve(&team.staffs);
+            let resolved = team.staffs.resolve_for_transfers();
 
             let avg_ability = {
                 let avg = team.players.current_ability_avg();

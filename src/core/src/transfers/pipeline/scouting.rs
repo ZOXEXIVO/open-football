@@ -7,7 +7,6 @@ use crate::transfers::pipeline::{
     DetailedScoutingReport, PlayerObservation, ScoutMatchAssignment, ScoutingAssignment,
     ScoutingRecommendation, TransferNeedPriority, TransferRequest, TransferRequestStatus,
 };
-use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::ScoutingRegion;
 use crate::utils::IntegerUtils;
@@ -83,7 +82,7 @@ impl PipelineProcessor {
             if club.teams.teams.is_empty() {
                 continue;
             }
-            let resolved = StaffResolver::resolve(&club.teams.teams[0].staffs);
+            let resolved = club.teams.teams[0].staffs.resolve_for_transfers();
 
             let mut sorted_requests = pending_requests;
             sorted_requests.sort_by(|a, b| {
@@ -185,7 +184,7 @@ impl PipelineProcessor {
                 continue;
             }
 
-            let resolved = StaffResolver::resolve(&club.teams.teams[0].staffs);
+            let resolved = club.teams.teams[0].staffs.resolve_for_transfers();
             if resolved.scouts.is_empty() {
                 continue;
             }
