@@ -4,6 +4,7 @@ mod loan_market;
 mod negotiations;
 mod recommendations;
 mod scouting;
+pub(crate) mod scouting_config;
 mod shortlists;
 
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
@@ -771,7 +772,9 @@ impl ClubTransferPlan {
     /// squad. Keeps only the strongest N per position group to bound growth.
     pub fn archive_reports_to_shadow(&mut self) {
         use std::collections::HashMap;
-        const SHADOW_CAP_PER_GROUP: usize = 15;
+        let shadow_cap_per_group = super::scouting_config::ScoutingConfig::default()
+            .shadow
+            .cap_per_group;
 
         if self.scouting_reports.is_empty() {
             return;
@@ -826,7 +829,7 @@ impl ClubTransferPlan {
                 .filter(|(_, s)| s.position_group == group)
                 .map(|(i, _)| i)
                 .collect();
-            if indices.len() <= SHADOW_CAP_PER_GROUP {
+            if indices.len() <= shadow_cap_per_group {
                 continue;
             }
             indices.sort_by(|a, b| {
@@ -838,7 +841,7 @@ impl ClubTransferPlan {
                     .partial_cmp(&score_a)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-            let to_drop: Vec<usize> = indices.into_iter().skip(SHADOW_CAP_PER_GROUP).collect();
+            let to_drop: Vec<usize> = indices.into_iter().skip(shadow_cap_per_group).collect();
             // Drop in reverse to preserve indices
             let mut sorted = to_drop;
             sorted.sort_unstable_by(|a, b| b.cmp(a));
@@ -878,15 +881,19 @@ impl ClubTransferPlan {
                 let mut seeded = shadow.report.clone();
                 seeded.assignment_id = *assign_id;
                 // Shadow confidence decays with age — a 12-month-old report is
-                // meaningfully less sharp than a fresh one.
-                seeded.confidence = (seeded.confidence * 0.7).clamp(0.2, 1.0);
+                // meaningfully less sharp than a fresh one. Decay rate and
+                // floor/ceiling live in `ScoutingConfig::shadow`.
+                seeded.confidence = super::scouting_config::ScoutingConfig::default()
+                    .seeded_shadow_confidence(seeded.confidence);
                 self.scouting_reports.push(seeded);
             }
         }
     }
 
     pub fn remember_known_player(&mut self, memory: KnownPlayerMemory) {
-        const KNOWN_CAP: usize = 120;
+        let known_cap = super::scouting_config::ScoutingConfig::default()
+            .shadow
+            .known_player_cap;
 
         if let Some(existing) = self
             .known_players
@@ -921,7 +928,7 @@ impl ClubTransferPlan {
             self.known_players.push(memory);
         }
 
-        if self.known_players.len() > KNOWN_CAP {
+        if self.known_players.len() > known_cap {
             self.known_players.sort_by(|a, b| {
                 let score_a = a.assessed_ability as f32 * a.confidence;
                 let score_b = b.assessed_ability as f32 * b.confidence;
@@ -929,7 +936,7 @@ impl ClubTransferPlan {
                     .partial_cmp(&score_a)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-            self.known_players.truncate(KNOWN_CAP);
+            self.known_players.truncate(known_cap);
         }
     }
 

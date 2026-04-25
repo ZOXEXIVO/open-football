@@ -244,6 +244,8 @@ impl PipelineProcessor {
 
     /// Derive risk flags for a scouted player from their observable signals.
     /// Buyer rep is passed in so we can flag wage demands that blow the budget.
+    /// Thresholds (determination floor, age cutoff, contract-month window,
+    /// rep gap) live in `ScoutingConfig::risk_flags`.
     pub(super) fn evaluate_risk_flags(
         is_injured: bool,
         determination: f32,
@@ -252,25 +254,14 @@ impl PipelineProcessor {
         player_world_rep: i16,
         buyer_world_rep: i16,
     ) -> Vec<ReportRiskFlag> {
-        let mut flags = Vec::new();
-        if is_injured {
-            flags.push(ReportRiskFlag::CurrentlyInjured);
-        }
-        if determination < 8.0 {
-            flags.push(ReportRiskFlag::PoorAttitude);
-        }
-        if age >= 31 {
-            flags.push(ReportRiskFlag::AgeRisk);
-        }
-        // Contract-ending is a bargain, still informational risk (uncertainty re: fee/FA).
-        if contract_months_remaining > 0 && contract_months_remaining <= 6 {
-            flags.push(ReportRiskFlag::ContractExpiring);
-        }
-        // Player's reputation far above buyer's → wage mismatch risk.
-        if player_world_rep > buyer_world_rep + 1500 {
-            flags.push(ReportRiskFlag::WageDemands);
-        }
-        flags
+        super::scouting_config::ScoutingConfig::default().risk_flags_for(
+            is_injured,
+            determination,
+            age,
+            contract_months_remaining,
+            player_world_rep,
+            buyer_world_rep,
+        )
     }
 
     pub(super) fn club_world_reputation(club: &Club) -> i16 {
@@ -283,8 +274,12 @@ impl PipelineProcessor {
 
     /// Best `judging_player_data` across the club's scouting staff.
     /// Drives how aggressively the data department narrows the scout pool.
-    /// Returns 8 as a safe default when no scouts exist.
+    /// Defaults from `ScoutingConfig::data_prefilter::default_data_skill`
+    /// when the club has no scouts at all.
     pub(super) fn club_data_analysis_skill(club: &Club) -> u8 {
+        let default_skill = super::scouting_config::ScoutingConfig::default()
+            .data_prefilter
+            .default_data_skill;
         club.teams
             .iter()
             .flat_map(|t| t.staffs.iter())
@@ -298,7 +293,7 @@ impl PipelineProcessor {
             })
             .map(|s| s.staff_attributes.data_analysis.judging_player_data)
             .max()
-            .unwrap_or(8)
+            .unwrap_or(default_skill)
     }
 
     /// Performance-adjusted data score used as a pre-scouting filter.
@@ -319,7 +314,14 @@ impl PipelineProcessor {
                 );
             }
         }
-        (10, 10)
+        // Pointer is stale (staff was removed mid-tick or assignment was
+        // never tied to a real scout). Use the configured "missing staff"
+        // defaults rather than panic — quality silently downgrades.
+        let cfg = super::scouting_config::ScoutingConfig::default();
+        (
+            cfg.observation.default_judging_when_staff_missing,
+            cfg.observation.default_judging_when_staff_missing,
+        )
     }
 
     /// Estimate a player's growth potential from observable attributes.

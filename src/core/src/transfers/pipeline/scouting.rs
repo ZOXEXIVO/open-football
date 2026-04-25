@@ -2,6 +2,7 @@ use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::scouting_config::ScoutingConfig;
 use crate::transfers::pipeline::{
     DetailedScoutingReport, PlayerObservation, ScoutMatchAssignment, ScoutingAssignment,
     ScoutingRecommendation, TransferNeedPriority, TransferRequest, TransferRequestStatus,
@@ -212,7 +213,9 @@ impl PipelineProcessor {
                 continue;
             }
 
-            let max_assignments = available_scouts.len().min(3);
+            let max_assignments = available_scouts
+                .len()
+                .min(ScoutingConfig::default().assignment.max_match_assignments_per_club);
 
             // Score each youth/reserve team from other clubs by how many matching players it has
             let mut team_scores: Vec<(u32, u32, u32, usize)> = Vec::new(); // (team_id, club_id, team_idx_for_ref, score)
@@ -319,6 +322,7 @@ impl PipelineProcessor {
     // ============================================================
 
     pub fn process_match_scouting(country: &mut Country, current_date: NaiveDate) {
+        let config = ScoutingConfig::default();
         let mut observations: Vec<MatchScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
         let mut attended_updates: Vec<(u32, u32, NaiveDate)> = Vec::new(); // (club_id, team_id, date)
@@ -379,25 +383,29 @@ impl PipelineProcessor {
                         None => continue,
                     };
 
-                    // Calculate assessed ability/potential with 40% less error than pool scanning
                     let existing_obs = assignment.observations.iter()
                         .find(|o| o.player_id == player.id);
                     let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
-                    let sqrt_count = ((obs_count + 1) as f32).sqrt();
 
-                    let base_ability_error = (20i16 - judging_ability as i16).max(1) as f32;
-                    let base_potential_error = (20i16 - judging_potential as i16).max(1) as f32;
-                    // 40% less error for match-context observations
-                    let ability_error = ((base_ability_error * 0.6) / sqrt_count) as i32;
-                    let potential_error = ((base_potential_error * 0.6) / sqrt_count) as i32;
+                    // Match-context observations enjoy reduced error (the
+                    // scout sees the player live for 90 minutes vs a
+                    // snapshot from a database).
+                    let ability_error = config.effective_error(
+                        judging_ability,
+                        obs_count as u8,
+                        config.region.domestic_penalty,
+                        true,
+                    );
+                    let potential_error = config.effective_error(
+                        judging_potential,
+                        obs_count as u8,
+                        config.region.domestic_penalty,
+                        true,
+                    );
 
                     // Assess from visible skills and match performance, not hidden CA/PA
                     let skill_ability = player.skills.calculate_ability_for_position(player.position());
-                    let match_bonus = if match_rating > 7.5 { 5i32 }
-                        else if match_rating > 7.0 { 3 }
-                        else if match_rating > 6.5 { 1 }
-                        else if match_rating < 5.5 { -3 }
-                        else { 0 };
+                    let match_bonus = config.match_rating_bonus(match_rating);
 
                     let assessed_ability = (skill_ability as i32
                         + match_bonus
@@ -429,39 +437,39 @@ impl PipelineProcessor {
                         is_new,
                     });
 
-                    // Generate report at 2+ observations
                     let final_obs_count = obs_count + 1;
-                    if final_obs_count >= 2 {
-                        let confidence = (1.0 - (0.5 / (final_obs_count as f32 + 1.0))).min(1.0);
+                    if final_obs_count >= config.assignment.match_report_threshold as u32 {
+                        let confidence = config.match_report_confidence(final_obs_count as u8);
 
-                        // Match rating influences recommendation tier
-                        let rating_boost = match_rating > 7.0;
-                        let rating_penalty = match_rating < 5.5;
+                        // Match rating influences recommendation tier:
+                        // a hot match boosts a borderline player into StrongBuy
+                        // territory, a poor match drops them.
+                        let rec_cfg = &config.recommendation;
+                        let rating_boost = match_rating > rec_cfg.match_rating_good;
+                        let rating_penalty = match_rating < rec_cfg.match_rating_poor_max;
 
                         let recommendation = if rating_penalty {
-                            // Low match rating downgrades
                             if assessed_ability >= assignment.min_ability {
                                 ScoutingRecommendation::Consider
                             } else {
                                 ScoutingRecommendation::Pass
                             }
                         } else if rating_boost
-                            && assessed_ability as i16 >= assignment.min_ability as i16 + 5
+                            && assessed_ability as i16
+                                >= assignment.min_ability as i16 + rec_cfg.stats_tier1_bonus
                             && assessed_potential > assessed_ability
                         {
                             ScoutingRecommendation::StrongBuy
-                        } else if assessed_ability as i16 >= assignment.min_ability as i16 + 10
-                            && assessed_potential > assessed_ability + 5
-                        {
-                            ScoutingRecommendation::StrongBuy
-                        } else if assessed_ability >= assignment.min_ability
-                            && assessed_potential >= assessed_ability
-                        {
-                            ScoutingRecommendation::Buy
-                        } else if assessed_ability >= assignment.min_ability.saturating_sub(5) {
-                            ScoutingRecommendation::Consider
                         } else {
-                            ScoutingRecommendation::Pass
+                            // Fall through to the standard recommendation tiers,
+                            // bypassing the youth/stats bonuses (they would
+                            // double-count the match-rating influence above).
+                            config.recommendation_for(
+                                assessed_ability as i16,
+                                assessed_ability,
+                                assessed_potential,
+                                assignment.min_ability,
+                            )
                         };
 
                         if recommendation != ScoutingRecommendation::Pass {
@@ -674,6 +682,8 @@ impl PipelineProcessor {
     pub fn process_scouting(country: &mut Country, foreign_players: &[PlayerSummary], date: NaiveDate) {
         let country_id = country.id;
         let country_reputation = country.reputation;
+        // Single source of truth for observation/error/recommendation/risk-flag tuning.
+        let config = ScoutingConfig::default();
 
         // Reuse collect_player_pool for the domestic pool — the body of this
         // loop used to be a copy-paste of that function, doubling the work
@@ -699,7 +709,8 @@ impl PipelineProcessor {
                 let (judging_ability, judging_potential) = if let Some(scout_id) = assignment.scout_staff_id {
                     Self::get_scout_skills(club, scout_id)
                 } else {
-                    (8, 8)
+                    let d = config.observation.default_judging_when_no_scout;
+                    (d, d)
                 };
 
                 // Borrow the scout's knowledge struct once — we need both
@@ -717,7 +728,7 @@ impl PipelineProcessor {
                     .map(|k| k.known_regions.as_slice())
                     .unwrap_or(EMPTY_REGIONS);
 
-                let observe_chance = 60 + (judging_ability as i32 / 2);
+                let observe_chance = config.daily_observation_chance(judging_ability);
                 if IntegerUtils::random(0, 100) > observe_chance {
                     continue;
                 }
@@ -798,33 +809,32 @@ impl PipelineProcessor {
                 // skill = tighter pool with less noise; low skill ≈ random.
                 // This is what real clubs do — Opta/Wyscout shortlists come
                 // first, scouts watch the narrowed list in person.
-                if matching.len() > 20 {
-                    let data_skill = Self::club_data_analysis_skill(club);
-                    // Pool size inversely related to data skill (skill 20 → 25, skill 0 → 80).
-                    let target_pool = (80usize).saturating_sub(data_skill as usize * 3).max(25);
-                    if matching.len() > target_pool {
-                        let noise = (20i32 - data_skill as i32).max(1);
-                        let mut scored: Vec<(&PlayerSummary, f32)> = matching
-                            .iter()
-                            .map(|p| {
-                                let score = Self::player_data_score(p);
-                                let jitter = IntegerUtils::random(-noise, noise) as f32;
-                                (*p, score + jitter)
-                            })
-                            .collect();
-                        scored.sort_by(|a, b| {
-                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                        matching = scored.into_iter().take(target_pool).map(|(p, _)| p).collect();
-                    }
+                let data_skill = Self::club_data_analysis_skill(club);
+                if let Some(target_pool) =
+                    config.data_prefilter_target(matching.len(), data_skill)
+                {
+                    let noise = config.data_prefilter_noise(data_skill);
+                    let mut scored: Vec<(&PlayerSummary, f32)> = matching
+                        .iter()
+                        .map(|p| {
+                            let score = Self::player_data_score(p);
+                            let jitter = IntegerUtils::random(-noise, noise) as f32;
+                            (*p, score + jitter)
+                        })
+                        .collect();
+                    scored.sort_by(|a, b| {
+                        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    matching = scored.into_iter().take(target_pool).map(|(p, _)| p).collect();
                 }
 
-                // Scouts observe 2-3 players per day (not just 1)
-                let obs_per_day = 2 + (judging_ability as usize / 10); // 2-3
+                let obs_per_day = config.observations_per_day(judging_ability);
 
                 for _obs_round in 0..obs_per_day.min(matching.len()) {
-                    // 60% chance to re-observe a previously seen player (deepen knowledge)
-                    // 40% chance to discover a new player
+                    // Configurable re-observe vs discover chance: deepen
+                    // existing knowledge most of the time, widen the pool
+                    // occasionally. Default ~60/40.
+                    let re_observe_chance = config.observation.re_observe_chance_pct;
                     let already_observed_ids: Vec<u32> = assignment
                         .observations
                         .iter()
@@ -832,7 +842,7 @@ impl PipelineProcessor {
                         .collect();
 
                     let target = if !already_observed_ids.is_empty()
-                        && IntegerUtils::random(0, 100) < 60
+                        && IntegerUtils::random(0, 100) < re_observe_chance
                     {
                         // Prefer re-observing a known player
                         matching
@@ -859,7 +869,6 @@ impl PipelineProcessor {
                         .iter()
                         .find(|o| o.player_id == target.player_id);
                     let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
-                    let sqrt_count = ((obs_count + 1) as f32).sqrt();
 
                     // Region penalty blends structural knowledge (in known_regions?)
                     // with empirical experience (familiarity, 0-100). A veteran
@@ -868,35 +877,30 @@ impl PipelineProcessor {
                     let target_region = ScoutingRegion::from_country(
                         target.continent_id, &target.country_code,
                     );
-                    let region_penalty = if target.country_id == country_id {
-                        1.0
-                    } else {
-                        let base = if scout_known_regions.contains(&target_region) {
-                            1.0
-                        } else {
-                            1.5
-                        };
-                        let familiarity = scout_knowledge
-                            .map(|k| k.familiarity_for(target_region))
-                            .unwrap_or(0);
-                        (base - familiarity as f32 / 200.0).max(0.5)
-                    };
+                    let is_domestic = target.country_id == country_id;
+                    let is_known_region = scout_known_regions.contains(&target_region);
+                    let familiarity = scout_knowledge
+                        .map(|k| k.familiarity_for(target_region))
+                        .unwrap_or(0);
+                    let region_penalty =
+                        config.region_penalty(is_domestic, is_known_region, familiarity);
 
-                    let base_ability_error = (20i16 - judging_ability as i16).max(1) as f32 * region_penalty;
-                    let base_potential_error = (20i16 - judging_potential as i16).max(1) as f32 * region_penalty;
-                    let ability_error = (base_ability_error / sqrt_count) as i32;
-                    let potential_error = (base_potential_error / sqrt_count) as i32;
+                    let ability_error = config.effective_error(
+                        judging_ability,
+                        obs_count as u8,
+                        region_penalty,
+                        false,
+                    );
+                    let potential_error = config.effective_error(
+                        judging_potential,
+                        obs_count as u8,
+                        region_penalty,
+                        false,
+                    );
 
                     // Assess ability from visible skills, boosted by match performance
-                    let performance_bonus = if target.appearances >= 10 && target.average_rating > 7.0 {
-                        3i32
-                    } else if target.appearances >= 5 && target.average_rating > 6.5 {
-                        1
-                    } else if target.average_rating > 0.0 && target.average_rating < 5.5 {
-                        -2
-                    } else {
-                        0
-                    };
+                    let performance_bonus =
+                        config.performance_bonus(target.appearances, target.average_rating);
 
                     let assessed_ability = (target.skill_ability as i32
                         + performance_bonus
@@ -948,48 +952,19 @@ impl PipelineProcessor {
                         wanted_player_ids.push(target.player_id);
                     }
 
-                    // Generate report after just 1 observation (with lower confidence)
                     let final_obs_count = obs_count + 1;
-                    let confidence = if final_obs_count == 1 {
-                        0.4
-                    } else {
-                        1.0 - (1.0 / (final_obs_count as f32 + 1.0))
-                    };
-
-                    // Young players with high potential gap get boosted recommendations
-                    let youth_bonus: i16 = if target.age <= 21 && assessed_potential > assessed_ability + 15 {
-                        10
-                    } else if target.age <= 23 && assessed_potential > assessed_ability + 10 {
-                        5
-                    } else {
-                        0
-                    };
-
-                    // Strong match stats boost recommendation
-                    let stats_bonus: i16 = if target.appearances >= 10 && target.average_rating >= 7.0 {
-                        5
-                    } else if target.appearances >= 5 && target.average_rating >= 6.5 {
-                        2
-                    } else {
-                        0
-                    };
-
+                    let confidence = config.pool_report_confidence(final_obs_count as u8);
+                    let youth_bonus =
+                        config.youth_bonus(target.age, assessed_ability, assessed_potential);
+                    let stats_bonus =
+                        config.stats_bonus(target.appearances, target.average_rating);
                     let effective_ability = assessed_ability as i16 + youth_bonus + stats_bonus;
-
-                    let recommendation =
-                        if effective_ability >= assignment.min_ability as i16 + 10
-                            && assessed_potential > assessed_ability + 5
-                        {
-                            ScoutingRecommendation::StrongBuy
-                        } else if effective_ability >= assignment.min_ability as i16
-                            && assessed_potential >= assessed_ability
-                        {
-                            ScoutingRecommendation::Buy
-                        } else if effective_ability >= assignment.min_ability as i16 - 5 {
-                            ScoutingRecommendation::Consider
-                        } else {
-                            ScoutingRecommendation::Pass
-                        };
+                    let recommendation = config.recommendation_for(
+                        effective_ability,
+                        assessed_ability,
+                        assessed_potential,
+                        assignment.min_ability,
+                    );
 
                     if recommendation == ScoutingRecommendation::Pass {
                         rejected_events.push((club.id, target.player_id));
@@ -1115,10 +1090,12 @@ impl PipelineProcessor {
         }
 
         // Commit rejection memory — a Pass recommendation blocks re-scouting
-        // for 6 months, spanning the rest of the current window and the next.
+        // for the configured window, spanning at least the current window
+        // and (typically) the next one.
+        let rejection_months = config.assignment.rejection_memory_months;
         for (club_id, player_id) in rejected_events {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                club.transfer_plan.reject_player(player_id, date, 6);
+                club.transfer_plan.reject_player(player_id, date, rejection_months);
             }
         }
     }
@@ -1136,6 +1113,7 @@ impl PipelineProcessor {
         if date.weekday() != chrono::Weekday::Mon {
             return;
         }
+        let config = ScoutingConfig::default();
 
         struct RefreshUpdate {
             club_id: u32,
@@ -1183,10 +1161,10 @@ impl PipelineProcessor {
                 })
                 .map(|s| s.staff_attributes.knowledge.judging_player_ability)
                 .max()
-                .unwrap_or(10);
+                .unwrap_or(config.shadow.refresh_default_judging);
 
-            // Refresh 1-3 random shadow reports per club per Monday.
-            let refresh_count = (club.transfer_plan.shadow_reports.len() / 5).max(1).min(3);
+            let refresh_count =
+                config.shadow_refresh_count(club.transfer_plan.shadow_reports.len());
             for _ in 0..refresh_count {
                 let idx = IntegerUtils::random(
                     0,
@@ -1200,7 +1178,8 @@ impl PipelineProcessor {
 
                 // Drift old assessment toward truth, damped by scout skill.
                 // High-skill scouts re-measure almost exactly; low-skill drift is noisier.
-                let noise = ((20i16 - judging as i16).max(1)) as i32;
+                let noise = (config.error.max_judging - judging as i16).max(config.error.min_error)
+                    as i32;
                 let drift = IntegerUtils::random(-noise, noise);
                 let blended = ((shadow.observed_ability as i32 + truth as i32) / 2 + drift)
                     .clamp(1, 200) as u8;
