@@ -3,6 +3,7 @@ pub mod context;
 pub mod contract;
 pub mod display;
 pub mod focus;
+pub mod free_pool;
 pub mod perception;
 pub mod responsibility;
 pub mod result;

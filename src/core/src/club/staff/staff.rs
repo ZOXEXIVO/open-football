@@ -280,6 +280,35 @@ impl StaffCollection {
             .map(|s| s.id)
     }
 
+    /// Remove the staff member currently holding `position` and return them
+    /// owned. Used by the sacking / poaching paths so the caller can route
+    /// the freed staff member into the global free-agent pool. Returns
+    /// `None` when no staff member holds that position.
+    pub fn take_by_position(&mut self, position: StaffPosition) -> Option<Staff> {
+        let idx = self.staffs.iter().position(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| c.position == position)
+                .unwrap_or(false)
+        })?;
+        Some(self.staffs.remove(idx))
+    }
+
+    /// Remove a staff member by id and return them owned. Mirrors
+    /// `take_by_position` for cases where the caller already knows the id
+    /// (e.g. manager-market poaching where the candidate is selected by
+    /// id before the move).
+    pub fn take_by_id(&mut self, id: u32) -> Option<Staff> {
+        let idx = self.staffs.iter().position(|s| s.id == id)?;
+        Some(self.staffs.remove(idx))
+    }
+
+    /// Append a staff member to the collection. Used by the manager-market
+    /// pipeline when a free agent or poached coach is signed.
+    pub fn push(&mut self, staff: Staff) {
+        self.staffs.push(staff);
+    }
+
     /// Best `working_with_youngsters` attribute among staff assigned to
     /// youth-development roles (Head of Youth Development, Youth Coach).
     /// Returns `fallback` when no such staff member is on the books —

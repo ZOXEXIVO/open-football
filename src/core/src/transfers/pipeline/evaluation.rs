@@ -11,14 +11,20 @@ use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
 use crate::transfers::TransferWindowManager;
 use crate::{
     Club, ClubPhilosophy, Country, MatchTacticType, Person, Player,
-    PlayerFieldPositionGroup, PlayerPlanRole, PlayerPositionType, ReputationLevel,
-    TacticsSelector, TACTICS_POSITIONS,
+    PlayerFieldPositionGroup, PlayerPlanRole, PlayerPositionType, PlayerStatusType,
+    ReputationLevel, TacticsSelector, TACTICS_POSITIONS,
 };
 
 struct SquadEvaluation {
     club_id: u32,
     requests: Vec<TransferRequest>,
     loan_outs: Vec<LoanOutCandidate>,
+    /// Player ids the deterministic position-glut detector wants
+    /// hard-listed for transfer this tick. Applied in pass 2 with
+    /// mutable Club access. Bypasses the AI listing path because the
+    /// signal here is unambiguous: the squad has too many at this
+    /// position and the player is too old to loan.
+    force_transfer_list: Vec<u32>,
     total_budget: f64,
     max_concurrent: u32,
 }
@@ -104,6 +110,24 @@ impl PipelineProcessor {
                 }
                 plan.last_evaluation_date = Some(date);
                 plan.initialized = true;
+
+                // Apply position-glut transfer-list decisions. These
+                // are deterministic (not AI-driven) so they bypass
+                // `TransferListManager` and write Lst directly. Cheap
+                // — usually empty; non-empty only when a club has
+                // accumulated a positional surplus the AI hasn't
+                // picked off yet (e.g. the Gzira 10-GK case).
+                if !eval.force_transfer_list.is_empty() {
+                    if let Some(main_team) = club.teams.main_mut() {
+                        for player_id in eval.force_transfer_list {
+                            if let Some(player) = main_team.players.find_mut(player_id) {
+                                if !player.statuses.get().contains(&PlayerStatusType::Lst) {
+                                    player.statuses.add(date, PlayerStatusType::Lst);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -143,6 +167,7 @@ impl PipelineProcessor {
                 club_id: club.id,
                 requests,
                 loan_outs,
+                force_transfer_list: Vec::new(),
                 total_budget: budget,
                 max_concurrent: 1,
             };
@@ -156,6 +181,7 @@ impl PipelineProcessor {
                 club_id: club.id,
                 requests,
                 loan_outs,
+                force_transfer_list: Vec::new(),
                 total_budget: budget,
                 max_concurrent: 1,
             };
@@ -719,13 +745,142 @@ impl PipelineProcessor {
             current_window,
         );
 
+        // Position-glut sweep: catches surplus the loan-out branches
+        // miss — most importantly the 30+ veterans the loan path
+        // explicitly excludes. A club with 8 GKs needs to *eject* the
+        // worst, not wait for a deficit signal that never fires when
+        // the surplus itself is dragging the average down.
+        let force_transfer_list = Self::identify_position_glut(
+            &squad,
+            date,
+            players,
+            &mut loan_outs,
+        );
+
         SquadEvaluation {
             club_id: club.id,
             requests,
             loan_outs,
+            force_transfer_list,
             total_budget: budget,
             max_concurrent,
         }
+    }
+
+    /// Position-glut detector. Independent of age, deficit, or
+    /// philosophy: triggers purely on having too many at one position.
+    ///
+    /// Per group, picks the bottom `count - keep_threshold` players
+    /// (worst CA first, oldest tiebreak). Routes them by age:
+    ///   * age >= 30 → **transfer-list** (returned for pass-2 apply,
+    ///     since the loan path won't take them).
+    ///   * age <  30 → **loan-out candidate** with `Surplus` reason.
+    ///
+    /// Catches the Gzira pattern: 10 GKs sitting on the main roster
+    /// because the loan-out branches can't see them (deficit_vs_group
+    /// underflows when surplus dominates the average), and the
+    /// transfer-list AI hasn't made up its mind. After this fires,
+    /// the worst 4-5 GKs are tagged for departure within one tick.
+    fn identify_position_glut(
+        squad: &[SquadPlayerInfo],
+        date: NaiveDate,
+        players: &[Player],
+        loan_outs: &mut Vec<LoanOutCandidate>,
+    ) -> Vec<u32> {
+        // Per-position keep ceiling. Anything beyond this is glut.
+        // Conservative — leaves headroom for tactical depth (e.g. 5
+        // CBs is fine for a back-3 club; 6 starts to be silly).
+        const KEEP_GK: usize = 4;
+        const KEEP_DEF: usize = 10;
+        const KEEP_MID: usize = 10;
+        const KEEP_FWD: usize = 7;
+
+        let keep_for = |group: PlayerFieldPositionGroup| -> usize {
+            match group {
+                PlayerFieldPositionGroup::Goalkeeper => KEEP_GK,
+                PlayerFieldPositionGroup::Defender => KEEP_DEF,
+                PlayerFieldPositionGroup::Midfielder => KEEP_MID,
+                PlayerFieldPositionGroup::Forward => KEEP_FWD,
+            }
+        };
+
+        let mut force_list: Vec<u32> = Vec::new();
+        let groups = [
+            PlayerFieldPositionGroup::Goalkeeper,
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
+        ];
+
+        for group in groups {
+            // Rank players in this group by CA ascending (worst first),
+            // age descending tiebreak (older first — they're the
+            // priority to clear because they can't be loaned).
+            let mut ranked: Vec<&SquadPlayerInfo> = squad
+                .iter()
+                .filter(|p| p.primary_position.position_group() == group)
+                .collect();
+            ranked.sort_by(|a, b| {
+                a.current_ability
+                    .cmp(&b.current_ability)
+                    .then(b.age.cmp(&a.age))
+            });
+
+            let count = ranked.len();
+            let keep = keep_for(group);
+            if count <= keep {
+                continue;
+            }
+            let excess = count - keep;
+
+            for surplus in ranked.into_iter().take(excess) {
+                // Skip players who are already on loan or already
+                // marked for transfer — no need to double-tag, and
+                // re-listing churn would invalidate prior negotiations.
+                let Some(player) = players.iter().find(|p| p.id == surplus.player_id) else {
+                    continue;
+                };
+                if player.is_on_loan() {
+                    continue;
+                }
+                let statuses = player.statuses.get();
+                let already_listed = statuses.contains(&PlayerStatusType::Lst);
+
+                if surplus.age >= 30 {
+                    // Older surplus → transfer-list path (loan path
+                    // explicitly excludes >= 30). Skip if already on
+                    // the list to avoid stutter.
+                    if !already_listed {
+                        debug!(
+                            "Position glut: forcing Lst on player {} (age {}, CA {}, group {:?})",
+                            surplus.player_id, surplus.age, surplus.current_ability, group
+                        );
+                        force_list.push(surplus.player_id);
+                    }
+                } else {
+                    // Younger surplus → loan-out path. Use the
+                    // standard `Surplus` reason so the existing
+                    // listing pipeline picks it up.
+                    let already_listed_for_loan =
+                        loan_outs.iter().any(|c| c.player_id == surplus.player_id);
+                    if !already_listed_for_loan {
+                        debug!(
+                            "Position glut: adding loan-out candidate {} (age {}, CA {}, group {:?})",
+                            surplus.player_id, surplus.age, surplus.current_ability, group
+                        );
+                        loan_outs.push(LoanOutCandidate {
+                            player_id: surplus.player_id,
+                            reason: LoanOutReason::Surplus,
+                            status: LoanOutStatus::Identified,
+                            loan_fee: 0.0,
+                        });
+                    }
+                }
+            }
+        }
+
+        let _ = date; // reserved for future age-window tweaks
+        force_list
     }
 
     /// Get formation positions, falling back to T442 for unmapped formations.

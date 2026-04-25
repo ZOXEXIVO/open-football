@@ -173,12 +173,28 @@ impl Club {
         }
 
         for &(player_id, age) in &surplus {
+            // Where can we send them? Single-team clubs (Maltese top
+            // flight, San Marino, etc.) often return None here because
+            // there's no reserve/youth team to absorb the demotion.
+            let demotion_target = self.find_demotion_target(age);
+
             if let Some(p) = self.teams.teams[main_idx].players.find_mut(player_id) {
                 if !p.statuses.get().contains(&PlayerStatusType::Loa) {
                     p.statuses.add(date, PlayerStatusType::Loa);
                 }
+                // No reserve/youth to demote to AND the player is too
+                // old to loan? Tag for transfer instead so the surplus
+                // can actually leave the club. Without this, single-
+                // team clubs accumulate veterans indefinitely (see
+                // Gzira: 4× 33-35 GKs sitting on the main roster
+                // because they can't loan and can't demote).
+                if demotion_target.is_none() && age >= 30 {
+                    if !p.statuses.get().contains(&PlayerStatusType::Lst) {
+                        p.statuses.add(date, PlayerStatusType::Lst);
+                    }
+                }
             }
-            if let Some(dest) = self.find_demotion_target(age) {
+            if let Some(dest) = demotion_target {
                 moves.push(PendingMove {
                     from: main_idx,
                     to: dest,

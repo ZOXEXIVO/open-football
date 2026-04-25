@@ -1,3 +1,4 @@
+use crate::club::board::manager_market::ManagerCandidate;
 use crate::club::team::reputation::AchievementType;
 use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClubContract};
 use crate::context::{GlobalContext, SimulationContext};
@@ -201,6 +202,17 @@ pub struct ClubBoard {
     /// `None` when the manager seat is filled (either permanently, or
     /// an interim has been confirmed as permanent).
     pub manager_search_since: Option<NaiveDate>,
+    /// Ranked free-agent (slice B) and employed-target (slice C)
+    /// candidates the board is willing to appoint. Refreshed weekly
+    /// while a search is open. Front of vec = top choice.
+    pub manager_shortlist: Vec<ManagerCandidate>,
+    /// Day the current shortlist was built. Used to decide when it's
+    /// stale enough to rebuild — see `manager_market::SHORTLIST_REFRESH_DAYS`.
+    pub shortlist_built_at: Option<NaiveDate>,
+    /// How long the search may run before the board commits to a
+    /// hire. Locked in when `manager_search_since` is set so it stays
+    /// stable across the search window. Top clubs hold out longer.
+    pub search_window_days: u16,
     /// Ownership archetype. Modulates budget size, sacking threshold,
     /// and long-term tolerance. Populated at club creation; stable for
     /// the lifetime of the chairman.
@@ -220,6 +232,9 @@ impl ClubBoard {
             vision_start_year: None,
             vision_goal_achieved: false,
             manager_search_since: None,
+            manager_shortlist: Vec::new(),
+            shortlist_built_at: None,
+            search_window_days: 0,
             chairman: ChairmanProfile::new(),
         }
     }
@@ -297,15 +312,25 @@ impl ClubBoard {
             }
         }
 
-        // Manager search: if we sacked someone ≥30 days ago, it's time to
-        // confirm a permanent appointment. Most real searches either
-        // promote the caretaker or hire externally after a few weeks;
-        // here we just signal "confirm the current caretaker" and let
-        // the result stage apply it.
+        // Manager search: once the per-club search window elapses, signal
+        // the result stage to confirm a permanent appointment. The result
+        // stage tries the top free-agent shortlist first (slice B) and
+        // falls back to promoting the caretaker if no candidate sticks.
+        // Window length scales with reputation — top clubs hunt longer
+        // because they're chasing big names; smaller clubs move faster.
         if let Some(since) = self.manager_search_since {
             let today = ctx.simulation.date.date();
             let days = (today - since).num_days();
-            if days >= 30 {
+            // Defensive: a board with `manager_search_since` set but a
+            // zero search window (legacy state, or first tick after a
+            // hot-reload) falls back to the previous fixed value so the
+            // seat doesn't sit empty forever.
+            let window = if self.search_window_days == 0 {
+                30
+            } else {
+                self.search_window_days as i64
+            };
+            if days >= window {
                 result.confirm_new_manager = true;
             }
         }

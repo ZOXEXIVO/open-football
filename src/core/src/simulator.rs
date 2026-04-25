@@ -1,5 +1,7 @@
 use crate::ai::{Ai, AiBatchProcessor};
 use crate::club::ai::apply_ai_responses;
+use crate::club::board::manager_market;
+use crate::club::staff::free_pool;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::competitions::GlobalCompetitions;
 use crate::context::{GlobalContext, SimulationContext};
@@ -9,7 +11,7 @@ use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
 use crate::utils::random::engine as rng_engine;
-use crate::{Player, TeamInfo, TeamType};
+use crate::{Player, Staff, TeamInfo, TeamType};
 use chrono::{Datelike, Duration, NaiveDateTime};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -110,6 +112,28 @@ impl FootballSimulator {
             continent_result.process(data, &mut result);
         }
 
+        // Phase D: world-level manager market.
+        //
+        // Runs once per day after every continent's BoardResult.process has
+        // applied sackings (so freshly-vacated seats and freshly-pooled
+        // staff are visible in this same tick). Five steps:
+        //   1. Sweep naturally-expired non-manager contracts into the pool.
+        //   2. Age the pool (decay satisfaction, retire elderly coaches).
+        //   3. Refresh shortlists for clubs in active manager search.
+        //      Combined builder pulls from the free-agent pool AND
+        //      enumerates poach-candidates at smaller clubs.
+        //   4. Initiate fresh approaches for top employed candidates
+        //      that don't already have a pursuit in flight.
+        //   5. Advance every in-flight approach by one state — sources
+        //      respond, candidates accept terms, signings finalize
+        //      with their cascade source-club search.
+        let today = data.date.date();
+        free_pool::harvest_expired_staff(data, today);
+        free_pool::tick_free_agent_staff_pool(&mut data.free_agent_staff, today);
+        manager_market::refresh_shortlists(data);
+        manager_market::initiate_approaches(data);
+        manager_market::tick_approaches(data);
+
         // Global competitions (Champions League, World Cup, etc.)
         GlobalCompetitionSimulator::simulate(data);
 
@@ -156,6 +180,20 @@ pub struct SimulatorData {
 
     pub free_agents: Vec<Player>,
 
+    /// Coaches/managers/staff between jobs. Populated on sacking and on
+    /// natural contract expiry; drained when the manager market signs
+    /// a candidate. Globally scoped so a Premier League club can hire
+    /// a sacked Bundesliga manager without per-country plumbing.
+    pub free_agent_staff: Vec<Staff>,
+
+    /// In-flight approaches by clubs pursuing employed managers at
+    /// other clubs (slice C — poaching). Each entry is one
+    /// requesting-club ↔ candidate ↔ source-club triplet that
+    /// progresses through `ApproachState` over ~5 daily ticks before
+    /// either resolving in a signing (with cascade) or being rejected.
+    pub pending_manager_approaches:
+        Vec<crate::club::board::manager_market::ManagerApproach>,
+
     pub watchlist: Vec<u32>,
 
     pub global_competitions: GlobalCompetitions,
@@ -201,6 +239,8 @@ impl SimulatorData {
             indexes: None,
             dirty_player_index: false,
             free_agents: Vec::new(),
+            free_agent_staff: Vec::new(),
+            pending_manager_approaches: Vec::new(),
             watchlist: Vec::new(),
             global_competitions,
             country_info,

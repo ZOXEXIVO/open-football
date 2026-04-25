@@ -1,5 +1,7 @@
 use crate::simulator::SimulatorData;
+use crate::club::board::manager_market;
 use crate::club::board::BoardMoodState;
+use crate::club::staff::free_pool;
 use crate::club::{StaffClubContract, StaffPosition, StaffStatus};
 use crate::TeamType;
 use chrono::Datelike;
@@ -63,6 +65,17 @@ impl BoardResult {
         // Grab the sim date before we take a mutable club borrow.
         let today = data.date.date();
 
+        // Sacked staff is collected during the club-mut block and admitted
+        // to the global free-agent pool *after* the club borrow ends —
+        // `data.free_agent_staff` is on the same `data` and the borrow
+        // checker won't allow both mut paths simultaneously.
+        let mut sacked_staff: Option<crate::Staff> = None;
+        // Mirror for confirm-new-manager: the appointment runs in
+        // `manager_market::execute_appointment` after the club borrow
+        // ends because it needs concurrent access to the pool.
+        let do_confirm = self.confirm_new_manager;
+
+        {
         let club = match data.club_mut(self.club_id) {
             Some(c) => c,
             None => return,
@@ -136,21 +149,24 @@ impl BoardResult {
         // Sacking: terminate the manager contract on the main team and
         // promote the best available coaching-staff member to caretaker.
         // The caretaker runs the team until the 30-day search concludes
-        // (see `confirm_new_manager` below).
+        // (see `confirm_new_manager` below). The sacked staff member is
+        // *removed* from the team's roster (not just stripped of contract)
+        // and routed into the global free-agent pool below the block, so
+        // a rival club can sign them next tick.
         if self.manager_sacked {
             let club_name = club.name.clone();
             if let Some(main_team) = club.teams.main_mut() {
                 let mut sacked_salary: u32 = 0;
-                if let Some(staff) = main_team.staffs.find_mut_by_position(StaffPosition::Manager) {
+                if let Some(staff) = main_team.staffs.take_by_position(StaffPosition::Manager) {
                     let id = staff.id;
                     if let Some(c) = &staff.contract {
                         sacked_salary = c.salary;
                     }
-                    staff.contract = None;
                     info!(
                         "Board sacked manager (staff id {}) at {} — confidence {}",
                         id, club_name, self.confidence
                     );
+                    sacked_staff = Some(staff);
                 }
 
                 // Promote best existing coaching-staff member to Caretaker.
@@ -192,101 +208,33 @@ impl BoardResult {
                 }
             }
 
-            // Start the search clock on the board.
-            club.board.manager_search_since = Some(today);
-        }
-
-        // Confirm the caretaker (or external hire) after ≥30 days.
-        // Interim becomes permanent — simulates the common outcome
-        // where the board sticks with the caretaker. Ambitious/Reckless
-        // chairmen at high-rep clubs instead go external: we keep the
-        // same staff slot but upgrade the attributes to simulate a
-        // high-profile appointment.
-        if self.confirm_new_manager {
-            use crate::club::board::ChairmanAmbition;
-
-            let club_name = club.name.clone();
-            let chairman_ambition = club.board.chairman.ambition;
-            // Cache reputation before we take the mutable team borrow.
-            let world_rep = club
+            // Start the search clock on the board, locking in the
+            // rep-scaled search window. Top clubs hunt for ~60 days,
+            // small clubs ~21. The window stays stable across the
+            // search even if reputation fluctuates.
+            let club_rep = club
                 .teams
                 .iter()
                 .find(|t| matches!(t.team_type, TeamType::Main))
-                .map(|t| t.reputation.world as u16)
+                .map(|t| t.reputation.world)
                 .unwrap_or(0);
+            manager_market::open_manager_search(&mut club.board, today, club_rep);
+        }
 
-            if let Some(main_team) = club.teams.main_mut() {
-                if let Some(staff) =
-                    main_team.staffs.find_mut_by_position(StaffPosition::CaretakerManager)
-                {
-                    let id = staff.id;
-                    let salary = staff.contract.as_ref().map(|c| c.salary).unwrap_or(0);
-                    let caretaker_quality = staff.staff_attributes.coaching.tactical as u16
-                        + staff.staff_attributes.mental.man_management as u16
-                        + staff.staff_attributes.mental.motivating as u16;
+        } // end of `club` mutable-borrow scope
 
-                    // External-hire gate: only fires for ambitious boards
-                    // at well-resourced clubs when the caretaker is clearly
-                    // not premium material. Modelled as an attribute boost
-                    // in-place rather than a full new-staff generator.
-                    let external_hire = matches!(
-                        chairman_ambition,
-                        ChairmanAmbition::Reckless | ChairmanAmbition::Ambitious
-                    ) && world_rep >= 6000
-                        && caretaker_quality < 42;
+        // The club borrow has ended — we can now mutate the global
+        // free-agent pool that lives on the same `data` value.
+        if let Some(staff) = sacked_staff {
+            free_pool::admit_to_pool(&mut data.free_agent_staff, staff, today);
+        }
 
-                    if external_hire {
-                        let target_level: u8 = if world_rep >= 8500 { 16 } else { 14 };
-                        let boost = |attr: u8| -> u8 { attr.max(target_level).min(20) };
-                        staff.staff_attributes.coaching.tactical =
-                            boost(staff.staff_attributes.coaching.tactical);
-                        staff.staff_attributes.coaching.technical =
-                            boost(staff.staff_attributes.coaching.technical);
-                        staff.staff_attributes.coaching.mental =
-                            boost(staff.staff_attributes.coaching.mental);
-                        staff.staff_attributes.mental.man_management =
-                            boost(staff.staff_attributes.mental.man_management);
-                        staff.staff_attributes.mental.motivating =
-                            boost(staff.staff_attributes.mental.motivating);
-                        staff.staff_attributes.mental.discipline =
-                            boost(staff.staff_attributes.mental.discipline);
-                        staff.staff_attributes.knowledge.tactical_knowledge =
-                            boost(staff.staff_attributes.knowledge.tactical_knowledge);
-                        info!(
-                            "External hire: caretaker {} upgraded to top-profile manager at {}",
-                            id, club_name
-                        );
-                    }
-
-                    // Salary scales with whether this is an external hire —
-                    // big-name appointments cost materially more.
-                    let final_salary = if external_hire {
-                        salary.max(200_000).saturating_mul(2)
-                    } else {
-                        salary
-                    };
-
-                    // 3-year full contract — standard appointment.
-                    let expires = today
-                        .with_year(today.year() + 3)
-                        .unwrap_or(today);
-                    staff.contract = Some(StaffClubContract::new(
-                        final_salary,
-                        expires,
-                        StaffPosition::Manager,
-                        StaffStatus::Active,
-                    ));
-                    info!(
-                        "Caretaker {} confirmed as permanent manager at {}",
-                        id, club_name
-                    );
-                }
-            }
-            // Fresh appointment — reset chairman loyalty to neutral so the
-            // new boss isn't inheriting the predecessor's good will (or lack
-            // of it).
-            club.board.chairman.manager_loyalty = 50;
-            club.board.manager_search_since = None;
+        // Permanent appointment: free-agent hire (preferred) or
+        // caretaker promotion (fallback). Lives in `manager_market`
+        // because it needs to weave between the global pool and the
+        // club's staff collection across multiple short borrows.
+        if do_confirm {
+            manager_market::execute_appointment(data, self.club_id, today);
         }
     }
 }

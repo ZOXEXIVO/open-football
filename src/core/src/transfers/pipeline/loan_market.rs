@@ -85,9 +85,34 @@ impl PipelineProcessor {
             let team = &club.teams.teams[0];
             let rep_level = team.reputation.level();
 
+            // Critical-need override: a club whose squad is genuinely
+            // short at any position MUST scan the loan market, even
+            // outside its usual scanning window. Without this, a
+            // National-rep club that loses both senior GKs in October
+            // would otherwise wait until January to cover — leaving
+            // them fielding youth keepers for two months.
+            //
+            // Threshold: < 2 at GK, < 4 at DEF/MID, < 2 at FWD. Below
+            // these and the team genuinely cannot field a balanced
+            // matchday squad.
+            let has_critical_shortage = {
+                use crate::PlayerFieldPositionGroup as G;
+                let mut counts = [0usize; 4]; // GK, DEF, MID, FWD
+                for p in team.players.iter() {
+                    let idx = match p.position().position_group() {
+                        G::Goalkeeper => 0,
+                        G::Defender => 1,
+                        G::Midfielder => 2,
+                        G::Forward => 3,
+                    };
+                    counts[idx] += 1;
+                }
+                counts[0] < 2 || counts[1] < 4 || counts[2] < 4 || counts[3] < 2
+            };
+
             // Determine if club should scan — philosophy overrides reputation defaults.
             // LoanFocused clubs always scan; SignToCompete clubs almost never loan.
-            let should_scan = match &club.philosophy {
+            let should_scan = has_critical_shortage || match &club.philosophy {
                 ClubPhilosophy::LoanFocused => true,
                 ClubPhilosophy::SignToCompete => {
                     // Only loan as emergency cover in January
@@ -248,14 +273,20 @@ impl PipelineProcessor {
                 }
             }
 
-            // Opportunistic scan: small clubs always look for deals, not just in January
+            // Opportunistic scan: small clubs always look for deals,
+            // not just in January. National clubs join in too when
+            // their squad has a genuine shortage — the critical-need
+            // override above already let them in past `should_scan`,
+            // but the opportunistic branch was small-club-only and
+            // would otherwise leave them empty-handed.
             let is_small_club = matches!(
                 rep_level,
                 ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
             );
 
-            // Small clubs scan for available loan players to strengthen their squad
-            if is_small_club && scans_this_club < max_scans {
+            // Small clubs (always) and National clubs in critical
+            // shortage scan for available loan players.
+            if (is_small_club || has_critical_shortage) && scans_this_club < max_scans {
                 let mut opps: Vec<&LoanListing> = loan_listings
                     .iter()
                     .filter(|l| {
