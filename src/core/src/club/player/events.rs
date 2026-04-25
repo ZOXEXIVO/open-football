@@ -260,7 +260,7 @@ impl Player {
         }
 
         if o.is_motm {
-            self.happiness.add_event(HappinessEventType::PlayerOfTheMatch, 4.0);
+            self.happiness.add_event_default(HappinessEventType::PlayerOfTheMatch);
         }
 
         // Debriefs are only meaningful for competitive matches where the
@@ -291,7 +291,7 @@ impl Player {
 
     /// Named to a squad but never got off the bench. Small morale hit.
     pub fn on_match_dropped(&mut self) {
-        self.happiness.add_event(HappinessEventType::MatchDropped, -1.5);
+        self.happiness.add_event_default(HappinessEventType::MatchDropped);
     }
 
     /// An approach from `buyer_rep` has made it past the selling club's
@@ -333,7 +333,7 @@ impl Player {
         ] {
             self.statuses.remove(s);
         }
-        self.happiness.add_event(HappinessEventType::ContractTerminated, -3.0);
+        self.happiness.add_event_default(HappinessEventType::ContractTerminated);
     }
 
     /// Apply the physical cost of featuring in a match: condition floor,

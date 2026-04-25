@@ -90,7 +90,7 @@ impl ProcessContractHandler {
                         return;
                     }
                     accept_and_clear(player, proposal, now);
-                    player.happiness.add_event(HappinessEventType::ContractRenewal, 5.0);
+                    player.happiness.add_event_default(HappinessEventType::ContractRenewal);
                     player.happiness.factors.salary_satisfaction = 0.0;
                     player.happiness.last_salary_negotiation = Some(now);
                 } else if proposal.salary >= player_contract.salary {

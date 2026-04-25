@@ -364,7 +364,7 @@ pub async fn player_get_action(
             } else {
                 None
             },
-            generated: player.generated,
+            generated: player.is_generated(),
         };
 
         let is_goalkeeper = player.position().is_goalkeeper();
@@ -442,11 +442,11 @@ pub async fn player_get_action(
         position_map: get_position_map(player),
         loan_status: None,
         injury_days: None,
-        generated: player.generated,
+        generated: player.is_generated(),
     };
 
     let is_goalkeeper = player.position().is_goalkeeper();
-    let sub_title = if player.retired {
+    let sub_title = if player.is_retired() {
         i18n.t("player_status_retired").to_string()
     } else {
         i18n.t("free_agent").to_string()
@@ -514,7 +514,7 @@ fn build_debug_dto(player: &Player) -> PlayerDebugDto {
         .unwrap_or_else(|| "None".to_string());
 
     let last_transfer_date = player
-        .last_transfer_date
+        .last_transfer_date()
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| "-".to_string());
 

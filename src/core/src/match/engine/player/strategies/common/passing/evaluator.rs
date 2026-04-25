@@ -1,3 +1,5 @@
+use crate::club::player::behaviour_config::PassEvaluatorConfig;
+use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, PlayerSide, StateProcessingContext};
 use crate::PlayerFieldPositionGroup;
@@ -75,14 +77,12 @@ impl PassEvaluator {
         // Determine if pass is recommended based on thresholds. Players with
         // killer-ball / playmaker PPMs are willing to attempt riskier passes
         // because they value the through ball / chance-creation upside.
-        let risk_tolerant = passer.has_trait(PlayerTrait::TriesThroughBalls)
-            || passer.has_trait(PlayerTrait::KillerBallOften)
-            || passer.has_trait(PlayerTrait::Playmaker);
-        let is_recommended = if risk_tolerant {
-            success_probability > 0.5 && risk_level < 0.82
-        } else {
-            success_probability > 0.6 && risk_level < 0.7
-        };
+        // Which traits flag a player as risk-tolerant lives in the trait
+        // registry (`risk_tolerant_passer` field) — adding a new such
+        // trait no longer requires touching this evaluator.
+        let risk_tolerant = has_risk_tolerant_passing_trait(&passer.traits);
+        let is_recommended = PassEvaluatorConfig::default()
+            .is_recommended(success_probability, risk_level, risk_tolerant);
 
         PassEvaluation {
             success_probability,
@@ -95,18 +95,19 @@ impl PassEvaluator {
 
     /// Calculate how distance affects pass success
     fn calculate_distance_factor(distance: f32, passer: &MatchPlayer) -> f32 {
+        let cfg = PassEvaluatorConfig::default();
         let passing_skill = passer.skills.technical.passing;
         let vision_skill = passer.skills.mental.vision;
         let technique_skill = passer.skills.technical.technique;
 
-        // Vision and technique extend effective passing range
-        let vision_bonus = (vision_skill / 20.0) * 1.5;
-        let _technique_bonus = (technique_skill / 20.0) * 0.5;
-
-        let optimal_range = passing_skill * (2.5 + vision_bonus);
-        let max_effective_range = passing_skill * (5.0 + vision_bonus * 2.0);
-        let ultra_long_threshold = 200.0;
-        let extreme_long_threshold = 300.0;
+        // Vision and technique extend effective passing range. The
+        // bonus values are baked into the config helper calls below;
+        // raw `(vision_skill / scale)` is still used inside the
+        // long-pass skill-factor branches further down.
+        let optimal_range = cfg.optimal_range(passing_skill, vision_skill);
+        let max_effective_range = cfg.max_effective_range(passing_skill, vision_skill);
+        let ultra_long_threshold = cfg.ultra_long_threshold;
+        let extreme_long_threshold = cfg.extreme_long_threshold;
 
         if distance <= optimal_range {
             // Short to medium passes - very high success
@@ -158,32 +159,18 @@ impl PassEvaluator {
         passer: &MatchPlayer,
         receiver: &MatchPlayerLite,
     ) -> f32 {
+        let cfg = PassEvaluatorConfig::default();
         let pass_direction = (receiver.position - passer.position).normalize();
         let passer_velocity = ctx.tick_context.positions.players.velocity(passer.id);
 
-        if passer_velocity.norm() < 0.1 {
+        if passer_velocity.norm() < cfg.stationary_velocity_threshold {
             // Standing still - can pass in any direction easily
-            return 0.95;
+            return cfg.stationary_angle_factor;
         }
 
         let facing_direction = passer_velocity.normalize();
         let dot_product = pass_direction.dot(&facing_direction);
-
-        // Convert dot product to angle factor
-        // 1.0 = same direction, -1.0 = opposite direction
-        if dot_product > 0.7 {
-            // Forward passes - easiest
-            1.0
-        } else if dot_product > 0.0 {
-            // Diagonal passes - moderate difficulty
-            0.8 + (dot_product * 0.2)
-        } else if dot_product > -0.5 {
-            // Sideways to backward passes - harder
-            0.6 + ((dot_product + 0.5) * 0.4)
-        } else {
-            // Backward passes while moving forward - very difficult
-            0.5 + ((dot_product + 1.0) * 0.2)
-        }
+        cfg.angle_factor_from_dot(dot_product)
     }
 
     /// Calculate pressure on the passer from opponents
@@ -191,13 +178,13 @@ impl PassEvaluator {
         ctx: &StateProcessingContext,
         passer: &MatchPlayer,
     ) -> f32 {
-        const PRESSURE_RADIUS: f32 = 15.0;
+        let pressure_radius = PassEvaluatorConfig::default().pressure_radius;
 
         // Compute closest distance and count without allocation
-        let mut closest_distance = PRESSURE_RADIUS;
+        let mut closest_distance = pressure_radius;
         let mut num_opponents: f32 = 0.0;
 
-        for (_, dist) in ctx.tick_context.grid.opponents(passer.id, PRESSURE_RADIUS) {
+        for (_, dist) in ctx.tick_context.grid.opponents(passer.id, pressure_radius) {
             num_opponents += 1.0;
             if dist < closest_distance {
                 closest_distance = dist;
@@ -209,7 +196,7 @@ impl PassEvaluator {
         }
 
         // Pressure from distance
-        let distance_pressure = (closest_distance / PRESSURE_RADIUS).clamp(0.0, 1.0);
+        let distance_pressure = (closest_distance / pressure_radius).clamp(0.0, 1.0);
 
         // Additional pressure from multiple opponents
         let number_pressure = (1.0 - (num_opponents - 1.0) * 0.15).max(0.5);

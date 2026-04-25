@@ -236,7 +236,7 @@ pub async fn team_transfers_action(
                 ),
                 other_team: from_team_name,
                 other_team_slug: from_team_slug,
-                date: p.last_transfer_date
+                date: p.last_transfer_date()
                     .map(|d| d.format("%d.%m.%Y").to_string())
                     .unwrap_or_default(),
                 end_date: loan_contract.expiration.format("%d.%m.%Y").to_string(),
@@ -267,7 +267,7 @@ pub async fn team_transfers_action(
                             ),
                             other_team: team_iter.name.clone(),
                             other_team_slug: team_iter.slug.clone(),
-                            date: player.last_transfer_date
+                            date: player.last_transfer_date()
                                 .map(|d| d.format("%d.%m.%Y").to_string())
                                 .unwrap_or_default(),
                             end_date: contract.expiration.format("%d.%m.%Y").to_string(),

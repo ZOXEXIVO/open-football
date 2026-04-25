@@ -71,7 +71,10 @@ pub struct Player {
 
     /// Set when a player transfers/loans to a new club. Used by season snapshot
     /// to detect recently transferred players and avoid phantom history entries.
-    pub last_transfer_date: Option<NaiveDate>,
+    ///
+    /// Visibility narrowed to `pub(crate)` — read via `Player::last_transfer_date()`.
+    /// Mutation is internal (set by `on_transfer` / `on_loan` / `on_loan_return`).
+    pub(crate) last_transfer_date: Option<NaiveDate>,
 
     /// The club's strategic intent for this signing.
     /// Set when a player is permanently transferred. Protects the player from
@@ -122,9 +125,14 @@ pub struct Player {
     /// True if this player was produced by a runtime generator (random squad
     /// fill, youth intake, synthetic national-team filler). False when loaded
     /// from the source database. Useful for filtering, telemetry, and UI hints.
-    pub generated: bool,
+    ///
+    /// Visibility narrowed to `pub(crate)` — read it via `Player::is_generated()`.
+    /// Mutation is internal (set once by `PlayerBuilder::generated`).
+    pub(crate) generated: bool,
 
-    pub retired: bool,
+    /// Visibility narrowed to `pub(crate)` — read via `Player::is_retired()`.
+    /// Mutation is internal (set by end-of-season retirement processing).
+    pub(crate) retired: bool,
 }
 
 /// What the manager committed to. Deliberately narrow — each new variant
@@ -150,6 +158,66 @@ impl Player {
     pub fn builder() -> PlayerBuilder {
         PlayerBuilder::new()
     }
+
+    // ========================================================
+    // Accessor API
+    // --------------------------------------------------------
+    // The fields below this struct are still `pub` for backward
+    // compatibility — many call sites and Askama templates read them
+    // directly, and narrowing visibility is a separate sweep that touches
+    // every web template.
+    //
+    // **New code should prefer these accessors.** They give us a single
+    // place to:
+    //   • intercept reads (e.g. for caching, telemetry, lazy compute);
+    //   • change underlying storage (skills as a registry, happiness as
+    //     an event-sourced log) without breaking callers;
+    //   • narrow visibility incrementally — once every consumer goes
+    //     through accessors, the underlying field can flip to `pub(crate)`
+    //     in one change.
+    //
+    // Naming: the immutable accessor matches the field name; the mutable
+    // accessor uses a `_mut` suffix.
+    // ========================================================
+
+    pub fn skills(&self) -> &PlayerSkills { &self.skills }
+    pub fn skills_mut(&mut self) -> &mut PlayerSkills { &mut self.skills }
+
+    pub fn attributes(&self) -> &PersonAttributes { &self.attributes }
+    pub fn attributes_mut(&mut self) -> &mut PersonAttributes { &mut self.attributes }
+
+    pub fn player_attributes(&self) -> &PlayerAttributes { &self.player_attributes }
+    pub fn player_attributes_mut(&mut self) -> &mut PlayerAttributes { &mut self.player_attributes }
+
+    pub fn happiness(&self) -> &PlayerHappiness { &self.happiness }
+    pub fn happiness_mut(&mut self) -> &mut PlayerHappiness { &mut self.happiness }
+
+    pub fn statuses(&self) -> &PlayerStatus { &self.statuses }
+    pub fn statuses_mut(&mut self) -> &mut PlayerStatus { &mut self.statuses }
+
+    pub fn statistics(&self) -> &PlayerStatistics { &self.statistics }
+    pub fn statistics_mut(&mut self) -> &mut PlayerStatistics { &mut self.statistics }
+
+    pub fn cup_statistics(&self) -> &PlayerStatistics { &self.cup_statistics }
+    pub fn friendly_statistics(&self) -> &PlayerStatistics { &self.friendly_statistics }
+    pub fn statistics_history(&self) -> &PlayerStatisticsHistory { &self.statistics_history }
+
+    pub fn contract(&self) -> Option<&PlayerClubContract> { self.contract.as_ref() }
+    pub fn contract_loan(&self) -> Option<&PlayerClubContract> { self.contract_loan.as_ref() }
+
+    pub fn plan(&self) -> Option<&PlayerPlan> { self.plan.as_ref() }
+    pub fn promises(&self) -> &[ManagerPromise] { &self.promises }
+    pub fn traits(&self) -> &[PlayerTrait] { &self.traits }
+
+    pub fn relations(&self) -> &Relations { &self.relations }
+    pub fn rapport(&self) -> &PlayerRapport { &self.rapport }
+    pub fn load(&self) -> &PlayerLoad { &self.load }
+
+    pub fn favorite_clubs(&self) -> &[u32] { &self.favorite_clubs }
+    pub fn languages(&self) -> &[PlayerLanguage] { &self.languages }
+    pub fn last_transfer_date(&self) -> Option<NaiveDate> { self.last_transfer_date }
+    pub fn is_retired(&self) -> bool { self.retired }
+    pub fn is_generated(&self) -> bool { self.generated }
 
     /// Canonical URL segment for this player: `{id}-{ascii-folded-name}`.
     /// Falls back to just the id when the name folds to nothing (e.g. all

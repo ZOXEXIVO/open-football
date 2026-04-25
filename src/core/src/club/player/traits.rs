@@ -186,28 +186,8 @@ pub fn generate_player_traits(
 }
 
 fn skill_supports_trait(tr: &PlayerTrait, skills: &PlayerSkills) -> bool {
-    let t = &skills.technical;
-    let m = &skills.mental;
-    match tr {
-        PlayerTrait::ShootsFromDistance => t.long_shots >= 12.0,
-        PlayerTrait::PlacesShots => t.finishing >= 12.0,
-        PlayerTrait::PowersShots => t.finishing >= 11.0 && t.long_shots >= 11.0,
-        PlayerTrait::TriesLobs => t.technique >= 12.0,
-        PlayerTrait::CurlsBall => t.technique >= 13.0 && t.crossing >= 11.0,
-        PlayerTrait::TriesThroughBalls | PlayerTrait::KillerBallOften => {
-            t.passing >= 13.0 && m.vision >= 13.0
-        }
-        PlayerTrait::Playmaker => t.passing >= 14.0 && m.vision >= 14.0,
-        PlayerTrait::LikesToSwitchPlay | PlayerTrait::PlaysLongPasses => t.passing >= 12.0,
-        PlayerTrait::RunsWithBallOften | PlayerTrait::KnocksBallPast => {
-            t.dribbling >= 12.0 && t.technique >= 11.0
-        }
-        PlayerTrait::TriesTricks | PlayerTrait::BackheelsRegularly => {
-            t.technique >= 14.0 && t.dribbling >= 13.0
-        }
-        PlayerTrait::DivesIntoTackles => t.tackling >= 11.0,
-        PlayerTrait::StaysOnFeet => m.positioning >= 12.0 && t.tackling >= 11.0,
-        PlayerTrait::MarkTightly => m.positioning >= 12.0 && m.concentration >= 12.0,
-        _ => true,
-    }
+    // Thresholds (which skills, what minimum) live on the trait registry —
+    // see `registry::TRAIT_REGISTRY`. Adding or rebalancing a trait now
+    // means editing one row there instead of two locations.
+    tr.skills_support(skills)
 }

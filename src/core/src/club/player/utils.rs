@@ -1,3 +1,4 @@
+use crate::club::player::registry::SkillId;
 use crate::{Person, Player};
 use chrono::NaiveDate;
 
@@ -9,7 +10,7 @@ impl PlayerUtils {
         let age = player.age(now);
         let age_factor = Self::age_factor(age);
 
-        let determination = player.skills.mental.determination as f32 / 20.0;
+        let determination = player.skills().get(SkillId::Determination) / 20.0;
         let ambition = player.attributes.ambition as f32 / 20.0;
         let professionalism = player.attributes.professionalism as f32 / 20.0;
         let base_factor = determination + ambition + professionalism;

@@ -131,7 +131,7 @@ impl StaffResult {
                             0.6,
                         );
                         player.relations.update_staff_relationship(self.staff_id, change, sim_date);
-                        player.happiness.add_event(HappinessEventType::ManagerTacticalInstruction, 1.0);
+                        player.happiness.add_event_default(HappinessEventType::ManagerTacticalInstruction);
                     }
                 }
             }

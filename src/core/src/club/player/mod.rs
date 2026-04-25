@@ -25,9 +25,11 @@ pub mod builder;
 pub mod language;
 pub mod plan;
 pub mod adaptation;
+pub mod behaviour_config;
 pub mod events;
 pub mod load;
 pub mod agent;
+pub mod registry;
 mod display;
 
 pub use attributes::*;

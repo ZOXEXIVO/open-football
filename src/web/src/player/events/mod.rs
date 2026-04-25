@@ -128,7 +128,7 @@ pub async fn player_events_action(
         sub_title: team_opt
             .map(|t| t.name.clone())
             .unwrap_or_else(|| {
-                if player.retired {
+                if player.is_retired() {
                     i18n.t("retired").to_string()
                 } else {
                     i18n.t("free_agent").to_string()

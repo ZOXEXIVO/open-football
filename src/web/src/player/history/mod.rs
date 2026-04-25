@@ -225,7 +225,7 @@ pub async fn player_history_action(
     };
 
     if has_no_team {
-        let sub_title = if player.retired {
+        let sub_title = if player.is_retired() {
             i18n.t("retired").to_string()
         } else {
             i18n.t("free_agent").to_string()

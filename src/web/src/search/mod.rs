@@ -185,7 +185,7 @@ pub async fn search_api_action(
                                 country_code,
                                 team_name: team.name.clone(),
                                 age: core::utils::DateUtils::age(player.birth_date, now),
-                                generated: player.generated,
+                                generated: player.is_generated(),
                             });
                         }
                     }

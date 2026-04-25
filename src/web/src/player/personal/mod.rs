@@ -201,7 +201,7 @@ pub async fn player_personal_action(
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
         sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| {
-            if player.retired {
+            if player.is_retired() {
                 i18n.t("retired").to_string()
             } else {
                 i18n.t("free_agent").to_string()

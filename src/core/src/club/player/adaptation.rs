@@ -1,3 +1,4 @@
+use crate::club::player::behaviour_config::AdaptationConfig;
 use crate::club::player::language::Language;
 use crate::club::player::player::{ManagerPromiseKind, Player};
 use crate::club::PlayerPositionType;
@@ -6,6 +7,11 @@ use chrono::NaiveDate;
 
 /// Post-transfer settling window. For the first ~12 weeks at a new club the
 /// player's match rating is dampened, and weekly integration events fire.
+///
+/// Backed by [`AdaptationConfig::settlement_window_days`]. Kept as a `const`
+/// so existing callers (test fixtures, doc references) don't break — the
+/// config value and this constant must stay in sync. If you need to override
+/// it per save, route through the config instead.
 pub const SETTLEMENT_WINDOW_DAYS: i64 = 84;
 
 /// Context left on the player by transfer execution. Consumed the next
@@ -24,23 +30,11 @@ pub struct PendingSigning {
     pub destination_club_id: u32,
 }
 
-/// Ambition-vs-club gap (raw units, see `calculate_ambition_fit`) past which
-/// the player notices he joined below his level.
-const AMBITION_SHOCK_THRESHOLD: f32 = 4000.0;
-
-/// Ambition-vs-club surplus past which the move is felt as a clear step up
-/// (club rep exceeds what the player's ambition was expecting).
-const DREAM_MOVE_THRESHOLD: f32 = 1500.0;
-
-/// Club reputation (0..10000 scale) above which the signing carries extra
-/// prestige — Champions League contenders and the giants.
-const ELITE_CLUB_REPUTATION: f32 = 7500.0;
-
-/// New/old salary ratio below which the contract is felt as a demotion.
-const SALARY_SHOCK_RATIO: f32 = 0.4;
-
-/// New/old salary ratio above which the contract is felt as a breakthrough.
-const SALARY_BOOST_RATIO: f32 = 1.8;
+// All settlement-shock thresholds (ambition gap, dream-move surplus,
+// elite-club reputation, salary shock/boost ratios) live in
+// `AdaptationConfig`. The functions below pull them via `default()` —
+// future per-save overrides can be threaded through without touching the
+// call sites.
 
 impl Player {
     /// Days elapsed since the player's most recent transfer/loan, if any.
@@ -49,46 +43,28 @@ impl Player {
     }
 
     /// Multiplier (0.80..1.00) applied to match rating while settling at a
-    /// new club. Linear recovery across [`SETTLEMENT_WINDOW_DAYS`], trimmed
-    /// by local-language fluency, adaptability, and motivation when the
-    /// move is a step up (an excited youngster at Barcelona adapts faster
-    /// than a demoralised veteran at a minnow).
+    /// new club. Linear recovery across the configured settlement window,
+    /// trimmed by local-language fluency, adaptability, and step-up status.
+    /// Tuning lives in [`AdaptationConfig`].
     pub fn settlement_form_multiplier(
         &self,
         now: NaiveDate,
         country_code: &str,
         club_rep_0_to_1: f32,
     ) -> f32 {
-        let days = match self.days_since_transfer(now) {
-            Some(d) if d >= 0 && d < SETTLEMENT_WINDOW_DAYS => d as f32,
-            _ => return 1.0,
-        };
-
-        let recovery = days / SETTLEMENT_WINDOW_DAYS as f32;
-        let mut penalty = (1.0 - recovery) * 0.15;
-
-        if self.speaks_local_language(country_code) {
-            penalty *= 0.4;
-        }
-
-        let adapt = self.attributes.adaptability.clamp(0.0, 20.0);
-        let adapt_factor = 1.0 - (adapt / 20.0) * 0.6;
-        penalty *= adapt_factor;
-
-        if self.is_step_up_move(club_rep_0_to_1) {
-            penalty *= 0.6;
-        }
-
-        (1.0 - penalty).clamp(0.80, 1.0)
+        let cfg = AdaptationConfig::default();
+        cfg.settlement_multiplier(
+            self.days_since_transfer(now),
+            self.speaks_local_language(country_code),
+            self.attributes.adaptability,
+            self.is_step_up_move(club_rep_0_to_1),
+        )
     }
 
     /// A step-up move is one where the club's reputation visibly exceeds
     /// what the player's ambition was already expecting.
     pub fn is_step_up_move(&self, club_rep_0_to_1: f32) -> bool {
-        let ambition = self.attributes.ambition;
-        let expected_rep = (ambition - 5.0).max(0.0) * 800.0;
-        let club_rep = club_rep_0_to_1 * 10000.0;
-        club_rep - expected_rep >= DREAM_MOVE_THRESHOLD
+        AdaptationConfig::default().is_step_up_move(self.attributes.ambition, club_rep_0_to_1)
     }
 
     /// True if the player speaks the country's primary language well enough
@@ -120,13 +96,14 @@ impl Player {
         formation: Option<&[PlayerPositionType; 11]>,
     ) {
         let Some(pending) = self.pending_signing.take() else { return };
+        let cfg = AdaptationConfig::default();
 
         // Ambition / dream / elite-club reactions fire for loans too —
         // being loaned to Real Madrid is still the move of your life, even
         // if you're going back in a year. Loans pay at the borrowing club's
         // loan wage (distinct from a full contract) so salary shock/boost
         // is skipped for them; that lever is tuned for permanent moves.
-        let loan_damp = if pending.is_loan { 0.7 } else { 1.0 };
+        let loan_damp = if pending.is_loan { cfg.loan_damp_factor } else { 1.0 };
         let is_favorite_destination = self.favorite_clubs.contains(&pending.destination_club_id);
         // Ambition shock is muted when joining a favorite club — the player
         // knew what they were signing for and the sentimental pull covers the
@@ -178,27 +155,23 @@ impl Player {
 
         // Big-money signings (or loans — the borrowing club took him to play)
         // arrive with an implicit playing-time promise.
-        let promise_horizon = if pending.is_loan {
-            60
-        } else if pending.fee >= 5_000_000.0 {
-            90
-        } else {
-            0
-        };
+        let promise_horizon = cfg.promise_horizon_days(pending.is_loan, pending.fee);
         if promise_horizon > 0 {
             self.record_promise(ManagerPromiseKind::PlayingTime, now, promise_horizon);
         }
     }
 
     fn emit_ambition_shock(&mut self, club_rep_0_to_1: f32, damp: f32) {
+        let cfg = AdaptationConfig::default();
         let ambition = self.attributes.ambition;
-        if ambition <= 10.0 {
+        if ambition <= cfg.ambition_shock_min_ambition {
             return;
         }
-        let expected_rep = (ambition - 10.0) * 800.0;
+        let expected_rep =
+            (ambition - cfg.ambition_shock_floor) * cfg.ambition_to_expected_rep_factor;
         let club_rep = club_rep_0_to_1 * 10000.0;
         let gap = expected_rep - club_rep;
-        if gap <= AMBITION_SHOCK_THRESHOLD {
+        if gap <= cfg.ambition_shock_threshold {
             return;
         }
         let severity = (gap / 8000.0).clamp(0.5, 2.0);
@@ -207,26 +180,30 @@ impl Player {
     }
 
     fn emit_salary_shock(&mut self, previous_salary: Option<u32>) {
+        let cfg = AdaptationConfig::default();
         let Some(prev) = previous_salary else { return };
         let Some(new) = self.contract.as_ref().map(|c| c.salary) else { return };
         if prev == 0 {
             return;
         }
         let ratio = new as f32 / prev as f32;
-        if ratio >= SALARY_SHOCK_RATIO {
+        if ratio >= cfg.salary_shock_ratio {
             return;
         }
-        let severity = ((SALARY_SHOCK_RATIO - ratio) / SALARY_SHOCK_RATIO).clamp(0.0, 1.0);
+        let severity =
+            ((cfg.salary_shock_ratio - ratio) / cfg.salary_shock_ratio).clamp(0.0, 1.0);
         self.happiness
             .add_event(HappinessEventType::SalaryShock, -6.0 - 6.0 * severity);
     }
 
     fn emit_dream_move(&mut self, club_rep_0_to_1: f32, damp: f32) {
+        let cfg = AdaptationConfig::default();
         let ambition = self.attributes.ambition;
-        let expected_rep = (ambition - 5.0).max(0.0) * 800.0;
+        let expected_rep =
+            (ambition - cfg.ambition_dream_floor).max(0.0) * cfg.ambition_to_expected_rep_factor;
         let club_rep = club_rep_0_to_1 * 10000.0;
         let surplus = club_rep - expected_rep;
-        if surplus < DREAM_MOVE_THRESHOLD {
+        if surplus < cfg.dream_move_threshold {
             return;
         }
         // Magnitude scales with how far above expectations the move is;
@@ -240,30 +217,33 @@ impl Player {
     }
 
     fn emit_joining_elite(&mut self, club_rep_0_to_1: f32, damp: f32) {
+        let cfg = AdaptationConfig::default();
         let club_rep = club_rep_0_to_1 * 10000.0;
-        if club_rep < ELITE_CLUB_REPUTATION {
+        if club_rep < cfg.elite_club_reputation {
             return;
         }
         let player_rep = self.player_attributes.world_reputation as f32;
         // Only fire if the club is meaningfully above the player's own
         // standing — a Ballon d'Or winner moving clubs doesn't feel this.
-        if club_rep - player_rep < 1500.0 {
+        if club_rep - player_rep < cfg.elite_club_min_player_gap {
             return;
         }
-        self.happiness.add_event(HappinessEventType::JoiningElite, 6.0 * damp);
+        self.happiness
+            .add_event(HappinessEventType::JoiningElite, 6.0 * damp);
     }
 
     fn emit_salary_boost(&mut self, previous_salary: Option<u32>) {
+        let cfg = AdaptationConfig::default();
         let Some(prev) = previous_salary else { return };
         let Some(new) = self.contract.as_ref().map(|c| c.salary) else { return };
         if prev == 0 {
             return;
         }
         let ratio = new as f32 / prev as f32;
-        if ratio < SALARY_BOOST_RATIO {
+        if ratio < cfg.salary_boost_ratio {
             return;
         }
-        let severity = ((ratio - SALARY_BOOST_RATIO) / 2.0).clamp(0.0, 1.5);
+        let severity = ((ratio - cfg.salary_boost_ratio) / 2.0).clamp(0.0, 1.5);
         self.happiness
             .add_event(HappinessEventType::SalaryBoost, 4.0 + 4.0 * severity);
     }
@@ -290,19 +270,11 @@ impl Player {
         now: NaiveDate,
         club_rep_0_to_1: f32,
     ) -> f32 {
-        let days = match self.days_since_transfer(now) {
-            Some(d) if d >= 0 && d < SETTLEMENT_WINDOW_DAYS => d as f32,
-            _ => return 1.0,
-        };
-        let club_rep = club_rep_0_to_1 * 10000.0;
-        let player_rep = self.player_attributes.world_reputation as f32;
-        let gap = club_rep - player_rep;
-        if gap <= 1000.0 {
-            return 1.0;
-        }
-        let gap_factor = (gap / 8000.0).clamp(0.0, 0.25);
-        let recency = 1.0 - (days / SETTLEMENT_WINDOW_DAYS as f32);
-        (1.0 + gap_factor * recency).clamp(1.0, 1.25)
+        AdaptationConfig::default().step_up_dev_multiplier(
+            self.days_since_transfer(now),
+            club_rep_0_to_1,
+            self.player_attributes.world_reputation as f32,
+        )
     }
 
     /// Weekly integration tick. During the settlement window the player
@@ -310,11 +282,12 @@ impl Player {
     /// fluency, personality, and age. Runs for ~24 weeks after a transfer so
     /// there's a tail of recovery even once the form penalty has faded.
     pub fn process_integration(&mut self, now: NaiveDate, country_code: &str) {
+        let cfg = AdaptationConfig::default();
         let Some(days) = self.days_since_transfer(now) else {
             self.process_chronic_language_isolation(now, country_code);
             return;
         };
-        if !(0..=168).contains(&days) {
+        if !(0..=cfg.integration_window_days).contains(&days) {
             self.process_chronic_language_isolation(now, country_code);
             return;
         }
@@ -325,18 +298,23 @@ impl Player {
         let prof = self.attributes.professionalism.clamp(0.0, 20.0);
         let pull_toward_bonding = (adapt + prof) / 40.0;
 
-        if weeks < 4 && !speaks_local && adapt < 12.0 {
+        if weeks < cfg.early_isolation_max_weeks
+            && !speaks_local
+            && adapt < cfg.early_isolation_max_adaptability
+        {
             self.happiness
                 .add_event(HappinessEventType::FeelingIsolated, -2.0);
             return;
         }
 
-        if pull_toward_bonding > 0.55 || speaks_local {
+        if pull_toward_bonding > cfg.bonding_pull_threshold || speaks_local {
             self.happiness
                 .add_event(HappinessEventType::TeammateBonding, 1.5);
         }
 
-        if weeks >= 8 && (pull_toward_bonding > 0.5 || speaks_local) {
+        if weeks >= cfg.settled_min_weeks
+            && (pull_toward_bonding > cfg.settled_pull_threshold || speaks_local)
+        {
             self.happiness
                 .add_event(HappinessEventType::SettledIntoSquad, 1.0);
         }
@@ -355,9 +333,10 @@ impl Player {
             return;
         }
         // Passive acceptance: high adaptability/professionalism masks it.
+        let cfg = AdaptationConfig::default();
         let adapt = self.attributes.adaptability.clamp(0.0, 20.0);
         let prof = self.attributes.professionalism.clamp(0.0, 20.0);
-        if (adapt + prof) / 40.0 > 0.7 {
+        if (adapt + prof) / 40.0 > cfg.chronic_isolation_suppress_threshold {
             return;
         }
         self.happiness
