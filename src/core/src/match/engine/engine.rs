@@ -151,6 +151,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 tackles: player.statistics.tackles,
                 interceptions: player.statistics.interceptions,
                 saves: player.statistics.saves,
+                shots_faced: player.statistics.shots_faced,
                 goals,
                 assists,
                 match_rating: 0.0,

@@ -87,6 +87,42 @@ pub fn calculate_match_rating(
         if stats.saves >= 5 && opponent_goals == 0 {
             rating += 0.5;
         }
+
+        // Save-percentage bonus: rewards GKs whose effective save rate
+        // is high regardless of conceded volume. A keeper who stopped
+        // 6 of 8 shots (75%) was excellent even if his team lost 2-0.
+        // Use `shots_faced` from the stats; fall back to `saves +
+        // opponent_goals` for the legacy code paths that don't set it
+        // (test fixtures, older save files).
+        let shots_faced = stats.shots_faced.max(stats.saves + opponent_goals as u16);
+        if shots_faced >= 3 {
+            let save_pct = stats.saves as f32 / shots_faced as f32;
+            // Tiered bonus: > 80% elite, > 70% great, > 60% solid.
+            // Below 50% the GK was beaten too often; small penalty.
+            let pct_bonus = if save_pct > 0.80 {
+                0.6
+            } else if save_pct > 0.70 {
+                0.4
+            } else if save_pct > 0.60 {
+                0.2
+            } else if save_pct < 0.50 {
+                -0.2
+            } else {
+                0.0
+            };
+            rating += pct_bonus;
+        }
+
+        // "Saves outnumber goals conceded" recognition: even a GK who
+        // shipped goals had a strong outing if he stopped meaningfully
+        // more than he conceded. The user's reported bug was "saves >
+        // conceded but rating still 6.7" — this branch is the explicit
+        // fix. Caps at +0.5 so a 10-save / 1-conceded performance
+        // doesn't spike past the existing 8+ ceiling.
+        if stats.saves > opponent_goals as u16 {
+            let surplus = stats.saves - opponent_goals as u16;
+            rating += (surplus as f32 * 0.1).min(0.5);
+        }
     }
 
     // ── Team result ──────────────────────────────────────────────────────
@@ -194,6 +230,7 @@ mod tests {
             tackles,
             interceptions,
             saves,
+            shots_faced: 0,
             match_rating: 0.0,
             xg,
             position_group,
@@ -201,6 +238,12 @@ mod tests {
             yellow_cards: 0,
             red_cards: 0,
         }
+    }
+
+    fn make_gk(saves: u16, shots_faced: u16) -> PlayerMatchEndStats {
+        let mut s = make_stats(0, 0, 20, 15, 0, 0, 0, 0, saves, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        s.shots_faced = shots_faced;
+        s
     }
 
     #[test]
@@ -341,6 +384,74 @@ mod tests {
         let rating = calculate_match_rating(&gk, 0, 10);
         assert!(rating >= 1.5 && rating <= 3.0,
             "GK conceding 10 with 3 saves rated {} — should sit in the 1.5-3.0 disaster band, not the 1.0 floor", rating);
+    }
+
+    #[test]
+    fn saves_greater_than_goals_conceded_rated_above_six_seven() {
+        // The user-reported bug: a GK with more saves than goals conceded
+        // was settling at 6.7 because the formula only gave a flat save
+        // bonus + linear conceded penalty, with no recognition of the
+        // ratio. After the fix this GK should clear 7.0 comfortably.
+        let gk = make_gk(5, 7); // 5 saves, 2 conceded → ~71% save rate
+        let rating = calculate_match_rating(&gk, 1, 2);
+        assert!(
+            rating > 7.0,
+            "GK with 5 saves vs 2 conceded rated {} — should be > 7.0, the previous bug capped it at ~6.7",
+            rating
+        );
+    }
+
+    #[test]
+    fn elite_save_percentage_lifts_rating() {
+        // High save% (8 of 9 shots stopped) should land in the 8+ band
+        // even if the team lost 1-0.
+        let gk = make_gk(8, 9);
+        let rating = calculate_match_rating(&gk, 0, 1);
+        assert!(
+            rating >= 8.0,
+            "Elite save-percentage GK rated {} — should be in the 8+ band",
+            rating
+        );
+    }
+
+    #[test]
+    fn low_save_percentage_penalised() {
+        // GK who let in 4 of 5 shots (20% save rate) had a poor outing
+        // even with 1 save credited. Should fall below 6.0.
+        let gk = make_gk(1, 5);
+        let rating = calculate_match_rating(&gk, 0, 4);
+        assert!(rating < 6.0, "Low-save% GK rated {} — should be < 6.0", rating);
+    }
+
+    #[test]
+    fn shots_faced_falls_back_to_legacy_total_when_zero() {
+        // Test fixtures and old save files don't populate `shots_faced`.
+        // The formula treats `shots_faced=0` as "legacy data" and
+        // synthesizes the denominator from saves + opponent_goals so
+        // ratings stay sensible.
+        let gk = make_gk(5, 0); // shots_faced unset
+        let rating = calculate_match_rating(&gk, 1, 2);
+        // Same shape as the populated case above — should still clear 7.
+        assert!(
+            rating > 7.0,
+            "Legacy GK (shots_faced=0) rated {} — fallback denominator should still produce a sensible rating",
+            rating
+        );
+    }
+
+    #[test]
+    fn surplus_saves_bonus_is_capped() {
+        // 10 saves vs 1 conceded shouldn't push the rating to absurd
+        // values — the surplus bonus caps at +0.5.
+        let elite = make_gk(10, 11);
+        let rating = calculate_match_rating(&elite, 1, 1);
+        // Ceiling check: with all bonuses (saves cap, save%, surplus)
+        // the rating should sit comfortably below 10.
+        assert!(rating < 10.0);
+        // But should clearly outrate a baseline GK.
+        let baseline = make_gk(2, 4);
+        let baseline_rating = calculate_match_rating(&baseline, 1, 2);
+        assert!(rating > baseline_rating + 1.0);
     }
 
     #[test]

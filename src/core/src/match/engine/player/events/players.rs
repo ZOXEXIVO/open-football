@@ -121,6 +121,13 @@ pub enum PlayerEvent {
     ClaimBall(u32),
     GainBall(u32),
     CaughtBall(u32),
+    /// Goalkeeper got a touch on a real shot but couldn't catch it —
+    /// the ball deflected away (parried wide, palmed over the bar,
+    /// punched off the line). Emitted by the diving and catching states
+    /// when they exit on "ball moving away" while `cached_shot_target`
+    /// was set. The handler credits a save and increments `shots_faced`
+    /// so the rating helper sees the GK's full workload.
+    ParriedBall(u32),
     /// Foul committed by (fouler_id, severity). Dispatcher decides cards.
     CommitFoul(u32, FoulSeverity),
     Offside(u32, Vector3<f32>),  // (offside_player_id, position_for_free_kick)
@@ -269,6 +276,9 @@ impl PlayerEventDispatcher {
             PlayerEvent::CaughtBall(player_id) => {
                 Self::handle_caught_ball_event(player_id, field);
             }
+            PlayerEvent::ParriedBall(player_id) => {
+                Self::handle_parried_ball_event(player_id, field);
+            }
             PlayerEvent::MovePlayer(player_id, position) => {
                 Self::handle_move_player_event(player_id, position, field);
             }
@@ -294,6 +304,7 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_goal_event(player_id: u32, is_auto_goal: bool, field: &mut MatchField, context: &mut MatchContext) {
+        let scorer_team_id = field.get_player(player_id).map(|p| p.team_id);
         let player = field.get_player_mut(player_id).unwrap();
 
         player.statistics.add_goal(context.total_match_time, is_auto_goal);
@@ -303,6 +314,31 @@ impl PlayerEventDispatcher {
         // deflected the ball.
         if !is_auto_goal {
             player.memory.credit_shot_on_target();
+        }
+
+        // Credit the conceding goalkeeper's `shots_faced` so the rating
+        // helper has the right denominator for save percentage. Auto-
+        // goals (own-goals) don't count — those aren't shots the GK got
+        // beaten by, they're defensive errors.
+        if !is_auto_goal {
+            if let Some(scoring_team) = scorer_team_id {
+                let conceding_gk_id = field
+                    .players
+                    .iter()
+                    .find(|p| {
+                        p.team_id != scoring_team
+                            && p.tactical_position
+                                .current_position
+                                .position_group()
+                                == PlayerFieldPositionGroup::Goalkeeper
+                    })
+                    .map(|p| p.id);
+                if let Some(gk_id) = conceding_gk_id {
+                    if let Some(gk) = field.get_player_mut(gk_id) {
+                        gk.statistics.shots_faced += 1;
+                    }
+                }
+            }
         }
 
         context.score.add_goal_detail(GoalDetail {
@@ -1512,6 +1548,27 @@ impl PlayerEventDispatcher {
         }
     }
 
+    /// Credit a goalkeeper save for a parried shot — the GK touched the
+    /// ball mid-flight but couldn't claim it cleanly. Emitted from the
+    /// diving and catching states when they exit on "ball moving away"
+    /// while `cached_shot_target` was set. The same `cached_shot_target`
+    /// is then cleared so the eventual rest position (out of bounds,
+    /// to a defender, or back into play) doesn't double-credit anyone.
+    fn handle_parried_ball_event(player_id: u32, field: &mut MatchField) {
+        // Only credit when the ball was a real shot — guards against
+        // the diving state calling this when the GK gave up on a long
+        // pass. The state-machine emitters are gated on the same flag,
+        // so this is belt-and-braces.
+        if field.ball.cached_shot_target.is_none() {
+            return;
+        }
+        if let Some(gk) = field.get_player_mut(player_id) {
+            gk.statistics.saves += 1;
+            gk.statistics.shots_faced += 1;
+        }
+        field.ball.cached_shot_target = None;
+    }
+
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField) {
         // Detect saves: ball was moving and came from an opponent
         let ball_was_moving = field.ball.velocity.norm_squared() > 0.25;
@@ -1524,12 +1581,16 @@ impl PlayerEventDispatcher {
         // (previous_owner) only now: the shot actually reached the
         // goalmouth. Gated on `cached_shot_target.is_some()` so a pass
         // or random clearance the keeper happens to intercept doesn't
-        // count as an on-target shot.
+        // count as an on-target shot — and now also gates `shots_faced`
+        // so save-percentage in the rating formula stays meaningful.
         if ball_was_moving && last_owner_team.is_some() && last_owner_team != gk_team {
             let was_shot = field.ball.cached_shot_target.is_some();
             let shooter_id = field.ball.previous_owner;
             if let Some(player) = field.get_player_mut(player_id) {
                 player.statistics.saves += 1;
+                if was_shot {
+                    player.statistics.shots_faced += 1;
+                }
             }
             if was_shot {
                 if let Some(sid) = shooter_id {
@@ -1871,7 +1932,47 @@ impl PlayerEventDispatcher {
         field.ball.clear_pass_history();
     }
 
+    /// Identify the goalkeeper who is about to clear a shot, if any.
+    /// Returns `Some(gk_id)` when the current ball owner is a GK *and*
+    /// the ball is mid-flight from a real shot (`cached_shot_target` set).
+    /// Used to credit punches/parries as saves — the existing path only
+    /// credited catches via `handle_caught_ball_event`.
+    fn gk_clearing_shot(field: &MatchField) -> Option<u32> {
+        let clearer_id = field.ball.current_owner?;
+        if field.ball.cached_shot_target.is_none() {
+            return None;
+        }
+        // Iterate directly because `MatchField::get_player` takes `&mut
+        // self`; we only need a read here and want to keep the borrow
+        // immutable so the caller can re-borrow `field` mutably afterward.
+        let clearer = field.players.iter().find(|p| p.id == clearer_id)?;
+        if clearer
+            .tactical_position
+            .current_position
+            .position_group()
+            == PlayerFieldPositionGroup::Goalkeeper
+        {
+            Some(clearer_id)
+        } else {
+            None
+        }
+    }
+
     fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
+        // Punches / dive-parries from a shot: the GK touched a real
+        // attempt-on-goal and steered it away. The catching path
+        // (handle_caught_ball_event) already credits saves; this is the
+        // companion that closes the long-standing gap where punched and
+        // parried shots stayed at zero saves regardless of effort.
+        let gk_save_id = Self::gk_clearing_shot(field);
+        if let Some(gk_id) = gk_save_id {
+            if let Some(gk) = field.get_player_mut(gk_id) {
+                gk.statistics.saves += 1;
+                gk.statistics.shots_faced += 1;
+            }
+            field.ball.cached_shot_target = None;
+        }
+
         // Clearance cap. Needs more headroom than a pass because a
         // clearance is typically lofted — horizontal AND vertical
         // components are both meaningful, so the total magnitude

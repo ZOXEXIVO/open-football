@@ -24,7 +24,18 @@ impl StateProcessingHandler for GoalkeeperDivingState {
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_moving_away = ball_velocity.dot(&(ctx.player.position - ctx.ball().direction_to_own_goal())) > 0.0;
 
+        // Ball is heading well away from goal during the dive — the GK
+        // either deflected a real shot (parry) or dove uselessly. Only
+        // credit a parry when there's an active shot to deflect; the
+        // handler is also gated on cached_shot_target so a missing flag
+        // here is a no-op rather than a phantom save.
         if ctx.ball().distance() > 100.0 && ball_moving_away {
+            if ctx.tick_context.ball.cached_shot_target.is_some() {
+                return Some(StateChangeResult::with_goalkeeper_state_and_event(
+                    GoalkeeperState::ReturningToGoal,
+                    Event::PlayerEvent(PlayerEvent::ParriedBall(ctx.player.id)),
+                ));
+            }
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
             ));

@@ -22,6 +22,10 @@ pub struct PlayerMatchEndStats {
     pub tackles: u16,
     pub interceptions: u16,
     pub saves: u16,
+    /// Shots-on-target the player (typically a GK) had to deal with —
+    /// `saves` + goals conceded. Drives the save-percentage component
+    /// of the rating helper.
+    pub shots_faced: u16,
     pub goals: u16,
     pub assists: u16,
     pub match_rating: f32,

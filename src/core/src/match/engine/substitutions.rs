@@ -300,6 +300,7 @@ fn execute_substitution(
             tackles: player_out.statistics.tackles,
             interceptions: player_out.statistics.interceptions,
             saves: player_out.statistics.saves,
+            shots_faced: player_out.statistics.shots_faced,
             goals,
             assists,
             match_rating: 0.0,

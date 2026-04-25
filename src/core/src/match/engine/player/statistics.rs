@@ -5,7 +5,15 @@ pub struct MatchPlayerStatistics {
     pub passes_completed: u16,
     pub tackles: u16,
     pub interceptions: u16,
+    /// Shots stopped by this player (catches, dive-parries, punches,
+    /// blocks). For goalkeepers the rating uses both `saves` and the
+    /// derived save percentage (`saves / max(shots_faced, 1)`).
     pub saves: u16,
+    /// Shots-on-target this player had to deal with — saved + conceded.
+    /// Always incremented by the same code paths that increment `saves`,
+    /// plus once per goal scored against the GK's team (so `shots_faced -
+    /// saves` equals `goals_conceded` to a first approximation).
+    pub shots_faced: u16,
     pub offsides: u16,
 }
 
@@ -18,6 +26,7 @@ impl MatchPlayerStatistics {
             tackles: 0,
             interceptions: 0,
             saves: 0,
+            shots_faced: 0,
             offsides: 0,
         }
     }
