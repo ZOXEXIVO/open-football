@@ -76,8 +76,14 @@ impl PlayerTrainingResult {
             player.skills.mental.work_rate = (player.skills.mental.work_rate + self.effects.mental_gains.work_rate * growth_factor).min(20.0);
             player.skills.mental.leadership = (player.skills.mental.leadership + self.effects.mental_gains.leadership * growth_factor).min(20.0);
 
-            // Recalculate current_ability from actual skill values
-            player.player_attributes.current_ability = player.skills.calculate_ability();
+            // Recalculate current_ability from actual skill values, weighted
+            // by the player's primary position. Using the position-weighted
+            // path keeps natural development and training in agreement —
+            // both feed back through the same ability function so neither
+            // path can quietly contradict the other's growth gate.
+            let position = player.position();
+            player.player_attributes.current_ability =
+                player.skills.calculate_ability_for_position(position);
 
             // Update rolling training performance (exponential moving average)
             // Alpha = 0.3 for first 5 sessions (fast warmup), then 0.15 (slower, more stable)

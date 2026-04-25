@@ -1,87 +1,131 @@
 //! Player skill development system.
 //!
 //! Key principles:
-//! 1. **Position-aware** — skills relevant to the player's position develop faster
+//! 1. Position-aware: skills relevant to the player's position develop faster
 //!    and have a higher ceiling. Irrelevant skills stay low.
-//! 2. **Age curve** — physical skills peak 24-28, decline from ~30; mental skills
+//! 2. Age curve: physical skills peak 24-28, decline from ~30; mental skills
 //!    can grow into the 30s; technical skills plateau in the late 20s.
-//! 3. **Personality** — professionalism, ambition, determination drive growth rate.
-//! 4. **Match experience** — playing competitive matches accelerates development.
-//! 5. **Potential ceiling** — PA gates maximum achievable level; per-skill ceilings
-//!    based on PA × position weight create realistic skill profiles.
+//! 3. Personality: professionalism, ambition, determination drive growth rate.
+//! 4. Match experience: playing competitive matches accelerates development.
+//! 5. Potential ceiling: PA gates maximum achievable level; per-skill ceilings
+//!    based on PA x position weight create realistic skill profiles.
+//! 6. Workload: tired, jaded or injured players don't grow normally.
+//!
+//! ## Testing seam
+//!
+//! The public entry point [`Player::process_development`] uses the global
+//! thread-local RNG, which makes results irreproducible. The internal
+//! [`Player::process_development_with`] variant accepts any
+//! [`RollSource`] so tests can drive a deterministic stream of rolls and
+//! assert on stable outputs.
 
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
 use crate::PlayerPositionType;
 use chrono::NaiveDate;
 
-// ── Skill indices (flat [f32; 37] layout) ───────────────────────────────
+// ── Skill registry ──────────────────────────────────────────────────────
+//
+// Internally we operate on a flat [f32; 50] for speed. To keep the index
+// constants in lockstep with the actual `PlayerSkills` fields, they are
+// defined relative to a single source of truth: the `SkillKey` enum.
+//
+// Adding or reordering a variant in `SkillKey` automatically shifts the
+// SK_* constants. The round-trip test in this module proves the
+// `skills_to_array` / `write_skills_back` mapping covers every variant.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillKey {
+    // Technical 0..14
+    Corners, Crossing, Dribbling, Finishing, FirstTouch,
+    FreeKicks, Heading, LongShots, LongThrows, Marking,
+    Passing, PenaltyTaking, Tackling, Technique,
+    // Mental 14..28
+    Aggression, Anticipation, Bravery, Composure, Concentration,
+    Decisions, Determination, Flair, Leadership, OffTheBall,
+    Positioning, Teamwork, Vision, WorkRate,
+    // Physical 28..37 (MatchReadiness sits at the end of the band — it's
+    // managed by the training/match system, not the development tick)
+    Acceleration, Agility, Balance, Jumping, NaturalFitness,
+    Pace, Stamina, Strength, MatchReadiness,
+    // Goalkeeping 37..50
+    GkAerialReach, GkCommandOfArea, GkCommunication, GkEccentricity,
+    GkFirstTouch, GkHandling, GkKicking, GkOneOnOnes, GkPassing,
+    GkPunching, GkReflexes, GkRushingOut, GkThrowing,
+}
+
+impl SkillKey {
+    pub const fn idx(self) -> usize { self as usize }
+}
 
 const SKILL_COUNT: usize = 50;
 
-// Technical 0..14
-const SK_CORNERS: usize = 0;
-const SK_CROSSING: usize = 1;
-const SK_DRIBBLING: usize = 2;
-const SK_FINISHING: usize = 3;
-const SK_FIRST_TOUCH: usize = 4;
-const SK_FREE_KICKS: usize = 5;
-const SK_HEADING: usize = 6;
-const SK_LONG_SHOTS: usize = 7;
-const SK_LONG_THROWS: usize = 8;
-const SK_MARKING: usize = 9;
-const SK_PASSING: usize = 10;
-const SK_PENALTY_TAKING: usize = 11;
-const SK_TACKLING: usize = 12;
-const SK_TECHNIQUE: usize = 13;
-// Mental 14..28
-const SK_AGGRESSION: usize = 14;
-const SK_ANTICIPATION: usize = 15;
-const SK_BRAVERY: usize = 16;
-const SK_COMPOSURE: usize = 17;
-const SK_CONCENTRATION: usize = 18;
-const SK_DECISIONS: usize = 19;
-const SK_DETERMINATION: usize = 20;
-const SK_FLAIR: usize = 21;
-const SK_LEADERSHIP: usize = 22;
-const SK_OFF_THE_BALL: usize = 23;
-const SK_POSITIONING: usize = 24;
-const SK_TEAMWORK: usize = 25;
-const SK_VISION: usize = 26;
-const SK_WORK_RATE: usize = 27;
-// Physical 28..37
-const SK_ACCELERATION: usize = 28;
-const SK_AGILITY: usize = 29;
-const SK_BALANCE: usize = 30;
-const SK_JUMPING: usize = 31;
-const SK_NATURAL_FITNESS: usize = 32;
-const SK_PACE: usize = 33;
-const SK_STAMINA: usize = 34;
-const SK_STRENGTH: usize = 35;
-const SK_MATCH_READINESS: usize = 36;
-// Goalkeeping 37..50
-const SK_GK_AERIAL_REACH: usize = 37;
-const SK_GK_COMMAND_OF_AREA: usize = 38;
-const SK_GK_COMMUNICATION: usize = 39;
-const SK_GK_ECCENTRICITY: usize = 40;
-const SK_GK_FIRST_TOUCH: usize = 41;
-const SK_GK_HANDLING: usize = 42;
-const SK_GK_KICKING: usize = 43;
-const SK_GK_ONE_ON_ONES: usize = 44;
-const SK_GK_PASSING: usize = 45;
-const SK_GK_PUNCHING: usize = 46;
-const SK_GK_REFLEXES: usize = 47;
-const SK_GK_RUSHING_OUT: usize = 48;
-const SK_GK_THROWING: usize = 49;
+const SK_CORNERS: usize = SkillKey::Corners.idx();
+const SK_CROSSING: usize = SkillKey::Crossing.idx();
+const SK_DRIBBLING: usize = SkillKey::Dribbling.idx();
+const SK_FINISHING: usize = SkillKey::Finishing.idx();
+const SK_FIRST_TOUCH: usize = SkillKey::FirstTouch.idx();
+const SK_FREE_KICKS: usize = SkillKey::FreeKicks.idx();
+const SK_HEADING: usize = SkillKey::Heading.idx();
+const SK_LONG_SHOTS: usize = SkillKey::LongShots.idx();
+const SK_LONG_THROWS: usize = SkillKey::LongThrows.idx();
+const SK_MARKING: usize = SkillKey::Marking.idx();
+const SK_PASSING: usize = SkillKey::Passing.idx();
+const SK_PENALTY_TAKING: usize = SkillKey::PenaltyTaking.idx();
+const SK_TACKLING: usize = SkillKey::Tackling.idx();
+const SK_TECHNIQUE: usize = SkillKey::Technique.idx();
+const SK_AGGRESSION: usize = SkillKey::Aggression.idx();
+const SK_ANTICIPATION: usize = SkillKey::Anticipation.idx();
+const SK_BRAVERY: usize = SkillKey::Bravery.idx();
+const SK_COMPOSURE: usize = SkillKey::Composure.idx();
+const SK_CONCENTRATION: usize = SkillKey::Concentration.idx();
+const SK_DECISIONS: usize = SkillKey::Decisions.idx();
+const SK_DETERMINATION: usize = SkillKey::Determination.idx();
+const SK_FLAIR: usize = SkillKey::Flair.idx();
+const SK_LEADERSHIP: usize = SkillKey::Leadership.idx();
+const SK_OFF_THE_BALL: usize = SkillKey::OffTheBall.idx();
+const SK_POSITIONING: usize = SkillKey::Positioning.idx();
+const SK_TEAMWORK: usize = SkillKey::Teamwork.idx();
+const SK_VISION: usize = SkillKey::Vision.idx();
+const SK_WORK_RATE: usize = SkillKey::WorkRate.idx();
+const SK_ACCELERATION: usize = SkillKey::Acceleration.idx();
+const SK_AGILITY: usize = SkillKey::Agility.idx();
+const SK_BALANCE: usize = SkillKey::Balance.idx();
+const SK_JUMPING: usize = SkillKey::Jumping.idx();
+const SK_NATURAL_FITNESS: usize = SkillKey::NaturalFitness.idx();
+const SK_PACE: usize = SkillKey::Pace.idx();
+const SK_STAMINA: usize = SkillKey::Stamina.idx();
+const SK_STRENGTH: usize = SkillKey::Strength.idx();
+const SK_MATCH_READINESS: usize = SkillKey::MatchReadiness.idx();
+const SK_GK_AERIAL_REACH: usize = SkillKey::GkAerialReach.idx();
+const SK_GK_COMMAND_OF_AREA: usize = SkillKey::GkCommandOfArea.idx();
+const SK_GK_COMMUNICATION: usize = SkillKey::GkCommunication.idx();
+const SK_GK_ECCENTRICITY: usize = SkillKey::GkEccentricity.idx();
+const SK_GK_FIRST_TOUCH: usize = SkillKey::GkFirstTouch.idx();
+const SK_GK_HANDLING: usize = SkillKey::GkHandling.idx();
+const SK_GK_KICKING: usize = SkillKey::GkKicking.idx();
+const SK_GK_ONE_ON_ONES: usize = SkillKey::GkOneOnOnes.idx();
+const SK_GK_PASSING: usize = SkillKey::GkPassing.idx();
+const SK_GK_PUNCHING: usize = SkillKey::GkPunching.idx();
+const SK_GK_REFLEXES: usize = SkillKey::GkReflexes.idx();
+const SK_GK_RUSHING_OUT: usize = SkillKey::GkRushingOut.idx();
+const SK_GK_THROWING: usize = SkillKey::GkThrowing.idx();
+
+// Compile-time invariant: the enum must have exactly SKILL_COUNT variants
+// and the GK band must end at SKILL_COUNT - 1.
+const _: () = {
+    assert!(SK_GK_THROWING == SKILL_COUNT - 1);
+};
 
 // ── Skill category ──────────────────────────────────────────────────────
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum SkillCategory {
     Technical,
     Mental,
     Physical,
-    /// GK-specific skills: peak later (28-33), decline slowly — GKs have long careers.
+    /// GK-specific skills: peak later (28-33), decline slowly — GKs have
+    /// long careers.
     Goalkeeping,
 }
 
@@ -98,8 +142,19 @@ fn skill_category(idx: usize) -> SkillCategory {
 }
 
 // ── Position group for development weights ──────────────────────────────
+//
+// IMPORTANT: This grouping intentionally diverges from
+// `PlayerPositionType::position_group()` for `DefensiveMidfielder`.
+// The canonical position group treats DM as a Defender (because they
+// drop deep, screen the back four, and are evaluated using defensive
+// weights). For *development*, however, a DM grows the same skill set
+// as a central midfielder: passing, vision, stamina, decisions. Treating
+// them as a defender for development would slow their growth on the
+// skills that actually define their role. The divergence is contained
+// to this file; ability calculations elsewhere keep using
+// `position_group()`.
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum PosGroup {
     Goalkeeper,
     Defender,
@@ -137,8 +192,9 @@ fn pos_group_from(pos: PlayerPositionType) -> PosGroup {
 // ── Position-based development weights ──────────────────────────────────
 //
 // These weights serve TWO purposes:
-// 1. Per-skill CEILING = base_ceiling * weight  (so key skills can reach high, irrelevant stay low)
-// 2. Per-skill GROWTH RATE multiplier (key skills develop faster)
+// 1. Per-skill CEILING = base_ceiling * weight (key skills can reach high,
+//    irrelevant stay low).
+// 2. Per-skill GROWTH RATE multiplier (key skills develop faster).
 //
 // Range: 0.3 (irrelevant) to 1.5 (core skill)
 // Default: 0.8 for unspecified skills
@@ -146,14 +202,13 @@ fn pos_group_from(pos: PlayerPositionType) -> PosGroup {
 fn position_dev_weights(group: PosGroup) -> [f32; SKILL_COUNT] {
     let mut w = [0.8f32; SKILL_COUNT];
 
-    // GK-specific skills default to 0 for outfield players — they don't train them
+    // GK-specific skills default to 0 for outfield players: they don't train them.
     for i in SK_GK_AERIAL_REACH..=SK_GK_THROWING {
         w[i] = 0.0;
     }
 
     match group {
         PosGroup::Goalkeeper => {
-            // Core GK skills — high ceiling and fast development
             w[SK_POSITIONING] = 1.5;
             w[SK_CONCENTRATION] = 1.4;
             w[SK_AGILITY] = 1.4;
@@ -170,7 +225,7 @@ fn position_dev_weights(group: PosGroup) -> [f32; SKILL_COUNT] {
             w[SK_NATURAL_FITNESS] = 1.0;
             w[SK_PACE] = 0.8;
             w[SK_STAMINA] = 0.8;
-            // Irrelevant outfield skills — low ceiling, barely develop
+            // Irrelevant outfield skills
             w[SK_FINISHING] = 0.3;
             w[SK_LONG_SHOTS] = 0.3;
             w[SK_CROSSING] = 0.3;
@@ -281,12 +336,15 @@ fn position_dev_weights(group: PosGroup) -> [f32; SKILL_COUNT] {
 
 // ── Age curve ───────────────────────────────────────────────────────────
 //
-// Returns a *base development rate* per week.  Positive = growth, negative = decline.
+// Returns a base development rate per week. Positive = growth, negative =
+// decline. The pair is (min_rate, max_rate); the per-tick value is rolled
+// uniformly inside that band.
 //
 // Curve shape:
-//   Physical:  rapid growth 16-22 → plateau 23-27 → noticeable decline 28-30 → steep 31+
-//   Technical: rapid growth 16-20 → moderate 21-26 → plateau 27-29 → slow decline 30+
-//   Mental:    steady growth 16-32 → very slow decline 33+
+//   Physical:  rapid growth 16-22 -> plateau 23-27 -> noticeable decline 28-30 -> steep 31+
+//   Technical: rapid growth 16-20 -> moderate 21-26 -> plateau 27-29 -> slow decline 30+
+//   Mental:    steady growth 16-32 -> very slow decline 33+
+//   Goalkeeping: later peak (28-33) and slower decline than outfield categories.
 
 fn base_weekly_rate(age: u8, cat: SkillCategory) -> (f32, f32) {
     match cat {
@@ -323,7 +381,6 @@ fn base_weekly_rate(age: u8, cat: SkillCategory) -> (f32, f32) {
             33..=35 => ( 0.002, 0.008),
             _       => (-0.003, 0.003),
         },
-        // GK skills: later peak (28-33), slower decline — GKs play into late 30s
         SkillCategory::Goalkeeping => match age {
             0..=15  => ( 0.012, 0.030),
             16..=17 => ( 0.030, 0.070),
@@ -345,7 +402,7 @@ fn personality_multiplier(professionalism: f32, ambition: f32, determination: f3
         + ambition * 0.25
         + determination * 0.20
         + work_rate * 0.15;
-    // Map 0-20 → 0.4-1.6
+    // Map 0-20 -> 0.4-1.6
     let norm = weighted / 20.0;
     0.4 + norm * 1.2
 }
@@ -354,8 +411,8 @@ fn personality_multiplier(professionalism: f32, ambition: f32, determination: f3
 //
 // Counts both official and friendly appearances. Official matches have full
 // weight; friendly appearances contribute at only 20% because the competitive
-// intensity and development stimulus is much lower. This makes loaning a
-// young player for 30 league games far more impactful than 30 U20 games.
+// intensity and development stimulus is much lower. Loaning a young player
+// for 30 league games is far more impactful than 30 U20 games.
 
 fn match_experience_multiplier(
     started: u16,
@@ -373,11 +430,9 @@ fn match_experience_multiplier(
 //
 // Competitive (official league/cup) matches develop players significantly
 // faster than friendlies or youth-team games due to higher pressure,
-// intensity, and stakes. This multiplier creates a strong incentive to
-// loan young players out for real first-team football rather than letting
-// them stagnate in U18/U20 leagues.
+// intensity, and stakes.
 //
-// Range: 0.75 (only friendlies) → 1.0 (no games) → 1.30 (only official)
+// Range: 0.75 (only friendlies) -> 1.0 (no games) -> 1.30 (only official)
 
 fn official_match_bonus(official_games: u16, friendly_games: u16) -> f32 {
     let total = official_games + friendly_games;
@@ -399,36 +454,27 @@ fn rating_multiplier(avg_rating: f32, total_games: u16) -> f32 {
 
 // ── Potential gap factor ────────────────────────────────────────────────
 //
-// Per-skill: measures how far THIS skill is from ITS ceiling.
-// Skills near their ceiling barely grow. Skills far below grow fast.
+// Per-skill: how far this skill is from its ceiling. Skills near their
+// ceiling barely grow. Skills far below grow fast.
 
 fn skill_gap_factor(current_skill: f32, skill_ceiling: f32) -> f32 {
     if skill_ceiling <= current_skill || skill_ceiling <= 1.0 {
-        return 0.05; // at or above ceiling
+        return 0.05;
     }
     let gap_ratio = (skill_ceiling - current_skill) / skill_ceiling;
-    // Sqrt curve: stays high for longer, drops sharply near ceiling
+    // Sqrt curve: stays high for longer, drops sharply near ceiling.
     (gap_ratio * 2.0).sqrt().clamp(0.1, 1.5)
 }
 
 // ── Competition quality multiplier ──────────────────────────────────────
 //
-// Players in stronger leagues develop faster because they face better
-// opposition, higher tactical demands, and greater physical intensity.
-// A player getting 30 apps in the Russian First Division develops slower
-// than one getting 30 apps in La Liga.
-//
-// League reputation 0-10000 maps to a 0.70-1.15 multiplier:
-//   rep ~1000 (semi-pro) → 0.70
-//   rep ~3000 (lower div) → 0.82
-//   rep ~5000 (mid-tier)  → 0.92
-//   rep ~7000 (strong)    → 1.02
-//   rep ~9000 (elite)     → 1.12
-//   rep 10000             → 1.15
+// Players in stronger leagues develop faster: better opposition, higher
+// tactical demands, greater physical intensity. A player getting 30 apps
+// in a semi-pro division grows slower than one getting 30 apps in La Liga.
 
 fn competition_quality_multiplier(league_reputation: u16) -> f32 {
     if league_reputation == 0 {
-        return 0.75; // No league context (youth/reserve) — reduced development
+        return 0.75;
     }
     let normalized = (league_reputation as f32 / 10000.0).clamp(0.0, 1.0);
     (0.70 + normalized * 0.45).clamp(0.70, 1.15)
@@ -441,6 +487,55 @@ fn decline_protection(natural_fitness: f32, professionalism: f32) -> f32 {
     let pr_norm = professionalism / 20.0;
     let protection = nf_norm * 0.50 + pr_norm * 0.50;
     1.0 - protection * 0.50
+}
+
+// ── Workload / fatigue / readiness ──────────────────────────────────────
+
+/// State of the player's body for the purposes of weekly development.
+/// Drives whether growth happens at all and at what intensity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FitnessState {
+    /// No injury and no recovery: full development.
+    Fit,
+    /// Coming back from an injury. No growth, no decline either: the body
+    /// is busy healing.
+    Recovering,
+    /// Currently injured. Skip the development tick entirely.
+    Injured,
+}
+
+/// Multiplier applied to *growth* rates based on the player's chronic
+/// workload state. A drained player learns less even when they show up.
+///
+/// `condition_pct` is 0..100, `jadedness` is 0..10000.
+fn workload_growth_modifier(condition_pct: u32, jadedness: i16) -> f32 {
+    let cond = (condition_pct as f32 / 100.0).clamp(0.0, 1.0);
+    // Very low condition (<40%) drags hardest; full condition is neutral.
+    let cond_mult = (0.55 + cond * 0.45).clamp(0.55, 1.0);
+
+    let jad = (jadedness.max(0) as f32 / 10000.0).clamp(0.0, 1.0);
+    // No jadedness = neutral; max jadedness blunts growth ~35%.
+    let jad_mult = (1.0 - jad * 0.35).clamp(0.65, 1.0);
+
+    (cond_mult * jad_mult).clamp(0.40, 1.0)
+}
+
+/// Multiplier applied to *decline* rates (only used when the per-tick
+/// roll is negative). A burned-out player decays a little faster.
+fn workload_decline_amplifier(condition_pct: u32, jadedness: i16) -> f32 {
+    let cond = (condition_pct as f32 / 100.0).clamp(0.0, 1.0);
+    let jad = (jadedness.max(0) as f32 / 10000.0).clamp(0.0, 1.0);
+    // Up to +25% decline for chronically tired/jaded players.
+    1.0 + (1.0 - cond) * 0.10 + jad * 0.15
+}
+
+/// Match readiness (0-20) feeds match-driven growth a small extra push.
+/// A player kept match-sharp benefits more from the same minutes than one
+/// who's been out of the rhythm.
+fn match_readiness_multiplier(match_readiness: f32) -> f32 {
+    let mr = (match_readiness / 20.0).clamp(0.0, 1.0);
+    // 0 readiness -> 0.90, 20 -> 1.10
+    0.90 + mr * 0.20
 }
 
 // ── Per-skill peak age offset ───────────────────────────────────────────
@@ -524,6 +619,38 @@ fn write_skills_back(player: &mut Player, arr: &[f32; SKILL_COUNT]) {
     g.throwing = arr[SK_GK_THROWING];
 }
 
+// ── Deterministic roll source ───────────────────────────────────────────
+//
+// Production code uses `ThreadRolls` which forwards to `rand::random()`.
+// Tests use `FixedRolls` (every roll returns the same value) or
+// `SeqRolls` (returns a scripted sequence) so a development tick produces
+// stable, inspectable output.
+
+/// Source of uniform random numbers in `[0.0, 1.0)`. Implementations are
+/// expected to be cheap and stateful (each call advances the stream).
+pub trait RollSource {
+    fn roll_unit(&mut self) -> f32;
+}
+
+/// Default production roll source backed by the thread-local RNG.
+pub struct ThreadRolls;
+
+impl RollSource for ThreadRolls {
+    #[inline]
+    fn roll_unit(&mut self) -> f32 { rand::random::<f32>() }
+}
+
+/// Roll source that returns the same value on every call. Useful when
+/// tests want to pin the per-skill roll to either the lower or upper
+/// edge of the age-curve band.
+#[derive(Debug, Clone, Copy)]
+pub struct FixedRolls(pub f32);
+
+impl RollSource for FixedRolls {
+    #[inline]
+    fn roll_unit(&mut self) -> f32 { self.0 }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Public API
 // ═══════════════════════════════════════════════════════════════════════
@@ -564,7 +691,7 @@ impl CoachingEffect {
         youth_quality_0_1: f32,
     ) -> Self {
         let m = |attr: u8| -> f32 {
-            // 0 → 0.60, 10 → 1.0, 20 → 1.40 (linear)
+            // 0 -> 0.60, 10 -> 1.0, 20 -> 1.40 (linear)
             (0.6 + (attr as f32 / 20.0) * 0.8).clamp(0.55, 1.45)
         };
         Self {
@@ -587,16 +714,11 @@ impl CoachingEffect {
 }
 
 impl Player {
-    /// Weekly development tick.
+    /// Weekly development tick. See module docs for the model.
     ///
-    /// Key difference from naive approach: each skill has its OWN ceiling and
-    /// growth rate based on position weights. A striker's finishing develops fast
-    /// toward a high ceiling while their tackling barely moves.
-    ///
-    /// `coach` comes from the club's best coaching staff scores — it is
-    /// `neutral()` when no coaching staff is available, and amplified when
-    /// an elite coach (and Head of Youth Development for youngsters) is in
-    /// place. This is what makes investing in coaching staff matter.
+    /// Routes through the deterministic roll seam under the hood, using
+    /// the thread-local RNG. Tests should call
+    /// [`Player::process_development_with`] with a deterministic source.
     pub fn process_development(
         &mut self,
         now: NaiveDate,
@@ -604,15 +726,44 @@ impl Player {
         coach: &CoachingEffect,
         club_rep_0_to_1: f32,
     ) {
+        self.process_development_with(now, league_reputation, coach, club_rep_0_to_1, &mut ThreadRolls);
+    }
+
+    /// Same as [`process_development`] but the per-skill rolls come from
+    /// `rolls`. This is the testable seam — pin the rolls to a known
+    /// value and the output becomes a pure function of the inputs.
+    pub fn process_development_with(
+        &mut self,
+        now: NaiveDate,
+        league_reputation: u16,
+        coach: &CoachingEffect,
+        club_rep_0_to_1: f32,
+        rolls: &mut impl RollSource,
+    ) {
         let age = DateUtils::age(self.birth_date, now);
         let pa = self.player_attributes.potential_ability as f32;
 
-        // Position-based development weights
+        // Body state gates everything else.
+        let fitness = if self.player_attributes.is_injured {
+            FitnessState::Injured
+        } else if self.player_attributes.is_in_recovery() {
+            FitnessState::Recovering
+        } else {
+            FitnessState::Fit
+        };
+
+        // Injured players don't develop. Their skills are frozen until they
+        // come back — no growth, no decline. The CA recalculation is also
+        // skipped because the underlying skills haven't moved.
+        if fitness == FitnessState::Injured {
+            return;
+        }
+
         let pos = self.position();
         let pos_group = pos_group_from(pos);
         let dev_weights = position_dev_weights(pos_group);
 
-        // Base ceiling from PA (PA 200 → ceiling 20.0)
+        // Base ceiling from PA (PA 200 -> ceiling 20.0)
         let base_ceiling = (pa / 200.0 * 20.0).clamp(1.0, 20.0);
 
         // ── Compute shared multipliers ────────────────────────────────
@@ -648,6 +799,18 @@ impl Player {
         // Extra boost while the player catches up to a clearly better club.
         let step_up_mult = self.step_up_development_multiplier(now, club_rep_0_to_1);
 
+        // Workload / fitness / readiness modifiers.
+        let condition_pct = self.player_attributes.condition_percentage();
+        let jadedness = self.player_attributes.jadedness;
+        let workload_growth = workload_growth_modifier(condition_pct, jadedness);
+        let workload_decline = workload_decline_amplifier(condition_pct, jadedness);
+        let readiness_mult = match_readiness_multiplier(self.skills.physical.match_readiness);
+
+        // Recovering from an injury: the body is healing, not adapting.
+        // Mental skills (study video, learn the playbook) can still nudge
+        // forward at a reduced rate; everything else is frozen.
+        let recovering = fitness == FitnessState::Recovering;
+
         // ── Process each skill ────────────────────────────────────────
 
         let mut skills = skills_to_array(self);
@@ -658,20 +821,26 @@ impl Player {
             }
 
             let cat = skill_category(i);
+
+            if recovering && cat != SkillCategory::Mental {
+                continue;
+            }
+
             let peak_offset = individual_peak_offset(i);
             let effective_age = (age as i16 - peak_offset as i16).clamp(14, 45) as u8;
 
-            // Per-skill ceiling: position weight determines how high this skill can go
+            // Per-skill ceiling: position weight determines how high this skill can go.
             let skill_ceiling = (base_ceiling * dev_weights[i]).clamp(1.0, 20.0);
 
-            // Per-skill gap factor (replaces global PA-CA gap)
+            // Per-skill gap factor (replaces global PA-CA gap).
             let gap = skill_gap_factor(skills[i], skill_ceiling);
 
-            // Base rate from age curve
+            // Base rate from age curve.
             let (min_rate, max_rate) = base_weekly_rate(effective_age, cat);
-            let base = min_rate + rand::random::<f32>() * (max_rate - min_rate);
+            let roll = rolls.roll_unit().clamp(0.0, 1.0);
+            let base = min_rate + roll * (max_rate - min_rate);
 
-            // Position weight also scales growth rate: key skills develop faster
+            // Position weight scales growth rate: key skills develop faster.
             let pos_rate_mult = dev_weights[i];
 
             // Coach effectiveness by category, plus a youth bonus for
@@ -681,14 +850,27 @@ impl Player {
 
             let change = if base > 0.0 {
                 // Growth: scale by all positive multipliers + position relevance + competition quality
-                base * personality * match_exp * official_bonus * rating_mult * gap * pos_rate_mult * comp_quality * coach_mult * youth_coach_mult * step_up_mult
+                base * personality
+                    * match_exp
+                    * official_bonus
+                    * rating_mult
+                    * gap
+                    * pos_rate_mult
+                    * comp_quality
+                    * coach_mult
+                    * youth_coach_mult
+                    * step_up_mult
+                    * workload_growth
+                    * readiness_mult
             } else {
-                // Decline: position-irrelevant skills decline slightly faster
-                // Key skills are more "maintained" by regular use.
-                // Great coaches also slow decline a little (they manage load + technique).
+                // Decline: position-irrelevant skills decline slightly faster;
+                // key skills are more "maintained" by regular use. Great
+                // coaches slow decline a little (load + technique management).
+                // Workload amplifier accelerates decline for chronically tired
+                // players.
                 let decline_pos_mult = (2.0 - dev_weights[i]).clamp(0.5, 1.5);
                 let decline_coach_protection = ((coach_mult - 1.0) * 0.5 + 1.0).clamp(0.6, 1.0);
-                base * decline_prot * decline_pos_mult * decline_coach_protection
+                base * decline_prot * decline_pos_mult * decline_coach_protection * workload_decline
             };
 
             let new_val = skills[i] + change;
@@ -708,10 +890,481 @@ impl Player {
         self.player_attributes.current_ability =
             self.skills.calculate_ability_for_position(position);
 
-        // PA must never be lower than CA — fix any legacy data where generation
-        // allowed CA > PA, which would cause skill ceilings to crush the player
+        // PA must never be lower than CA. Generation can occasionally produce
+        // CA > PA, which would otherwise crush all per-skill ceilings.
         if self.player_attributes.potential_ability < self.player_attributes.current_ability {
             self.player_attributes.potential_ability = self.player_attributes.current_ability;
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::position::{PlayerPosition, PlayerPositions};
+    use crate::shared::fullname::FullName;
+    use crate::{PersonAttributes, PlayerAttributes, PlayerSkills};
+    use chrono::NaiveDate;
+
+    // ── Test helpers ──────────────────────────────────────────────────
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn person_pro(prof: f32, ambition: f32) -> PersonAttributes {
+        PersonAttributes {
+            professionalism: prof,
+            ambition,
+            ..PersonAttributes::default()
+        }
+    }
+
+    fn baseline_skills() -> PlayerSkills {
+        // Mid-range outfield baseline — meaningfully below the per-skill
+        // ceiling of a high-PA player so growth has room to happen.
+        let mut s = PlayerSkills::default();
+        s.technical.passing = 10.0;
+        s.technical.first_touch = 10.0;
+        s.technical.dribbling = 10.0;
+        s.technical.finishing = 10.0;
+        s.technical.tackling = 10.0;
+        s.technical.marking = 10.0;
+        s.technical.heading = 10.0;
+        s.technical.technique = 10.0;
+        s.technical.crossing = 10.0;
+        s.technical.long_shots = 10.0;
+        s.technical.long_throws = 10.0;
+        s.technical.corners = 10.0;
+        s.technical.free_kicks = 10.0;
+        s.technical.penalty_taking = 10.0;
+
+        s.mental.work_rate = 14.0;
+        s.mental.determination = 14.0;
+        s.mental.composure = 10.0;
+        s.mental.decisions = 10.0;
+        s.mental.positioning = 10.0;
+        s.mental.anticipation = 10.0;
+        s.mental.vision = 10.0;
+        s.mental.teamwork = 10.0;
+        s.mental.concentration = 10.0;
+        s.mental.bravery = 10.0;
+        s.mental.aggression = 10.0;
+        s.mental.flair = 10.0;
+        s.mental.leadership = 10.0;
+        s.mental.off_the_ball = 10.0;
+
+        s.physical.pace = 12.0;
+        s.physical.acceleration = 12.0;
+        s.physical.agility = 12.0;
+        s.physical.balance = 12.0;
+        s.physical.stamina = 12.0;
+        s.physical.strength = 12.0;
+        s.physical.jumping = 12.0;
+        s.physical.natural_fitness = 14.0;
+        s.physical.match_readiness = 15.0;
+
+        s
+    }
+
+    fn gk_skills() -> PlayerSkills {
+        let mut s = baseline_skills();
+        // Give GK a meaningful goalkeeping baseline.
+        s.goalkeeping.handling = 10.0;
+        s.goalkeeping.reflexes = 10.0;
+        s.goalkeeping.aerial_reach = 10.0;
+        s.goalkeeping.one_on_ones = 10.0;
+        s.goalkeeping.command_of_area = 10.0;
+        s.goalkeeping.communication = 10.0;
+        s.goalkeeping.kicking = 10.0;
+        s.goalkeeping.first_touch = 10.0;
+        s.goalkeeping.passing = 10.0;
+        s.goalkeeping.throwing = 10.0;
+        s.goalkeeping.punching = 10.0;
+        s.goalkeeping.rushing_out = 10.0;
+        s.goalkeeping.eccentricity = 10.0;
+        s
+    }
+
+    fn positions(p: PlayerPositionType) -> PlayerPositions {
+        PlayerPositions {
+            positions: vec![PlayerPosition { position: p, level: 20 }],
+        }
+    }
+
+    fn make_player(
+        birth: NaiveDate,
+        pos: PlayerPositionType,
+        skills: PlayerSkills,
+        pa: u8,
+        person: PersonAttributes,
+    ) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.potential_ability = pa;
+        // Start CA below PA so per-skill growth has room.
+        attrs.current_ability = (pa as f32 * 0.5) as u8;
+        attrs.condition = 9500;
+        attrs.jadedness = 1000;
+        attrs.injury_proneness = 5;
+
+        PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Test".to_string(), "Player".to_string()))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(person)
+            .skills(skills)
+            .positions(positions(pos))
+            .player_attributes(attrs)
+            .build()
+            .unwrap()
+    }
+
+    // ── Round-trip ────────────────────────────────────────────────────
+
+    #[test]
+    fn skill_array_round_trip_preserves_all_fields() {
+        let mut p = make_player(
+            d(2000, 1, 1),
+            PlayerPositionType::Striker,
+            baseline_skills(),
+            150,
+            PersonAttributes::default(),
+        );
+        // Stamp every skill with a unique value so a missing field shows up
+        // as a stale default rather than a coincidence.
+        let mut tagged = [0.0f32; SKILL_COUNT];
+        for i in 0..SKILL_COUNT {
+            tagged[i] = 1.0 + (i as f32) * 0.1; // 1.0, 1.1, 1.2, ... 5.9
+        }
+        write_skills_back(&mut p, &tagged);
+
+        let round_tripped = skills_to_array(&p);
+        for i in 0..SKILL_COUNT {
+            assert!(
+                (round_tripped[i] - tagged[i]).abs() < 1e-6,
+                "skill index {} did not round-trip: wrote {}, read {}",
+                i, tagged[i], round_tripped[i]
+            );
+        }
+    }
+
+    #[test]
+    fn skill_count_matches_enum() {
+        assert_eq!(SkillKey::GkThrowing as usize + 1, SKILL_COUNT);
+    }
+
+    // ── Pure helper checks ────────────────────────────────────────────
+
+    #[test]
+    fn workload_growth_modifier_drops_with_fatigue() {
+        let fresh = workload_growth_modifier(100, 0);
+        let drained = workload_growth_modifier(35, 8000);
+        assert!(fresh > drained, "fresh {} should exceed drained {}", fresh, drained);
+        assert!(drained <= 0.7);
+        assert!(fresh >= 0.99);
+    }
+
+    #[test]
+    fn match_readiness_multiplier_scales_inside_band() {
+        assert!(match_readiness_multiplier(0.0) < match_readiness_multiplier(20.0));
+        assert!((match_readiness_multiplier(20.0) - 1.10).abs() < 1e-4);
+        assert!((match_readiness_multiplier(0.0) - 0.90).abs() < 1e-4);
+    }
+
+    #[test]
+    fn skill_gap_factor_is_zero_at_or_above_ceiling() {
+        assert_eq!(skill_gap_factor(20.0, 15.0), 0.05);
+        assert_eq!(skill_gap_factor(15.0, 15.0), 0.05);
+        assert!(skill_gap_factor(5.0, 15.0) > 0.5);
+    }
+
+    #[test]
+    fn defensive_midfielder_uses_midfielder_dev_weights() {
+        // This pins the deliberate divergence from
+        // PlayerPositionType::position_group(): for development the DM is
+        // a midfielder, not a defender.
+        assert_eq!(
+            pos_group_from(PlayerPositionType::DefensiveMidfielder),
+            PosGroup::Midfielder
+        );
+    }
+
+    // ── Position-specific ceilings ────────────────────────────────────
+
+    #[test]
+    fn striker_finishing_ceiling_exceeds_tackling_ceiling() {
+        // Verify the position weights produce the expected ceiling shape.
+        let w = position_dev_weights(PosGroup::Forward);
+        assert!(w[SK_FINISHING] > w[SK_TACKLING]);
+        assert!(w[SK_FINISHING] >= 1.4);
+        assert!(w[SK_TACKLING] <= 0.5);
+    }
+
+    #[test]
+    fn defender_marking_grows_faster_than_finishing() {
+        let w = position_dev_weights(PosGroup::Defender);
+        assert!(w[SK_MARKING] > w[SK_FINISHING]);
+        assert!(w[SK_TACKLING] > w[SK_FINISHING]);
+    }
+
+    // ── Behavioral tests using the deterministic roll seam ────────────
+
+    fn high_roll() -> FixedRolls { FixedRolls(1.0) }
+
+    #[test]
+    fn young_professional_grows_more_than_low_professionalism_peer() {
+        let birth = d(2008, 1, 1); // age ~17 on 2025-06-01
+        let now = d(2025, 6, 1);
+        let pa = 170u8;
+
+        let mut pro = make_player(
+            birth, PlayerPositionType::Striker, baseline_skills(), pa,
+            person_pro(18.0, 16.0),
+        );
+        let mut sloth = make_player(
+            birth, PlayerPositionType::Striker, baseline_skills(), pa,
+            person_pro(4.0, 6.0),
+        );
+        // Same starting CA so the gap factor is identical.
+        sloth.skills.mental.work_rate = 6.0;
+        sloth.skills.mental.determination = 6.0;
+
+        let pre_pro_finishing = pro.skills.technical.finishing;
+        let pre_sloth_finishing = sloth.skills.technical.finishing;
+
+        let coach = CoachingEffect::neutral();
+        pro.process_development_with(now, 5000, &coach, 0.5, &mut high_roll());
+        sloth.process_development_with(now, 5000, &coach, 0.5, &mut high_roll());
+
+        let pro_gain = pro.skills.technical.finishing - pre_pro_finishing;
+        let sloth_gain = sloth.skills.technical.finishing - pre_sloth_finishing;
+        assert!(
+            pro_gain > sloth_gain,
+            "pro_gain={}, sloth_gain={}",
+            pro_gain, sloth_gain
+        );
+    }
+
+    #[test]
+    fn old_player_declines_physically_but_can_still_grow_mentally() {
+        // 36-year-old with neutral coaching, same fixed roll for both
+        // categories. Mental should still nudge up, physical should fall.
+        let now = d(2025, 6, 1);
+        let birth = d(1989, 1, 1); // 36
+        let mut p = make_player(
+            birth,
+            PlayerPositionType::DefenderCenter,
+            baseline_skills(),
+            150,
+            person_pro(15.0, 12.0),
+        );
+        let pre_pace = p.skills.physical.pace;
+        let pre_leadership = p.skills.mental.leadership;
+
+        let coach = CoachingEffect::neutral();
+        // Use the midpoint roll so the band is interpreted at its center —
+        // physical at 36 is unambiguously negative; mental at 36 is around 0.
+        p.process_development_with(now, 5000, &coach, 0.5, &mut FixedRolls(0.5));
+
+        assert!(
+            p.skills.physical.pace <= pre_pace,
+            "old pace should not grow: pre={}, post={}",
+            pre_pace, p.skills.physical.pace
+        );
+        // Leadership has a +3 peak offset so a 36yo is effectively 33 for it.
+        assert!(
+            p.skills.mental.leadership >= pre_leadership,
+            "leadership should hold or grow: pre={}, post={}",
+            pre_leadership, p.skills.mental.leadership
+        );
+    }
+
+    #[test]
+    fn injured_player_skips_development_entirely() {
+        let mut p = make_player(
+            d(2008, 1, 1),
+            PlayerPositionType::Striker,
+            baseline_skills(),
+            170,
+            person_pro(18.0, 16.0),
+        );
+        p.player_attributes.is_injured = true;
+        p.player_attributes.injury_days_remaining = 30;
+
+        let snapshot = skills_to_array(&p);
+        let coach = CoachingEffect::neutral();
+        p.process_development_with(d(2025, 6, 1), 8000, &coach, 0.6, &mut high_roll());
+
+        let after = skills_to_array(&p);
+        for i in 0..SKILL_COUNT {
+            assert!(
+                (snapshot[i] - after[i]).abs() < 1e-6,
+                "injured player skill {} changed: {} -> {}",
+                i, snapshot[i], after[i]
+            );
+        }
+    }
+
+    #[test]
+    fn recovering_player_only_gains_mental() {
+        let mut p = make_player(
+            d(2008, 1, 1),
+            PlayerPositionType::Striker,
+            baseline_skills(),
+            170,
+            person_pro(18.0, 16.0),
+        );
+        p.player_attributes.recovery_days_remaining = 14;
+        // is_injured is already false (Default), so this puts the player in
+        // the recovery phase.
+
+        let pre_finishing = p.skills.technical.finishing;
+        let pre_pace = p.skills.physical.pace;
+        let pre_decisions = p.skills.mental.decisions;
+
+        let coach = CoachingEffect::neutral();
+        p.process_development_with(d(2025, 6, 1), 8000, &coach, 0.6, &mut high_roll());
+
+        assert_eq!(p.skills.technical.finishing, pre_finishing,
+            "recovering player should not gain technical");
+        assert_eq!(p.skills.physical.pace, pre_pace,
+            "recovering player should not gain physical");
+        assert!(p.skills.mental.decisions >= pre_decisions,
+            "recovering player can still gain mental");
+    }
+
+    #[test]
+    fn fatigued_jaded_player_grows_less_than_fresh_peer() {
+        let birth = d(2006, 1, 1); // ~19yo
+        let now = d(2025, 6, 1);
+        let pa = 170u8;
+
+        let mut fresh = make_player(
+            birth, PlayerPositionType::Striker, baseline_skills(), pa,
+            person_pro(15.0, 14.0),
+        );
+        let mut drained = make_player(
+            birth, PlayerPositionType::Striker, baseline_skills(), pa,
+            person_pro(15.0, 14.0),
+        );
+        drained.player_attributes.condition = 3500;
+        drained.player_attributes.jadedness = 8000;
+        drained.skills.physical.match_readiness = 5.0;
+
+        let pre_fresh = fresh.skills.technical.finishing;
+        let pre_drained = drained.skills.technical.finishing;
+
+        let coach = CoachingEffect::neutral();
+        fresh.process_development_with(now, 5000, &coach, 0.5, &mut high_roll());
+        drained.process_development_with(now, 5000, &coach, 0.5, &mut high_roll());
+
+        let fresh_gain = fresh.skills.technical.finishing - pre_fresh;
+        let drained_gain = drained.skills.technical.finishing - pre_drained;
+        assert!(
+            fresh_gain > drained_gain,
+            "fresh {} should grow more than drained {}",
+            fresh_gain, drained_gain
+        );
+    }
+
+    #[test]
+    fn deterministic_seeded_rolls_produce_stable_output() {
+        let now = d(2025, 6, 1);
+        let coach = CoachingEffect::neutral();
+        let mut p1 = make_player(
+            d(2007, 1, 1), PlayerPositionType::MidfielderCenter,
+            baseline_skills(), 160, person_pro(15.0, 12.0),
+        );
+        let mut p2 = make_player(
+            d(2007, 1, 1), PlayerPositionType::MidfielderCenter,
+            baseline_skills(), 160, person_pro(15.0, 12.0),
+        );
+
+        p1.process_development_with(now, 6000, &coach, 0.4, &mut FixedRolls(0.5));
+        p2.process_development_with(now, 6000, &coach, 0.4, &mut FixedRolls(0.5));
+
+        let a = skills_to_array(&p1);
+        let b = skills_to_array(&p2);
+        for i in 0..SKILL_COUNT {
+            assert!(
+                (a[i] - b[i]).abs() < 1e-6,
+                "deterministic skill {} differed: {} vs {}",
+                i, a[i], b[i]
+            );
+        }
+    }
+
+    #[test]
+    fn goalkeeping_skills_use_later_peak_curve() {
+        // At age 30, a GK should still gain on goalkeeping skills, while
+        // an outfield 30yo's physical skills are flat or declining.
+        let coach = CoachingEffect::neutral();
+        let now = d(2025, 6, 1);
+
+        let mut gk = make_player(
+            d(1995, 1, 1), // 30
+            PlayerPositionType::Goalkeeper,
+            gk_skills(),
+            160,
+            person_pro(15.0, 12.0),
+        );
+        let pre_handling = gk.skills.goalkeeping.handling;
+        gk.process_development_with(now, 6000, &coach, 0.4, &mut FixedRolls(0.7));
+        assert!(
+            gk.skills.goalkeeping.handling > pre_handling,
+            "30yo GK handling should still grow: pre={} post={}",
+            pre_handling, gk.skills.goalkeeping.handling
+        );
+
+        let mut out = make_player(
+            d(1995, 1, 1), // 30
+            PlayerPositionType::Striker,
+            baseline_skills(),
+            160,
+            person_pro(15.0, 12.0),
+        );
+        let pre_pace = out.skills.physical.pace;
+        out.process_development_with(now, 6000, &coach, 0.4, &mut FixedRolls(0.5));
+        assert!(
+            out.skills.physical.pace <= pre_pace,
+            "30yo outfield pace should not grow: pre={} post={}",
+            pre_pace, out.skills.physical.pace
+        );
+    }
+
+    #[test]
+    fn coaching_effect_amplifies_growth() {
+        let now = d(2025, 6, 1);
+        let mut weak = make_player(
+            d(2007, 1, 1), PlayerPositionType::MidfielderCenter,
+            baseline_skills(), 160, person_pro(15.0, 12.0),
+        );
+        let mut strong = make_player(
+            d(2007, 1, 1), PlayerPositionType::MidfielderCenter,
+            baseline_skills(), 160, person_pro(15.0, 12.0),
+        );
+
+        let no_coach = CoachingEffect::neutral();
+        let elite = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
+
+        let pre_weak = weak.skills.technical.passing;
+        let pre_strong = strong.skills.technical.passing;
+
+        weak.process_development_with(now, 6000, &no_coach, 0.4, &mut high_roll());
+        strong.process_development_with(now, 6000, &elite, 0.4, &mut high_roll());
+
+        let weak_gain = weak.skills.technical.passing - pre_weak;
+        let strong_gain = strong.skills.technical.passing - pre_strong;
+        assert!(
+            strong_gain > weak_gain,
+            "elite coach gain {} should exceed neutral coach gain {}",
+            strong_gain, weak_gain
+        );
     }
 }
