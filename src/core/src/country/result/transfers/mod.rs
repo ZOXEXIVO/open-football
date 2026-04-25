@@ -11,6 +11,9 @@ use super::CountryResult;
 use crate::simulator::SimulatorData;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::PipelineProcessor;
+use free_agents::{
+    execute_global_free_agent_signing, snapshot_global_free_agents, GlobalFreeAgentSigning,
+};
 
 impl CountryResult {
     pub(super) fn simulate_transfer_market(
@@ -34,11 +37,21 @@ impl CountryResult {
             Vec::new()
         };
 
+        // Snapshot the global "Move on Free" pool *before* we take a mutable
+        // borrow on the country. Players in `data.free_agents` have no club
+        // and were therefore invisible to `handle_free_agents`, which only
+        // scanned club rosters. With this snapshot in hand the per-country
+        // handler can match them against unfulfilled transfer requests; the
+        // returned `GlobalFreeAgentSigning`s get executed below once the
+        // country borrow ends and we can mutate `data.free_agents`.
+        let global_free_agents = snapshot_global_free_agents(data, current_date);
+
         // Snapshot completed count so we can detect any free-agent / negotiation
         // signings that bypass the deferred execution path below.
         let completed_before = summary.completed_transfers;
 
         // Phase 1: Negotiations & pipeline (per-country)
+        let mut global_signings: Vec<GlobalFreeAgentSigning> = Vec::new();
         let deferred_transfers = if let Some(country) = data.country_mut(country_id) {
             // Sync market's window flag. On open→closed transitions this cancels
             // any stranded listings and expires pending negotiations.
@@ -53,8 +66,15 @@ impl CountryResult {
                 PipelineProcessor::on_negotiation_resolved(country, buying_club_id, player_id, false);
             }
 
-            // Free agents and contract expirations
-            Self::handle_free_agents(country, current_date, &mut summary);
+            // Free agents and contract expirations. Returns deferred
+            // signings sourced from the global pool (`sim.free_agents`),
+            // which we execute after the country borrow ends.
+            global_signings = Self::handle_free_agents(
+                country,
+                current_date,
+                &mut summary,
+                &global_free_agents,
+            );
 
             if window_open {
                 debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
@@ -104,6 +124,17 @@ impl CountryResult {
         } else {
             Vec::new()
         };
+
+        // Execute any deferred global free-agent signings (players from
+        // `data.free_agents`, populated by the "Move on Free" UI action).
+        // Each signing is independent and may fail silently if another
+        // country signed the same player earlier in this tick — we deduce
+        // success from the executor's return value.
+        for signing in &global_signings {
+            if execute_global_free_agent_signing(data, signing, current_date) {
+                summary.completed_transfers += 1;
+            }
+        }
 
         // Free-agent / in-country signings already mutated club rosters
         // while the country borrow was active — flag the index as dirty.
