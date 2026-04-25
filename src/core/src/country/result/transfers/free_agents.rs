@@ -1,5 +1,3 @@
-use chrono::NaiveDate;
-use log::debug;
 use super::types::{can_club_accept_player, TransferActivitySummary};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
@@ -10,6 +8,8 @@ use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::utils::IntegerUtils;
 use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
+use chrono::NaiveDate;
+use log::debug;
 
 impl CountryResult {
     /// Handle expiring contracts and free agent signings.
@@ -22,7 +22,11 @@ impl CountryResult {
     ///
     /// This creates realistic free agent markets where low-quality players
     /// linger while stars get snapped up immediately.
-    pub(crate) fn handle_free_agents(country: &mut Country, date: NaiveDate, summary: &mut TransferActivitySummary) {
+    pub(crate) fn handle_free_agents(
+        country: &mut Country,
+        date: NaiveDate,
+        summary: &mut TransferActivitySummary,
+    ) {
         #[allow(dead_code)]
         struct FreeAgentCandidate {
             player_id: u32,
@@ -100,9 +104,13 @@ impl CountryResult {
         for player_id in expired_player_ids {
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
-                    if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
-                        debug!("Contract expired: player {} ({}) released from {}",
-                              player.full_name, player_id, club.name);
+                    if let Some(player) =
+                        team.players.players.iter_mut().find(|p| p.id == player_id)
+                    {
+                        debug!(
+                            "Contract expired: player {} ({}) released from {}",
+                            player.full_name, player_id, club.name
+                        );
                         player.contract = None;
                         break;
                     }
@@ -212,7 +220,8 @@ impl CountryResult {
                         1.0
                     };
 
-                    let daily_chance = (base_chance * age_factor * potential_boost).clamp(0.1, 30.0);
+                    let daily_chance =
+                        (base_chance * age_factor * potential_boost).clamp(0.1, 30.0);
 
                     // Roll the dice
                     let roll = IntegerUtils::random(1, 1000) as f32 / 10.0; // 0.1 to 100.0
@@ -220,7 +229,8 @@ impl CountryResult {
                         continue; // Not today — player stays on the market
                     }
 
-                    let reason = PipelineProcessor::transfer_need_reason_text(&request.reason).to_string();
+                    let reason =
+                        PipelineProcessor::transfer_need_reason_text(&request.reason).to_string();
 
                     signings.push(FreeAgentSigning {
                         player_id: best.player_id,
@@ -236,7 +246,9 @@ impl CountryResult {
 
         // Pass 3: Execute signings as free transfers with negotiation records
         for signing in &signings {
-            let negotiator_staff_id = country.clubs.iter()
+            let negotiator_staff_id = country
+                .clubs
+                .iter()
                 .find(|c| c.id == signing.to_club_id)
                 .and_then(|c| c.teams.teams.first())
                 .and_then(|t| StaffResolver::resolve(&t.staffs).negotiator.map(|s| s.id));
@@ -267,11 +279,16 @@ impl CountryResult {
             negotiation.reason = signing.reason.clone();
             negotiation.status = NegotiationStatus::Accepted;
             negotiation.phase = NegotiationPhase::MedicalAndFinalization { started: date };
-            country.transfer_market.negotiations.insert(neg_id, negotiation);
+            country
+                .transfer_market
+                .negotiations
+                .insert(neg_id, negotiation);
         }
 
         for signing in signings {
-            let to_club_name = country.clubs.iter()
+            let to_club_name = country
+                .clubs
+                .iter()
                 .find(|c| c.id == signing.to_club_id)
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
@@ -302,12 +319,10 @@ impl CountryResult {
                 agreed_annual_wage: None,
                 buying_league_reputation,
                 sell_on_percentage: None,
+                loan_future_fee: None,
             };
-            let executed = super::execution::execute_transfer_within_country(
-                country,
-                &deferred,
-                date,
-            );
+            let executed =
+                super::execution::execute_transfer_within_country(country, &deferred, date);
 
             if !executed {
                 debug!(
@@ -329,7 +344,8 @@ impl CountryResult {
                     date,
                     CurrencyValue::new(0.0, Currency::Usd),
                     TransferType::Free,
-                ).with_reason(signing.reason),
+                )
+                .with_reason(signing.reason),
             );
 
             PipelineProcessor::clear_player_interest(country, signing.player_id);

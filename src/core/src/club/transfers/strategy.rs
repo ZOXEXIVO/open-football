@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 pub struct ClubTransferStrategy {
     pub club_id: u32,
     pub budget: Option<CurrencyValue>,
-    pub selling_willingness: f32, // 0.0-1.0
+    pub selling_willingness: f32,   // 0.0-1.0
     pub buying_aggressiveness: f32, // 0.0-1.0
     pub target_positions: Vec<PlayerPositionType>,
     pub reputation_level: u16,
@@ -63,7 +63,7 @@ impl ClubTransferStrategy {
         &self,
         player: &Player,
         asking_price: &CurrencyValue,
-        current_date: NaiveDate
+        current_date: NaiveDate,
     ) -> TransferOffer {
         // Club budget check
         let max_budget = match &self.budget {
@@ -71,20 +71,29 @@ impl ClubTransferStrategy {
             None => f64::MAX, // No budget constraint
         };
 
-        // Calculate base valuation
-        let player_value = PlayerValuationCalculator::calculate_value(player, current_date, 0, 0);
+        // Calculate base valuation with club reputation context. The old
+        // 0/0 call flattened prices across leagues and made elite-club
+        // targets look too cheap.
+        let player_value = PlayerValuationCalculator::calculate_value(
+            player,
+            current_date,
+            self.reputation_level.saturating_mul(100).min(10_000),
+            self.reputation_level.saturating_mul(100).min(10_000),
+        );
 
         // Adjust based on asking price
         let mut offer_amount = if asking_price.amount > 0.0 {
-            // Start with 80-93% of asking price depending on aggressiveness
-            asking_price.amount * (0.80 + (self.buying_aggressiveness as f64 * 0.15))
+            let market_anchor = asking_price.amount.max(player_value.amount * 0.85);
+            market_anchor * (0.74 + (self.buying_aggressiveness as f64 * 0.23))
         } else {
             // No asking price - use our valuation but discount it
-            player_value.amount * (0.80 + (self.buying_aggressiveness as f64 * 0.15))
+            player_value.amount * (0.78 + (self.buying_aggressiveness as f64 * 0.18))
         };
 
-        // Cap by budget - never offer more than 80% of available budget
-        let budget_cap = max_budget * 0.8;
+        // Keep most clubs disciplined, but allow a critical high-aggression
+        // buyer to spend closer to its whole budget like real one-target windows.
+        let budget_cap_ratio = 0.70 + (self.buying_aggressiveness as f64 * 0.25);
+        let budget_cap = max_budget * budget_cap_ratio.min(0.95);
         if offer_amount > budget_cap {
             offer_amount = budget_cap;
         }
@@ -106,8 +115,8 @@ impl ClubTransferStrategy {
 
         // 1. Add sell-on clause for young players with potential
         let age = player.age(current_date);
-        let potential_gap = player.player_attributes.potential_ability as i16 -
-            player.player_attributes.current_ability as i16;
+        let potential_gap = player.player_attributes.potential_ability as i16
+            - player.player_attributes.current_ability as i16;
 
         if age < 23 && potential_gap > 10 {
             // Add sell-on clause for promising youngsters
@@ -123,7 +132,7 @@ impl ClubTransferStrategy {
                     amount: appearance_amount,
                     currency: crate::shared::Currency::Usd,
                 },
-                20 // After 20 appearances
+                20, // After 20 appearances
             ));
         }
 
@@ -135,19 +144,17 @@ impl ClubTransferStrategy {
                     amount: goals_bonus,
                     currency: crate::shared::Currency::Usd,
                 },
-                15 // After 15 goals
+                15, // After 15 goals
             ));
         }
 
         // 4. Add promotion bonus for lower reputation clubs
         if self.reputation_level < 60 {
             let promotion_bonus = FormattingUtils::round_fee(offer_amount * 0.2);
-            offer = offer.with_clause(TransferClause::PromotionBonus(
-                CurrencyValue {
-                    amount: promotion_bonus,
-                    currency: crate::shared::Currency::Usd,
-                }
-            ));
+            offer = offer.with_clause(TransferClause::PromotionBonus(CurrencyValue {
+                amount: promotion_bonus,
+                currency: crate::shared::Currency::Usd,
+            }));
         }
 
         // Set contract length based on player age

@@ -221,7 +221,7 @@ pub fn process_substitutions(
 /// player off. The actual injury type / recovery days are decided by the
 /// post-match path (`on_match_exertion` rolls the injury from minutes +
 /// existing proneness); this function only models the **in-match event**.
-fn roll_in_match_injuries(field: &mut MatchField, context: &MatchContext) {
+fn roll_in_match_injuries(field: &mut MatchField, context: &mut MatchContext) {
     let match_minute = context.total_match_time / 60_000;
     if match_minute < 5 {
         return; // No opening-minute theatre
@@ -264,6 +264,10 @@ fn roll_in_match_injuries(field: &mut MatchField, context: &MatchContext) {
         if rand::random::<f32>() < base {
             victims.push(player.id);
         }
+    }
+
+    if !victims.is_empty() {
+        context.record_stoppage_time(60_000 * victims.len() as u64);
     }
 
     for pid in victims {
@@ -312,6 +316,7 @@ fn execute_substitution(
     }
 
     context.record_substitution(team_id, player_out_id, player_in_id, context.total_match_time);
+    context.record_stoppage_time(30_000);
     context.players.remove_player(player_out_id);
 
     if let Some(field_player) = field.get_player(player_in_id) {

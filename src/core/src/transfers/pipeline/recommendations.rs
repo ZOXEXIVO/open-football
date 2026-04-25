@@ -1,11 +1,11 @@
 use chrono::NaiveDate;
 
-use crate::transfers::pipeline::{
-    RecommendationSource, RecommendationType, ShortlistCandidate,
-    ShortlistCandidateStatus, StaffRecommendation, TransferNeedPriority,
-    TransferNeedReason, TransferRequest, TransferRequestStatus,
-};
 use crate::transfers::pipeline::processor::PipelineProcessor;
+use crate::transfers::pipeline::{
+    RecommendationSource, RecommendationType, ShortlistCandidate, ShortlistCandidateStatus,
+    StaffRecommendation, TransferNeedPriority, TransferNeedReason, TransferRequest,
+    TransferRequestStatus, TransferShortlist,
+};
 use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::TransferWindowManager;
@@ -34,7 +34,7 @@ impl PipelineProcessor {
             club_id: u32,
             position: PlayerPositionType,
             position_group: PlayerFieldPositionGroup,
-            ability: u8,           // skill-based, not CA
+            ability: u8,             // skill-based, not CA
             estimated_potential: u8, // estimated from age + mentals, not PA
             age: u8,
             estimated_value: f64,
@@ -68,7 +68,8 @@ impl PipelineProcessor {
                         player,
                         date,
                         price_level,
-                        0, 0,
+                        0,
+                        0,
                     );
                     let contract_months = player
                         .contract
@@ -81,16 +82,19 @@ impl PipelineProcessor {
 
                     let statuses = player.statuses.get();
 
-                    let skill_ability = player.skills.calculate_ability_for_position(player.position());
+                    let skill_ability = player
+                        .skills
+                        .calculate_ability_for_position(player.position());
                     let player_age = player.age(date);
-                    let estimated_potential = skill_ability + Self::estimate_growth_potential(
-                        player_age,
-                        player.skills.mental.determination,
-                        player.skills.mental.work_rate,
-                        player.skills.mental.composure,
-                        player.skills.mental.anticipation,
-                        skill_ability,
-                    );
+                    let estimated_potential = skill_ability
+                        + Self::estimate_growth_potential(
+                            player_age,
+                            player.skills.mental.determination,
+                            player.skills.mental.work_rate,
+                            player.skills.mental.composure,
+                            player.skills.mental.anticipation,
+                            skill_ability,
+                        );
 
                     all_snapshots.push(PlayerSnapshot {
                         id: player.id,
@@ -140,7 +144,11 @@ impl PipelineProcessor {
 
             let avg_ability = {
                 let avg = team.players.current_ability_avg();
-                if avg == 0 { 50 } else { avg }
+                if avg == 0 {
+                    50
+                } else {
+                    avg
+                }
             };
 
             let club_rep = team.reputation.level();
@@ -153,6 +161,69 @@ impl PipelineProcessor {
 
             // Budget cap: scouts should not recommend players the club cannot afford
             let max_recommend_value = plan.total_budget * 2.0;
+
+            let memory_recommender_id = resolved
+                .scouts
+                .first()
+                .copied()
+                .or(resolved.director_of_football)
+                .or_else(|| Some(team.staffs.head_coach()))
+                .map(|s| s.id);
+
+            if let Some(recommender_staff_id) = memory_recommender_id {
+                for memory in &plan.known_players {
+                    if plan.staff_recommendations.len()
+                        + actions.iter().filter(|a| a.club_id == club.id).count()
+                        >= 6
+                    {
+                        break;
+                    }
+                    if memory.last_known_club_id == club.id
+                        || memory.last_seen < date - chrono::Duration::days(540)
+                        || memory.confidence < 0.25
+                        || already_recommended.contains(&memory.player_id)
+                        || actions.iter().any(|a| {
+                            a.club_id == club.id && a.recommendation.player_id == memory.player_id
+                        })
+                    {
+                        continue;
+                    }
+                    let seen_score = memory.official_appearances_seen as f32
+                        + memory.friendly_appearances_seen as f32 * 0.35;
+                    if seen_score < 0.35 {
+                        continue;
+                    }
+                    if max_recommend_value > 0.0 && memory.estimated_fee > max_recommend_value {
+                        continue;
+                    }
+                    if memory.assessed_ability < avg_ability.saturating_sub(12) {
+                        continue;
+                    }
+
+                    let rec_type = if memory.assessed_potential > memory.assessed_ability + 12 {
+                        RecommendationType::HiddenGem
+                    } else if memory.official_appearances_seen == 0 {
+                        RecommendationType::YouthMatchStandout
+                    } else {
+                        RecommendationType::ReadyForStepUp
+                    };
+
+                    actions.push(RecommendationAction {
+                        club_id: club.id,
+                        recommendation: StaffRecommendation {
+                            player_id: memory.player_id,
+                            recommender_staff_id,
+                            source: RecommendationSource::ScoutNetwork,
+                            recommendation_type: rec_type,
+                            assessed_ability: memory.assessed_ability,
+                            assessed_potential: memory.assessed_potential,
+                            confidence: memory.confidence,
+                            estimated_fee: memory.estimated_fee,
+                            date_recommended: date,
+                        },
+                    });
+                }
+            }
 
             // ── Scout network recommendations ──
             for scout in &resolved.scouts {
@@ -178,11 +249,13 @@ impl PipelineProcessor {
                 let candidates: Vec<&PlayerSnapshot> = all_snapshots
                     .iter()
                     .filter(|p| {
-                        p.club_id != club.id && !club.is_rival(p.club_id)
+                        p.club_id != club.id
+                            && !club.is_rival(p.club_id)
                             && !p.is_transfer_protected
                             && p.ability >= avg_ability.saturating_sub(10)
                             && p.ability <= avg_ability + (judging / 2)
-                            && (max_recommend_value <= 0.0 || p.estimated_value <= max_recommend_value)
+                            && (max_recommend_value <= 0.0
+                                || p.estimated_value <= max_recommend_value)
                             && Self::rep_level_value(&p.parent_club_reputation)
                                 >= Self::rep_level_value(&min_source_rep)
                             && !already_recommended.contains(&p.id)
@@ -299,7 +372,8 @@ impl PipelineProcessor {
                     let dof_candidates: Vec<&PlayerSnapshot> = all_snapshots
                         .iter()
                         .filter(|p| {
-                            p.club_id != club.id && !club.is_rival(p.club_id)
+                            p.club_id != club.id
+                                && !club.is_rival(p.club_id)
                                 && !p.is_transfer_protected
                                 && p.contract_months_remaining <= 6
                                 && p.ability >= avg_ability.saturating_sub(5)
@@ -364,14 +438,17 @@ impl PipelineProcessor {
                     let coach_id = head_coach.id;
                     let coach_judging =
                         head_coach.staff_attributes.knowledge.judging_player_ability;
-                    let coach_judging_pot =
-                        head_coach.staff_attributes.knowledge.judging_player_potential;
+                    let coach_judging_pot = head_coach
+                        .staff_attributes
+                        .knowledge
+                        .judging_player_potential;
 
                     // ── Cheap loan targets (loan-listed players the club could afford) ──
                     let mut loan_targets: Vec<&PlayerSnapshot> = all_snapshots
                         .iter()
                         .filter(|p| {
-                            p.club_id != club.id && !club.is_rival(p.club_id)
+                            p.club_id != club.id
+                                && !club.is_rival(p.club_id)
                                 && !p.is_transfer_protected
                                 && p.is_loan_listed
                                 && p.ability >= avg_ability.saturating_sub(8)
@@ -429,14 +506,14 @@ impl PipelineProcessor {
                         let mut free_targets: Vec<&PlayerSnapshot> = all_snapshots
                             .iter()
                             .filter(|p| {
-                                p.club_id != club.id && !club.is_rival(p.club_id)
+                                p.club_id != club.id
+                                    && !club.is_rival(p.club_id)
                                     && !p.is_transfer_protected
                                     && p.contract_months_remaining <= 6
                                     && p.ability >= avg_ability.saturating_sub(10)
                                     && !already_recommended.contains(&p.id)
                                     && !actions.iter().any(|a| {
-                                        a.club_id == club.id
-                                            && a.recommendation.player_id == p.id
+                                        a.club_id == club.id && a.recommendation.player_id == p.id
                                     })
                             })
                             .collect();
@@ -444,15 +521,15 @@ impl PipelineProcessor {
 
                         for target in free_targets.iter().take(remaining_after_loans.min(2)) {
                             let ability_error = (20i16 - coach_judging as i16).max(1) as i32;
-                            let potential_error =
-                                (20i16 - coach_judging_pot as i16).max(1) as i32;
+                            let potential_error = (20i16 - coach_judging_pot as i16).max(1) as i32;
 
                             let assessed_ability = (target.ability as i32
                                 + IntegerUtils::random(-ability_error, ability_error))
                             .clamp(1, 200) as u8;
                             let assessed_potential = (target.estimated_potential as i32
                                 + IntegerUtils::random(-potential_error, potential_error))
-                            .clamp(1, 200) as u8;
+                            .clamp(1, 200)
+                                as u8;
 
                             let confidence = (0.5 + (coach_judging as f32 * 0.03)).min(0.9);
 
@@ -484,7 +561,8 @@ impl PipelineProcessor {
                         let mut game_time_seekers: Vec<&PlayerSnapshot> = all_snapshots
                             .iter()
                             .filter(|p| {
-                                p.club_id != club.id && !club.is_rival(p.club_id)
+                                p.club_id != club.id
+                                    && !club.is_rival(p.club_id)
                                     && !p.is_transfer_protected
                                     && p.age <= 23
                                     && p.estimated_potential > p.ability + 5
@@ -494,25 +572,24 @@ impl PipelineProcessor {
                                     && !p.is_loan_listed
                                     && !already_recommended.contains(&p.id)
                                     && !actions.iter().any(|a| {
-                                        a.club_id == club.id
-                                            && a.recommendation.player_id == p.id
+                                        a.club_id == club.id && a.recommendation.player_id == p.id
                                     })
                             })
                             .collect();
-                        game_time_seekers.sort_by(|a, b| b.estimated_potential.cmp(&a.estimated_potential));
+                        game_time_seekers
+                            .sort_by(|a, b| b.estimated_potential.cmp(&a.estimated_potential));
 
-                        for target in game_time_seekers.iter().take(remaining_after_free.min(2))
-                        {
+                        for target in game_time_seekers.iter().take(remaining_after_free.min(2)) {
                             let ability_error = (20i16 - coach_judging as i16).max(1) as i32;
-                            let potential_error =
-                                (20i16 - coach_judging_pot as i16).max(1) as i32;
+                            let potential_error = (20i16 - coach_judging_pot as i16).max(1) as i32;
 
                             let assessed_ability = (target.ability as i32
                                 + IntegerUtils::random(-ability_error, ability_error))
                             .clamp(1, 200) as u8;
                             let assessed_potential = (target.estimated_potential as i32
                                 + IntegerUtils::random(-potential_error, potential_error))
-                            .clamp(1, 200) as u8;
+                            .clamp(1, 200)
+                                as u8;
 
                             let confidence = (0.3 + (coach_judging as f32 * 0.025)).min(0.8);
 
@@ -580,6 +657,7 @@ impl PipelineProcessor {
             },
             CreateRequest {
                 request: TransferRequest,
+                candidate: ShortlistCandidate,
             },
         }
 
@@ -600,9 +678,12 @@ impl PipelineProcessor {
 
             for rec in &recent_recs {
                 // Determine player's position group
+                let memory = plan.known_player(rec.player_id);
                 let player_pos_group =
                     if let Some(player) = Self::find_player_in_country(country, rec.player_id) {
                         player.position().position_group()
+                    } else if let Some(memory) = memory {
+                        memory.position_group
                     } else {
                         continue;
                     };
@@ -646,13 +727,15 @@ impl PipelineProcessor {
                     }
                 } else if rec.confidence >= 0.6 && rec.assessed_ability >= 50 {
                     // No existing request — create a new one
-                    let player_position =
-                        if let Some(player) = Self::find_player_in_country(country, rec.player_id)
-                        {
-                            player.position()
-                        } else {
-                            continue;
-                        };
+                    let player_position = if let Some(player) =
+                        Self::find_player_in_country(country, rec.player_id)
+                    {
+                        player.position()
+                    } else if let Some(memory) = memory {
+                        memory.position
+                    } else {
+                        continue;
+                    };
 
                     // Check we don't already have too many requests
                     let active_requests = plan
@@ -676,17 +759,27 @@ impl PipelineProcessor {
                         continue;
                     }
 
-                    let next_id = plan.next_request_id + actions
-                        .iter()
-                        .filter(|a| {
-                            a.club_id == club.id
-                                && matches!(a.kind, RecommendationProcessKind::CreateRequest { .. })
-                        })
-                        .count() as u32;
+                    let next_id = plan.next_request_id
+                        + actions
+                            .iter()
+                            .filter(|a| {
+                                a.club_id == club.id
+                                    && matches!(
+                                        a.kind,
+                                        RecommendationProcessKind::CreateRequest { .. }
+                                    )
+                            })
+                            .count() as u32;
 
                     actions.push(RecommendationProcessAction {
                         club_id: club.id,
                         kind: RecommendationProcessKind::CreateRequest {
+                            candidate: ShortlistCandidate {
+                                player_id: rec.player_id,
+                                score: rec.assessed_ability as f32 / 100.0 + rec.confidence * 0.1,
+                                estimated_fee: rec.estimated_fee,
+                                status: ShortlistCandidateStatus::Available,
+                            },
                             request: TransferRequest::new(
                                 next_id,
                                 player_position,
@@ -720,12 +813,15 @@ impl PipelineProcessor {
                             shortlist.candidates.push(candidate);
                         }
                     }
-                    RecommendationProcessKind::CreateRequest { request } => {
+                    RecommendationProcessKind::CreateRequest { request, candidate } => {
                         let req_id = request.id;
                         if req_id >= plan.next_request_id {
                             plan.next_request_id = req_id + 1;
                         }
                         plan.transfer_requests.push(request);
+                        let mut shortlist = TransferShortlist::new(req_id, candidate.estimated_fee);
+                        shortlist.candidates.push(candidate);
+                        plan.shortlists.push(shortlist);
                     }
                 }
             }

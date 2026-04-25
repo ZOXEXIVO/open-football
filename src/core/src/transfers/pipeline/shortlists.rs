@@ -1,12 +1,12 @@
 use chrono::NaiveDate;
 use log::debug;
 
+use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
     DetailedScoutingReport, ReportRiskFlag, ScoutingAssignment, ScoutingRecommendation,
     ShortlistCandidate, ShortlistCandidateStatus, TransferNeedPriority, TransferRequestStatus,
     TransferShortlist,
 };
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::{Club, Country, PlayerFieldPositionGroup, StaffPosition, TeamType};
 
 struct ShortlistResult {
@@ -174,7 +174,11 @@ impl PipelineProcessor {
                     })
                     .collect();
 
-                candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                candidates.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 candidates.truncate(10);
 
                 if !candidates.is_empty() {
@@ -203,25 +207,41 @@ impl PipelineProcessor {
                     continue;
                 }
                 // Skip if we already built a shortlist from scouting reports above
-                if results.iter().any(|r| r.club_id == club.id && r.request_id == request.id) {
+                if results
+                    .iter()
+                    .any(|r| r.club_id == club.id && r.request_id == request.id)
+                {
                     continue;
                 }
 
-                let market_candidates: Vec<ShortlistCandidate> = country
+                let mut market_candidates: Vec<ShortlistCandidate> = country
                     .transfer_market
                     .get_available_listings()
                     .iter()
-                    .filter(|l| l.club_id != club.id && !club.is_rival(l.club_id))
+                    .filter(|l| l.club_id != club.id)
                     .filter_map(|l| {
                         Self::find_player_summary_in_country(country, l.player_id, date).and_then(
                             |p| {
                                 if p.position_group == request.position.position_group()
                                     && p.skill_ability >= request.min_ability
-                                    && p.estimated_value <= request.budget_allocation * 1.5
+                                    && p.estimated_value <= request.budget_allocation * 2.0
                                 {
+                                    let rival_penalty =
+                                        if club.is_rival(l.club_id) { 0.75 } else { 1.0 };
+                                    let budget_fit = if request.budget_allocation > 0.0 {
+                                        (1.0 - (p.estimated_value / request.budget_allocation)
+                                            .min(1.2)
+                                            as f32
+                                            * 0.35)
+                                            .clamp(0.55, 1.15)
+                                    } else {
+                                        0.9
+                                    };
                                     Some(ShortlistCandidate {
                                         player_id: p.player_id,
-                                        score: p.skill_ability as f32 / 200.0,
+                                        score: (p.skill_ability as f32 / 200.0)
+                                            * budget_fit
+                                            * rival_penalty,
                                         estimated_fee: p.estimated_value,
                                         status: ShortlistCandidateStatus::Available,
                                     })
@@ -231,8 +251,14 @@ impl PipelineProcessor {
                             },
                         )
                     })
-                    .take(5)
                     .collect();
+
+                market_candidates.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                market_candidates.truncate(5);
 
                 if !market_candidates.is_empty() {
                     let mut shortlist =
@@ -295,7 +321,9 @@ impl PipelineProcessor {
 
             for shortlist in &plan.shortlists {
                 // Skip anything already approved / vetoed / drained.
-                let Some(top) = shortlist.candidates.first() else { continue };
+                let Some(top) = shortlist.candidates.first() else {
+                    continue;
+                };
                 let req = match plan
                     .transfer_requests
                     .iter()
@@ -383,8 +411,7 @@ impl PipelineProcessor {
                                 .find_mut_by_position(StaffPosition::Manager)
                             {
                                 mgr.job_satisfaction =
-                                    (mgr.job_satisfaction + d.satisfaction_delta)
-                                        .clamp(0.0, 100.0);
+                                    (mgr.job_satisfaction + d.satisfaction_delta).clamp(0.0, 100.0);
                             }
                         }
                     }

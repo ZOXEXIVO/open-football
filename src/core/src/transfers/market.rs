@@ -14,7 +14,6 @@ pub struct TransferMarket {
     pub next_negotiation_id: u32,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct TransferListing {
     pub player_id: u32,
@@ -83,21 +82,30 @@ impl TransferMarket {
 
     pub fn add_listing(&mut self, listing: TransferListing) {
         // Check for duplicates
-        if !self.listings.iter().any(|l| l.player_id == listing.player_id
-            && l.status == TransferListingStatus::Available) {
+        if !self.listings.iter().any(|l| {
+            l.player_id == listing.player_id
+                && l.club_id == listing.club_id
+                && l.listing_type == listing.listing_type
+                && l.status != TransferListingStatus::Completed
+                && l.status != TransferListingStatus::Cancelled
+        }) {
             self.listings.push(listing);
         }
     }
 
     pub fn get_available_listings(&self) -> Vec<&TransferListing> {
-        self.listings.iter()
+        self.listings
+            .iter()
             .filter(|l| l.status == TransferListingStatus::Available)
             .collect()
     }
 
     pub fn get_listing_by_player(&self, player_id: u32) -> Option<&TransferListing> {
-        self.listings.iter()
-            .find(|l| l.player_id == player_id && l.status == TransferListingStatus::Available)
+        self.listings.iter().find(|l| {
+            l.player_id == player_id
+                && (l.status == TransferListingStatus::Available
+                    || l.status == TransferListingStatus::InNegotiation)
+        })
     }
 
     /// Mark all listings for a player as completed (after transfer/loan executes).
@@ -120,10 +128,17 @@ impl TransferMarket {
         player_age: u8,
         player_ambition: f32,
     ) -> Option<u32> {
-        // Find the listing
-        if let Some(listing_index) = self.listings.iter().position(|l|
-            l.player_id == player_id &&
-                l.status == TransferListingStatus::Available) {
+        if self.has_active_negotiation_for(player_id, buying_club_id) {
+            return None;
+        }
+
+        // Find the listing. InNegotiation remains eligible so several clubs
+        // can bid for the same player while the seller compares offers.
+        if let Some(listing_index) = self.listings.iter().position(|l| {
+            l.player_id == player_id
+                && (l.status == TransferListingStatus::Available
+                    || l.status == TransferListingStatus::InNegotiation)
+        }) {
             let listing = &mut self.listings[listing_index];
 
             // Never negotiate with yourself
@@ -149,7 +164,6 @@ impl TransferMarket {
                 player_ambition,
             );
 
-            // Update listing status
             listing.status = TransferListingStatus::InNegotiation;
 
             // Store the negotiation
@@ -190,13 +204,17 @@ impl TransferMarket {
             // Use negotiation's is_loan flag (not listing type) since a buying club
             // may approach a Transfer-listed player as a loan or vice versa
             let transfer_type = if negotiation.is_loan {
-                let loan_end = negotiation.current_offer.contract_length
+                let loan_end = negotiation
+                    .current_offer
+                    .contract_length
                     .map(|months| {
-                        current_date.checked_add_signed(chrono::Duration::days(months as i64 * 30))
+                        current_date
+                            .checked_add_signed(chrono::Duration::days(months as i64 * 30))
                             .unwrap_or(current_date)
                     })
                     .unwrap_or_else(|| {
-                        current_date.checked_add_signed(chrono::Duration::days(180))
+                        current_date
+                            .checked_add_signed(chrono::Duration::days(180))
                             .unwrap_or(current_date)
                     });
                 TransferType::Loan(loan_end)
@@ -219,7 +237,8 @@ impl TransferMarket {
                 current_date,
                 negotiation.current_offer.base_fee.clone(),
                 transfer_type,
-            ).with_reason(reason);
+            )
+            .with_reason(reason);
 
             self.transfer_history.push(completed.clone());
 
@@ -279,7 +298,9 @@ impl TransferMarket {
         }
 
         // Check for expired negotiations
-        let expired_ids: Vec<u32> = self.negotiations.iter_mut()
+        let expired_ids: Vec<u32> = self
+            .negotiations
+            .iter_mut()
             .filter_map(|(id, negotiation)| {
                 if negotiation.check_expired(current_date) {
                     Some(*id)
@@ -294,18 +315,35 @@ impl TransferMarket {
 
         // Update listings for expired negotiations
         for id in expired_ids {
-            if let Some(negotiation) = self.negotiations.get(&id) {
-                expired_info.push((negotiation.buying_club_id, negotiation.player_id));
-
-                let listing_idx = negotiation.listing_id as usize;
-                if listing_idx < self.listings.len() {
-                    let listing = &mut self.listings[listing_idx];
-                    listing.status = TransferListingStatus::Available;
-                }
+            if let Some((buying_club_id, player_id)) = self
+                .negotiations
+                .get(&id)
+                .map(|n| (n.buying_club_id, n.player_id))
+            {
+                expired_info.push((buying_club_id, player_id));
+                self.reopen_listing_if_no_active_bids(player_id);
             }
         }
 
         expired_info
+    }
+
+    fn reopen_listing_if_no_active_bids(&mut self, player_id: u32) {
+        let has_other_active = self.negotiations.values().any(|n| {
+            n.player_id == player_id
+                && (n.status == NegotiationStatus::Pending
+                    || n.status == NegotiationStatus::Countered)
+        });
+
+        if !has_other_active {
+            for listing in &mut self.listings {
+                if listing.player_id == player_id
+                    && listing.status == TransferListingStatus::InNegotiation
+                {
+                    listing.status = TransferListingStatus::Available;
+                }
+            }
+        }
     }
 
     /// Check if a specific player already has an active negotiation from a given buyer.
@@ -333,23 +371,102 @@ impl TransferMarket {
     pub fn check_transfer_window(&mut self, is_open: bool) {
         self.transfer_window_open = is_open;
 
-        // If window closes, cancel all active listings and negotiations
-        if !is_open {
-            // Mark all available listings as cancelled
-            for listing in &mut self.listings {
-                if listing.status == TransferListingStatus::Available ||
-                    listing.status == TransferListingStatus::InNegotiation {
-                    listing.status = TransferListingStatus::Cancelled;
-                }
-            }
+        // Interest, listings, and agreed talks survive closed windows. The
+        // window controls when new pipeline activity and registrations happen;
+        // it should not erase the market's memory between windows.
+    }
+}
 
-            // Mark all pending negotiations as expired
-            for (_, negotiation) in &mut self.negotiations {
-                if negotiation.status == NegotiationStatus::Pending ||
-                    negotiation.status == NegotiationStatus::Countered {
-                    negotiation.status = NegotiationStatus::Expired;
-                }
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::{Currency, CurrencyValue};
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn money(amount: f64) -> CurrencyValue {
+        CurrencyValue {
+            amount,
+            currency: Currency::Usd,
         }
+    }
+
+    fn offer(buyer_id: u32, amount: f64) -> TransferOffer {
+        TransferOffer::new(money(amount), buyer_id, d(2026, 7, 1))
+    }
+
+    #[test]
+    fn allows_multiple_buyers_to_bid_for_same_listing() {
+        let mut market = TransferMarket::new();
+        market.add_listing(TransferListing::new(
+            10,
+            1,
+            100,
+            money(1_000_000.0),
+            d(2026, 7, 1),
+            TransferListingType::Transfer,
+        ));
+
+        let first =
+            market.start_negotiation(10, 2, offer(2, 850_000.0), d(2026, 7, 1), 0.5, 0.6, 24, 0.5);
+        let second =
+            market.start_negotiation(10, 3, offer(3, 900_000.0), d(2026, 7, 1), 0.5, 0.7, 24, 0.5);
+
+        assert!(first.is_some());
+        assert!(second.is_some());
+        assert_eq!(market.negotiations.len(), 2);
+        assert_eq!(
+            market.listings[0].status,
+            TransferListingStatus::InNegotiation
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_active_bid_from_same_buyer() {
+        let mut market = TransferMarket::new();
+        market.add_listing(TransferListing::new(
+            10,
+            1,
+            100,
+            money(1_000_000.0),
+            d(2026, 7, 1),
+            TransferListingType::Transfer,
+        ));
+
+        assert!(market
+            .start_negotiation(10, 2, offer(2, 850_000.0), d(2026, 7, 1), 0.5, 0.6, 24, 0.5)
+            .is_some());
+        assert!(market
+            .start_negotiation(10, 2, offer(2, 900_000.0), d(2026, 7, 2), 0.5, 0.6, 24, 0.5)
+            .is_none());
+    }
+
+    #[test]
+    fn closing_window_preserves_market_interest() {
+        let mut market = TransferMarket::new();
+        market.add_listing(TransferListing::new(
+            10,
+            1,
+            100,
+            money(1_000_000.0),
+            d(2026, 7, 1),
+            TransferListingType::Transfer,
+        ));
+        let negotiation_id = market
+            .start_negotiation(10, 2, offer(2, 850_000.0), d(2026, 7, 1), 0.5, 0.6, 24, 0.5)
+            .unwrap();
+
+        market.check_transfer_window(false);
+
+        assert_eq!(
+            market.listings[0].status,
+            TransferListingStatus::InNegotiation
+        );
+        assert_eq!(
+            market.negotiations.get(&negotiation_id).map(|n| &n.status),
+            Some(&NegotiationStatus::Pending),
+        );
     }
 }

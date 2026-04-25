@@ -8,7 +8,9 @@ use crate::transfers::pipeline::{
 };
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
-use crate::{Club, Country, Person, Player, PlayerStatusType, ReputationLevel, StaffPosition, TeamType};
+use crate::{
+    Club, Country, Person, Player, PlayerStatusType, ReputationLevel, StaffPosition, TeamType,
+};
 
 impl PipelineProcessor {
     pub(super) fn is_january_window(date: NaiveDate) -> bool {
@@ -35,24 +37,35 @@ impl PipelineProcessor {
         }
 
         // Rest of window: weekly on Monday
-        ((month >= 6 && month <= 8) || month == 1)
-            && date.weekday() == chrono::Weekday::Mon
+        ((month >= 6 && month <= 8) || month == 1) && date.weekday() == chrono::Weekday::Mon
     }
 
     pub fn transfer_need_reason_text(reason: &TransferNeedReason) -> &'static str {
         match reason {
             TransferNeedReason::FormationGap => "Formation gap — no player for required position",
-            TransferNeedReason::QualityUpgrade => "Quality upgrade — current player below squad level",
+            TransferNeedReason::QualityUpgrade => {
+                "Quality upgrade — current player below squad level"
+            }
             TransferNeedReason::DepthCover => "Squad depth — need backup for position group",
-            TransferNeedReason::SuccessionPlanning => "Succession planning — aging key player needs replacement",
-            TransferNeedReason::DevelopmentSigning => "Development signing — young prospect with high potential",
+            TransferNeedReason::SuccessionPlanning => {
+                "Succession planning — aging key player needs replacement"
+            }
+            TransferNeedReason::DevelopmentSigning => {
+                "Development signing — young prospect with high potential"
+            }
             TransferNeedReason::StaffRecommendation => "Staff recommendation",
             TransferNeedReason::LoanToFillSquad => "Loan to fill squad — cannot afford to buy",
-            TransferNeedReason::ExperiencedHead => "Experienced head — need senior player for leadership",
+            TransferNeedReason::ExperiencedHead => {
+                "Experienced head — need senior player for leadership"
+            }
             TransferNeedReason::SquadPadding => "Squad padding — too few players to compete",
-            TransferNeedReason::CheapReinforcement => "Cheap reinforcement — affordable quality improvement",
+            TransferNeedReason::CheapReinforcement => {
+                "Cheap reinforcement — affordable quality improvement"
+            }
             TransferNeedReason::InjuryCoverLoan => "Injury cover — loan to replace injured player",
-            TransferNeedReason::OpportunisticLoanUpgrade => "Opportunistic loan — player better than current options",
+            TransferNeedReason::OpportunisticLoanUpgrade => {
+                "Opportunistic loan — player better than current options"
+            }
         }
     }
 
@@ -72,8 +85,13 @@ impl PipelineProcessor {
             };
             let ability_label = Self::ability_label(r.assessed_ability);
             let potential_label = Self::ability_label(r.assessed_potential);
-            format!("Scout: {} (ability: {}, potential: {}, confidence: {:.0}%)",
-                rec, ability_label, potential_label, r.confidence * 100.0)
+            format!(
+                "Scout: {} (ability: {}, potential: {}, confidence: {:.0}%)",
+                rec,
+                ability_label,
+                potential_label,
+                r.confidence * 100.0
+            )
         });
 
         match (need_reason, scout_reason) {
@@ -100,7 +118,10 @@ impl PipelineProcessor {
         }
     }
 
-    pub(super) fn find_player_in_country<'a>(country: &'a Country, player_id: u32) -> Option<&'a Player> {
+    pub(super) fn find_player_in_country<'a>(
+        country: &'a Country,
+        player_id: u32,
+    ) -> Option<&'a Player> {
         for club in &country.clubs {
             for team in &club.teams.teams {
                 if let Some(player) = team.players.find(player_id) {
@@ -112,14 +133,22 @@ impl PipelineProcessor {
     }
 
     /// Resolve player full name and selling club name from the country data.
-    pub(super) fn resolve_player_and_club_name(country: &Country, player_id: u32, club_id: u32) -> (String, String) {
-        let player_name = country.clubs.iter()
+    pub(super) fn resolve_player_and_club_name(
+        country: &Country,
+        player_id: u32,
+        club_id: u32,
+    ) -> (String, String) {
+        let player_name = country
+            .clubs
+            .iter()
             .flat_map(|c| c.teams.iter())
             .find_map(|t| t.players.find(player_id))
             .map(|p| p.full_name.to_string())
             .unwrap_or_default();
 
-        let club_name = country.clubs.iter()
+        let club_name = country
+            .clubs
+            .iter()
             .find(|c| c.id == club_id)
             .map(|c| c.name.clone())
             .unwrap_or_default();
@@ -144,7 +173,27 @@ impl PipelineProcessor {
         for club in &country.clubs {
             for team in &club.teams.teams {
                 if let Some(player) = team.players.find(player_id) {
-                    let skill_ability = player.skills.calculate_ability_for_position(player.position());
+                    let skill_ability = player
+                        .skills
+                        .calculate_ability_for_position(player.position());
+                    let club_reputation =
+                        club.teams.main().map(|t| t.reputation.world).unwrap_or(0);
+                    let league_reputation = club
+                        .teams
+                        .main()
+                        .and_then(|t| t.league_id)
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                        .map(|l| l.reputation)
+                        .unwrap_or(0);
+                    let estimated_value =
+                        PlayerValuationCalculator::calculate_value_with_price_level(
+                            player,
+                            date,
+                            country.settings.pricing.price_level,
+                            league_reputation,
+                            club_reputation,
+                        )
+                        .amount;
                     let (contract_months_remaining, salary) = player
                         .contract
                         .as_ref()
@@ -164,7 +213,7 @@ impl PipelineProcessor {
                         position: player.position(),
                         position_group: player.position().position_group(),
                         age: player.age(date),
-                        estimated_value: skill_ability as f64 * 10000.0,
+                        estimated_value,
                         is_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
                         is_loan_listed: player.statuses.get().contains(&PlayerStatusType::Loa),
                         skill_ability,
@@ -242,12 +291,9 @@ impl PipelineProcessor {
             .filter(|s| {
                 s.contract
                     .as_ref()
-                    .map(|c| {
-                        matches!(
-                            c.position,
-                            StaffPosition::Scout | StaffPosition::ChiefScout,
-                        )
-                    })
+                    .map(
+                        |c| matches!(c.position, StaffPosition::Scout | StaffPosition::ChiefScout,),
+                    )
                     .unwrap_or(false)
             })
             .map(|s| s.staff_attributes.data_analysis.judging_player_data)
@@ -288,7 +334,8 @@ impl PipelineProcessor {
         current_skill_ability: u8,
     ) -> u8 {
         // Mental quality score: how much this player's character suggests growth (0.0-1.0)
-        let mental_quality = ((determination + work_rate + composure + anticipation) / 4.0 - 1.0) / 19.0;
+        let mental_quality =
+            ((determination + work_rate + composure + anticipation) / 4.0 - 1.0) / 19.0;
         let mental_factor = mental_quality.clamp(0.0, 1.0);
 
         // Age-based growth window: younger = more room to grow
@@ -324,8 +371,13 @@ impl PipelineProcessor {
         date: NaiveDate,
         price_level: f32,
     ) -> CurrencyValue {
-        let base_value =
-            PlayerValuationCalculator::calculate_value_with_price_level(player, date, price_level, 0, 0);
+        let base_value = PlayerValuationCalculator::calculate_value_with_price_level(
+            player,
+            date,
+            price_level,
+            0,
+            0,
+        );
 
         let multiplier = if club.finance.balance.balance < 0 {
             0.9

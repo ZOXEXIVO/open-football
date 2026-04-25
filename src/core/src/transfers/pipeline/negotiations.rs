@@ -2,7 +2,6 @@ use chrono::NaiveDate;
 use log::debug;
 
 use crate::shared::{Currency, CurrencyValue};
-use crate::SimulatorData;
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::processor::PipelineProcessor;
@@ -11,8 +10,9 @@ use crate::transfers::pipeline::{
     TransferRequest, TransferRequestStatus,
 };
 use crate::transfers::staff_resolver::StaffResolver;
-use crate::utils::FormattingUtils;
 use crate::transfers::TransferWindowManager;
+use crate::utils::FormattingUtils;
+use crate::SimulatorData;
 use crate::{
     ClubPhilosophy, ClubTransferStrategy, Country, Person, PlayerStatusType, ReputationLevel,
     StaffPosition, WageCalculator,
@@ -68,11 +68,16 @@ impl PipelineProcessor {
             }
 
             // Skip clubs that have reached their squad cap (main team only)
-            let max_squad = club.board.season_targets
+            let max_squad = club
+                .board
+                .season_targets
                 .as_ref()
                 .map(|t| t.max_squad_size as usize)
                 .unwrap_or(50);
-            let main_squad = club.teams.teams.first()
+            let main_squad = club
+                .teams
+                .teams
+                .first()
                 .map(|t| t.players.players.len())
                 .unwrap_or(0);
             if main_squad >= max_squad {
@@ -108,11 +113,16 @@ impl PipelineProcessor {
 
             let avg_ability = {
                 let avg = team.players.current_ability_avg();
-                if avg == 0 { 50 } else { avg }
+                if avg == 0 {
+                    50
+                } else {
+                    avg
+                }
             };
 
-            let slots_available =
-                plan.max_concurrent_negotiations.saturating_sub(actual_active) as usize;
+            let slots_available = plan
+                .max_concurrent_negotiations
+                .saturating_sub(actual_active) as usize;
             let mut negotiations_this_club = 0usize;
 
             for shortlist in &plan.shortlists {
@@ -145,7 +155,12 @@ impl PipelineProcessor {
                 // Skip players on loan contracts — they belong to another club
                 // Skip recently signed players — their club has a plan for them
                 let (is_on_loan, is_protected) = Self::find_player_in_country(country, player_id)
-                    .map(|p| (p.is_on_loan(), p.is_transfer_protected(date, current_window)))
+                    .map(|p| {
+                        (
+                            p.is_on_loan(),
+                            p.is_transfer_protected(date, current_window),
+                        )
+                    })
                     .unwrap_or((false, false));
                 if is_on_loan || is_protected {
                     continue;
@@ -212,10 +227,8 @@ impl PipelineProcessor {
                         .map(|t| t.reputation.overall_score())
                         .unwrap_or(0.3);
 
-                    let buying_aggressiveness = buying_aggressiveness_from_rep(
-                        buying_rep_score,
-                        selling_rep_score,
-                    );
+                    let buying_aggressiveness =
+                        buying_aggressiveness_from_rep(buying_rep_score, selling_rep_score);
 
                     let strategy = ClubTransferStrategy {
                         club_id: club.id,
@@ -229,33 +242,39 @@ impl PipelineProcessor {
                         reputation_level: avg_ability as u16,
                     };
 
-                    let asking_price = Self::calculate_asking_price(
-                        player,
-                        selling_club,
-                        date,
-                        price_level,
-                    );
+                    let asking_price =
+                        Self::calculate_asking_price(player, selling_club, date, price_level);
 
                     let actual_asking = if is_loan {
+                        let salary_proxy = player
+                            .contract
+                            .as_ref()
+                            .map(|c| c.salary as f64 * 0.35)
+                            .unwrap_or(0.0);
+                        let loan_fee_rate = if has_option_to_buy { 0.04 } else { 0.07 };
                         CurrencyValue {
-                            amount: FormattingUtils::round_fee(asking_price.amount * 0.1),
+                            amount: FormattingUtils::round_fee(
+                                (asking_price.amount * loan_fee_rate).max(salary_proxy),
+                            ),
                             currency: asking_price.currency.clone(),
                         }
                     } else {
                         asking_price.clone()
                     };
 
-                    let mut offer =
-                        strategy.calculate_initial_offer(player, &actual_asking, date);
+                    let mut offer = strategy.calculate_initial_offer(player, &actual_asking, date);
 
                     // Add appearance fee clause for loans from high-reputation sellers
                     if is_loan {
-                        let selling_rep_level = Self::get_club_reputation_level(country, selling_club_id);
+                        let selling_rep_level =
+                            Self::get_club_reputation_level(country, selling_club_id);
                         match selling_rep_level {
                             ReputationLevel::Elite => {
                                 offer.clauses.push(TransferClause::AppearanceFee(
                                     CurrencyValue {
-                                        amount: FormattingUtils::round_fee(offer.base_fee.amount * 0.30),
+                                        amount: FormattingUtils::round_fee(
+                                            offer.base_fee.amount * 0.30,
+                                        ),
                                         currency: Currency::Usd,
                                     },
                                     10,
@@ -264,7 +283,9 @@ impl PipelineProcessor {
                             ReputationLevel::Continental => {
                                 offer.clauses.push(TransferClause::AppearanceFee(
                                     CurrencyValue {
-                                        amount: FormattingUtils::round_fee(offer.base_fee.amount * 0.20),
+                                        amount: FormattingUtils::round_fee(
+                                            offer.base_fee.amount * 0.20,
+                                        ),
                                         currency: Currency::Usd,
                                     },
                                     15,
@@ -274,18 +295,14 @@ impl PipelineProcessor {
                         }
                     }
 
-                    // LoanWithOption: record a synthetic appearance-fee clause
-                    // acting as the option-trigger price. 60% of expected value
-                    // after 20 appearances — a crude but functional option.
                     if has_option_to_buy {
                         let option_price = FormattingUtils::round_fee(asking_price.amount * 0.7);
-                        offer.clauses.push(TransferClause::AppearanceFee(
-                            CurrencyValue {
+                        offer
+                            .clauses
+                            .push(TransferClause::LoanOptionToBuy(CurrencyValue {
                                 amount: option_price,
                                 currency: Currency::Usd,
-                            },
-                            20,
-                        ));
+                            }));
                     }
 
                     let offered_annual_wage = WageCalculator::expected_annual_wage(
@@ -300,7 +317,9 @@ impl PipelineProcessor {
                         .negotiator
                         .map(|s| s.id);
 
-                    let scout_report = plan.scouting_reports.iter()
+                    let scout_report = plan
+                        .scouting_reports
+                        .iter()
                         .find(|r| r.player_id == player_id);
 
                     let reason = Self::build_transfer_reason(request, scout_report);
@@ -334,7 +353,8 @@ impl PipelineProcessor {
         for action in actions {
             let selling_rep = Self::get_club_reputation(country, action.selling_club_id);
             let buying_rep = Self::get_club_reputation(country, action.club_id);
-            let (p_age, p_ambition) = Self::get_player_negotiation_data(country, action.player_id, date);
+            let (p_age, p_ambition) =
+                Self::get_player_negotiation_data(country, action.player_id, date);
 
             let has_listing = country
                 .transfer_market
@@ -466,11 +486,10 @@ impl PipelineProcessor {
         // Philosophy-based overrides
         match philosophy {
             ClubPhilosophy::DevelopAndSell => {
-                // Prefer loans for young players, never buy players > 28
+                // Develop-and-sell clubs buy young assets and avoid expensive
+                // older purchases. Loans are fallback cover, not the default
+                // strategy for prospects.
                 if age > 28 {
-                    return TransferApproach::Loan;
-                }
-                if age < 23 {
                     return TransferApproach::Loan;
                 }
             }
@@ -480,7 +499,11 @@ impl PipelineProcessor {
             }
             ClubPhilosophy::LoanFocused => {
                 // Always prefer loan unless fee < 50k
-                let affordability = if estimated_fee > 0.0 { budget / estimated_fee } else { 10.0 };
+                let affordability = if estimated_fee > 0.0 {
+                    budget / estimated_fee
+                } else {
+                    10.0
+                };
                 if estimated_fee >= 50_000.0 || affordability < 0.8 {
                     return TransferApproach::Loan;
                 }
@@ -543,7 +566,7 @@ impl PipelineProcessor {
 
         // SignToCompete: accept higher fees, lower affordability thresholds
         if *philosophy == ClubPhilosophy::SignToCompete {
-            return if affordability >= 0.2 {
+            return if affordability >= 0.75 || (is_critical && affordability >= 0.55) {
                 TransferApproach::PermanentTransfer
             } else {
                 TransferApproach::LoanWithOption
@@ -680,8 +703,7 @@ impl PipelineProcessor {
                         .find_mut_by_position(StaffPosition::Manager)
                     {
                         mgr.job_satisfaction =
-                            (mgr.job_satisfaction + manager_satisfaction_hit)
-                                .clamp(0.0, 100.0);
+                            (mgr.job_satisfaction + manager_satisfaction_hit).clamp(0.0, 100.0);
                     }
                 }
             }
@@ -709,11 +731,13 @@ impl PipelineProcessor {
             }
 
             // Staff recommendations
-            plan.staff_recommendations.retain(|r| r.player_id != player_id);
+            plan.staff_recommendations
+                .retain(|r| r.player_id != player_id);
 
             // Loan-out candidates: a free-agent / moved player is no longer
             // at this club's disposal to be loaned out.
-            plan.loan_out_candidates.retain(|c| c.player_id != player_id);
+            plan.loan_out_candidates
+                .retain(|c| c.player_id != player_id);
         }
     }
 
@@ -777,13 +801,21 @@ impl PipelineProcessor {
         if let Some(country) = data.country(country_id) {
             for club in &country.clubs {
                 let plan = &club.transfer_plan;
-                if !plan.initialized || !plan.can_start_negotiation() { continue; }
+                if !plan.initialized || !plan.can_start_negotiation() {
+                    continue;
+                }
 
-                let actual_active = country.transfer_market.active_negotiation_count_for_club(club.id);
-                if actual_active >= plan.max_concurrent_negotiations { continue; }
+                let actual_active = country
+                    .transfer_market
+                    .active_negotiation_count_for_club(club.id);
+                if actual_active >= plan.max_concurrent_negotiations {
+                    continue;
+                }
 
                 for shortlist in &plan.shortlists {
-                    if shortlist.has_pursuing_candidate() || shortlist.all_exhausted() { continue; }
+                    if shortlist.has_pursuing_candidate() || shortlist.all_exhausted() {
+                        continue;
+                    }
 
                     let candidate = match shortlist.current_candidate() {
                         Some(c) if c.status == ShortlistCandidateStatus::Available => c,
@@ -791,10 +823,16 @@ impl PipelineProcessor {
                     };
 
                     // Only process if player is NOT in the local country
-                    let is_local = Self::find_player_in_country(country, candidate.player_id).is_some();
-                    if is_local { continue; }
+                    let is_local =
+                        Self::find_player_in_country(country, candidate.player_id).is_some();
+                    if is_local {
+                        continue;
+                    }
 
-                    if country.transfer_market.has_active_negotiation_for(candidate.player_id, club.id) {
+                    if country
+                        .transfer_market
+                        .has_active_negotiation_for(candidate.player_id, club.id)
+                    {
                         continue;
                     }
 
@@ -807,7 +845,9 @@ impl PipelineProcessor {
             }
         }
 
-        if candidates.is_empty() { return; }
+        if candidates.is_empty() {
+            return;
+        }
 
         // Pass 2: Resolve — find each player globally, compute offers
         struct ResolvedNeg {
@@ -841,64 +881,142 @@ impl PipelineProcessor {
             let mut found = None;
             for continent in &data.continents {
                 for country in &continent.countries {
-                    if country.id == country_id { continue; }
+                    if country.id == country_id {
+                        continue;
+                    }
                     for club in &country.clubs {
                         if club.teams.contains_player(cand.player_id) {
-                            found = Some((country.id, club.id, country.settings.pricing.price_level, country.continent_id, country.code.clone()));
+                            found = Some((
+                                country.id,
+                                club.id,
+                                country.settings.pricing.price_level,
+                                country.continent_id,
+                                country.code.clone(),
+                            ));
                             break;
                         }
                     }
-                    if found.is_some() { break; }
+                    if found.is_some() {
+                        break;
+                    }
                 }
-                if found.is_some() { break; }
+                if found.is_some() {
+                    break;
+                }
             }
 
-            let (sell_country_id, sell_club_id, sell_price_level, sell_continent_id, sell_country_code) = match found {
+            let (
+                sell_country_id,
+                sell_club_id,
+                sell_price_level,
+                sell_continent_id,
+                sell_country_code,
+            ) = match found {
                 Some(v) => v,
                 None => continue,
             };
 
-            let sell_country = match data.country(sell_country_id) { Some(c) => c, None => continue };
-            let player = match Self::find_player_in_country(sell_country, cand.player_id) { Some(p) => p, None => continue };
-            if player.is_on_loan() { continue; }
-            let sell_window = TransferWindowManager::new().current_window_dates(sell_country_id, date);
-            if player.is_transfer_protected(date, sell_window) { continue; }
+            let sell_country = match data.country(sell_country_id) {
+                Some(c) => c,
+                None => continue,
+            };
+            let player = match Self::find_player_in_country(sell_country, cand.player_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            if player.is_on_loan() {
+                continue;
+            }
+            let sell_window =
+                TransferWindowManager::new().current_window_dates(sell_country_id, date);
+            if player.is_transfer_protected(date, sell_window) {
+                continue;
+            }
 
-            let sell_club = match sell_country.clubs.iter().find(|c| c.id == sell_club_id) { Some(c) => c, None => continue };
-            let asking_price = Self::calculate_asking_price(player, sell_club, date, sell_price_level);
+            let sell_club = match sell_country.clubs.iter().find(|c| c.id == sell_club_id) {
+                Some(c) => c,
+                None => continue,
+            };
+            let asking_price =
+                Self::calculate_asking_price(player, sell_club, date, sell_price_level);
             let player_age = player.age(date);
             let player_ambition = player.skills.mental.determination;
             let player_name = player.full_name.to_string();
             let selling_club_name = sell_club.name.clone();
 
-            let selling_rep = sell_club.teams.teams.first()
-                .map(|t| t.reputation.world as f32 / 10000.0).unwrap_or(0.3);
+            let selling_rep = sell_club
+                .teams
+                .teams
+                .first()
+                .map(|t| t.reputation.world as f32 / 10000.0)
+                .unwrap_or(0.3);
 
-            let buy_country = match data.country(country_id) { Some(c) => c, None => continue };
-            let buy_club = match buy_country.clubs.iter().find(|c| c.id == cand.buying_club_id) { Some(c) => c, None => continue };
+            let buy_country = match data.country(country_id) {
+                Some(c) => c,
+                None => continue,
+            };
+            let buy_club = match buy_country
+                .clubs
+                .iter()
+                .find(|c| c.id == cand.buying_club_id)
+            {
+                Some(c) => c,
+                None => continue,
+            };
 
-            let buying_rep = buy_club.teams.teams.first()
-                .map(|t| t.reputation.world as f32 / 10000.0).unwrap_or(0.3);
-            let rep_level = buy_club.teams.teams.first()
-                .map(|t| t.reputation.level()).unwrap_or(ReputationLevel::Amateur);
-            let budget = buy_club.finance.transfer_budget.as_ref()
+            let buying_rep = buy_club
+                .teams
+                .teams
+                .first()
+                .map(|t| t.reputation.world as f32 / 10000.0)
+                .unwrap_or(0.3);
+            let rep_level = buy_club
+                .teams
+                .teams
+                .first()
+                .map(|t| t.reputation.level())
+                .unwrap_or(ReputationLevel::Amateur);
+            let budget = buy_club
+                .finance
+                .transfer_budget
+                .as_ref()
                 .map(|b| b.amount)
                 .unwrap_or_else(|| (buy_club.finance.balance.balance.max(0) as f64) * 0.3);
 
-            let request = buy_club.transfer_plan.transfer_requests.iter()
+            let request = buy_club
+                .transfer_plan
+                .transfer_requests
+                .iter()
                 .find(|r| r.id == cand.shortlist_request_id);
 
             let approach = Self::determine_transfer_approach(
-                &rep_level, budget, asking_price.amount, request,
-                sell_country, cand.player_id, date,
-                buy_club.finance.balance.balance, &buy_club.philosophy,
+                &rep_level,
+                budget,
+                asking_price.amount,
+                request,
+                sell_country,
+                cand.player_id,
+                date,
+                buy_club.finance.balance.balance,
+                &buy_club.philosophy,
             );
 
             let is_loan = !matches!(approach, TransferApproach::PermanentTransfer);
             let has_option_to_buy = matches!(approach, TransferApproach::LoanWithOption);
 
             let actual_asking = if is_loan {
-                CurrencyValue { amount: FormattingUtils::round_fee(asking_price.amount * 0.1), currency: asking_price.currency.clone() }
+                let salary_proxy = player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.salary as f64 * 0.35)
+                    .unwrap_or(0.0);
+                let loan_fee_rate = if has_option_to_buy { 0.04 } else { 0.07 };
+                CurrencyValue {
+                    amount: FormattingUtils::round_fee(
+                        (asking_price.amount * loan_fee_rate).max(salary_proxy),
+                    ),
+                    currency: asking_price.currency.clone(),
+                }
             } else {
                 asking_price.clone()
             };
@@ -909,7 +1027,11 @@ impl PipelineProcessor {
                 .first()
                 .map(|t| {
                     let avg = t.players.current_ability_avg();
-                    if avg == 0 { 50 } else { avg }
+                    if avg == 0 {
+                        50
+                    } else {
+                        avg
+                    }
                 })
                 .unwrap_or(50);
 
@@ -924,7 +1046,10 @@ impl PipelineProcessor {
 
             let strategy = ClubTransferStrategy {
                 club_id: cand.buying_club_id,
-                budget: Some(CurrencyValue { amount: budget, currency: Currency::Usd }),
+                budget: Some(CurrencyValue {
+                    amount: budget,
+                    currency: Currency::Usd,
+                }),
                 selling_willingness: 0.5,
                 buying_aggressiveness: buying_aggressiveness_from_rep(buying_rep, selling_rep),
                 target_positions: vec![player.position()],
@@ -935,42 +1060,82 @@ impl PipelineProcessor {
 
             if has_option_to_buy {
                 let option_price = FormattingUtils::round_fee(asking_price.amount * 0.7);
-                offer.clauses.push(TransferClause::AppearanceFee(
-                    CurrencyValue { amount: option_price, currency: Currency::Usd },
-                    20,
-                ));
+                offer
+                    .clauses
+                    .push(TransferClause::LoanOptionToBuy(CurrencyValue {
+                        amount: option_price,
+                        currency: Currency::Usd,
+                    }));
             }
 
             let offered_annual_wage = WageCalculator::expected_annual_wage(
-                player, player_age, buying_rep, buying_league_reputation,
+                player,
+                player_age,
+                buying_rep,
+                buying_league_reputation,
             );
 
-            let reason = if is_loan { "Loan signing".to_string() } else { "Transfer signing".to_string() };
+            let reason = if is_loan {
+                "Loan signing".to_string()
+            } else {
+                "Transfer signing".to_string()
+            };
 
             resolved.push(ResolvedNeg {
-                buying_club_id: cand.buying_club_id, selling_country_id: sell_country_id,
-                selling_continent_id: sell_continent_id, selling_country_code: sell_country_code,
+                buying_club_id: cand.buying_club_id,
+                selling_country_id: sell_country_id,
+                selling_continent_id: sell_continent_id,
+                selling_country_code: sell_country_code,
                 selling_club_id: sell_club_id,
-                player_id: cand.player_id, is_loan, has_option_to_buy, offer, reason, shortlist_request_id: cand.shortlist_request_id,
-                selling_rep, buying_rep, player_age, player_ambition, asking_price, player_name, selling_club_name,
+                player_id: cand.player_id,
+                is_loan,
+                has_option_to_buy,
+                offer,
+                reason,
+                shortlist_request_id: cand.shortlist_request_id,
+                selling_rep,
+                buying_rep,
+                player_age,
+                player_ambition,
+                asking_price,
+                player_name,
+                selling_club_name,
                 player_sold_from: player.sold_from.clone(),
-                offered_annual_wage, buying_league_reputation,
+                offered_annual_wage,
+                buying_league_reputation,
             });
         }
 
         // Pass 3: Write — create listings and negotiations
         for action in resolved {
-            let country = match data.country_mut(country_id) { Some(c) => c, None => continue };
+            let country = match data.country_mut(country_id) {
+                Some(c) => c,
+                None => continue,
+            };
 
             let listing = TransferListing::new(
-                action.player_id, action.selling_club_id, 0, action.asking_price, date,
-                if action.is_loan { TransferListingType::Loan } else { TransferListingType::Transfer },
+                action.player_id,
+                action.selling_club_id,
+                0,
+                action.asking_price,
+                date,
+                if action.is_loan {
+                    TransferListingType::Loan
+                } else {
+                    TransferListingType::Transfer
+                },
             );
             country.transfer_market.add_listing(listing);
 
             if let Some(neg_id) = country.transfer_market.start_negotiation(
-                action.player_id, action.buying_club_id, action.offer, date,
-                action.selling_rep, action.buying_rep, action.player_age, action.player_ambition,
+                action.player_id,
+                action.buying_club_id,
+                action.offer,
+                date,
+                action.selling_rep,
+                action.buying_rep,
+                action.player_age,
+                action.player_ambition,
             ) {
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                     negotiation.is_loan = action.is_loan;
@@ -986,17 +1151,28 @@ impl PipelineProcessor {
                     negotiation.buying_league_reputation = action.buying_league_reputation;
                 }
 
-                if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.buying_club_id) {
+                if let Some(club) = country
+                    .clubs
+                    .iter_mut()
+                    .find(|c| c.id == action.buying_club_id)
+                {
                     let plan = &mut club.transfer_plan;
-                    if let Some(shortlist) = plan.shortlists.iter_mut()
-                        .find(|s| s.transfer_request_id == action.shortlist_request_id) {
+                    if let Some(shortlist) = plan
+                        .shortlists
+                        .iter_mut()
+                        .find(|s| s.transfer_request_id == action.shortlist_request_id)
+                    {
                         if let Some(candidate) = shortlist.current_candidate_mut() {
                             if candidate.player_id == action.player_id {
                                 candidate.status = ShortlistCandidateStatus::CurrentlyPursuing;
                             }
                         }
                     }
-                    if let Some(req) = plan.transfer_requests.iter_mut().find(|r| r.id == action.shortlist_request_id) {
+                    if let Some(req) = plan
+                        .transfer_requests
+                        .iter_mut()
+                        .find(|r| r.id == action.shortlist_request_id)
+                    {
                         req.status = TransferRequestStatus::Negotiating;
                     }
                     plan.active_negotiation_count += 1;

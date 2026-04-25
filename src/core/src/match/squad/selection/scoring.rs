@@ -32,7 +32,9 @@ impl ScoringEngine {
     /// Philosophy-specific selection tilt. Small magnitudes so philosophy
     /// biases but doesn't swamp real quality signals.
     pub fn philosophy_bonus(&self, player: &Player, date: NaiveDate) -> f32 {
-        let Some(phil) = self.philosophy.as_ref() else { return 0.0 };
+        let Some(phil) = self.philosophy.as_ref() else {
+            return 0.0;
+        };
         let age = DateUtils::age(player.birth_date, date);
         let is_loan_in = player.contract_loan.is_some();
         match phil {
@@ -47,7 +49,11 @@ impl ScoringEngine {
                 }
             }
             ClubPhilosophy::LoanFocused => {
-                if is_loan_in { 0.9 } else { 0.0 }
+                if is_loan_in {
+                    0.9
+                } else {
+                    0.0
+                }
             }
             ClubPhilosophy::SignToCompete => {
                 // Experienced heads get the nod; youngsters are backup.
@@ -73,8 +79,7 @@ impl ScoringEngine {
             (t.finishing + t.dribbling + t.crossing + t.first_touch + t.technique + t.long_shots)
                 / 6.0;
         let def_tech = (t.tackling + t.marking + t.heading + t.passing) / 4.0;
-        let tech_score =
-            atk_tech * lens.attacking_focus + def_tech * (1.0 - lens.attacking_focus);
+        let tech_score = atk_tech * lens.attacking_focus + def_tech * (1.0 - lens.attacking_focus);
 
         // Mental composite
         let creative_mental =
@@ -102,8 +107,7 @@ impl ScoringEngine {
             .map(|p| p.level)
             .max()
             .unwrap_or(0) as f32;
-        let position_contribution =
-            position_level * (1.0 - self.profile.tactical_blindness * 0.5);
+        let position_contribution = position_level * (1.0 - self.profile.tactical_blindness * 0.5);
 
         let base = skill_composite * 0.75 + position_contribution * 0.25;
 
@@ -202,7 +206,7 @@ impl ScoringEngine {
         let over = load - FATIGUE_LOAD_THRESHOLD;
         let span = (FATIGUE_LOAD_DANGER - FATIGUE_LOAD_THRESHOLD).max(1.0);
         let t = (over / span).min(2.0); // allow overshoot beyond danger
-        // Risk-tolerant coaches shrug off load; conservative coaches rotate early.
+                                        // Risk-tolerant coaches shrug off load; conservative coaches rotate early.
         let scale = 1.0 - self.profile.risk_tolerance * 0.4;
         -(t * 3.0) * scale
     }
@@ -230,8 +234,7 @@ impl ScoringEngine {
 
         let current_rep =
             (player.player_attributes.current_reputation as f32 / 3000.0).clamp(0.0, 1.0);
-        let world_rep =
-            (player.player_attributes.world_reputation as f32 / 1200.0).clamp(0.0, 1.0);
+        let world_rep = (player.player_attributes.world_reputation as f32 / 1200.0).clamp(0.0, 1.0);
         let intl_factor =
             (player.player_attributes.international_apps as f32 / 50.0).clamp(0.0, 1.0);
 
@@ -279,7 +282,8 @@ impl ScoringEngine {
         let days_at_club = (date - transfer_date).num_days().max(0) as f32;
         let appearances = (player.statistics.played + player.statistics.played_subs) as f32;
 
-        let rep_factor = (player.player_attributes.world_reputation as f32 / 1200.0).clamp(0.0, 1.0);
+        let rep_factor =
+            (player.player_attributes.world_reputation as f32 / 1200.0).clamp(0.0, 1.0);
         let max_penalty = 3.5 * (1.0 - rep_factor * 0.77);
         let apps_to_integrate = 3.0 + (1.0 - rep_factor) * 5.0;
 
@@ -373,11 +377,17 @@ impl ScoringEngine {
 
         score += helpers::tactical_style_bonus(player, slot_position, tactics)
             * (0.05 * (1.0 - p.tactical_blindness * 0.5));
+        score += helpers::side_foot_bonus(player, slot_position)
+            * (0.6 * (1.0 - p.tactical_blindness * 0.3));
 
         let rep = self.reputation_score(player);
         let rel = self.relationship_score(player, staff);
         score += rep;
-        let rel_dampening = if rel < 0.0 { 1.0 } else { (1.0 - rep * 0.15).max(0.3) };
+        let rel_dampening = if rel < 0.0 {
+            1.0
+        } else {
+            (1.0 - rep * 0.15).max(0.3)
+        };
         score += rel * rel_dampening;
 
         score -= Self::newcomer_penalty(player, date, p);
@@ -417,7 +427,9 @@ impl ScoringEngine {
     /// the plan; risk-takers override it on form.
     pub fn squad_status_bonus(&self, player: &Player) -> f32 {
         use crate::club::PlayerSquadStatus;
-        let Some(contract) = player.contract.as_ref() else { return 0.0 };
+        let Some(contract) = player.contract.as_ref() else {
+            return 0.0;
+        };
         let raw = match contract.squad_status {
             PlayerSquadStatus::KeyPlayer => 1.8,
             PlayerSquadStatus::FirstTeamRegular => 1.0,
@@ -460,6 +472,40 @@ impl ScoringEngine {
         (rest_bonus + minutes_bonus) * rotation_factor
     }
 
+    /// Risk of asking a player to start while physically fragile. This is
+    /// separate from the hard availability gate: managers will sometimes
+    /// risk a tired star in a final, but usually protect them in normal games.
+    pub fn injury_risk_penalty(
+        &self,
+        player: &Player,
+        match_importance: f32,
+        is_friendly: bool,
+    ) -> f32 {
+        if is_friendly {
+            return 0.0;
+        }
+
+        let condition = player.player_attributes.condition_percentage() as f32;
+        let fitness = (player.player_attributes.fitness as f32 / 10000.0).clamp(0.0, 1.0);
+        let natural_fitness = (player.skills.physical.natural_fitness / 20.0).clamp(0.0, 1.0);
+        let load_7 = (player.load.minutes_last_7 / FATIGUE_LOAD_DANGER).clamp(0.0, 1.8);
+        let matches_14 = player.load.matches_last_14() as f32;
+
+        let condition_risk = ((65.0 - condition) / 65.0).clamp(0.0, 1.0);
+        let fitness_risk = 1.0 - fitness;
+        let durability_risk = 1.0 - natural_fitness;
+        let match_density_risk = ((matches_14 - 3.0) / 3.0).clamp(0.0, 1.0);
+
+        let raw = condition_risk * 2.4
+            + fitness_risk * 1.4
+            + durability_risk * 0.8
+            + load_7 * 1.6
+            + match_density_risk * 1.2;
+
+        let importance_dampener = (1.15 - match_importance).clamp(0.25, 1.10);
+        raw * importance_dampener * (1.0 - self.profile.risk_tolerance * 0.35)
+    }
+
     /// Overall quality score (bench selection)
     pub fn overall_quality(
         &self,
@@ -490,7 +536,11 @@ impl ScoringEngine {
         let rep = self.reputation_score(player);
         let rel = self.relationship_score(player, staff);
         score += rep;
-        let rel_dampening = if rel < 0.0 { 1.0 } else { (1.0 - rep * 0.15).max(0.3) };
+        let rel_dampening = if rel < 0.0 {
+            1.0
+        } else {
+            (1.0 - rep * 0.15).max(0.3)
+        };
         score += rel * rel_dampening;
 
         let best_pos = helpers::best_tactical_position(player, tactics);
@@ -525,7 +575,11 @@ impl ScoringEngine {
         // A good coach includes them on the bench to sub in when possible.
         let total_games = (player.statistics.played + player.statistics.played_subs) as f32;
         if total_games < 5.0 {
-            let loan_factor = if player.contract_loan.is_some() { 1.3 } else { 1.0 };
+            let loan_factor = if player.contract_loan.is_some() {
+                1.3
+            } else {
+                1.0
+            };
             let need_minutes_bonus = (5.0 - total_games) * 0.4 * loan_factor;
             score += need_minutes_bonus;
         }
@@ -554,15 +608,10 @@ impl ScoringEngine {
     pub fn goalkeeper_score(&self, player: &Player, staff: &Staff, is_friendly: bool) -> f32 {
         let ca = player.player_attributes.current_ability as f32 / 10.0;
         let gk_q = self.gk_perceived_quality(player);
-        let gk_level = player
-            .positions
-            .get_level(PlayerPositionType::Goalkeeper) as f32;
+        let gk_level = player.positions.get_level(PlayerPositionType::Goalkeeper) as f32;
         let readiness = self.match_readiness(player);
 
-        let mut score = ca * 2.0
-            + gk_q * 1.0
-            + gk_level * 0.10
-            + readiness * 0.20;
+        let mut score = ca * 2.0 + gk_q * 1.0 + gk_level * 0.10 + readiness * 0.20;
 
         score -= self.condition_floor_penalty(player, is_friendly);
 

@@ -1,17 +1,19 @@
-use std::collections::HashMap;
+use super::LeagueResult;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::{MatchOutcome, MatchParticipation};
 use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
 };
-use crate::r#match::player::statistics::MatchStatisticType;
 use crate::club::team::team_talks::{apply_team_talk, MatchPhase, TeamTalkContext, TeamTalkTone};
 use crate::club::StaffPosition;
-use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, EUROPA_LEAGUE_ID, CONFERENCE_LEAGUE_ID};
+use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, EUROPA_LEAGUE_ID};
 use crate::r#match::engine::result::MatchResultRaw;
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult};
 use crate::simulator::SimulatorData;
-use super::LeagueResult;
+use crate::transfers::pipeline::KnownPlayerMemory;
+use crate::transfers::window::PlayerValuationCalculator;
+use std::collections::HashMap;
 
 impl LeagueResult {
     pub(super) fn process_match_events(result: &mut MatchResult, data: &mut SimulatorData) {
@@ -58,7 +60,11 @@ impl LeagueResult {
 
         // Per-player match reaction — Player owns all bookkeeping.
         for side in [&details.left_team_players, &details.right_team_players] {
-            let conceded = if side.team_id == home_team_id { away_goals } else { home_goals };
+            let conceded = if side.team_id == home_team_id {
+                away_goals
+            } else {
+                home_goals
+            };
             let (team_won, team_lost) = if side.team_id == home_team_id {
                 (home_goals > away_goals, home_goals < away_goals)
             } else {
@@ -81,6 +87,15 @@ impl LeagueResult {
             );
         }
 
+        Self::record_match_scouting_memory(
+            details,
+            data,
+            is_friendly,
+            now_date,
+            home_team_id,
+            away_team_id,
+        );
+
         if !is_friendly {
             Self::process_loan_match_fees(details, data);
             Self::process_contract_bonuses(result, details, data);
@@ -92,6 +107,138 @@ impl LeagueResult {
 
         if let Some(details_mut) = &mut result.details {
             details_mut.player_of_the_match_id = best_player_id;
+        }
+    }
+
+    /// Clubs learn about players who appear in their domestic football.
+    /// This is especially important for foreign loanees: once they return
+    /// home, active country-local scouting can no longer see them, but clubs
+    /// should still remember the player by id and profile.
+    fn record_match_scouting_memory(
+        details: &MatchResultRaw,
+        data: &mut SimulatorData,
+        is_friendly: bool,
+        date: chrono::NaiveDate,
+        home_team_id: u32,
+        away_team_id: u32,
+    ) {
+        struct MemoryAction {
+            country_id: u32,
+            current_club_id: u32,
+            memory: KnownPlayerMemory,
+        }
+
+        let mut actions: Vec<MemoryAction> = Vec::new();
+
+        for side in [&details.left_team_players, &details.right_team_players] {
+            let current_club_id = match data.team(side.team_id).map(|t| t.club_id) {
+                Some(id) => id,
+                None => continue,
+            };
+            let current_country_id = match data.country_by_club(current_club_id).map(|c| c.id) {
+                Some(id) => id,
+                None => continue,
+            };
+            let current_price_level = data
+                .country(current_country_id)
+                .map(|c| c.settings.pricing.price_level)
+                .unwrap_or(1.0);
+
+            let appeared: Vec<u32> = side
+                .main
+                .iter()
+                .copied()
+                .chain(side.substitutes_used.iter().copied())
+                .collect();
+
+            for player_id in appeared {
+                let player = match data.player(player_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+
+                let foreign_loan_exposure = player
+                    .contract_loan
+                    .as_ref()
+                    .and_then(|loan| loan.loan_from_club_id)
+                    .and_then(|parent_club_id| {
+                        data.country_by_club(parent_club_id)
+                            .map(|parent_country| parent_country.id != current_country_id)
+                    })
+                    .unwrap_or(false);
+
+                // Regular domestic players are discovered by the normal
+                // scouting pipeline. This memory path is for players whose
+                // stay in the country is temporary or otherwise easy to lose.
+                if !foreign_loan_exposure {
+                    continue;
+                }
+
+                let stats = match details.player_stats.get(&player_id) {
+                    Some(stats) => stats,
+                    None => continue,
+                };
+                let skill_ability = player
+                    .skills
+                    .calculate_ability_for_position(player.position());
+                let rating_bonus = if stats.match_rating >= 7.5 {
+                    5
+                } else if stats.match_rating >= 7.0 {
+                    3
+                } else if stats.match_rating >= 6.5 {
+                    1
+                } else if stats.match_rating < 5.5 {
+                    -3
+                } else {
+                    0
+                };
+                let assessed_ability = (skill_ability as i32 + rating_bonus).clamp(1, 200) as u8;
+                let assessed_potential = player
+                    .player_attributes
+                    .potential_ability
+                    .max(assessed_ability);
+                let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
+                    player,
+                    date,
+                    current_price_level,
+                    0,
+                    0,
+                )
+                .amount;
+
+                actions.push(MemoryAction {
+                    country_id: current_country_id,
+                    current_club_id,
+                    memory: KnownPlayerMemory {
+                        player_id,
+                        last_known_club_id: current_club_id,
+                        last_known_country_id: current_country_id,
+                        position: player.position(),
+                        position_group: player.position().position_group(),
+                        assessed_ability,
+                        assessed_potential,
+                        confidence: if is_friendly { 0.28 } else { 0.48 },
+                        estimated_fee: estimated_value,
+                        last_seen: date,
+                        official_appearances_seen: if is_friendly { 0 } else { 1 },
+                        friendly_appearances_seen: if is_friendly { 1 } else { 0 },
+                    },
+                });
+            }
+        }
+
+        for action in actions {
+            if let Some(country) = data.country_mut(action.country_id) {
+                for club in &mut country.clubs {
+                    if club.id == action.current_club_id
+                        || club.teams.iter().any(|team| team.id == home_team_id)
+                        || club.teams.iter().any(|team| team.id == away_team_id)
+                    {
+                        club.transfer_plan
+                            .remember_known_player(action.memory.clone());
+                    }
+                }
+            }
         }
     }
 
@@ -141,7 +288,14 @@ impl LeagueResult {
         let date = data.date.date();
 
         if let Some(team) = data.team_mut(home_team_id) {
-            team.on_match_completed(home_outcome, away_rep, comp.clone(), home_pos, total_teams, date);
+            team.on_match_completed(
+                home_outcome,
+                away_rep,
+                comp.clone(),
+                home_pos,
+                total_teams,
+                date,
+            );
         }
         if let Some(team) = data.team_mut(away_team_id) {
             team.on_match_completed(away_outcome, home_rep, comp, away_pos, total_teams, date);
@@ -182,8 +336,16 @@ impl LeagueResult {
         let away_goals = result.score.away_team.get();
         let home_team_id = result.score.home_team.team_id;
         let left_team_id = details.left_team_players.team_id;
-        let left_conceded = if left_team_id == home_team_id { away_goals } else { home_goals };
-        let right_conceded = if left_team_id == home_team_id { home_goals } else { away_goals };
+        let left_conceded = if left_team_id == home_team_id {
+            away_goals
+        } else {
+            home_goals
+        };
+        let right_conceded = if left_team_id == home_team_id {
+            home_goals
+        } else {
+            away_goals
+        };
 
         // Pass 1 (read): compute (club_id, total_payout) aggregates without holding
         // a mutable borrow of a club while reading another player.
@@ -209,17 +371,17 @@ impl LeagueResult {
                 let is_gk = player.position().is_goalkeeper();
                 let on_left = details.left_team_players.main.contains(pid);
                 let on_right = details.right_team_players.main.contains(pid);
-                let gk_clean_sheet = is_gk && (
-                    (on_left && left_conceded == 0) ||
-                    (on_right && right_conceded == 0)
-                );
+                let gk_clean_sheet =
+                    is_gk && ((on_left && left_conceded == 0) || (on_right && right_conceded == 0));
 
                 let goals = goals_per_player.get(pid).copied().unwrap_or(0) as i64;
 
                 let mut payout: i64 = 0;
                 for bonus in &contract.bonuses {
                     let v = bonus.value as i64;
-                    if v <= 0 { continue; }
+                    if v <= 0 {
+                        continue;
+                    }
                     match bonus.bonus_type {
                         ContractBonusType::AppearanceFee => payout += v,
                         ContractBonusType::GoalFee => payout += v * goals,
@@ -300,7 +462,11 @@ impl LeagueResult {
                 .and_then(|i| i.get_player_location(*pids.first().unwrap()))
                 .map(|(_, _, c, _)| c)
                 .unwrap_or(0);
-            sides.push(SideTalk { club_id, player_ids: pids, delta });
+            sides.push(SideTalk {
+                club_id,
+                player_ids: pids,
+                delta,
+            });
         }
 
         for side in sides {
@@ -339,7 +505,10 @@ impl LeagueResult {
         // Collect fee transfers: (parent_club_id, borrowing_club_id, fee)
         let mut fee_transfers: Vec<(u32, u32, u32)> = Vec::new();
 
-        let all_players = details.left_team_players.main.iter()
+        let all_players = details
+            .left_team_players
+            .main
+            .iter()
             .chain(details.left_team_players.substitutes_used.iter())
             .chain(details.right_team_players.main.iter())
             .chain(details.right_team_players.substitutes_used.iter());
@@ -347,9 +516,11 @@ impl LeagueResult {
         for &player_id in all_players {
             if let Some(player) = data.player(player_id) {
                 if let Some(ref loan) = player.contract_loan {
-                    if let (Some(fee), Some(parent_id), Some(borrowing_id)) =
-                        (loan.loan_match_fee, loan.loan_from_club_id, loan.loan_to_club_id)
-                    {
+                    if let (Some(fee), Some(parent_id), Some(borrowing_id)) = (
+                        loan.loan_match_fee,
+                        loan.loan_from_club_id,
+                        loan.loan_to_club_id,
+                    ) {
                         if fee > 0 {
                             fee_transfers.push((parent_id, borrowing_id, fee));
                         }
@@ -466,7 +637,9 @@ fn pick_player_of_the_match(
     let mut best_rating = 0.0_f32;
     let mut best = None;
     for (player_id, stats) in &details.player_stats {
-        let r = *effective_ratings.get(player_id).unwrap_or(&stats.match_rating);
+        let r = *effective_ratings
+            .get(player_id)
+            .unwrap_or(&stats.match_rating);
         if r > best_rating {
             best_rating = r;
             best = Some(*player_id);
@@ -475,11 +648,7 @@ fn pick_player_of_the_match(
     best
 }
 
-fn reputation_weights(
-    result: &MatchResult,
-    is_cup: bool,
-    data: &SimulatorData,
-) -> (f32, f32) {
+fn reputation_weights(result: &MatchResult, is_cup: bool, data: &SimulatorData) -> (f32, f32) {
     if result.league_id == CHAMPIONS_LEAGUE_ID {
         (1.5, 1.2)
     } else if result.league_id == EUROPA_LEAGUE_ID {
@@ -519,7 +688,11 @@ fn dispatch_match_outcomes(
     let all_ids: Vec<(u32, MatchParticipation)> = starter_ids
         .iter()
         .map(|id| (*id, MatchParticipation::Starter))
-        .chain(sub_ids.iter().map(|id| (*id, MatchParticipation::Substitute)))
+        .chain(
+            sub_ids
+                .iter()
+                .map(|id| (*id, MatchParticipation::Substitute)),
+        )
         .collect();
 
     for (pid, participation) in all_ids {
@@ -529,8 +702,8 @@ fn dispatch_match_outcomes(
         };
         let effective = *effective_ratings.get(&pid).unwrap_or(&stats.match_rating);
         let is_motm = best_player_id == Some(pid);
-        let team_goals_against = matches!(participation, MatchParticipation::Starter)
-            .then_some(team_conceded);
+        let team_goals_against =
+            matches!(participation, MatchParticipation::Starter).then_some(team_conceded);
         if let Some(player) = data.player_mut(pid) {
             player.on_match_played(&MatchOutcome {
                 stats,

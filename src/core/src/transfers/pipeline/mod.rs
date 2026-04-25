@@ -1,10 +1,10 @@
 mod evaluation;
+mod helpers;
+mod loan_market;
+mod negotiations;
+mod recommendations;
 mod scouting;
 mod shortlists;
-mod negotiations;
-mod loan_market;
-mod recommendations;
-mod helpers;
 
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use chrono::NaiveDate;
@@ -14,8 +14,8 @@ pub use self::processor::PipelineProcessor;
 pub use self::processor::PlayerSummary;
 
 mod processor {
-    use std::collections::HashMap;
     use crate::{PlayerFieldPositionGroup, PlayerPositionType};
+    use std::collections::HashMap;
 
     /// PipelineProcessor handles all daily transfer pipeline logic.
     /// Uses a two-pass borrow pattern: immutable read -> collect mutations -> mutable write.
@@ -216,7 +216,12 @@ pub struct PlayerObservation {
 }
 
 impl PlayerObservation {
-    pub fn new(player_id: u32, assessed_ability: u8, assessed_potential: u8, date: NaiveDate) -> Self {
+    pub fn new(
+        player_id: u32,
+        assessed_ability: u8,
+        assessed_potential: u8,
+        date: NaiveDate,
+    ) -> Self {
         PlayerObservation {
             player_id,
             observation_count: 1,
@@ -238,8 +243,8 @@ impl PlayerObservation {
         let old_weight = 1.0 - weight;
         self.assessed_ability =
             (old_weight * self.assessed_ability as f32 + weight * assessed_ability as f32) as u8;
-        self.assessed_potential =
-            (old_weight * self.assessed_potential as f32 + weight * assessed_potential as f32) as u8;
+        self.assessed_potential = (old_weight * self.assessed_potential as f32
+            + weight * assessed_potential as f32) as u8;
         self.confidence = 1.0 - (1.0 / (self.observation_count as f32 + 1.0));
         self.last_observed = date;
     }
@@ -256,8 +261,8 @@ impl PlayerObservation {
         let old_weight = 1.0 - weight;
         self.assessed_ability =
             (old_weight * self.assessed_ability as f32 + weight * assessed_ability as f32) as u8;
-        self.assessed_potential =
-            (old_weight * self.assessed_potential as f32 + weight * assessed_potential as f32) as u8;
+        self.assessed_potential = (old_weight * self.assessed_potential as f32
+            + weight * assessed_potential as f32) as u8;
         let match_rating_bonus = if match_rating > 7.0 {
             0.05
         } else if match_rating > 6.0 {
@@ -362,7 +367,9 @@ impl ScoutingAssignment {
     }
 
     pub fn find_observation_mut(&mut self, player_id: u32) -> Option<&mut PlayerObservation> {
-        self.observations.iter_mut().find(|o| o.player_id == player_id)
+        self.observations
+            .iter_mut()
+            .find(|o| o.player_id == player_id)
     }
 
     pub fn has_observation_for(&self, player_id: u32) -> bool {
@@ -482,7 +489,9 @@ impl TransferShortlist {
     }
 
     pub fn has_pursuing_candidate(&self) -> bool {
-        self.candidates.iter().any(|c| c.status == ShortlistCandidateStatus::CurrentlyPursuing)
+        self.candidates
+            .iter()
+            .any(|c| c.status == ShortlistCandidateStatus::CurrentlyPursuing)
     }
 }
 
@@ -576,6 +585,25 @@ pub struct StaffRecommendation {
     pub date_recommended: NaiveDate,
 }
 
+/// Persistent club-level knowledge of a player. Unlike active scouting
+/// assignments, this survives transfers and loan returns, so a club can
+/// remember a foreign player who spent a few months in its league.
+#[derive(Debug, Clone)]
+pub struct KnownPlayerMemory {
+    pub player_id: u32,
+    pub last_known_club_id: u32,
+    pub last_known_country_id: u32,
+    pub position: PlayerPositionType,
+    pub position_group: PlayerFieldPositionGroup,
+    pub assessed_ability: u8,
+    pub assessed_potential: u8,
+    pub confidence: f32,
+    pub estimated_fee: f64,
+    pub last_seen: NaiveDate,
+    pub official_appearances_seen: u16,
+    pub friendly_appearances_seen: u16,
+}
+
 // ============================================================
 // ScoutMatchAssignment - Scout assigned to watch a youth/reserve match
 // ============================================================
@@ -628,6 +656,9 @@ pub struct ClubTransferPlan {
     /// squad built up over time. On window start these seed new shortlists
     /// instead of forcing a cold-start scouting pass each cycle.
     pub shadow_reports: Vec<ShadowReport>,
+
+    /// Persistent knowledge gathered from scouting and match exposure.
+    pub known_players: Vec<KnownPlayerMemory>,
 }
 
 /// A scouting report preserved past its originating assignment, used to
@@ -661,6 +692,7 @@ impl ClubTransferPlan {
             initialized: false,
             rejected_players: Vec::new(),
             shadow_reports: Vec::new(),
+            known_players: Vec::new(),
         }
     }
 
@@ -711,7 +743,9 @@ impl ClubTransferPlan {
     }
 
     pub fn has_pending_requests(&self) -> bool {
-        self.transfer_requests.iter().any(|r| r.status == TransferRequestStatus::Pending)
+        self.transfer_requests
+            .iter()
+            .any(|r| r.status == TransferRequestStatus::Pending)
     }
 
     pub fn reset_for_window(&mut self) {
@@ -754,7 +788,11 @@ impl ClubTransferPlan {
 
         for report in &self.scouting_reports {
             // Skip reports we've already shadowed (e.g. in-window archive calls).
-            if self.shadow_reports.iter().any(|s| s.report.player_id == report.player_id) {
+            if self
+                .shadow_reports
+                .iter()
+                .any(|s| s.report.player_id == report.player_id)
+            {
                 continue;
             }
             // Only keep reports for non-Pass recommendations — Pass-flagged
@@ -796,7 +834,9 @@ impl ClubTransferPlan {
                 let sb = &self.shadow_reports[*b];
                 let score_a = sa.report.assessed_ability as f32 * sa.report.confidence;
                 let score_b = sb.report.assessed_ability as f32 * sb.report.confidence;
-                score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+                score_b
+                    .partial_cmp(&score_a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
             let to_drop: Vec<usize> = indices.into_iter().skip(SHADOW_CAP_PER_GROUP).collect();
             // Drop in reverse to preserve indices
@@ -844,10 +884,102 @@ impl ClubTransferPlan {
             }
         }
     }
+
+    pub fn remember_known_player(&mut self, memory: KnownPlayerMemory) {
+        const KNOWN_CAP: usize = 120;
+
+        if let Some(existing) = self
+            .known_players
+            .iter_mut()
+            .find(|m| m.player_id == memory.player_id)
+        {
+            let old_weight = existing.confidence.max(0.1);
+            let new_weight = memory.confidence.max(0.1);
+            let total = old_weight + new_weight;
+
+            existing.assessed_ability = ((existing.assessed_ability as f32 * old_weight
+                + memory.assessed_ability as f32 * new_weight)
+                / total)
+                .round()
+                .clamp(1.0, 200.0) as u8;
+            existing.assessed_potential =
+                existing.assessed_potential.max(memory.assessed_potential);
+            existing.confidence = (existing.confidence + memory.confidence * 0.35).min(0.95);
+            existing.estimated_fee = memory.estimated_fee;
+            existing.last_known_club_id = memory.last_known_club_id;
+            existing.last_known_country_id = memory.last_known_country_id;
+            existing.position = memory.position;
+            existing.position_group = memory.position_group;
+            existing.last_seen = memory.last_seen;
+            existing.official_appearances_seen = existing
+                .official_appearances_seen
+                .saturating_add(memory.official_appearances_seen);
+            existing.friendly_appearances_seen = existing
+                .friendly_appearances_seen
+                .saturating_add(memory.friendly_appearances_seen);
+        } else {
+            self.known_players.push(memory);
+        }
+
+        if self.known_players.len() > KNOWN_CAP {
+            self.known_players.sort_by(|a, b| {
+                let score_a = a.assessed_ability as f32 * a.confidence;
+                let score_b = b.assessed_ability as f32 * b.confidence;
+                score_b
+                    .partial_cmp(&score_a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            self.known_players.truncate(KNOWN_CAP);
+        }
+    }
+
+    pub fn known_player(&self, player_id: u32) -> Option<&KnownPlayerMemory> {
+        self.known_players.iter().find(|m| m.player_id == player_id)
+    }
 }
 
 impl Default for ClubTransferPlan {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod known_player_memory_tests {
+    use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn memory(player_id: u32, ability: u8, confidence: f32, date: NaiveDate) -> KnownPlayerMemory {
+        KnownPlayerMemory {
+            player_id,
+            last_known_club_id: 10,
+            last_known_country_id: 1,
+            position: PlayerPositionType::ForwardCenter,
+            position_group: PlayerFieldPositionGroup::Forward,
+            assessed_ability: ability,
+            assessed_potential: ability.saturating_add(10),
+            confidence,
+            estimated_fee: 1_000_000.0,
+            last_seen: date,
+            official_appearances_seen: 1,
+            friendly_appearances_seen: 0,
+        }
+    }
+
+    #[test]
+    fn known_player_memory_updates_existing_record() {
+        let mut plan = ClubTransferPlan::new();
+        plan.remember_known_player(memory(99, 90, 0.4, d(2026, 7, 1)));
+        plan.remember_known_player(memory(99, 110, 0.5, d(2026, 7, 8)));
+
+        let known = plan.known_player(99).unwrap();
+        assert_eq!(known.player_id, 99);
+        assert!(known.assessed_ability > 90);
+        assert!(known.confidence > 0.4);
+        assert_eq!(known.official_appearances_seen, 2);
+        assert_eq!(known.last_seen, d(2026, 7, 8));
     }
 }

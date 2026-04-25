@@ -89,6 +89,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         context.fill_details();
 
+        result.additional_time_ms = context.additional_time_ms;
+        result.penalty_shootout = context.penalty_shootout_kicks.clone();
         result.score = Some(context.score.clone());
 
         // Assign squads based on team IDs, not field positions
@@ -920,14 +922,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let gk_q = gk_prob_adj(field, gk_id);
             // League average ≈ 0.76. Skill delta nudges 0.45..0.92.
             let goal_prob = (0.72 + (taker_q - gk_q) * 0.25).clamp(0.45, 0.92);
-            let scored = rng.random::<f32>() < goal_prob;
-            if scored {
-                // Record the kick on the taker's stat sheet too.
-                if let Some(p) = field.players.iter_mut().find(|p| p.id == taker_id) {
-                    p.statistics.add_goal(context.total_match_time, false);
-                }
-            }
-            scored
+            rng.random::<f32>() < goal_prob
         };
 
         // Takers in rotation; sudden-death wraps the order.
@@ -960,7 +955,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             // Home kick.
             if let Some(id) = next_home_taker(&mut home_idx) {
-                if take_kick(id, away_keeper) {
+                let scored = take_kick(id, away_keeper);
+                context.penalty_shootout_kicks.push(crate::r#match::PenaltyShootoutKick {
+                    team_id: home_id,
+                    taker_id: id,
+                    goalkeeper_id: away_keeper,
+                    round: round + 1,
+                    scored,
+                    sudden_death: false,
+                });
+                if scored {
                     home_score += 1;
                 }
             }
@@ -973,7 +977,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             // Away kick.
             if let Some(id) = next_away_taker(&mut away_idx) {
-                if take_kick(id, home_keeper) {
+                let scored = take_kick(id, home_keeper);
+                context.penalty_shootout_kicks.push(crate::r#match::PenaltyShootoutKick {
+                    team_id: away_id,
+                    taker_id: id,
+                    goalkeeper_id: home_keeper,
+                    round: round + 1,
+                    scored,
+                    sudden_death: false,
+                });
+                if scored {
                     away_score += 1;
                 }
             }
@@ -995,10 +1008,31 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if h.is_none() || a.is_none() {
                 break; // Shouldn't happen — takers wrap — but guard anyway.
             }
-            if take_kick(h.unwrap(), away_keeper) {
+            let home_taker = h.unwrap();
+            let away_taker = a.unwrap();
+            let round = 5 + sudden_rounds;
+            let home_scored = take_kick(home_taker, away_keeper);
+            context.penalty_shootout_kicks.push(crate::r#match::PenaltyShootoutKick {
+                team_id: home_id,
+                taker_id: home_taker,
+                goalkeeper_id: away_keeper,
+                round,
+                scored: home_scored,
+                sudden_death: true,
+            });
+            if home_scored {
                 home_score += 1;
             }
-            if take_kick(a.unwrap(), home_keeper) {
+            let away_scored = take_kick(away_taker, home_keeper);
+            context.penalty_shootout_kicks.push(crate::r#match::PenaltyShootoutKick {
+                team_id: away_id,
+                taker_id: away_taker,
+                goalkeeper_id: home_keeper,
+                round,
+                scored: away_scored,
+                sudden_death: true,
+            });
+            if away_scored {
                 away_score += 1;
             }
         }
@@ -1104,9 +1138,13 @@ impl MatchPlayerCollection {
         };
 
         for p in &home_squad.main_squad { add(p, &mut players, &mut entries); }
-        for p in &home_squad.substitutes { add(p, &mut players, &mut entries); }
         for p in &away_squad.main_squad { add(p, &mut players, &mut entries); }
-        for p in &away_squad.substitutes { add(p, &mut players, &mut entries); }
+
+        let add_lookup_only = |p: &MatchPlayer, map: &mut HashMap<u32, MatchPlayer>| {
+            map.insert(p.id, p.clone());
+        };
+        for p in &home_squad.substitutes { add_lookup_only(p, &mut players); }
+        for p in &away_squad.substitutes { add_lookup_only(p, &mut players); }
 
         MatchPlayerCollection { players, entries }
     }

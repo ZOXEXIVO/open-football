@@ -39,6 +39,33 @@ pub struct SelectionContext {
     pub opponent_tactic: Option<MatchTacticType>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionPolicy {
+    BestEleven,
+    StrongWithRotation,
+    ManagedMinutes,
+    CupRotation,
+    YouthDevelopment,
+}
+
+impl SelectionPolicy {
+    pub(crate) fn from_context(ctx: &SelectionContext) -> Self {
+        if ctx.is_friendly || ctx.match_importance <= 0.20 {
+            return SelectionPolicy::YouthDevelopment;
+        }
+        if ctx.match_importance < 0.40 {
+            return SelectionPolicy::CupRotation;
+        }
+        if ctx.match_importance < 0.60 {
+            return SelectionPolicy::ManagedMinutes;
+        }
+        if ctx.match_importance < 0.82 {
+            return SelectionPolicy::StrongWithRotation;
+        }
+        SelectionPolicy::BestEleven
+    }
+}
+
 impl Default for SelectionContext {
     fn default() -> Self {
         SelectionContext {
@@ -73,7 +100,18 @@ impl SquadSelector {
         ctx: &SelectionContext,
     ) -> PlayerSelectionResult {
         let tactics = team.tactics();
+        Self::select_with_tactics_context(team, staff, reserve_players, tactics.borrow(), ctx)
+    }
+
+    pub fn select_with_tactics_context(
+        team: &Team,
+        staff: &Staff,
+        reserve_players: &[&Player],
+        tactics: &Tactics,
+        ctx: &SelectionContext,
+    ) -> PlayerSelectionResult {
         let engine = ScoringEngine::from_staff_with_philosophy(staff, ctx.philosophy.clone());
+        let policy = SelectionPolicy::from_context(ctx);
 
         let mut available: Vec<&Player> = team
             .players
@@ -123,34 +161,76 @@ impl SquadSelector {
 
         if available.len() < DEFAULT_SQUAD_SIZE {
             let all_players = team.players.players();
-            let injured_count = all_players.iter().filter(|p| p.player_attributes.is_injured).count();
-            let int_count = all_players.iter().filter(|p| p.statuses.get().contains(&PlayerStatusType::Int)).count();
-            let low_condition = all_players.iter().filter(|p| !p.player_attributes.is_injured && p.player_attributes.condition_percentage() < HARD_CONDITION_FLOOR).count();
-            let banned_count = if !ctx.is_friendly { all_players.iter().filter(|p| p.player_attributes.is_banned).count() } else { 0 };
+            let injured_count = all_players
+                .iter()
+                .filter(|p| p.player_attributes.is_injured)
+                .count();
+            let int_count = all_players
+                .iter()
+                .filter(|p| p.statuses.get().contains(&PlayerStatusType::Int))
+                .count();
+            let low_condition = all_players
+                .iter()
+                .filter(|p| {
+                    !p.player_attributes.is_injured
+                        && p.player_attributes.condition_percentage() < HARD_CONDITION_FLOOR
+                })
+                .count();
+            let banned_count = if !ctx.is_friendly {
+                all_players
+                    .iter()
+                    .filter(|p| p.player_attributes.is_banned)
+                    .count()
+            } else {
+                0
+            };
             let lst_loa_count = if !ctx.is_friendly {
-                all_players.iter().filter(|p| {
-                    let s = p.statuses.get();
-                    s.contains(&PlayerStatusType::Lst) || s.contains(&PlayerStatusType::Loa)
-                }).count()
-            } else { 0 };
+                all_players
+                    .iter()
+                    .filter(|p| {
+                        let s = p.statuses.get();
+                        s.contains(&PlayerStatusType::Lst) || s.contains(&PlayerStatusType::Loa)
+                    })
+                    .count()
+            } else {
+                0
+            };
 
             log::debug!(
                 "Squad selection for team {}: only {} available out of {} registered \
                 (injured={}, international={}, low_condition={}, banned={}, lst_loa={}, \
                 {} outfield, {} GK, {} reserves offered)",
-                team.name, available.len(), all_players.len(),
-                injured_count, int_count, low_condition, banned_count, lst_loa_count,
-                outfield_count, gk_count, reserve_players.len()
+                team.name,
+                available.len(),
+                all_players.len(),
+                injured_count,
+                int_count,
+                low_condition,
+                banned_count,
+                lst_loa_count,
+                outfield_count,
+                gk_count,
+                reserve_players.len()
             );
         } else if available.len() < DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE {
             debug!(
                 "Squad selection for team {}: only {} available (need {} for full squad+bench)",
-                team.name, available.len(), DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE
+                team.name,
+                available.len(),
+                DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE
             );
         }
 
         let main_squad = competitive::select_starting_eleven(
-            team.id, &available, staff, tactics.borrow(), &engine, ctx.date, ctx.is_friendly, ctx.match_importance,
+            team.id,
+            &available,
+            staff,
+            tactics,
+            &engine,
+            ctx.date,
+            ctx.is_friendly,
+            ctx.match_importance,
+            policy,
         );
 
         let remaining: Vec<&Player> = available
@@ -160,7 +240,15 @@ impl SquadSelector {
             .collect();
 
         let mut substitutes = competitive::select_substitutes(
-            team.id, &remaining, staff, tactics.borrow(), &engine, ctx.date, ctx.is_friendly, ctx.match_importance,
+            team.id,
+            &remaining,
+            staff,
+            tactics,
+            &engine,
+            ctx.date,
+            ctx.is_friendly,
+            ctx.match_importance,
+            policy,
         );
 
         if substitutes.is_empty() && !remaining.is_empty() {
@@ -172,14 +260,21 @@ impl SquadSelector {
                 if substitutes.len() >= DEFAULT_BENCH_SIZE {
                     break;
                 }
-                let pos = best_tactical_position(player, tactics.borrow());
+                let pos = best_tactical_position(player, tactics);
                 substitutes.push(MatchPlayer::from_player(team.id, player, pos, false));
             }
         }
 
-        debug!("Final squad: {} starters, {} subs", main_squad.len(), substitutes.len());
+        debug!(
+            "Final squad: {} starters, {} subs",
+            main_squad.len(),
+            substitutes.len()
+        );
 
-        PlayerSelectionResult { main_squad, substitutes }
+        PlayerSelectionResult {
+            main_squad,
+            substitutes,
+        }
     }
 
     // ========== ROTATION SELECTION ==========
@@ -194,8 +289,13 @@ impl SquadSelector {
         reserve_players: &[&Player],
     ) -> PlayerSelectionResult {
         Self::select_for_rotation_with_context(
-            team, staff, reserve_players,
-            &SelectionContext { is_friendly: true, ..SelectionContext::default() },
+            team,
+            staff,
+            reserve_players,
+            &SelectionContext {
+                is_friendly: true,
+                ..SelectionContext::default()
+            },
         )
     }
 
@@ -220,14 +320,14 @@ impl SquadSelector {
             let mut supplements: Vec<&Player> = reserve_players
                 .iter()
                 .filter(|&&rp| {
-                    is_available(rp, ctx.is_friendly)
-                        && !available.iter().any(|p| p.id == rp.id)
+                    is_available(rp, ctx.is_friendly) && !available.iter().any(|p| p.id == rp.id)
                 })
                 .copied()
                 .collect();
 
             supplements.sort_by(|a, b| {
-                b.player_attributes.days_since_last_match
+                b.player_attributes
+                    .days_since_last_match
                     .cmp(&a.player_attributes.days_since_last_match)
             });
 
@@ -243,9 +343,8 @@ impl SquadSelector {
             }
         }
 
-        let main_squad = rotation::select_rotation_starting_eleven(
-            team.id, &available, staff, tactics.borrow(),
-        );
+        let main_squad =
+            rotation::select_rotation_starting_eleven(team.id, &available, staff, tactics.borrow());
 
         let remaining: Vec<&Player> = available
             .iter()
@@ -253,9 +352,8 @@ impl SquadSelector {
             .copied()
             .collect();
 
-        let mut substitutes = rotation::select_rotation_substitutes(
-            team.id, &remaining, staff, tactics.borrow(),
-        );
+        let mut substitutes =
+            rotation::select_rotation_substitutes(team.id, &remaining, staff, tactics.borrow());
 
         if substitutes.is_empty() && !remaining.is_empty() {
             debug!(
@@ -271,7 +369,10 @@ impl SquadSelector {
             }
         }
 
-        PlayerSelectionResult { main_squad, substitutes }
+        PlayerSelectionResult {
+            main_squad,
+            substitutes,
+        }
     }
 
     // ========== LEGACY PUBLIC API ==========
@@ -296,7 +397,17 @@ impl SquadSelector {
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
         let date = chrono::Utc::now().date_naive();
-        competitive::select_starting_eleven(team_id, players, staff, tactics, &engine, date, false, 0.7)
+        competitive::select_starting_eleven(
+            team_id,
+            players,
+            staff,
+            tactics,
+            &engine,
+            date,
+            false,
+            0.7,
+            SelectionPolicy::StrongWithRotation,
+        )
     }
 
     pub fn select_substitutes_legacy(
@@ -307,6 +418,16 @@ impl SquadSelector {
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
         let date = chrono::Utc::now().date_naive();
-        competitive::select_substitutes(team_id, players, staff, tactics, &engine, date, false, 0.7)
+        competitive::select_substitutes(
+            team_id,
+            players,
+            staff,
+            tactics,
+            &engine,
+            date,
+            false,
+            0.7,
+            SelectionPolicy::StrongWithRotation,
+        )
     }
 }

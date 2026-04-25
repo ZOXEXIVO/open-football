@@ -37,6 +37,16 @@ pub struct PlayerMatchEndStats {
     pub red_cards: u16,
 }
 
+#[derive(Debug, Clone)]
+pub struct PenaltyShootoutKick {
+    pub team_id: u32,
+    pub taker_id: u32,
+    pub goalkeeper_id: Option<u32>,
+    pub round: u8,
+    pub scored: bool,
+    pub sudden_death: bool,
+}
+
 #[derive(Debug)]
 pub struct MatchResultRaw {
     pub score: Option<Score>,
@@ -53,6 +63,8 @@ pub struct MatchResultRaw {
 
     pub substitutions: Vec<SubstitutionInfo>,
 
+    pub penalty_shootout: Vec<PenaltyShootoutKick>,
+
     pub player_of_the_match_id: Option<u32>,
 }
 
@@ -67,6 +79,7 @@ impl Clone for MatchResultRaw {
             additional_time_ms: self.additional_time_ms,
             player_stats: self.player_stats.clone(),
             substitutions: self.substitutions.clone(),
+            penalty_shootout: self.penalty_shootout.clone(),
             player_of_the_match_id: self.player_of_the_match_id,
         }
     }
@@ -83,6 +96,7 @@ impl MatchResultRaw {
             additional_time_ms: 0,
             player_stats: HashMap::new(),
             substitutions: Vec::new(),
+            penalty_shootout: Vec::new(),
             player_of_the_match_id: None,
         }
     }
@@ -97,6 +111,7 @@ impl MatchResultRaw {
             additional_time_ms: self.additional_time_ms,
             player_stats: self.player_stats.clone(),
             substitutions: self.substitutions.clone(),
+            penalty_shootout: self.penalty_shootout.clone(),
             player_of_the_match_id: self.player_of_the_match_id,
         }
     }

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerCollection, PlayerGenerator,
-    StaffCollection, TeamBuilder, TeamReputation, TeamType, TrainingSchedule,
+    PlayerPosition, StaffCollection, TeamBuilder, TeamReputation, TeamType, TrainingSchedule,
 };
 use chrono::{NaiveTime, Utc};
 
@@ -32,9 +32,10 @@ fn test_squad_always_has_goalkeeper() {
 
     let result = SquadSelector::select(&team, &staff);
 
-    let has_gk = result.main_squad.iter().any(|p| {
-        p.tactical_position.current_position == PlayerPositionType::Goalkeeper
-    });
+    let has_gk = result
+        .main_squad
+        .iter()
+        .any(|p| p.tactical_position.current_position == PlayerPositionType::Goalkeeper);
     assert!(has_gk, "Starting 11 must always have a goalkeeper");
 }
 
@@ -64,7 +65,90 @@ fn test_position_group_matching() {
         PlayerPositionType::DefenderCenterLeft,
         crate::club::PlayerFieldPositionGroup::Defender,
     );
-    assert!(score > 5.0, "Same-group player should score well: {}", score);
+    assert!(
+        score > 5.0,
+        "Same-group player should score well: {}",
+        score
+    );
+}
+
+#[test]
+fn test_global_assignment_preserves_specialists() {
+    let mut team = generate_test_team();
+    let staff = generate_test_staff();
+    let date = Utc::now().date_naive();
+
+    let mut players = vec![
+        make_test_player(1, &[(PlayerPositionType::Goalkeeper, 20)], 120, date),
+        make_test_player(
+            2,
+            &[
+                (PlayerPositionType::DefenderLeft, 20),
+                (PlayerPositionType::DefenderCenterLeft, 20),
+            ],
+            180,
+            date,
+        ),
+        make_test_player(3, &[(PlayerPositionType::DefenderLeft, 18)], 135, date),
+        make_test_player(4, &[(PlayerPositionType::DefenderCenterLeft, 5)], 80, date),
+    ];
+
+    let filler_positions = [
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+    ];
+    for (idx, pos) in filler_positions.iter().enumerate() {
+        players.push(make_test_player(10 + idx as u32, &[(*pos, 16)], 120, date));
+    }
+
+    team.players = PlayerCollection::new(players);
+    team.tactics = Some(Tactics::new(MatchTacticType::T442));
+
+    let result = SquadSelector::select(&team, &staff);
+    let elite_pos = result
+        .main_squad
+        .iter()
+        .find(|p| p.id == 2)
+        .map(|p| p.tactical_position.current_position);
+    let specialist_pos = result
+        .main_squad
+        .iter()
+        .find(|p| p.id == 3)
+        .map(|p| p.tactical_position.current_position);
+
+    assert_eq!(elite_pos, Some(PlayerPositionType::DefenderCenterLeft));
+    assert_eq!(specialist_pos, Some(PlayerPositionType::DefenderLeft));
+}
+
+#[test]
+fn test_selection_policy_from_context() {
+    assert_eq!(
+        SelectionPolicy::from_context(&SelectionContext {
+            match_importance: 0.9,
+            ..SelectionContext::default()
+        }),
+        SelectionPolicy::BestEleven
+    );
+    assert_eq!(
+        SelectionPolicy::from_context(&SelectionContext {
+            match_importance: 0.3,
+            ..SelectionContext::default()
+        }),
+        SelectionPolicy::CupRotation
+    );
+    assert_eq!(
+        SelectionPolicy::from_context(&SelectionContext {
+            is_friendly: true,
+            ..SelectionContext::default()
+        }),
+        SelectionPolicy::YouthDevelopment
+    );
 }
 
 // ========== Test helpers ==========
@@ -130,4 +214,29 @@ fn generate_defender_center() -> Player {
         18,
         &names,
     )
+}
+
+fn make_test_player(
+    id: u32,
+    positions: &[(PlayerPositionType, u8)],
+    current_ability: u8,
+    date: chrono::NaiveDate,
+) -> Player {
+    let mut player =
+        PlayerGenerator::generate(1, date, positions[0].0, positions[0].1, &test_names());
+    player.id = id;
+    player.positions = crate::PlayerPositions {
+        positions: positions
+            .iter()
+            .map(|(position, level)| PlayerPosition {
+                position: *position,
+                level: *level,
+            })
+            .collect(),
+    };
+    player.player_attributes.current_ability = current_ability;
+    player.player_attributes.condition = 9500;
+    player.player_attributes.fitness = 9000;
+    player.player_attributes.days_since_last_match = 7;
+    player
 }

@@ -1,5 +1,5 @@
+use crate::transfers::negotiation::NegotiationPhase;
 use crate::{Club, Country, Player, PlayerPositionType};
-use crate::transfers::negotiation::{NegotiationPhase};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -71,6 +71,8 @@ pub(crate) struct NegotiationData {
     /// Sell-on percentage pledged in the buyer's offer, owed to the current
     /// seller on the player's next sale.
     pub(crate) sell_on_percentage: Option<f32>,
+    /// Loan option/obligation fee and whether it is mandatory.
+    pub(crate) loan_future_fee: Option<(u32, bool)>,
 }
 
 /// A completed negotiation that needs execution at SimulatorData level.
@@ -93,15 +95,22 @@ pub(crate) struct DeferredTransfer {
     /// If the buyer's offer carried a sell-on clause, this is the percentage
     /// owed to the *current seller* on the player's next permanent sale.
     pub(crate) sell_on_percentage: Option<f32>,
+    /// Loan option/obligation fee and whether it is mandatory.
+    pub(crate) loan_future_fee: Option<(u32, bool)>,
 }
 
 pub(crate) fn can_club_accept_player(club: &Club) -> bool {
-    let max_squad = club.board.season_targets
+    let max_squad = club
+        .board
+        .season_targets
         .as_ref()
         .map(|t| t.max_squad_size as usize)
         .unwrap_or(50);
     // Only count main team players for squad cap — youth/reserve teams are separate
-    let main_squad = club.teams.teams.first()
+    let main_squad = club
+        .teams
+        .teams
+        .first()
         .map(|t| t.players.len())
         .unwrap_or(0);
     main_squad < max_squad

@@ -1,8 +1,9 @@
 use nalgebra::Vector3;
 use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchCoach, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamTacticalState, TeamsTactics, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS};
-use crate::r#match::engine::result::PlayerMatchEndStats;
+use crate::r#match::engine::result::{PenaltyShootoutKick, PlayerMatchEndStats};
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;
+const MAX_STOPPAGE_PER_PERIOD_MS: u64 = 15 * 60 * 1000;
 
 pub struct SubstitutionRecord {
     pub team_id: u32,
@@ -31,6 +32,9 @@ pub struct MatchContext {
 
     pub substitutions: Vec<SubstitutionRecord>,
     pub max_substitutions_per_team: usize,
+    pub additional_time_ms: u64,
+    pub period_stoppage_time_ms: u64,
+    pub penalty_shootout_kicks: Vec<PenaltyShootoutKick>,
 
     // Global goal cooldown: tick when last goal was scored
     // Prevents immediate scoring after kickoff restart
@@ -74,6 +78,9 @@ impl MatchContext {
             // Knockout ties get one extra substitution once ET begins (FIFA rule).
             // Represented here as a flat limit; ET bonus applied on entry.
             max_substitutions_per_team: if is_friendly { usize::MAX } else { 5 },
+            additional_time_ms: 0,
+            period_stoppage_time_ms: 0,
+            penalty_shootout_kicks: Vec::new(),
             last_goal_tick: 0,
             substituted_out_stats: Vec::new(),
             coach_home: MatchCoach::new(),
@@ -99,10 +106,10 @@ impl MatchContext {
 
         match self.state.match_state {
             MatchState::FirstHalf | MatchState::SecondHalf => {
-                new_time < MATCH_HALF_TIME_MS
+                new_time < MATCH_HALF_TIME_MS + self.period_stoppage_time_ms
             }
             MatchState::ExtraTime => {
-                new_time < MATCH_EXTRA_TIME_MS
+                new_time < MATCH_EXTRA_TIME_MS + self.period_stoppage_time_ms
             }
             _ => false
         }
@@ -110,11 +117,26 @@ impl MatchContext {
 
     pub fn reset_period_time(&mut self) {
         self.time = MatchTime::new();
+        self.period_stoppage_time_ms = 0;
     }
 
     pub fn add_time(&mut self, time: u64) {
         self.time.increment(time);
         self.total_match_time += time;
+    }
+
+    pub fn record_stoppage_time(&mut self, time: u64) {
+        if !matches!(
+            self.state.match_state,
+            MatchState::FirstHalf | MatchState::SecondHalf | MatchState::ExtraTime
+        ) {
+            return;
+        }
+
+        let room = MAX_STOPPAGE_PER_PERIOD_MS.saturating_sub(self.period_stoppage_time_ms);
+        let added = time.min(room);
+        self.period_stoppage_time_ms += added;
+        self.additional_time_ms += added;
     }
 
     pub fn fill_details(&mut self) {

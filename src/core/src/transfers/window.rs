@@ -32,17 +32,15 @@ impl TransferWindowManager {
 
     /// Returns the (start, end) dates of the currently open transfer window,
     /// or None if no window is currently open for this country.
-    pub fn current_window_dates(&self, country_id: u32, date: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+    pub fn current_window_dates(
+        &self,
+        country_id: u32,
+        date: NaiveDate,
+    ) -> Option<(NaiveDate, NaiveDate)> {
         let (summer, winter) = if let Some(window) = self.windows.get(&country_id) {
             (window.summer_window, window.winter_window)
         } else {
-            // Default to European standard windows if country-specific not defined
-            let year = date.year();
-            let summer_start = NaiveDate::from_ymd_opt(year, 6, 1).unwrap_or(date);
-            let summer_end = NaiveDate::from_ymd_opt(year, 8, 31).unwrap_or(date);
-            let winter_start = NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(date);
-            let winter_end = NaiveDate::from_ymd_opt(year, 1, 31).unwrap_or(date);
-            ((summer_start, summer_end), (winter_start, winter_end))
+            Self::default_european_windows(date)
         };
 
         if self.is_date_in_window(date, &summer) {
@@ -57,6 +55,48 @@ impl TransferWindowManager {
     fn is_date_in_window(&self, date: NaiveDate, window: &(NaiveDate, NaiveDate)) -> bool {
         date >= window.0 && date <= window.1
     }
+
+    fn default_european_windows(
+        date: NaiveDate,
+    ) -> ((NaiveDate, NaiveDate), (NaiveDate, NaiveDate)) {
+        let year = date.year();
+        let summer_start = NaiveDate::from_ymd_opt(year, 6, 1).unwrap_or(date);
+        let summer_end = NaiveDate::from_ymd_opt(year, 8, 31).unwrap_or(date);
+        let winter_start = NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(date);
+        let winter_end = NaiveDate::from_ymd_opt(year, 1, 31).unwrap_or(date);
+        ((summer_start, summer_end), (winter_start, winter_end))
+    }
+}
+
+impl Default for TransferWindowManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod transfer_window_tests {
+    use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn custom_country_window_overrides_default_dates() {
+        let mut manager = TransferWindowManager::new();
+        manager.add_window(
+            99,
+            TransferWindow {
+                summer_window: (d(2026, 2, 1), d(2026, 3, 15)),
+                winter_window: (d(2026, 7, 1), d(2026, 7, 31)),
+                country_id: 99,
+            },
+        );
+
+        assert!(manager.is_window_open(99, d(2026, 2, 20)));
+        assert!(!manager.is_window_open(99, d(2026, 6, 20)));
+    }
 }
 
 /// Transfer-market-specific player valuation.
@@ -64,12 +104,35 @@ impl TransferWindowManager {
 pub struct PlayerValuationCalculator;
 
 impl PlayerValuationCalculator {
-    pub fn calculate_value(player: &Player, date: NaiveDate, league_reputation: u16, club_reputation: u16) -> CurrencyValue {
-        Self::calculate_value_with_price_level(player, date, 1.0, league_reputation, club_reputation)
+    pub fn calculate_value(
+        player: &Player,
+        date: NaiveDate,
+        league_reputation: u16,
+        club_reputation: u16,
+    ) -> CurrencyValue {
+        Self::calculate_value_with_price_level(
+            player,
+            date,
+            1.0,
+            league_reputation,
+            club_reputation,
+        )
     }
 
-    pub fn calculate_value_with_price_level(player: &Player, date: NaiveDate, price_level: f32, league_reputation: u16, club_reputation: u16) -> CurrencyValue {
-        let base_value = PlayerValueCalculator::calculate(player, date, price_level, league_reputation, club_reputation);
+    pub fn calculate_value_with_price_level(
+        player: &Player,
+        date: NaiveDate,
+        price_level: f32,
+        league_reputation: u16,
+        club_reputation: u16,
+    ) -> CurrencyValue {
+        let base_value = PlayerValueCalculator::calculate(
+            player,
+            date,
+            price_level,
+            league_reputation,
+            club_reputation,
+        );
 
         // Transfer-listed players face market discount (buyer leverage)
         let mut market_value = base_value;

@@ -33,7 +33,11 @@ impl Team {
 
     /// Get match squad using rotation with supplementary players from other club teams.
     /// Ensures non-main teams always have enough players for a full squad.
-    pub fn get_rotation_match_squad_with_reserves(&self, reserve_players: &[&Player], ctx: &SelectionContext) -> MatchSquad {
+    pub fn get_rotation_match_squad_with_reserves(
+        &self,
+        reserve_players: &[&Player],
+        ctx: &SelectionContext,
+    ) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
 
         let squad_result =
@@ -62,30 +66,35 @@ impl Team {
 
     /// Enhanced get_match_squad that uses improved tactical analysis
     /// Accepts optional reserve players that can be selected for the match squad
-    pub fn get_enhanced_match_squad(&self, reserve_players: &[&Player], ctx: &SelectionContext) -> MatchSquad {
+    pub fn get_enhanced_match_squad(
+        &self,
+        reserve_players: &[&Player],
+        ctx: &SelectionContext,
+    ) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
 
-        // Use squad selection with reserve pool
-        let squad_result = SquadSelector::select_with_context(self, head_coach, reserve_players, ctx);
-
-        // Step 3: Create match squad with selected tactics.
-        // Opponent-aware tactics: a tactically sharp coach reads the
-        // opposition setup and picks a counter-formation instead of the
-        // default team shape. Knowledge threshold is ≥14 (Conti B level).
-        let head_coach_tac = head_coach
-            .staff_attributes
-            .knowledge
-            .tactical_knowledge;
+        // Pick the match tactic before selecting players. Otherwise the XI
+        // can be built for the default shape and then validated against a
+        // late opponent-aware counter shape.
+        let head_coach_tac = head_coach.staff_attributes.knowledge.tactical_knowledge;
         let final_tactics = if let (Some(opp), true) = (ctx.opponent_tactic, head_coach_tac >= 14) {
             let roster: Vec<&Player> = self.players.players();
             TacticsSelector::select_counter_tactic(&opp, &roster)
         } else {
-            self
-                .tactics
+            self.tactics
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| TacticsSelector::select(self, head_coach))
         };
+
+        // Use squad selection with reserve pool for the final match tactic.
+        let squad_result = SquadSelector::select_with_tactics_context(
+            self,
+            head_coach,
+            reserve_players,
+            &final_tactics,
+            ctx,
+        );
 
         // Step 5: Validate squad selection
         self.validate_squad_selection(&squad_result, &final_tactics);
@@ -103,11 +112,7 @@ impl Team {
         }
     }
 
-    fn validate_squad_selection(
-        &self,
-        squad_result: &PlayerSelectionResult,
-        tactics: &Tactics,
-    ) {
+    fn validate_squad_selection(&self, squad_result: &PlayerSelectionResult, tactics: &Tactics) {
         let formation_positions = tactics.positions();
 
         if squad_result.main_squad.len() != formation_positions.len() {

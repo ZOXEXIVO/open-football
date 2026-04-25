@@ -1,7 +1,6 @@
-use chrono::NaiveDate;
 use super::types::{
-    DeferredTransfer, NegotiationData, TransferActivitySummary,
-    find_player_in_country, find_player_in_country_mut,
+    find_player_in_country, find_player_in_country_mut, DeferredTransfer, NegotiationData,
+    TransferActivitySummary,
 };
 use crate::club::player::agent::PlayerAgent;
 use crate::country::result::CountryResult;
@@ -10,9 +9,10 @@ use crate::transfers::offer::TransferClause;
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::TransferListingStatus;
-use crate::utils::{FloatUtils, FormattingUtils};
 use crate::transfers::TransferWindowManager;
+use crate::utils::{FloatUtils, FormattingUtils};
 use crate::{Country, PlayerSquadStatus, PlayerStatusType, WageCalculator};
+use chrono::NaiveDate;
 
 impl CountryResult {
     pub(crate) fn resolve_pending_negotiations(
@@ -34,14 +34,20 @@ impl CountryResult {
         for neg_id in ready_to_resolve {
             let neg_data = match country.transfer_market.negotiations.get(&neg_id) {
                 Some(n) => {
-                    let asking_price = country.transfer_market.listings
+                    let asking_price = country
+                        .transfer_market
+                        .listings
                         .get(n.listing_id as usize)
                         .map(|l| l.asking_price.amount)
                         .unwrap_or(0.0);
-                    let is_listed = country.transfer_market.listings
+                    let is_listed = country
+                        .transfer_market
+                        .listings
                         .get(n.listing_id as usize)
-                        .map(|l| l.status == TransferListingStatus::InNegotiation
-                            || l.status == TransferListingStatus::Available)
+                        .map(|l| {
+                            l.status == TransferListingStatus::InNegotiation
+                                || l.status == TransferListingStatus::Available
+                        })
                         .unwrap_or(false);
                     let sell_on_percentage = n.current_offer.clauses.iter().find_map(|c| {
                         if let TransferClause::SellOnClause(pct) = c {
@@ -74,6 +80,9 @@ impl CountryResult {
                         offered_annual_wage: n.offered_salary,
                         buying_league_reputation: n.buying_league_reputation,
                         sell_on_percentage,
+                        loan_future_fee: n.current_offer.loan_future_fee().map(
+                            |(fee, obligation)| (fee.amount.max(0.0).round() as u32, obligation),
+                        ),
                     }
                 }
                 None => continue,
@@ -90,7 +99,15 @@ impl CountryResult {
                     Self::resolve_personal_terms(country, neg_id, &neg_data, date);
                 }
                 NegotiationPhase::MedicalAndFinalization { .. } => {
-                    Self::resolve_medical(country, country_id, neg_id, &neg_data, date, summary, &mut deferred);
+                    Self::resolve_medical(
+                        country,
+                        country_id,
+                        neg_id,
+                        &neg_data,
+                        date,
+                        summary,
+                        &mut deferred,
+                    );
                 }
             }
         }
@@ -129,8 +146,10 @@ impl CountryResult {
             let current_window = window_mgr.current_window_dates(country.id, date);
             if let Some(player) = find_player_in_country(country, neg_data.player_id) {
                 if player.is_transfer_protected(date, current_window) {
-                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                        negotiation.reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
+                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
+                    {
+                        negotiation
+                            .reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
                     }
                     Self::reopen_listing_for_player(country, neg_data.player_id);
                     PipelineProcessor::on_negotiation_resolved(
@@ -144,23 +163,44 @@ impl CountryResult {
             }
         }
 
+        let ratio = if neg_data.asking_price > 0.0 {
+            neg_data.offer_amount / neg_data.asking_price
+        } else {
+            1.0
+        };
+
         let mut chance: f32 = if neg_data.is_listed {
-            75.0
+            80.0
         } else if neg_data.is_unsolicited {
-            45.0
+            35.0
         } else {
             55.0
         };
 
-        if neg_data.asking_price > 0.0 {
-            let ratio = neg_data.offer_amount / neg_data.asking_price;
-            if ratio >= 1.0 {
-                chance += 25.0;
-            } else if ratio >= 0.8 {
-                chance += 10.0;
-            } else if ratio < 0.5 {
-                chance -= 15.0;
+        // Reservation-price guardrails: randomness adds texture, but it
+        // should not let insulting bids or unaffordable rival taps through.
+        if !neg_data.is_loan && ratio < 0.45 {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
             }
+            Self::reopen_listing_for_player(country, neg_data.player_id);
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                false,
+            );
+            return;
+        }
+
+        if ratio >= 1.15 {
+            chance += 30.0;
+        } else if ratio >= 1.0 {
+            chance += 22.0;
+        } else if ratio >= 0.85 {
+            chance += 8.0;
+        } else if ratio < 0.65 {
+            chance -= 22.0;
         }
 
         let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
@@ -184,9 +224,7 @@ impl CountryResult {
             if rep_diff > 0.25 {
                 rival_penalty -= 12.0;
             }
-            if neg_data.asking_price > 0.0
-                && neg_data.offer_amount >= neg_data.asking_price * 1.5
-            {
+            if neg_data.asking_price > 0.0 && neg_data.offer_amount >= neg_data.asking_price * 1.5 {
                 rival_penalty -= 15.0;
             }
             chance -= rival_penalty.max(5.0);
@@ -211,7 +249,8 @@ impl CountryResult {
             }
         } else {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+                negotiation
+                    .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
             PipelineProcessor::on_negotiation_resolved(
@@ -235,50 +274,50 @@ impl CountryResult {
         // and the negotiation jumps straight to personal terms. Buy-back
         // clauses and division-tier variants are not modelled yet (they
         // need richer context than NegotiationData carries today).
-        if neg_data.selling_country_id.is_none()
-            && Self::clause_triggers_sale(country, neg_data)
-        {
+        if neg_data.selling_country_id.is_none() && Self::clause_triggers_sale(country, neg_data) {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.advance_to_personal_terms(date);
             }
             return;
         }
 
-        let mut chance: f32 = if neg_data.asking_price > 0.0 {
-            let ratio = neg_data.offer_amount / neg_data.asking_price;
-            if ratio >= 1.2 { 90.0 }
-            else if ratio >= 1.0 { 75.0 }
-            else if ratio >= 0.9 { 60.0 }
-            else if ratio >= 0.8 { 50.0 }
-            else if ratio >= 0.7 { 35.0 }
-            else { 15.0 }
+        let ratio = if neg_data.asking_price > 0.0 {
+            neg_data.offer_amount / neg_data.asking_price
         } else {
-            55.0
+            1.0
         };
+        let mut seller_reservation = if neg_data.is_listed { 0.82 } else { 1.08 };
 
-        // For domestic transfers, check player importance
-        if neg_data.selling_country_id.is_none() {
-            let importance = Self::calculate_player_importance(
-                country, neg_data.player_id, neg_data.selling_club_id,
-            );
-            chance -= importance * 20.0;
-        }
+        // For domestic transfers, check player importance. Important players
+        // require a real premium; depth players and listed players can move
+        // closer to asking.
+        let importance = if neg_data.selling_country_id.is_none() {
+            Self::calculate_player_importance(country, neg_data.player_id, neg_data.selling_club_id)
+        } else {
+            0.55
+        };
+        seller_reservation += (importance as f64) * 0.28;
 
-        if let Some(selling_club) = country.clubs.iter().find(|c| c.id == neg_data.selling_club_id) {
+        if let Some(selling_club) = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)
+        {
             if selling_club.finance.balance.balance < 0 {
-                chance += 15.0;
+                seller_reservation -= 0.12;
             }
         }
 
-        let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
-        if rep_diff > 0.15 {
-            chance += 10.0;
+        let urgency = Self::deadline_urgency(country.id, date) as f64;
+        if urgency > 0.0 && importance < 0.75 {
+            seller_reservation -= urgency * 0.10;
         }
 
-        // Rivalry friction carries into the fee-negotiation round. Stays
-        // lighter than the initial-approach penalty — at this point both
-        // sides have already committed to talking, so the resistance is
-        // "price it higher" rather than "walk out".
+        let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
+        if rep_diff > 0.15 && importance < 0.85 {
+            seller_reservation -= 0.04;
+        }
+
         if neg_data.selling_country_id.is_none()
             && Self::seller_views_buyer_as_rival(
                 country,
@@ -286,13 +325,22 @@ impl CountryResult {
                 neg_data.buying_club_id,
             )
         {
-            chance -= 18.0;
+            seller_reservation += 0.18;
         }
 
-        // As deadline day approaches, the selling club gets less precious —
-        // either take this bid or risk keeping an unhappy asset.
-        let urgency = Self::deadline_urgency(country.id, date);
-        chance += urgency * 30.0;
+        seller_reservation = seller_reservation.clamp(0.55, 1.55);
+
+        let mut chance: f32 = if ratio >= seller_reservation + 0.20 {
+            92.0
+        } else if ratio >= seller_reservation + 0.08 {
+            78.0
+        } else if ratio >= seller_reservation {
+            62.0
+        } else if ratio >= seller_reservation - 0.10 {
+            34.0
+        } else {
+            8.0
+        };
 
         chance = chance.clamp(5.0, 95.0);
         let roll = FloatUtils::random(0.0, 100.0);
@@ -307,9 +355,16 @@ impl CountryResult {
                 // window, up to ~30% on the last few days (panic buy).
                 // The previous offer is archived to `counter_offers` so the
                 // negotiation history is auditable (who bid what, when).
-                let escalation = (1.15 + urgency * 0.15) as f64;
+                let target = if neg_data.asking_price > 0.0 {
+                    neg_data.asking_price * seller_reservation
+                } else {
+                    negotiation.current_offer.base_fee.amount * 1.15
+                };
+                let escalation = 0.45 + urgency * 0.25;
                 let new_amount = FormattingUtils::round_fee(
-                    negotiation.current_offer.base_fee.amount * escalation
+                    negotiation.current_offer.base_fee.amount
+                        + (target - negotiation.current_offer.base_fee.amount).max(0.0)
+                            * escalation,
                 );
                 let mut escalated = negotiation.current_offer.clone();
                 escalated.base_fee.amount = new_amount;
@@ -337,7 +392,6 @@ impl CountryResult {
         neg_data: &NegotiationData,
         date: NaiveDate,
     ) {
-
         let is_foreign = neg_data.selling_country_id.is_some();
 
         // Foreign loans start lower: unfamiliar country, language, likely
@@ -415,8 +469,7 @@ impl CountryResult {
                 chance += 10.0; // Ambitious + moving up = eager
             } else if rep_diff < -0.1 {
                 // Scale penalty with the gap: bigger drop = stronger refusal
-                let penalty = if rep_diff < -0.3 { 20.0 }
-                    else { 12.0 };
+                let penalty = if rep_diff < -0.3 { 20.0 } else { 12.0 };
                 chance -= penalty;
             }
         } else if ambition < 0.4 {
@@ -444,7 +497,9 @@ impl CountryResult {
                 let agent = PlayerAgent::for_player(player);
                 chance += agent.personal_terms_delta(rep_diff);
 
-                let current_salary = player.contract.as_ref()
+                let current_salary = player
+                    .contract
+                    .as_ref()
                     .map(|c| c.salary as f64)
                     .unwrap_or(500.0);
 
@@ -547,7 +602,8 @@ impl CountryResult {
         // and a prestige-drop would otherwise penalise (hypothetically).
         if let Some(sell_continent_id) = neg_data.selling_continent_id {
             let buying_region = ScoutingRegion::from_country(country.continent_id, &country.code);
-            let selling_region = ScoutingRegion::from_country(sell_continent_id, &neg_data.selling_country_code);
+            let selling_region =
+                ScoutingRegion::from_country(sell_continent_id, &neg_data.selling_country_code);
 
             if buying_region != selling_region && !moving_to_favorite {
                 let buy_prestige = buying_region.league_prestige();
@@ -561,19 +617,31 @@ impl CountryResult {
                     let base_penalty = prestige_drop * 110.0;
 
                     // Ambitious players resist prestige drops more
-                    let ambition_factor = if neg_data.player_ambition > 0.7 { 1.5 }
-                        else if neg_data.player_ambition > 0.5 { 1.0 }
-                        else { 0.7 };
+                    let ambition_factor = if neg_data.player_ambition > 0.7 {
+                        1.5
+                    } else if neg_data.player_ambition > 0.5 {
+                        1.0
+                    } else {
+                        0.7
+                    };
 
                     // Veterans (30+) accept drops more easily for money/playing time,
                     // but a very large drop still stings regardless of age.
                     let age_factor = if prestige_drop > 0.4 {
-                        if neg_data.player_age >= 32 { 0.7 }
-                        else if neg_data.player_age >= 30 { 0.85 }
-                        else { 1.0 }
-                    } else if neg_data.player_age >= 32 { 0.3 }
-                        else if neg_data.player_age >= 30 { 0.5 }
-                        else { 1.0 };
+                        if neg_data.player_age >= 32 {
+                            0.7
+                        } else if neg_data.player_age >= 30 {
+                            0.85
+                        } else {
+                            1.0
+                        }
+                    } else if neg_data.player_age >= 32 {
+                        0.3
+                    } else if neg_data.player_age >= 30 {
+                        0.5
+                    } else {
+                        1.0
+                    };
 
                     chance -= base_penalty * ambition_factor * age_factor;
                 } else if prestige_drop < -0.1 {
@@ -592,7 +660,8 @@ impl CountryResult {
             }
         } else {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
+                negotiation
+                    .reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
             PipelineProcessor::on_negotiation_resolved(
@@ -621,23 +690,37 @@ impl CountryResult {
             // Reject if another negotiation for this player is already deferred
             if deferred.iter().any(|d| d.player_id == neg_data.player_id) {
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+                    negotiation
+                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
                 }
-                PipelineProcessor::on_negotiation_resolved(country, neg_data.buying_club_id, neg_data.player_id, false);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
                 return;
             }
         } else {
-            let player_at_selling_club = country.clubs.iter()
+            let player_at_selling_club = country
+                .clubs
+                .iter()
                 .find(|c| c.id == neg_data.selling_club_id)
                 .map(|c| c.teams.contains_player(neg_data.player_id))
                 .unwrap_or(false);
 
             if !player_at_selling_club {
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+                    negotiation
+                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
                 }
                 Self::reopen_listing_for_player(country, neg_data.player_id);
-                PipelineProcessor::on_negotiation_resolved(country, neg_data.buying_club_id, neg_data.player_id, false);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
                 return;
             }
         }
@@ -649,7 +732,7 @@ impl CountryResult {
                 .map(|p| p.player_attributes.is_injured)
                 .unwrap_or(false)
         };
-        let fail_chance = if is_injured { 15.0 } else { 5.0 };
+        let fail_chance = if is_injured { 8.0 } else { 1.0 };
         let roll = FloatUtils::random(0.0, 100.0);
 
         if roll >= fail_chance {
@@ -668,18 +751,26 @@ impl CountryResult {
             let from_team_name = if is_foreign {
                 neg_data.selling_club_name.clone()
             } else {
-                country.clubs.iter()
+                country
+                    .clubs
+                    .iter()
                     .find(|c| c.id == neg_data.selling_club_id)
                     .map(|c| c.name.clone())
                     .unwrap_or_default()
             };
-            let to_team_name = country.clubs.iter()
+            let to_team_name = country
+                .clubs
+                .iter()
                 .find(|c| c.id == neg_data.buying_club_id)
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
 
             if let Some(completed) = country.transfer_market.complete_transfer(
-                neg_id, date, player_name, from_team_name, to_team_name,
+                neg_id,
+                date,
+                player_name,
+                from_team_name,
+                to_team_name,
             ) {
                 summary.completed_transfers += 1;
                 summary.total_fees_exchanged += completed.fee.amount;
@@ -698,9 +789,15 @@ impl CountryResult {
                     agreed_annual_wage: neg_data.offered_annual_wage,
                     buying_league_reputation: neg_data.buying_league_reputation,
                     sell_on_percentage: neg_data.sell_on_percentage,
+                    loan_future_fee: neg_data.loan_future_fee,
                 });
 
-                PipelineProcessor::on_negotiation_resolved(country, neg_data.buying_club_id, neg_data.player_id, true);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    true,
+                );
                 PipelineProcessor::clear_player_interest(country, neg_data.player_id);
             }
         } else {
@@ -708,11 +805,20 @@ impl CountryResult {
                 negotiation.reject_with_reason(NegotiationRejectionReason::MedicalFailed);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
-            PipelineProcessor::on_negotiation_resolved(country, neg_data.buying_club_id, neg_data.player_id, false);
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                false,
+            );
         }
     }
 
-    pub(crate) fn calculate_player_importance(country: &Country, player_id: u32, club_id: u32) -> f32 {
+    pub(crate) fn calculate_player_importance(
+        country: &Country,
+        player_id: u32,
+        club_id: u32,
+    ) -> f32 {
         if let Some(club) = country.clubs.iter().find(|c| c.id == club_id) {
             if club.teams.teams.is_empty() {
                 return 0.5;
@@ -723,9 +829,11 @@ impl CountryResult {
                 return 0.5;
             }
 
-            let avg_ability: f32 = players.iter()
+            let avg_ability: f32 = players
+                .iter()
                 .map(|p| p.player_attributes.current_ability as f32)
-                .sum::<f32>() / players.len() as f32;
+                .sum::<f32>()
+                / players.len() as f32;
 
             if let Some(player) = players.iter().find(|p| p.id == player_id) {
                 let ability = player.player_attributes.current_ability as f32;
@@ -748,6 +856,15 @@ impl CountryResult {
     }
 
     pub(crate) fn reopen_listing_for_player(country: &mut Country, player_id: u32) {
+        let still_has_active_bid = country.transfer_market.negotiations.values().any(|n| {
+            n.player_id == player_id
+                && (n.status == crate::transfers::NegotiationStatus::Pending
+                    || n.status == crate::transfers::NegotiationStatus::Countered)
+        });
+        if still_has_active_bid {
+            return;
+        }
+
         for listing in &mut country.transfer_market.listings {
             if listing.player_id == player_id
                 && listing.status == TransferListingStatus::InNegotiation

@@ -450,6 +450,15 @@ impl SimulatorData {
                         }
                     }
 
+                    // Persistent scouting memory: clubs may know a player
+                    // from a past loan spell or observed match even after he
+                    // has returned to another country.
+                    if !is_interested {
+                        if club.transfer_plan.known_players.iter().any(|m| m.player_id == player_id) {
+                            is_interested = true;
+                        }
+                    }
+
                     if is_interested {
                         let team_slug = club.teams.teams.first()
                             .map(|t| t.slug.clone())

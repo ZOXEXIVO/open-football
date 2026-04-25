@@ -1,4 +1,5 @@
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
+use crate::PlayerPreferredFoot;
 use crate::{Player, PlayerStatusType, TacticalStyle, Tactics};
 
 pub const DEFAULT_SQUAD_SIZE: usize = 11;
@@ -31,10 +32,19 @@ pub fn is_available(player: &Player, is_friendly: bool) -> bool {
 pub fn is_adjacent_group(a: PlayerFieldPositionGroup, b: PlayerFieldPositionGroup) -> bool {
     matches!(
         (a, b),
-        (PlayerFieldPositionGroup::Defender, PlayerFieldPositionGroup::Midfielder)
-            | (PlayerFieldPositionGroup::Midfielder, PlayerFieldPositionGroup::Defender)
-            | (PlayerFieldPositionGroup::Midfielder, PlayerFieldPositionGroup::Forward)
-            | (PlayerFieldPositionGroup::Forward, PlayerFieldPositionGroup::Midfielder)
+        (
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder
+        ) | (
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Defender
+        ) | (
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward
+        ) | (
+            PlayerFieldPositionGroup::Forward,
+            PlayerFieldPositionGroup::Midfielder
+        )
     )
 }
 
@@ -59,15 +69,24 @@ pub fn position_fit_score(
             .map(|p| p.level)
             .max()
             .unwrap_or(0);
-        return primary_level as f32 * 0.7;
+        return primary_level as f32 * same_group_fit_multiplier(player.position(), slot_position);
     }
 
     let adjacent = matches!(
         (player_group, slot_group),
-        (PlayerFieldPositionGroup::Defender, PlayerFieldPositionGroup::Midfielder)
-            | (PlayerFieldPositionGroup::Midfielder, PlayerFieldPositionGroup::Defender)
-            | (PlayerFieldPositionGroup::Midfielder, PlayerFieldPositionGroup::Forward)
-            | (PlayerFieldPositionGroup::Forward, PlayerFieldPositionGroup::Midfielder)
+        (
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder
+        ) | (
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Defender
+        ) | (
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward
+        ) | (
+            PlayerFieldPositionGroup::Forward,
+            PlayerFieldPositionGroup::Midfielder
+        )
     );
 
     if adjacent {
@@ -84,6 +103,70 @@ pub fn position_fit_score(
     1.0
 }
 
+/// More realistic compatibility for nearby roles. This keeps the old broad
+/// group fallback, but distinguishes sensible conversions (DR -> WBR) from
+/// desperate ones (DC -> DL).
+fn same_group_fit_multiplier(primary: PlayerPositionType, slot: PlayerPositionType) -> f32 {
+    if primary == slot {
+        return 1.0;
+    }
+
+    match (primary, slot) {
+        (PlayerPositionType::DefenderLeft, PlayerPositionType::WingbackLeft)
+        | (PlayerPositionType::WingbackLeft, PlayerPositionType::DefenderLeft)
+        | (PlayerPositionType::DefenderRight, PlayerPositionType::WingbackRight)
+        | (PlayerPositionType::WingbackRight, PlayerPositionType::DefenderRight)
+        | (PlayerPositionType::MidfielderLeft, PlayerPositionType::AttackingMidfielderLeft)
+        | (PlayerPositionType::AttackingMidfielderLeft, PlayerPositionType::MidfielderLeft)
+        | (PlayerPositionType::MidfielderRight, PlayerPositionType::AttackingMidfielderRight)
+        | (PlayerPositionType::AttackingMidfielderRight, PlayerPositionType::MidfielderRight) => {
+            0.86
+        }
+
+        (PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderCenterLeft)
+        | (PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderCenterRight)
+        | (PlayerPositionType::DefenderCenterLeft, PlayerPositionType::DefenderCenter)
+        | (PlayerPositionType::DefenderCenterRight, PlayerPositionType::DefenderCenter)
+        | (PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderCenterLeft)
+        | (PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderCenterRight)
+        | (PlayerPositionType::MidfielderCenterLeft, PlayerPositionType::MidfielderCenter)
+        | (PlayerPositionType::MidfielderCenterRight, PlayerPositionType::MidfielderCenter)
+        | (PlayerPositionType::ForwardCenter, PlayerPositionType::Striker)
+        | (PlayerPositionType::Striker, PlayerPositionType::ForwardCenter) => 0.82,
+
+        (PlayerPositionType::ForwardLeft, PlayerPositionType::AttackingMidfielderLeft)
+        | (PlayerPositionType::AttackingMidfielderLeft, PlayerPositionType::ForwardLeft)
+        | (PlayerPositionType::ForwardRight, PlayerPositionType::AttackingMidfielderRight)
+        | (PlayerPositionType::AttackingMidfielderRight, PlayerPositionType::ForwardRight) => 0.78,
+
+        _ => 0.62,
+    }
+}
+
+pub fn side_foot_bonus(player: &Player, position: PlayerPositionType) -> f32 {
+    match position {
+        PlayerPositionType::DefenderLeft
+        | PlayerPositionType::DefenderCenterLeft
+        | PlayerPositionType::WingbackLeft
+        | PlayerPositionType::MidfielderLeft
+        | PlayerPositionType::AttackingMidfielderLeft
+        | PlayerPositionType::ForwardLeft => match player.preferred_foot {
+            PlayerPreferredFoot::Left | PlayerPreferredFoot::Both => 0.45,
+            PlayerPreferredFoot::Right => -0.25,
+        },
+        PlayerPositionType::DefenderRight
+        | PlayerPositionType::DefenderCenterRight
+        | PlayerPositionType::WingbackRight
+        | PlayerPositionType::MidfielderRight
+        | PlayerPositionType::AttackingMidfielderRight
+        | PlayerPositionType::ForwardRight => match player.preferred_foot {
+            PlayerPreferredFoot::Right | PlayerPreferredFoot::Both => 0.45,
+            PlayerPreferredFoot::Left => -0.25,
+        },
+        _ => 0.0,
+    }
+}
+
 /// Tactical style bonus for a player in a given position
 pub fn tactical_style_bonus(
     player: &Player,
@@ -94,9 +177,7 @@ pub fn tactical_style_bonus(
 
     match tactics.tactical_style() {
         TacticalStyle::Attacking => {
-            if position.is_forward()
-                || position == PlayerPositionType::AttackingMidfielderCenter
-            {
+            if position.is_forward() || position == PlayerPositionType::AttackingMidfielderCenter {
                 bonus += player.skills.technical.finishing * 0.1;
                 bonus += player.skills.mental.off_the_ball * 0.1;
             }
@@ -158,10 +239,7 @@ pub fn best_tactical_position(player: &Player, tactics: &Tactics) -> PlayerPosit
     player.position()
 }
 
-pub fn pick_best_unused<'p>(
-    available: &[&'p Player],
-    used_ids: &[u32],
-) -> Option<&'p Player> {
+pub fn pick_best_unused<'p>(available: &[&'p Player], used_ids: &[u32]) -> Option<&'p Player> {
     available
         .iter()
         .filter(|p| !used_ids.contains(&p.id))

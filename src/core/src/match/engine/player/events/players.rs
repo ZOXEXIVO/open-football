@@ -311,6 +311,7 @@ impl PlayerEventDispatcher {
             is_auto_goal,
             time: context.total_match_time,
         });
+        context.record_stoppage_time(30_000);
 
         field.ball.previous_owner = None;
         field.ball.current_owner = None;
@@ -1685,6 +1686,7 @@ impl PlayerEventDispatcher {
             };
             player.yellow_cards = player.yellow_cards.saturating_add(1);
             player.statistics.add_yellow_card(match_second);
+            context.record_stoppage_time(15_000);
             let _ = direct_red;
             (false, false)
         };
