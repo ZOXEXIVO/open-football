@@ -1,3 +1,4 @@
+pub(crate) mod config;
 pub(crate) mod types;
 mod listings;
 mod negotiations;
@@ -11,6 +12,7 @@ use super::CountryResult;
 use crate::simulator::SimulatorData;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::PipelineProcessor;
+use config::TransferConfig;
 use free_agents::{
     execute_global_free_agent_signing, snapshot_global_free_agents, GlobalFreeAgentSigning,
 };
@@ -25,6 +27,11 @@ impl CountryResult {
 
         let window_manager = TransferWindowManager::new();
         let window_open = window_manager.is_window_open(country_id, current_date);
+        // Single source of truth for tunable knobs (probability tiers,
+        // squad caps, default contract terms). One day we'll thread a
+        // per-save override through here; for now `default()` keeps the
+        // game's published balance.
+        let config = TransferConfig::default();
 
         // Collect foreign player pool from other countries (for cross-country scouting)
         let foreign_players = if window_open {
@@ -74,6 +81,7 @@ impl CountryResult {
                 current_date,
                 &mut summary,
                 &global_free_agents,
+                &config,
             );
 
             if window_open {
@@ -131,7 +139,7 @@ impl CountryResult {
         // country signed the same player earlier in this tick — we deduce
         // success from the executor's return value.
         for signing in &global_signings {
-            if execute_global_free_agent_signing(data, signing, current_date) {
+            if execute_global_free_agent_signing(data, signing, current_date, &config) {
                 summary.completed_transfers += 1;
             }
         }

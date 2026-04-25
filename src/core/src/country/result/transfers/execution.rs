@@ -109,17 +109,8 @@ pub(crate) fn execute_transfer_within_country(
 
     if let Some(mut player) = player {
         if let Some(ref mut from) = from_info {
-            let (league_name, league_slug) = selling_league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .and_then(|l| {
-                    if l.friendly {
-                        country.leagues.leagues.iter().find(|ml| !ml.friendly)
-                    } else {
-                        Some(l)
-                    }
-                })
-                .map(|l| (l.name.clone(), l.slug.clone()))
-                .unwrap_or_default();
+            let (league_name, league_slug) =
+                resolve_selling_league_labels(country, selling_league_id);
             from.league_name = league_name;
             from.league_slug = league_slug;
         }
@@ -149,20 +140,8 @@ pub(crate) fn execute_transfer_within_country(
         }
 
         // Always record history — use fallback TeamInfo if club info couldn't be resolved
-        let from = from_info.unwrap_or_else(|| TeamInfo {
-            name: String::new(),
-            slug: String::new(),
-            reputation: 0,
-            league_name: String::new(),
-            league_slug: String::new(),
-        });
-        let to = to_info.unwrap_or_else(|| TeamInfo {
-            name: String::new(),
-            slug: String::new(),
-            reputation: 0,
-            league_name: String::new(),
-            league_slug: String::new(),
-        });
+        let from = from_info.unwrap_or_else(empty_team_info);
+        let to = to_info.unwrap_or_else(empty_team_info);
         // Drain existing sell-on obligations now — they pay previous
         // beneficiaries out of the selling club's proceeds on this sale.
         let obligations = player.drain_sell_on_obligations();
@@ -289,17 +268,8 @@ fn execute_loan_within_country(
 
     if let Some(mut player) = player {
         if let Some(ref mut from) = from_info {
-            let (league_name, league_slug) = selling_league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .and_then(|l| {
-                    if l.friendly {
-                        country.leagues.leagues.iter().find(|ml| !ml.friendly)
-                    } else {
-                        Some(l)
-                    }
-                })
-                .map(|l| (l.name.clone(), l.slug.clone()))
-                .unwrap_or_default();
+            let (league_name, league_slug) =
+                resolve_selling_league_labels(country, selling_league_id);
             from.league_name = league_name;
             from.league_slug = league_slug;
         }
@@ -333,20 +303,8 @@ fn execute_loan_within_country(
         }
 
         // Always record history — use fallback TeamInfo if club info couldn't be resolved
-        let from = from_info.unwrap_or_else(|| TeamInfo {
-            name: String::new(),
-            slug: String::new(),
-            reputation: 0,
-            league_name: String::new(),
-            league_slug: String::new(),
-        });
-        let to = to_info.unwrap_or_else(|| TeamInfo {
-            name: String::new(),
-            slug: String::new(),
-            reputation: 0,
-            league_name: String::new(),
-            league_slug: String::new(),
-        });
+        let from = from_info.unwrap_or_else(empty_team_info);
+        let to = to_info.unwrap_or_else(empty_team_info);
         let loan_contract = build_loan_contract(
             loan_fee,
             loan_end,
@@ -459,17 +417,7 @@ fn take_player_from_selling_country(
 
     // Resolve league name
     let mut from_info = from_info;
-    let (league_name, league_slug) = league_id
-        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-        .and_then(|l| {
-            if l.friendly {
-                country.leagues.leagues.iter().find(|ml| !ml.friendly)
-            } else {
-                Some(l)
-            }
-        })
-        .map(|l| (l.name.clone(), l.slug.clone()))
-        .unwrap_or_default();
+    let (league_name, league_slug) = resolve_selling_league_labels(country, league_id);
     from_info.league_name = league_name;
     from_info.league_slug = league_slug;
 
@@ -537,13 +485,7 @@ fn execute_transfer_across_countries(
 
     let to_info = resolve_buying_club_info(buying_country, buying_club_id);
 
-    let to = to_info.unwrap_or_else(|| TeamInfo {
-        name: String::new(),
-        slug: String::new(),
-        reputation: 0,
-        league_name: String::new(),
-        league_slug: String::new(),
-    });
+    let to = to_info.unwrap_or_else(empty_team_info);
     // Drain sell-on obligations for cross-country. The beneficiaries may
     // live in a different country from the current seller, so we hold the
     // drained list and settle after returning the player into the buyer
@@ -688,13 +630,7 @@ fn execute_loan_across_countries(
 
     let to_info = resolve_buying_club_info(buying_country, buying_club_id);
 
-    let to = to_info.unwrap_or_else(|| TeamInfo {
-        name: String::new(),
-        slug: String::new(),
-        reputation: 0,
-        league_name: String::new(),
-        league_slug: String::new(),
-    });
+    let to = to_info.unwrap_or_else(empty_team_info);
     let loan_contract = build_loan_contract(
         loan_fee,
         loan_end,
@@ -736,6 +672,41 @@ fn execute_loan_across_countries(
 // ============================================================
 // Shared helpers
 // ============================================================
+
+/// Empty `TeamInfo` placeholder used as a fallback when club / league
+/// lookup fails partway through execution. Centralised so changes to
+/// `TeamInfo`'s shape don't have to be mirrored across four call sites.
+fn empty_team_info() -> TeamInfo {
+    TeamInfo {
+        name: String::new(),
+        slug: String::new(),
+        reputation: 0,
+        league_name: String::new(),
+        league_slug: String::new(),
+    }
+}
+
+/// Resolve `(league_name, league_slug)` for the selling side of a transfer.
+/// Friendly leagues (preseason / exhibition fixtures) don't represent the
+/// player's actual competitive context, so we fall back to the country's
+/// first non-friendly league instead. Used to populate the `from.league_*`
+/// fields on `TeamInfo` once the player has been taken.
+fn resolve_selling_league_labels(
+    country: &Country,
+    selling_league_id: Option<u32>,
+) -> (String, String) {
+    selling_league_id
+        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+        .and_then(|l| {
+            if l.friendly {
+                country.leagues.leagues.iter().find(|ml| !ml.friendly)
+            } else {
+                Some(l)
+            }
+        })
+        .map(|l| (l.name.clone(), l.slug.clone()))
+        .unwrap_or_default()
+}
 
 fn resolve_buying_club_info(country: &Country, buying_club_id: u32) -> Option<TeamInfo> {
     country

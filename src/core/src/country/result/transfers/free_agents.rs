@@ -1,3 +1,4 @@
+use super::config::TransferConfig;
 use super::types::{can_club_accept_player, TransferActivitySummary};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
@@ -54,6 +55,7 @@ impl CountryResult {
         date: NaiveDate,
         summary: &mut TransferActivitySummary,
         global_pool: &[GlobalFreeAgentSummary],
+        config: &TransferConfig,
     ) -> Vec<GlobalFreeAgentSigning> {
         #[allow(dead_code)]
         struct FreeAgentCandidate {
@@ -186,7 +188,8 @@ impl CountryResult {
         }
 
         let mut signings: Vec<FreeAgentSigning> = Vec::new();
-        let max_signings_per_day = 2;
+        let max_signings_per_day = config.max_free_agent_signings_per_day;
+        let ability_slack = config.free_agent_ability_slack;
 
         for club in &country.clubs {
             if signings.len() >= max_signings_per_day {
@@ -228,49 +231,15 @@ impl CountryResult {
                     .filter(|c| {
                         c.club_id != club.id
                             && c.position_group == request.position.position_group()
-                            && c.ability >= request.min_ability.saturating_sub(5)
+                            && c.ability >= request.min_ability.saturating_sub(ability_slack)
                             && !signings.iter().any(|s| s.player_id == c.player_id)
                     })
                     .max_by_key(|c| c.ability as u16 + c.potential as u16)
                 {
-                    // Probability-based signing: better players get signed faster
-                    // Daily chance based on ability and age:
-                    //   ability 160+ → 25% daily (elite, signed in days)
-                    //   ability 130  → 10% daily (signed in ~2 weeks)
-                    //   ability 100  → 3% daily  (signed in ~1 month)
-                    //   ability 70   → 0.8% daily (signed in ~4 months)
-                    //   ability 40   → 0.2% daily (may take 1-2 seasons)
-                    let ability_f = best.ability as f32;
-                    let base_chance = if ability_f >= 160.0 {
-                        25.0
-                    } else if ability_f >= 130.0 {
-                        5.0 + (ability_f - 130.0) / 30.0 * 20.0
-                    } else if ability_f >= 100.0 {
-                        1.5 + (ability_f - 100.0) / 30.0 * 3.5
-                    } else if ability_f >= 60.0 {
-                        0.3 + (ability_f - 60.0) / 40.0 * 1.2
-                    } else {
-                        0.1 + (ability_f / 60.0) * 0.2
-                    };
-
-                    // Age penalty: older players are harder to place
-                    let age_factor = match best.age {
-                        0..=29 => 1.0,
-                        30..=31 => 0.8,
-                        32..=33 => 0.5,
-                        34..=35 => 0.3,
-                        _ => 0.15,
-                    };
-
-                    // Young players with high potential get a boost
-                    let potential_boost = if best.age < 24 && best.potential > best.ability + 20 {
-                        1.5
-                    } else {
-                        1.0
-                    };
-
+                    // Probability tables, age penalties, and the young-potential
+                    // boost all live in `TransferConfig` — see config.rs.
                     let daily_chance =
-                        (base_chance * age_factor * potential_boost).clamp(0.1, 30.0);
+                        config.daily_signing_chance(best.ability, best.potential, best.age);
 
                     // Roll the dice
                     let roll = IntegerUtils::random(1, 1000) as f32 / 10.0; // 0.1 to 100.0
@@ -466,6 +435,7 @@ pub(crate) fn execute_global_free_agent_signing(
     data: &mut SimulatorData,
     signing: &GlobalFreeAgentSigning,
     date: NaiveDate,
+    config: &TransferConfig,
 ) -> bool {
     // Pre-check 1: is the player still in the global pool?
     let player_idx = match data.free_agents.iter().position(|p| p.id == signing.player_id) {
@@ -488,12 +458,21 @@ pub(crate) fn execute_global_free_agent_signing(
     // All pre-checks passed — take the player out of the pool.
     let mut player = data.free_agents.swap_remove(player_idx);
 
-    // Default 3-year contract. Salary falls back to a minimum because a
-    // global free agent may have no prior contract; the wage system will
-    // re-evaluate against league reputation on the next tick.
-    let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1_000);
-    let expiration =
-        NaiveDate::from_ymd_opt(date.year() + 3, 6, 30).unwrap_or(date);
+    // Default contract length / wage fall through `TransferConfig`. The
+    // wage system re-evaluates against league reputation on the next tick,
+    // so the salary here is just a safe boot value when the player came
+    // out of the pool with no prior contract.
+    let salary = player
+        .contract
+        .as_ref()
+        .map(|c| c.salary)
+        .unwrap_or(config.free_agent_default_salary);
+    let expiration = NaiveDate::from_ymd_opt(
+        date.year() + config.free_agent_contract_years,
+        config.free_agent_contract_end_month,
+        config.free_agent_contract_end_day,
+    )
+    .unwrap_or(date);
     player.contract = Some(PlayerClubContract::new(salary, expiration));
     player.contract_loan = None;
 
