@@ -31,6 +31,12 @@ pub struct OdbPlayer {
     /// The club that owns the player's primary contract (parent club).
     /// If the player is on loan, they will still appear in this club's
     /// transfer/contract records even though they physically play for `loan.to_club_id`.
+    ///
+    /// Defaults to 0 for free agents — players sourced from
+    /// `data/{cc}/free_agents/*.json` who belong to no club at all. The
+    /// hydrator routes these into `SimulatorData.free_agents` instead of
+    /// any club squad.
+    #[serde(default)]
     pub club_id: u32,
 
     /// One or more positions with skill levels (1-20).
@@ -54,7 +60,10 @@ pub struct OdbPlayer {
     #[serde(default)]
     pub reputation: Option<OdbReputation>,
 
-    pub contract: OdbContract,
+    /// Active contract terms. Optional so free-agent records (no club, no
+    /// running deal) can omit it; clubbed players always populate it.
+    #[serde(default)]
+    pub contract: Option<OdbContract>,
 
     /// Present when the player is currently on loan to another club.
     /// `loan.to_club_id` becomes the player's CURRENT club for squad placement;
@@ -166,8 +175,14 @@ pub struct OdbHistoryItem {
 /// play. Loaned-out players are indexed under the borrower so their squad
 /// lists them in training / matches. Loan metadata rides on the player's
 /// `contract_loan`, which the web layer reads to label the loan direction.
+///
+/// Players whose `club_id` is 0 (sourced from `data/{cc}/free_agents/`) live
+/// in a separate `free_agents` bucket — they are not part of any club's
+/// squad and will be dropped into `SimulatorData.free_agents` by the
+/// generator instead.
 pub struct PlayersOdb {
     by_physical_club: HashMap<u32, Vec<OdbPlayer>>,
+    free_agents: Vec<OdbPlayer>,
 }
 
 impl PlayersOdb {
@@ -182,9 +197,10 @@ impl PlayersOdb {
         let odb = Self::from_players(source.iter().cloned().collect());
         let total: usize = odb.by_physical_club.values().map(|v| v.len()).sum();
         info!(
-            "players loaded from compiled DB: {} players across {} clubs",
+            "players loaded from compiled DB: {} clubbed players across {} clubs, {} free agents",
             total,
-            odb.by_physical_club.len()
+            odb.by_physical_club.len(),
+            odb.free_agents.len(),
         );
         Some(odb)
     }
@@ -192,11 +208,17 @@ impl PlayersOdb {
     /// Index an in-memory list of players — useful for tests and ad-hoc tools.
     pub fn from_players(players: Vec<OdbPlayer>) -> Self {
         let mut by_physical_club: HashMap<u32, Vec<OdbPlayer>> = HashMap::new();
+        let mut free_agents: Vec<OdbPlayer> = Vec::new();
         for p in players {
+            // A free agent has no parent club and no loan placement.
+            if p.club_id == 0 && p.loan.is_none() {
+                free_agents.push(p);
+                continue;
+            }
             let physical_club = p.loan.as_ref().map(|l| l.to_club_id).unwrap_or(p.club_id);
             by_physical_club.entry(physical_club).or_default().push(p);
         }
-        PlayersOdb { by_physical_club }
+        PlayersOdb { by_physical_club, free_agents }
     }
 
     pub fn for_club(&self, club_id: u32) -> Option<&[OdbPlayer]> {
@@ -207,14 +229,26 @@ impl PlayersOdb {
         self.by_physical_club.contains_key(&club_id)
     }
 
+    /// Players sourced from `data/{cc}/free_agents/` — clubless and ready
+    /// to be hydrated into `SimulatorData.free_agents`.
+    pub fn free_agents(&self) -> &[OdbPlayer] {
+        &self.free_agents
+    }
+
     /// Highest player id present in the index, or `None` when empty.
     /// Used to seed the procedural id sequence so generated players never
     /// collide with externally-supplied ids.
     pub fn max_player_id(&self) -> Option<u32> {
-        self.by_physical_club
+        let club_max = self
+            .by_physical_club
             .values()
             .flat_map(|v| v.iter().map(|p| p.id))
-            .max()
+            .max();
+        let fa_max = self.free_agents.iter().map(|p| p.id).max();
+        match (club_max, fa_max) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
     }
 }
 
@@ -240,14 +274,14 @@ mod tests {
             potential_ability: 130,
             value: None,
             reputation: None,
-            contract: OdbContract {
+            contract: Some(OdbContract {
                 salary: 100_000,
                 expiration: NaiveDate::from_ymd_opt(2027, 6, 30).unwrap(),
                 started: None,
                 contract_type: None,
                 shirt_number: None,
                 squad_status: None,
-            },
+            }),
             loan: loan_to.map(|to| OdbLoan {
                 to_club_id: to,
                 to_team_id: None,
@@ -268,6 +302,16 @@ mod tests {
         let odb = PlayersOdb::from_players(vec![make_player(1, 1139, None)]);
         assert!(odb.has_club(1139));
         assert_eq!(odb.for_club(1139).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn free_agent_routed_out_of_club_index() {
+        let mut p = make_player(99, 0, None);
+        p.contract = None;
+        let odb = PlayersOdb::from_players(vec![p]);
+        assert!(odb.for_club(0).is_none(), "free agent must not occupy a synthetic club_id=0 bucket");
+        assert_eq!(odb.free_agents().len(), 1);
+        assert_eq!(odb.free_agents()[0].id, 99);
     }
 
     #[test]

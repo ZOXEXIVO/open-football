@@ -12,8 +12,10 @@ use core::{
     seed_core_player_id_sequence, CompetitionScope, NationalCompetitionConfig, SimulatorData,
 };
 use crate::DatabaseEntity;
+use crate::generators::PlayerGenerator;
 use crate::generators::convert::convert_national_competition;
 use crate::generators::player::seed_player_id_sequence;
+use log::info;
 use rayon::prelude::*;
 
 pub struct DatabaseGenerator;
@@ -100,6 +102,36 @@ impl DatabaseGenerator {
                 country.slug.clone(),
                 country.name.clone(),
             );
+        }
+
+        // Hydrate clubless players from `data/{cc}/free_agents/` directly
+        // into `SimulatorData.free_agents` — same pool the runtime uses for
+        // released players, so the existing free-agent matching pipeline
+        // can sign them without any new plumbing.
+        if let Some(odb) = data.players_odb.as_ref() {
+            let records = odb.free_agents();
+            if !records.is_empty() {
+                let hydrated: Vec<core::Player> = records
+                    .par_iter()
+                    .map(|r| {
+                        let (continent_id, country_code) = data
+                            .countries
+                            .iter()
+                            .find(|c| c.id == r.country_id)
+                            .map(|c| (c.continent_id, c.code.clone()))
+                            .unwrap_or((1, String::new()));
+                        PlayerGenerator::generate_from_odb(
+                            r,
+                            continent_id,
+                            &country_code,
+                            data,
+                        )
+                    })
+                    .collect();
+                let count = hydrated.len();
+                simulator_data.free_agents.extend(hydrated);
+                info!("free agents hydrated from compiled DB: {count}");
+            }
         }
 
         simulator_data

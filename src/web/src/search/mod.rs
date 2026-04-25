@@ -89,6 +89,7 @@ pub struct SearchPlayerDto {
     pub team_name: String,
     pub age: u8,
     pub generated: bool,
+    pub is_free_agent: bool,
 }
 
 #[derive(Serialize)]
@@ -186,11 +187,43 @@ pub async fn search_api_action(
                                 team_name: team.name.clone(),
                                 age: core::utils::DateUtils::age(player.birth_date, now),
                                 generated: player.is_generated(),
+                                is_free_agent: false,
                             });
                         }
                     }
                 }
             }
+        }
+    }
+
+    for player in &simulator_data.free_agents {
+        if players.len() >= MAX_RESULTS_PER_KIND {
+            break;
+        }
+        let first = player.full_name.display_first_name();
+        let last = player.full_name.display_last_name();
+        let full = format!("{} {}", first, last);
+        if full.to_lowercase().contains(&needle) {
+            let country_code = simulator_data
+                .country(player.country_id)
+                .map(|c| c.code.clone())
+                .or_else(|| {
+                    simulator_data
+                        .country_info
+                        .get(&player.country_id)
+                        .map(|i| i.code.clone())
+                })
+                .unwrap_or_default();
+            players.push(SearchPlayerDto {
+                id: player.id,
+                slug: player.slug(),
+                name: full.trim().to_string(),
+                country_code,
+                team_name: String::new(),
+                age: core::utils::DateUtils::age(player.birth_date, now),
+                generated: player.is_generated(),
+                is_free_agent: true,
+            });
         }
     }
 

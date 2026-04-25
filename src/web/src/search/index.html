@@ -7,7 +7,8 @@
              data-i18n-countries="{{ i18n.t("search_countries") }}"
              data-i18n-clubs="{{ i18n.t("search_clubs") }}"
              data-i18n-players="{{ i18n.t("search_players") }}"
-             data-i18n-no-results="{{ i18n.t("search_no_results") }}">
+             data-i18n-no-results="{{ i18n.t("search_no_results") }}"
+             data-i18n-free-agent="{{ i18n.t("free_agent") }}">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("search") }}</h3>
         </div>
@@ -44,7 +45,8 @@
         countries: panel.dataset.i18nCountries || 'Countries',
         clubs: panel.dataset.i18nClubs || 'Clubs',
         players: panel.dataset.i18nPlayers || 'Players',
-        noResults: panel.dataset.i18nNoResults || 'No results'
+        noResults: panel.dataset.i18nNoResults || 'No results',
+        freeAgent: panel.dataset.i18nFreeAgent || 'Free Agent'
     };
 
     var input = document.getElementById('fm-search-input');
@@ -121,7 +123,7 @@
                     '/face.svg?age=' + encodeURIComponent(p.age) +
                     '&cc=' + encodeURIComponent(p.country_code || '');
                 var realSrc = 'https://open-football.org/player/' + encodeURIComponent(p.id) + '.png';
-                var sub = esc(p.team_name || '');
+                var sub = p.is_free_agent ? esc(i18n.freeAgent) : esc(p.team_name || '');
                 var img = p.generated
                     ? '<img class="fm-search-avatar-img" src="' + faceSrc + '" alt="">'
                     : '<img class="fm-search-avatar-img fm-search-avatar-real" src="' + realSrc +

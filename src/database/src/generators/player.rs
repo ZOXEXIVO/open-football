@@ -1458,15 +1458,18 @@ fn build_full_name(record: &OdbPlayer) -> FullName {
 }
 
 fn build_main_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
+    // Free-agent records have no active contract — leave the player
+    // contract-less so the free-agent flows treat them as available.
+    let src = record.contract.as_ref()?;
     let mut c = PlayerClubContract {
-        shirt_number: record.contract.shirt_number,
-        salary: record.contract.salary,
-        contract_type: parse_contract_type(record.contract.contract_type.as_deref()),
+        shirt_number: src.shirt_number,
+        salary: src.salary,
+        contract_type: parse_contract_type(src.contract_type.as_deref()),
         squad_status: core::PlayerSquadStatus::NotYetSet,
         is_transfer_listed: false,
         transfer_status: None,
-        started: record.contract.started,
-        expiration: record.contract.expiration,
+        started: src.started,
+        expiration: src.expiration,
         loan_from_club_id: None,
         loan_from_team_id: None,
         loan_to_club_id: None,
