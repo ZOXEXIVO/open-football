@@ -140,7 +140,7 @@ pub async fn team_stats_action(
         menu_sections,
         team_slug: team.slug.clone(),
         active_tab: "stats",
-        show_finances_tab: matches!(team.team_type, core::TeamType::Main | core::TeamType::B | core::TeamType::Second),
+        show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
         players,
     })
@@ -155,18 +155,7 @@ fn get_neighbor_teams(
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
 
-    let club_name = &club.name;
-
-    let mut teams: Vec<(String, String, u16)> = club
-        .teams
-        .teams
-        .iter()
-        .map(|team| {
-            (format!("{}  |  {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
-        })
-        .collect();
-
-    teams.sort_by(|a, b| b.2.cmp(&a.2));
+    let teams = views::neighbor_teams(club, i18n);
 
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
@@ -180,7 +169,7 @@ fn get_neighbor_teams(
     country_leagues.sort_by_key(|(id, _, _)| *id);
 
     Ok((
-        teams.into_iter().map(|(name, slug, _)| (name, slug)).collect(),
+        teams,
         country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
     ))
 }

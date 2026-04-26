@@ -2,7 +2,7 @@ use log::info;
 use super::CountryResult;
 use crate::league::Season;
 use crate::simulator::SimulatorData;
-use crate::{TeamInfo, TeamType};
+use crate::TeamInfo;
 
 impl CountryResult {
     /// Snapshot all player statistics into history when a new season starts.
@@ -25,7 +25,8 @@ impl CountryResult {
             .collect();
 
         for club in &mut country.clubs {
-            // Get main team info — used for all teams in player history
+            // Get main team info — used as fallback for sub-teams that
+            // share the parent's brand (Reserve, U18..U23).
             let main_team_info: Option<(String, String, u16)> = club.teams.main()
                 .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
 
@@ -36,22 +37,35 @@ impl CountryResult {
                 .unwrap_or_default();
 
             for team in &mut club.teams.teams {
-                // Always use main team info in history (show club name, not sub-team)
-                let (team_name, team_slug, team_reputation) = match (&team.team_type, &main_team_info) {
-                    (TeamType::Main, _) | (_, None) => {
-                        (team.name.clone(), team.slug.clone(), team.reputation.world)
-                    }
-                    (_, Some((name, slug, rep))) => {
-                        (name.clone(), slug.clone(), *rep)
-                    }
+                // Senior squads (Main, B, Second) keep their own identity
+                // because they each compete in a real league; the player's
+                // history must show the actual team and league played for.
+                // Youth/Reserve sub-teams collapse into the main brand so
+                // synthetic-sub-league stats still aggregate under the club.
+                let keeps_own_identity = team.team_type.is_own_team();
+
+                let (team_name, team_slug, team_reputation) = if keeps_own_identity || main_team_info.is_none() {
+                    (team.name.clone(), team.slug.clone(), team.reputation.world)
+                } else {
+                    let (name, slug, rep) = main_team_info.as_ref().unwrap();
+                    (name.clone(), slug.clone(), *rep)
+                };
+
+                let (league_name, league_slug) = if keeps_own_identity {
+                    team.league_id
+                        .and_then(|lid| league_lookup.get(&lid))
+                        .cloned()
+                        .unwrap_or_else(|| main_team_league.clone())
+                } else {
+                    main_team_league.clone()
                 };
 
                 let team_info = TeamInfo {
                     name: team_name,
                     slug: team_slug,
                     reputation: team_reputation,
-                    league_name: main_team_league.0.clone(),
-                    league_slug: main_team_league.1.clone(),
+                    league_name,
+                    league_slug,
                 };
 
                 for player in &mut team.players.players {

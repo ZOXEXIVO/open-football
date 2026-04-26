@@ -1,6 +1,34 @@
 use crate::I18n;
 use core::SimulatorData;
 use core::league::League;
+use core::Club;
+
+/// Build the parent-club's left-menu team list ready for the template:
+/// sorted with Main first, then Second, B, Reserve, U23..U18, with
+/// reputation tiebreaking inside a type. Each entry is `(label, slug)`.
+pub fn neighbor_teams(club: &Club, i18n: &I18n) -> Vec<(String, String)> {
+    use std::cmp::Reverse;
+    let club_name = club.name.as_str();
+    let mut entries: Vec<(String, String, u8, u16)> = club
+        .teams
+        .teams
+        .iter()
+        .map(|team| {
+            (
+                team.team_type.menu_label(
+                    club_name,
+                    &team.name,
+                    i18n.t(team.team_type.as_i18n_key()),
+                ),
+                team.slug.clone(),
+                team.team_type.menu_order(),
+                team.reputation.world,
+            )
+        })
+        .collect();
+    entries.sort_by_key(|(_, _, ord, rep)| (*ord, Reverse(*rep)));
+    entries.into_iter().map(|(label, slug, _, _)| (label, slug)).collect()
+}
 
 pub fn club_country_info(simulator_data: &SimulatorData, club_id: u32) -> (&str, &str) {
     simulator_data

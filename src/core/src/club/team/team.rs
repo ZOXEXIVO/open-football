@@ -562,6 +562,47 @@ impl TeamType {
         }
     }
 
+    /// Senior squads that compete in a real league under their own brand.
+    /// Used by the player-history pipeline (so a B/Second player's stats
+    /// show their actual team and league) and by the web layer to decide
+    /// when a team gets its own finances/transfers/etc. tabs.
+    ///
+    /// Reserve is intentionally excluded: it shares the Main team's brand
+    /// and plays in a synthetic sub-league.
+    pub fn is_own_team(&self) -> bool {
+        matches!(self, TeamType::Main | TeamType::B | TeamType::Second)
+    }
+
+    /// Menu-row label for a team grouped under its parent club. Senior
+    /// reserves (B, Second) carry their own canonical name like
+    /// "Spartak Moscow 2" or "Ural B Team", so the row shows the team
+    /// name as-is. Everything else (Main, Reserve, U18..U23) renders as
+    /// "{Club}  |  {i18n type label}", e.g. "Spartak Moscow | First team".
+    pub fn menu_label(&self, club_name: &str, team_name: &str, i18n_type_label: &str) -> String {
+        match self {
+            TeamType::B | TeamType::Second => team_name.to_string(),
+            _ => format!("{}  |  {}", club_name, i18n_type_label),
+        }
+    }
+
+    /// Sort priority for the parent club's left-menu listing. Lower comes
+    /// first, so Main appears at the top, Second right after, then B,
+    /// Reserve, and youth squads in descending age. Reputation tiebreaks
+    /// between teams of the same type within a single club (rare).
+    pub fn menu_order(&self) -> u8 {
+        match self {
+            TeamType::Main => 0,
+            TeamType::Second => 1,
+            TeamType::B => 2,
+            TeamType::Reserve => 3,
+            TeamType::U23 => 4,
+            TeamType::U21 => 5,
+            TeamType::U20 => 6,
+            TeamType::U19 => 7,
+            TeamType::U18 => 8,
+        }
+    }
+
     /// Youth team progression order: U18 → U19 → U20 → U21 → U23
     pub const YOUTH_PROGRESSION: &'static [TeamType] = &[
         TeamType::U18,
@@ -583,9 +624,12 @@ impl fmt::Display for TeamType {
             TeamType::U20 => write!(f, "U20"),
             TeamType::U21 => write!(f, "U21"),
             TeamType::U23 => write!(f, "U23"),
-            // Renders as bare "2" so `format!("{} {}", club_name, team_type)`
-            // produces the conventional "Ural 2" / "Zenit 2" form.
-            TeamType::Second => write!(f, "2"),
+            // Renders as " Team" so the runtime team-name formula
+            // `format!("{} {}", t.name, team_type)` turns the satellite-curated
+            // "Spartak Moscow 2" into "Spartak Moscow 2 Team" without
+            // double-tagging the digit. The "2" lives in the data, the suffix
+            // lives in the type.
+            TeamType::Second => write!(f, "Team"),
         }
     }
 }

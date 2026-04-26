@@ -121,8 +121,12 @@ impl DatabaseGenerator {
                             let team_rep = t.reputation.world;
                             let team_type = TeamType::from_str(&t.team_type).unwrap();
 
+                            // Main and Second carry their full canonical name in
+                            // the data ("Spartak Moscow", "Spartak Moscow 2").
+                            // Other sub-types (B, Reserve, U18..U23) get their
+                            // short type label appended.
                             let team_name = match &team_type {
-                                TeamType::Main => t.name.clone(),
+                                TeamType::Main | TeamType::Second => t.name.clone(),
                                 _ => format!("{} {}", t.name, team_type),
                             };
 

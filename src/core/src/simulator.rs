@@ -11,7 +11,7 @@ use crate::shared::SimulatorDataIndexes;
 use crate::simulator_config::SimulatorConfig;
 use crate::transfers::TransferPool;
 use crate::utils::random::engine as rng_engine;
-use crate::{Player, Staff, TeamInfo, TeamType};
+use crate::{Player, Staff, TeamInfo};
 use chrono::{Datelike, Duration, NaiveDateTime};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -513,14 +513,17 @@ fn team_has_players_needing_seed(team: &crate::club::Team) -> bool {
 }
 
 /// Snapshot of the club's main-team identity for stats-seeding purposes.
-/// Resolved once per club so non-main teams (reserve, U21) inherit the
-/// main brand consistently across all their players.
+/// Resolved once per club so youth teams (U18-U23) and Reserve inherit the
+/// main brand consistently across all their players. Senior reserves
+/// (B, Second) keep their own identity because they compete in real
+/// lower divisions and players' histories should show that.
 struct ClubSeedingContext {
     main_name: Option<String>,
     main_slug: Option<String>,
     main_reputation: u16,
     main_league_name: String,
     main_league_slug: String,
+    league_lookup: HashMap<u32, (String, String)>,
 }
 
 impl ClubSeedingContext {
@@ -543,15 +546,32 @@ impl ClubSeedingContext {
             main_reputation,
             main_league_name,
             main_league_slug,
+            league_lookup: league_lookup.clone(),
         }
     }
 
     /// Build the `TeamInfo` that the seeder writes onto the player's
-    /// history. Main teams use their own identity; non-main teams inherit
-    /// the main brand so stats aggregate correctly under one club name.
+    /// history. Main, B and Second teams keep their own identity (each
+    /// competes in a real league); youth and Reserve squads inherit the
+    /// main brand so synthetic sub-league stats aggregate under the club.
     fn team_info_for(&self, team: &crate::club::Team) -> TeamInfo {
-        let inherit = team.team_type != TeamType::Main && self.main_name.is_some();
-        if inherit {
+        let keeps_own_identity = team.team_type.is_own_team();
+        if keeps_own_identity {
+            let (league_name, league_slug) = team
+                .league_id
+                .and_then(|lid| self.league_lookup.get(&lid))
+                .cloned()
+                .unwrap_or_else(|| {
+                    (self.main_league_name.clone(), self.main_league_slug.clone())
+                });
+            TeamInfo {
+                name: team.name.clone(),
+                slug: team.slug.clone(),
+                reputation: team.reputation.world,
+                league_name,
+                league_slug,
+            }
+        } else if self.main_name.is_some() {
             TeamInfo {
                 name: self.main_name.clone().unwrap_or_default(),
                 slug: self.main_slug.clone().unwrap_or_default(),
@@ -560,6 +580,7 @@ impl ClubSeedingContext {
                 league_slug: self.main_league_slug.clone(),
             }
         } else {
+            // Club has no main team at all — fall back to the team's own info.
             TeamInfo {
                 name: team.name.clone(),
                 slug: team.slug.clone(),

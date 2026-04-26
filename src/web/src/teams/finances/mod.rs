@@ -106,11 +106,9 @@ pub async fn team_finances_get_action(
         .team(team_id)
         .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
 
-    // Finances tab only available for senior teams (Main, B, Second).
-    if !matches!(
-        team.team_type,
-        core::TeamType::Main | core::TeamType::B | core::TeamType::Second
-    ) {
+    // Finances tab only available for senior teams that compete under their
+    // own brand (Main, B, Second) — see TeamType::is_own_team.
+    if !team.team_type.is_own_team() {
         return Err(ApiError::NotFound("Finances not available for this team type".to_string()));
     }
 
@@ -278,18 +276,7 @@ fn get_neighbor_teams(
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
 
-    let club_name = &club.name;
-
-    let mut teams: Vec<(String, String, u16)> = club
-        .teams
-        .teams
-        .iter()
-        .map(|team| {
-            (format!("{}  |  {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
-        })
-        .collect();
-
-    teams.sort_by(|a, b| b.2.cmp(&a.2));
+    let teams = views::neighbor_teams(club, i18n);
 
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
@@ -303,7 +290,7 @@ fn get_neighbor_teams(
     country_leagues.sort_by_key(|(id, _, _)| *id);
 
     Ok((
-        teams.into_iter().map(|(name, slug, _)| (name, slug)).collect(),
+        teams,
         country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
     ))
 }
