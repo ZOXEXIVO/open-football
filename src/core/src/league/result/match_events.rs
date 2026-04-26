@@ -24,13 +24,22 @@ impl LeagueResult {
             None => return,
         };
 
-        let is_cup = result.league_id >= 900_000_000;
-        let is_friendly = if is_cup {
-            false
+        // Continental cups don't have a `League` row; everything else is
+        // classified by the league's own `is_cup` flag. The previous
+        // `league_id >= 900_000_000` heuristic miscategorised domestic
+        // leagues whose generated IDs landed above that threshold (e.g.
+        // Russian Second Division ~2.0e9), routing their matches into the
+        // cup statistics bucket.
+        let is_continental_cup = matches!(
+            result.league_id,
+            CHAMPIONS_LEAGUE_ID | EUROPA_LEAGUE_ID | CONFERENCE_LEAGUE_ID
+        );
+        let (is_cup, is_friendly) = if is_continental_cup {
+            (true, false)
         } else {
             data.league(result.league_id)
-                .map(|l| l.friendly)
-                .unwrap_or(false)
+                .map(|l| (l.is_cup, l.friendly))
+                .unwrap_or((false, false))
         };
 
         // Players inside their post-transfer settlement window play at a

@@ -295,7 +295,9 @@ pub async fn transfer_action(
         if let Some((_, _, ref source)) = source_info {
             player.on_manual_transfer(&source.info, &dest.info, Some(fee), date);
         } else {
-            player.on_manual_transfer(&dest.info, &dest.info, None, date);
+            // Free agent: no source club, so a phantom "transfer from
+            // dest to dest" would record the destination row twice.
+            player.on_free_agent_signing(&dest.info, date);
         }
 
         // Clear transfer-related statuses: player is joining a new club

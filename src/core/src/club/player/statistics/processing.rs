@@ -177,6 +177,18 @@ impl Player {
         self.last_transfer_date = Some(date);
     }
 
+    /// Record a manual signing of a free agent from the web UI.
+    /// No source club exists, so this records only the destination — the
+    /// generic `record_departure_transfer` path duplicates the row by
+    /// treating the destination as both source and target.
+    pub fn on_free_agent_signing(&mut self, to: &TeamInfo, date: NaiveDate) {
+        let stats = std::mem::take(&mut self.statistics);
+        self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
+        self.statistics_history.record_free_agent_signing(stats, to, date);
+        self.last_transfer_date = Some(date);
+    }
+
     /// Record a manual loan from the web UI.
     /// Snapshots source stats, cleans stale entries, creates parent + destination placeholders.
     pub fn on_manual_loan(

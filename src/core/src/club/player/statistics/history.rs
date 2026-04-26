@@ -269,6 +269,32 @@ impl PlayerStatisticsHistory {
         }
     }
 
+    /// Record a free-agent signing. Unlike `record_departure_transfer`,
+    /// there is no source club — only the destination — so we just freeze
+    /// any prior-season entries and push one fresh row for the new club.
+    /// `last_stats` is the player's pre-signing live `PlayerStatistics`,
+    /// snapshotted onto the most recent unfinalised entry (e.g. a former
+    /// club spell that hasn't been frozen yet) so its games aren't lost.
+    pub fn record_free_agent_signing(
+        &mut self,
+        last_stats: PlayerStatistics,
+        to: &TeamInfo,
+        date: NaiveDate,
+    ) {
+        self.flush_stale_entries(date);
+        if last_stats.total_games() > 0 {
+            if let Some(entry) = self
+                .current
+                .iter_mut()
+                .rev()
+                .find(|e| e.statistics.total_games() == 0)
+            {
+                entry.statistics = last_stats;
+            }
+        }
+        self.push_new_entry(to, PlayerStatistics::default(), false, None, date);
+    }
+
     pub fn record_departure_transfer(&mut self, old_stats: PlayerStatistics, from: &TeamInfo, to: &TeamInfo, fee: Option<f64>, is_loan: bool, date: NaiveDate) {
         self.flush_stale_entries(date);
         self.upsert_current(from, old_stats, is_loan, None, date);
