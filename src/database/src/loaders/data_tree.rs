@@ -89,7 +89,79 @@ mod tests {
         let countries = CountryLoader::load();
         let tree = DataTreeLoader::load(&countries);
         // Snapshot counts of enabled leagues and their clubs in the compiled data.
-        assert_eq!(tree.leagues.len(), 65, "enabled league count changed");
-        assert_eq!(tree.clubs.len(), 999, "enabled club count changed");
+        assert_eq!(tree.leagues.len(), 73, "enabled league count changed");
+        assert_eq!(tree.clubs.len(), 1076, "enabled club count changed");
+    }
+
+    #[test]
+    fn russian_b_team_satellites_fold_into_parents() {
+        let countries = CountryLoader::load();
+        let tree = DataTreeLoader::load(&countries);
+
+        // Satellite directories under russian-second-division-* should not
+        // appear as standalone clubs — they're folded into their parents.
+        let satellite_ids: &[u32] = &[
+            58126843, 479504, 2000032541, 8066991, 58098003, 495359, 476302,
+            58135242, 8064339,
+        ];
+        for sid in satellite_ids {
+            assert!(
+                !tree.clubs.iter().any(|c| c.id == *sid),
+                "satellite club {} leaked into clubs list",
+                sid
+            );
+        }
+
+        // Mapping: (parent_id, expected sub-team team_type, enclosing league id).
+        // Ural alone uses "B" because Ural's club.json predeclares a hand-named
+        // B slot ("ural-b"); every other parent gets "Second", the canonical
+        // "{Club} 2" reserve type.
+        let expected: &[(u32, &str, u32)] = &[
+            (1533, "B", 2000272306),          // Ural   → russian-second-division-b-group-4
+            (1520, "Second", 2000272298),     // Dinamo Moscow → russian-second-division-a-gold
+            (58126754, "Second", 2000272300), // Rodina → russian-second-division-a-silver
+            (1301106, "Second", 2000272303),  // Baltika → russian-second-division-b-group-2
+            (1529, "Second", 2000272303),     // Spartak Moscow → russian-second-division-b-group-2
+            (1301108, "Second", 2000272303), // Zenit  → russian-second-division-b-group-2
+            (130501, "Second", 2000272305),   // Arsenal Tula → russian-second-division-b-group-3
+            (58127493, "Second", 2000272306), // Orenburg → russian-second-division-b-group-4
+            (130509, "Second", 2000272306),   // Rubin  → russian-second-division-b-group-4
+        ];
+        let enabled_league_ids: std::collections::HashSet<u32> =
+            tree.leagues.iter().map(|l| l.id).collect();
+
+        for (parent_id, want_type, want_league) in expected {
+            let parent = tree
+                .clubs
+                .iter()
+                .find(|c| c.id == *parent_id)
+                .unwrap_or_else(|| panic!("parent club {} missing", parent_id));
+            let sub_team = parent
+                .teams
+                .iter()
+                .find(|t| t.team_type == *want_type)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "parent club {} has no {} team after satellite merge",
+                        parent_id, want_type
+                    )
+                });
+            let league_id = sub_team.league_id.unwrap_or_else(|| {
+                panic!(
+                    "{} team on parent {} has no league_id stamped",
+                    want_type, parent_id
+                )
+            });
+            assert_eq!(
+                league_id, *want_league,
+                "{} team on parent {} stamped with wrong league",
+                want_type, parent_id
+            );
+            assert!(
+                enabled_league_ids.contains(&league_id),
+                "{} team on parent {} points at non-enabled league {}",
+                want_type, parent_id, league_id
+            );
+        }
     }
 }

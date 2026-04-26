@@ -262,7 +262,7 @@ pub async fn team_get_action(
         menu_sections,
         team_slug: team.slug.clone(),
         active_tab: "squad",
-        show_finances_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::B,
+        show_finances_tab: matches!(team.team_type, core::TeamType::Main | core::TeamType::B | core::TeamType::Second),
         show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
         players,
     })

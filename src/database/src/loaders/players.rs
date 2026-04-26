@@ -77,6 +77,13 @@ pub struct OdbPlayer {
     /// instead of starting empty.
     #[serde(default)]
     pub history: Vec<OdbHistoryItem>,
+
+    /// Forced team-type bucket. Set by the compiler when a player is folded
+    /// in from a satellite directory (e.g. "Ural 2" → Ural's B team) so the
+    /// runtime distributor places them in this bucket regardless of age.
+    /// Empty/missing means "use age-based placement".
+    #[serde(default)]
+    pub team_type_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -294,6 +301,7 @@ mod tests {
                 min_appearances: None,
             }),
             history: Vec::new(),
+            team_type_hint: None,
         }
     }
 

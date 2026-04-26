@@ -106,8 +106,11 @@ pub async fn team_finances_get_action(
         .team(team_id)
         .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
 
-    // Finances tab only available for Main and B teams
-    if team.team_type != core::TeamType::Main && team.team_type != core::TeamType::B {
+    // Finances tab only available for senior teams (Main, B, Second).
+    if !matches!(
+        team.team_type,
+        core::TeamType::Main | core::TeamType::B | core::TeamType::Second
+    ) {
         return Err(ApiError::NotFound("Finances not available for this team type".to_string()));
     }
 

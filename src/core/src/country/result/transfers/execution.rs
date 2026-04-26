@@ -394,7 +394,8 @@ fn execute_loan_within_country(
         let reserve_idx = selling_club
             .teams
             .index_of_type(TeamType::Reserve)
-            .or_else(|| selling_club.teams.index_of_type(TeamType::B));
+            .or_else(|| selling_club.teams.index_of_type(TeamType::B))
+            .or_else(|| selling_club.teams.index_of_type(TeamType::Second));
 
         if let (Some(mi), Some(ri)) = (main_idx, reserve_idx) {
             if mi != ri {
@@ -559,7 +560,8 @@ fn take_player_from_selling_country(
         let reserve_idx = selling_club
             .teams
             .index_of_type(TeamType::Reserve)
-            .or_else(|| selling_club.teams.index_of_type(TeamType::B));
+            .or_else(|| selling_club.teams.index_of_type(TeamType::B))
+            .or_else(|| selling_club.teams.index_of_type(TeamType::Second));
         if let (Some(mi), Some(ri)) = (main_idx, reserve_idx) {
             if mi != ri {
                 if let Some(p) = selling_club.teams.teams[mi].players.take_player(&player_id) {

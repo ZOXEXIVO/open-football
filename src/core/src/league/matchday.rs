@@ -232,7 +232,7 @@ impl League {
             .iter()
             .filter(|t| {
                 t.id != team_id
-                    && matches!(t.team_type, TeamType::B | TeamType::Reserve | TeamType::U21 | TeamType::U23)
+                    && matches!(t.team_type, TeamType::B | TeamType::Second | TeamType::Reserve | TeamType::U21 | TeamType::U23)
             })
             .flat_map(|t| t.players.iter())
             .filter(|p| Self::is_player_available(p, is_friendly))

@@ -103,7 +103,7 @@ impl DatabaseGenerator {
             TeamType::U20 => (16, 20),
             TeamType::U21 => (16, 21),
             TeamType::U23 => (17, 23),
-            TeamType::B | TeamType::Reserve => (17, 28),
+            TeamType::B | TeamType::Second | TeamType::Reserve => (17, 28),
             TeamType::Main => (17, 35),
             _ => (15, 18),
         };

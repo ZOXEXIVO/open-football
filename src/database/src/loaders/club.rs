@@ -22,6 +22,19 @@ pub struct ClubEntity {
     pub facilities: Option<ClubFacilitiesEntity>,
     #[serde(default)]
     pub average_attendance: Option<u32>,
+    /// Set on satellite directories (e.g. "Ural 2") that should not become a
+    /// standalone club. The compiler folds the satellite's Main team into the
+    /// referenced parent club as `team_type` (typically `"B"`), stamping the
+    /// enclosing league's id on it. The runtime never sees this field —
+    /// satellites are dropped from the clubs list during compilation.
+    #[serde(default)]
+    pub parent_club: Option<ParentClubEntity>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct ParentClubEntity {
+    pub id: u32,
+    pub team_type: String,
 }
 
 #[derive(Deserialize, Clone)]

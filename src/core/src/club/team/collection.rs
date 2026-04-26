@@ -345,6 +345,7 @@ impl TeamCollection {
 
     fn find_reserve_team_index(&self) -> Option<usize> {
         self.teams.iter().position(|t| t.team_type == TeamType::B)
+            .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::Second))
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::Reserve))
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U23))
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U21))

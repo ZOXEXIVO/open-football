@@ -531,6 +531,11 @@ pub enum TeamType {
     U20 = 5,
     U21 = 6,
     U23 = 7,
+    /// Senior reserve squad that competes in a real lower division under the
+    /// "{Club} 2" naming convention (e.g. "Ural 2", "Zenit 2"). Behaves like
+    /// `B` in most respects (senior bracket, finance/transfer/staff handling)
+    /// but renders as the suffix "2" so the team name reads naturally.
+    Second = 8,
 }
 
 impl TeamType {
@@ -544,6 +549,7 @@ impl TeamType {
             TeamType::U20 => "under_20s",
             TeamType::U21 => "under_21s",
             TeamType::U23 => "under_23s",
+            TeamType::Second => "second_team",
         }
     }
 
@@ -577,6 +583,9 @@ impl fmt::Display for TeamType {
             TeamType::U20 => write!(f, "U20"),
             TeamType::U21 => write!(f, "U21"),
             TeamType::U23 => write!(f, "U23"),
+            // Renders as bare "2" so `format!("{} {}", club_name, team_type)`
+            // produces the conventional "Ural 2" / "Zenit 2" form.
+            TeamType::Second => write!(f, "2"),
         }
     }
 }
@@ -594,6 +603,7 @@ impl FromStr for TeamType {
             "U20" => Ok(TeamType::U20),
             "U21" => Ok(TeamType::U21),
             "U23" => Ok(TeamType::U23),
+            "Second" => Ok(TeamType::Second),
             _ => Err(format!("'{}' is not a valid value for WSType", s)),
         }
     }

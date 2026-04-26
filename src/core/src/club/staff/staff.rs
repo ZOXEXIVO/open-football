@@ -125,7 +125,7 @@ impl StaffCollection {
                     .contract_renewal
                     .handle_first_team_contracts
             }
-            TeamType::B => {
+            TeamType::B | TeamType::Second => {
                 self.responsibility
                     .contract_renewal
                     .handle_other_staff_contracts

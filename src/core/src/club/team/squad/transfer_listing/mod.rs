@@ -85,6 +85,7 @@ impl TransferListManager {
                 let label = match t.team_type {
                     TeamType::Main => "Main Team",
                     TeamType::B => "B Team",
+                    TeamType::Second => "Second Team",
                     TeamType::Reserve => "Reserve Team",
                     TeamType::U18 => "Under 18s",
                     TeamType::U19 => "Under 19s",

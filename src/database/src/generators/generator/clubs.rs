@@ -261,30 +261,45 @@ fn distribute_odb_players_by_age(
     let mut out: HashMap<TeamType, Vec<OdbPlayer>> = HashMap::new();
 
     for p in players {
-        let age = now_year - p.birth_date.year();
-        let target = if age <= 18 && has(TeamType::U18) {
-            TeamType::U18
-        } else if age <= 19 && has(TeamType::U19) {
-            TeamType::U19
-        } else if age <= 20 && has(TeamType::U20) {
-            TeamType::U20
-        } else if age <= 21 && has(TeamType::U21) {
-            TeamType::U21
-        } else if age <= 23 && has(TeamType::U23) {
-            TeamType::U23
-        } else if has(TeamType::Main) {
-            TeamType::Main
-        } else if has(TeamType::B) {
-            TeamType::B
-        } else if has(TeamType::Reserve) {
-            TeamType::Reserve
+        // Compiler-set hint pins a player to a specific bucket (e.g. squad
+        // folded in from a satellite "B-team" directory). Honour it whenever
+        // the parent club actually has that bucket; otherwise fall through
+        // to age-based placement.
+        let hinted = p
+            .team_type_hint
+            .as_deref()
+            .and_then(|s| TeamType::from_str(s).ok())
+            .filter(|tt| has(*tt));
+        let target = if let Some(tt) = hinted {
+            tt
         } else {
-            // No senior team at all — drop into the first available bucket so
-            // the player isn't silently lost.
-            *available
-                .iter()
-                .find(|t| !matches!(t, TeamType::U18 | TeamType::U19))
-                .unwrap_or(&TeamType::Main)
+            let age = now_year - p.birth_date.year();
+            if age <= 18 && has(TeamType::U18) {
+                TeamType::U18
+            } else if age <= 19 && has(TeamType::U19) {
+                TeamType::U19
+            } else if age <= 20 && has(TeamType::U20) {
+                TeamType::U20
+            } else if age <= 21 && has(TeamType::U21) {
+                TeamType::U21
+            } else if age <= 23 && has(TeamType::U23) {
+                TeamType::U23
+            } else if has(TeamType::Main) {
+                TeamType::Main
+            } else if has(TeamType::B) {
+                TeamType::B
+            } else if has(TeamType::Second) {
+                TeamType::Second
+            } else if has(TeamType::Reserve) {
+                TeamType::Reserve
+            } else {
+                // No senior team at all — drop into the first available bucket so
+                // the player isn't silently lost.
+                *available
+                    .iter()
+                    .find(|t| !matches!(t, TeamType::U18 | TeamType::U19))
+                    .unwrap_or(&TeamType::Main)
+            }
         };
         out.entry(target).or_default().push(p.clone());
     }

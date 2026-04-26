@@ -327,7 +327,7 @@ impl Club {
     /// playing competitive matches; absent those, fall back to the
     /// youth team that fits the player's age.
     fn find_demotion_target(&self, age: u8) -> Option<usize> {
-        for t in [TeamType::Reserve, TeamType::B] {
+        for t in [TeamType::Reserve, TeamType::B, TeamType::Second] {
             if let Some(idx) = self.teams.index_of_type(t) {
                 return Some(idx);
             }
@@ -365,7 +365,8 @@ impl Club {
         };
 
         let reserve_idx = self.teams.index_of_type(TeamType::Reserve)
-            .or_else(|| self.teams.index_of_type(TeamType::B));
+            .or_else(|| self.teams.index_of_type(TeamType::B))
+            .or_else(|| self.teams.index_of_type(TeamType::Second));
 
         let reserve_idx = match reserve_idx {
             Some(idx) => idx,

@@ -151,6 +151,7 @@ impl SquadComposition {
                 let type_name = match teams[idx].team_type {
                     TeamType::Main => "Main",
                     TeamType::B => "B Team",
+                    TeamType::Second => "Second Team",
                     TeamType::Reserve => "U20",
                     TeamType::U18 => "Under 18s",
                     TeamType::U19 => "Under 19s",
