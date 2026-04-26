@@ -157,6 +157,12 @@ impl FootballSimulator {
         // Global competitions (Champions League, World Cup, etc.)
         GlobalCompetitionSimulator::simulate(data);
 
+        // Move any player whose contract was cleared this tick (positional
+        // surplus, free-transfer release, contract expiry) off their old
+        // team's roster and into the global free-agent pool, so the player
+        // page header and contract panel agree.
+        data.sweep_released_to_free_agents();
+
         // Refresh player indexes only if a transfer actually moved a player
         // between clubs today. Walking the world every day is wasteful.
         data.rebuild_indexes_if_dirty();
@@ -377,6 +383,46 @@ impl SimulatorData {
                     }
                 }
             }
+        }
+    }
+
+    /// Move every team-attached player whose main-club contract is `None`
+    /// onto the global `free_agents` pool. Several pipelines (positional
+    /// surplus, unresolved-salary "free transfer", contract expiry) clear
+    /// the contract in place; without this sweep the player lingers on the
+    /// roster as a "free agent on a team," which the player page renders
+    /// inconsistently — the header reads the team name while the contract
+    /// panel reads "Free Agent."
+    ///
+    /// Loanees are skipped (their `contract` is the parent-club contract
+    /// and stays `Some` during the loan), as are retired players (already
+    /// removed from team rosters by the retirement pipeline). Sets
+    /// `dirty_player_index` so the next index rebuild picks up the moves.
+    pub fn sweep_released_to_free_agents(&mut self) {
+        let mut released: Vec<Player> = Vec::new();
+        for continent in &mut self.continents {
+            for country in &mut continent.countries {
+                for club in &mut country.clubs {
+                    for team in &mut club.teams.teams {
+                        let ids: Vec<u32> = team
+                            .players
+                            .players
+                            .iter()
+                            .filter(|p| p.contract.is_none() && !p.is_on_loan() && !p.retired)
+                            .map(|p| p.id)
+                            .collect();
+                        for id in ids {
+                            if let Some(p) = team.players.take_player(&id) {
+                                released.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !released.is_empty() {
+            self.dirty_player_index = true;
+            self.free_agents.extend(released);
         }
     }
 
