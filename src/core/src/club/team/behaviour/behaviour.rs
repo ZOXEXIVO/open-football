@@ -299,10 +299,16 @@ impl TeamBehaviour {
                 // shouldn't tick every fortnight while the player is
                 // already adjusting elsewhere.
                 if positive_count >= 3 && rand::random::<f32>() < 0.10 {
+                    // Long cooldown so a single transfer spell yields at
+                    // most one settling-in event — the previous 21-day
+                    // window let it fire ~4× per 90-day adaptation period
+                    // and read as event-feed spam. Happiness is cleared
+                    // on every transfer, so the cooldown effectively
+                    // resets at the next club.
                     player.happiness.add_event_with_cooldown(
                         HappinessEventType::SettledIntoSquad,
                         2.0,
-                        21,
+                        365,
                     );
                 } else if !has_any_relation && rand::random::<f32>() < 0.08 {
                     player.happiness.add_event_with_cooldown(
@@ -311,20 +317,6 @@ impl TeamBehaviour {
                         14,
                     );
                 }
-            }
-
-            // Team leaders give dressing room speeches (~5% weekly chance).
-            // Cooldown so a single high-leadership captain doesn't stack
-            // multiple speeches per month.
-            if player.skills.mental.leadership >= 14.0
-                && player.happiness.morale >= 60.0
-                && rand::random::<f32>() < 0.05
-            {
-                player.happiness.add_event_with_cooldown(
-                    HappinessEventType::DressingRoomSpeech,
-                    1.5,
-                    28,
-                );
             }
         }
     }

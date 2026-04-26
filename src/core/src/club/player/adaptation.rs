@@ -602,12 +602,18 @@ impl Player {
             }
         }
 
-        // Settled-into-squad lift.
+        // Settled-into-squad lift. Long cooldown so the per-tick
+        // bonding/language predicate doesn't refire the event week after
+        // week — happiness clears on transfer, so a fresh club gets a
+        // fresh emission.
         if weeks >= cfg.settled_min_weeks
             && (pull_toward_bonding > cfg.settled_pull_threshold || speaks_local)
         {
-            self.happiness
-                .add_event(HappinessEventType::SettledIntoSquad, 1.0);
+            self.happiness.add_event_with_cooldown(
+                HappinessEventType::SettledIntoSquad,
+                1.0,
+                365,
+            );
         }
     }
 
