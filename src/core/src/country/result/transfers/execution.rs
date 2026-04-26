@@ -180,9 +180,10 @@ pub(crate) fn execute_transfer_within_country(
                         && bond >= 55.0;
 
                     if is_mentor_break {
-                        teammate.on_mentor_departed(bond, same_nat);
+                        teammate.on_mentor_departed(info.id, bond, same_nat);
                     } else if bond >= 65.0 {
                         teammate.on_close_friend_sold(
+                            info.id,
                             bond,
                             same_nat,
                             info.high_reputation,
@@ -294,19 +295,39 @@ pub(crate) fn execute_transfer_within_country(
                     }
                     compatriot_present = true;
                     let lacks_lang = !speaks_local_language(existing, &club_country_code);
-                    existing.on_compatriot_joined(club_country_id, lacks_lang);
+                    existing.on_compatriot_joined(player_id, club_country_id, lacks_lang);
                 }
             }
             // Reverse pass: fire on the arrival if compatriots exist.
+            // Tag with one of the existing compatriot ids so the link
+            // points at a real teammate; pick the first one we find.
             if compatriot_present {
-                for team in &mut buying_club.teams.teams {
-                    if let Some(arrival) =
-                        team.players.iter_mut().find(|p| p.id == player_id)
+                let mut a_compatriot_id: Option<u32> = None;
+                for team in &buying_club.teams.teams {
+                    if let Some(found) = team
+                        .players
+                        .players
+                        .iter()
+                        .find(|p| p.id != player_id && p.country_id == arrival_country_id)
                     {
-                        let lacks_lang =
-                            !speaks_local_language(arrival, &club_country_code);
-                        arrival.on_compatriot_joined(club_country_id, lacks_lang);
+                        a_compatriot_id = Some(found.id);
                         break;
+                    }
+                }
+                if let Some(compatriot_id) = a_compatriot_id {
+                    for team in &mut buying_club.teams.teams {
+                        if let Some(arrival) =
+                            team.players.iter_mut().find(|p| p.id == player_id)
+                        {
+                            let lacks_lang =
+                                !speaks_local_language(arrival, &club_country_code);
+                            arrival.on_compatriot_joined(
+                                compatriot_id,
+                                club_country_id,
+                                lacks_lang,
+                            );
+                            break;
+                        }
                     }
                 }
             }
@@ -657,9 +678,10 @@ fn execute_transfer_across_countries(
                             && teammate_age <= 23
                             && bond >= 55.0;
                         if is_mentor_break {
-                            teammate.on_mentor_departed(bond, same_nat);
+                            teammate.on_mentor_departed(info.id, bond, same_nat);
                         } else if bond >= 65.0 {
                             teammate.on_close_friend_sold(
+                                info.id,
                                 bond,
                                 same_nat,
                                 info.high_reputation,
@@ -735,15 +757,37 @@ fn execute_transfer_across_countries(
                 }
                 compatriot_present = true;
                 let lacks_lang = !speaks_local_language(existing, &buying_country_code);
-                existing.on_compatriot_joined(buying_country_id_local, lacks_lang);
+                existing.on_compatriot_joined(player_id, buying_country_id_local, lacks_lang);
             }
         }
         if compatriot_present {
-            for team in &mut buying_club.teams.teams {
-                if let Some(arrival) = team.players.iter_mut().find(|p| p.id == player_id) {
-                    let lacks_lang = !speaks_local_language(arrival, &buying_country_code);
-                    arrival.on_compatriot_joined(buying_country_id_local, lacks_lang);
+            // Tag the arrival's reciprocal event with one of the existing
+            // compatriots so the link in the events page resolves to a
+            // real teammate.
+            let mut a_compatriot_id: Option<u32> = None;
+            for team in &buying_club.teams.teams {
+                if let Some(found) = team
+                    .players
+                    .players
+                    .iter()
+                    .find(|p| p.id != player_id && p.country_id == arrival_country_id)
+                {
+                    a_compatriot_id = Some(found.id);
                     break;
+                }
+            }
+            if let Some(compatriot_id) = a_compatriot_id {
+                for team in &mut buying_club.teams.teams {
+                    if let Some(arrival) = team.players.iter_mut().find(|p| p.id == player_id) {
+                        let lacks_lang =
+                            !speaks_local_language(arrival, &buying_country_code);
+                        arrival.on_compatriot_joined(
+                            compatriot_id,
+                            buying_country_id_local,
+                            lacks_lang,
+                        );
+                        break;
+                    }
                 }
             }
         }

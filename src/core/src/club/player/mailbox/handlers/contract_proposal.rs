@@ -182,11 +182,71 @@ impl ProcessContractHandler {
                 let pkg_value = package_value(&proposal);
                 let pkg_ratio = pkg_value as f32 / current_salary as f32;
 
+                // Compare the package against what the player thinks they
+                // are actually worth, not just against their current deal.
+                // Without this an underpaid star auto-accepts a token raise
+                // because their existing salary anchors the comparison too
+                // low. Use the ContractValuation that the renewal AI uses
+                // so the two systems agree on the floor.
+                let age = DateUtils::age(player.birth_date, now);
+                let market_interest = player.statuses.get().iter().any(|s| {
+                    matches!(
+                        s,
+                        PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
+                    )
+                });
+                let months_remaining =
+                    ((player_contract.expiration - now).num_days() / 30).max(0) as i32;
+                let valuation_ctx = ValuationContext {
+                    age,
+                    // Happiness-default reputation here — the renewal AI
+                    // already had real club/league context when shaping
+                    // the offer, so the player-side check just needs the
+                    // status premium + ability + age curve.
+                    club_reputation_score: 0.5,
+                    league_reputation: 5_000,
+                    squad_status: proposal
+                        .squad_status_promise
+                        .clone()
+                        .unwrap_or(player_contract.squad_status.clone()),
+                    current_salary: player_contract.salary,
+                    months_remaining,
+                    has_market_interest: market_interest,
+                };
+                let valuation = ContractValuation::evaluate(player, &valuation_ctx);
+
+                // Loyal veterans and players with strong release clauses /
+                // signing bonuses tolerate a 15% underpay vs market.
+                let loyalty = player.attributes.loyalty;
+                let tolerance = if loyalty >= 16.0 {
+                    0.85
+                } else if has_clause || sweetener_ratio >= 0.3 {
+                    0.90
+                } else {
+                    0.95
+                };
+                let market_floor = (valuation.expected_wage as f32 * tolerance) as u32;
+                let badly_underpaid = pkg_value < market_floor;
+
                 if proposal.salary > player_contract.salary {
                     let raise_ratio = proposal.salary as f32 / current_salary as f32;
                     let agent_delta =
                         agent.renewal_delta_with(raise_ratio, sweetener_ratio, has_clause);
                     if agent_delta < -4.0 && raise_ratio < 1.15 && sweetener_ratio < 0.20 {
+                        result.contract.contract_rejected = true;
+                        record_counter_offer(
+                            player,
+                            &proposal,
+                            now,
+                            min_acceptable_years,
+                            RejectionReason::LowSalary,
+                        );
+                        log_rejection(player, &proposal, now);
+                        return;
+                    }
+                    // Even with a token raise, if the package still leaves
+                    // the player meaningfully below market they push back.
+                    if badly_underpaid && raise_ratio < 1.20 && sweetener_ratio < 0.25 {
                         result.contract.contract_rejected = true;
                         record_counter_offer(
                             player,

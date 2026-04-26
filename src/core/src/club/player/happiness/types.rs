@@ -298,12 +298,28 @@ impl PlayerHappiness {
     /// ConflictWithTeammate, CloseFriendSold, MentorDeparted,
     /// CompatriotJoined). The partner id has no effect on morale — it's
     /// purely informational.
+    ///
+    /// Enforcement: events listed in `requires_partner_id` MUST be emitted
+    /// with a `Some(_)` partner id. Calls that pass `None` for those types
+    /// are dropped here — the event would otherwise reach the UI as
+    /// orphaned text ("bonded with a teammate" — which one?), be filtered
+    /// out at render time, and waste a slot in `recent_events`. Failing
+    /// silently at the source forces the emit-site to either supply the
+    /// partner id or pick a different event type.
     pub fn add_event_with_partner(
         &mut self,
         event_type: HappinessEventType,
         magnitude: f32,
         partner_player_id: Option<u32>,
     ) {
+        if requires_partner_id(&event_type) && partner_player_id.is_none() {
+            debug_assert!(
+                false,
+                "{:?} requires a partner_player_id; use add_event_with_partner",
+                event_type
+            );
+            return;
+        }
         let cfg = HappinessConfig::default();
         self.recent_events.push(HappinessEvent {
             event_type,
@@ -342,6 +358,24 @@ impl PlayerHappiness {
             return false;
         }
         self.add_event(event_type, magnitude);
+        true
+    }
+
+    /// Cooldown-gated counterpart of `add_event_with_partner`. Use this
+    /// for partner-required events that also want a cooldown — emitting
+    /// via the partner-less variant would be silently dropped by the
+    /// `requires_partner_id` guard.
+    pub fn add_event_with_partner_and_cooldown(
+        &mut self,
+        event_type: HappinessEventType,
+        magnitude: f32,
+        partner_player_id: Option<u32>,
+        cooldown_days: u16,
+    ) -> bool {
+        if self.has_recent_event(&event_type, cooldown_days) {
+            return false;
+        }
+        self.add_event_with_partner(event_type, magnitude, partner_player_id);
         true
     }
 
@@ -404,6 +438,22 @@ impl PlayerHappiness {
     pub fn add_negative(&mut self, _item: NegativeHappiness) {
         self.add_event_default(HappinessEventType::PoorTraining);
     }
+}
+
+/// Event types that name a specific teammate and therefore must carry a
+/// `partner_player_id`. Mirrors the web layer's `is_partner_required`
+/// gate — kept here as the source of truth so emit-side and render-side
+/// agree. Adding a new partner-style event type means listing it both
+/// here (to enforce at emit) and in the web filter (to render the link).
+fn requires_partner_id(event_type: &HappinessEventType) -> bool {
+    matches!(
+        event_type,
+        HappinessEventType::TeammateBonding
+            | HappinessEventType::ConflictWithTeammate
+            | HappinessEventType::CloseFriendSold
+            | HappinessEventType::MentorDeparted
+            | HappinessEventType::CompatriotJoined
+    )
 }
 
 /// Kept for backward compatibility

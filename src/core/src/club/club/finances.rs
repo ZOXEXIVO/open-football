@@ -1,6 +1,7 @@
 use crate::context::GlobalContext;
-use crate::ReputationLevel;
+use crate::{ContractBonusType, ReputationLevel};
 use super::Club;
+use chrono::Datelike;
 
 /// Country price level: scales ticket prices, merchandising etc. by local economy.
 /// England 1.5, Colombia 0.4, default 1.0.
@@ -26,11 +27,24 @@ impl Club {
             .map(|c| c.sponsorship_market_strength)
             .unwrap_or(1.0);
 
-        // 1. Player wages: annual salary / 12
+        // 1. Player wages: annual salary / 12. `Team::get_annual_salary`
+        // returns *only* player wages (loan-aware: borrowers bill the
+        // loan contract, not the parent contract).
         for team in self.teams.iter() {
             let annual_salary = team.get_annual_salary();
             let monthly_salary = annual_salary / 12;
             self.finance.push_salary(club_name, monthly_salary as i64);
+        }
+
+        // 1b. Lump-sum bonuses owed this month: signing bonus on freshly
+        // signed contracts, loyalty bonus on each contract anniversary
+        // year. Mutates the contract's `signing_bonus_paid` / per-year
+        // memos so a re-run of this pass cannot double-charge.
+        let bonus_payout = settle_lump_sum_bonuses(self, date);
+        if bonus_payout > 0 {
+            self.finance
+                .balance
+                .push_expense_player_wages(bonus_payout);
         }
 
         // 2. Staff wages: coaching, medical, scouting staff
@@ -162,4 +176,90 @@ impl Club {
 
         (wins_ratio, position, total)
     }
+}
+
+/// Pay every lump-sum bonus owed to a player on this monthly tick. Walks
+/// the club's player contracts and, for each one:
+///   - SigningBonus pays once on the first finance pass after acceptance.
+///     Mutates `signing_bonus_paid = true` so subsequent passes skip it.
+///   - LoyaltyBonus pays once per calendar year — the contract's
+///     `last_loyalty_paid_year` memo prevents same-year double pay.
+///   - InternationalCapFee pays per cap gained since the last pass.
+///     Tracked via `last_intl_caps_paid` so the difference is the new caps.
+///
+/// Returns the total expense to charge to the club this month.
+fn settle_lump_sum_bonuses(club: &mut Club, date: chrono::NaiveDate) -> i64 {
+    let year = date.year();
+    let mut total: i64 = 0;
+    for team in club.teams.teams.iter_mut() {
+        for player in team.players.players.iter_mut() {
+            // Cap-tracking baseline lives on the player; caps cumulative
+            // count is `player.player_attributes.international_apps`.
+            let current_caps = player.player_attributes.international_apps;
+            let baseline_caps = player.last_intl_caps_paid;
+
+            if let Some(contract) = player.contract.as_mut() {
+                for bonus in &contract.bonuses {
+                    if bonus.value <= 0 {
+                        continue;
+                    }
+                    match bonus.bonus_type {
+                        ContractBonusType::SigningBonus => {
+                            if !contract.signing_bonus_paid {
+                                total += bonus.value as i64;
+                            }
+                        }
+                        ContractBonusType::LoyaltyBonus => {
+                            // Pay only on or after the contract anniversary
+                            // and at most once per calendar year. Year of
+                            // signing pays nothing — it's the signing bonus.
+                            if let Some(started) = contract.started {
+                                if year > started.year()
+                                    && contract.last_loyalty_paid_year != Some(year)
+                                {
+                                    total += bonus.value as i64;
+                                }
+                            }
+                        }
+                        ContractBonusType::InternationalCapFee => {
+                            let new_caps =
+                                current_caps.saturating_sub(baseline_caps) as i64;
+                            if new_caps > 0 {
+                                total += bonus.value as i64 * new_caps;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Memo updates AFTER the bonus value scan so a re-entrant
+                // call within the same month is a no-op.
+                if !contract.signing_bonus_paid
+                    && contract
+                        .bonuses
+                        .iter()
+                        .any(|b| matches!(b.bonus_type, ContractBonusType::SigningBonus))
+                {
+                    contract.signing_bonus_paid = true;
+                }
+                if let Some(started) = contract.started {
+                    if year > started.year()
+                        && contract.last_loyalty_paid_year != Some(year)
+                        && contract
+                            .bonuses
+                            .iter()
+                            .any(|b| matches!(b.bonus_type, ContractBonusType::LoyaltyBonus))
+                    {
+                        contract.last_loyalty_paid_year = Some(year);
+                    }
+                }
+            }
+            // Update international-caps baseline on the player so the next
+            // pass only counts further caps. Done outside the contract
+            // borrow.
+            if current_caps > baseline_caps {
+                player.last_intl_caps_paid = current_caps;
+            }
+        }
+    }
+    total
 }

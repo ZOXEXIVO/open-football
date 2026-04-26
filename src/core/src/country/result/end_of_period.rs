@@ -852,9 +852,30 @@ impl CountryResult {
             let relegated_team_ids: Vec<u32> = relegated_candidates.into_iter().take(swap_count).collect();
             let promoted_team_ids: Vec<u32> = promoted_candidates.into_iter().take(swap_count).collect();
 
+            // Build a tier-2 club expectation map: clubs that finished
+            // inside the promotion window (top promotion_spots + a couple
+            // of playoff places) "expected" promotion. NonPromotionRelease
+            // only activates for those — finishing 18th in the second tier
+            // shouldn't trigger any player's escape clause.
+            let promotion_window_team_ids: Vec<u32> = country
+                .leagues
+                .leagues
+                .iter()
+                .find(|l| l.id == tier2_id)
+                .and_then(|l| l.final_table.as_ref())
+                .map(|t| {
+                    let window = (promotion_spots as usize + 2).min(t.len());
+                    t.iter().take(window).map(|r| r.team_id).collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
             // Swap league_ids on teams and move sub-teams to matching friendly league
             for club in &mut country.clubs {
                 let mut new_main_league_id: Option<u32> = None;
+                // Aggregate one-shot bonus payouts owed for this season's
+                // outcome. Charged to the club after the team loops so we
+                // only hold a single mut borrow at a time.
+                let mut bonus_total: i64 = 0;
 
                 for team in &mut club.teams.teams {
                     if relegated_team_ids.contains(&team.id) {
@@ -896,30 +917,63 @@ impl CountryResult {
                         for player in team.players.iter_mut() {
                             if let Some(c) = player.contract.as_mut() {
                                 let _ = c.apply_promotion_wage_increase();
+                                // PromotionFee bonus is paid out as a
+                                // one-shot lump sum to every player on
+                                // the promoted team who has the bonus.
+                                for bonus in &c.bonuses {
+                                    if matches!(
+                                        bonus.bonus_type,
+                                        crate::ContractBonusType::PromotionFee
+                                    ) && bonus.value > 0
+                                    {
+                                        bonus_total += bonus.value as i64;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Survival in a tier-1 league with relegation
+                        // places: pay AvoidRelegationFee bonuses if the
+                        // team was at risk this season. Approximated by
+                        // "team carries the clause" — the bonus is only
+                        // installed on contracts when the club expected
+                        // a relegation battle.
+                        let in_tier1_with_relegation = team.league_id == Some(tier1_id);
+                        if in_tier1_with_relegation {
+                            for player in team.players.iter_mut() {
+                                if let Some(c) = player.contract.as_mut() {
+                                    for bonus in &c.bonuses {
+                                        if matches!(
+                                            bonus.bonus_type,
+                                            crate::ContractBonusType::AvoidRelegationFee
+                                        ) && bonus.value > 0
+                                        {
+                                            bonus_total += bonus.value as i64;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
 
-                // Clubs that expected promotion but didn't get it activate
-                // their non-promotion release clauses. We approximate
-                // "expected promotion" as: in tier 2, finished outside the
-                // promotion places. Without a richer expectation model we
-                // limit this to clubs that made the playoff window — i.e.
-                // clubs in the SAME paired tier as the promoted teams who
-                // did NOT get promoted.
-                let club_in_tier2 = club
+                // NonPromotionRelease activates only for clubs that
+                // genuinely expected to go up — finished inside the
+                // promotion window — and didn't. Mid-table and
+                // bottom-of-tier-2 clubs are excluded so a player's
+                // escape clause doesn't fire just because the club is
+                // in the wrong league.
+                let club_was_in_window = club
                     .teams
                     .teams
                     .iter()
-                    .any(|t| t.league_id == Some(tier2_id));
-                if club_in_tier2
-                    && !club
-                        .teams
-                        .teams
-                        .iter()
-                        .any(|t| promoted_team_ids.contains(&t.id))
-                {
+                    .any(|t| promotion_window_team_ids.contains(&t.id));
+                let club_was_promoted = club
+                    .teams
+                    .teams
+                    .iter()
+                    .any(|t| promoted_team_ids.contains(&t.id));
+                if club_was_in_window && !club_was_promoted {
                     for team in &mut club.teams.teams {
                         if team.league_id == Some(tier2_id) {
                             for player in team.players.iter_mut() {
@@ -929,6 +983,12 @@ impl CountryResult {
                             }
                         }
                     }
+                }
+
+                if bonus_total > 0 {
+                    club.finance
+                        .balance
+                        .push_expense_player_wages(bonus_total);
                 }
 
                 // Move sub-teams to the matching youth league of the new main league

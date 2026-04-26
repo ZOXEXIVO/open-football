@@ -41,7 +41,11 @@ impl Player {
         self.happiness.factors.playing_time = playing_time_factor;
 
         // 2. Salary vs ability
-        let mut salary_factor = self.calculate_salary_factor(age);
+        let mut salary_factor = self.calculate_salary_factor(
+            age,
+            team_reputation,
+            season_state.league_reputation,
+        );
 
         // After 2 years of unresolved salary unhappiness, player accepts situation
         // and salary frustration dampens — prevents permanent unhappiness loops.
@@ -184,7 +188,12 @@ impl Player {
     /// reputation, league prestige, club tier, status premium. The factor
     /// here is the gap between actual salary and expected; bonuses and
     /// recent renewals dampen frustration.
-    fn calculate_salary_factor(&self, age: u8) -> f32 {
+    fn calculate_salary_factor(
+        &self,
+        age: u8,
+        team_reputation: f32,
+        league_reputation: u16,
+    ) -> f32 {
         let Some(ref contract) = self.contract else {
             return -5.0;
         };
@@ -200,17 +209,20 @@ impl Player {
             _ => {}
         }
 
-        // Happiness runs without a Country reference, so we use neutral
-        // club/league inputs — the valuation's status premium + ability +
-        // age factors carry most of the weight. months_remaining doesn't
-        // affect expected_wage (only the leverage band), so a constant
-        // here keeps the factor stable.
+        // Pass the real club + league reputation so an elite Premier League
+        // player's expectation isn't computed against a generic "mid-tier"
+        // baseline. Falls back to the neutral 0.5 / 5000 only when the
+        // caller couldn't provide context (zero values).
+        let club_rep = if team_reputation > 0.0 { team_reputation.clamp(0.0, 1.0) } else { 0.5 };
+        let league_rep = if league_reputation > 0 { league_reputation } else { 5_000 };
         let ctx = ValuationContext {
             age,
-            club_reputation_score: 0.5,
-            league_reputation: 5_000,
+            club_reputation_score: club_rep,
+            league_reputation: league_rep,
             squad_status: contract.squad_status.clone(),
             current_salary: contract.salary,
+            // months_remaining doesn't affect expected_wage (only the
+            // leverage band), so a constant keeps the factor stable.
             months_remaining: 24,
             has_market_interest: false,
         };

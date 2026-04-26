@@ -122,6 +122,12 @@ pub struct Player {
     /// rather than guessing from scratch. Cleared when a deal is accepted.
     pub pending_contract_ask: Option<PlayerContractAsk>,
 
+    /// Baseline of `player_attributes.international_apps` on the most
+    /// recent monthly bonus pass. The InternationalCapFee bonus pays the
+    /// (current - baseline) cap delta and bumps this to the new total —
+    /// so re-running the pass within the same month is a no-op.
+    pub last_intl_caps_paid: u16,
+
     /// True if this player was produced by a runtime generator (random squad
     /// fill, youth intake, synthetic national-team filler). False when loaded
     /// from the source database. Useful for filtering, telemetry, and UI hints.

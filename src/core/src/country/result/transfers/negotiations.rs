@@ -11,6 +11,9 @@ use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferWindowManager;
 use crate::utils::{FloatUtils, FormattingUtils};
+use crate::club::player::calculators::{
+    squad_status_wage_factor, ContractValuation, ValuationContext,
+};
 use crate::{Country, PlayerSquadStatus, PlayerStatusType, WageCalculator};
 use chrono::NaiveDate;
 
@@ -532,13 +535,40 @@ impl CountryResult {
                 // club given their ability, age, and the destination's tier. The
                 // offered wage (staged by the pipeline; falls back to a proxy of
                 // the current deal if absent) is compared against this.
+                //
+                // Use ContractValuation so the renewal AI and transfer
+                // pipeline agree on the wage curve. Best-guess destination
+                // role: the same tier the player currently holds —
+                // transfers within tier are the common case; promotions
+                // and demotions do happen but personal terms negotiates
+                // off the player's perceived market value, not a role
+                // they haven't yet been promised.
                 let club_rep_score = (neg_data.buying_rep).clamp(0.0, 1.0);
-                let reservation_wage = WageCalculator::expected_annual_wage(
+                let assumed_status = player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.squad_status.clone())
+                    .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+                let val_ctx = ValuationContext {
+                    age,
+                    club_reputation_score: club_rep_score,
+                    league_reputation: neg_data.buying_league_reputation,
+                    squad_status: assumed_status,
+                    current_salary: current_salary as u32,
+                    months_remaining: 24,
+                    has_market_interest: true,
+                };
+                let reservation_wage =
+                    ContractValuation::evaluate(player, &val_ctx).expected_wage as f64;
+                // Underlying open-market wage referenced for guard-rails
+                // below (so the silence-the-warning path stays explicit).
+                let _ = WageCalculator::expected_annual_wage(
                     player,
                     age,
                     club_rep_score,
                     neg_data.buying_league_reputation,
-                ) as f64;
+                );
+                let _ = squad_status_wage_factor; // imported for future use
                 let offered_salary = neg_data
                     .offered_annual_wage
                     .map(|w| w as f64)

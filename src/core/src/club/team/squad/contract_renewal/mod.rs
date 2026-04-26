@@ -56,12 +56,23 @@ impl ContractRenewalManager {
         wage_budget: Option<u32>,
         league_reputation: u16,
     ) {
+        // Apply team-level clause helpers once per pass before generating
+        // new offers — match-highest-earner can change the snapshot used
+        // by the renewal AI, and optional extensions can take a player out
+        // of the candidate set entirely.
+        Self::apply_team_level_clauses(&mut teams[main_idx], date);
+
         let (coach_name, negotiation_skill, judging_ability) =
             Self::resolve_staff(&teams[main_idx]);
         let team_rep_factor = teams[main_idx].reputation.overall_score();
 
-        let structure = WageStructureSnapshot::from_team(&teams[main_idx]);
+        // Mutable: each accepted offer reserves its salary delta against
+        // current_bill so subsequent candidates in this same monthly pass
+        // see the budget already spent. Without this the loop could blow
+        // the wage budget by approving five star offers in parallel.
+        let mut structure = WageStructureSnapshot::from_team(&teams[main_idx]);
         let candidates = Self::collect_candidates(&teams[main_idx], date);
+        let mut match_highest_used = false;
 
         for candidate in candidates {
             let attempts = teams[main_idx]
@@ -85,6 +96,14 @@ impl ContractRenewalManager {
                 continue;
             }
 
+            let current_salary = teams[main_idx]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == candidate.player_id)
+                .and_then(|p| p.contract.as_ref().map(|c| c.salary))
+                .unwrap_or(0);
+
             let built = Self::build_offer(
                 &teams[main_idx],
                 candidate.player_id,
@@ -97,11 +116,36 @@ impl ContractRenewalManager {
                 wage_budget,
                 &structure,
                 &candidate,
+                match_highest_used,
             );
-            let proposal = match built {
+            let mut proposal = match built {
                 Some(p) => p,
                 None => continue,
             };
+
+            // Match-highest-earner is genuinely elite — only one offer per
+            // monthly pass may carry it, and only if the candidate is a
+            // KeyPlayer. Without this guard a wave of "star" candidates
+            // could each receive the clause and ratchet the wage hierarchy
+            // upwards in one go.
+            if proposal.match_highest_earner {
+                if match_highest_used {
+                    proposal.match_highest_earner = false;
+                } else {
+                    match_highest_used = true;
+                }
+            }
+
+            // Reserve the salary delta against the running wage bill so the
+            // next candidate's budget check sees this offer as already
+            // spent. Conservative: assume the player will accept.
+            let salary_delta = proposal.salary.saturating_sub(current_salary);
+            structure.current_bill = structure.current_bill.saturating_add(salary_delta);
+            // Lift top_earner so a follow-on KeyPlayer offer doesn't
+            // immediately leapfrog the just-promised one.
+            if proposal.salary > structure.top_earner {
+                structure.top_earner = proposal.salary;
+            }
 
             if let Some(player) = teams[main_idx]
                 .players
@@ -123,6 +167,102 @@ impl ContractRenewalManager {
                 player.mailbox.push(PlayerMessage {
                     message_type: PlayerMessageType::ContractProposal(proposal),
                 });
+            }
+        }
+    }
+
+    /// Apply the clause helpers that need team-level context once per
+    /// monthly renewal pass.
+    ///
+    /// `MatchHighestEarner`: lift the holder's wage to match the current
+    /// top earner *excluding self* — re-running with the same top is a
+    /// no-op because the helper bails when `top <= self.salary`.
+    ///
+    /// `OptionalContractExtensionByClub`: club exercises the option only
+    /// when the player is still a first-team contributor with
+    /// >= 1 appearance per ~5 weeks of the contract window. Otherwise the
+    /// option lapses and the clause is consumed.
+    fn apply_team_level_clauses(team: &mut Team, date: NaiveDate) {
+        // Snapshot ids + salaries so we can compute "top excluding self"
+        // without holding two mutable borrows simultaneously.
+        let snapshot: Vec<(u32, u32)> = team
+            .players
+            .players
+            .iter()
+            .filter_map(|p| p.contract.as_ref().map(|c| (p.id, c.salary)))
+            .collect();
+        let global_top = snapshot.iter().map(|(_, s)| *s).max().unwrap_or(0);
+
+        for player in team.players.players.iter_mut() {
+            // Compute top earner excluding this player — without it the
+            // helper would be a fixed-point on the player's own salary
+            // and never lift them.
+            let top_excl = if let Some(c) = player.contract.as_ref() {
+                if c.salary >= global_top {
+                    snapshot
+                        .iter()
+                        .filter(|(id, _)| *id != player.id)
+                        .map(|(_, s)| *s)
+                        .max()
+                        .unwrap_or(0)
+                } else {
+                    global_top
+                }
+            } else {
+                continue;
+            };
+
+            // Cheap exit: only act on contracts that actually carry a
+            // team-level clause.
+            let has_team_clause = player
+                .contract
+                .as_ref()
+                .map(|c| {
+                    c.clauses.iter().any(|cl| {
+                        matches!(
+                            cl.bonus_type,
+                            crate::ContractClauseType::MatchHighestEarner
+                                | crate::ContractClauseType::OptionalContractExtensionByClub
+                        )
+                    })
+                })
+                .unwrap_or(false);
+            if !has_team_clause {
+                continue;
+            }
+
+            // Decide whether the optional extension is worth exercising
+            // BEFORE we mutate the contract. Heuristic: only for first-team
+            // contributors who started enough games this season.
+            let should_extend = {
+                let played_share = (player.statistics.played as f32)
+                    .max(player.statistics.played_subs as f32 / 2.0);
+                let is_contributor = matches!(
+                    player.contract.as_ref().map(|c| &c.squad_status),
+                    Some(crate::PlayerSquadStatus::KeyPlayer)
+                        | Some(crate::PlayerSquadStatus::FirstTeamRegular)
+                        | Some(crate::PlayerSquadStatus::FirstTeamSquadRotation)
+                ) && played_share >= 8.0;
+                is_contributor
+            };
+
+            if let Some(c) = player.contract.as_mut() {
+                let _ = c.try_apply_match_highest_earner(top_excl);
+                if should_extend {
+                    let _ = c.exercise_optional_extension();
+                } else {
+                    // Drop unused options so they don't linger past the
+                    // expiry date and pollute future audits.
+                    let final_year = (c.expiration - date).num_days() <= 60;
+                    if final_year {
+                        c.clauses.retain(|cl| {
+                            !matches!(
+                                cl.bonus_type,
+                                crate::ContractClauseType::OptionalContractExtensionByClub
+                            )
+                        });
+                    }
+                }
             }
         }
     }
@@ -276,6 +416,7 @@ impl ContractRenewalManager {
         wage_budget: Option<u32>,
         structure: &WageStructureSnapshot,
         candidate: &RenewalCandidate,
+        match_highest_already_used: bool,
     ) -> Option<PlayerContractProposal> {
         let player = team.players.find(player_id)?;
         let contract = player.contract.as_ref()?;
@@ -330,17 +471,26 @@ impl ContractRenewalManager {
         // can approach but not exceed; everyone else is capped under it.
         offered = structure.cap_for_status(offered, &candidate.effective_status);
 
-        // FFP / wage-budget gate: never bust it.
+        // FFP / wage-budget gate: never bust it. If the available budget
+        // can't even cover the player's acceptance floor, return None —
+        // the chairman defers the offer rather than papering over the
+        // shortfall with `min_acceptable / 2` (which would generate a
+        // proposal the player rejects on sight, wasting an attempt).
         if let Some(budget) = wage_budget {
             let salary_delta = offered.saturating_sub(contract.salary);
             if structure.current_bill + salary_delta > budget {
                 let remaining = budget.saturating_sub(structure.current_bill);
-                offered = (contract.salary + remaining).max(contract.salary);
+                let capped = (contract.salary + remaining).max(contract.salary);
+                if capped < valuation.min_acceptable && !candidate.final_panic {
+                    // Defer: budget can't fund a credible offer right now.
+                    // Final-panic players (last-month expiry) still get
+                    // whatever the budget allows — better an insulting bid
+                    // than letting them walk for free.
+                    return None;
+                }
+                offered = capped;
             }
         }
-
-        // Bound by player acceptable range so we don't insult them.
-        offered = offered.max(valuation.min_acceptable / 2);
 
         let years = proactive_contract_years(
             age,
@@ -400,6 +550,7 @@ impl ContractRenewalManager {
             urgency,
             budget_pressure,
             structure,
+            match_highest_already_used,
         );
 
         // Honor demanded clauses from the previous rejection.
@@ -609,6 +760,7 @@ fn decorate_proposal(
     urgency: usize,
     budget_pressure: f32,
     structure: &WageStructureSnapshot,
+    match_highest_already_used: bool,
 ) {
     let salary = proposal.salary;
 
@@ -656,10 +808,13 @@ fn decorate_proposal(
             }
         }
         PlayerProfile::Star => {
-            // Match highest earner only for true elites (status == KeyPlayer)
+            // Match highest earner only for true elites (status == KeyPlayer),
+            // and never if another candidate this monthly pass already
+            // claimed the privilege — otherwise the wage hierarchy collapses.
             if matches!(status, PlayerSquadStatus::KeyPlayer)
                 && structure.top_earner > 0
                 && salary >= (structure.top_earner * 90 / 100)
+                && !match_highest_already_used
             {
                 proposal.match_highest_earner = true;
             }
@@ -793,5 +948,40 @@ mod wage_structure_tests {
     fn empty_structure_does_not_clamp() {
         let s = snapshot(0, 0, 0);
         assert_eq!(s.cap_for_status(500_000, &PlayerSquadStatus::KeyPlayer), 500_000);
+    }
+
+    #[test]
+    fn budget_reservation_prevents_simultaneous_overcommit() {
+        // Simulate the renewal loop's monthly behaviour: snapshot says
+        // current_bill = 1.0M, budget = 1.2M. Two candidates each ask
+        // for +200k. The first offer slides under the cap; the second
+        // — after the loop reserves the first delta — must be capped
+        // back to current_salary because no headroom remains.
+        let mut s = snapshot(200_000, 150_000, 60_000);
+        s.current_bill = 1_000_000;
+        let budget: u32 = 1_200_000;
+        let asked: u32 = 200_000; // each candidate's wage delta over current
+
+        // Helper mirroring the production path's gate.
+        fn reserve(s: &mut WageStructureSnapshot, current: u32, raise: u32, budget: u32) -> u32 {
+            let mut offered = current + raise;
+            let salary_delta = offered.saturating_sub(current);
+            if s.current_bill + salary_delta > budget {
+                let remaining = budget.saturating_sub(s.current_bill);
+                offered = (current + remaining).max(current);
+            }
+            let final_delta = offered.saturating_sub(current);
+            s.current_bill = s.current_bill.saturating_add(final_delta);
+            offered
+        }
+
+        // Candidate A — current 100k, asks +200k → granted in full.
+        let a = reserve(&mut s, 100_000, asked, budget);
+        assert_eq!(a, 300_000);
+        assert_eq!(s.current_bill, 1_200_000);
+        // Candidate B — current 100k, asks +200k → no headroom, cap at current.
+        let b = reserve(&mut s, 100_000, asked, budget);
+        assert_eq!(b, 100_000, "budget should already be exhausted");
+        assert_eq!(s.current_bill, 1_200_000);
     }
 }

@@ -579,9 +579,13 @@ impl TeamBehaviour {
 
         // Collect fresh signers first (id, salary, last_negotiation) so we
         // don't clash borrows while mutating other players below.
+        // Loaned-in players are excluded as signers — their parent club's
+        // renewal isn't borrower-squad news, and the borrower's wage
+        // hierarchy doesn't include them anyway.
         let signers: Vec<(u32, u32)> = players
             .players
             .iter()
+            .filter(|p| !p.is_on_loan())
             .filter_map(|p| {
                 let last = p.happiness.last_salary_negotiation?;
                 let age_days = (today - last).num_days();
@@ -603,6 +607,13 @@ impl TeamBehaviour {
             }
             for player in players.players.iter_mut() {
                 if player.id == signer_id {
+                    continue;
+                }
+                // Loanees see star wages every day at a top club — they
+                // know they're a temporary visitor on a different
+                // contract structure (the loan deal), so a star
+                // teammate's renewal isn't a personal slight.
+                if player.is_on_loan() {
                     continue;
                 }
                 let own_salary = match player.contract.as_ref() {
@@ -764,11 +775,17 @@ impl TeamBehaviour {
                     .add_event(HappinessEventType::ControversyIncident, magnitude);
             }
             // And a smaller ripple on the teammate (if one was found).
+            // ConflictWithTeammate must carry the partner id — the events
+            // UI filters out partner-required events that can't name the
+            // teammate (otherwise "Argued with a teammate" reads as ghost
+            // text). The partner here is the offender, not the victim.
             if let Some(vid) = victim_id {
                 if let Some(victim) = players.players.iter_mut().find(|p| p.id == vid) {
-                    victim
-                        .happiness
-                        .add_event(HappinessEventType::ConflictWithTeammate, -2.0);
+                    victim.happiness.add_event_with_partner(
+                        HappinessEventType::ConflictWithTeammate,
+                        -2.0,
+                        Some(offender_id),
+                    );
                 }
             }
         }
@@ -787,8 +804,16 @@ impl TeamBehaviour {
 
         use std::collections::HashMap;
 
+        // Build the top-earner-by-position map from permanent squad
+        // contracts only. Loanees' parent contracts may be huge (a Real
+        // Madrid loanee carrying a Madrid wage) or tiny (a youth loanee
+        // from a lower-league parent) and neither belongs in the
+        // borrower's wage structure.
         let mut top_by_group: HashMap<PlayerFieldPositionGroup, u32> = HashMap::new();
         for p in &players.players {
+            if p.is_on_loan() {
+                continue;
+            }
             let Some(contract) = p.contract.as_ref() else { continue };
             if contract.salary == 0 {
                 continue;
@@ -801,6 +826,14 @@ impl TeamBehaviour {
         }
 
         for player in players.players.iter_mut() {
+            // Loanees know their wage at the borrower is the loan deal —
+            // not the parent contract — and that their stay is temporary.
+            // Comparing the parent salary to the borrower's stars is
+            // doubly nonsensical and produces the "low-CA loanee
+            // unsettled by stars" bug.
+            if player.is_on_loan() {
+                continue;
+            }
             let Some(contract) = player.contract.as_ref() else { continue };
             if contract.salary == 0 {
                 continue;

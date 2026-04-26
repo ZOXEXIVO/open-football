@@ -306,19 +306,29 @@ impl Team {
         })
     }
 
+    /// Annual player wage bill at this team. Staff are billed separately by
+    /// `Club::process_monthly_finances` via `StaffCollection::get_annual_salary`
+    /// — including them here would double-count.
+    ///
+    /// Loan accounting:
+    ///   - Loaned-IN players (contract_loan.is_some()): the borrower's
+    ///     payroll line is the loan contract salary, not the parent
+    ///     contract. The parent's residual share is accepted as zero on
+    ///     the parent side — when a player is loaned out they leave the
+    ///     parent's roster, so the parent's wage bill drops by their full
+    ///     contract for the duration of the loan.
+    ///   - Other players: parent contract salary as installed.
     pub fn get_annual_salary(&self) -> u32 {
         self.players
             .players
             .iter()
-            .filter_map(|p| p.contract.as_ref())
-            .map(|c| c.salary)
-            .chain(
-                self.staffs
-                    .staffs
-                    .iter()
-                    .filter_map(|p| p.contract.as_ref())
-                    .map(|c| c.salary),
-            )
+            .filter_map(|p| {
+                if let Some(loan) = p.contract_loan.as_ref() {
+                    Some(loan.salary)
+                } else {
+                    p.contract.as_ref().map(|c| c.salary)
+                }
+            })
             .sum()
     }
 
@@ -494,6 +504,84 @@ impl FromStr for TeamType {
             "U23" => Ok(TeamType::U23),
             _ => Err(format!("'{}' is not a valid value for WSType", s)),
         }
+    }
+}
+
+#[cfg(test)]
+mod payroll_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
+    };
+    use chrono::NaiveTime;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn make_player(id: u32, salary: u32) -> Player {
+        let mut p = PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Test".into(), format!("Wager{}", id)))
+            .birth_date(d(1995, 1, 1))
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 20,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        p.contract = Some(PlayerClubContract::new(salary, d(2030, 6, 30)));
+        p
+    }
+
+    fn build_team_with(players: Vec<Player>) -> Team {
+        TeamBuilder::new()
+            .id(1)
+            .league_id(Some(1))
+            .club_id(1)
+            .name("Test FC".into())
+            .slug("test-fc".into())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn get_annual_salary_does_not_include_staff() {
+        // Two players, no staff: total = sum of player salaries.
+        let team = build_team_with(vec![make_player(1, 100_000), make_player(2, 80_000)]);
+        assert_eq!(team.get_annual_salary(), 180_000);
+    }
+
+    #[test]
+    fn get_annual_salary_uses_loan_contract_for_loaned_in_player() {
+        // Loaned-in player: borrower's payroll is the loan contract,
+        // not the parent contract. Without this fix the borrower would
+        // be billed the full parent salary every month.
+        let mut p = make_player(7, 500_000);
+        // Install a loan contract simulating the borrower side.
+        let mut loan = PlayerClubContract::new_loan(120_000, d(2027, 6, 30), 1, 1, 2);
+        loan.salary = 120_000;
+        p.contract_loan = Some(loan);
+        let team = build_team_with(vec![p]);
+        // 120k loan, not 500k parent.
+        assert_eq!(team.get_annual_salary(), 120_000);
     }
 }
 

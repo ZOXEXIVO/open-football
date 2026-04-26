@@ -364,15 +364,19 @@ fn is_partner_required(event_type: &HappinessEventType) -> bool {
     )
 }
 
-/// Resolve `(display_name, slug)` for the partner player. Returns `None`
-/// if the partner can no longer be located (retired, never existed) — the
-/// event is then filtered out so we don't show a dangling link.
+/// Resolve `(display_name, canonical_slug)` for the partner player. The
+/// slug must be the canonical `{id}-{name}` form produced by
+/// `Player::slug()` so the rendered `/players/{slug}` URL parses back to
+/// a real player id — using `FullName::slug()` here would strip the id
+/// prefix and the link would 404. Returns `None` when the partner can no
+/// longer be located (retired and aged out, or never existed); the event
+/// is then filtered out so we don't show a dangling link.
 fn resolve_partner(data: &SimulatorData, partner_id: u32) -> Option<(String, String)> {
-    let p = data.player(partner_id)?;
+    let p = data.player(partner_id).or_else(|| data.retired_player(partner_id))?;
     let display = format!(
         "{} {}",
         p.full_name.display_first_name(),
         p.full_name.display_last_name()
     );
-    Some((display, p.full_name.slug()))
+    Some((display, p.slug()))
 }

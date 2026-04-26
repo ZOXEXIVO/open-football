@@ -5,6 +5,10 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 impl Player {
     pub(crate) fn process_contract(&mut self, result: &mut PlayerResult, now: NaiveDateTime) {
+        // Snapshot threshold inputs before borrowing contract mutably.
+        let career_apps = (self.statistics.played as u32) + (self.statistics.played_subs as u32);
+        let caps = self.player_attributes.international_apps;
+
         if let Some(ref mut contract) = self.contract {
             const ONE_YEAR_DAYS: i64 = 365;
 
@@ -14,8 +18,22 @@ impl Player {
             }
 
             // Yearly wage-rise clause: applies on the contract anniversary.
-            // The helper guards idempotency by demanding the date == anniversary.
+            // The helper guards idempotency via a per-year memo so a
+            // same-day double tick won't double-apply.
             let _ = contract.try_apply_yearly_wage_rise(now.date());
+
+            // Threshold clauses fire as soon as the daily count crosses
+            // the negotiated threshold. Each helper consumes its clause
+            // on success so the next tick is a cheap no-op.
+            let _ = contract.try_apply_wage_after_career_apps(career_apps);
+            let _ = contract.try_apply_wage_after_caps(caps);
+
+            // Final-season auto-extension: triggers once the contract is
+            // inside its last 365 days and the player has crossed the
+            // appearance threshold this season. Helper handles both
+            // gates internally.
+            let season_apps = self.statistics.played + self.statistics.played_subs;
+            let _ = contract.try_apply_appearance_extension(season_apps, now.date());
         } else if !self.is_on_loan() {
             result.contract.no_contract = true;
         }

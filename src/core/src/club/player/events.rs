@@ -1022,6 +1022,7 @@ impl Player {
     /// `same_nationality` / `is_long_term_teammate` modulate magnitude.
     pub fn on_close_friend_sold(
         &mut self,
+        partner_player_id: u32,
         bond_friendship: f32,
         same_nationality: bool,
         departing_was_high_reputation: bool,
@@ -1033,28 +1034,46 @@ impl Player {
         let nat_mul = if same_nationality { 1.20 } else { 1.0 };
         let rep_mul = if departing_was_high_reputation { 1.15 } else { 1.0 };
         let mag = base * bond * nat_mul * rep_mul;
-        self.happiness
-            .add_event_with_cooldown(HappinessEventType::CloseFriendSold, mag, 30);
+        self.happiness.add_event_with_partner_and_cooldown(
+            HappinessEventType::CloseFriendSold,
+            mag,
+            Some(partner_player_id),
+            30,
+        );
     }
 
     /// React to a veteran mentor leaving. Same call shape as
     /// `on_close_friend_sold` but tuned for the mentor / mentee dynamic —
     /// larger base hit, longer cooldown.
-    pub fn on_mentor_departed(&mut self, bond_friendship: f32, same_nationality: bool) {
+    pub fn on_mentor_departed(
+        &mut self,
+        partner_player_id: u32,
+        bond_friendship: f32,
+        same_nationality: bool,
+    ) {
         let cfg = HappinessConfig::default();
         let base = cfg.catalog.mentor_departed;
         let bond = ((bond_friendship.clamp(0.0, 100.0)) / 100.0) * 0.5 + 0.75;
         let nat_mul = if same_nationality { 1.15 } else { 1.0 };
         let mag = base * bond * nat_mul;
-        self.happiness
-            .add_event_with_cooldown(HappinessEventType::MentorDeparted, mag, 60);
+        self.happiness.add_event_with_partner_and_cooldown(
+            HappinessEventType::MentorDeparted,
+            mag,
+            Some(partner_player_id),
+            60,
+        );
     }
 
     /// React to a same-nationality player joining the squad. Strongest
     /// for foreign players who lack the local language; not emitted for
     /// domestic players in their home country (everyone speaks the same
     /// language, no integration boost).
-    pub fn on_compatriot_joined(&mut self, club_country_id: u32, lacks_local_language: bool) {
+    pub fn on_compatriot_joined(
+        &mut self,
+        partner_player_id: u32,
+        club_country_id: u32,
+        lacks_local_language: bool,
+    ) {
         if self.country_id == club_country_id {
             return;
         }
@@ -1065,8 +1084,12 @@ impl Player {
         // settled linguistically.
         let lang_mul = if lacks_local_language { 1.30 } else { 1.0 };
         let mag = base * lang_mul;
-        self.happiness
-            .add_event_with_cooldown(HappinessEventType::CompatriotJoined, mag, 30);
+        self.happiness.add_event_with_partner_and_cooldown(
+            HappinessEventType::CompatriotJoined,
+            mag,
+            Some(partner_player_id),
+            30,
+        );
     }
 
     /// React to a mutual contract termination. Clears the contract (player
@@ -2266,23 +2289,23 @@ mod match_event_tests {
     #[test]
     fn close_friend_sold_emits_negative() {
         let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-        p.on_close_friend_sold(80.0, true, true);
-        let mag = p
+        p.on_close_friend_sold(42, 80.0, true, true);
+        let ev = p
             .happiness
             .recent_events
             .iter()
             .find(|e| e.event_type == HappinessEventType::CloseFriendSold)
-            .unwrap()
-            .magnitude;
-        assert!(mag < 0.0);
+            .unwrap();
+        assert!(ev.magnitude < 0.0);
+        assert_eq!(ev.partner_player_id, Some(42));
     }
 
     #[test]
     fn close_friend_sold_stronger_with_compatriot() {
         let mut compat = build_player(PlayerPositionType::Striker, PersonAttributes::default());
         let mut foreign = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-        compat.on_close_friend_sold(80.0, true, false);
-        foreign.on_close_friend_sold(80.0, false, false);
+        compat.on_close_friend_sold(7, 80.0, true, false);
+        foreign.on_close_friend_sold(7, 80.0, false, false);
         let c = compat
             .happiness
             .recent_events
@@ -2303,21 +2326,21 @@ mod match_event_tests {
     #[test]
     fn mentor_departed_emits_negative() {
         let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-        p.on_mentor_departed(70.0, false);
-        let count = p
+        p.on_mentor_departed(13, 70.0, false);
+        let ev = p
             .happiness
             .recent_events
             .iter()
-            .filter(|e| e.event_type == HappinessEventType::MentorDeparted)
-            .count();
-        assert_eq!(count, 1);
+            .find(|e| e.event_type == HappinessEventType::MentorDeparted)
+            .unwrap();
+        assert_eq!(ev.partner_player_id, Some(13));
     }
 
     #[test]
     fn compatriot_joined_silent_for_domestic_player() {
         let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
         // p.country_id == 1 by default. Club is in same country.
-        p.on_compatriot_joined(1, false);
+        p.on_compatriot_joined(2, 1, false);
         let count = p
             .happiness
             .recent_events
@@ -2331,14 +2354,14 @@ mod match_event_tests {
     fn compatriot_joined_fires_for_foreign_player() {
         let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
         // Player from country 1, club in country 99 → foreign at this club.
-        p.on_compatriot_joined(99, true);
-        let count = p
+        p.on_compatriot_joined(2, 99, true);
+        let ev = p
             .happiness
             .recent_events
             .iter()
-            .filter(|e| e.event_type == HappinessEventType::CompatriotJoined)
-            .count();
-        assert_eq!(count, 1);
+            .find(|e| e.event_type == HappinessEventType::CompatriotJoined)
+            .unwrap();
+        assert_eq!(ev.partner_player_id, Some(2));
     }
 
     #[test]
@@ -2347,8 +2370,8 @@ mod match_event_tests {
         // not stack two events on the existing player — `on_compatriot_joined`
         // has a 30-day cooldown.
         let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-        p.on_compatriot_joined(99, true);
-        p.on_compatriot_joined(99, true);
+        p.on_compatriot_joined(2, 99, true);
+        p.on_compatriot_joined(3, 99, true);
         assert_eq!(count_events(&p, &HappinessEventType::CompatriotJoined), 1);
     }
 
@@ -2356,8 +2379,8 @@ mod match_event_tests {
     fn compatriot_joined_amplified_when_no_local_language() {
         let mut isolated = build_player(PlayerPositionType::Striker, PersonAttributes::default());
         let mut settled = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-        isolated.on_compatriot_joined(99, true);
-        settled.on_compatriot_joined(99, false);
+        isolated.on_compatriot_joined(2, 99, true);
+        settled.on_compatriot_joined(2, 99, false);
         let i = isolated
             .happiness
             .recent_events

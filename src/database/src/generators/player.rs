@@ -1481,6 +1481,9 @@ fn build_main_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
         loan_min_appearances: None,
         bonuses: vec![],
         clauses: vec![],
+        last_yearly_rise_year: None,
+        last_loyalty_paid_year: None,
+        signing_bonus_paid: false,
     };
     // If currently loaned out, the main contract retains parent terms but
     // records the borrower via loan_to_club_id so the value/wage code knows.
@@ -1532,6 +1535,9 @@ fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<Play
         loan_min_appearances: loan.min_appearances,
         bonuses: vec![],
         clauses: vec![],
+        last_yearly_rise_year: None,
+        last_loyalty_paid_year: None,
+        signing_bonus_paid: false,
     })
 }
 

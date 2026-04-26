@@ -1,3 +1,4 @@
+use crate::club::player::contract::contract::encode_threshold_pct;
 use crate::{
     ContractBonus, ContractBonusType, ContractClause, ContractClauseType, ContractType, Player,
     PlayerClubContract, PlayerContractProposal, PlayerSquadStatus,
@@ -29,6 +30,11 @@ impl AcceptContractHandler {
         let bonuses = build_bonuses(&proposal);
         let clauses = build_clauses(&proposal);
 
+        // `signing_bonus_paid = false` defers the actual cash transfer to
+        // the next monthly finance pass — it scans contracts for unpaid
+        // signing bonuses, pushes them as expenses, and flips the flag.
+        // Storing the bonus inside `contract.bonuses` keeps it visible to
+        // happiness / package-value scoring throughout the contract.
         player.contract = Some(PlayerClubContract {
             shirt_number,
             salary: proposal.salary,
@@ -49,6 +55,9 @@ impl AcceptContractHandler {
             loan_min_appearances: None,
             bonuses,
             clauses,
+            last_yearly_rise_year: None,
+            last_loyalty_paid_year: None,
+            signing_bonus_paid: false,
         });
     }
 }
@@ -156,21 +165,21 @@ fn build_clauses(p: &PlayerContractProposal) -> Vec<ContractClause> {
             ));
         }
     }
-    if let Some((threshold, _pct)) = p.wage_after_apps {
-        // Encoded value is the appearances threshold; the rise size is
-        // resolved at apply-time from a fixed table to avoid a second
-        // u32 slot per clause.
+    if let Some((threshold, pct)) = p.wage_after_apps {
+        // Pack threshold and negotiated rise percentage into a single
+        // i32 (`threshold * 100 + pct`) so we don't widen ContractClause
+        // for two thresholded clauses. Decoded at apply-time.
         if threshold > 0 {
             clauses.push(ContractClause::new(
-                threshold as i32,
+                encode_threshold_pct(threshold, pct),
                 ContractClauseType::WageAfterReachingClubCareerLeagueGames,
             ));
         }
     }
-    if let Some((threshold, _pct)) = p.wage_after_caps {
+    if let Some((threshold, pct)) = p.wage_after_caps {
         if threshold > 0 {
             clauses.push(ContractClause::new(
-                threshold as i32,
+                encode_threshold_pct(threshold, pct),
                 ContractClauseType::WageAfterReachingInternationalCaps,
             ));
         }

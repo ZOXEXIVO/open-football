@@ -1,4 +1,5 @@
 use crate::club::academy::result::ClubAcademyResult;
+use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::{BoardResult, ClubFinanceResult};
 use crate::simulator::SimulatorData;
 use crate::transfers::CompletedTransfer;
@@ -138,10 +139,14 @@ impl ClubResult {
             };
 
             // Step 1: Resolve contract renewal staff, wage budget, and current wage bill
-            // Uses the parent club's context for loaned players
-            let (negotiation_skill, judging_ability, wage_budget, current_wage_bill) = data.club(contract_club_id)
+            // Uses the parent club's context for loaned players. Also pull
+            // club + league reputation so the reactive offer can run through
+            // the same ContractValuation as the proactive renewal pass.
+            let (negotiation_skill, judging_ability, wage_budget, current_wage_bill,
+                club_rep_score, league_reputation) = data.club(contract_club_id)
                 .map(|club| {
-                    let (neg, judge) = club.teams.teams.first()
+                    let main_team = club.teams.teams.first();
+                    let (neg, judge) = main_team
                         .map(|team| {
                             let staff = team.staffs.responsibility.contract_renewal.handle_first_team_contracts
                                 .and_then(|id| team.staffs.find(id));
@@ -172,9 +177,16 @@ impl ClubResult {
                         .map(|t| t.get_annual_salary())
                         .sum();
 
-                    (neg, judge, wb, total_wages)
+                    let club_rep = main_team.map(|t| t.reputation.overall_score()).unwrap_or(0.5);
+                    let league_id = main_team.and_then(|t| t.league_id);
+                    let league_rep = league_id
+                        .and_then(|lid| data.league(lid))
+                        .map(|l| l.reputation)
+                        .unwrap_or(5_000);
+
+                    (neg, judge, wb, total_wages, club_rep, league_rep)
                 })
-                .unwrap_or((5, 5, 0, 0));
+                .unwrap_or((5, 5, 0, 0, 0.5, 5_000));
 
             // Step 2: Read player info (immutable)
             let player = match data.player(result.player_id) {
@@ -185,46 +197,59 @@ impl ClubResult {
             let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
             let ability = player.player_attributes.current_ability;
             let age = DateUtils::age(player.birth_date, data.date.date());
-            let base_salary = ability_based_salary(ability);
 
-            // Staff judging_ability affects how accurate the salary offer is
-            // Low skill: offer 70-85% of fair value, high skill: offer 95-105%
-            let accuracy = 0.70 + (judging_ability as f32 / 20.0) * 0.35;
-            let adjusted_base = (base_salary as f32 * accuracy) as u32;
+            // Reactive renewal salary now flows through ContractValuation,
+            // the same model used by the proactive renewal pass and salary
+            // happiness — otherwise the three systems disagree about what a
+            // fair wage looks like and chase each other in circles.
+            let squad_status = player.contract.as_ref()
+                .map(|c| c.squad_status.clone())
+                .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+            let is_not_needed = matches!(squad_status, PlayerSquadStatus::NotNeeded);
 
-            // Loaned players always get the extension path (parent club renewing remotely)
-            let mut offered_salary = if !is_on_loan && result.contract.want_improve_contract {
-                // Staff evaluates whether this player deserves a raise
-                let ability_f = ability as f32;
-                let matches_played = player.statistics.played + player.statistics.played_subs;
-                let is_not_needed = player.contract.as_ref()
-                    .map(|c| matches!(c.squad_status, PlayerSquadStatus::NotNeeded))
-                    .unwrap_or(false);
+            // Not needed players don't get raises — transfer list or release instead
+            if !is_on_loan && result.contract.want_improve_contract && is_not_needed {
+                Self::handle_unresolved_salary(result.player_id, data, club_id);
+                return;
+            }
 
-                // Not needed players don't get raises — transfer list or release instead
-                if is_not_needed {
-                    Self::handle_unresolved_salary(result.player_id, data, club_id);
-                    return;
-                }
+            let months_remaining = player.contract.as_ref()
+                .map(|c| ((c.expiration - data.date.date()).num_days() / 30).max(0) as i32)
+                .unwrap_or(0);
+            let has_market_interest = player.statuses.get().iter().any(|s| {
+                matches!(s, PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid)
+            });
 
-                // Low ability with few appearances: smaller raise
-                let raise_pct = if ability_f < 60.0 && matches_played < 5 {
-                    1.05
-                } else {
-                    1.10 + (ability_f / 200.0) * 0.10 // 10-15% raise
-                };
-
-                // Escalate from whichever anchor is higher — player's
-                // current wage or our band-based valuation. Escalating only
-                // off the band meant players already above their band saw
-                // no meaningful raise and their agent rejected every
-                // attempt (see contract_renewal fix).
-                let anchor = adjusted_base.max(current_salary);
-                let raised = (anchor as f32 * raise_pct) as u32;
-                raised.max(current_salary + current_salary / 20).max(current_salary + 1)
-            } else {
-                adjusted_base.max(current_salary + current_salary / 20).max(current_salary + 1)
+            let valuation_ctx = ValuationContext {
+                age,
+                club_reputation_score: club_rep_score,
+                league_reputation,
+                squad_status: squad_status.clone(),
+                current_salary,
+                months_remaining,
+                has_market_interest,
             };
+            let valuation = ContractValuation::evaluate(player, &valuation_ctx);
+
+            // Staff judging_ability narrows the offer around the unified
+            // target: poor staff under-offer (~85%), elite ones land within
+            // ±15% of the right number.
+            let accuracy = 0.85 + (judging_ability as f32 / 20.0) * 0.30;
+            let target = (valuation.expected_wage as f32 * accuracy) as u32;
+
+            // Anchor never below current salary plus a token bump.
+            let mut offered_salary = target
+                .max(current_salary + current_salary / 20)
+                .max(current_salary + 1);
+
+            // Salary-unhappy reactive offer: lean toward the player's own
+            // valuation rather than asking them to settle for a band-based
+            // average. Use max(target, expected) here so we don't underpay
+            // when the staff filter clipped it back.
+            if !is_on_loan && result.contract.want_improve_contract {
+                offered_salary = offered_salary.max(valuation.expected_wage);
+            }
+            let _ = ability; // silence unused-warning if future logic drops it
 
             // Converge toward the player's own ask when we have it — same
             // split-the-gap heuristic as the proactive path.
@@ -292,19 +317,6 @@ impl ClubResult {
                     "dec_contract_renewal_offered".to_string(),
                     String::new(),
                 );
-            }
-        }
-
-        /// Ability-based salary that reflects realistic player market value
-        fn ability_based_salary(ability: u8) -> u32 {
-            match ability {
-                0..=50 => 5_000,
-                51..=70 => 20_000,
-                71..=90 => 50_000,
-                91..=110 => 100_000,
-                111..=130 => 200_000,
-                131..=150 => 350_000,
-                _ => 500_000,
             }
         }
 

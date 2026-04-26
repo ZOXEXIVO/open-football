@@ -328,6 +328,26 @@ impl LeagueResult {
         appearance_ids.extend(details.right_team_players.main.iter().copied());
         appearance_ids.extend(details.right_team_players.substitutes_used.iter().copied());
 
+        // Bench players who never came on are paid the unused-sub fee.
+        let unused_subs_left: Vec<u32> = details
+            .left_team_players
+            .substitutes
+            .iter()
+            .copied()
+            .filter(|id| !details.left_team_players.substitutes_used.contains(id))
+            .collect();
+        let unused_subs_right: Vec<u32> = details
+            .right_team_players
+            .substitutes
+            .iter()
+            .copied()
+            .filter(|id| !details.right_team_players.substitutes_used.contains(id))
+            .collect();
+        let unused_sub_ids: Vec<u32> = unused_subs_left
+            .into_iter()
+            .chain(unused_subs_right.into_iter())
+            .collect();
+
         // Which GKs started on which team + did they keep a clean sheet?
         let home_goals = result.score.home_team.get();
         let away_goals = result.score.away_team.get();
@@ -384,6 +404,37 @@ impl LeagueResult {
                         ContractBonusType::GoalFee => payout += v * goals,
                         ContractBonusType::CleanSheetFee if gk_clean_sheet => payout += v,
                         _ => {}
+                    }
+                }
+                if payout > 0 {
+                    *club_totals.entry(club_id).or_insert(0) += payout;
+                }
+            }
+        }
+
+        // Unused-substitute fee: bench players who didn't get on the
+        // pitch are still paid their negotiated showup fee. Routed
+        // through the same per-club aggregation as appearance bonuses.
+        for pid in &unused_sub_ids {
+            if let Some(player) = data.player(*pid) {
+                let club_id = match data
+                    .indexes
+                    .as_ref()
+                    .and_then(|i| i.get_player_location(*pid))
+                {
+                    Some((_, _, club_id, _)) => club_id,
+                    None => continue,
+                };
+                let contract = match player.contract.as_ref() {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let mut payout: i64 = 0;
+                for bonus in &contract.bonuses {
+                    if matches!(bonus.bonus_type, ContractBonusType::UnusedSubstitutionFee)
+                        && bonus.value > 0
+                    {
+                        payout += bonus.value as i64;
                     }
                 }
                 if payout > 0 {

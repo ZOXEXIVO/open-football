@@ -114,6 +114,20 @@ pub struct PlayerClubContract {
 
     pub bonuses: Vec<ContractBonus>,
     pub clauses: Vec<ContractClause>,
+
+    /// Year of the most recent yearly-wage-rise application. The clause is
+    /// recurring (not consumed) and the apply helper is invoked daily, so
+    /// without a per-year memo a same-day double call would double-apply
+    /// the rise. Cleared by `new()` to None.
+    pub last_yearly_rise_year: Option<i32>,
+    /// Year in which the loyalty bonus was last paid. Loyalty pays once
+    /// per contract anniversary; this guards against duplicate payments
+    /// when end-of-period or anniversary checks fire more than once.
+    pub last_loyalty_paid_year: Option<i32>,
+    /// Anchor year for one-shot signing-bonus payment. Set when the
+    /// contract is first installed; if the bonus has been paid out the
+    /// flag is `Some(year)` and we don't pay again on subsequent ticks.
+    pub signing_bonus_paid: bool,
 }
 
 impl PlayerClubContract {
@@ -138,6 +152,9 @@ impl PlayerClubContract {
             loan_min_appearances: None,
             bonuses: vec![],
             clauses: vec![],
+            last_yearly_rise_year: None,
+            last_loyalty_paid_year: None,
+            signing_bonus_paid: false,
         }
     }
 
@@ -162,6 +179,9 @@ impl PlayerClubContract {
             loan_min_appearances: None,
             bonuses: vec![],
             clauses: vec![],
+            last_yearly_rise_year: None,
+            last_loyalty_paid_year: None,
+            signing_bonus_paid: false,
         }
     }
 
@@ -186,6 +206,9 @@ impl PlayerClubContract {
             loan_min_appearances: None,
             bonuses: vec![],
             clauses: vec![],
+            last_yearly_rise_year: None,
+            last_loyalty_paid_year: None,
+            signing_bonus_paid: false,
         }
     }
 
@@ -304,6 +327,12 @@ impl PlayerClubContract {
         if today.year() <= started.year() {
             return None; // Anniversary at year of signing is the signing itself.
         }
+        // Per-year memo: the daily caller would otherwise re-apply the
+        // rise on every same-day re-entry. Skip if we already applied this
+        // calendar year.
+        if self.last_yearly_rise_year == Some(today.year()) {
+            return None;
+        }
         let pct = self.clauses.iter().find_map(|c| match c.bonus_type {
             ContractClauseType::YearlyWageRise => Some(c.value.max(0) as u32),
             _ => None,
@@ -313,6 +342,7 @@ impl PlayerClubContract {
         }
         let bump = (self.salary as u64 * pct as u64 / 100) as u32;
         self.salary = self.salary.saturating_add(bump.max(1));
+        self.last_yearly_rise_year = Some(today.year());
         Some(self.salary)
     }
 
@@ -435,9 +465,11 @@ impl PlayerClubContract {
         Some(self.expiration)
     }
 
-    /// Wage rise after a club-career league-games threshold. Predefined
-    /// rise of 20% (the clause stores only the threshold). Consumes the
-    /// clause once fired.
+    /// Wage rise after a club-career league-games threshold. The clause
+    /// stores `threshold * 100 + rise_pct` to preserve the negotiated
+    /// percentage without adding a second slot to ContractClause. Falls
+    /// back to a sensible 20% when the encoded percentage is zero.
+    /// Consumes the clause once fired.
     pub fn try_apply_wage_after_career_apps(&mut self, career_apps: u32) -> Option<u32> {
         let pos = self.clauses.iter().position(|c| {
             matches!(
@@ -445,18 +477,19 @@ impl PlayerClubContract {
                 ContractClauseType::WageAfterReachingClubCareerLeagueGames
             )
         })?;
-        let threshold = self.clauses[pos].value.max(0) as u32;
-        if career_apps < threshold {
+        let (threshold, pct) = decode_threshold_pct(self.clauses[pos].value, 20);
+        if career_apps < threshold as u32 {
             return None;
         }
-        let bump = self.salary / 5; // +20%
+        let bump = (self.salary as u64 * pct as u64 / 100) as u32;
         self.salary = self.salary.saturating_add(bump.max(1));
         self.clauses.remove(pos);
         Some(self.salary)
     }
 
-    /// Wage rise after international caps cross a threshold. Same shape
-    /// as `try_apply_wage_after_career_apps` (15% rise).
+    /// Wage rise after international caps cross a threshold. Encoded as
+    /// `threshold * 100 + rise_pct`. Falls back to 15% when the encoded
+    /// percentage is zero. Consumes the clause once fired.
     pub fn try_apply_wage_after_caps(&mut self, caps: u16) -> Option<u32> {
         let pos = self.clauses.iter().position(|c| {
             matches!(
@@ -464,11 +497,11 @@ impl PlayerClubContract {
                 ContractClauseType::WageAfterReachingInternationalCaps
             )
         })?;
-        let threshold = self.clauses[pos].value.max(0) as u16;
-        if caps < threshold {
+        let (threshold, pct) = decode_threshold_pct(self.clauses[pos].value, 15);
+        if caps < threshold as u16 {
             return None;
         }
-        let bump = (self.salary as u64 * 15 / 100) as u32;
+        let bump = (self.salary as u64 * pct as u64 / 100) as u32;
         self.salary = self.salary.saturating_add(bump.max(1));
         self.clauses.remove(pos);
         Some(self.salary)
@@ -494,6 +527,27 @@ impl PlayerClubContract {
         self.salary = top_earner_excl_self;
         Some(self.salary)
     }
+}
+
+/// Decode a `threshold * 100 + pct` packed clause value. Negotiation only
+/// stores threshold-bearing clauses with `threshold > 0`; a packed value
+/// like `100 * 100 + 20 = 10020` decodes to `(100, 20)`. Backwards-compat:
+/// if `value < 100` (older saves before the encoding), treat the whole
+/// number as the threshold and use the supplied `default_pct`.
+pub(crate) fn encode_threshold_pct(threshold: u16, pct: u8) -> i32 {
+    threshold as i32 * 100 + pct.min(99) as i32
+}
+
+pub(crate) fn decode_threshold_pct(value: i32, default_pct: u8) -> (u16, u8) {
+    let v = value.max(0);
+    if v < 100 {
+        // Legacy / un-encoded value — interpret as plain threshold.
+        return (v as u16, default_pct);
+    }
+    let threshold = (v / 100) as u16;
+    let pct = (v % 100) as u8;
+    let pct = if pct == 0 { default_pct } else { pct };
+    (threshold, pct)
 }
 
 // Bonuses
@@ -799,8 +853,9 @@ mod clause_lifecycle_tests {
     #[test]
     fn wage_after_career_apps_fires_at_threshold_only() {
         let mut c = fresh(100_000);
+        // Encoded value is `threshold * 100 + pct`. 100 apps × +20% rise.
         c.clauses.push(ContractClause::new(
-            100,
+            encode_threshold_pct(100, 20),
             ContractClauseType::WageAfterReachingClubCareerLeagueGames,
         ));
         assert!(c.try_apply_wage_after_career_apps(99).is_none());
@@ -810,15 +865,73 @@ mod clause_lifecycle_tests {
     }
 
     #[test]
+    fn wage_after_career_apps_uses_negotiated_percentage() {
+        // Fully exercise the encoded percentage path: +35% rise instead
+        // of the legacy fixed 20%.
+        let mut c = fresh(100_000);
+        c.clauses.push(ContractClause::new(
+            encode_threshold_pct(50, 35),
+            ContractClauseType::WageAfterReachingClubCareerLeagueGames,
+        ));
+        let new_salary = c.try_apply_wage_after_career_apps(50).unwrap();
+        assert_eq!(new_salary, 135_000);
+    }
+
+    #[test]
     fn wage_after_caps_fires_at_threshold_only() {
         let mut c = fresh(100_000);
         c.clauses.push(ContractClause::new(
-            10,
+            encode_threshold_pct(10, 15),
             ContractClauseType::WageAfterReachingInternationalCaps,
         ));
         assert!(c.try_apply_wage_after_caps(9).is_none());
         let new_salary = c.try_apply_wage_after_caps(10).unwrap();
         assert_eq!(new_salary, 115_000); // +15%
         assert!(c.try_apply_wage_after_caps(20).is_none());
+    }
+
+    #[test]
+    fn wage_after_caps_uses_negotiated_percentage() {
+        let mut c = fresh(100_000);
+        c.clauses.push(ContractClause::new(
+            encode_threshold_pct(5, 25),
+            ContractClauseType::WageAfterReachingInternationalCaps,
+        ));
+        let new_salary = c.try_apply_wage_after_caps(5).unwrap();
+        assert_eq!(new_salary, 125_000);
+    }
+
+    #[test]
+    fn yearly_wage_rise_is_idempotent_within_a_day() {
+        let mut c = fresh(100_000);
+        c.clauses
+            .push(ContractClause::new(10, ContractClauseType::YearlyWageRise));
+        let anniversary = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        // First call applies.
+        let s1 = c.try_apply_yearly_wage_rise(anniversary).unwrap();
+        assert_eq!(s1, 110_000);
+        // Re-call on the SAME day must NOT double-apply.
+        assert!(c.try_apply_yearly_wage_rise(anniversary).is_none());
+        assert_eq!(c.salary, 110_000);
+        // Next-year anniversary applies again on top of the new salary.
+        let next = NaiveDate::from_ymd_opt(2027, 7, 1).unwrap();
+        let s2 = c.try_apply_yearly_wage_rise(next).unwrap();
+        assert_eq!(s2, 121_000);
+    }
+
+    #[test]
+    fn decode_threshold_pct_legacy_value_uses_default() {
+        // Pre-encoding clause values were just the raw threshold —
+        // anything < 100 must still decode to (value, default_pct).
+        let (t, p) = decode_threshold_pct(50, 20);
+        assert_eq!(t, 50);
+        assert_eq!(p, 20);
+        // Encoded value with explicit pct overrides the default.
+        let (t, p) = decode_threshold_pct(encode_threshold_pct(80, 33), 20);
+        assert_eq!(t, 80);
+        assert_eq!(p, 33);
+        // Encoded value with pct=0 falls back to default.
+        let (_, p) = decode_threshold_pct(encode_threshold_pct(20, 0), 25);
+        assert_eq!(p, 25);
     }
 }
