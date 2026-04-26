@@ -5,6 +5,58 @@ use crate::club::{Person, PlayerPositionType};
 use crate::HappinessEventType;
 use chrono::NaiveDate;
 
+/// Multi-axis reputation gap between the player and his current
+/// surroundings. Used by morale-factor calculators (pressure_load,
+/// club_fit, coach_credibility), the adaptation score, and squad-level
+/// processing to share one source of truth for "how much of an outlier
+/// is this player at this club / in this league?"
+///
+/// All gaps are signed: positive = player above his surroundings
+/// (Messi at a small club); negative = player below (a Tier-4 fringe
+/// player at Real Madrid). Inputs are normalised to common units.
+#[derive(Debug, Clone, Copy)]
+pub struct ReputationGap {
+    /// player.world_reputation − club_reputation. Both 0..10000.
+    pub player_vs_club: i32,
+    /// player.world_reputation − league_reputation. Both 0..10000.
+    pub player_vs_league: i32,
+    /// player.current_ability − expected ability for the club tier
+    /// (10× league rep / 1000, capped). Surfaces over- or under-fits.
+    pub ability_vs_tier: i32,
+}
+
+impl ReputationGap {
+    /// Compute against the rounded inputs the caller already has.
+    /// `team_reputation_0_to_1` matches the convention used elsewhere
+    /// (ClubContext, ScoringEngine) — multiplied by 10000 to share the
+    /// player_world_reputation 0..10000 axis.
+    pub fn compute(player: &Player, team_reputation_0_to_1: f32, league_reputation: u16) -> Self {
+        let p_rep = player.player_attributes.world_reputation as i32;
+        let c_rep = (team_reputation_0_to_1.clamp(0.0, 1.0) * 10000.0) as i32;
+        let l_rep = league_reputation as i32;
+        let expected_tier = ((league_reputation as i32) / 100).clamp(20, 200);
+        ReputationGap {
+            player_vs_club: p_rep - c_rep,
+            player_vs_league: p_rep - l_rep,
+            ability_vs_tier: player.player_attributes.current_ability as i32 - expected_tier,
+        }
+    }
+
+    /// True if the player is meaningfully above where they're playing —
+    /// triggers pressure_load spikes, role_clarity sensitivity, and the
+    /// squad-side awe/jealousy dynamics already in
+    /// `process_reputation_dynamics`.
+    pub fn is_outlier_above(&self) -> bool {
+        self.player_vs_club >= 3000 || self.player_vs_league >= 3000
+    }
+
+    /// True if the player is meaningfully below where they're playing —
+    /// triggers role-mismatch tolerance and isolation susceptibility.
+    pub fn is_outlier_below(&self) -> bool {
+        self.player_vs_club <= -3000 || self.player_vs_league <= -3000
+    }
+}
+
 /// Squad-side context for [`Player::adaptation_score`]. Caller-supplied so
 /// the player doesn't need to walk the squad to compute its own number.
 /// Empty-default fields contribute neutrally — the score still works

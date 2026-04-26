@@ -7,6 +7,31 @@ use crate::utils::DateUtils;
 use crate::{ContractType, HappinessEventType, PlayerSquadStatus};
 use chrono::NaiveDate;
 
+/// Club / coaching context fed into the six derived morale factors.
+/// Decoupled from `GlobalContext` so the helpers can be unit-tested
+/// without spinning up a simulator. Built once per weekly tick by the
+/// caller (see `Player::simulate`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ClubMoraleContext {
+    /// Best technical coach score on the club staff (0..20). Drives
+    /// coach_credibility for outfield players.
+    pub coach_best_technical: u8,
+    /// Best mental coach score on the club staff (0..20). Drives
+    /// coach_credibility weight for high-pressure / tactical players.
+    pub coach_best_mental: u8,
+    /// Best fitness coach score on the club staff (0..20). Drives
+    /// coach_credibility for athleticism-dependent roles.
+    pub coach_best_fitness: u8,
+    /// Best goalkeeping coach score on the club staff (0..20). Drives
+    /// coach_credibility for goalkeepers specifically.
+    pub coach_best_goalkeeping: u8,
+    /// Training facility quality (0..1) — feeds club_fit for ambitious
+    /// pros who expect modern facilities.
+    pub training_facility_quality: f32,
+    /// Youth facility quality (0..1) — feeds club_fit for young players.
+    pub youth_facility_quality: f32,
+}
+
 /// Snapshot of the team's current competitive standing — fed into
 /// `calculate_ambition_fit` so a high-ambition player at a club who's
 /// bottom of the table reacts to the season, not just to the club badge.
@@ -24,13 +49,18 @@ pub struct TeamSeasonState {
 }
 
 impl Player {
-    /// Weekly happiness evaluation with 6 real-world factors
-    pub(crate) fn process_happiness(
+    /// Weekly happiness evaluation. Computes the seven legacy factors
+    /// plus six derived "life in the team" factors (role clarity,
+    /// coach credibility, dressing-room status, club fit, pressure
+    /// load, promise trust). Takes `ClubMoraleContext` so the derived
+    /// axes can read coach scores and facility quality.
+    pub(crate) fn process_happiness_full(
         &mut self,
         result: &mut PlayerResult,
         now: NaiveDate,
         team_reputation: f32,
         season_state: TeamSeasonState,
+        club_ctx: ClubMoraleContext,
     ) {
         let age = DateUtils::age(self.birth_date, now);
         let age_sensitivity = if age >= 24 && age <= 30 { 1.3 } else { 1.0 };
@@ -90,7 +120,29 @@ impl Player {
             .sum();
         self.happiness.factors.recent_discipline = discipline.clamp(-10.0, 0.0);
 
-        // Recalculate overall morale (now uses dampened salary factor)
+        // Loan-specific weekly modulation — extends the loan audit with
+        // per-player morale signals (out-of-position, too-good, young
+        // enjoying responsibility, veteran humiliation).
+        if self.contract_loan.is_some() {
+            self.process_loan_morale(team_reputation, season_state.league_reputation);
+        }
+
+        // ── Derived factors ───────────────────────────────────
+        self.happiness.factors.role_clarity = self.calculate_role_clarity();
+        self.happiness.factors.coach_credibility = self.calculate_coach_credibility(&club_ctx);
+        self.happiness.factors.dressing_room_status = self.calculate_dressing_room_status();
+        self.happiness.factors.club_fit = self.calculate_club_fit(
+            team_reputation,
+            season_state.league_reputation,
+            &club_ctx,
+        );
+        self.happiness.factors.pressure_load = self.calculate_pressure_load(
+            team_reputation,
+            season_state.league_reputation,
+        );
+        self.happiness.factors.promise_trust = self.calculate_promise_trust(now);
+
+        // Recalculate overall morale (now uses dampened salary factor + derived axes)
         self.happiness.recalculate_morale();
 
         // Salary unhappy: player wants contract renegotiation (with 1-year cooldown)
@@ -487,6 +539,368 @@ impl Player {
         };
 
         (raw * weight).clamp(-10.0, 5.0)
+    }
+
+    // ── Six derived morale factors ───────────────────────────
+    //
+    // Each factor returns a signed value in roughly the band stated on
+    // its `HappinessFactors` field doc. They're recomputed every weekly
+    // tick and rolled into morale at 0.6× weight inside
+    // `recalculate_morale`.
+
+    /// role_clarity: does the player understand his role?
+    fn calculate_role_clarity(&self) -> f32 {
+        let mut score: f32 = 0.0;
+
+        // Recent RoleMismatch events drag clarity down hard.
+        let mismatch_pull: f32 = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::RoleMismatch)
+            .map(|e| e.magnitude * (1.0 - e.days_ago as f32 / 90.0).max(0.0))
+            .sum();
+        score += mismatch_pull * 0.5;
+
+        // Squad status alignment with appearances. KeyPlayer with a
+        // healthy starter ratio knows where he stands; KeyPlayer barely
+        // playing has zero clarity even though the badge says regular.
+        if let Some(c) = self.contract.as_ref() {
+            let starter = self.happiness.starter_ratio;
+            let alignment = match c.squad_status {
+                PlayerSquadStatus::KeyPlayer => starter - 0.65,
+                PlayerSquadStatus::FirstTeamRegular => starter - 0.50,
+                PlayerSquadStatus::FirstTeamSquadRotation => starter - 0.30,
+                PlayerSquadStatus::MainBackupPlayer => 0.20 - (starter - 0.20).abs(),
+                _ => 0.0,
+            };
+            score += alignment * 6.0;
+        }
+
+        // Repeated tactical-role talks in the log signal the player
+        // has been chasing clarity. One ask is normal; three+ in 90
+        // days means he's not getting it.
+        let tactical_asks = self
+            .interactions
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.topic,
+                    crate::club::player::interaction::InteractionTopic::TacticalRole
+                )
+            })
+            .count() as f32;
+        if tactical_asks >= 3.0 {
+            score -= (tactical_asks - 2.0) * 1.5;
+        }
+
+        score.clamp(-8.0, 5.0)
+    }
+
+    /// coach_credibility: do the coaches feel competent enough to coach
+    /// this player? Compares the best-coach-on-staff scores against
+    /// the player's CA. Goalkeepers weight the goalkeeping coach;
+    /// outfield players weight technical+mental.
+    fn calculate_coach_credibility(&self, ctx: &ClubMoraleContext) -> f32 {
+        let player_ca = self.player_attributes.current_ability as f32;
+        if player_ca < 60.0 {
+            // Sub-60 CA players don't outgrow their coaches.
+            return 0.0;
+        }
+
+        let is_gk = matches!(
+            self.position(),
+            crate::PlayerPositionType::Goalkeeper
+        );
+        let coach_score = if is_gk {
+            ctx.coach_best_goalkeeping as f32
+        } else {
+            (ctx.coach_best_technical as f32 + ctx.coach_best_mental as f32) / 2.0
+        };
+
+        // Player expects coach quality scaled with own ability:
+        // CA 100 → expect coach ≥ 10
+        // CA 150 → expect coach ≥ 15
+        // CA 180+ → expect coach ≥ 18 (top ten in the world)
+        let expected_coach = (player_ca / 10.0).clamp(6.0, 19.0);
+        let gap = coach_score - expected_coach;
+
+        // Above expectations: respect, capped. Below: contempt scaling
+        // by how big a star the player is. World-class player at a
+        // small club coached by amateurs feels this most.
+        if gap >= 0.0 {
+            (gap * 0.8).clamp(0.0, 6.0)
+        } else {
+            let star_factor = (player_ca / 160.0).clamp(0.6, 1.8);
+            (gap * 1.4 * star_factor).clamp(-8.0, 0.0)
+        }
+    }
+
+    /// dressing_room_status: where does the player sit in the squad
+    /// pecking order? Built from leadership skill, world reputation,
+    /// and the player's own social-graph signals — bonding events lift,
+    /// conflict events drag.
+    fn calculate_dressing_room_status(&self) -> f32 {
+        let leadership = self.skills.mental.leadership;
+        let reputation = self.player_attributes.current_reputation as f32;
+
+        // Base — leadership 0..20 → -2..+4, reputation lifts top end.
+        let mut score: f32 = ((leadership - 10.0) * 0.3).clamp(-3.0, 4.0);
+        score += (reputation / 10000.0).clamp(0.0, 1.0) * 3.0;
+
+        // Recent bonding lifts standing; conflicts drag.
+        let bonding: f32 = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::TeammateBonding)
+            .map(|e| e.magnitude * (1.0 - e.days_ago as f32 / 60.0).max(0.0))
+            .sum();
+        let conflict: f32 = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::ConflictWithTeammate)
+            .map(|e| e.magnitude * (1.0 - e.days_ago as f32 / 60.0).max(0.0))
+            .sum();
+        score += (bonding * 0.4).clamp(0.0, 3.0);
+        score += (conflict * 0.6).clamp(-4.0, 0.0);
+
+        // Isolation events knock standing further.
+        let isolated = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::FeelingIsolated && e.days_ago <= 60)
+            .count() as f32;
+        score -= isolated * 0.5;
+
+        score.clamp(-6.0, 8.0)
+    }
+
+    /// club_fit: cultural / structural fit with the club. Reads
+    /// language fluency, league level, and facilities against the
+    /// player's ambition. Distinct from ambition_fit (which is purely
+    /// reputation-vs-expectation) — club_fit captures the *day-to-day*
+    /// experience of being at this club.
+    fn calculate_club_fit(
+        &self,
+        team_reputation: f32,
+        league_reputation: u16,
+        ctx: &ClubMoraleContext,
+    ) -> f32 {
+        let mut score: f32 = 0.0;
+
+        // Facility fit — ambitious pros expect modern training. Below
+        // 0.4 facility quality and ambition ≥ 14 → noticeable hit.
+        let ambition = self.attributes.ambition;
+        let avg_facility = (ctx.training_facility_quality + ctx.youth_facility_quality) / 2.0;
+        if avg_facility > 0.0 {
+            let facility_gap = avg_facility - (ambition / 30.0);
+            score += facility_gap * 6.0;
+        }
+
+        // League prestige fit — pros at a tier-4 league with high
+        // ambition feel out of place even if the club is doing well.
+        let league_norm = (league_reputation as f32 / 8000.0).clamp(0.2, 1.2);
+        score += (league_norm - 0.5) * (ambition - 10.0) * 0.3;
+
+        // Compatriot count + language progress events — cultural roots.
+        let compatriots = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.event_type == HappinessEventType::CompatriotJoined && e.days_ago <= 180
+            })
+            .count() as f32;
+        score += compatriots.min(2.0) * 0.8;
+
+        let lang_progress = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.event_type == HappinessEventType::LanguageProgress && e.days_ago <= 180
+            })
+            .count() as f32;
+        score += lang_progress.min(3.0) * 0.5;
+
+        // (Favorite-club bonus is applied at signing time via the
+        // DreamMove pathway — duplicating it weekly would double-count.)
+
+        // Use team reputation only as a tiny tie-breaker — ambition_fit
+        // already covers the "wrong size club" axis.
+        score += (team_reputation - 0.5) * 1.5;
+
+        score.clamp(-8.0, 6.0)
+    }
+
+    /// pressure_load: how heavy is the fan/media/board expectation
+    /// relative to the player's pressure tolerance? High-rep players at
+    /// big clubs always carry pressure; low-pressure personalities
+    /// crack first. Outlier-above players (e.g. Messi at a small club)
+    /// get an extra spotlight multiplier — the press follows them
+    /// regardless of where the badge sits.
+    fn calculate_pressure_load(&self, team_reputation: f32, league_reputation: u16) -> f32 {
+        use crate::club::player::adaptation::ReputationGap;
+        let rep_gap = ReputationGap::compute(self, team_reputation, league_reputation);
+        let pressure = self.attributes.pressure;
+        let player_rep = self.player_attributes.current_reputation as f32;
+        let club_rep_score = team_reputation.clamp(0.0, 1.0) * 100.0;
+        let league_score = (league_reputation as f32 / 100.0).clamp(0.0, 100.0);
+
+        // Pressure index — bigger club, bigger league, higher player
+        // rep → more eyes. Player_rep doubled because the public talks
+        // about the player, not just the badge.
+        let pressure_index = (club_rep_score * 0.4
+            + league_score * 0.3
+            + (player_rep / 100.0) * 0.6)
+            .clamp(0.0, 100.0);
+
+        // Tolerance: pressure attribute 0..20 → 0..100.
+        let tolerance = pressure * 5.0;
+        let index_gap = pressure_index - tolerance;
+
+        // High rep player having a poor recent stretch under spotlight
+        // (low form rating) — extra hit. Form ≥ 0 means we have data.
+        let form = self.statistics.average_rating;
+        let form_penalty = if form > 0.0 && form < 6.0 && pressure_index > 50.0 {
+            -1.5
+        } else {
+            0.0
+        };
+
+        // Outlier-above amplifier: Messi at a small club draws every
+        // camera regardless of league or club rep. Adds a floor of
+        // pressure that scales with how far the rep gap is.
+        let outlier_pull: f32 = if rep_gap.is_outlier_above() {
+            (rep_gap.player_vs_club.max(rep_gap.player_vs_league) as f32 / 1000.0)
+                .clamp(0.0, 8.0)
+        } else {
+            0.0
+        };
+
+        let raw = if index_gap <= 0.0 {
+            (-index_gap * 0.05).clamp(0.0, 3.0) - outlier_pull * 0.5
+        } else {
+            (-(index_gap / 12.0) + form_penalty - outlier_pull * 0.5).clamp(-8.0, 0.0)
+        };
+        raw.clamp(-8.0, 3.0)
+    }
+
+    /// promise_trust: the player's belief in the manager's word. Built
+    /// from kept-vs-broken promise events, recent broken-promise
+    /// frequency, and current credibility of the manager-relationship.
+    fn calculate_promise_trust(&self, _now: NaiveDate) -> f32 {
+        let kept: f32 = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::PromiseKept && e.days_ago <= 180)
+            .count() as f32;
+        let broken: f32 = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::PromiseBroken && e.days_ago <= 180)
+            .count() as f32;
+
+        // Kept builds slowly; broken cuts trust hard. Asymmetry
+        // mirrors the rapport "easy to lose" model.
+        let mut score = kept * 1.5 - broken * 3.5;
+
+        // Pending promises with high importance and low credibility
+        // erode trust just by sitting there — the player notices the
+        // manager is overpromising.
+        let overhang: f32 = self
+            .promises
+            .iter()
+            .filter(|p| {
+                p.credibility_at_creation < 40 && p.importance_to_player >= 60
+            })
+            .count() as f32;
+        score -= overhang * 1.5;
+
+        score.clamp(-10.0, 6.0)
+    }
+
+    /// Weekly loan-life modulation — only called when the player is on
+    /// loan. Emits the "too good for this level" frustration for elite
+    /// veterans, the "first taste of responsibility" lift for young
+    /// loanees, an "out of position" hit when role mismatch lingers,
+    /// and an underperformance signal when the player's form is poor
+    /// at a smaller club (the loan isn't working out).
+    fn process_loan_morale(&mut self, team_reputation: f32, league_reputation: u16) {
+        use crate::club::player::adaptation::ReputationGap;
+        let gap = ReputationGap::compute(self, team_reputation, league_reputation);
+        let age = DateUtils::age(
+            self.birth_date,
+            self.last_transfer_date.unwrap_or_else(|| {
+                self.contract_loan
+                    .as_ref()
+                    .and_then(|c| c.started)
+                    .unwrap_or(self.birth_date)
+            }),
+        );
+        let world_rep = self.player_attributes.world_reputation;
+
+        // Veteran humiliation — elite vet (32+, world_rep ≥ 6500)
+        // sitting in a clearly smaller league. Gentle ongoing drag.
+        if age >= 32 && world_rep >= 6500 && gap.is_outlier_above() {
+            self.happiness.add_event_with_cooldown(
+                HappinessEventType::AmbitionShock,
+                -3.0,
+                30,
+            );
+        }
+
+        // Young loanee enjoying responsibility — under-23, in a
+        // smaller club / lower league than parent, getting starts.
+        // Trigger only if the player has ≥ 5 starts since arriving.
+        let starts = self.statistics.played;
+        if age <= 22
+            && world_rep < 5000
+            && starts >= 5
+            && (gap.player_vs_club <= 0 || gap.player_vs_league <= 0)
+        {
+            self.happiness.add_event_with_cooldown(
+                HappinessEventType::SettledIntoSquad,
+                2.5,
+                60,
+            );
+        }
+
+        // Used out of position — RoleMismatch event still active and
+        // the player hasn't been moved back. Recurring small hit.
+        let recent_mismatch = self
+            .happiness
+            .recent_events
+            .iter()
+            .any(|e| {
+                e.event_type == HappinessEventType::RoleMismatch && e.days_ago <= 28
+            });
+        if recent_mismatch {
+            self.happiness.add_event_with_cooldown(
+                HappinessEventType::LackOfPlayingTime,
+                -2.0,
+                21,
+            );
+        }
+
+        // Loan underperformance — apps but rating < 6.0 means the loan
+        // isn't producing minutes the parent club would value. Adds
+        // the "I'm not enjoying this" hit.
+        let apps = self.statistics.played + self.statistics.played_subs;
+        let form = self.statistics.average_rating;
+        if apps >= 6 && form > 0.0 && form < 6.0 {
+            self.happiness.add_event_with_cooldown(
+                HappinessEventType::PoorTraining,
+                -1.5,
+                28,
+            );
+        }
     }
 }
 

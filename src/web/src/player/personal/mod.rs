@@ -404,12 +404,21 @@ fn get_morale(player: &Player, i18n: &I18n) -> MoraleDto {
 
 fn get_happiness_factors(player: &Player, i18n: &I18n) -> Vec<HappinessFactorDto> {
     let f = &player.happiness.factors;
+    // Core seven factors (existing) plus the six derived "life in the
+    // team" factors. Surface them all so the user can answer "why is
+    // Messi unhappy at this club?" without guessing.
     let factors = [
         ("factor_playing_time", f.playing_time),
         ("factor_salary", f.salary_satisfaction),
         ("factor_manager", f.manager_relationship),
         ("factor_ambition_fit", f.ambition_fit),
         ("factor_injury", f.injury_frustration),
+        ("factor_role_clarity", f.role_clarity),
+        ("factor_coach_credibility", f.coach_credibility),
+        ("factor_dressing_room_status", f.dressing_room_status),
+        ("factor_club_fit", f.club_fit),
+        ("factor_pressure_load", f.pressure_load),
+        ("factor_promise_trust", f.promise_trust),
     ];
 
     factors

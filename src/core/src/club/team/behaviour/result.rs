@@ -1,5 +1,10 @@
+use crate::club::player::interaction::{
+    default_cooldown_days, InteractionOutcome, InteractionTone, InteractionTopic,
+    ManagerInteraction,
+};
 use crate::club::player::ManagerPromiseKind;
 use crate::{ChangeType, HappinessEventType, PlayerStatusType, RelationshipChange, SimulatorData};
+use chrono::Duration;
 
 pub struct TeamBehaviourResult {
     pub players: PlayerBehaviourResult,
@@ -95,6 +100,18 @@ impl TeamBehaviourResult {
                     };
                     player.relations.update_staff_relationship(talk.staff_id, change, sim_date);
 
+                    // Coach rapport mirrors the staff-relation update —
+                    // mid-magnitude relationship deltas become rapport ticks
+                    // so trusted coaches actually accumulate trust here.
+                    let rapport_amount = (talk.relationship_change.abs() * 4.0).round() as i16;
+                    if rapport_amount > 0 {
+                        if talk.relationship_change >= 0.0 {
+                            player.rapport.on_positive(talk.staff_id, sim_date, rapport_amount);
+                        } else {
+                            player.rapport.on_negative(talk.staff_id, sim_date, rapport_amount);
+                        }
+                    }
+
                     // Also update the happiness factor for manager relationship
                     let current = player.happiness.factors.manager_relationship;
                     player.happiness.factors.manager_relationship =
@@ -117,29 +134,62 @@ impl TeamBehaviourResult {
                 };
                 player.happiness.add_event(event_type, talk.morale_change);
 
+                let mut promise_created = false;
+
                 // Remove statuses on success
                 if talk.success {
                     match talk.talk_type {
                         ManagerTalkType::PlayingTimeTalk | ManagerTalkType::MoraleTalk => {
                             player.statuses.remove(PlayerStatusType::Unh);
                             // A successful playing-time chat is a concrete
-                            // promise. 30-day horizon; verified weekly.
+                            // promise — record it with full credibility &
+                            // importance context so verification weights
+                            // honestly. Honest framing scales the horizon
+                            // shorter (a calmer "we'll see in 30 days"),
+                            // soft reassurance pushes longer.
                             if talk.talk_type == ManagerTalkType::PlayingTimeTalk {
-                                player.record_promise(
+                                let horizon = if talk.honest_framing { 30 } else { 45 };
+                                player.record_promise_full(
                                     ManagerPromiseKind::PlayingTime,
                                     sim_date,
-                                    30,
+                                    horizon,
+                                    Some(talk.staff_id),
+                                    None,
+                                    false,
                                 );
+                                promise_created = true;
                             }
                         }
                         ManagerTalkType::TransferDiscussion => {
                             player.statuses.remove(PlayerStatusType::Req);
+                            // Coach agreed to consider sale next window.
+                            // Record TransferPermission so the player
+                            // remembers — broken later if no offer is
+                            // entertained.
+                            player.record_promise_full(
+                                ManagerPromiseKind::TransferPermission,
+                                sim_date,
+                                120,
+                                Some(talk.staff_id),
+                                None,
+                                false,
+                            );
+                            promise_created = true;
                         }
                         ManagerTalkType::PlayingTimeRequest => {
                             player.happiness.add_event(
                                 HappinessEventType::ManagerPlayingTimePromise,
                                 8.0,
                             );
+                            player.record_promise_full(
+                                ManagerPromiseKind::PlayingTime,
+                                sim_date,
+                                30,
+                                Some(talk.staff_id),
+                                None,
+                                false,
+                            );
+                            promise_created = true;
                         }
                         ManagerTalkType::LoanRequest => {
                             player.statuses.add(sim_date, PlayerStatusType::Loa);
@@ -157,16 +207,45 @@ impl TeamBehaviourResult {
                             player.statuses.add(sim_date, PlayerStatusType::Req);
                         }
                         ManagerTalkType::LoanRequest => {
-                            // Denied loan — player becomes unsettled about their future
+                            // Denied loan — unsettled about future. Honest
+                            // refusal hits softer than a wishy-washy fob.
                             player.statuses.add(sim_date, PlayerStatusType::Fut);
+                            let mag = if talk.honest_framing { -3.0 } else { -5.0 };
                             player.happiness.add_event(
                                 HappinessEventType::LackOfPlayingTime,
-                                -5.0,
+                                mag,
                             );
                         }
                         _ => {}
                     }
                 }
+
+                // Append the interaction record. Picker writes to log on
+                // apply, not on emit, so the cooldown gate sees the
+                // *committed* set of talks, not transient pickings.
+                let topic = topic_for_talk(talk.talk_type.clone());
+                let outcome = if promise_created {
+                    InteractionOutcome::PromiseMade
+                } else if talk.success {
+                    InteractionOutcome::Positive
+                } else if talk.morale_change.abs() < 0.5 {
+                    InteractionOutcome::Neutral
+                } else {
+                    InteractionOutcome::Negative
+                };
+                let cooldown = sim_date + Duration::days(default_cooldown_days(topic));
+                player.interactions.push(ManagerInteraction {
+                    date: sim_date,
+                    staff_id: talk.staff_id,
+                    topic,
+                    tone: talk.tone,
+                    player_mood_before: talk.mood_before,
+                    outcome,
+                    promise_created,
+                    relationship_delta: talk.relationship_change,
+                    morale_delta: talk.morale_change,
+                    cooldown_until: cooldown,
+                });
             }
         }
     }
@@ -238,6 +317,17 @@ pub struct ManagerTalkResult {
     pub success: bool,
     pub morale_change: f32,
     pub relationship_change: f32,
+    /// Tone the manager picked. Defaults to [`InteractionTone::Calm`] when
+    /// the picker hasn't decided. Drives how the talk lands relative to
+    /// the player's personality (mirrors team-talk tone modelling).
+    pub tone: InteractionTone,
+    /// True if the manager backed an honest framing instead of empty
+    /// reassurance. An honest "no, you're not playing more" hits less
+    /// hard than a false promise that breaks two months later.
+    pub honest_framing: bool,
+    /// Snapshot of player morale before applying the talk — captured by
+    /// the talk picker. Used purely for the interaction log.
+    pub mood_before: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -250,4 +340,23 @@ pub enum ManagerTalkType {
     Motivational,
     PlayingTimeRequest,
     LoanRequest,
+}
+
+/// Translate the legacy `ManagerTalkType` into the new
+/// [`InteractionTopic`] taxonomy. Used by `process_manager_talks` so the
+/// interaction log uses the football-specific topics rather than the
+/// implementation-shaped talk-types.
+pub(crate) fn topic_for_talk(talk: ManagerTalkType) -> InteractionTopic {
+    match talk {
+        ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest => {
+            InteractionTopic::PlayingTime
+        }
+        ManagerTalkType::MoraleTalk | ManagerTalkType::Motivational => {
+            InteractionTopic::PoorForm
+        }
+        ManagerTalkType::Praise => InteractionTopic::GoodForm,
+        ManagerTalkType::Discipline => InteractionTopic::Discipline,
+        ManagerTalkType::TransferDiscussion => InteractionTopic::TransferRequest,
+        ManagerTalkType::LoanRequest => InteractionTopic::LoanRequest,
+    }
 }

@@ -220,6 +220,7 @@ impl PlayerBuilder {
             traits,
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
+            interactions: crate::club::player::interaction::ManagerInteractionLog::new(),
             pending_signing: None,
             generated: self.generated.unwrap_or(false),
             retired: false,

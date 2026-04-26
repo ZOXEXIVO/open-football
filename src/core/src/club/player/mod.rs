@@ -29,6 +29,7 @@ pub mod behaviour_config;
 pub mod events;
 pub mod load;
 pub mod agent;
+pub mod interaction;
 pub mod registry;
 mod display;
 
@@ -54,6 +55,7 @@ pub use training::*;
 pub use traits::*;
 pub use utils::*;
 pub use agent::*;
+pub use interaction::*;
 pub use language::*;
 pub use load::*;
 pub use plan::*;

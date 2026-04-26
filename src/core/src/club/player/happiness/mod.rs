@@ -1,5 +1,5 @@
 mod types;
 pub(crate) mod processing;
 
-pub use processing::TeamSeasonState;
+pub use processing::{ClubMoraleContext, TeamSeasonState};
 pub use types::*;

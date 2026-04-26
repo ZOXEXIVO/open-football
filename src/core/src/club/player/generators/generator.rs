@@ -808,6 +808,7 @@ impl PlayerGenerator {
             traits: Vec::new(), // academy youth start with no traits; grow via training
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
+            interactions: crate::club::player::interaction::ManagerInteractionLog::new(),
             pending_signing: None,
             generated: true,
             retired: false,

@@ -32,6 +32,32 @@ pub struct HappinessFactors {
     pub injury_frustration: f32,
     pub recent_praise: f32,
     pub recent_discipline: f32,
+
+    // ── Derived "life in the team" factors ──────────────────────
+    /// Does the player understand his role and how he's being used?
+    /// Drops on RoleMismatch / repeated tactical-role talks; rises
+    /// when the player is in his preferred position with consistent
+    /// minutes. Range roughly -8..+5.
+    pub role_clarity: f32,
+    /// Does the player believe the coaching staff is competent enough
+    /// to coach him? Reads coach attribute scores against the player's
+    /// own ability. A world-class player at a club with weak coaching
+    /// loses respect quickly. Range roughly -8..+6.
+    pub coach_credibility: f32,
+    /// Where does the player sit in the dressing room — respected,
+    /// resented, isolated, or influential? Built from leadership,
+    /// reputation, and relations. Range roughly -6..+8.
+    pub dressing_room_status: f32,
+    /// Cultural / structural fit with the club — facilities, league
+    /// level, language, lifestyle, ambition match. Range roughly -8..+6.
+    pub club_fit: f32,
+    /// Pressure load from fans, media, board expectations relative to
+    /// the player's `pressure` personality. Range roughly -8..+3.
+    pub pressure_load: f32,
+    /// Trust the player has in the manager's word — distinct from the
+    /// general manager_relationship. Built from kept-vs-broken
+    /// promises and recent broken-promise count. Range roughly -10..+6.
+    pub promise_trust: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -253,7 +279,7 @@ impl PlayerHappiness {
 
     pub fn recalculate_morale(&mut self) {
         let cfg = HappinessConfig::default();
-        let factor_sum = self.factors.playing_time
+        let core_factor_sum = self.factors.playing_time
             + self.factors.salary_satisfaction
             + self.factors.manager_relationship
             + self.factors.ambition_fit
@@ -261,13 +287,26 @@ impl PlayerHappiness {
             + self.factors.recent_praise
             + self.factors.recent_discipline;
 
+        // Derived "life in the team" factors. Weighted to 0.6× of their
+        // raw range so they enrich morale without dominating the core
+        // axes the audit already balances around. Each factor is
+        // independently clamped at compute time.
+        let derived_sum = (self.factors.role_clarity
+            + self.factors.coach_credibility
+            + self.factors.dressing_room_status
+            + self.factors.club_fit
+            + self.factors.pressure_load
+            + self.factors.promise_trust)
+            * 0.6;
+
         let event_sum: f32 = self
             .recent_events
             .iter()
             .map(|e| e.magnitude * cfg.event_decay(e.days_ago))
             .sum();
 
-        self.morale = cfg.clamp_morale(cfg.default_morale + factor_sum + event_sum);
+        self.morale =
+            cfg.clamp_morale(cfg.default_morale + core_factor_sum + derived_sum + event_sum);
     }
 
     pub fn adjust_morale(&mut self, delta: f32) {
@@ -412,7 +451,9 @@ impl PlayerHappiness {
         self.add_event(event_type, magnitude);
     }
 
-    /// Reset happiness to neutral state (fresh start at a new club)
+    /// Reset happiness to neutral state (fresh start at a new club).
+    /// `HappinessFactors::default()` zeroes all six derived factors —
+    /// they're recomputed on the first weekly tick at the new club.
     pub fn clear(&mut self) {
         let cfg = HappinessConfig::default();
         self.morale = cfg.default_morale;

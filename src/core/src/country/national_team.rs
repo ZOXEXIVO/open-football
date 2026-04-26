@@ -1040,6 +1040,7 @@ impl NationalTeam {
             traits: Vec::new(),
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
+            interactions: crate::club::player::interaction::ManagerInteractionLog::new(),
             pending_signing: None,
             generated: true,
             retired: false,
