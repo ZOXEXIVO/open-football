@@ -117,7 +117,7 @@ mod tests {
         // B slot ("ural-b"); every other parent gets "Second", the canonical
         // "{Club} 2" reserve type.
         let expected: &[(u32, &str, u32)] = &[
-            (1533, "B", 2000272306),          // Ural   → russian-second-division-b-group-4
+            (1533, "Second", 2000272306),     // Ural   → russian-second-division-b-group-4
             (1520, "Second", 2000272298),     // Dinamo Moscow → russian-second-division-a-gold
             (58126754, "Second", 2000272300), // Rodina → russian-second-division-a-silver
             (1301106, "Second", 2000272303),  // Baltika → russian-second-division-b-group-2
@@ -163,5 +163,34 @@ mod tests {
                 want_type, parent_id, league_id
             );
         }
+    }
+
+    #[test]
+    fn real_sociedad_b_folds_into_real_sociedad() {
+        let countries = CountryLoader::load();
+        let tree = DataTreeLoader::load(&countries);
+
+        // The Real Sociedad B satellite (id 1743) must not appear standalone.
+        assert!(
+            !tree.clubs.iter().any(|c| c.id == 1743),
+            "Real Sociedad B leaked into clubs list"
+        );
+
+        // Real Sociedad parent must now own a B sub-team stamped with the
+        // Spanish second division league id.
+        let parent = tree
+            .clubs
+            .iter()
+            .find(|c| c.id == 1742)
+            .expect("Real Sociedad parent missing");
+        let b = parent
+            .teams
+            .iter()
+            .find(|t| t.team_type == "B")
+            .expect("Real Sociedad has no B team after satellite merge");
+        assert_eq!(b.id, 1743, "B team kept the satellite's id");
+        assert_eq!(b.name, "Real Sociedad B");
+        assert_eq!(b.slug, "real-sociedad-b");
+        assert_eq!(b.league_id, Some(91));
     }
 }

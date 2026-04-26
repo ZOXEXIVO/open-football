@@ -29,7 +29,33 @@ impl WageCalculator {
         club_reputation_score: f32,
         league_reputation: u16,
     ) -> u32 {
-        let ability = player.player_attributes.current_ability as f64;
+        let pos = player.position();
+        Self::expected_annual_wage_raw(
+            player.player_attributes.current_ability,
+            player.player_attributes.current_reputation,
+            pos.is_forward(),
+            pos.is_goalkeeper(),
+            age,
+            club_reputation_score,
+            league_reputation,
+        )
+    }
+
+    /// Same wage formula as [`expected_annual_wage`] but takes raw inputs
+    /// instead of a fully-built `Player`. Lets the database hydrator fill in
+    /// a sensible salary when an ODB record omits one — at that point the
+    /// `Player` doesn't exist yet, but CA / reputation / position are all
+    /// readable on the record.
+    pub fn expected_annual_wage_raw(
+        current_ability: u8,
+        current_reputation: i16,
+        is_forward: bool,
+        is_goalkeeper: bool,
+        age: u8,
+        club_reputation_score: f32,
+        league_reputation: u16,
+    ) -> u32 {
+        let ability = current_ability as f64;
         let n = ability / 200.0;
         let base = 15_000.0 + 5_000_000.0 * n * n * n;
 
@@ -40,16 +66,15 @@ impl WageCalculator {
 
         let age_factor = age_factor(age);
 
-        let pos = player.position();
-        let position_factor = if pos.is_forward() {
+        let position_factor = if is_forward {
             1.15
-        } else if pos.is_goalkeeper() {
+        } else if is_goalkeeper {
             0.85
         } else {
             1.0
         };
 
-        let rep = player.player_attributes.current_reputation as f64;
+        let rep = current_reputation as f64;
         let rep_factor = if rep > 2000.0 {
             1.25
         } else if rep > 1000.0 {

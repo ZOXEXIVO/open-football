@@ -110,8 +110,12 @@ pub struct OdbReputation {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OdbContract {
-    /// Annual salary, whole currency units.
-    pub salary: u32,
+    /// Annual salary, whole currency units. Optional — when absent, the
+    /// hydrator computes one via `core::WageCalculator::expected_annual_wage_raw`
+    /// using the player's CA/reputation and the club + league reputation.
+    /// Treat `Some(0)` the same as `None` (legacy records may stamp 0).
+    #[serde(default)]
+    pub salary: Option<u32>,
     pub expiration: NaiveDate,
     #[serde(default)]
     pub started: Option<NaiveDate>,
@@ -132,7 +136,11 @@ pub struct OdbLoan {
     pub to_team_id: Option<u32>,
     pub expiration: NaiveDate,
     /// Loan-period salary (paid by borrower, possibly subsidised by parent).
-    pub salary: u32,
+    /// Optional — when absent the hydrator splits the parent's annual wage
+    /// via `WageCalculator::loan_wage_split` so the loanee keeps a wage
+    /// proportional to their parent contract.
+    #[serde(default)]
+    pub salary: Option<u32>,
     #[serde(default)]
     pub match_fee: Option<u32>,
     #[serde(default)]
@@ -282,7 +290,7 @@ mod tests {
             value: None,
             reputation: None,
             contract: Some(OdbContract {
-                salary: 100_000,
+                salary: Some(100_000),
                 expiration: NaiveDate::from_ymd_opt(2027, 6, 30).unwrap(),
                 started: None,
                 contract_type: None,
@@ -293,7 +301,7 @@ mod tests {
                 to_club_id: to,
                 to_team_id: None,
                 expiration: NaiveDate::from_ymd_opt(2026, 6, 30).unwrap(),
-                salary: 100_000,
+                salary: Some(100_000),
                 match_fee: None,
                 wage_contribution_pct: None,
                 future_fee: None,

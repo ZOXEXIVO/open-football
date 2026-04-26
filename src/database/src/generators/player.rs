@@ -8,7 +8,7 @@ use core::{
     ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType, PlayerPositions,
     PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
-    PlayerStatisticsHistoryItem, Technical,
+    PlayerStatisticsHistoryItem, Technical, WageCalculator,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::LazyLock;
@@ -1219,7 +1219,7 @@ impl PlayerGenerator {
         let full_name = build_full_name(record);
         let preferred_foot = parse_preferred_foot(record.preferred_foot.as_deref());
 
-        let contract = build_main_contract(record);
+        let contract = build_main_contract(record, age, primary, data);
         let contract_loan = build_loan_contract(record, data);
 
         let player_attributes = build_player_attributes(record, age, primary, &skills);
@@ -1457,13 +1457,22 @@ fn build_full_name(record: &OdbPlayer) -> FullName {
     }
 }
 
-fn build_main_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
+fn build_main_contract(
+    record: &OdbPlayer,
+    age: u32,
+    primary: PlayerPositionType,
+    data: &DatabaseEntity,
+) -> Option<PlayerClubContract> {
     // Free-agent records have no active contract — leave the player
     // contract-less so the free-agent flows treat them as available.
     let src = record.contract.as_ref()?;
+    let salary = match src.salary {
+        Some(s) if s > 0 => s,
+        _ => default_annual_salary(record, age, primary, data),
+    };
     let mut c = PlayerClubContract {
         shirt_number: src.shirt_number,
-        salary: src.salary,
+        salary,
         contract_type: parse_contract_type(src.contract_type.as_deref()),
         squad_status: core::PlayerSquadStatus::NotYetSet,
         is_transfer_listed: false,
@@ -1493,6 +1502,65 @@ fn build_main_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
     Some(c)
 }
 
+/// Default-fill an annual salary using the same wage curve the runtime uses
+/// for renewals and personal-terms. Resolves club + league reputation from
+/// the loaded entity tree; missing pieces fall back to neutral mid-tier
+/// values so the formula still produces a sane number for satellite clubs
+/// or records pointing at an unknown club_id.
+fn default_annual_salary(
+    record: &OdbPlayer,
+    age: u32,
+    primary: PlayerPositionType,
+    data: &DatabaseEntity,
+) -> u32 {
+    let club = data.clubs.iter().find(|c| c.id == record.club_id);
+    let main_team = club.and_then(|c| {
+        c.teams
+            .iter()
+            .find(|t| t.team_type.eq_ignore_ascii_case("Main"))
+    });
+    let team_rep = main_team.map(|t| t.reputation.world).unwrap_or(1500);
+    // 0..1 normalised club reputation, mirrors TeamReputation::overall_score
+    // closely enough for an initial wage anchor.
+    let club_reputation_score = (team_rep as f32 / 10000.0).clamp(0.0, 1.0);
+
+    let league_id = main_team.and_then(|t| t.league_id);
+    let league_reputation = league_id
+        .and_then(|id| data.leagues.iter().find(|l| l.id == id))
+        .map(|l| l.reputation)
+        .unwrap_or(1500);
+
+    // Player reputation: prefer the explicit current rep on the record, else
+    // derive an approximation from CA so the wage curve still tilts toward
+    // higher-quality players when the scrape didn't capture reputation.
+    let current_reputation = record
+        .reputation
+        .as_ref()
+        .and_then(|r| r.current)
+        .unwrap_or_else(|| (record.current_ability as i16) * 8);
+
+    use core::PlayerPositionType as Pp;
+    let is_forward = matches!(
+        primary,
+        Pp::Striker
+            | Pp::ForwardLeft
+            | Pp::ForwardCenter
+            | Pp::ForwardRight
+            | Pp::AttackingMidfielderCenter
+    );
+    let is_goalkeeper = matches!(primary, Pp::Goalkeeper);
+
+    WageCalculator::expected_annual_wage_raw(
+        record.current_ability,
+        current_reputation,
+        is_forward,
+        is_goalkeeper,
+        age.min(u8::MAX as u32) as u8,
+        club_reputation_score,
+        league_reputation,
+    )
+}
+
 fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<PlayerClubContract> {
     let loan = record.loan.as_ref()?;
     // Anchor the loan-out on the parent club's Reserve team rather than
@@ -1515,9 +1583,26 @@ fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<Play
                     .map(|t| t.id)
             })
         });
+    // Loan-leg salary defaults to the borrower's share of the parent contract
+    // when the data omits it (loan blocks scraped without a wage figure).
+    let loan_salary = match loan.salary {
+        Some(s) if s > 0 => s,
+        _ => {
+            let parent_salary = record
+                .contract
+                .as_ref()
+                .and_then(|c| c.salary)
+                .unwrap_or(0);
+            if parent_salary > 0 {
+                WageCalculator::loan_wage_split(parent_salary).0
+            } else {
+                0
+            }
+        }
+    };
     Some(PlayerClubContract {
         shirt_number: None,
-        salary: loan.salary,
+        salary: loan_salary,
         contract_type: ContractType::Loan,
         squad_status: core::PlayerSquadStatus::NotYetSet,
         is_transfer_listed: false,
