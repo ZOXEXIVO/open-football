@@ -353,4 +353,25 @@ impl ChampionsLeague {
     ) -> Vec<MatchResult> {
         self.play_matches(clubs, date)
     }
+
+    /// Final-result accessor used by the season-end happiness pipeline to
+    /// fire `TrophyWon` / `CupFinalDefeat`. Returns `(winner, loser)` once
+    /// the Final has been resolved (single knockout tie at `Final` stage
+    /// with a winner recorded). Returns `None` until the bracket actually
+    /// reaches a resolved Final — today the engine doesn't schedule
+    /// continental finals, so this is forward-compat plumbing for when
+    /// the QF/SF/Final advancement is wired.
+    pub fn final_result(&self) -> Option<(u32, u32)> {
+        if !matches!(self.current_stage, CompetitionStage::Final) {
+            return None;
+        }
+        let tie = self.knockout_round.first()?;
+        let winner = tie.winner?;
+        let loser = if winner == tie.home_team {
+            tie.away_team
+        } else {
+            tie.home_team
+        };
+        Some((winner, loser))
+    }
 }

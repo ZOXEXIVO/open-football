@@ -1,10 +1,14 @@
-use crate::club::player::mailbox::handlers::contract_proposal::{ProcessContractHandler, RENEWAL_REJECTED_LABEL};
-use crate::club::player::player::Player;
-use crate::{
-    PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerSquadStatus,
-    PlayerStatusType, Team,
+use crate::club::player::calculators::{ContractValuation, ValuationContext};
+use crate::club::player::mailbox::handlers::contract_proposal::{
+    ProcessContractHandler, RENEWAL_REJECTED_LABEL,
 };
+use crate::club::player::mailbox::RejectionReason;
+use crate::club::player::player::Player;
 use crate::utils::DateUtils;
+use crate::{
+    PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerSquadStatus, PlayerStatusType,
+    Team,
+};
 use chrono::NaiveDate;
 
 /// Minimum gap between proactive offers when the previous one hasn't
@@ -39,11 +43,24 @@ impl ContractRenewalManager {
     /// them. This prevents the listing AI from inventing "contract expiring"
     /// as a reason to sell a player the club actually wants to keep.
     pub fn run(teams: &mut [Team], main_idx: usize, date: NaiveDate) {
+        Self::run_with_budget(teams, main_idx, date, None, 5_000)
+    }
+
+    /// Variant used by the club layer where wage budget and league
+    /// reputation are available. Falls through to the same logic as
+    /// `run` but cannot exceed the supplied wage budget when offering.
+    pub fn run_with_budget(
+        teams: &mut [Team],
+        main_idx: usize,
+        date: NaiveDate,
+        wage_budget: Option<u32>,
+        league_reputation: u16,
+    ) {
         let (coach_name, negotiation_skill, judging_ability) =
             Self::resolve_staff(&teams[main_idx]);
         let team_rep_factor = teams[main_idx].reputation.overall_score();
-        let wage_budget = 0u32; // No board-level wage cap wired into Team yet
 
+        let structure = WageStructureSnapshot::from_team(&teams[main_idx]);
         let candidates = Self::collect_candidates(&teams[main_idx], date);
 
         for candidate in candidates {
@@ -57,8 +74,7 @@ impl ContractRenewalManager {
                         .items
                         .iter()
                         .filter(|d| {
-                            d.decision == DECISION_LABEL
-                                && (date - d.date).num_days() < 365
+                            d.decision == DECISION_LABEL && (date - d.date).num_days() < 365
                         })
                         .count()
                 })
@@ -77,7 +93,9 @@ impl ContractRenewalManager {
                 date,
                 attempts,
                 team_rep_factor,
+                league_reputation,
                 wage_budget,
+                &structure,
                 &candidate,
             );
             let proposal = match built {
@@ -164,7 +182,10 @@ impl ContractRenewalManager {
         }
 
         let has_market_interest = statuses.iter().any(|s| {
-            matches!(s, PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid)
+            matches!(
+                s,
+                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
+            )
         });
 
         let effective_status = Self::effective_squad_status(player, &contract.squad_status);
@@ -189,6 +210,7 @@ impl ContractRenewalManager {
             final_panic,
             bosman_pressure,
             override_attempts_cap: override_cap,
+            months_remaining: (days_remaining / 30).max(0) as i32,
         })
     }
 
@@ -215,12 +237,10 @@ impl ContractRenewalManager {
 
     fn renewal_threshold_days(squad_status: &PlayerSquadStatus) -> i64 {
         match squad_status {
-            PlayerSquadStatus::KeyPlayer
-            | PlayerSquadStatus::FirstTeamRegular => 540,
+            PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular => 540,
             PlayerSquadStatus::FirstTeamSquadRotation
             | PlayerSquadStatus::HotProspectForTheFuture => 365,
-            PlayerSquadStatus::MainBackupPlayer
-            | PlayerSquadStatus::DecentYoungster => 180,
+            PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::DecentYoungster => 180,
             // NotNeeded / unset still get a 90-day window. Real clubs at
             // least consider every expiring contract before letting a
             // player walk on a free — listing is a separate decision.
@@ -232,14 +252,9 @@ impl ContractRenewalManager {
     /// rejected offer gets a much longer one before we come back with a
     /// revised deal.
     fn recently_offered(player: &Player, date: NaiveDate) -> bool {
-        let last = player
-            .decision_history
-            .items
-            .iter()
-            .rev()
-            .find(|d| {
-                d.decision == DECISION_LABEL || d.decision == RENEWAL_REJECTED_LABEL
-            });
+        let last = player.decision_history.items.iter().rev().find(|d| {
+            d.decision == DECISION_LABEL || d.decision == RENEWAL_REJECTED_LABEL
+        });
         match last {
             Some(d) if d.decision == RENEWAL_REJECTED_LABEL => {
                 (date - d.date).num_days() < RENEWAL_COOLDOWN_AFTER_REJECT_DAYS
@@ -257,7 +272,9 @@ impl ContractRenewalManager {
         date: NaiveDate,
         previous_attempts: usize,
         team_rep_factor: f32,
-        wage_budget: u32,
+        league_reputation: u16,
+        wage_budget: Option<u32>,
+        structure: &WageStructureSnapshot,
         candidate: &RenewalCandidate,
     ) -> Option<PlayerContractProposal> {
         let player = team.players.find(player_id)?;
@@ -266,27 +283,29 @@ impl ContractRenewalManager {
         let ability = player.player_attributes.current_ability;
         let age = DateUtils::age(player.birth_date, date);
 
-        // Wage inflation: clubs with higher reputation pay higher wages at
-        // every tier. A Key Player at an elite club earns materially more
-        // than a Key Player at a relegation-zone club.
-        let band = ability_based_salary(ability);
-        let rep_multiplier = 0.8 + team_rep_factor * 0.9;
-        let inflated_band = (band as f32 * rep_multiplier) as u32;
+        let ctx = ValuationContext {
+            age,
+            club_reputation_score: team_rep_factor,
+            league_reputation,
+            squad_status: candidate.effective_status.clone(),
+            current_salary: contract.salary,
+            months_remaining: candidate.months_remaining,
+            has_market_interest: candidate.has_market_interest,
+        };
+        let valuation = ContractValuation::evaluate(player, &ctx);
 
-        let accuracy = 0.85 + (judging_ability as f32 / 20.0) * 0.25;
-        let adjusted_base = (inflated_band as f32 * accuracy) as u32;
+        // Coach judging-ability variance — within ±15% of the unified target.
+        let accuracy = 0.85 + (judging_ability as f32 / 20.0) * 0.30;
+        let mut offered = (valuation.expected_wage as f32 * accuracy) as u32;
 
-        let current_salary = contract.salary;
+        // Anchor never below current salary plus a token bump.
+        offered = offered
+            .max(contract.salary + contract.salary / 20)
+            .max(contract.salary + 1);
 
-        // Anchor the escalation to whichever is higher — the player's
-        // current wage or our band-based valuation. Escalating only on the
-        // band meant a player already above their band saw attempt 1-3
-        // stuck at current×1.05, which greedy agents rejected every time.
-        let anchor = adjusted_base.max(current_salary);
-
-        // Urgency escalation: +10% per prior rejection, plus a jolt when
-        // Bosman / final-year kicks in.
-        let mut escalation = 1.0 + previous_attempts as f32 * 0.10;
+        // Urgency escalation: +8% per prior rejection, plus a jolt when
+        // Bosman / final-year kicks in. Capped by max_acceptable.
+        let mut escalation = 1.0 + previous_attempts as f32 * 0.08;
         if candidate.bosman_pressure {
             escalation += 0.10;
         }
@@ -296,30 +315,32 @@ impl ContractRenewalManager {
         if candidate.has_market_interest {
             escalation += 0.05;
         }
+        offered = ((offered as f32) * escalation) as u32;
 
-        let mut offered = (anchor as f32 * escalation) as u32;
-        offered = offered
-            .max(current_salary + current_salary / 20)
-            .max(current_salary + 1);
-
-        // Converge toward the player's own ask when we have it. This is the
-        // signal the player left after the previous rejection. Never
-        // capitulate fully — split the gap so negotiation still has teeth.
+        // Converge toward the player's own ask when we have it, but never
+        // beyond max_acceptable.
         if let Some(ask) = &player.pending_contract_ask {
             if ask.desired_salary > offered {
                 offered = (offered + ask.desired_salary) / 2;
             }
         }
 
-        // FFP gate: if the club has a wage budget set, never bust it.
-        if wage_budget > 0 {
-            let current_wage_bill: u32 = team.get_annual_salary();
-            let salary_delta = offered.saturating_sub(current_salary);
-            if current_wage_bill + salary_delta > wage_budget {
-                let remaining = wage_budget.saturating_sub(current_wage_bill);
-                offered = (current_salary + remaining).max(current_salary);
+        // Wage structure protection: only KeyPlayer can break the
+        // top-earner ceiling, and only by a small margin. FirstTeamRegular
+        // can approach but not exceed; everyone else is capped under it.
+        offered = structure.cap_for_status(offered, &candidate.effective_status);
+
+        // FFP / wage-budget gate: never bust it.
+        if let Some(budget) = wage_budget {
+            let salary_delta = offered.saturating_sub(contract.salary);
+            if structure.current_bill + salary_delta > budget {
+                let remaining = budget.saturating_sub(structure.current_bill);
+                offered = (contract.salary + remaining).max(contract.salary);
             }
         }
+
+        // Bound by player acceptable range so we don't insult them.
+        offered = offered.max(valuation.min_acceptable / 2);
 
         let years = proactive_contract_years(
             age,
@@ -330,27 +351,203 @@ impl ContractRenewalManager {
             date,
         );
 
-        // Sweeteners come out once the base deal isn't enough. Scale with
-        // urgency — a first offer is clean, a third-attempt/final-panic
-        // offer pulls the full kit: signing bonus, loyalty bonus, release
-        // clause sized to the market.
-        let (signing_bonus, loyalty_bonus, release_clause) = build_sweeteners(
-            offered,
-            ability,
-            age,
-            previous_attempts,
-            candidate,
-            player,
-        );
+        let profile = PlayerProfile::classify(player, age, ability, &candidate.effective_status);
+        let budget_pressure = wage_budget
+            .map(|b| {
+                let target_delta = offered.saturating_sub(contract.salary);
+                let projected = structure.current_bill + target_delta;
+                if b > 0 && projected > (b * 95 / 100) {
+                    1.0
+                } else if b > 0 && projected > (b * 85 / 100) {
+                    0.5
+                } else {
+                    0.0
+                }
+            })
+            .unwrap_or(0.0);
 
-        Some(PlayerContractProposal {
-            salary: offered,
+        // Apply budget pressure to base wage: trim it back, compensate
+        // with bonuses + clauses below.
+        if budget_pressure > 0.5 {
+            offered = ((offered as f32) * (1.0 - 0.05 * budget_pressure)) as u32;
+            offered = offered.max(contract.salary + 1);
+        }
+
+        let mut proposal = PlayerContractProposal::basic(
+            offered,
             years,
             negotiation_skill,
-            signing_bonus,
-            loyalty_bonus,
-            release_clause,
-        })
+            0,
+            0,
+            None,
+        );
+
+        // Profile-driven package decoration. The `urgency` knob blends
+        // attempts, market interest, and final-panic into one budget for
+        // sweeteners.
+        let urgency = previous_attempts
+            + if candidate.bosman_pressure { 1 } else { 0 }
+            + if candidate.final_panic { 2 } else { 0 }
+            + if candidate.has_market_interest { 1 } else { 0 };
+
+        decorate_proposal(
+            &mut proposal,
+            player,
+            age,
+            ability,
+            &profile,
+            &candidate.effective_status,
+            urgency,
+            budget_pressure,
+            structure,
+        );
+
+        // Honor demanded clauses from the previous rejection.
+        if let Some(ask) = &player.pending_contract_ask {
+            if ask.demanded_release_clause.is_some() && proposal.release_clause.is_none() {
+                proposal.release_clause = ask.demanded_release_clause;
+            }
+            if let Some(status) = &ask.demanded_status {
+                if proposal.squad_status_promise.is_none()
+                    && status_rank(status) > status_rank(&contract.squad_status)
+                {
+                    proposal.squad_status_promise = Some(status.clone());
+                }
+            }
+            if let Some(b) = ask.demanded_signing_bonus {
+                if proposal.signing_bonus < b {
+                    proposal.signing_bonus = b;
+                }
+            }
+            if matches!(ask.rejection_reason, Some(RejectionReason::ShortContract)) {
+                proposal.years = proposal.years.max(ask.desired_years);
+            }
+        }
+
+        Some(proposal)
+    }
+}
+
+/// Snapshot of the team's salary distribution. Renewal AI consults this
+/// to avoid breaking wage structure when offering a new deal.
+#[derive(Debug, Clone)]
+pub struct WageStructureSnapshot {
+    pub current_bill: u32,
+    pub top_earner: u32,
+    pub average_first_team: u32,
+    pub average_backup: u32,
+}
+
+impl WageStructureSnapshot {
+    pub fn from_team(team: &Team) -> Self {
+        let mut top: u32 = 0;
+        let mut bill: u32 = 0;
+        let mut first_team_sum: u32 = 0;
+        let mut first_team_count: u32 = 0;
+        let mut backup_sum: u32 = 0;
+        let mut backup_count: u32 = 0;
+
+        for p in team.players.players.iter() {
+            let c = match p.contract.as_ref() {
+                Some(c) => c,
+                None => continue,
+            };
+            bill = bill.saturating_add(c.salary);
+            top = top.max(c.salary);
+            match c.squad_status {
+                PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular => {
+                    first_team_sum = first_team_sum.saturating_add(c.salary);
+                    first_team_count += 1;
+                }
+                PlayerSquadStatus::FirstTeamSquadRotation
+                | PlayerSquadStatus::MainBackupPlayer => {
+                    backup_sum = backup_sum.saturating_add(c.salary);
+                    backup_count += 1;
+                }
+                _ => {}
+            }
+        }
+        let average_first_team = if first_team_count > 0 {
+            first_team_sum / first_team_count
+        } else {
+            0
+        };
+        let average_backup = if backup_count > 0 {
+            backup_sum / backup_count
+        } else {
+            0
+        };
+
+        Self {
+            current_bill: bill,
+            top_earner: top,
+            average_first_team,
+            average_backup,
+        }
+    }
+
+    /// Cap the offered wage based on squad status. KeyPlayer may exceed
+    /// the current top earner by up to 10%; FirstTeamRegular gets to
+    /// 95%; rotation/backup are held below the first-team average.
+    pub fn cap_for_status(&self, offered: u32, status: &PlayerSquadStatus) -> u32 {
+        if self.top_earner == 0 && self.average_first_team == 0 {
+            return offered;
+        }
+        let top = self.top_earner.max(self.average_first_team);
+        match status {
+            PlayerSquadStatus::KeyPlayer => offered.min((top as f32 * 1.10) as u32),
+            PlayerSquadStatus::FirstTeamRegular => offered.min((top as f32 * 0.95) as u32),
+            PlayerSquadStatus::HotProspectForTheFuture => {
+                offered.min(self.average_first_team.max(top / 3))
+            }
+            PlayerSquadStatus::FirstTeamSquadRotation => {
+                offered.min(self.average_first_team.max(top / 2))
+            }
+            PlayerSquadStatus::MainBackupPlayer => {
+                let cap = if self.average_backup > 0 {
+                    (self.average_backup as f32 * 1.20) as u32
+                } else {
+                    self.average_first_team / 2
+                };
+                offered.min(cap.max(top / 4))
+            }
+            _ => offered.min(self.average_backup.max(top / 5)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlayerProfile {
+    YoungProspect,
+    Star,
+    Veteran,
+    Backup,
+    Standard,
+}
+
+impl PlayerProfile {
+    fn classify(player: &Player, age: u8, ability: u8, status: &PlayerSquadStatus) -> Self {
+        let rep = player.player_attributes.current_reputation;
+        let potential = player.player_attributes.potential_ability;
+
+        if age <= 23 && (potential >= 130 || matches!(status, PlayerSquadStatus::HotProspectForTheFuture)) {
+            return PlayerProfile::YoungProspect;
+        }
+        if age >= 31 {
+            return PlayerProfile::Veteran;
+        }
+        if rep > 5000 || ability >= 150 || matches!(status, PlayerSquadStatus::KeyPlayer) {
+            return PlayerProfile::Star;
+        }
+        if matches!(
+            status,
+            PlayerSquadStatus::MainBackupPlayer
+                | PlayerSquadStatus::DecentYoungster
+                | PlayerSquadStatus::NotNeeded
+        ) {
+            return PlayerProfile::Backup;
+        }
+        PlayerProfile::Standard
     }
 }
 
@@ -361,24 +558,9 @@ struct RenewalCandidate {
     final_panic: bool,
     bosman_pressure: bool,
     override_attempts_cap: bool,
+    months_remaining: i32,
 }
 
-fn ability_based_salary(ability: u8) -> u32 {
-    match ability {
-        0..=50 => 5_000,
-        51..=70 => 20_000,
-        71..=90 => 50_000,
-        91..=110 => 100_000,
-        111..=130 => 200_000,
-        131..=150 => 350_000,
-        _ => 500_000,
-    }
-}
-
-/// Proactive renewals favour longer deals — the club is locking in value.
-/// Veterans with high reputation now get at least their minimum acceptable
-/// term via the natural max(), rather than a club-cap that forces auto-
-/// rejection on length.
 fn proactive_contract_years(
     age: u8,
     ability: u8,
@@ -412,53 +594,204 @@ fn proactive_contract_years(
     }
 
     let min_accept = ProcessContractHandler::player_minimum_years(player, date) as f32;
-    // Respect the player's minimum — otherwise the offer auto-rejects on
-    // length and the club wastes attempts. Capped at 5 so elite-rep
-    // veterans still get a 3-4 year deal without breaching the upper limit.
     let raised = years.max(min_accept);
 
     (raised.round() as u8).clamp(1, 5)
 }
 
-fn build_sweeteners(
-    offered_salary: u32,
-    ability: u8,
-    age: u8,
-    previous_attempts: usize,
-    candidate: &RenewalCandidate,
+fn decorate_proposal(
+    proposal: &mut PlayerContractProposal,
     player: &Player,
-) -> (u32, u32, Option<u32>) {
-    let mut signing_bonus = 0u32;
-    let mut loyalty_bonus = 0u32;
-    let mut release_clause: Option<u32> = None;
+    age: u8,
+    ability: u8,
+    profile: &PlayerProfile,
+    status: &PlayerSquadStatus,
+    urgency: usize,
+    budget_pressure: f32,
+    structure: &WageStructureSnapshot,
+) {
+    let salary = proposal.salary;
 
-    let urgency = previous_attempts
-        + if candidate.bosman_pressure { 1 } else { 0 }
-        + if candidate.final_panic { 2 } else { 0 }
-        + if candidate.has_market_interest { 1 } else { 0 };
+    // Promise the role unless we're keeping the same. KeyPlayer/FirstTeam
+    // promises are leverage in negotiation; backup roles aren't promised
+    // because the player would consider that a downgrade in writing.
+    if matches!(
+        status,
+        PlayerSquadStatus::KeyPlayer
+            | PlayerSquadStatus::FirstTeamRegular
+            | PlayerSquadStatus::HotProspectForTheFuture
+    ) {
+        proposal.squad_status_promise = Some(status.clone());
+    }
 
     let greedy_agent = player.attributes.ambition + player.attributes.controversy > 24.0;
     let loyal_agent = player.attributes.loyalty > 14.0;
 
+    // Base sweeteners — same logic as before but applied uniformly.
     if urgency >= 2 || greedy_agent {
-        // Signing bonus scales with salary — 20-60% of annual wage.
-        signing_bonus = (offered_salary as f32 * (0.20 + (urgency.min(5) as f32) * 0.08)) as u32;
+        // Signing bonus 20-60% of annual wage, scaled with urgency.
+        let scale = 0.20 + (urgency.min(5) as f32) * 0.08;
+        proposal.signing_bonus = ((salary as f32) * scale) as u32;
     }
-
     if urgency >= 2 || loyal_agent || age >= 30 {
-        // Loyalty bonus: yearly, ~10-25% of salary.
-        loyalty_bonus = (offered_salary as f32 * (0.10 + (urgency.min(4) as f32) * 0.04)) as u32;
+        let scale = 0.10 + (urgency.min(4) as f32) * 0.04;
+        proposal.loyalty_bonus = ((salary as f32) * scale) as u32;
     }
 
-    // Release clauses get introduced once the player has leverage (market
-    // interest) or after two failed attempts. Sized from player ability
-    // and reputation — big enough to deter tyre-kickers but reachable.
-    if candidate.has_market_interest || previous_attempts >= 2 {
-        let rep = player.player_attributes.current_reputation as u32;
-        let base = (ability as u32) * (ability as u32) * 4_000; // ability²-shaped
-        let rep_boost = rep * 8_000;
-        release_clause = Some(base + rep_boost);
+    // Profile-driven extras.
+    match profile {
+        PlayerProfile::YoungProspect => {
+            // Long progression — yearly rise, optional extension, appearance step.
+            proposal.yearly_wage_rise_pct = Some(8);
+            proposal.optional_extension_years = Some(1);
+            proposal.wage_after_apps = Some((50, 25));
+            // Ambitious prospects insist on a release clause when the
+            // club is below their ceiling.
+            if player.attributes.ambition >= 13.0 {
+                proposal.release_clause = Some(release_clause_value(player, ability, 1.0));
+            }
+            // Caps milestone if they're already pushing toward the senior team.
+            if player.player_attributes.international_apps >= 3 {
+                proposal.wage_after_caps = Some((20, 15));
+            }
+        }
+        PlayerProfile::Star => {
+            // Match highest earner only for true elites (status == KeyPlayer)
+            if matches!(status, PlayerSquadStatus::KeyPlayer)
+                && structure.top_earner > 0
+                && salary >= (structure.top_earner * 90 / 100)
+            {
+                proposal.match_highest_earner = true;
+            }
+            if proposal.signing_bonus == 0 {
+                proposal.signing_bonus = ((salary as f32) * 0.30) as u32;
+            }
+            if proposal.loyalty_bonus == 0 {
+                proposal.loyalty_bonus = ((salary as f32) * 0.15) as u32;
+            }
+            // Stars only sign a clause when they have leverage — market
+            // interest or two failed offers.
+            if urgency >= 2 {
+                proposal.release_clause = Some(release_clause_value(player, ability, 1.4));
+            }
+            // Star strikers/midfielders → goal bonus; defenders/keepers → clean sheet.
+            attach_position_bonus(proposal, player, salary, 1.0);
+            proposal.appearance_fee = Some(((salary as f32) * 0.01) as u32);
+        }
+        PlayerProfile::Veteran => {
+            // Shorter deal, appearance fee, optional extension after league apps.
+            proposal.appearance_fee = Some(((salary as f32) * 0.02) as u32);
+            proposal.appearance_extension_threshold = Some(20);
+            // Loyalty bonus already handled above.
+        }
+        PlayerProfile::Backup => {
+            // Lower base, more on appearances + unused-sub fee.
+            proposal.appearance_fee = Some(((salary as f32) * 0.04) as u32);
+            proposal.unused_sub_fee = Some(((salary as f32) * 0.005) as u32);
+        }
+        PlayerProfile::Standard => {
+            attach_position_bonus(proposal, player, salary, 0.6);
+            if urgency >= 2 {
+                proposal.release_clause = Some(release_clause_value(player, ability, 1.0));
+            }
+        }
     }
 
-    (signing_bonus, loyalty_bonus, release_clause)
+    // Budget pressure: substitute base-wage shortfall with bigger appearance fee
+    // and signing bonus when we had to trim the base.
+    if budget_pressure >= 0.5 {
+        let extra_signing = ((salary as f32) * 0.10 * budget_pressure) as u32;
+        proposal.signing_bonus = proposal.signing_bonus.saturating_add(extra_signing);
+        let extra_app = proposal
+            .appearance_fee
+            .map(|f| f.saturating_add(((salary as f32) * 0.005) as u32))
+            .unwrap_or(((salary as f32) * 0.005) as u32);
+        proposal.appearance_fee = Some(extra_app);
+    }
+}
+
+fn release_clause_value(player: &Player, ability: u8, scale: f32) -> u32 {
+    let rep = player.player_attributes.current_reputation as u32;
+    let base = (ability as u32) * (ability as u32) * 4_000;
+    let rep_boost = rep * 8_000;
+    ((base + rep_boost) as f32 * scale) as u32
+}
+
+fn attach_position_bonus(
+    proposal: &mut PlayerContractProposal,
+    player: &Player,
+    salary: u32,
+    scale: f32,
+) {
+    let pos = player.position();
+    if pos.is_forward() || pos.is_midfielder() {
+        proposal.goal_bonus = Some(((salary as f32) * 0.012 * scale) as u32);
+    } else if pos.is_goalkeeper() || pos.is_defender() {
+        proposal.clean_sheet_bonus = Some(((salary as f32) * 0.012 * scale) as u32);
+    }
+}
+
+fn status_rank(status: &PlayerSquadStatus) -> u8 {
+    use PlayerSquadStatus::*;
+    match status {
+        KeyPlayer => 7,
+        FirstTeamRegular => 6,
+        HotProspectForTheFuture => 5,
+        FirstTeamSquadRotation => 4,
+        MainBackupPlayer => 3,
+        DecentYoungster => 2,
+        NotNeeded => 1,
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod wage_structure_tests {
+    use super::*;
+
+    fn snapshot(top: u32, avg_first_team: u32, avg_backup: u32) -> WageStructureSnapshot {
+        WageStructureSnapshot {
+            current_bill: top * 5,
+            top_earner: top,
+            average_first_team: avg_first_team,
+            average_backup: avg_backup,
+        }
+    }
+
+    #[test]
+    fn key_player_may_marginally_exceed_top() {
+        let s = snapshot(200_000, 150_000, 60_000);
+        // Asking for 300k — clamped to 110% of top = 220k.
+        assert_eq!(s.cap_for_status(300_000, &PlayerSquadStatus::KeyPlayer), 220_000);
+    }
+
+    #[test]
+    fn first_team_regular_held_below_top() {
+        let s = snapshot(200_000, 150_000, 60_000);
+        // Asking for 300k — clamped to 95% of top = 190k.
+        assert_eq!(
+            s.cap_for_status(300_000, &PlayerSquadStatus::FirstTeamRegular),
+            190_000
+        );
+    }
+
+    #[test]
+    fn backup_capped_well_below_first_team() {
+        let s = snapshot(200_000, 150_000, 60_000);
+        let capped = s.cap_for_status(180_000, &PlayerSquadStatus::MainBackupPlayer);
+        // 1.20 × average_backup = 72k, max with top/4 = 50k → cap is 72k.
+        assert_eq!(capped, 72_000);
+    }
+
+    #[test]
+    fn cap_passes_through_when_under_limit() {
+        let s = snapshot(200_000, 150_000, 60_000);
+        assert_eq!(s.cap_for_status(50_000, &PlayerSquadStatus::FirstTeamRegular), 50_000);
+    }
+
+    #[test]
+    fn empty_structure_does_not_clamp() {
+        let s = snapshot(0, 0, 0);
+        assert_eq!(s.cap_for_status(500_000, &PlayerSquadStatus::KeyPlayer), 500_000);
+    }
 }

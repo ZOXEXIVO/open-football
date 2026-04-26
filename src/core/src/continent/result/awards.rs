@@ -3,6 +3,7 @@ use crate::continent::Continent;
 use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
+use crate::HappinessEventType;
 use log::debug;
 
 impl ContinentResult {
@@ -42,6 +43,68 @@ impl ContinentResult {
                 if let Some(player) = data.player_mut(id) {
                     player.player_attributes.current_reputation =
                         (player.player_attributes.current_reputation + 300).min(10000);
+                }
+            }
+        }
+
+        // Continental cup trophies / final defeats. Each tier emits to
+        // both finalists when the engine resolves a `Final` knockout tie.
+        // Today the engine doesn't schedule continental finals, so the
+        // accessors return None and this is a no-op — the wiring is here
+        // so adding final-stage scheduling later auto-fires the events.
+        Self::process_continental_cup_finals(data, continent_id, date);
+    }
+
+    /// Emit `TrophyWon` for the cup winner and `CupFinalDefeat` for the
+    /// losing finalist of each continental competition. Prestige factors
+    /// follow the canonical band (CL > EL > Conference). Cooldown is
+    /// 365 days so back-to-back end-of-period ticks don't double-fire.
+    fn process_continental_cup_finals(
+        data: &mut SimulatorData,
+        continent_id: u32,
+        date: chrono::NaiveDate,
+    ) {
+        // Snapshot finals up front so we don't keep an immutable borrow
+        // while emitting. (CL 1.5 / EL 1.3 / Conference 1.2 reflect the
+        // real-world prestige gap.)
+        let finals: Vec<(u32, u32, f32, f32)> = if let Some(continent) = data.continent(continent_id) {
+            let comps = &continent.continental_competitions;
+            let mut v = Vec::new();
+            if let Some((w, l)) = comps.champions_league.final_result() {
+                v.push((w, l, 1.5, 1.4));
+            }
+            if let Some((w, l)) = comps.europa_league.final_result() {
+                v.push((w, l, 1.3, 1.2));
+            }
+            if let Some((w, l)) = comps.conference_league.final_result() {
+                v.push((w, l, 1.2, 1.0));
+            }
+            v
+        } else {
+            return;
+        };
+
+        for (winner_team, loser_team, win_prestige, lose_prestige) in finals {
+            // Locate which country owns each team. Continental cups can
+            // span the whole continent, so we walk the country list.
+            if let Some(continent) = data.continent_mut(continent_id) {
+                for country in continent.countries.iter_mut() {
+                    CountryResult::apply_team_squad_event(
+                        country,
+                        winner_team,
+                        HappinessEventType::TrophyWon,
+                        365,
+                        win_prestige,
+                        date,
+                    );
+                    CountryResult::apply_team_squad_event(
+                        country,
+                        loser_team,
+                        HappinessEventType::CupFinalDefeat,
+                        365,
+                        lose_prestige,
+                        date,
+                    );
                 }
             }
         }

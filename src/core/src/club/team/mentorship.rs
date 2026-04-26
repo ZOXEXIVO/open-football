@@ -161,9 +161,11 @@ pub fn process_mentorship(
         let mentee = &mut players[*mentee_idx];
         nudge_personality(mentee, mentor_prof, mentor_amb, mentor_det, hoy_factor);
         mentee.statuses.add(date, PlayerStatusType::Tut);
-        mentee
-            .happiness
-            .add_event(HappinessEventType::TeammateBonding, 0.6);
+        mentee.happiness.add_event_with_partner(
+            HappinessEventType::TeammateBonding,
+            0.6,
+            Some(mentor_ids[i]),
+        );
 
         applied.push(MentorshipPairing {
             mentor_id: mentor_ids[i],

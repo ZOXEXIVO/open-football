@@ -321,4 +321,19 @@ impl EuropaLeague {
 
         5.0
     }
+
+    /// See [`crate::continent::ChampionsLeague::final_result`] — same shape.
+    pub fn final_result(&self) -> Option<(u32, u32)> {
+        if !matches!(self.current_stage, CompetitionStage::Final) {
+            return None;
+        }
+        let tie = self.knockout_round.first()?;
+        let winner = tie.winner?;
+        let loser = if winner == tie.home_team {
+            tie.away_team
+        } else {
+            tie.home_team
+        };
+        Some((winner, loser))
+    }
 }

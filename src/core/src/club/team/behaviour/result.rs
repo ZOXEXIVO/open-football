@@ -203,10 +203,20 @@ impl PlayerBehaviourResult {
 
                 // Generate teammate relationship events visible in player history.
                 // Use a higher threshold to prevent event spam from routine friction.
+                // Tag the partner so the UI can link to the specific teammate.
+                let partner_id = Some(relationship_result.to_player_id);
                 if relationship_result.relationship_change > 0.5 {
-                    player_to_modify.happiness.add_event(HappinessEventType::TeammateBonding, 1.0);
+                    player_to_modify.happiness.add_event_with_partner(
+                        HappinessEventType::TeammateBonding,
+                        1.0,
+                        partner_id,
+                    );
                 } else if relationship_result.relationship_change < -0.5 {
-                    player_to_modify.happiness.add_event(HappinessEventType::ConflictWithTeammate, -1.5);
+                    player_to_modify.happiness.add_event_with_partner(
+                        HappinessEventType::ConflictWithTeammate,
+                        -1.5,
+                        partner_id,
+                    );
                 }
             }
         }

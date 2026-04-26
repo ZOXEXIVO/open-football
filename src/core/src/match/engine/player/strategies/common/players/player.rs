@@ -6,7 +6,26 @@ use crate::r#match::{
 use crate::{PlayerAttributes, PlayerSkills};
 use nalgebra::Vector3;
 use rand::RngExt;
+use std::sync::OnceLock;
 use crate::r#match::player::strategies::players::{DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl, ShootingOperationsImpl, SkillOperationsImpl};
+
+/// Zero-valued fallback returned by [`PlayerOperationsImpl::skills`] /
+/// [`PlayerOperationsImpl::attributes`] when the requested `player_id`
+/// is no longer present in `MatchContext::players` — typically because
+/// the player was substituted off but a stale id is still being chased
+/// by another AI strategy's spatial-grid query or remembered target.
+/// Using a default instead of panicking keeps the simulation running;
+/// downstream calculations against a zero-skilled player produce a
+/// degraded-but-bounded result (e.g. tackle skill 0/20 = 0.0).
+fn fallback_skills() -> &'static PlayerSkills {
+    static FALLBACK: OnceLock<PlayerSkills> = OnceLock::new();
+    FALLBACK.get_or_init(PlayerSkills::default)
+}
+
+fn fallback_attributes() -> &'static PlayerAttributes {
+    static FALLBACK: OnceLock<PlayerAttributes> = OnceLock::new();
+    FALLBACK.get_or_init(PlayerAttributes::default)
+}
 
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
@@ -20,28 +39,62 @@ impl<'p> PlayerOperationsImpl<'p> {
 
 impl<'p> PlayerOperationsImpl<'p> {
     pub fn get(&self, player_id: u32) -> MatchPlayerLite {
+        // Stale id from a subbed-off opponent or a grid race — fall back
+        // to a sensible neutral position so callers don't crash. They
+        // still get a valid lite handle; spatial calculations using its
+        // tactical_position will pick the goalkeeper default but that's
+        // bounded behaviour, not a hard panic mid-tick.
+        let tactical_positions = self
+            .ctx
+            .context
+            .players
+            .by_id(player_id)
+            .map(|p| p.tactical_position.current_position)
+            .unwrap_or_else(|| {
+                log::debug!(
+                    "get() lookup for unknown player_id={} — using default position",
+                    player_id
+                );
+                crate::PlayerPositionType::Goalkeeper
+            });
         MatchPlayerLite {
             id: player_id,
             position: self.ctx.tick_context.positions.players.position(player_id),
-            tactical_positions: self
-                .ctx
-                .context
-                .players
-                .by_id(player_id)
-                .expect(&format!("unknown player = {}", player_id))
-                .tactical_position
-                .current_position,
+            tactical_positions,
         }
     }
 
+    /// Returns this player's skills. If `player_id` is no longer in the
+    /// match context (subbed off, stale grid hit, AI memory pointing at a
+    /// gone player), returns a static zero-valued default instead of
+    /// panicking. See [`fallback_skills`].
     pub fn skills(&self, player_id: u32) -> &PlayerSkills {
-        let player = self.ctx.context.players.by_id(player_id).unwrap();
-        &player.skills
+        match self.ctx.context.players.by_id(player_id) {
+            Some(player) => &player.skills,
+            None => {
+                log::debug!(
+                    "skills() lookup for unknown player_id={} — falling back to default",
+                    player_id
+                );
+                fallback_skills()
+            }
+        }
     }
 
+    /// Returns this player's attributes. If `player_id` is no longer in
+    /// the match context, returns a static default instead of panicking.
+    /// See [`fallback_attributes`].
     pub fn attributes(&self, player_id: u32) -> &PlayerAttributes {
-        let player = self.ctx.context.players.by_id(player_id).unwrap();
-        &player.player_attributes
+        match self.ctx.context.players.by_id(player_id) {
+            Some(player) => &player.player_attributes,
+            None => {
+                log::debug!(
+                    "attributes() lookup for unknown player_id={} — falling back to default",
+                    player_id
+                );
+                fallback_attributes()
+            }
+        }
     }
 
     pub fn on_own_side(&self) -> bool {

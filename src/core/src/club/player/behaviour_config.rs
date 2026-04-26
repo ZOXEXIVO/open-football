@@ -323,6 +323,43 @@ pub struct MoraleEventCatalog {
     pub national_team_dropped: f32,
     pub shirt_number_promotion: f32,
     pub controversy_incident: f32,
+    // Match performance
+    pub first_club_goal: f32,
+    pub decisive_goal: f32,
+    pub substitute_impact: f32,
+    pub clean_sheet_pride: f32,
+    pub costly_mistake: f32,
+    pub red_card_fallout: f32,
+    pub derby_hero: f32,
+    pub derby_win: f32,
+    pub derby_defeat: f32,
+    // Team season events
+    pub trophy_won: f32,
+    pub cup_final_defeat: f32,
+    pub promotion_celebration: f32,
+    pub relegation_fear: f32,
+    pub relegated: f32,
+    pub qualified_for_europe: f32,
+    // Role / status
+    pub won_starting_place: f32,
+    pub lost_starting_place: f32,
+    pub captaincy_awarded: f32,
+    pub captaincy_removed: f32,
+    pub youth_breakthrough: f32,
+    pub squad_registration_omitted: f32,
+    // Transfer / media
+    pub wanted_by_bigger_club: f32,
+    pub transfer_bid_rejected: f32,
+    pub dream_move_collapsed: f32,
+    pub fan_praise: f32,
+    pub fan_criticism: f32,
+    pub media_praise: f32,
+    pub media_criticism: f32,
+    // Social / culture
+    pub close_friend_sold: f32,
+    pub compatriot_joined: f32,
+    pub mentor_departed: f32,
+    pub language_progress: f32,
 }
 
 impl Default for MoraleEventCatalog {
@@ -369,6 +406,57 @@ impl Default for MoraleEventCatalog {
             national_team_dropped: -4.0,
             shirt_number_promotion: 2.0,
             controversy_incident: -3.0,
+            // Match performance — small/medium routine events plus a
+            // career milestone (first_club_goal). Magnitudes here are
+            // *base* values; emit sites may scale by rating, derby
+            // multiplier, role or starter-vs-sub.
+            first_club_goal: 6.0,
+            decisive_goal: 3.0,
+            substitute_impact: 2.0,
+            clean_sheet_pride: 1.5,
+            costly_mistake: -3.5,
+            red_card_fallout: -5.0,
+            derby_hero: 5.0,
+            // Squad-wide derby win — a moderate lift for everyone on the
+            // winning side. Standout performers get the bigger DerbyHero
+            // on top, but only one of the two events fires per player.
+            derby_win: 2.5,
+            // Base defeat is squad-wide; emit site adds up to -3.0 extra
+            // for poor performers / red cards, so worst case lands around
+            // -6 — a meaningful but not crushing rivalry blow.
+            derby_defeat: -3.0,
+            // Team season events — major positives are once-a-season
+            // career memories; relegation is a year-defining wound.
+            trophy_won: 10.0,
+            cup_final_defeat: -5.0,
+            promotion_celebration: 8.0,
+            relegation_fear: -2.5,
+            relegated: -10.0,
+            qualified_for_europe: 6.0,
+            // Role / status — captaincy is the strongest pure status
+            // event short of a trophy; squad omission silently chronic.
+            won_starting_place: 4.0,
+            lost_starting_place: -4.0,
+            captaincy_awarded: 7.0,
+            captaincy_removed: -7.0,
+            youth_breakthrough: 8.0,
+            squad_registration_omitted: -5.0,
+            // Transfer / media — fan/media events are softer than the
+            // dressing-room layer; a collapsed dream move stings.
+            wanted_by_bigger_club: 3.0,
+            transfer_bid_rejected: -3.0,
+            dream_move_collapsed: -7.0,
+            fan_praise: 2.0,
+            fan_criticism: -2.5,
+            media_praise: 1.5,
+            media_criticism: -2.0,
+            // Social / culture — quiet ongoing events. Friend sold and
+            // mentor departed are felt; compatriot/language are gentle
+            // integration helpers.
+            close_friend_sold: -3.0,
+            compatriot_joined: 2.5,
+            mentor_departed: -3.0,
+            language_progress: 1.5,
         }
     }
 }
@@ -417,6 +505,38 @@ impl MoraleEventCatalog {
             NationalTeamDropped => self.national_team_dropped,
             ShirtNumberPromotion => self.shirt_number_promotion,
             ControversyIncident => self.controversy_incident,
+            FirstClubGoal => self.first_club_goal,
+            DecisiveGoal => self.decisive_goal,
+            SubstituteImpact => self.substitute_impact,
+            CleanSheetPride => self.clean_sheet_pride,
+            CostlyMistake => self.costly_mistake,
+            RedCardFallout => self.red_card_fallout,
+            DerbyHero => self.derby_hero,
+            DerbyWin => self.derby_win,
+            DerbyDefeat => self.derby_defeat,
+            TrophyWon => self.trophy_won,
+            CupFinalDefeat => self.cup_final_defeat,
+            PromotionCelebration => self.promotion_celebration,
+            RelegationFear => self.relegation_fear,
+            Relegated => self.relegated,
+            QualifiedForEurope => self.qualified_for_europe,
+            WonStartingPlace => self.won_starting_place,
+            LostStartingPlace => self.lost_starting_place,
+            CaptaincyAwarded => self.captaincy_awarded,
+            CaptaincyRemoved => self.captaincy_removed,
+            YouthBreakthrough => self.youth_breakthrough,
+            SquadRegistrationOmitted => self.squad_registration_omitted,
+            WantedByBiggerClub => self.wanted_by_bigger_club,
+            TransferBidRejected => self.transfer_bid_rejected,
+            DreamMoveCollapsed => self.dream_move_collapsed,
+            FanPraise => self.fan_praise,
+            FanCriticism => self.fan_criticism,
+            MediaPraise => self.media_praise,
+            MediaCriticism => self.media_criticism,
+            CloseFriendSold => self.close_friend_sold,
+            CompatriotJoined => self.compatriot_joined,
+            MentorDeparted => self.mentor_departed,
+            LanguageProgress => self.language_progress,
         }
     }
 }
@@ -730,6 +850,21 @@ mod tests {
             crate::HappinessEventType::ContractTerminated,
             crate::HappinessEventType::NationalTeamDropped,
             crate::HappinessEventType::ControversyIncident,
+            crate::HappinessEventType::CostlyMistake,
+            crate::HappinessEventType::RedCardFallout,
+            crate::HappinessEventType::DerbyDefeat,
+            crate::HappinessEventType::CupFinalDefeat,
+            crate::HappinessEventType::RelegationFear,
+            crate::HappinessEventType::Relegated,
+            crate::HappinessEventType::LostStartingPlace,
+            crate::HappinessEventType::CaptaincyRemoved,
+            crate::HappinessEventType::SquadRegistrationOmitted,
+            crate::HappinessEventType::TransferBidRejected,
+            crate::HappinessEventType::DreamMoveCollapsed,
+            crate::HappinessEventType::FanCriticism,
+            crate::HappinessEventType::MediaCriticism,
+            crate::HappinessEventType::CloseFriendSold,
+            crate::HappinessEventType::MentorDeparted,
         ];
         for n in negatives {
             assert!(cat.magnitude(n.clone()) < 0.0, "expected {:?} negative", n);
@@ -746,9 +881,66 @@ mod tests {
             crate::HappinessEventType::NationalTeamCallup,
             crate::HappinessEventType::ContractRenewal,
             crate::HappinessEventType::TeammateBonding,
+            crate::HappinessEventType::FirstClubGoal,
+            crate::HappinessEventType::DecisiveGoal,
+            crate::HappinessEventType::SubstituteImpact,
+            crate::HappinessEventType::CleanSheetPride,
+            crate::HappinessEventType::DerbyHero,
+            crate::HappinessEventType::TrophyWon,
+            crate::HappinessEventType::PromotionCelebration,
+            crate::HappinessEventType::QualifiedForEurope,
+            crate::HappinessEventType::WonStartingPlace,
+            crate::HappinessEventType::CaptaincyAwarded,
+            crate::HappinessEventType::YouthBreakthrough,
+            crate::HappinessEventType::WantedByBiggerClub,
+            crate::HappinessEventType::FanPraise,
+            crate::HappinessEventType::MediaPraise,
+            crate::HappinessEventType::CompatriotJoined,
+            crate::HappinessEventType::LanguageProgress,
         ];
         for p in positives {
             assert!(cat.magnitude(p.clone()) > 0.0, "expected {:?} positive", p);
+        }
+    }
+
+    #[test]
+    fn catalog_career_milestones_are_meaningful() {
+        // Career-defining events should land in the major-event band
+        // (>= |5|). Small routine events (FanPraise, LanguageProgress)
+        // and ambient pressure (RelegationFear) should stay below |3|.
+        let cat = MoraleEventCatalog::default();
+        let career = [
+            (crate::HappinessEventType::TrophyWon, 5.0),
+            (crate::HappinessEventType::Relegated, 5.0),
+            (crate::HappinessEventType::CaptaincyAwarded, 5.0),
+            (crate::HappinessEventType::CaptaincyRemoved, 5.0),
+            (crate::HappinessEventType::PromotionCelebration, 5.0),
+            (crate::HappinessEventType::DreamMoveCollapsed, 5.0),
+            (crate::HappinessEventType::YouthBreakthrough, 5.0),
+        ];
+        for (event, min_abs) in career {
+            let m = cat.magnitude(event.clone()).abs();
+            assert!(
+                m >= min_abs,
+                "expected {:?} magnitude >= {} (got {})",
+                event,
+                min_abs,
+                m
+            );
+        }
+        let ambient = [
+            crate::HappinessEventType::RelegationFear,
+            crate::HappinessEventType::FanPraise,
+            crate::HappinessEventType::LanguageProgress,
+        ];
+        for event in ambient {
+            let m = cat.magnitude(event.clone()).abs();
+            assert!(
+                m < 3.0,
+                "expected {:?} ambient magnitude < 3.0 (got {})",
+                event,
+                m
+            );
         }
     }
 

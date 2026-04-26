@@ -112,6 +112,7 @@ impl TeamBuilder {
             match_history: self.match_history.unwrap_or_else(MatchHistory::new),
             captain_id: None,
             vice_captain_id: None,
+            captaincy_initialized: false,
         })
     }
 }

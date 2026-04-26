@@ -1,3 +1,4 @@
+use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
@@ -174,6 +175,15 @@ impl Player {
         factor.clamp(-20.0, 20.0)
     }
 
+    /// Salary factor uses the same `ContractValuation` as the renewal AI
+    /// and personal-terms negotiation. Otherwise the three systems disagree
+    /// on what a fair wage looks like — happiness might shout "underpaid"
+    /// while the renewal AI is happily renewing on the same terms.
+    ///
+    /// Inputs the valuation already accounts for: ability, age, position,
+    /// reputation, league prestige, club tier, status premium. The factor
+    /// here is the gap between actual salary and expected; bonuses and
+    /// recent renewals dampen frustration.
     fn calculate_salary_factor(&self, age: u8) -> f32 {
         let Some(ref contract) = self.contract else {
             return -5.0;
@@ -190,32 +200,62 @@ impl Player {
             _ => {}
         }
 
-        let ability = self.player_attributes.current_ability as f32;
+        // Happiness runs without a Country reference, so we use neutral
+        // club/league inputs — the valuation's status premium + ability +
+        // age factors carry most of the weight. months_remaining doesn't
+        // affect expected_wage (only the leverage band), so a constant
+        // here keeps the factor stable.
+        let ctx = ValuationContext {
+            age,
+            club_reputation_score: 0.5,
+            league_reputation: 5_000,
+            squad_status: contract.squad_status.clone(),
+            current_salary: contract.salary,
+            months_remaining: 24,
+            has_market_interest: false,
+        };
 
-        // Map ability to expected salary matching the generation curve:
-        // Salaries are generated as random(2k + rep*30k, 10k + rep*190k)
-        // Ability ~30-170 roughly maps to rep_factor 0.0-1.0
-        let ability_ratio = ((ability - 30.0) / 140.0).clamp(0.0, 1.0);
-        let expected_base = 6000.0 + ability_ratio * 110000.0;
-
-        let age_factor = if age < 22 { 0.7 } else if age > 30 { 0.85 } else { 1.0 };
-        let expected = expected_base * age_factor;
-
+        let valuation = ContractValuation::evaluate(self, &ctx);
+        let expected = valuation.expected_wage as f32;
         if expected < 1.0 {
             return 0.0;
         }
 
-        let ratio = contract.salary as f32 / expected;
-        let factor = if ratio >= 1.2 {
-            // Well paid
-            10.0_f32.min(ratio * 5.0)
-        } else if ratio >= 0.8 {
-            // Fairly paid
-            (ratio - 0.8) * 25.0 // 0 to 10
+        // Bonuses partially compensate base wage — half their face value
+        // counts toward closing the gap so a star with a generous signing
+        // bonus doesn't grow furious purely on base.
+        let bonus_extra: u32 = contract
+            .bonuses
+            .iter()
+            .map(|b| (b.value.max(0) as u32) / 2)
+            .sum();
+        let effective_salary = (contract.salary as f32) + (bonus_extra as f32);
+
+        let ratio = effective_salary / expected;
+        let mut factor = if ratio >= 1.20 {
+            (5.0 + (ratio - 1.20) * 8.0).min(12.0)
+        } else if ratio >= 1.00 {
+            (ratio - 1.0) * 25.0
+        } else if ratio >= 0.80 {
+            (ratio - 1.0) * 30.0
+        } else if ratio >= 0.60 {
+            -6.0 + (ratio - 0.80) * 30.0
         } else {
-            // Underpaid
-            (ratio - 0.8) * 37.5
+            -12.0 + (ratio - 0.60) * 15.0
         };
+
+        // Loyalty veterans tolerate slightly below market — agent isn't
+        // pushing them to chase every dollar.
+        if self.attributes.loyalty >= 16.0 && ratio >= 0.85 {
+            factor = (factor + 2.0).min(10.0);
+        }
+
+        // Just signed → don't resent the wage you just negotiated. The
+        // renewal handler stamps `last_salary_negotiation` on accept; if
+        // it's set and the factor is negative, soften the blow.
+        if self.happiness.last_salary_negotiation.is_some() && factor < 0.0 {
+            factor *= 0.85;
+        }
 
         factor.clamp(-15.0, 15.0)
     }

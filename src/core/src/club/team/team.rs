@@ -45,6 +45,12 @@ pub struct Team {
     pub captain_id: Option<u32>,
     /// Stand-in captain when the captain is unavailable (injured / benched).
     pub vice_captain_id: Option<u32>,
+    /// Sticky flag flipped to true the first time `assign_captaincy`
+    /// successfully picks a captain on this team. Used to suppress the
+    /// false `CaptaincyAwarded` event that would otherwise fire on the
+    /// game's very first monthly tick — that's just save-file setup, not
+    /// a managerial decision the player made or experienced.
+    pub captaincy_initialized: bool,
 }
 
 impl Team {
@@ -156,6 +162,17 @@ impl Team {
     /// the top scorer as captain, second as vice. Captaincy changes carry
     /// morale consequences: a stripped former captain takes a hit, a new
     /// appointee gets a lift.
+    ///
+    /// Three guards keep the events realistic:
+    /// 1. The very first captain pick on a freshly-loaded team is silent
+    ///    (`captaincy_initialized` flag) — it's save-file setup, not a
+    ///    decision the player remembers.
+    /// 2. A 120-day cooldown on each emit type prevents recalculation
+    ///    oscillation from spamming armband-handover events.
+    /// 3. If the previous captain has left the squad (transfer / loan
+    ///    out / retirement), no `CaptaincyRemoved` is fired for them —
+    ///    the move itself is what unsettled them, not "stripping the
+    ///    armband" they no longer wear at this club.
     pub fn assign_captaincy(&mut self, date: chrono::NaiveDate) {
         use chrono::Datelike;
 
@@ -198,26 +215,88 @@ impl Team {
 
         let new_captain = ranked.first().map(|(id, _)| *id);
         let new_vice = ranked.get(1).map(|(id, _)| *id);
+        let was_initialized = self.captaincy_initialized;
 
-        // Emit morale events on changes — being handed or stripped of the
-        // armband is a real moment for a player.
-        if self.captain_id != new_captain {
+        // Persistent state always updates regardless of whether we emit.
+        // Captaincy events are about *narrative*; the underlying field is
+        // the source of truth for the next match-day squad selection.
+        if self.captain_id != new_captain && was_initialized {
+            // Strip event for the outgoing captain — only if they're
+            // still in the squad. A captain who left the club should not
+            // get a `CaptaincyRemoved` event applied to their morale at
+            // their next club; the transfer pipeline handles the move
+            // itself, and pinning a "stripped of armband" event on a
+            // departed player would be doubly wrong.
             if let Some(old_id) = self.captain_id {
                 if let Some(p) = self.players.players.iter_mut().find(|p| p.id == old_id) {
-                    p.happiness
-                        .add_event(HappinessEventType::RoleMismatch, -6.0);
+                    let mag = Self::captaincy_removed_magnitude(p);
+                    // 120-day cooldown to absorb monthly recalculation
+                    // oscillation around an evenly-matched leadership
+                    // group (the kind of churn we don't want narrated).
+                    p.happiness.add_event_with_cooldown(
+                        HappinessEventType::CaptaincyRemoved,
+                        mag,
+                        120,
+                    );
                 }
             }
             if let Some(new_id) = new_captain {
                 if let Some(p) = self.players.players.iter_mut().find(|p| p.id == new_id) {
-                    p.happiness
-                        .add_event(HappinessEventType::DressingRoomSpeech, 4.0);
+                    let mag = Self::captaincy_awarded_magnitude(p);
+                    p.happiness.add_event_with_cooldown(
+                        HappinessEventType::CaptaincyAwarded,
+                        mag,
+                        120,
+                    );
                 }
             }
         }
 
         self.captain_id = new_captain;
         self.vice_captain_id = new_vice;
+        self.captaincy_initialized = true;
+    }
+
+    /// Magnitude for `CaptaincyAwarded`. Catalog default amplified by the
+    /// player's leadership traits, loyalty, reputation, and tempered by
+    /// age (a 19-year-old handed the armband feels it less viscerally
+    /// than a 30-year-old club legend who's earned it). Returns a value
+    /// near the catalog default (7.0) but in the band ~5..10.
+    fn captaincy_awarded_magnitude(p: &Player) -> f32 {
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.captaincy_awarded;
+        // Leadership + loyalty drive how much a player wanted this.
+        let leadership_lift =
+            (p.skills.mental.leadership.clamp(0.0, 20.0) / 20.0) * 0.30;
+        let loyalty_lift = (p.attributes.loyalty.clamp(0.0, 20.0) / 20.0) * 0.20;
+        // Reputation amplifier — a star getting the armband at a marquee
+        // club feels it carry more weight (pressure plus prestige).
+        let rep_lift = (p.player_attributes.current_reputation as f32 / 10_000.0)
+            .clamp(0.0, 1.0)
+            * 0.20;
+        let mul = (1.0 + leadership_lift + loyalty_lift + rep_lift).clamp(0.7, 1.6);
+        base * mul
+    }
+
+    /// Magnitude for `CaptaincyRemoved`. Catalog default (-7.0)
+    /// amplified by reputation and reactive personality (controversy /
+    /// low temperament read this as a public humiliation), softened by
+    /// professionalism (high-pro players keep it together).
+    fn captaincy_removed_magnitude(p: &Player) -> f32 {
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.captaincy_removed;
+        let rep_amp =
+            crate::club::player::events::scaling::reputation_amplifier(
+                p.player_attributes.current_reputation,
+            );
+        let provoke_amp = crate::club::player::events::scaling::criticism_amplifier(
+            p.attributes.controversy,
+            p.attributes.temperament,
+        );
+        let prof_dampen =
+            crate::club::player::events::scaling::criticism_dampener(p.attributes.professionalism);
+        // base is negative; multiplying by these factors keeps the sign.
+        base * rep_amp * provoke_amp * prof_dampen
     }
 
     pub fn add_player_to_transfer_list(&mut self, player_id: u32, value: CurrencyValue) {
@@ -415,5 +494,257 @@ impl FromStr for TeamType {
             "U23" => Ok(TeamType::U23),
             _ => Err(format!("'{}' is not a valid value for WSType", s)),
         }
+    }
+}
+
+#[cfg(test)]
+mod captaincy_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+    use chrono::NaiveTime;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn build_leader(id: u32, leadership: f32, reputation: i16) -> Player {
+        let mut skills = PlayerSkills::default();
+        skills.mental.leadership = leadership;
+        let mut attrs = PlayerAttributes::default();
+        attrs.current_reputation = reputation;
+        let mut contract = PlayerClubContract::new(20_000, d(2035, 6, 30));
+        contract.started = Some(d(2020, 7, 1));
+        let mut p = PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Test".into(), format!("Leader{}", id)))
+            .birth_date(d(1996, 1, 1)) // age ~30 by 2026 — peak captaincy band
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(skills)
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        p.contract = Some(contract);
+        p
+    }
+
+    fn build_team_with(players: Vec<Player>) -> Team {
+        TeamBuilder::new()
+            .id(1)
+            .league_id(Some(1))
+            .club_id(1)
+            .name("Test FC".into())
+            .slug("test-fc".into())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    fn captaincy_event_count(p: &Player, kind: &HappinessEventType) -> usize {
+        p.happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == *kind)
+            .count()
+    }
+
+    #[test]
+    fn initial_captain_assignment_is_silent() {
+        let p1 = build_leader(1, 18.0, 5_000);
+        let p2 = build_leader(2, 14.0, 3_000);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        assert!(!team.captaincy_initialized);
+        team.assign_captaincy(d(2026, 7, 1));
+        assert!(team.captaincy_initialized);
+        // Captain set, but no narrative event fires on first run.
+        assert!(team.captain_id.is_some());
+        for player in team.players.players.iter() {
+            assert_eq!(
+                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded),
+                0
+            );
+            assert_eq!(
+                captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn replacing_existing_captain_emits_both_events() {
+        let p1 = build_leader(1, 14.0, 3_000);
+        let p2 = build_leader(2, 10.0, 2_000);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        // Initial silent assignment.
+        team.assign_captaincy(d(2026, 7, 1));
+        let original_captain = team.captain_id.unwrap();
+
+        // Bump the other player's leadership to overtake. Need to also
+        // depress current captain's score so the rank flips deterministically.
+        for p in team.players.players.iter_mut() {
+            if p.id != original_captain {
+                p.skills.mental.leadership = 20.0;
+                p.player_attributes.current_reputation = 9_000;
+            } else {
+                p.skills.mental.leadership = 9.0;
+            }
+        }
+        team.assign_captaincy(d(2026, 8, 1));
+
+        let new_captain = team.captain_id.unwrap();
+        assert_ne!(new_captain, original_captain);
+
+        let outgoing = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == original_captain)
+            .unwrap();
+        let incoming = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == new_captain)
+            .unwrap();
+        assert_eq!(
+            captaincy_event_count(outgoing, &HappinessEventType::CaptaincyRemoved),
+            1
+        );
+        assert_eq!(
+            captaincy_event_count(incoming, &HappinessEventType::CaptaincyAwarded),
+            1
+        );
+    }
+
+    #[test]
+    fn departed_captain_does_not_get_removed_event() {
+        let p1 = build_leader(1, 14.0, 3_000);
+        let p2 = build_leader(2, 12.0, 2_500);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        team.assign_captaincy(d(2026, 7, 1));
+        let original_captain = team.captain_id.unwrap();
+
+        // Captain "leaves" the squad — remove them from the player list
+        // but leave `team.captain_id` stale, simulating the small window
+        // between transfer execution and the next monthly recalc.
+        team.players.players.retain(|p| p.id != original_captain);
+
+        // Re-assign — the new appointment fires for the surviving leader,
+        // but no `CaptaincyRemoved` event must be applied to the absent
+        // player (they're not on this team to receive it anyway, and we
+        // explicitly check the loop doesn't ghost-emit).
+        team.assign_captaincy(d(2026, 8, 1));
+
+        for player in team.players.players.iter() {
+            // Survivor may receive `CaptaincyAwarded` if they're now the
+            // pick, but they should never see `CaptaincyRemoved`.
+            assert_eq!(
+                captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn captaincy_cooldown_blocks_oscillation() {
+        let p1 = build_leader(1, 14.0, 3_000);
+        let p2 = build_leader(2, 10.0, 2_000);
+        let mut team = build_team_with(vec![p1, p2]);
+
+        team.assign_captaincy(d(2026, 7, 1)); // silent init
+        let first_captain = team.captain_id.unwrap();
+
+        // Flip leadership so other player wins.
+        for p in team.players.players.iter_mut() {
+            if p.id == first_captain {
+                p.skills.mental.leadership = 9.0;
+            } else {
+                p.skills.mental.leadership = 20.0;
+                p.player_attributes.current_reputation = 9_000;
+            }
+        }
+        team.assign_captaincy(d(2026, 8, 1));
+
+        // Flip back the very next month — within the 120d cooldown.
+        for p in team.players.players.iter_mut() {
+            if p.id == first_captain {
+                p.skills.mental.leadership = 20.0;
+                p.player_attributes.current_reputation = 9_000;
+            } else {
+                p.skills.mental.leadership = 9.0;
+            }
+        }
+        team.assign_captaincy(d(2026, 9, 1));
+
+        // Each player should have at most one `CaptaincyAwarded` event
+        // — the cooldown absorbs the second handover.
+        for player in team.players.players.iter() {
+            let awarded =
+                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded);
+            assert!(awarded <= 1, "expected ≤1 award, got {} for player {}", awarded, player.id);
+        }
+    }
+
+    #[test]
+    fn high_reputation_removed_captain_takes_bigger_hit() {
+        // Two parallel teams: one star captain (reputation 9000), one
+        // anonymous captain (reputation 500). Both get displaced; star's
+        // hit should be more negative due to reputation amplification.
+        fn run(rep: i16) -> f32 {
+            let mut p1 = build_leader(1, 14.0, rep);
+            // Mild personality — keep reputation as the dominant axis.
+            p1.attributes.controversy = 10.0;
+            p1.attributes.temperament = 10.0;
+            p1.attributes.professionalism = 10.0;
+            let p2 = build_leader(2, 10.0, 1_000);
+            let mut team = build_team_with(vec![p1, p2]);
+            team.assign_captaincy(d(2026, 7, 1));
+            let captain = team.captain_id.unwrap();
+            // Flip ranks.
+            for p in team.players.players.iter_mut() {
+                if p.id == captain {
+                    p.skills.mental.leadership = 9.0;
+                } else {
+                    p.skills.mental.leadership = 20.0;
+                    p.player_attributes.current_reputation = 9_000;
+                }
+            }
+            team.assign_captaincy(d(2026, 8, 1));
+            team.players
+                .players
+                .iter()
+                .find(|p| p.id == captain)
+                .unwrap()
+                .happiness
+                .recent_events
+                .iter()
+                .find(|e| e.event_type == HappinessEventType::CaptaincyRemoved)
+                .unwrap()
+                .magnitude
+        }
+        let star = run(9_000);
+        let anon = run(500);
+        assert!(star < anon, "star {} should be more negative than anon {}", star, anon);
     }
 }

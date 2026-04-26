@@ -255,8 +255,24 @@ impl Club {
 
         if ctx.simulation.is_month_beginning() {
             self.teams.ensure_coach_state(date);
-            // Offer proactive renewals before the listing AI sees the squad
-            self.teams.run_contract_renewals(date);
+            // Offer proactive renewals before the listing AI sees the squad.
+            // Pass the chairman's wage cap and league prestige so the
+            // renewal AI sizes its offers correctly.
+            let wage_budget = self
+                .finance
+                .wage_budget
+                .as_ref()
+                .map(|b| b.amount.max(0.0) as u32);
+            // Use the team's world reputation as a proxy for league prestige
+            // — `CountryContext` doesn't carry the league table here, and the
+            // two correlate strongly (top-rep teams play in top-rep leagues).
+            let league_rep = self
+                .teams
+                .main()
+                .map(|t| t.reputation.world)
+                .unwrap_or(5_000);
+            self.teams
+                .run_contract_renewals_with_budget(date, wage_budget, league_rep);
             for req in self.teams.prepare_ai_requests(date, self.id) {
                 ctx.ai.push(req);
             }

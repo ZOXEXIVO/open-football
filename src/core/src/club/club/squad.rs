@@ -238,6 +238,12 @@ impl Club {
                 // Upgrade youth contract to full when promoting to main
                 if m.to == main_idx {
                     upgrade_contract_if_youth(&mut player, date, &self.teams.teams[main_idx]);
+                    // Career-defining promotion to senior football. Long
+                    // cooldown (effectively one-shot per spell) keeps the
+                    // event scarce — a player who yo-yos between reserve
+                    // and main shouldn't get a fresh "breakthrough" each
+                    // bounce.
+                    player.on_youth_breakthrough(date);
                 }
 
                 debug!("squad rebalance: {} (CA={}, age={}) {} → {} ({})",
@@ -284,6 +290,7 @@ impl Club {
             for (team_idx, player_id, _) in candidates {
                 if let Some(mut player) = self.teams.teams[team_idx].players.take_player(&player_id) {
                     upgrade_contract_if_youth(&mut player, date, &self.teams.teams[main_idx]);
+                    player.on_youth_breakthrough(date);
                     debug!("backfill to main: {} (CA={}, age={}) from {}",
                         player.full_name, player.player_attributes.current_ability,
                         player.age(date), self.teams.teams[team_idx].name);

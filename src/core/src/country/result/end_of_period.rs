@@ -4,8 +4,8 @@ use super::CountryResult;
 use crate::utils::{DateUtils, IntegerUtils};
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::{
-    ClubResult, Country, Person, Player, PlayerHappiness, PlayerStatusType, StaffPosition, TeamInfo,
-    TeamType,
+    ClubResult, Country, HappinessEventType, Person, Player, PlayerHappiness, PlayerStatusType,
+    StaffPosition, TeamInfo, TeamType,
 };
 use crate::simulator::SimulatorData;
 use std::collections::HashMap;
@@ -76,7 +76,16 @@ impl CountryResult {
         let promo_month = if latest_end_month == 12 { 1u8 } else { latest_end_month + 1 };
         if DateUtils::is_month_beginning(date) && date.month() as u8 == promo_month {
             if let Some(country) = data.country_mut(country_id) {
-                Self::process_promotion_relegation(country);
+                Self::process_promotion_relegation(country, date);
+            }
+        }
+
+        // Late-season relegation-fear audit — runs once a month, scoped
+        // to the second half of the season for tier-1+ leagues. Players
+        // in the bottom (relegation_spots + 1) of the live table feel it.
+        if DateUtils::is_month_beginning(date) {
+            if let Some(country) = data.country_mut(country_id) {
+                Self::process_relegation_fear_audit(country, date);
             }
         }
 
@@ -106,6 +115,11 @@ impl CountryResult {
         // a durable rep bump that lingers for 2 seasons (see Achievement).
         // Collected before the prize-money loop so we don't mix concerns.
         let mut trophy_awards: Vec<(u32, AchievementType)> = Vec::new();
+        // Per-player happiness events triggered by the same final tables.
+        // (team_id, event, prestige) — prestige lets a lower-tier league
+        // title fire `TrophyWon` at a smaller magnitude so it doesn't
+        // compete with the promotion emotion that's the real headline.
+        let mut player_team_events: Vec<(u32, HappinessEventType, f32)> = Vec::new();
         for league in &country.leagues.leagues {
             if league.friendly {
                 continue;
@@ -114,16 +128,76 @@ impl CountryResult {
                 Some(t) if !t.is_empty() => t,
                 _ => continue,
             };
+            // For lower-tier leagues that *also* promote (Championship-style
+            // setups), the title is real silverware but promotion is the
+            // career-visible moment. We fire both, but soften `TrophyWon`
+            // so the stack reads as "got promoted, also won the league"
+            // rather than two huge wins.
+            let promo_slots = league.settings.promotion_spots as usize;
+            let lower_tier_with_promo = league.settings.tier > 1 && promo_slots > 0;
             if let Some(champion) = table.first() {
                 trophy_awards.push((champion.team_id, AchievementType::LeagueTitle));
+                let trophy_prestige = if lower_tier_with_promo { 0.6 } else { 1.0 };
+                player_team_events.push((
+                    champion.team_id,
+                    HappinessEventType::TrophyWon,
+                    trophy_prestige,
+                ));
+                if lower_tier_with_promo {
+                    // Lower-league champions are *also* promoted — the
+                    // promotion emotion is the dominant one.
+                    player_team_events.push((
+                        champion.team_id,
+                        HappinessEventType::PromotionCelebration,
+                        1.0,
+                    ));
+                }
             }
-            let promo_slots = league.settings.promotion_spots as usize;
             if promo_slots > 0 {
-                // The top `promo_slots` rows are already the title winners
-                // plus those promoted; skip index 0 since that's the title
-                // event already recorded.
+                // Non-title promoted clubs (positions 2..=promo_slots).
+                // Champion already handled above with the dual emit.
                 for row in table.iter().take(promo_slots).skip(1) {
                     trophy_awards.push((row.team_id, AchievementType::Promotion));
+                    player_team_events.push((
+                        row.team_id,
+                        HappinessEventType::PromotionCelebration,
+                        1.0,
+                    ));
+                }
+            }
+
+            // Continental qualification — only top-tier leagues feed
+            // continental competitions. Heuristic, intentionally:
+            // `continent::result::competitions::collect_*_qualified_clubs`
+            // is the authoritative qualification source, but it indexes by
+            // *continental ranking* rather than league reputation, and it
+            // runs as part of the autumn draw — there's no clean signal
+            // queryable here at end-of-season for which clubs got the
+            // letters in the post.
+            //
+            // The reputation bands below mirror the *spot counts* that
+            // collector hands out (top-4 country = 7 European spots, next
+            // 4 country tier = 4, smaller top flights = 2), so a player at
+            // a club that genuinely qualifies will reliably hit this
+            // happiness event. Bottom flights and friendlies skip.
+            //
+            // Skip position 0 (title winner already gets `TrophyWon`,
+            // which subsumes European qualification — no double-counting).
+            if league.settings.tier == 1 {
+                let mut europe_spots = 0usize;
+                if league.reputation >= 7000 {
+                    europe_spots = 7; // CL top 4 + EL/UECL slots
+                } else if league.reputation >= 5000 {
+                    europe_spots = 4; // top-4 cup-tier qualification
+                } else if league.reputation >= 3000 {
+                    europe_spots = 2; // 2 spots in modest top flights
+                }
+                for row in table.iter().take(europe_spots).skip(1) {
+                    player_team_events.push((
+                        row.team_id,
+                        HappinessEventType::QualifiedForEurope,
+                        1.0,
+                    ));
                 }
             }
         }
@@ -249,6 +323,46 @@ impl CountryResult {
                 club.finance.balance.push_income_tv(tv);
             }
             debug!("Season awards: {} - prize: ${}, TV: ${}", club.name, prize, tv);
+        }
+
+        // Per-player season events. One pass over the (team_id, event,
+        // prestige) queue we built alongside the trophy collection, with
+        // a generous 365-day cooldown so the same milestone never fires
+        // twice in a season even if end-of-period happens to tick on
+        // consecutive days.
+        for (team_id, event, prestige) in player_team_events {
+            Self::apply_team_squad_event(country, team_id, event, 365, prestige, date);
+        }
+    }
+
+    /// Emit a team-level happiness event to every player on `team_id`,
+    /// scaled by `prestige` (1.0 = default — domestic top cup / league
+    /// title / promotion). Domestic minor cups should pass 0.7-0.8;
+    /// continental trophies 1.2-1.5. Cooldown is forwarded to the
+    /// player-side cooldown gate so repeated end-of-period ticks don't
+    /// duplicate the event. No-op if the team isn't found in `country`.
+    pub(crate) fn apply_team_squad_event(
+        country: &mut Country,
+        team_id: u32,
+        event: HappinessEventType,
+        cooldown_days: u16,
+        prestige: f32,
+        date: NaiveDate,
+    ) {
+        for club in &mut country.clubs {
+            for team in club.teams.iter_mut() {
+                if team.id != team_id {
+                    continue;
+                }
+                for player in team.players.iter_mut() {
+                    player.on_team_season_event_with_prestige(
+                        event.clone(),
+                        cooldown_days,
+                        prestige,
+                        date,
+                    );
+                }
+            }
         }
     }
 
@@ -673,7 +787,7 @@ impl CountryResult {
         }
     }
 
-    fn process_promotion_relegation(country: &mut Country) {
+    fn process_promotion_relegation(country: &mut Country, date: NaiveDate) {
         // Collect league info: (league_id, tier, relegation_spots, promotion_spots)
         let league_info: Vec<(u32, u8, u8, u8)> = country
             .leagues
@@ -748,11 +862,72 @@ impl CountryResult {
                               team.name, team.id, tier2_id);
                         team.league_id = Some(tier2_id);
                         new_main_league_id = Some(tier2_id);
+                        // Year-defining wound — emit per player. The promo
+                        // counterpart already ran in season_awards via the
+                        // PromotionCelebration emit; we don't duplicate the
+                        // upward case here.
+                        // Inline emit (we hold &mut to team here, so the
+                        // Self::apply_team_squad_event helper which takes
+                        // &mut country would conflict).
+                        for player in team.players.iter_mut() {
+                            player.on_team_season_event(
+                                HappinessEventType::Relegated,
+                                365,
+                                date,
+                            );
+                            // Activate any RelegationWageDecrease and
+                            // RelegationFeeRelease clauses on the player's
+                            // contract. Each helper consumes the matching
+                            // clause so subsequent relegations don't double-apply.
+                            if let Some(c) = player.contract.as_mut() {
+                                let _ = c.apply_relegation_wage_decrease();
+                                let _ = c.take_relegation_release();
+                            }
+                        }
                     } else if promoted_team_ids.contains(&team.id) {
                         info!("⬆️ Promotion: team {} ({}) moves to league {}",
                               team.name, team.id, tier1_id);
                         team.league_id = Some(tier1_id);
                         new_main_league_id = Some(tier1_id);
+                        // Symmetric to the relegation hooks above —
+                        // PromotionWageIncrease bumps salary; players
+                        // also keep their existing contracts (no clause
+                        // for "release on promotion").
+                        for player in team.players.iter_mut() {
+                            if let Some(c) = player.contract.as_mut() {
+                                let _ = c.apply_promotion_wage_increase();
+                            }
+                        }
+                    }
+                }
+
+                // Clubs that expected promotion but didn't get it activate
+                // their non-promotion release clauses. We approximate
+                // "expected promotion" as: in tier 2, finished outside the
+                // promotion places. Without a richer expectation model we
+                // limit this to clubs that made the playoff window — i.e.
+                // clubs in the SAME paired tier as the promoted teams who
+                // did NOT get promoted.
+                let club_in_tier2 = club
+                    .teams
+                    .teams
+                    .iter()
+                    .any(|t| t.league_id == Some(tier2_id));
+                if club_in_tier2
+                    && !club
+                        .teams
+                        .teams
+                        .iter()
+                        .any(|t| promoted_team_ids.contains(&t.id))
+                {
+                    for team in &mut club.teams.teams {
+                        if team.league_id == Some(tier2_id) {
+                            for player in team.players.iter_mut() {
+                                if let Some(c) = player.contract.as_mut() {
+                                    let _ = c.take_non_promotion_release();
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -779,5 +954,452 @@ impl CountryResult {
         for league in &mut country.leagues.leagues {
             league.final_table = None;
         }
+    }
+
+    /// Monthly late-season audit: surface ambient relegation dread for
+    /// players whose team is in (or close to) the drop zone. Gated to
+    /// season_progress >= 0.6 so an early-season slump doesn't generate
+    /// the event — pressure builds with the season trajectory.
+    ///
+    /// The cooldown on `RelegationFear` is 30 days, so this monthly scan
+    /// produces at most one event per player per month even if their team
+    /// fluctuates around the line.
+    fn process_relegation_fear_audit(country: &mut Country, date: NaiveDate) {
+        // Collect (team_id, in_zone, near_zone) from each non-friendly
+        // league with a meaningful relegation slot count and enough
+        // season progress to register pressure.
+        let mut at_risk_teams: Vec<u32> = Vec::new();
+
+        for league in &country.leagues.leagues {
+            if league.friendly || league.settings.relegation_spots == 0 {
+                continue;
+            }
+            let total_teams = league.table.rows.len();
+            if total_teams == 0 {
+                continue;
+            }
+            let matches_played = league
+                .table
+                .rows
+                .iter()
+                .map(|r| r.played)
+                .max()
+                .unwrap_or(0);
+            let total_matches = ((total_teams - 1) * 2) as u8;
+            if total_matches == 0 {
+                continue;
+            }
+            let progress = matches_played as f32 / total_matches as f32;
+            if progress < 0.6 {
+                continue;
+            }
+
+            // Bottom (relegation_spots + 1) teams: the in-zone clubs plus
+            // the one immediately above. They're the squads doing the
+            // morning newspaper math every week.
+            let zone = league.settings.relegation_spots as usize + 1;
+            let table = &league.table.rows;
+            for row in table.iter().rev().take(zone) {
+                at_risk_teams.push(row.team_id);
+            }
+        }
+
+        if at_risk_teams.is_empty() {
+            return;
+        }
+
+        for club in &mut country.clubs {
+            for team in club.teams.iter_mut() {
+                if !at_risk_teams.contains(&team.id) {
+                    continue;
+                }
+                for player in team.players.iter_mut() {
+                    player.on_team_season_event(
+                        HappinessEventType::RelegationFear,
+                        30,
+                        date,
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings, LeagueTableRow};
+    use crate::shared::Location;
+    use crate::{
+        Club, ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerCollection, PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder,
+        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn make_player(id: u32) -> Player {
+        let mut p = PlayerBuilder::new()
+            .id(id)
+            .full_name(crate::shared::fullname::FullName::new(
+                "Test".to_string(),
+                format!("Player{}", id),
+            ))
+            .birth_date(d(2000, 1, 1))
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions { positions: vec![] })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        // Regular starter so participation factor = 1.0.
+        p.statistics.played = 30;
+        p
+    }
+
+    fn make_training_schedule() -> TrainingSchedule {
+        use chrono::NaiveTime;
+        TrainingSchedule::new(
+            NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+        )
+    }
+
+    fn make_team(id: u32, club_id: u32, league_id: u32, players: Vec<Player>) -> crate::Team {
+        TeamBuilder::new()
+            .id(id)
+            .league_id(Some(league_id))
+            .club_id(club_id)
+            .name(format!("Team{}", id))
+            .slug(format!("team{}", id))
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(make_training_schedule())
+            .build()
+            .unwrap()
+    }
+
+    fn make_club(id: u32, teams: Vec<crate::Team>) -> Club {
+        Club::new(
+            id,
+            format!("Club{}", id),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(teams),
+            crate::ClubFacilities::default(),
+        )
+    }
+
+    fn make_league_with_table(id: u32, rep: u16, rows: Vec<(u32, u8, u8)>) -> League {
+        let mut league = League::new(
+            id,
+            format!("League{}", id),
+            format!("league{}", id),
+            1,
+            rep,
+            LeagueSettings {
+                season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                tier: 1,
+                promotion_spots: 0,
+                relegation_spots: 3,
+                league_group: None,
+            },
+            false,
+        );
+        league.table.rows = rows
+            .into_iter()
+            .map(|(team_id, played, points)| LeagueTableRow {
+                team_id,
+                played,
+                win: 0,
+                draft: 0,
+                lost: 0,
+                goal_scored: 0,
+                goal_concerned: 0,
+                points,
+            })
+            .collect();
+        league
+    }
+
+    fn build_country(clubs: Vec<Club>, leagues: Vec<League>) -> Country {
+        Country::builder()
+            .id(1)
+            .code("EN".to_string())
+            .slug("england".to_string())
+            .name("England".to_string())
+            .continent_id(1)
+            .leagues(LeagueCollection::new(leagues))
+            .clubs(clubs)
+            .build()
+            .unwrap()
+    }
+
+    fn happiness_event_count(player: &Player, kind: &HappinessEventType) -> usize {
+        player
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == *kind)
+            .count()
+    }
+
+    #[test]
+    fn relegation_fear_fires_for_bottom_team_late_season() {
+        // 20-team league, total_matches = 38. matches_played = 30 → 78%
+        // progress (>= 60% gate). Team 5 finishes second-to-bottom of the
+        // simulated 5-team table, so it falls inside the (relegation_spots
+        // + 1 = 4) audit window.
+        let p1 = make_player(1);
+        let p2 = make_player(2);
+        let team = make_team(5, 50, 1, vec![p1, p2]);
+        let club = make_club(50, vec![team]);
+
+        // 5 rows; bottom 4 (relegation_spots 3 + 1) eligible.
+        let rows = vec![
+            (1, 30, 70),
+            (2, 30, 50),
+            (3, 30, 35),
+            (5, 30, 20),
+            (4, 30, 10),
+        ];
+        let league = make_league_with_table(1, 7000, rows);
+        let mut country = build_country(vec![club], vec![league]);
+
+        CountryResult::process_relegation_fear_audit(&mut country, d(2032, 4, 1));
+
+        let players = &country.clubs[0].teams.teams[0].players.players;
+        assert_eq!(
+            happiness_event_count(&players[0], &HappinessEventType::RelegationFear),
+            1
+        );
+        assert_eq!(
+            happiness_event_count(&players[1], &HappinessEventType::RelegationFear),
+            1
+        );
+    }
+
+    #[test]
+    fn relegation_fear_silent_for_safe_team() {
+        let p1 = make_player(1);
+        let team = make_team(1, 50, 1, vec![p1]);
+        let club = make_club(50, vec![team]);
+        // Team 1 is top of the table — way out of the drop zone.
+        let rows = vec![
+            (1, 30, 70),
+            (2, 30, 50),
+            (3, 30, 35),
+            (4, 30, 20),
+            (5, 30, 10),
+        ];
+        let league = make_league_with_table(1, 7000, rows);
+        let mut country = build_country(vec![club], vec![league]);
+
+        CountryResult::process_relegation_fear_audit(&mut country, d(2032, 4, 1));
+
+        let player = &country.clubs[0].teams.teams[0].players.players[0];
+        assert_eq!(
+            happiness_event_count(player, &HappinessEventType::RelegationFear),
+            0
+        );
+    }
+
+    #[test]
+    fn relegation_fear_silent_too_early_in_season() {
+        let p1 = make_player(1);
+        let team = make_team(5, 50, 1, vec![p1]);
+        let club = make_club(50, vec![team]);
+        // 5-team league → 8 matches per team. Stop at 4 played (50%) so
+        // we sit *under* the 60% audit gate. Drop-zone position alone
+        // shouldn't trigger fear in early autumn.
+        let rows = vec![
+            (1, 4, 10),
+            (2, 4, 8),
+            (3, 4, 6),
+            (5, 4, 2),
+            (4, 4, 1),
+        ];
+        let league = make_league_with_table(1, 7000, rows);
+        let mut country = build_country(vec![club], vec![league]);
+
+        CountryResult::process_relegation_fear_audit(&mut country, d(2031, 11, 1));
+
+        let player = &country.clubs[0].teams.teams[0].players.players[0];
+        assert_eq!(
+            happiness_event_count(player, &HappinessEventType::RelegationFear),
+            0
+        );
+    }
+
+    #[test]
+    fn apply_team_squad_event_emits_to_each_player() {
+        let p1 = make_player(1);
+        let p2 = make_player(2);
+        let team = make_team(7, 70, 1, vec![p1, p2]);
+        let club = make_club(70, vec![team]);
+        // No relegation_spots needed — using the helper directly.
+        let league = make_league_with_table(1, 5000, vec![]);
+        let mut country = build_country(vec![club], vec![league]);
+
+        CountryResult::apply_team_squad_event(
+            &mut country,
+            7,
+            HappinessEventType::TrophyWon,
+            365,
+            1.0,
+            d(2032, 5, 30),
+        );
+
+        let players = &country.clubs[0].teams.teams[0].players.players;
+        assert_eq!(
+            happiness_event_count(&players[0], &HappinessEventType::TrophyWon),
+            1
+        );
+        assert_eq!(
+            happiness_event_count(&players[1], &HappinessEventType::TrophyWon),
+            1
+        );
+    }
+
+    #[test]
+    fn apply_team_squad_event_silent_for_unknown_team() {
+        let p1 = make_player(1);
+        let team = make_team(1, 50, 1, vec![p1]);
+        let club = make_club(50, vec![team]);
+        let league = make_league_with_table(1, 5000, vec![]);
+        let mut country = build_country(vec![club], vec![league]);
+
+        // team_id 999 doesn't exist — must no-op.
+        CountryResult::apply_team_squad_event(
+            &mut country,
+            999,
+            HappinessEventType::TrophyWon,
+            365,
+            1.0,
+            d(2032, 5, 30),
+        );
+
+        let player = &country.clubs[0].teams.teams[0].players.players[0];
+        assert_eq!(
+            happiness_event_count(player, &HappinessEventType::TrophyWon),
+            0
+        );
+    }
+
+    #[test]
+    fn apply_team_squad_event_prestige_scales_magnitude() {
+        let p1 = make_player(1);
+        let team_a = make_team(10, 100, 1, vec![p1]);
+        let club_a = make_club(100, vec![team_a]);
+        let p2 = make_player(2);
+        let team_b = make_team(20, 200, 1, vec![p2]);
+        let club_b = make_club(200, vec![team_b]);
+        let league = make_league_with_table(1, 5000, vec![]);
+        let mut country = build_country(vec![club_a, club_b], vec![league]);
+
+        CountryResult::apply_team_squad_event(
+            &mut country,
+            10,
+            HappinessEventType::TrophyWon,
+            365,
+            1.0,
+            d(2032, 5, 30),
+        );
+        CountryResult::apply_team_squad_event(
+            &mut country,
+            20,
+            HappinessEventType::TrophyWon,
+            365,
+            1.5,
+            d(2032, 5, 30),
+        );
+
+        let mag_a = country.clubs[0].teams.teams[0].players.players[0]
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::TrophyWon)
+            .unwrap()
+            .magnitude;
+        let mag_b = country.clubs[1].teams.teams[0].players.players[0]
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::TrophyWon)
+            .unwrap()
+            .magnitude;
+        assert!(mag_b > mag_a, "prestige 1.5 ({}) should exceed prestige 1.0 ({})", mag_b, mag_a);
+    }
+
+    #[test]
+    fn apply_team_squad_event_cooldown_blocks_repeat() {
+        let p1 = make_player(1);
+        let team = make_team(7, 70, 1, vec![p1]);
+        let club = make_club(70, vec![team]);
+        let league = make_league_with_table(1, 5000, vec![]);
+        let mut country = build_country(vec![club], vec![league]);
+
+        let date = d(2032, 5, 30);
+        CountryResult::apply_team_squad_event(
+            &mut country,
+            7,
+            HappinessEventType::TrophyWon,
+            365,
+            1.0,
+            date,
+        );
+        // Second emit on the same date — cooldown must absorb it.
+        CountryResult::apply_team_squad_event(
+            &mut country,
+            7,
+            HappinessEventType::TrophyWon,
+            365,
+            1.0,
+            date,
+        );
+
+        let player = &country.clubs[0].teams.teams[0].players.players[0];
+        assert_eq!(
+            happiness_event_count(player, &HappinessEventType::TrophyWon),
+            1
+        );
+    }
+
+    #[test]
+    fn relegation_fear_cooldown_blocks_repeat_audit() {
+        let p1 = make_player(1);
+        let team = make_team(5, 50, 1, vec![p1]);
+        let club = make_club(50, vec![team]);
+        let rows = vec![
+            (1, 30, 70),
+            (2, 30, 50),
+            (3, 30, 35),
+            (5, 30, 20),
+            (4, 30, 10),
+        ];
+        let league = make_league_with_table(1, 7000, rows);
+        let mut country = build_country(vec![club], vec![league]);
+
+        // First audit fires; second consecutive monthly audit must respect
+        // the 30-day cooldown and silently skip.
+        CountryResult::process_relegation_fear_audit(&mut country, d(2032, 4, 1));
+        CountryResult::process_relegation_fear_audit(&mut country, d(2032, 4, 1));
+
+        let player = &country.clubs[0].teams.teams[0].players.players[0];
+        assert_eq!(
+            happiness_event_count(player, &HappinessEventType::RelegationFear),
+            1
+        );
     }
 }

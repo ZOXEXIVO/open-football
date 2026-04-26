@@ -1,7 +1,7 @@
 use crate::club::player::behaviour_config::AdaptationConfig;
 use crate::club::player::language::Language;
 use crate::club::player::player::{ManagerPromiseKind, Player};
-use crate::club::PlayerPositionType;
+use crate::club::{Person, PlayerPositionType};
 use crate::HappinessEventType;
 use chrono::NaiveDate;
 
@@ -116,11 +116,14 @@ impl Player {
             // Signing for a childhood/legend club trumps the reputation-gap
             // logic — fire DreamMove at full weight regardless of where the
             // club sits on the prestige ladder. A player returning to boyhood
-            // club feels this even if it's a rep-drop move.
+            // club feels this even if it's a rep-drop move. Veterans get a
+            // softer boyhood-return event rather than a "dream move of his
+            // career" framing.
+            let mag = if self.age(now) >= 32 { 8.0 } else { 15.0 };
             self.happiness
-                .add_event(HappinessEventType::DreamMove, 15.0 * loan_damp);
+                .add_event(HappinessEventType::DreamMove, mag * loan_damp);
         } else {
-            self.emit_dream_move(club_rep_0_to_1, loan_damp);
+            self.emit_dream_move(club_rep_0_to_1, loan_damp, now);
         }
         self.emit_joining_elite(club_rep_0_to_1, loan_damp);
 
@@ -196,7 +199,7 @@ impl Player {
             .add_event(HappinessEventType::SalaryShock, -6.0 - 6.0 * severity);
     }
 
-    fn emit_dream_move(&mut self, club_rep_0_to_1: f32, damp: f32) {
+    fn emit_dream_move(&mut self, club_rep_0_to_1: f32, damp: f32, now: NaiveDate) {
         let cfg = AdaptationConfig::default();
         let ambition = self.attributes.ambition;
         let expected_rep =
@@ -206,13 +209,38 @@ impl Player {
         if surplus < cfg.dream_move_threshold {
             return;
         }
+
+        // Player-reputation gate. A "dream move" requires the new club to
+        // be meaningfully bigger than where the player has been. Pinsoglio
+        // (Juventus reserve, world_rep ~4500) joining Cittadella (rep ~3000)
+        // is a step DOWN, never a dream — even if his ambition is modest.
+        // Require the club to sit at least 1000 rep above the player's
+        // own world rep before the framing fits.
+        let player_world_rep = self.player_attributes.world_reputation as f32;
+        if club_rep <= player_world_rep + 1000.0 {
+            return;
+        }
+
+        // Age gate. "Dream move of his career" doesn't fit a 32+ veteran —
+        // late-career moves are pragmatic, not dream-fulfilment. For 32+
+        // require an extra 1500 rep margin; over 35, suppress unless the
+        // destination is an outright elite club.
+        let age = self.age(now);
+        if age >= 32 && club_rep < player_world_rep + 2500.0 {
+            return;
+        }
+        if age >= 35 && club_rep < cfg.elite_club_reputation {
+            return;
+        }
+
         // Magnitude scales with how far above expectations the move is;
         // ambitious players (high `ambition`) also feel it more strongly.
         let severity = (surplus / 6000.0).clamp(0.5, 2.0);
         let ambition_weight = (ambition / 20.0).clamp(0.4, 1.2);
+        let age_dampen = if age >= 32 { 0.6 } else { 1.0 };
         self.happiness.add_event(
             HappinessEventType::DreamMove,
-            10.0 * severity * ambition_weight * damp,
+            10.0 * severity * ambition_weight * damp * age_dampen,
         );
     }
 
@@ -307,11 +335,12 @@ impl Player {
             return;
         }
 
-        if pull_toward_bonding > cfg.bonding_pull_threshold || speaks_local {
-            self.happiness
-                .add_event(HappinessEventType::TeammateBonding, 1.5);
-        }
-
+        // Generic "bonding with the squad" without a specific teammate is
+        // a confusing event to surface in the player's history ("bonded
+        // with a teammate" — which one?). The SettledIntoSquad event below
+        // covers the same integration moment with honest framing. The
+        // TeammateBonding event remains, but is now reserved for emit
+        // sites that can name the partner (mentorship, behaviour result).
         if weeks >= cfg.settled_min_weeks
             && (pull_toward_bonding > cfg.settled_pull_threshold || speaks_local)
         {
@@ -341,5 +370,134 @@ impl Player {
         }
         self.happiness
             .add_event(HappinessEventType::FeelingIsolated, -1.5);
+    }
+}
+
+#[cfg(test)]
+mod dream_move_gating_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn person(ambition: f32) -> PersonAttributes {
+        PersonAttributes {
+            adaptability: 10.0,
+            ambition,
+            controversy: 10.0,
+            loyalty: 10.0,
+            pressure: 10.0,
+            professionalism: 10.0,
+            sportsmanship: 10.0,
+            temperament: 10.0,
+            consistency: 10.0,
+            important_matches: 10.0,
+            dirtiness: 10.0,
+        }
+    }
+
+    fn player(age: u8, ambition: f32, world_rep: i16) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.world_reputation = world_rep;
+        attrs.current_reputation = world_rep;
+        attrs.current_ability = 100;
+        attrs.potential_ability = 100;
+        let today = d(2026, 4, 26);
+        let birth = today
+            .checked_sub_signed(chrono::Duration::days(age as i64 * 365))
+            .unwrap();
+        PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("X".into(), "Y".into()))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(person(ambition))
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Goalkeeper,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap()
+    }
+
+    fn dream_count(p: &Player) -> usize {
+        p.happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::DreamMove)
+            .count()
+    }
+
+    #[test]
+    fn pinsoglio_to_cittadella_does_not_fire_dream_move() {
+        // 36yo high-rep keeper from Juventus (world_rep ~4500) joining
+        // Cittadella (rep ~3000 → 0.30 normalised). Should NOT fire.
+        let mut p = player(36, 10.0, 4500);
+        let now = d(2026, 4, 26);
+        p.emit_dream_move(0.30, 1.0, now);
+        assert_eq!(dream_count(&p), 0);
+    }
+
+    #[test]
+    fn step_down_at_any_age_does_not_fire_dream_move() {
+        // 25yo player with world_rep 6000 joining a club at rep 4000.
+        let mut p = player(25, 12.0, 6000);
+        let now = d(2026, 4, 26);
+        p.emit_dream_move(0.40, 1.0, now);
+        assert_eq!(dream_count(&p), 0);
+    }
+
+    #[test]
+    fn young_prospect_to_top_club_fires_dream_move() {
+        // 22yo with modest world_rep 2000 joining a top club (rep 8500).
+        // Ambition 10 keeps expected_rep at ~4000 — surplus is well above
+        // the dream_move_threshold and the rep gate (club > player + 1000)
+        // is comfortably met.
+        let mut p = player(22, 10.0, 2000);
+        let now = d(2026, 4, 26);
+        p.emit_dream_move(0.85, 1.0, now);
+        assert_eq!(dream_count(&p), 1);
+    }
+
+    #[test]
+    fn veteran_needs_extra_margin_for_dream_move() {
+        // 33yo with world_rep 5000. Club at 6000 — only 1000 above.
+        // 32+ requires 2500+ gap, so this should NOT fire.
+        let mut p = player(33, 12.0, 5000);
+        let now = d(2026, 4, 26);
+        p.emit_dream_move(0.60, 1.0, now);
+        assert_eq!(dream_count(&p), 0);
+
+        // Same player to a clearly elite club: world_rep 5000, club 8000.
+        let mut p2 = player(33, 12.0, 5000);
+        p2.emit_dream_move(0.80, 1.0, now);
+        assert_eq!(dream_count(&p2), 1);
+    }
+
+    #[test]
+    fn over_35_requires_elite_destination() {
+        // 36yo, world_rep 3000. Club at 6000 — 3000 above the player but
+        // not elite (< 7500). 35+ gate should suppress.
+        let mut p = player(36, 12.0, 3000);
+        let now = d(2026, 4, 26);
+        p.emit_dream_move(0.60, 1.0, now);
+        assert_eq!(dream_count(&p), 0);
+
+        // Same player to genuinely elite club (rep 8500). Fires.
+        let mut p2 = player(36, 12.0, 3000);
+        p2.emit_dream_move(0.85, 1.0, now);
+        assert_eq!(dream_count(&p2), 1);
     }
 }

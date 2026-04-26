@@ -16,7 +16,12 @@
             <div class="fm-evt-row{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% endif %}">
                 <div class="fm-evt-dot"></div>
                 <div class="fm-evt-body">
-                    <span class="fm-evt-text">{{ event.description }}</span>
+                    <span class="fm-evt-text">
+                        {{ event.description }}
+                        {% if let Some(partner_slug) = event.partner_slug %}{% if let Some(partner_name) = event.partner_name %}
+                        — <a href="/{{ lang }}/players/{{ partner_slug }}">{{ partner_name }}</a>
+                        {% endif %}{% endif %}
+                    </span>
                     <span class="fm-evt-time">{{ event.days_ago }}{{ i18n.t("days_ago_short") }}</span>
                 </div>
             </div>

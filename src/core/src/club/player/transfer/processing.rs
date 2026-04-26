@@ -5,13 +5,17 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 impl Player {
     pub(crate) fn process_contract(&mut self, result: &mut PlayerResult, now: NaiveDateTime) {
-        if let Some(ref contract) = self.contract {
+        if let Some(ref mut contract) = self.contract {
             const ONE_YEAR_DAYS: i64 = 365;
 
             if contract.days_to_expiration(now) < ONE_YEAR_DAYS {
                 // For loaned players this signals the parent club to renew remotely
                 result.contract.want_extend_contract = true;
             }
+
+            // Yearly wage-rise clause: applies on the contract anniversary.
+            // The helper guards idempotency by demanding the date == anniversary.
+            let _ = contract.try_apply_yearly_wage_rise(now.date());
         } else if !self.is_on_loan() {
             result.contract.no_contract = true;
         }

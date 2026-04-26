@@ -5,7 +5,7 @@ mod satisfaction;
 mod transfer_listing;
 
 pub use composition::SquadComposition;
-pub use contract_renewal::ContractRenewalManager;
+pub use contract_renewal::{ContractRenewalManager, WageStructureSnapshot};
 pub use satisfaction::compute_squad_satisfaction;
 pub use transfer_listing::TransferListManager;
 

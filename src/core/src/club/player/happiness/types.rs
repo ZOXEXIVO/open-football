@@ -7,6 +7,20 @@ pub struct PlayerHappiness {
     pub factors: HappinessFactors,
     pub recent_events: Vec<HappinessEvent>,
     pub last_salary_negotiation: Option<NaiveDate>,
+    /// EMA of "did I start this competitive match?" — updated on every
+    /// non-friendly match. Drives the WonStartingPlace / LostStartingPlace
+    /// transitions instead of raw season totals so a mid-season turnaround
+    /// is felt promptly. Range 0.0..=1.0; 0.5 baseline before first match.
+    pub starter_ratio: f32,
+    /// Rolling count of recent competitive appearances feeding `starter_ratio`.
+    /// Caps at u8::MAX; only the first 5 appearances are required before role
+    /// transitions can fire (avoids one good week swinging the verdict).
+    pub appearances_tracked: u8,
+    /// Sticky flag — true once the player has been recognised as an
+    /// established starter, false until they fall back below the bench
+    /// threshold. Used to emit one-shot WonStartingPlace / LostStartingPlace
+    /// events on the crossing rather than every matchday in range.
+    pub is_established_starter: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -25,6 +39,11 @@ pub struct HappinessEvent {
     pub event_type: HappinessEventType,
     pub magnitude: f32,
     pub days_ago: u16,
+    /// Optional teammate / partner involved in this event. Lets the UI
+    /// link the event description to a specific player (e.g. who the
+    /// player bonded with, who the close friend was, who the mentor was).
+    /// `None` for events that don't naturally involve a specific peer.
+    pub partner_player_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,6 +123,118 @@ pub enum HappinessEventType {
     /// Had a controversial incident (media or dressing room) — fallout
     /// tied to `controversy` personality attribute.
     ControversyIncident,
+
+    // ── Match performance ────────────────────────────────────────
+    /// First competitive goal scored for this club. Career milestone —
+    /// one-shot per club, lingers in memory for the season.
+    FirstClubGoal,
+    /// Scored or assisted a goal that decided a tight match. Bigger
+    /// than a routine goal, smaller than POM unless paired with it.
+    DecisiveGoal,
+    /// Came on as a substitute and made a clear positive impact —
+    /// scored, assisted, or finished with a high rating off the bench.
+    SubstituteImpact,
+    /// Defender or goalkeeper kept a clean sheet. Position-gated —
+    /// strikers don't care about clean sheets.
+    CleanSheetPride,
+    /// Finished a match with a costly low rating, often paired with
+    /// a goal conceded the player was directly responsible for.
+    CostlyMistake,
+    /// Sent off (direct red or two yellows). Lingers as embarrassment
+    /// plus the suspension fallout.
+    RedCardFallout,
+    /// Standout performer in a derby win — scorer, assister, POM, or
+    /// high-rated display. Reserved for players who carried the win;
+    /// ordinary participants get the squad-wide [`DerbyWin`] instead.
+    DerbyHero,
+    /// Squad-wide moderate positive for being on the winning side of a
+    /// derby. Distinct from [`DerbyHero`], which is reserved for the
+    /// match's standout performers.
+    DerbyWin,
+    /// Lost a derby — meaningfully bigger blow than a generic defeat.
+    /// Lingers; rivalry loss isn't shaken off in a week.
+    DerbyDefeat,
+
+    // ── Team season events ──────────────────────────────────────
+    /// Team won a trophy (league, cup, continental). Major career moment.
+    TrophyWon,
+    /// Team lost a cup final. The flip side of TrophyWon — tournament
+    /// runs that ended in heartbreak weigh on a squad.
+    CupFinalDefeat,
+    /// Team confirmed promotion to a higher division.
+    PromotionCelebration,
+    /// Team is in the relegation fight late in the season — ambient
+    /// dread that builds with the season trajectory.
+    RelegationFear,
+    /// Team was relegated. Major morale hit, particularly for ambitious
+    /// players who'll often want a transfer afterwards.
+    Relegated,
+    /// Team qualified for European competition — a real boost for
+    /// ambitious squads who treat continental football as the floor.
+    QualifiedForEurope,
+
+    // ── Role / status ───────────────────────────────────────────
+    /// Cemented a place in the starting XI after fighting for it. Fires
+    /// once per spell — the moment the manager's trust is established.
+    WonStartingPlace,
+    /// Lost the starting place to a teammate / new signing. Fires once
+    /// per spell on the cusp of being benched, not every dropped match.
+    LostStartingPlace,
+    /// Awarded the captain's armband. Big prestige and trust signal.
+    CaptaincyAwarded,
+    /// Stripped of the captain's armband. Wounding — rarely forgotten.
+    CaptaincyRemoved,
+    /// Young player promoted from academy / development squad to senior
+    /// matchday duty for the first time. One-shot career milestone.
+    YouthBreakthrough,
+    /// Left out of the squad registration list for a competition. Frozen
+    /// out of matchday minutes for the duration of that registration window.
+    ///
+    /// **Reserved.** No emit site exists today — the simulation has
+    /// `ForeignPlayerLimits` / `YouthRequirements` placeholders in
+    /// `continent::regulations::types`, but no per-club registration list
+    /// is enforced and `match_squad` picks XI matchday-by-matchday with
+    /// no separate roster gate. When a registration window is added
+    /// (continental cup squad lists, foreign-player caps), emit this for
+    /// `KeyPlayer` / `FirstTeamRegular` who were expected to be included
+    /// but weren't. Do **not** infer it from match-day non-selection —
+    /// that's a manager call, not a roster lockout, and a different event.
+    SquadRegistrationOmitted,
+
+    // ── Transfer / media ────────────────────────────────────────
+    /// Confirmed concrete interest from a club meaningfully bigger than
+    /// the current one. Flattery for ambitious players, distraction for
+    /// settled ones — replaces the old "manager-encouragement" misuse.
+    WantedByBiggerClub,
+    /// Bid for the player from another club was rejected by the selling
+    /// side. Frustrating for an ambitious player who saw the move coming.
+    TransferBidRejected,
+    /// A transfer the player was set on collapsed at a late stage —
+    /// medical, registration, or club back-out. Lingering bitterness.
+    DreamMoveCollapsed,
+    /// Praised by the supporters — banners, songs, fan-poll wins.
+    FanPraise,
+    /// Targeted by fan criticism — bad displays, off-field controversy.
+    FanCriticism,
+    /// Praised in the media. Reputation-boosting profile pieces, top
+    /// pundit ratings.
+    MediaPraise,
+    /// Targeted by media criticism. Hatchet jobs, tabloid drama.
+    MediaCriticism,
+
+    // ── Social / culture ────────────────────────────────────────
+    /// A close friend / mentor / linchpin teammate left the club. Players
+    /// with strong relationships at the dressing-room core feel this.
+    CloseFriendSold,
+    /// A compatriot (same primary nationality) joined the club. Big
+    /// integration boost for foreign players battling language/culture.
+    CompatriotJoined,
+    /// Veteran mentor on whom this young player relied departed. Hits
+    /// developing players who lost an established guidance figure.
+    MentorDeparted,
+    /// Made meaningful progress with the local language. Self-reinforcing
+    /// integration milestone, only fires for foreign players.
+    LanguageProgress,
 }
 
 impl PlayerHappiness {
@@ -114,6 +245,9 @@ impl PlayerHappiness {
             factors: HappinessFactors::default(),
             recent_events: Vec::new(),
             last_salary_negotiation: None,
+            starter_ratio: 0.5,
+            appearances_tracked: 0,
+            is_established_starter: false,
         }
     }
 
@@ -155,17 +289,73 @@ impl PlayerHappiness {
     }
 
     pub fn add_event(&mut self, event_type: HappinessEventType, magnitude: f32) {
+        self.add_event_with_partner(event_type, magnitude, None);
+    }
+
+    /// Same as `add_event` but tags the event with a teammate / partner
+    /// player id so the UI can render an inline link. Use this for events
+    /// that naturally involve a specific peer (TeammateBonding,
+    /// ConflictWithTeammate, CloseFriendSold, MentorDeparted,
+    /// CompatriotJoined). The partner id has no effect on morale — it's
+    /// purely informational.
+    pub fn add_event_with_partner(
+        &mut self,
+        event_type: HappinessEventType,
+        magnitude: f32,
+        partner_player_id: Option<u32>,
+    ) {
         let cfg = HappinessConfig::default();
         self.recent_events.push(HappinessEvent {
             event_type,
             magnitude,
             days_ago: 0,
+            partner_player_id,
         });
 
         if self.recent_events.len() > cfg.recent_events_cap {
             self.recent_events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
             self.recent_events.truncate(cfg.recent_events_cap);
         }
+    }
+
+    /// True if an event of `event_type` was recorded within the last
+    /// `days` days (inclusive). Cheap O(n) scan — `recent_events` is
+    /// capped, so this is bounded.
+    pub fn has_recent_event(&self, event_type: &HappinessEventType, days: u16) -> bool {
+        self.recent_events.iter()
+            .any(|e| e.event_type == *event_type && e.days_ago <= days)
+    }
+
+    /// Add an event only if no event of this type was emitted in the
+    /// last `cooldown_days`. Returns `true` if the event was recorded.
+    /// Centralised cooldown gate so emit sites don't reimplement the
+    /// "did we already fire this recently" pattern (the audit found
+    /// inline copies in `process_contract_jealousy` and
+    /// `process_periodic_wage_envy`).
+    pub fn add_event_with_cooldown(
+        &mut self,
+        event_type: HappinessEventType,
+        magnitude: f32,
+        cooldown_days: u16,
+    ) -> bool {
+        if self.has_recent_event(&event_type, cooldown_days) {
+            return false;
+        }
+        self.add_event(event_type, magnitude);
+        true
+    }
+
+    /// Catalog-default counterpart of [`add_event_with_cooldown`].
+    pub fn add_event_default_with_cooldown(
+        &mut self,
+        event_type: HappinessEventType,
+        cooldown_days: u16,
+    ) -> bool {
+        if self.has_recent_event(&event_type, cooldown_days) {
+            return false;
+        }
+        self.add_event_default(event_type);
+        true
     }
 
     /// Record an event using the catalog's default magnitude. Equivalent
@@ -195,6 +385,9 @@ impl PlayerHappiness {
         self.factors = HappinessFactors::default();
         self.recent_events.clear();
         self.last_salary_negotiation = None;
+        self.starter_ratio = 0.5;
+        self.appearances_tracked = 0;
+        self.is_established_starter = false;
     }
 
     /// Backward compatible: morale >= happy_threshold means happy.
@@ -223,4 +416,42 @@ pub struct PositiveHappiness {
 #[derive(Debug, Clone)]
 pub struct NegativeHappiness {
     pub description: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cooldown_blocks_duplicate_event() {
+        let mut h = PlayerHappiness::new();
+        let added = h.add_event_with_cooldown(HappinessEventType::DerbyHero, 5.0, 14);
+        assert!(added, "first emit should land");
+        let second = h.add_event_with_cooldown(HappinessEventType::DerbyHero, 5.0, 14);
+        assert!(!second, "second emit inside cooldown should be skipped");
+        assert_eq!(
+            h.recent_events.iter()
+                .filter(|e| e.event_type == HappinessEventType::DerbyHero)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn cooldown_lapses_after_age() {
+        let mut h = PlayerHappiness::new();
+        h.add_event_with_cooldown(HappinessEventType::SettledIntoSquad, 2.0, 14);
+        // Simulate time passing — bump days_ago past the cooldown window.
+        h.recent_events[0].days_ago = 21;
+        let added = h.add_event_with_cooldown(HappinessEventType::SettledIntoSquad, 2.0, 14);
+        assert!(added, "emit should resume once cooldown has elapsed");
+    }
+
+    #[test]
+    fn has_recent_event_distinguishes_event_types() {
+        let mut h = PlayerHappiness::new();
+        h.add_event_default(HappinessEventType::DerbyHero);
+        assert!(h.has_recent_event(&HappinessEventType::DerbyHero, 30));
+        assert!(!h.has_recent_event(&HappinessEventType::DerbyDefeat, 30));
+    }
 }

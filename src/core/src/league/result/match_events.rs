@@ -60,18 +60,15 @@ impl LeagueResult {
 
         // Per-player match reaction — Player owns all bookkeeping.
         for side in [&details.left_team_players, &details.right_team_players] {
-            let conceded = if side.team_id == home_team_id {
-                away_goals
+            let (scored, conceded) = if side.team_id == home_team_id {
+                (home_goals, away_goals)
             } else {
-                home_goals
+                (away_goals, home_goals)
             };
-            let (team_won, team_lost) = if side.team_id == home_team_id {
-                (home_goals > away_goals, home_goals < away_goals)
-            } else {
-                (away_goals > home_goals, away_goals < home_goals)
-            };
+            let (team_won, team_lost) = (scored > conceded, scored < conceded);
             dispatch_match_outcomes(
                 side,
+                scored,
                 conceded,
                 details,
                 data,
@@ -670,6 +667,7 @@ fn reputation_weights(result: &MatchResult, is_cup: bool, data: &SimulatorData) 
 #[allow(clippy::too_many_arguments)]
 fn dispatch_match_outcomes(
     side: &FieldSquad,
+    team_scored: u8,
     team_conceded: u8,
     details: &MatchResultRaw,
     data: &mut SimulatorData,
@@ -702,8 +700,6 @@ fn dispatch_match_outcomes(
         };
         let effective = *effective_ratings.get(&pid).unwrap_or(&stats.match_rating);
         let is_motm = best_player_id == Some(pid);
-        let team_goals_against =
-            matches!(participation, MatchParticipation::Starter).then_some(team_conceded);
         if let Some(player) = data.player_mut(pid) {
             player.on_match_played(&MatchOutcome {
                 stats,
@@ -712,7 +708,8 @@ fn dispatch_match_outcomes(
                 is_friendly,
                 is_cup,
                 is_motm,
-                team_goals_against,
+                team_goals_for: team_scored,
+                team_goals_against: team_conceded,
                 league_weight,
                 world_weight,
                 is_derby,

@@ -47,6 +47,10 @@ pub struct PlayerEventDto {
     pub is_negative: bool,
     pub is_big: bool,
     pub days_ago: u16,
+    /// Partner player display info (name + slug) for events that name a
+    /// specific teammate. The template renders a link when present.
+    pub partner_name: Option<String>,
+    pub partner_slug: Option<String>,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -117,7 +121,7 @@ pub async fn player_events_action(
         player.full_name.display_last_name()
     );
 
-    let events = build_events(player, &i18n);
+    let events = build_events(player, &i18n, simulator_data);
 
     Ok(PlayerEventsTemplate {
         css_version: CSS_VERSION,
@@ -186,33 +190,56 @@ pub async fn player_events_action(
     }.into_response())
 }
 
-/// Big events: those that visibly impact the player's career or mood
+/// Big events: rare, career-visible moments. The threshold is "would a
+/// player remember this in retirement" — silverware, career milestones,
+/// promotion/relegation, transfer dramas, captaincy hand-overs. Routine
+/// match talk, fan/media noise, role oscillation, and gradual integration
+/// sit below the bar even when their immediate magnitude is non-trivial.
+///
+/// Trimmed entries (used to be big, now demoted):
+/// - `PlayerOfTheMatch` — fires for stars several times a season; common.
+/// - `DerbyDefeat` — squad-wide on every rivalry loss; recurs.
+/// - `RedCardFallout` — recurs across a career, particularly for the
+///   physical centre-backs / hot-headed strikers it most applies to.
+/// - `QualifiedForEurope` — routine at elite clubs; the heuristic gate
+///   already only fires it at the upper end of league-rep tiers.
+/// - `WonStartingPlace` / `LostStartingPlace` — sticky one-shots, but
+///   they oscillate over a career and the UI can't tell whether this is
+///   a 19-year-old's breakthrough or a journeyman's third such event.
 fn is_big_event(event_type: &HappinessEventType) -> bool {
     matches!(
         event_type,
-        HappinessEventType::PlayerOfTheMatch
-            | HappinessEventType::ManagerDiscipline
-            | HappinessEventType::ManagerCriticism
-            | HappinessEventType::ContractOffer
+        // ── Career / silverware ──────────────────────────────
+        HappinessEventType::TrophyWon
+            | HappinessEventType::Relegated
+            | HappinessEventType::PromotionCelebration
+            | HappinessEventType::CupFinalDefeat
+            // ── Status / role hand-overs ─────────────────────
+            | HappinessEventType::CaptaincyAwarded
+            | HappinessEventType::CaptaincyRemoved
+            | HappinessEventType::YouthBreakthrough
+            // SquadRegistrationOmitted is reserved (no emit site yet —
+            // see HappinessEventType docs). Removed from is_big_event
+            // until a real registration-window emitter exists.
+            // ── Contract / transfer drama ────────────────────
             | HappinessEventType::ContractRenewal
-            | HappinessEventType::InjuryReturn
-            | HappinessEventType::LoanListingAccepted
-            | HappinessEventType::ConflictWithTeammate
-            | HappinessEventType::DressingRoomSpeech
-            | HappinessEventType::SettledIntoSquad
-            | HappinessEventType::FeelingIsolated
-            | HappinessEventType::AmbitionShock
-            | HappinessEventType::SalaryShock
-            | HappinessEventType::RoleMismatch
-            | HappinessEventType::DreamMove
-            | HappinessEventType::SalaryBoost
-            | HappinessEventType::JoiningElite
             | HappinessEventType::ContractTerminated
+            | HappinessEventType::DreamMove
+            | HappinessEventType::DreamMoveCollapsed
+            | HappinessEventType::JoiningElite
+            | HappinessEventType::AmbitionShock
+            // ── Match-day milestones ─────────────────────────
+            | HappinessEventType::FirstClubGoal
+            | HappinessEventType::DerbyHero
+            // ── Manager / national team ──────────────────────
             | HappinessEventType::ManagerDeparture
             | HappinessEventType::NationalTeamCallup
             | HappinessEventType::NationalTeamDropped
-            | HappinessEventType::ShirtNumberPromotion
-            | HappinessEventType::ControversyIncident
+            | HappinessEventType::PromiseBroken
+            | HappinessEventType::PromiseKept
+            // ── Dressing-room ──────────────────────────────
+            | HappinessEventType::CloseFriendSold
+            | HappinessEventType::MentorDeparted
     )
 }
 
@@ -255,28 +282,97 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::NationalTeamDropped => "event_national_team_dropped",
         HappinessEventType::ShirtNumberPromotion => "event_shirt_number_promotion",
         HappinessEventType::ControversyIncident => "event_controversy_incident",
+        HappinessEventType::FirstClubGoal => "event_first_club_goal",
+        HappinessEventType::DecisiveGoal => "event_decisive_goal",
+        HappinessEventType::SubstituteImpact => "event_substitute_impact",
+        HappinessEventType::CleanSheetPride => "event_clean_sheet_pride",
+        HappinessEventType::CostlyMistake => "event_costly_mistake",
+        HappinessEventType::RedCardFallout => "event_red_card_fallout",
+        HappinessEventType::DerbyHero => "event_derby_hero",
+        HappinessEventType::DerbyWin => "event_derby_win",
+        HappinessEventType::DerbyDefeat => "event_derby_defeat",
+        HappinessEventType::TrophyWon => "event_trophy_won",
+        HappinessEventType::CupFinalDefeat => "event_cup_final_defeat",
+        HappinessEventType::PromotionCelebration => "event_promotion_celebration",
+        HappinessEventType::RelegationFear => "event_relegation_fear",
+        HappinessEventType::Relegated => "event_relegated",
+        HappinessEventType::QualifiedForEurope => "event_qualified_for_europe",
+        HappinessEventType::WonStartingPlace => "event_won_starting_place",
+        HappinessEventType::LostStartingPlace => "event_lost_starting_place",
+        HappinessEventType::CaptaincyAwarded => "event_captaincy_awarded",
+        HappinessEventType::CaptaincyRemoved => "event_captaincy_removed",
+        HappinessEventType::YouthBreakthrough => "event_youth_breakthrough",
+        HappinessEventType::SquadRegistrationOmitted => "event_squad_registration_omitted",
+        HappinessEventType::WantedByBiggerClub => "event_wanted_by_bigger_club",
+        HappinessEventType::TransferBidRejected => "event_transfer_bid_rejected",
+        HappinessEventType::DreamMoveCollapsed => "event_dream_move_collapsed",
+        HappinessEventType::FanPraise => "event_fan_praise",
+        HappinessEventType::FanCriticism => "event_fan_criticism",
+        HappinessEventType::MediaPraise => "event_media_praise",
+        HappinessEventType::MediaCriticism => "event_media_criticism",
+        HappinessEventType::CloseFriendSold => "event_close_friend_sold",
+        HappinessEventType::CompatriotJoined => "event_compatriot_joined",
+        HappinessEventType::MentorDeparted => "event_mentor_departed",
+        HappinessEventType::LanguageProgress => "event_language_progress",
     }
 }
 
-fn build_events(player: &core::Player, i18n: &I18n) -> Vec<PlayerEventDto> {
+fn build_events(
+    player: &core::Player,
+    i18n: &I18n,
+    simulator_data: &SimulatorData,
+) -> Vec<PlayerEventDto> {
     let mut events: Vec<_> = player
         .happiness
         .recent_events
         .iter()
         .filter(|e| e.event_type != HappinessEventType::GoodTraining)
+        // Suppress partner-style events that lost track of the partner:
+        // showing "Bonded with a teammate" without naming who is confusing.
+        .filter(|e| !is_partner_required(&e.event_type) || e.partner_player_id.is_some())
         .take(100)
         .map(|e| {
             let key = event_type_to_i18n_key(&e.event_type);
+            let (partner_name, partner_slug) = e
+                .partner_player_id
+                .and_then(|pid| resolve_partner(simulator_data, pid))
+                .map(|(n, s)| (Some(n), Some(s)))
+                .unwrap_or((None, None));
             PlayerEventDto {
                 description: i18n.t(key).to_string(),
                 is_positive: e.magnitude > 0.0,
                 is_negative: e.magnitude < 0.0,
                 is_big: is_big_event(&e.event_type),
                 days_ago: e.days_ago,
+                partner_name,
+                partner_slug,
             }
         })
         .collect();
 
     events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
     events
+}
+
+/// Events that don't make sense without a named partner. If the event was
+/// emitted without a partner id (legacy data, generic emit site), it gets
+/// filtered out of the player's history view.
+fn is_partner_required(event_type: &HappinessEventType) -> bool {
+    matches!(
+        event_type,
+        HappinessEventType::TeammateBonding | HappinessEventType::ConflictWithTeammate
+    )
+}
+
+/// Resolve `(display_name, slug)` for the partner player. Returns `None`
+/// if the partner can no longer be located (retired, never existed) — the
+/// event is then filtered out so we don't show a dangling link.
+fn resolve_partner(data: &SimulatorData, partner_id: u32) -> Option<(String, String)> {
+    let p = data.player(partner_id)?;
+    let display = format!(
+        "{} {}",
+        p.full_name.display_first_name(),
+        p.full_name.display_last_name()
+    );
+    Some((display, p.full_name.slug()))
 }

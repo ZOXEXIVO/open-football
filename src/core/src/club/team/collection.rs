@@ -287,6 +287,19 @@ impl TeamCollection {
     /// contracts are approaching expiry. Called monthly before the
     /// transfer listing AI so valuable players are locked in first.
     pub fn run_contract_renewals(&mut self, date: NaiveDate) {
+        self.run_contract_renewals_with_budget(date, None, 5_000)
+    }
+
+    /// Variant aware of the chairman's wage budget and league reputation.
+    /// Renewal offers will not collectively bust the budget and will
+    /// scale with league prestige (Premier League pays more than Maltese
+    /// Premier League at the same ability).
+    pub fn run_contract_renewals_with_budget(
+        &mut self,
+        date: NaiveDate,
+        wage_budget: Option<u32>,
+        league_reputation: u16,
+    ) {
         if self.teams.is_empty() {
             return;
         }
@@ -294,7 +307,13 @@ impl TeamCollection {
             Some(idx) => idx,
             None => return,
         };
-        ContractRenewalManager::run(&mut self.teams, main_idx, date);
+        ContractRenewalManager::run_with_budget(
+            &mut self.teams,
+            main_idx,
+            date,
+            wage_budget,
+            league_reputation,
+        );
     }
 
     /// Daily critical squad moves: immediate demotions and ability-based swaps

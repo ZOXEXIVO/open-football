@@ -511,10 +511,48 @@ impl Player {
                 continue;
             }
 
+            // Threshold-crossing detection so morale only lifts on meaningful
+            // milestones (basic, conversational, functional, fluent). Weekly
+            // +1% increments would otherwise spam the event log.
+            //
+            // Magnitude scales by milestone — first words feel small, the
+            // jump to functional ("can do an interview unaided") is bigger,
+            // and full fluency is a quiet pride moment. Catalog default is
+            // the conversational rung; the multiplier maps each threshold
+            // around it.
+            const THRESHOLDS: &[u8] = &[40, 55, 70, 90];
+            let prev_prof = current_prof;
+            let new_prof = (current_prof + gain).min(100);
+            let crossed_threshold = THRESHOLDS
+                .iter()
+                .find(|&&t| prev_prof < t && new_prof >= t)
+                .copied();
+
             if let Some(lang_entry) = self.languages.iter_mut().find(|l| l.language == *target_lang) {
-                lang_entry.proficiency = (lang_entry.proficiency + gain).min(100);
+                lang_entry.proficiency = new_prof;
             } else {
                 self.languages.push(PlayerLanguage::learning(*target_lang, gain));
+            }
+
+            if let Some(t) = crossed_threshold {
+                // 40 basic → 0.7×, 55 conversational → 1.0× (catalog),
+                // 70 functional → 1.4×, 90 fluent → 0.9× (quiet pride).
+                let factor = match t {
+                    40 => 0.7,
+                    55 => 1.0,
+                    70 => 1.4,
+                    90 => 0.9,
+                    _ => 1.0,
+                };
+                let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+                let mag = cfg.catalog.language_progress * factor;
+                // Cooldown 30d so two languages crossing thresholds in the
+                // same fortnight don't both fire (rare, but tidy).
+                self.happiness.add_event_with_cooldown(
+                    crate::HappinessEventType::LanguageProgress,
+                    mag,
+                    30,
+                );
             }
         }
     }

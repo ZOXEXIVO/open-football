@@ -253,6 +253,19 @@ impl CountryResult {
                     .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
+            // Domestic targets feel the rejection if it was a real chance —
+            // buyer must be meaningfully bigger and either the player was
+            // already pushing for a move or has the ambition to feel snubbed.
+            // Favorite-club bid being rejected hurts even at lateral rep.
+            if neg_data.selling_country_id.is_none() {
+                let buyer_rep = neg_data.buying_rep;
+                let seller_rep = neg_data.selling_rep;
+                let buying_club_id = neg_data.buying_club_id;
+                if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
+                    let was_favorite = player.favorite_clubs.contains(&buying_club_id);
+                    player.on_transfer_bid_rejected(buyer_rep, seller_rep, was_favorite);
+                }
+            }
             PipelineProcessor::on_negotiation_resolved(
                 country,
                 neg_data.buying_club_id,
@@ -377,6 +390,18 @@ impl CountryResult {
                 negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
+            // Final-round rejection — the buying club really did pursue
+            // and the selling club still said no. Same gating as the
+            // initial-approach path, including favorite-club amplification.
+            if neg_data.selling_country_id.is_none() {
+                let buyer_rep = neg_data.buying_rep;
+                let seller_rep = neg_data.selling_rep;
+                let buying_club_id = neg_data.buying_club_id;
+                if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
+                    let was_favorite = player.favorite_clubs.contains(&buying_club_id);
+                    player.on_transfer_bid_rejected(buyer_rep, seller_rep, was_favorite);
+                }
+            }
             PipelineProcessor::on_negotiation_resolved(
                 country,
                 neg_data.buying_club_id,
@@ -805,6 +830,19 @@ impl CountryResult {
                 negotiation.reject_with_reason(NegotiationRejectionReason::MedicalFailed);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
+            // Late-stage collapse — both clubs and the player had agreed
+            // and only the medical stood in the way. Strong morale event
+            // for domestic players if the destination was meaningfully
+            // bigger or a known favorite club.
+            if neg_data.selling_country_id.is_none() {
+                let buyer_rep = neg_data.buying_rep;
+                let seller_rep = neg_data.selling_rep;
+                let buying_club_id = neg_data.buying_club_id;
+                if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
+                    let was_favorite = player.favorite_clubs.contains(&buying_club_id);
+                    player.on_dream_move_collapsed(buyer_rep, seller_rep, was_favorite);
+                }
+            }
             PipelineProcessor::on_negotiation_resolved(
                 country,
                 neg_data.buying_club_id,

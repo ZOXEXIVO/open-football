@@ -265,14 +265,14 @@ impl ClubResult {
             };
 
             Self::deliver_message(data, club_id, result.player_id, PlayerMessage {
-                message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {
-                    salary: final_salary,
+                message_type: PlayerMessageType::ContractProposal(PlayerContractProposal::basic(
+                    final_salary,
                     years,
                     negotiation_skill,
-                    signing_bonus: 0,
+                    0,
                     loyalty_bonus,
-                    release_clause: None,
-                }),
+                    None,
+                )),
             });
 
             // Record the offer so the cooldown + attempt cap at the top

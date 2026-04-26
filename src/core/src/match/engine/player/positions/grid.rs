@@ -139,9 +139,24 @@ impl SpatialGrid {
         self.generation = self.generation.wrapping_add(1);
         let current_gen = self.generation;
 
-        // Rebuild hash table only when player roster changes (substitution)
-        let ids_changed = n != self.num_players
-            || (n > 0 && self.all_players[0].id != field.players[0].id);
+        // Detect roster changes (substitutions, sent-off players). The
+        // earlier heuristic only checked count + the first slot's id,
+        // which missed substitutions at any index > 0 — `field.players`
+        // length doesn't change on a sub (the slot is replaced in
+        // place), and the new id never made it into `id_slots`. That
+        // produced stale grid lookups (and panics downstream when AI
+        // strategies dereferenced the missing id). Compare every slot
+        // against the previous tick's snapshot; the loop is bounded by
+        // MAX_GRID_PLAYERS so this is still effectively O(1).
+        let mut ids_changed = n != self.num_players;
+        if !ids_changed {
+            for i in 0..n {
+                if self.all_players[i].id != field.players[i].id {
+                    ids_changed = true;
+                    break;
+                }
+            }
+        }
 
         if ids_changed {
             self.num_players = n;

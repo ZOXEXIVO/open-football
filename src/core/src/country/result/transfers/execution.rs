@@ -1,9 +1,39 @@
 use super::types::{can_club_accept_player, DeferredTransfer};
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
+use crate::club::player::language::Language;
+use crate::club::Person;
 use crate::simulator::SimulatorData;
 use crate::{Country, Player, PlayerClubContract, TeamInfo, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
+
+/// Snapshot of a departing player's traits captured BEFORE they leave the
+/// selling club. Drives the per-teammate social events (close-friend lost,
+/// mentor departed) that fire on the leftover squad.
+#[derive(Debug, Clone)]
+struct DepartingPlayerInfo {
+    id: u32,
+    age: u8,
+    country_id: u32,
+    high_reputation: bool,
+}
+
+/// True if the country's primary language(s) are met at functional fluency
+/// (proficiency >= 70). Used to gate CompatriotJoined: an integration boost
+/// from a same-nationality teammate matters most when the new arrival is
+/// linguistically isolated.
+fn speaks_local_language(player: &Player, country_code: &str) -> bool {
+    let langs = Language::from_country_code(country_code);
+    if langs.is_empty() {
+        return true;
+    }
+    langs.iter().any(|l| {
+        player
+            .languages
+            .iter()
+            .any(|pl| pl.language == *l && (pl.is_native || pl.proficiency >= 70))
+    })
+}
 
 /// Unified transfer execution — handles both domestic and cross-country.
 /// When selling_country_id == buying_country_id it's domestic (single country).
@@ -81,6 +111,27 @@ pub(crate) fn execute_transfer_within_country(
     let mut from_info: Option<TeamInfo> = None;
     let mut selling_league_id = None;
 
+    // Capture departing player's social traits BEFORE removal. Used by
+    // the post-move pass to emit per-teammate CloseFriendSold /
+    // MentorDeparted events on the leftover squad.
+    let departing: Option<DepartingPlayerInfo> = country
+        .clubs
+        .iter()
+        .find(|c| c.id == selling_club_id)
+        .and_then(|club| {
+            club.teams.iter().find_map(|t| {
+                t.players.iter().find(|p| p.id == player_id).map(|p| {
+                    DepartingPlayerInfo {
+                        id: p.id,
+                        age: p.age(date),
+                        country_id: p.country_id,
+                        // 7000+ world rep is a "household name" threshold.
+                        high_reputation: p.player_attributes.world_reputation >= 7000,
+                    }
+                })
+            })
+        });
+
     if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
         if let Some(main_team) = selling_club.teams.main() {
             selling_league_id = main_team.league_id;
@@ -104,6 +155,41 @@ pub(crate) fn execute_transfer_within_country(
         // Only credit income when player was actually found and taken
         if player.is_some() {
             selling_club.finance.add_transfer_income(fee);
+        }
+
+        // Emit per-teammate dressing-room events on the leftover squad.
+        // Done while we still hold the selling_club mut-borrow but after
+        // the departing player has been removed — so we're iterating
+        // remaining teammates only.
+        if let Some(info) = &departing {
+            for team in &mut selling_club.teams.teams {
+                for teammate in team.players.iter_mut() {
+                    let bond = match teammate.relations.get_player(info.id) {
+                        Some(rel) => rel.friendship,
+                        None => continue,
+                    };
+                    let same_nat = teammate.country_id == info.country_id;
+                    let teammate_age = teammate.age(date);
+
+                    // Mentor departure: a veteran (30+) leaving a young
+                    // (<= 23) teammate with a strong bond. Single event,
+                    // not also CloseFriendSold — mentorship is the more
+                    // specific framing.
+                    let is_mentor_break = info.age >= 30
+                        && teammate_age <= 23
+                        && bond >= 55.0;
+
+                    if is_mentor_break {
+                        teammate.on_mentor_departed(bond, same_nat);
+                    } else if bond >= 65.0 {
+                        teammate.on_close_friend_sold(
+                            bond,
+                            same_nat,
+                            info.high_reputation,
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -174,10 +260,55 @@ pub(crate) fn execute_transfer_within_country(
             }
         }
 
+        // The arriving player's nationality is needed for the post-move
+        // CompatriotJoined pass; capture before move-out borrows.
+        let arrival_country_id = player.country_id;
+        let club_country_id = country.id;
+        let club_country_code = country.code.clone();
+
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             buying_club.finance.spend_from_transfer_budget(fee);
             if !buying_club.teams.teams.is_empty() {
                 buying_club.teams.teams[0].players.add(player);
+            }
+
+            // Compatriot pass on the buying club's existing roster: any
+            // same-nationality teammate gets the integration boost. Skip
+            // the new arrival themselves (they're at the front of the list
+            // we just pushed onto). The check `id != player_id` is enough.
+            //
+            // We also count whether at least one same-nationality teammate
+            // exists, so the arriving player can fire `CompatriotJoined`
+            // themselves — the integration goes both ways. Domestic moves
+            // where everyone already shares the local nationality are
+            // gated out by `on_compatriot_joined` itself
+            // (`country_id == club_country_id` early-returns).
+            let mut compatriot_present = false;
+            for team in &mut buying_club.teams.teams {
+                for existing in team.players.iter_mut() {
+                    if existing.id == player_id {
+                        continue;
+                    }
+                    if existing.country_id != arrival_country_id {
+                        continue;
+                    }
+                    compatriot_present = true;
+                    let lacks_lang = !speaks_local_language(existing, &club_country_code);
+                    existing.on_compatriot_joined(club_country_id, lacks_lang);
+                }
+            }
+            // Reverse pass: fire on the arrival if compatriots exist.
+            if compatriot_present {
+                for team in &mut buying_club.teams.teams {
+                    if let Some(arrival) =
+                        team.players.iter_mut().find(|p| p.id == player_id)
+                    {
+                        let lacks_lang =
+                            !speaks_local_language(arrival, &club_country_code);
+                        arrival.on_compatriot_joined(club_country_id, lacks_lang);
+                        break;
+                    }
+                }
             }
         }
 
@@ -305,6 +436,22 @@ fn execute_loan_within_country(
         // Always record history — use fallback TeamInfo if club info couldn't be resolved
         let from = from_info.unwrap_or_else(empty_team_info);
         let to = to_info.unwrap_or_else(empty_team_info);
+        let borrower_score = country
+            .clubs
+            .iter()
+            .find(|c| c.id == buying_club_id)
+            .and_then(|c| c.teams.main())
+            .map(|t| t.reputation.world as f32 / 10_000.0)
+            .unwrap_or(0.4);
+        // Parent develops loanees more aggressively if the player is
+        // young or has high potential.
+        let parent_desire = if player.age(date) <= 22
+            || player.player_attributes.potential_ability >= 130
+        {
+            0.7
+        } else {
+            0.3
+        };
         let loan_contract = build_loan_contract(
             loan_fee,
             loan_end,
@@ -315,6 +462,8 @@ fn execute_loan_within_country(
             transfer.has_option_to_buy,
             transfer.agreed_annual_wage,
             transfer.loan_future_fee,
+            borrower_score,
+            parent_desire,
         );
         player.complete_loan(LoanCompletion {
             from: &from,
@@ -449,6 +598,26 @@ fn execute_transfer_across_countries(
         return false;
     }
 
+    // Snapshot the departing player's social traits BEFORE removal so the
+    // selling-country teammates can be ticked with CloseFriendSold /
+    // MentorDeparted. Same shape as the within-country path, just routed
+    // via SimulatorData since the player's home country is foreign here.
+    let departing: Option<DepartingPlayerInfo> = data
+        .country(selling_country_id)
+        .and_then(|c| c.clubs.iter().find(|club| club.id == selling_club_id))
+        .and_then(|club| {
+            club.teams.iter().find_map(|t| {
+                t.players.iter().find(|p| p.id == player_id).map(|p| {
+                    DepartingPlayerInfo {
+                        id: p.id,
+                        age: p.age(date),
+                        country_id: p.country_id,
+                        high_reputation: p.player_attributes.world_reputation >= 7000,
+                    }
+                })
+            })
+        });
+
     let taken = take_player_from_selling_country(
         data,
         player_id,
@@ -468,6 +637,39 @@ fn execute_transfer_across_countries(
             return false;
         }
     };
+
+    // Selling-side dressing-room pass: the player has been taken out of
+    // the squad, the remaining teammates feel the departure.
+    if let Some(info) = &departing {
+        if let Some(country) = data.country_mut(selling_country_id) {
+            if let Some(selling_club) =
+                country.clubs.iter_mut().find(|c| c.id == selling_club_id)
+            {
+                for team in &mut selling_club.teams.teams {
+                    for teammate in team.players.iter_mut() {
+                        let bond = match teammate.relations.get_player(info.id) {
+                            Some(rel) => rel.friendship,
+                            None => continue,
+                        };
+                        let same_nat = teammate.country_id == info.country_id;
+                        let teammate_age = teammate.age(date);
+                        let is_mentor_break = info.age >= 30
+                            && teammate_age <= 23
+                            && bond >= 55.0;
+                        if is_mentor_break {
+                            teammate.on_mentor_departed(bond, same_nat);
+                        } else if bond >= 65.0 {
+                            teammate.on_close_friend_sold(
+                                bond,
+                                same_nat,
+                                info.high_reputation,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let buying_country = match data.country_mut(buying_country_id) {
         Some(c) => c,
@@ -503,6 +705,10 @@ fn execute_transfer_across_countries(
         record_sell_on: transfer.sell_on_percentage,
     });
 
+    let arrival_country_id = player.country_id;
+    let buying_country_code = buying_country.code.clone();
+    let buying_country_id_local = buying_country.id;
+
     if let Some(buying_club) = buying_country
         .clubs
         .iter_mut()
@@ -511,6 +717,35 @@ fn execute_transfer_across_countries(
         buying_club.finance.spend_from_transfer_budget(fee);
         if !buying_club.teams.teams.is_empty() {
             buying_club.teams.teams[0].players.add(player);
+        }
+
+        // Compatriot integration pass — same shape as the within-country
+        // path, but the player has just stepped off a flight rather than
+        // a coach across town. Existing same-nationality teammates feel
+        // the lift; the arriving player gets the reciprocal boost if at
+        // least one compatriot already plays here.
+        let mut compatriot_present = false;
+        for team in &mut buying_club.teams.teams {
+            for existing in team.players.iter_mut() {
+                if existing.id == player_id {
+                    continue;
+                }
+                if existing.country_id != arrival_country_id {
+                    continue;
+                }
+                compatriot_present = true;
+                let lacks_lang = !speaks_local_language(existing, &buying_country_code);
+                existing.on_compatriot_joined(buying_country_id_local, lacks_lang);
+            }
+        }
+        if compatriot_present {
+            for team in &mut buying_club.teams.teams {
+                if let Some(arrival) = team.players.iter_mut().find(|p| p.id == player_id) {
+                    let lacks_lang = !speaks_local_language(arrival, &buying_country_code);
+                    arrival.on_compatriot_joined(buying_country_id_local, lacks_lang);
+                    break;
+                }
+            }
         }
     }
 
@@ -631,6 +866,20 @@ fn execute_loan_across_countries(
     let to_info = resolve_buying_club_info(buying_country, buying_club_id);
 
     let to = to_info.unwrap_or_else(empty_team_info);
+    let borrower_score = buying_country
+        .clubs
+        .iter()
+        .find(|c| c.id == buying_club_id)
+        .and_then(|c| c.teams.main())
+        .map(|t| t.reputation.world as f32 / 10_000.0)
+        .unwrap_or(0.4);
+    let parent_desire = if player.age(date) <= 22
+        || player.player_attributes.potential_ability >= 130
+    {
+        0.7
+    } else {
+        0.3
+    };
     let loan_contract = build_loan_contract(
         loan_fee,
         loan_end,
@@ -641,6 +890,8 @@ fn execute_loan_across_countries(
         transfer.has_option_to_buy,
         transfer.agreed_annual_wage,
         transfer.loan_future_fee,
+        borrower_score,
+        parent_desire,
     );
     player.complete_loan(LoanCompletion {
         from: &from_info,
@@ -740,6 +991,8 @@ fn build_loan_contract(
     _has_option_to_buy: bool,
     agreed_parent_wage: Option<u32>,
     loan_future_fee: Option<(u32, bool)>,
+    borrower_score: f32,
+    parent_desire_to_develop: f32,
 ) -> PlayerClubContract {
     // Parent wage drives the loan split: borrower covers the majority,
     // parent keeps paying the rest. Falls back to the player's current
@@ -747,8 +1000,33 @@ fn build_loan_contract(
     let parent_wage = agreed_parent_wage
         .or_else(|| player.contract.as_ref().map(|c| c.salary))
         .unwrap_or(1_000);
+    // V2 split scales borrower share with their reputation/appetite and
+    // softens it when the parent is loaning the player out for development
+    // (a small parent club won't subsidise a Premier League borrower).
     let (borrower_wage, match_fee) =
-        crate::club::player::calculators::WageCalculator::loan_wage_split(parent_wage);
+        crate::club::player::calculators::WageCalculator::loan_wage_split_v2(
+            parent_wage,
+            borrower_score,
+            parent_desire_to_develop,
+        );
+
+    // Wage-contribution percentage = borrower share of total. Computed
+    // back from borrower_wage / parent_wage so it stays consistent with
+    // the split helper. Capped at 100; floored at 0.
+    let contribution_pct = ((borrower_wage as f64 / parent_wage.max(1) as f64) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as u8;
+
+    // Minimum-appearances scales with borrower size: bigger borrowers
+    // promised the parent more minutes; small borrowers can't commit.
+    let min_apps = if borrower_score >= 0.7 {
+        15
+    } else if borrower_score >= 0.4 {
+        10
+    } else {
+        6
+    };
+
     let mut contract = PlayerClubContract::new_loan(
         borrower_wage,
         loan_end,
@@ -757,13 +1035,13 @@ fn build_loan_contract(
         buying_club_id,
     )
     .with_loan_match_fee(match_fee)
-    .with_loan_wage_contribution(100u8.saturating_sub((match_fee > 0) as u8 * 20))
+    .with_loan_wage_contribution(contribution_pct)
     .with_loan_recall(
         loan_end
             .checked_sub_signed(chrono::Duration::days(90))
             .unwrap_or(loan_end),
     )
-    .with_loan_min_appearances(10);
+    .with_loan_min_appearances(min_apps);
 
     if let Some((future_fee, obligation)) = loan_future_fee {
         contract = contract.with_loan_future_fee(future_fee, obligation);

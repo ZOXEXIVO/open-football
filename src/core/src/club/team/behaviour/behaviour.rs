@@ -293,20 +293,38 @@ impl TeamBehaviour {
                 let has_any_relation = teammate_ids.iter()
                     .any(|&tid| tid != player.id && player.relations.get_player(tid).is_some());
 
-                // ~10% weekly chance, biased by relationship count
+                // ~10% weekly chance, biased by relationship count.
+                // Cooldowns prevent the same player firing back-to-back
+                // weekly — settling-in is a slow process; isolation
+                // shouldn't tick every fortnight while the player is
+                // already adjusting elsewhere.
                 if positive_count >= 3 && rand::random::<f32>() < 0.10 {
-                    player.happiness.add_event(HappinessEventType::SettledIntoSquad, 2.0);
+                    player.happiness.add_event_with_cooldown(
+                        HappinessEventType::SettledIntoSquad,
+                        2.0,
+                        21,
+                    );
                 } else if !has_any_relation && rand::random::<f32>() < 0.08 {
-                    player.happiness.add_event(HappinessEventType::FeelingIsolated, -1.5);
+                    player.happiness.add_event_with_cooldown(
+                        HappinessEventType::FeelingIsolated,
+                        -1.5,
+                        14,
+                    );
                 }
             }
 
-            // Team leaders give dressing room speeches (~5% weekly chance)
+            // Team leaders give dressing room speeches (~5% weekly chance).
+            // Cooldown so a single high-leadership captain doesn't stack
+            // multiple speeches per month.
             if player.skills.mental.leadership >= 14.0
                 && player.happiness.morale >= 60.0
                 && rand::random::<f32>() < 0.05
             {
-                player.happiness.add_event(HappinessEventType::DressingRoomSpeech, 1.5);
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::DressingRoomSpeech,
+                    1.5,
+                    28,
+                );
             }
         }
     }
@@ -607,22 +625,16 @@ impl TeamBehaviour {
                     continue;
                 }
 
-                // Don't double-fire: skip if we already noticed this signer
-                // in the last 14 days (check most recent matching event).
-                let already_noticed = player
-                    .happiness
-                    .recent_events
-                    .iter()
-                    .any(|e| e.event_type == HappinessEventType::SalaryGapNoticed
-                        && e.days_ago <= freshness_days as u16);
-                if already_noticed {
-                    continue;
-                }
-
                 // Magnitude scales with the gap: 25% gap → -1.5, 50% gap → -3.5, cap at -5.
+                // Cooldown prevents a fresh raise refiring inside the
+                // 14-day jealousy window from the same signer.
                 let gap = (1.0 - ratio).clamp(0.25, 0.9);
                 let magnitude = -((gap - 0.25) * 6.0 + 1.5).min(5.0);
-                player.happiness.add_event(HappinessEventType::SalaryGapNoticed, magnitude);
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::SalaryGapNoticed,
+                    magnitude,
+                    freshness_days as u16,
+                );
             }
         }
     }
@@ -816,22 +828,16 @@ impl TeamBehaviour {
             if ratio >= 0.6 {
                 continue;
             }
-            // Deduplicate: skip if we already fired this month (look at the
-            // last 28 days of recent_events for this event type).
-            let already_noticed = player
-                .happiness
-                .recent_events
-                .iter()
-                .any(|e| e.event_type == HappinessEventType::SalaryGapNoticed
-                    && e.days_ago <= 28);
-            if already_noticed {
-                continue;
-            }
             // Magnitude: 60% ratio → -1.5, 30% ratio → -4.5, cap at -5.
+            // 28-day cooldown so the monthly audit doesn't re-fire the
+            // same player while last month's wage-envy event is still
+            // visible in the history.
             let magnitude = -(((0.6 - ratio) * 10.0) + 1.5).min(5.0);
-            player
-                .happiness
-                .add_event(HappinessEventType::SalaryGapNoticed, magnitude);
+            player.happiness.add_event_with_cooldown(
+                HappinessEventType::SalaryGapNoticed,
+                magnitude,
+                28,
+            );
         }
     }
 
