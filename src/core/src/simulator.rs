@@ -12,7 +12,7 @@ use crate::simulator_config::SimulatorConfig;
 use crate::transfers::TransferPool;
 use crate::utils::random::engine as rng_engine;
 use crate::{Player, Staff, TeamInfo, TeamType};
-use chrono::{Duration, NaiveDateTime};
+use chrono::{Datelike, Duration, NaiveDateTime};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
@@ -142,6 +142,17 @@ impl FootballSimulator {
         // see `manager_market::tick_daily` for the dependency rationale.
         let today = data.date.date();
         manager_market::tick_daily(data, today);
+
+        // Phase D2: parent-side loan wage settlement. Per-club monthly
+        // finance runs inside Phase A and bills the borrower for the
+        // loan contract; the parent club still owes the residual share
+        // of its primary contract for the duration of the loan. Done
+        // here at the world level because parent and borrower may live
+        // in different countries — a per-country pass can't see them
+        // both.
+        if today.day() == 1 {
+            settle_parent_residual_loan_wages(data);
+        }
 
         // Global competitions (Champions League, World Cup, etc.)
         GlobalCompetitionSimulator::simulate(data);
@@ -399,6 +410,61 @@ impl SimulationResult {
 
     pub fn has_match_results(&self) -> bool {
         !self.match_results.is_empty()
+    }
+}
+
+/// Walk every player in the world, find loaned-in players, and bill
+/// the parent club for its residual share of the primary contract that
+/// the borrower's loan contract didn't cover. Runs once per calendar
+/// month from `simulate_with`.
+///
+/// Residual = `(parent_salary - loan_salary).max(0) / 12`. When
+/// `loan_wage_contribution_pct` is recorded it implies the loan salary
+/// is already a percentage of the parent salary, so the residual
+/// arithmetic is correct without a separate pct path. Negative
+/// residuals (borrower paying more than the parent contract — should
+/// not happen in practice) are clamped to zero so we never accidentally
+/// credit the parent.
+fn settle_parent_residual_loan_wages(data: &mut SimulatorData) {
+    // Pass 1 (read): collect (parent_club_id, monthly_residual) entries
+    // so we don't hold borrows across the credit pass.
+    let mut owed_by_parent: HashMap<u32, i64> = HashMap::new();
+    for continent in &data.continents {
+        for country in &continent.countries {
+            for club in &country.clubs {
+                for team in club.teams.teams.iter() {
+                    for player in team.players.players.iter() {
+                        let Some(loan) = player.contract_loan.as_ref() else {
+                            continue;
+                        };
+                        let Some(parent_id) = loan.loan_from_club_id else {
+                            continue;
+                        };
+                        let Some(parent_contract) = player.contract.as_ref() else {
+                            continue;
+                        };
+                        let parent_annual = parent_contract.salary;
+                        let borrower_annual = loan.salary;
+                        let residual_annual =
+                            parent_annual.saturating_sub(borrower_annual);
+                        if residual_annual == 0 {
+                            continue;
+                        }
+                        let monthly = (residual_annual / 12) as i64;
+                        if monthly > 0 {
+                            *owed_by_parent.entry(parent_id).or_insert(0) += monthly;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Pass 2 (write): charge each parent club once.
+    for (parent_id, amount) in owed_by_parent {
+        if let Some(club) = data.club_mut(parent_id) {
+            club.finance.balance.push_expense_player_wages(amount);
+        }
     }
 }
 

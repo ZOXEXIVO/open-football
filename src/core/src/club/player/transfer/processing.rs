@@ -6,7 +6,14 @@ use chrono::{NaiveDate, NaiveDateTime};
 impl Player {
     pub(crate) fn process_contract(&mut self, result: &mut PlayerResult, now: NaiveDateTime) {
         // Snapshot threshold inputs before borrowing contract mutably.
-        let career_apps = (self.statistics.played as u32) + (self.statistics.played_subs as u32);
+        // Career apps for the threshold clause means *club-career* — the
+        // sum of every season this player has spent at the current club,
+        // not just this season's apps. The history helper sums prior
+        // frozen seasons + current-season live stats keyed by the active
+        // current-spell team slug.
+        let career_apps = self
+            .statistics_history
+            .current_club_career_apps(self.statistics.played, self.statistics.played_subs);
         let caps = self.player_attributes.international_apps;
 
         if let Some(ref mut contract) = self.contract {

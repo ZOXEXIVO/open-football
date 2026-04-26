@@ -1,4 +1,4 @@
-use crate::club::player::contract::contract::encode_threshold_pct;
+use crate::club::player::contract::contract::{is_inert_bonus, is_inert_clause};
 use crate::{
     ContractBonus, ContractBonusType, ContractClause, ContractClauseType, ContractType, Player,
     PlayerClubContract, PlayerContractProposal, PlayerSquadStatus,
@@ -27,8 +27,24 @@ impl AcceptContractHandler {
             .clone()
             .unwrap_or(current_status);
 
-        let bonuses = build_bonuses(&proposal);
-        let clauses = build_clauses(&proposal);
+        let mut bonuses = build_bonuses(&proposal);
+        let mut clauses = build_clauses(&proposal);
+        // Strip inert types so a future code path can't sneak a
+        // decorative bonus or clause onto a contract — those would
+        // inflate the perceived package value (happiness / acceptance
+        // scoring) without ever costing the club anything.
+        bonuses.retain(|b| !is_inert_bonus(&b.bonus_type));
+        clauses.retain(|c| !is_inert_clause(&c.bonus_type));
+
+        // Anchor the cap-bonus baseline at the player's CURRENT caps so
+        // pre-existing international caps do NOT trigger a retroactive
+        // payout on the next monthly finance pass. Without this, a
+        // 30-cap player signing a contract with an InternationalCapFee
+        // would be credited 30 cap bonuses on day one.
+        let installs_cap_bonus = proposal.international_cap_bonus.unwrap_or(0) > 0;
+        if installs_cap_bonus {
+            player.last_intl_caps_paid = player.player_attributes.international_apps;
+        }
 
         // `signing_bonus_paid = false` defers the actual cash transfer to
         // the next monthly finance pass — it scans contracts for unpaid
@@ -166,20 +182,23 @@ fn build_clauses(p: &PlayerContractProposal) -> Vec<ContractClause> {
         }
     }
     if let Some((threshold, pct)) = p.wage_after_apps {
-        // Pack threshold and negotiated rise percentage into a single
-        // i32 (`threshold * 100 + pct`) so we don't widen ContractClause
-        // for two thresholded clauses. Decoded at apply-time.
+        // Use explicit threshold + percentage fields so the negotiated
+        // rise size survives intact — the previous packed encoding
+        // (`threshold * 100 + pct`) silently broke for raw-threshold
+        // values like 100 and could not survive a round-trip.
         if threshold > 0 {
-            clauses.push(ContractClause::new(
-                encode_threshold_pct(threshold, pct),
+            clauses.push(ContractClause::new_threshold_pct(
+                threshold,
+                pct,
                 ContractClauseType::WageAfterReachingClubCareerLeagueGames,
             ));
         }
     }
     if let Some((threshold, pct)) = p.wage_after_caps {
         if threshold > 0 {
-            clauses.push(ContractClause::new(
-                encode_threshold_pct(threshold, pct),
+            clauses.push(ContractClause::new_threshold_pct(
+                threshold,
+                pct,
                 ContractClauseType::WageAfterReachingInternationalCaps,
             ));
         }

@@ -2,6 +2,30 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
+/// Hint passed to [`Relations::recalculate_chemistry_with_context`] so the
+/// chemistry calculation can read squad-wide signals — leadership, captain,
+/// turnover — that the per-relation store can't see on its own. When the
+/// caller doesn't have this context (legacy paths, isolated tests) the
+/// chemistry recalculation falls back to neutral defaults for those terms.
+#[derive(Debug, Clone, Default)]
+pub struct ChemistryContext {
+    /// Top-3 leadership scores in the dressing room, raw 0..20 scale, sorted
+    /// descending. Drives the leadership_quality term. Empty fallback → 50.
+    pub top_leadership_scores: Vec<f32>,
+    /// Top-3 influence scores (`relation.influence` summed across the squad
+    /// per player), 0..100 scale, sorted descending. Empty fallback → 50.
+    pub top_influence_scores: Vec<f32>,
+    /// Captain id — receives a 1.5× weight in leadership_quality.
+    pub captain_id: Option<u32>,
+    /// Vice-captain id — receives a 1.2× weight in leadership_quality.
+    pub vice_captain_id: Option<u32>,
+    /// Number of new signings in the last 90 days. Drives turnover_penalty.
+    pub recent_signings_90d: u8,
+    /// Inner-circle cohesion (0..1) — proxy for group_cohesion. Pulled from
+    /// the GroupDynamics model so callers don't have to compute it.
+    pub inner_circle_cohesion: f32,
+}
+
 /// Enhanced Relations system with complex relationship dynamics
 #[derive(Debug, Clone)]
 pub struct Relations {
@@ -304,6 +328,42 @@ impl Relations {
         self.chemistry.recalculate(&self.players, &self.staffs);
     }
 
+    /// Recalculate chemistry with squad-wide context (captain, leadership,
+    /// turnover). Use this when the caller can supply the extra signals;
+    /// otherwise the inner [`Relations::process_weekly_update`] still falls
+    /// back to the neutral-default version.
+    pub fn recalculate_chemistry_with_context(&mut self, ctx: &ChemistryContext) {
+        self.chemistry
+            .recalculate_with_context(&self.players, &self.staffs, &self.groups, ctx);
+    }
+
+    /// Iterate this subject's player-side relations as `(target_id, relation)`.
+    /// Used by squad-level passes (chemistry context, leadership totals) that
+    /// need to roll up relations across many subjects without exposing the
+    /// internal RelationStore type.
+    pub fn player_relations_iter(&self) -> impl Iterator<Item = (&u32, &PlayerRelation)> {
+        self.players.iter()
+    }
+
+    /// Iterate this subject's staff-side relations the same way as
+    /// `player_relations_iter`.
+    pub fn staff_relations_iter(&self) -> impl Iterator<Item = (&u32, &StaffRelation)> {
+        self.staffs.iter()
+    }
+
+    /// Inner-circle cohesion (0..1) for the subject's perceived clique —
+    /// useful when callers want to roll up many subjects' cohesion signals
+    /// into a [`ChemistryContext::inner_circle_cohesion`] without exposing
+    /// the GroupDynamics struct.
+    pub fn inner_circle_cohesion(&self) -> f32 {
+        const INNER_CIRCLE_GROUP: GroupId = 1;
+        self.groups
+            .groups
+            .get(&INNER_CIRCLE_GROUP)
+            .map(|g| g.cohesion.clamp(0.0, 1.0))
+            .unwrap_or(0.0)
+    }
+
 }
 
 /// Store for relationships of a specific type
@@ -363,6 +423,14 @@ trait Relationship {
     fn is_disliked(&self) -> bool;
     fn apply_decay(&mut self);
     fn apply_change(&mut self, change: &RelationshipChange);
+    /// Return a 0..100 quality summary used by chemistry's player_harmony /
+    /// coach_relationship terms. Different implementors weight the inputs
+    /// differently — a player relation cares about trust + respect, a staff
+    /// relation cares about authority respect + trust in abilities.
+    fn quality_score(&self) -> f32;
+    /// Contribution to the chemistry conflict_level term. 0 for neutral or
+    /// positive relations; positive for rivalries, dislikes, hostility.
+    fn conflict_contribution(&self) -> f32;
 }
 
 /// Player relationship details
@@ -436,6 +504,35 @@ impl Relationship for PlayerRelation {
 
         // Momentum decays
         self.momentum *= 0.95;
+    }
+
+    fn quality_score(&self) -> f32 {
+        // level ∈ [-100, 100] → 0..100 axis
+        let level_axis = (self.level + 100.0) / 2.0;
+        // trust, professional_respect already on 0..100
+        // Mirror the spec weighting: relation quality = level*0.4 + (trust-50)*0.3 + (prof_respect-50)*0.3
+        // Centre trust/prof around 50 to keep neutral input → 50 output.
+        let combined = level_axis * 0.4
+            + self.trust * 0.3
+            + self.professional_respect * 0.3;
+        combined.clamp(0.0, 100.0)
+    }
+
+    fn conflict_contribution(&self) -> f32 {
+        let mut acc = 0.0;
+        let is_rivalry = !self.rivalry_with.is_empty();
+        let level = self.level;
+        if level <= -75.0 {
+            acc += 25.0; // critical conflict
+        } else if level <= -50.0 {
+            acc += 15.0; // serious conflict
+        } else if self.is_disliked() {
+            acc += 8.0; // mild dislike
+        }
+        if is_rivalry {
+            acc += 6.0;
+        }
+        acc
     }
 
     fn apply_change(&mut self, change: &RelationshipChange) {
@@ -574,6 +671,25 @@ impl Relationship for StaffRelation {
 
         // Level trends toward neutral
         self.level *= 0.99;
+    }
+
+    fn quality_score(&self) -> f32 {
+        let level_axis = (self.level + 100.0) / 2.0;
+        // Mix in authority respect + trust in abilities (already 0..100).
+        (level_axis * 0.4 + self.authority_respect * 0.3 + self.trust_in_abilities * 0.3)
+            .clamp(0.0, 100.0)
+    }
+
+    fn conflict_contribution(&self) -> f32 {
+        if self.level <= -75.0 {
+            18.0
+        } else if self.level <= -50.0 {
+            10.0
+        } else if self.is_disliked() {
+            5.0
+        } else {
+            0.0
+        }
     }
 
     fn apply_change(&mut self, change: &RelationshipChange) {
@@ -772,11 +888,17 @@ enum GroupType {
     Professional,
 }
 
-/// Team chemistry calculator
+/// Team chemistry calculator. Six-factor model (player_harmony, leadership,
+/// coach_relationship, group_cohesion, conflict_level, turnover_penalty)
+/// blended into a single 0..100 chemistry score that downstream systems
+/// (training, match rating, selection) can read.
 #[derive(Debug, Clone)]
 struct TeamChemistry {
     overall: f32,
     factors: ChemistryFactors,
+    /// Last-known turnover penalty (raw points subtracted in the formula).
+    /// Surfaced via [`ChemistryFactors`] for UI/diagnostics.
+    turnover_penalty: f32,
 }
 
 impl TeamChemistry {
@@ -784,64 +906,211 @@ impl TeamChemistry {
         TeamChemistry {
             overall: 50.0,
             factors: ChemistryFactors::default(),
+            turnover_penalty: 0.0,
         }
     }
 
+    /// Legacy recalculate — used by per-relation update paths that don't
+    /// have squad-wide context. Falls back to neutral defaults for the
+    /// signals it can't compute (leadership, turnover, captain weighting).
     fn recalculate<T: Relationship, S: Relationship>(
         &mut self,
         players: &RelationStore<T>,
         staffs: &RelationStore<S>,
     ) {
-        // Calculate various chemistry factors
-        let player_harmony = self.calculate_player_harmony(players);
-        let leadership_quality = self.calculate_leadership_quality(players);
-        let coach_relationship = self.calculate_coach_relationship(staffs);
+        let ctx = ChemistryContext::default();
+        let player_harmony = calculate_player_harmony(players);
+        let coach_relationship = calculate_coach_relationship(staffs);
+        let leadership_quality = calculate_leadership_quality_default(&ctx);
+        let conflict_level = calculate_conflict_level(players);
+        let group_cohesion = (ctx.inner_circle_cohesion * 100.0).clamp(0.0, 100.0).max(50.0);
+        let turnover = turnover_penalty_for(ctx.recent_signings_90d);
 
         self.factors = ChemistryFactors {
             player_harmony,
             leadership_quality,
             coach_relationship,
-            group_cohesion: 50.0, // Simplified
-            conflict_level: 10.0, // Simplified
+            group_cohesion,
+            conflict_level,
         };
-
-        // Calculate overall chemistry
-        self.overall = (
-            player_harmony * 0.4 +
-                leadership_quality * 0.2 +
-                coach_relationship * 0.3 +
-                self.factors.group_cohesion * 0.1
-        ) * (1.0 - self.factors.conflict_level / 100.0);
+        self.turnover_penalty = turnover;
+        self.overall = blend_chemistry(
+            player_harmony,
+            leadership_quality,
+            coach_relationship,
+            group_cohesion,
+            conflict_level,
+            turnover,
+        );
     }
 
-    fn calculate_player_harmony<T: Relationship>(&self, players: &RelationStore<T>) -> f32 {
-        if players.relations.is_empty() {
-            return 50.0;
-        }
+    /// Context-aware recalculate — used by the team's weekly tick where the
+    /// caller can supply captain, top influencers, recent signings.
+    fn recalculate_with_context<T: Relationship, S: Relationship>(
+        &mut self,
+        players: &RelationStore<T>,
+        staffs: &RelationStore<S>,
+        groups: &GroupDynamics,
+        ctx: &ChemistryContext,
+    ) {
+        let player_harmony = calculate_player_harmony(players);
+        let coach_relationship = calculate_coach_relationship(staffs);
+        let leadership_quality = calculate_leadership_quality_default(ctx);
+        let conflict_level = calculate_conflict_level(players);
 
-        let avg_positive = players.relations.values()
-            .filter(|r| !r.is_disliked())
-            .count() as f32;
+        // Group cohesion: prefer caller-supplied inner_circle_cohesion (the
+        // squad-wide aggregate); fall back to the per-store group's average.
+        let circle = if ctx.inner_circle_cohesion > 0.0 {
+            ctx.inner_circle_cohesion
+        } else {
+            groups
+                .groups
+                .values()
+                .map(|g| g.cohesion)
+                .sum::<f32>()
+                / groups.groups.len().max(1) as f32
+        };
+        let group_cohesion = (circle * 100.0).clamp(0.0, 100.0).max(35.0);
 
-        (avg_positive / players.relations.len() as f32) * 100.0
+        let turnover = turnover_penalty_for(ctx.recent_signings_90d);
+
+        self.factors = ChemistryFactors {
+            player_harmony,
+            leadership_quality,
+            coach_relationship,
+            group_cohesion,
+            conflict_level,
+        };
+        self.turnover_penalty = turnover;
+        self.overall = blend_chemistry(
+            player_harmony,
+            leadership_quality,
+            coach_relationship,
+            group_cohesion,
+            conflict_level,
+            turnover,
+        );
+    }
+}
+
+/// Player harmony — weighted average across all stored player relations of
+/// (level, trust, professional_respect). Maps the natural -100..100 / 0..100
+/// inputs onto a single 0..100 axis. Empty store → 50 (neutral).
+fn calculate_player_harmony<T: Relationship>(players: &RelationStore<T>) -> f32 {
+    if players.relations.is_empty() {
+        return 50.0;
+    }
+    let mut acc = 0.0f32;
+    let mut count = 0.0f32;
+    for rel in players.relations.values() {
+        // Ask the relation for its quality summary (0..100) — defined on
+        // the Relationship trait so PlayerRelation and StaffRelation can
+        // share the harmony pipeline.
+        acc += rel.quality_score();
+        count += 1.0;
+    }
+    (acc / count).clamp(0.0, 100.0)
+}
+
+/// Leadership quality — average of the top 3 influence/leadership scores
+/// (with captain ×1.5, vice ×1.2 weighting). Empty list → 50, *not* 60.
+fn calculate_leadership_quality_default(ctx: &ChemistryContext) -> f32 {
+    if ctx.top_leadership_scores.is_empty() && ctx.top_influence_scores.is_empty() {
+        return 50.0;
     }
 
-    fn calculate_leadership_quality<T: Relationship>(&self, _players: &RelationStore<T>) -> f32 {
-        // Simplified - would check actual leader relationships
-        60.0
+    // Combine raw 0..20 leadership and 0..100 influence into a single 0..100
+    // axis. Leadership is our primary signal; influence pulls the score
+    // toward the dressing-room reality (a quiet pro can still command
+    // respect).
+    let leadership_norm: Vec<f32> = ctx
+        .top_leadership_scores
+        .iter()
+        .take(3)
+        .map(|v| (v / 20.0 * 100.0).clamp(0.0, 100.0))
+        .collect();
+    let influence_norm: Vec<f32> = ctx
+        .top_influence_scores
+        .iter()
+        .take(3)
+        .map(|v| v.clamp(0.0, 100.0))
+        .collect();
+
+    let mut score = 0.0f32;
+    let mut weight = 0.0f32;
+    for (i, v) in leadership_norm.iter().enumerate() {
+        let w = if i == 0 { 1.5 } else if i == 1 { 1.2 } else { 1.0 };
+        score += v * w;
+        weight += w;
     }
-
-    fn calculate_coach_relationship<S: Relationship>(&self, staffs: &RelationStore<S>) -> f32 {
-        if staffs.relations.is_empty() {
-            return 50.0;
-        }
-
-        let avg_positive = staffs.relations.values()
-            .filter(|r| !r.is_disliked())
-            .count() as f32;
-
-        (avg_positive / staffs.relations.len() as f32) * 100.0
+    for (i, v) in influence_norm.iter().enumerate() {
+        let w = if i == 0 { 0.6 } else if i == 1 { 0.5 } else { 0.4 };
+        score += v * w;
+        weight += w;
     }
+    if weight <= 0.0 {
+        return 50.0;
+    }
+    (score / weight).clamp(0.0, 100.0)
+}
+
+/// Coach relationship — weighted average across all staff relations of
+/// (level, authority_respect, trust_in_abilities). Empty store → 50.
+fn calculate_coach_relationship<S: Relationship>(staffs: &RelationStore<S>) -> f32 {
+    if staffs.relations.is_empty() {
+        return 50.0;
+    }
+    let mut acc = 0.0f32;
+    let mut count = 0.0f32;
+    for rel in staffs.relations.values() {
+        acc += rel.quality_score();
+        count += 1.0;
+    }
+    (acc / count).clamp(0.0, 100.0)
+}
+
+/// Conflict level — sum of explicit conflict signals capped at 100. Mild
+/// dislikes contribute small amounts; rivalries and outright hostility
+/// contribute more. Caller-provided rivalry/conflict severity flags would
+/// further tune this; the relation store itself only sees per-pair levels.
+fn calculate_conflict_level<T: Relationship>(players: &RelationStore<T>) -> f32 {
+    let mut total = 0.0f32;
+    for rel in players.relations.values() {
+        total += rel.conflict_contribution();
+    }
+    total.min(100.0)
+}
+
+/// Turnover penalty — recent signings unsettle dressing rooms. Step
+/// function: 1 signing = mild, 7+ = severe.
+fn turnover_penalty_for(recent_signings: u8) -> f32 {
+    match recent_signings {
+        0 => 0.0,
+        1 => 2.0,
+        2..=3 => 5.0,
+        4..=6 => 10.0,
+        _ => 18.0,
+    }
+}
+
+/// Final blend — clamped to 0..100. Centred at 50 with linear contributions
+/// from each factor's deviation from neutral.
+fn blend_chemistry(
+    player_harmony: f32,
+    leadership_quality: f32,
+    coach_relationship: f32,
+    group_cohesion: f32,
+    conflict_level: f32,
+    turnover_penalty: f32,
+) -> f32 {
+    let raw = 50.0
+        + (player_harmony - 50.0) * 0.35
+        + (leadership_quality - 50.0) * 0.20
+        + (coach_relationship - 50.0) * 0.20
+        + (group_cohesion - 50.0) * 0.15
+        - conflict_level * 0.35
+        - turnover_penalty;
+    raw.clamp(0.0, 100.0)
 }
 
 #[derive(Debug, Clone, Default)]

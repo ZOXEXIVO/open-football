@@ -6,6 +6,38 @@ use crate::{
 use chrono::{Datelike, NaiveDateTime, Weekday};
 use std::collections::HashMap;
 
+/// Deterministic pseudo-random roll in `[0.0, 1.0)` for an unordered pair
+/// of player ids on a given date. Same pair + date always returns the same
+/// number — keeps weekly tests stable. The `salt` parameter lets us run
+/// independent bond / friction rolls that don't collide.
+fn pair_roll(a: u32, b: u32, salt: u32, date: chrono::NaiveDate) -> f32 {
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    // Cheap hash — wrapping multiplication on a couple of large primes.
+    // Determinism over cryptographic strength is what we need here.
+    let h = (lo as u64)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add((hi as u64).wrapping_mul(0xC6BC_279E_9286_5A2B))
+        .wrapping_add(salt as u64)
+        .wrapping_add(date.num_days_from_ce() as u64);
+    let frac = ((h >> 11) as u32 as f32) / (u32::MAX as f32);
+    frac.clamp(0.0, 0.999)
+}
+
+/// Returns true when a recovering (Lmp) player can safely take part in
+/// the given session. Heavy physical or high-tempo tactical work is
+/// excluded — those need full match fitness, not rehab fitness.
+fn is_recovery_compatible_session(session_type: &TrainingType) -> bool {
+    matches!(
+        session_type,
+        TrainingType::Recovery
+            | TrainingType::LightRecovery
+            | TrainingType::Rehabilitation
+            | TrainingType::RestDay
+            | TrainingType::VideoAnalysis
+            | TrainingType::Positioning
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct TeamTraining;
 
@@ -129,7 +161,7 @@ impl TeamTraining {
         if !session.participants.is_empty() {
             for player_id in &session.participants {
                 if let Some(player) = team.players.find(*player_id) {
-                    if Self::can_participate(player) {
+                    if Self::can_participate(player, session) {
                         participants.push(player);
                     }
                 }
@@ -137,7 +169,7 @@ impl TeamTraining {
         } else if !session.focus_positions.is_empty() {
             // Select players based on focus positions
             for player in team.players.iter() {
-                if Self::can_participate(player) {
+                if Self::can_participate(player, session) {
                     for position in &session.focus_positions {
                         if player.positions.has_position(*position) {
                             participants.push(player);
@@ -149,7 +181,7 @@ impl TeamTraining {
         } else {
             // All available players participate
             for player in team.players.iter() {
-                if Self::can_participate(player) {
+                if Self::can_participate(player, session) {
                     participants.push(player);
                 }
             }
@@ -158,10 +190,23 @@ impl TeamTraining {
         participants
     }
 
-    fn can_participate(player: &Player) -> bool {
-        !player.player_attributes.is_injured &&
-            !player.player_attributes.is_banned &&
-            player.player_attributes.condition_percentage() > 30
+    fn can_participate(player: &Player, session: &TrainingSession) -> bool {
+        if player.player_attributes.is_injured || player.player_attributes.is_banned {
+            return false;
+        }
+        if player.player_attributes.condition_percentage() <= 30 {
+            return false;
+        }
+        // Returning-from-injury (Lmp) players only join light /
+        // rehabilitation sessions. Throwing them straight into a
+        // pressing drill is the canonical way to reaggravate the
+        // injury — not how a real fitness coach manages a return.
+        if player.player_attributes.is_in_recovery()
+            && !is_recovery_compatible_session(&session.session_type)
+        {
+            return false;
+        }
+        true
     }
 
     fn apply_team_cohesion_effects(team: &mut Team, training_results: &TeamTrainingResult, sim_date: chrono::NaiveDate) {
@@ -171,17 +216,15 @@ impl TeamTraining {
             .map(|r| r.player_id)
             .collect();
 
-        // Small relationship improvements between training partners
-        for i in 0..participant_ids.len() {
-            for j in i + 1..participant_ids.len() {
-                if let Some(player_i) = team.players.find_mut(participant_ids[i]) {
-                    player_i.relations.update(participant_ids[j], 0.01, sim_date);
-                }
-                if let Some(player_j) = team.players.find_mut(participant_ids[j]) {
-                    player_j.relations.update(participant_ids[i], 0.01, sim_date);
-                }
-            }
-        }
+        // Per-pair bonding/friction. The old "+0.01 across the board" was
+        // unrealistic — striker rivals don't bond at the same rate as a
+        // mentor pair. We compute a deterministic bond/friction chance per
+        // pair from shared language, position group, mentorship, morale,
+        // and personality, then apply a meaningful relation magnitude only
+        // when the chance passes a per-pair pseudo-random threshold.
+        // Determinism: chance comparison uses a seeded function of the two
+        // ids so tests stay stable across runs.
+        Self::apply_pairwise_bonding(team, &participant_ids, training_results, sim_date);
 
         // Coach-player relationship updates based on training quality
         let coach_id = team.staffs.head_coach().id;
@@ -224,6 +267,198 @@ impl TeamTraining {
                         relationship_boost,
                     );
                     player.relations.update_staff_relationship(coach_id, change, sim_date);
+                }
+            }
+        }
+    }
+
+    /// Pair-wise training bonding/friction. Replaces the universal +0.01
+    /// nudge with a richer model: shared language, position group, mentor
+    /// pair, professionalism, and morale all influence bond chance; the
+    /// flip side fires friction for direct rivals or low-professionalism
+    /// pairs. Magnitude is non-trivial when an event lands so chemistry
+    /// actually moves — but we gate event emission so the player history
+    /// only sees meaningful bonds.
+    fn apply_pairwise_bonding(
+        team: &mut Team,
+        participant_ids: &[u32],
+        training_results: &TeamTrainingResult,
+        sim_date: chrono::NaiveDate,
+    ) {
+        use crate::HappinessEventType;
+
+        // Index morale changes by player id so we don't iterate the result
+        // vector once per pair.
+        let mut morale_change: HashMap<u32, f32> = HashMap::with_capacity(
+            training_results.player_results.len(),
+        );
+        for r in &training_results.player_results {
+            morale_change.insert(r.player_id, r.effects.morale_change);
+        }
+
+        // Snapshot per-player bonding inputs (immutable) so we can apply
+        // mutations afterwards without aliasing the player borrow.
+        struct Snap {
+            id: u32,
+            position_group: crate::PlayerFieldPositionGroup,
+            primary_lang: Option<crate::club::player::language::Language>,
+            languages: Vec<(crate::club::player::language::Language, u8)>,
+            morale: f32,
+            controversy: f32,
+            professionalism: f32,
+            mentor_target: Option<u32>,
+        }
+
+        let snaps: Vec<Snap> = participant_ids
+            .iter()
+            .filter_map(|id| {
+                let p = team.players.find(*id)?;
+                let group = p.position().position_group();
+                let primary_lang = p
+                    .languages
+                    .iter()
+                    .find(|l| l.is_native)
+                    .or_else(|| p.languages.iter().max_by_key(|l| l.proficiency))
+                    .map(|l| l.language);
+                let languages: Vec<_> = p
+                    .languages
+                    .iter()
+                    .filter(|l| l.is_native || l.proficiency >= 60)
+                    .map(|l| (l.language, l.proficiency))
+                    .collect();
+                let mentor_target = p
+                    .relations
+                    .player_relations_iter()
+                    .find_map(|(other_id, rel)| {
+                        if rel.mentorship.is_some() {
+                            Some(*other_id)
+                        } else {
+                            None
+                        }
+                    });
+                Some(Snap {
+                    id: *id,
+                    position_group: group,
+                    primary_lang,
+                    languages,
+                    morale: p.happiness.morale,
+                    controversy: p.attributes.controversy,
+                    professionalism: p.attributes.professionalism,
+                    mentor_target,
+                })
+            })
+            .collect();
+
+        // Pairwise pass — collect changes first, then apply, so we don't
+        // hold a long mutable borrow on `team`.
+        struct Effect {
+            from: u32,
+            to: u32,
+            relation_change: f32, // signed magnitude on the level axis
+            bond: bool,
+        }
+        let mut effects: Vec<Effect> = Vec::new();
+
+        for i in 0..snaps.len() {
+            for j in (i + 1)..snaps.len() {
+                let a = &snaps[i];
+                let b = &snaps[j];
+                let same_group = a.position_group == b.position_group;
+                let direct_rivals = same_group;
+                // Shared language if either side has the other side's
+                // primary language at proficiency ≥ 60 (or native).
+                let shared_language = match (a.primary_lang, b.primary_lang) {
+                    (Some(la), Some(lb)) if la == lb => true,
+                    (Some(la), _) => b.languages.iter().any(|(l, _)| *l == la),
+                    (_, Some(lb)) => a.languages.iter().any(|(l, _)| *l == lb),
+                    _ => false,
+                };
+                let mentor_pair =
+                    a.mentor_target == Some(b.id) || b.mentor_target == Some(a.id);
+                let both_pro = a.professionalism >= 14.0 && b.professionalism >= 14.0;
+                let avg_session_morale =
+                    (morale_change.get(&a.id).copied().unwrap_or(0.0)
+                        + morale_change.get(&b.id).copied().unwrap_or(0.0))
+                        / 2.0;
+                let positive_session = avg_session_morale > 0.0;
+                let either_low_morale = a.morale < 35.0 || b.morale < 35.0;
+                let either_high_controversy =
+                    a.controversy > 14.0 || b.controversy > 14.0;
+                let either_low_pro =
+                    a.professionalism < 8.0 || b.professionalism < 8.0;
+
+                // Bond chance build-up.
+                let mut bond_chance = 0.03;
+                if same_group { bond_chance += 0.04; }
+                if shared_language { bond_chance += 0.05; }
+                if mentor_pair { bond_chance += 0.08; }
+                if both_pro { bond_chance += 0.03; }
+                if positive_session { bond_chance += 0.04; }
+                if direct_rivals { bond_chance -= 0.04; }
+                if either_low_morale { bond_chance -= 0.03; }
+                if either_high_controversy { bond_chance -= 0.03; }
+
+                // Friction chance.
+                let mut friction_chance = 0.01;
+                if direct_rivals { friction_chance += 0.04; }
+                if either_low_pro { friction_chance += 0.03; }
+                if either_high_controversy { friction_chance += 0.03; }
+
+                // Deterministic per-pair "roll" — same hash twice in the
+                // same week resolves identically. Independent rolls for
+                // bond and friction so the same pair can't trigger both.
+                let bond_roll = pair_roll(a.id, b.id, 0xB0_4D, sim_date);
+                let friction_roll = pair_roll(a.id, b.id, 0xF1_2A, sim_date);
+
+                if bond_chance > 0.0 && bond_roll < bond_chance {
+                    let mut mag: f32 = 0.08;
+                    if mentor_pair { mag += 0.10; }
+                    if shared_language { mag += 0.05; }
+                    mag = mag.clamp(0.08, 0.25);
+                    effects.push(Effect { from: a.id, to: b.id, relation_change: mag, bond: true });
+                    effects.push(Effect { from: b.id, to: a.id, relation_change: mag, bond: true });
+                } else if friction_chance > 0.0 && friction_roll < friction_chance {
+                    let mut mag: f32 = 0.10;
+                    if direct_rivals { mag += 0.08; }
+                    if either_low_pro { mag += 0.07; }
+                    if either_high_controversy { mag += 0.05; }
+                    mag = mag.clamp(0.10, 0.35);
+                    effects.push(Effect { from: a.id, to: b.id, relation_change: -mag, bond: false });
+                    effects.push(Effect { from: b.id, to: a.id, relation_change: -mag, bond: false });
+                }
+            }
+        }
+
+        // Apply effects. Event emission only on magnitudes ≥ 0.5 to keep
+        // the player history readable — small drifts stay silent.
+        for eff in effects {
+            if let Some(player) = team.players.find_mut(eff.from) {
+                let change_type = if eff.bond {
+                    crate::ChangeType::TrainingBonding
+                } else {
+                    crate::ChangeType::TrainingFriction
+                };
+                player.relations.update_with_type(
+                    eff.to,
+                    eff.relation_change,
+                    change_type,
+                    sim_date,
+                );
+
+                if eff.relation_change.abs() >= 0.5 {
+                    if eff.bond {
+                        player.happiness.add_event_with_partner(
+                            HappinessEventType::TeammateBonding,
+                            0.6,
+                            Some(eff.to),
+                        );
+                    } else {
+                        player.happiness.add_event_with_partner(
+                            HappinessEventType::ConflictWithTeammate,
+                            -0.8,
+                            Some(eff.to),
+                        );
+                    }
                 }
             }
         }
@@ -606,9 +841,20 @@ pub struct TrainingEffects {
     pub physical_gains: PhysicalGains,
     pub technical_gains: TechnicalGains,
     pub mental_gains: MentalGains,
+    /// Net change to in-match condition. Positive = costs condition,
+    /// negative = recovery. Applied after clamping.
     pub fatigue_change: f32,
     pub injury_risk: f32,
     pub morale_change: f32,
+    /// Physical-load units booked into `PlayerLoad`. A heavy match-prep
+    /// or pressing drill ≈ 30-40 units; passive video session = 0.
+    pub physical_load_units: f32,
+    /// Share of the load that's high-intensity (0.0..1.0).
+    pub high_intensity_share: f32,
+    /// Match-readiness delta. Replaces the old "any negative fatigue
+    /// gives +2 sharpness" rule — passive recovery now gains nothing,
+    /// real match-tempo work gains a lot.
+    pub readiness_change: f32,
 }
 
 impl TrainingEffects {

@@ -520,4 +520,133 @@ impl PlayerStatisticsHistory {
         }
         totals
     }
+
+    /// Slug of the player's currently active club spell — the entry in
+    /// `current` without a `departed_date`. Used to identify which past
+    /// items belong to the *current* club for career-apps clauses.
+    pub fn active_team_slug(&self) -> Option<&str> {
+        self.current
+            .iter()
+            .find(|e| e.departed_date.is_none())
+            .map(|e| e.team_slug.as_str())
+    }
+
+    /// Total competitive (league + cup) apps the player has logged for
+    /// their current club across all spells: prior frozen seasons +
+    /// current-season snapshot. `live_played` / `live_played_subs` come
+    /// from `player.statistics` because the current-season `current`
+    /// entry isn't updated until event boundaries.
+    ///
+    /// Used by `WageAfterReachingClubCareerLeagueGames` so the threshold
+    /// counts a player's full club tenure, not just this season.
+    pub fn current_club_career_apps(
+        &self,
+        live_played: u16,
+        live_played_subs: u16,
+    ) -> u32 {
+        let slug = match self.active_team_slug() {
+            Some(s) => s,
+            None => return live_played as u32 + live_played_subs as u32,
+        };
+        let mut total: u32 = 0;
+        // Prior seasons at this club (frozen items).
+        for item in &self.items {
+            if item.team_slug == slug {
+                total = total
+                    .saturating_add(item.statistics.played as u32)
+                    .saturating_add(item.statistics.played_subs as u32);
+            }
+        }
+        // Current-season at this club uses LIVE stats — the snapshot in
+        // `current` isn't updated continuously.
+        total = total
+            .saturating_add(live_played as u32)
+            .saturating_add(live_played_subs as u32);
+        total
+    }
+}
+
+#[cfg(test)]
+mod club_career_apps_tests {
+    use super::*;
+    use crate::league::Season;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn frozen(season_start: u16, slug: &str, played: u16, played_subs: u16) -> PlayerStatisticsHistoryItem {
+        let mut stats = PlayerStatistics::default();
+        stats.played = played;
+        stats.played_subs = played_subs;
+        PlayerStatisticsHistoryItem {
+            season: Season::new(season_start),
+            team_name: slug.to_string(),
+            team_slug: slug.to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: stats,
+            seq_id: season_start as u32,
+        }
+    }
+
+    fn current(slug: &str, played: u16) -> CurrentSeasonEntry {
+        let mut stats = PlayerStatistics::default();
+        stats.played = played;
+        CurrentSeasonEntry {
+            team_name: slug.to_string(),
+            team_slug: slug.to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: stats,
+            joined_date: d(2025, 8, 1),
+            departed_date: None,
+            seq_id: 999,
+        }
+    }
+
+    #[test]
+    fn club_career_apps_sums_history_at_current_club_plus_live() {
+        // Player has 80 historical apps at "juventus" (split across two
+        // earlier seasons) plus 20 live apps this season at the same
+        // club. Helper should report 100 — exactly the threshold a
+        // 100-app clause would trigger on.
+        let mut hist = PlayerStatisticsHistory::from_items(vec![
+            frozen(2023, "juventus", 30, 5),
+            frozen(2024, "juventus", 40, 5),
+        ]);
+        hist.current.push(current("juventus", 0));
+        let apps = hist.current_club_career_apps(20, 0);
+        assert_eq!(apps, 35 + 45 + 20);
+    }
+
+    #[test]
+    fn club_career_apps_excludes_other_clubs() {
+        // Apps at other clubs (a previous spell at "torino") must NOT
+        // count toward "career apps at the CURRENT club".
+        let mut hist = PlayerStatisticsHistory::from_items(vec![
+            frozen(2022, "torino", 60, 0),
+            frozen(2023, "juventus", 25, 5),
+        ]);
+        hist.current.push(current("juventus", 0));
+        let apps = hist.current_club_career_apps(10, 0);
+        // 30 (Juventus historical) + 10 (live) = 40 — Torino's 60 ignored.
+        assert_eq!(apps, 30 + 10);
+    }
+
+    #[test]
+    fn club_career_apps_falls_back_to_live_only_with_no_active_spell() {
+        // Edge case: empty current vec (mid-transfer). Helper falls back
+        // to live stats only so we don't crash and don't claim apps
+        // never logged.
+        let hist = PlayerStatisticsHistory::new();
+        let apps = hist.current_club_career_apps(5, 2);
+        assert_eq!(apps, 7);
+    }
 }

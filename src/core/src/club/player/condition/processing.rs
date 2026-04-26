@@ -142,3 +142,152 @@ impl Player {
         // No decay for first 3 days (normal rest period)
     }
 }
+
+#[cfg(test)]
+mod recovery_tests {
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::condition::ConditionLabel;
+    use crate::club::player::player::Player;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn make_player(birth: NaiveDate, natural_fitness: f32) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.condition = 5_000;
+        attrs.fitness = 7_000;
+        attrs.jadedness = 2_000;
+        attrs.days_since_last_match = 1;
+        let mut skills = PlayerSkills::default();
+        skills.physical.natural_fitness = natural_fitness;
+        skills.physical.match_readiness = 13.0;
+        PlayerBuilder::new()
+            .id(11)
+            .full_name(FullName::new("T".to_string(), "P".to_string()))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(skills)
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition { position: PlayerPositionType::MidfielderCenter, level: 18 }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn one_match_per_week_mostly_recovers_by_match_day() {
+        // 50% condition midfielder with a week's rest. Rest-only
+        // recovery is intentionally slow — players rely on training
+        // recovery sessions to top up — but a week should still bring
+        // condition back to a "selectable" zone (≥75%).
+        let mut p = make_player(d(2000, 1, 1), 14.0);
+        p.player_attributes.condition = 5_000;
+        let start = d(2025, 9, 1);
+        for i in 0..7 {
+            p.process_condition_recovery(start + chrono::Duration::days(i));
+        }
+        assert!(
+            p.player_attributes.condition >= 7_500,
+            "condition after week of rest: {}",
+            p.player_attributes.condition
+        );
+        // And it should NOT have overshot the 9000 normal level.
+        assert!(p.player_attributes.condition <= 9_000);
+    }
+
+    #[test]
+    fn older_player_recovers_slower_than_younger_with_same_nf() {
+        let mut young = make_player(d(2003, 1, 1), 14.0); // ~22 in 2025
+        let mut old = make_player(d(1990, 1, 1), 14.0); // ~35 in 2025
+        young.player_attributes.condition = 5_000;
+        old.player_attributes.condition = 5_000;
+        // Single day rest — magnitudes are small but the ordering is
+        // robust (age_factor = 1.1 for young, ≈0.75 for 35).
+        for _ in 0..3 {
+            young.process_condition_recovery(d(2025, 9, 1));
+            old.process_condition_recovery(d(2025, 9, 1));
+        }
+        assert!(
+            young.player_attributes.condition > old.player_attributes.condition,
+            "young {} should recover faster than old {}",
+            young.player_attributes.condition,
+            old.player_attributes.condition
+        );
+    }
+
+    #[test]
+    fn high_natural_fitness_helps_recovery_but_isnt_immune() {
+        let mut elite = make_player(d(2000, 1, 1), 19.0);
+        let mut average = make_player(d(2000, 1, 1), 8.0);
+        elite.player_attributes.condition = 5_000;
+        average.player_attributes.condition = 5_000;
+        elite.process_condition_recovery(d(2025, 9, 1));
+        average.process_condition_recovery(d(2025, 9, 1));
+        assert!(
+            elite.player_attributes.condition > average.player_attributes.condition,
+            "elite NF {} should beat avg NF {}",
+            elite.player_attributes.condition,
+            average.player_attributes.condition
+        );
+        // But neither should jump to full
+        assert!(elite.player_attributes.condition < 9_000);
+    }
+
+    #[test]
+    fn condition_label_returning_from_short_injury() {
+        let mut p = make_player(d(2000, 1, 1), 14.0);
+        p.player_attributes.is_injured = false;
+        p.player_attributes.recovery_days_remaining = 5;
+        assert_eq!(p.condition_label(), ConditionLabel::ReturningFromInjury);
+    }
+
+    #[test]
+    fn condition_label_limited_minutes_for_long_recovery() {
+        let mut p = make_player(d(2000, 1, 1), 14.0);
+        p.player_attributes.is_injured = false;
+        p.player_attributes.recovery_days_remaining = 21;
+        assert_eq!(p.condition_label(), ConditionLabel::LimitedMinutesRecommended);
+    }
+
+    #[test]
+    fn condition_label_heavy_legs_when_debt_is_high() {
+        let mut p = make_player(d(2000, 1, 1), 14.0);
+        p.load.recovery_debt = 500.0;
+        p.player_attributes.condition = 9_500;
+        assert_eq!(p.condition_label(), ConditionLabel::HeavyLegs);
+    }
+
+    #[test]
+    fn condition_label_needs_rest_when_jaded() {
+        let mut p = make_player(d(2000, 1, 1), 14.0);
+        p.player_attributes.jadedness = 8_000;
+        assert_eq!(p.condition_label(), ConditionLabel::NeedsRest);
+    }
+
+    #[test]
+    fn condition_label_lacking_match_sharpness() {
+        let mut p = make_player(d(2000, 1, 1), 14.0);
+        p.skills.physical.match_readiness = 6.0;
+        p.player_attributes.days_since_last_match = 21;
+        assert_eq!(p.condition_label(), ConditionLabel::LackingMatchSharpness);
+    }
+
+    #[test]
+    fn condition_label_fresh_for_well_rested_sharp_player() {
+        let mut p = make_player(d(2000, 1, 1), 14.0);
+        p.player_attributes.condition = 9_500;
+        p.player_attributes.jadedness = 1_500;
+        p.skills.physical.match_readiness = 16.0;
+        // No matches in last 7d, no debt
+        assert_eq!(p.condition_label(), ConditionLabel::Fresh);
+    }
+}

@@ -422,14 +422,19 @@ impl PlayerClubContract {
                 ContractClauseType::OptionalContractExtensionByClub
             )
         })?;
-        let years = self.clauses[pos].value.max(0) as i64;
+        let years = self.clauses[pos].value.max(0) as i32;
         if years == 0 {
             self.clauses.remove(pos);
             return None;
         }
+        // Calendar-year shift preserves month/day so the contract still
+        // has a coherent anniversary; falls back to 365-day arithmetic
+        // only on impossible dates (Feb 29 across a non-leap target year).
+        let target_year = self.expiration.year() + years;
         let new_exp = self
             .expiration
-            .checked_add_signed(chrono::Duration::days(365 * years))?;
+            .with_year(target_year)
+            .or_else(|| self.expiration.checked_add_signed(chrono::Duration::days(365 * years as i64)))?;
         self.expiration = new_exp;
         self.clauses.remove(pos);
         Some(self.expiration)
@@ -453,23 +458,27 @@ impl PlayerClubContract {
                 ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason
             )
         })?;
-        let threshold = self.clauses[pos].value.max(0) as u16;
+        let threshold = self.clauses[pos].resolved_threshold();
         if apps_this_season < threshold {
             return None;
         }
+        // Calendar-year shift: keep the same month/day, advance the year.
+        // 365-day arithmetic drifts a day every leap year and breaks the
+        // "contract anniversary" property the yearly_wage_rise helper
+        // relies on.
         let new_exp = self
             .expiration
-            .checked_add_signed(chrono::Duration::days(365))?;
+            .with_year(self.expiration.year() + 1)
+            .or_else(|| self.expiration.checked_add_signed(chrono::Duration::days(365)))?;
         self.expiration = new_exp;
         self.clauses.remove(pos);
         Some(self.expiration)
     }
 
-    /// Wage rise after a club-career league-games threshold. The clause
-    /// stores `threshold * 100 + rise_pct` to preserve the negotiated
-    /// percentage without adding a second slot to ContractClause. Falls
-    /// back to a sensible 20% when the encoded percentage is zero.
-    /// Consumes the clause once fired.
+    /// Wage rise after a club-career league-games threshold. Reads
+    /// `clause.threshold` + `clause.percentage` when present; falls back
+    /// to plain `value` as the threshold and a 20% default rise for
+    /// legacy clauses. Consumes the clause once fired.
     pub fn try_apply_wage_after_career_apps(&mut self, career_apps: u32) -> Option<u32> {
         let pos = self.clauses.iter().position(|c| {
             matches!(
@@ -477,7 +486,8 @@ impl PlayerClubContract {
                 ContractClauseType::WageAfterReachingClubCareerLeagueGames
             )
         })?;
-        let (threshold, pct) = decode_threshold_pct(self.clauses[pos].value, 20);
+        let threshold = self.clauses[pos].resolved_threshold();
+        let pct = self.clauses[pos].resolved_percentage(20);
         if career_apps < threshold as u32 {
             return None;
         }
@@ -487,9 +497,9 @@ impl PlayerClubContract {
         Some(self.salary)
     }
 
-    /// Wage rise after international caps cross a threshold. Encoded as
-    /// `threshold * 100 + rise_pct`. Falls back to 15% when the encoded
-    /// percentage is zero. Consumes the clause once fired.
+    /// Wage rise after international caps cross a threshold. Same shape
+    /// as `try_apply_wage_after_career_apps`; default rise is 15% when
+    /// the negotiated percentage isn't recorded.
     pub fn try_apply_wage_after_caps(&mut self, caps: u16) -> Option<u32> {
         let pos = self.clauses.iter().position(|c| {
             matches!(
@@ -497,8 +507,9 @@ impl PlayerClubContract {
                 ContractClauseType::WageAfterReachingInternationalCaps
             )
         })?;
-        let (threshold, pct) = decode_threshold_pct(self.clauses[pos].value, 15);
-        if caps < threshold as u16 {
+        let threshold = self.clauses[pos].resolved_threshold();
+        let pct = self.clauses[pos].resolved_percentage(15);
+        if caps < threshold {
             return None;
         }
         let bump = (self.salary as u64 * pct as u64 / 100) as u32;
@@ -529,25 +540,35 @@ impl PlayerClubContract {
     }
 }
 
-/// Decode a `threshold * 100 + pct` packed clause value. Negotiation only
-/// stores threshold-bearing clauses with `threshold > 0`; a packed value
-/// like `100 * 100 + 20 = 10020` decodes to `(100, 20)`. Backwards-compat:
-/// if `value < 100` (older saves before the encoding), treat the whole
-/// number as the threshold and use the supplied `default_pct`.
-pub(crate) fn encode_threshold_pct(threshold: u16, pct: u8) -> i32 {
-    threshold as i32 * 100 + pct.min(99) as i32
+/// True for bonus types that have no payout site in the simulation.
+/// Acceptance/install code filters these out so the renewal or transfer
+/// AI can't accidentally install a decorative bonus that never costs
+/// the club anything but inflates the player's perceived package value.
+///
+/// To make a type "active" again, implement the payout (in
+/// `process_contract_bonuses` or `settle_lump_sum_bonuses`) and remove
+/// it from this list.
+pub fn is_inert_bonus(bonus_type: &ContractBonusType) -> bool {
+    matches!(
+        bonus_type,
+        ContractBonusType::TeamOfTheYear | ContractBonusType::TopGoalscorer
+    )
 }
 
-pub(crate) fn decode_threshold_pct(value: i32, default_pct: u8) -> (u16, u8) {
-    let v = value.max(0);
-    if v < 100 {
-        // Legacy / un-encoded value — interpret as plain threshold.
-        return (v as u16, default_pct);
-    }
-    let threshold = (v / 100) as u16;
-    let pct = (v % 100) as u8;
-    let pct = if pct == 0 { default_pct } else { pct };
-    (threshold, pct)
+/// True for clause types with no apply/lifecycle hook in the
+/// simulation. Acceptance filters them out for the same reason as
+/// `is_inert_bonus`.
+pub fn is_inert_clause(clause_type: &ContractClauseType) -> bool {
+    matches!(
+        clause_type,
+        ContractClauseType::SellOnFee
+            | ContractClauseType::SellOnFeeProfit
+            | ContractClauseType::SeasonalLandmarkGoalBonus
+            | ContractClauseType::StaffJobRelease
+            | ContractClauseType::MinimumFeeReleaseToHigherDivisionClubs
+            | ContractClauseType::TopDivisionPromotionWageRise
+            | ContractClauseType::TopDivisionRelegationWageDrop
+    )
 }
 
 // Bonuses
@@ -607,13 +628,64 @@ pub enum ContractClauseType {
 
 #[derive(Debug, Clone)]
 pub struct ContractClause {
+    /// Single-number payload — release fee, percentage, or extension years
+    /// depending on `bonus_type`. Kept for backward compatibility and as
+    /// the dominant carrier for clauses that only need one number.
     pub value: i32,
     pub bonus_type: ContractClauseType,
+    /// Optional appearances/caps threshold for clauses gated by a count
+    /// (WageAfterReachingClubCareerLeagueGames,
+    /// WageAfterReachingInternationalCaps,
+    /// OneYearExtensionAfterLeagueGamesFinalSeason). When `Some`, this is
+    /// authoritative — `value` is ignored as the threshold.
+    pub threshold: Option<u16>,
+    /// Optional negotiated percentage for percentage-based clauses (yearly
+    /// wage rise size, app-threshold rise size, cap-threshold rise size).
+    /// When `Some`, this is authoritative — `value` is ignored as the pct.
+    pub percentage: Option<u8>,
 }
 
 impl ContractClause {
     pub fn new(value: i32, bonus_type: ContractClauseType) -> Self {
-        ContractClause { value, bonus_type }
+        ContractClause {
+            value,
+            bonus_type,
+            threshold: None,
+            percentage: None,
+        }
+    }
+
+    /// Threshold + negotiated percentage carrier. Keep `value` synced with
+    /// the legacy encoding so any code path that still inspects `value`
+    /// directly sees the same threshold.
+    pub fn new_threshold_pct(
+        threshold: u16,
+        percentage: u8,
+        bonus_type: ContractClauseType,
+    ) -> Self {
+        ContractClause {
+            value: threshold as i32,
+            bonus_type,
+            threshold: Some(threshold),
+            percentage: Some(percentage),
+        }
+    }
+
+    /// Read the threshold for a count-gated clause. Prefers the explicit
+    /// `threshold` field; otherwise falls back to `value` (legacy data).
+    pub fn resolved_threshold(&self) -> u16 {
+        self.threshold
+            .unwrap_or_else(|| self.value.max(0).min(u16::MAX as i32) as u16)
+    }
+
+    /// Read the percentage for a percentage-bearing clause. Prefers the
+    /// explicit `percentage` field; falls back to `default_pct` when not
+    /// set. (We never reinterpret `value` as both threshold and percentage
+    /// any more — the brittle `* 100 + pct` encoding is gone.)
+    pub fn resolved_percentage(&self, default_pct: u8) -> u8 {
+        self.percentage
+            .filter(|p| *p > 0)
+            .unwrap_or(default_pct)
     }
 }
 
@@ -853,9 +925,9 @@ mod clause_lifecycle_tests {
     #[test]
     fn wage_after_career_apps_fires_at_threshold_only() {
         let mut c = fresh(100_000);
-        // Encoded value is `threshold * 100 + pct`. 100 apps × +20% rise.
-        c.clauses.push(ContractClause::new(
-            encode_threshold_pct(100, 20),
+        c.clauses.push(ContractClause::new_threshold_pct(
+            100,
+            20,
             ContractClauseType::WageAfterReachingClubCareerLeagueGames,
         ));
         assert!(c.try_apply_wage_after_career_apps(99).is_none());
@@ -866,11 +938,10 @@ mod clause_lifecycle_tests {
 
     #[test]
     fn wage_after_career_apps_uses_negotiated_percentage() {
-        // Fully exercise the encoded percentage path: +35% rise instead
-        // of the legacy fixed 20%.
         let mut c = fresh(100_000);
-        c.clauses.push(ContractClause::new(
-            encode_threshold_pct(50, 35),
+        c.clauses.push(ContractClause::new_threshold_pct(
+            50,
+            35,
             ContractClauseType::WageAfterReachingClubCareerLeagueGames,
         ));
         let new_salary = c.try_apply_wage_after_career_apps(50).unwrap();
@@ -880,8 +951,9 @@ mod clause_lifecycle_tests {
     #[test]
     fn wage_after_caps_fires_at_threshold_only() {
         let mut c = fresh(100_000);
-        c.clauses.push(ContractClause::new(
-            encode_threshold_pct(10, 15),
+        c.clauses.push(ContractClause::new_threshold_pct(
+            10,
+            15,
             ContractClauseType::WageAfterReachingInternationalCaps,
         ));
         assert!(c.try_apply_wage_after_caps(9).is_none());
@@ -893,8 +965,9 @@ mod clause_lifecycle_tests {
     #[test]
     fn wage_after_caps_uses_negotiated_percentage() {
         let mut c = fresh(100_000);
-        c.clauses.push(ContractClause::new(
-            encode_threshold_pct(5, 25),
+        c.clauses.push(ContractClause::new_threshold_pct(
+            5,
+            25,
             ContractClauseType::WageAfterReachingInternationalCaps,
         ));
         let new_salary = c.try_apply_wage_after_caps(5).unwrap();
@@ -907,31 +980,93 @@ mod clause_lifecycle_tests {
         c.clauses
             .push(ContractClause::new(10, ContractClauseType::YearlyWageRise));
         let anniversary = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
-        // First call applies.
         let s1 = c.try_apply_yearly_wage_rise(anniversary).unwrap();
         assert_eq!(s1, 110_000);
-        // Re-call on the SAME day must NOT double-apply.
         assert!(c.try_apply_yearly_wage_rise(anniversary).is_none());
         assert_eq!(c.salary, 110_000);
-        // Next-year anniversary applies again on top of the new salary.
         let next = NaiveDate::from_ymd_opt(2027, 7, 1).unwrap();
         let s2 = c.try_apply_yearly_wage_rise(next).unwrap();
         assert_eq!(s2, 121_000);
     }
 
     #[test]
-    fn decode_threshold_pct_legacy_value_uses_default() {
-        // Pre-encoding clause values were just the raw threshold —
-        // anything < 100 must still decode to (value, default_pct).
-        let (t, p) = decode_threshold_pct(50, 20);
-        assert_eq!(t, 50);
-        assert_eq!(p, 20);
-        // Encoded value with explicit pct overrides the default.
-        let (t, p) = decode_threshold_pct(encode_threshold_pct(80, 33), 20);
-        assert_eq!(t, 80);
-        assert_eq!(p, 33);
-        // Encoded value with pct=0 falls back to default.
-        let (_, p) = decode_threshold_pct(encode_threshold_pct(20, 0), 25);
-        assert_eq!(p, 25);
+    fn legacy_threshold_clauses_still_decode_as_plain_threshold() {
+        // Pre-refactor clauses had only `value` set to the raw threshold
+        // (50, 100, 150 etc). The new resolved_threshold/percentage path
+        // must still treat them as raw thresholds and use the default
+        // percentage rather than dividing by 100.
+        for raw in [50, 100, 150] {
+            let mut c = fresh(100_000);
+            c.clauses.push(ContractClause::new(
+                raw,
+                ContractClauseType::WageAfterReachingClubCareerLeagueGames,
+            ));
+            let just_under = (raw - 1) as u32;
+            let exactly_at = raw as u32;
+            assert!(c.try_apply_wage_after_career_apps(just_under).is_none());
+            let new_salary = c.try_apply_wage_after_career_apps(exactly_at).unwrap();
+            // Default fallback rise is +20% → 120_000.
+            assert_eq!(new_salary, 120_000, "legacy threshold {} broke", raw);
+        }
+    }
+
+    #[test]
+    fn optional_extension_calendar_year_shift_preserves_anniversary() {
+        // Calendar-year shift (`with_year(year + N)`) keeps month/day so
+        // the anniversary stays clean, unlike `+ 365 days` which drifts
+        // a day every leap year.
+        let mut c = fresh(100_000);
+        c.expiration = NaiveDate::from_ymd_opt(2030, 6, 30).unwrap();
+        c.clauses.push(ContractClause::new(
+            2,
+            ContractClauseType::OptionalContractExtensionByClub,
+        ));
+        let new_exp = c.exercise_optional_extension().unwrap();
+        assert_eq!(new_exp, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+    }
+
+    #[test]
+    fn appearance_extension_calendar_year_shift_preserves_anniversary() {
+        // Inside the final-365-day window so the helper's gate passes.
+        let mut c = fresh(100_000);
+        c.expiration = NaiveDate::from_ymd_opt(2027, 4, 1).unwrap();
+        c.clauses.push(ContractClause::new(
+            25,
+            ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason,
+        ));
+        let today = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        let new_exp = c.try_apply_appearance_extension(30, today).unwrap();
+        // Year + 1, same month/day — calendar shift, no leap-year drift.
+        assert_eq!(new_exp, NaiveDate::from_ymd_opt(2028, 4, 1).unwrap());
+    }
+
+    #[test]
+    fn inert_bonuses_and_clauses_are_recognised() {
+        // The is_inert_* lists are the source of truth used by the
+        // accept-contract install path to strip decorative types.
+        assert!(is_inert_bonus(&ContractBonusType::TeamOfTheYear));
+        assert!(is_inert_bonus(&ContractBonusType::TopGoalscorer));
+        assert!(!is_inert_bonus(&ContractBonusType::SigningBonus));
+        assert!(!is_inert_bonus(&ContractBonusType::AppearanceFee));
+
+        assert!(is_inert_clause(&ContractClauseType::SellOnFee));
+        assert!(is_inert_clause(&ContractClauseType::SellOnFeeProfit));
+        assert!(is_inert_clause(&ContractClauseType::SeasonalLandmarkGoalBonus));
+        assert!(is_inert_clause(&ContractClauseType::StaffJobRelease));
+        assert!(is_inert_clause(
+            &ContractClauseType::MinimumFeeReleaseToHigherDivisionClubs
+        ));
+        assert!(is_inert_clause(
+            &ContractClauseType::TopDivisionPromotionWageRise
+        ));
+        assert!(is_inert_clause(
+            &ContractClauseType::TopDivisionRelegationWageDrop
+        ));
+        // Sanity: the active types are NOT marked inert.
+        assert!(!is_inert_clause(&ContractClauseType::MinimumFeeRelease));
+        assert!(!is_inert_clause(&ContractClauseType::YearlyWageRise));
+        assert!(!is_inert_clause(
+            &ContractClauseType::OptionalContractExtensionByClub
+        ));
     }
 }

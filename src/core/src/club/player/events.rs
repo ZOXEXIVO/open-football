@@ -1,16 +1,165 @@
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::calculators::WageCalculator;
+use crate::club::player::contract::contract::{
+    is_inert_bonus, is_inert_clause, ContractBonus, ContractClause, ContractClauseType,
+};
 use crate::club::player::injury::InjuryType;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::player::Player;
 use crate::club::PlayerClubContract;
 use crate::r#match::PlayerMatchEndStats;
 use crate::{
-    HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerStatistics,
-    PlayerStatusType, TeamInfo,
+    ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan,
+    PlayerStatistics, PlayerStatusType, TeamInfo,
 };
 use chrono::NaiveDate;
+
+/// Decorate a freshly-installed transfer contract with profile-shaped
+/// bonuses and clauses. Mirrors the renewal AI's `decorate_proposal` so
+/// the transfer market and renewal market install the same shape of
+/// deal — without this every transfer signs a bare salary/years deal.
+///
+/// Profile axes:
+///   - **Star** (rep ≥ 5000 or ability ≥ 150): signing + loyalty
+///     bonuses, position-based goal/clean-sheet bonus, release clause.
+///   - **YoungProspect** (age ≤ 23 + potential ≥ 130): yearly wage
+///     rise, optional extension, apps-threshold bump, release clause
+///     for ambitious ones.
+///   - **Veteran** (age ≥ 31): short-term flavour — loyalty bonus,
+///     appearance fee, no release clause.
+///   - **Backup / Standard**: small appearance + unused-sub fee.
+///
+/// Relegation-risk clubs (low buying-club reputation) attach a
+/// relegation wage-drop clause so the cost-side trims if the club goes
+/// down. Top clubs don't need it.
+fn install_transfer_package(
+    contract: &mut PlayerClubContract,
+    player: &Player,
+    age: u8,
+    buying_club_reputation: u16,
+) {
+    let salary = contract.salary;
+    let pos = player.position();
+    let rep = player.player_attributes.current_reputation;
+    let ability = player.player_attributes.current_ability;
+    let potential = player.player_attributes.potential_ability;
+    let ambition = player.attributes.ambition;
+    let loyalty = player.attributes.loyalty;
+    let club_rep_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
+
+    let is_star = rep > 5000 || ability >= 150;
+    let is_prospect = age <= 23 && potential >= 130;
+    let is_veteran = age >= 31;
+
+    if is_star {
+        // Signing + loyalty + position bonus + (large) release clause.
+        contract.bonuses.push(ContractBonus::new(
+            ((salary as f32) * 0.30) as i32,
+            ContractBonusType::SigningBonus,
+        ));
+        contract.bonuses.push(ContractBonus::new(
+            ((salary as f32) * 0.15) as i32,
+            ContractBonusType::LoyaltyBonus,
+        ));
+        if pos.is_forward() || pos.is_midfielder() {
+            contract.bonuses.push(ContractBonus::new(
+                ((salary as f32) * 0.012) as i32,
+                ContractBonusType::GoalFee,
+            ));
+        } else if pos.is_goalkeeper() || pos.is_defender() {
+            contract.bonuses.push(ContractBonus::new(
+                ((salary as f32) * 0.012) as i32,
+                ContractBonusType::CleanSheetFee,
+            ));
+        }
+        contract.bonuses.push(ContractBonus::new(
+            ((salary as f32) * 0.01) as i32,
+            ContractBonusType::AppearanceFee,
+        ));
+        let release_value = release_clause_value(ability, rep, 1.4);
+        contract.clauses.push(ContractClause::new(
+            release_value as i32,
+            ContractClauseType::MinimumFeeRelease,
+        ));
+    } else if is_prospect {
+        // Long progression — yearly rise, optional extension, apps step.
+        contract.clauses.push(ContractClause::new(
+            8,
+            ContractClauseType::YearlyWageRise,
+        ));
+        contract.clauses.push(ContractClause::new(
+            1,
+            ContractClauseType::OptionalContractExtensionByClub,
+        ));
+        contract.clauses.push(ContractClause::new_threshold_pct(
+            50,
+            25,
+            ContractClauseType::WageAfterReachingClubCareerLeagueGames,
+        ));
+        if ambition >= 13.0 {
+            let release_value = release_clause_value(ability, rep, 1.0);
+            contract.clauses.push(ContractClause::new(
+                release_value as i32,
+                ContractClauseType::MinimumFeeRelease,
+            ));
+        }
+    } else if is_veteran {
+        // Shorter-deal flavour — loyalty + appearance + extension on
+        // hitting a season's apps. No release clause; veterans don't
+        // negotiate them.
+        if loyalty >= 10.0 {
+            contract.bonuses.push(ContractBonus::new(
+                ((salary as f32) * 0.10) as i32,
+                ContractBonusType::LoyaltyBonus,
+            ));
+        }
+        contract.bonuses.push(ContractBonus::new(
+            ((salary as f32) * 0.02) as i32,
+            ContractBonusType::AppearanceFee,
+        ));
+        contract.clauses.push(ContractClause::new(
+            20,
+            ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason,
+        ));
+    } else {
+        // Standard / backup — modest appearance + unused-sub fee.
+        contract.bonuses.push(ContractBonus::new(
+            ((salary as f32) * 0.04) as i32,
+            ContractBonusType::AppearanceFee,
+        ));
+        contract.bonuses.push(ContractBonus::new(
+            ((salary as f32) * 0.005) as i32,
+            ContractBonusType::UnusedSubstitutionFee,
+        ));
+    }
+
+    // Relegation-risk clubs add a wage-drop clause so the cost side
+    // trims if they go down. Threshold ≈ bottom-third of the league
+    // reputation distribution.
+    if club_rep_score < 0.35 {
+        contract.clauses.push(ContractClause::new(
+            20,
+            ContractClauseType::RelegationWageDecrease,
+        ));
+    }
+
+    // Final guard — strip any inert bonuses/clauses a future caller
+    // might add. The is_inert_* lists are the source of truth for
+    // "decorative without payout site"; the install path enforces it.
+    contract
+        .bonuses
+        .retain(|b| !is_inert_bonus(&b.bonus_type));
+    contract
+        .clauses
+        .retain(|c| !is_inert_clause(&c.bonus_type));
+}
+
+fn release_clause_value(ability: u8, current_reputation: i16, scale: f32) -> u32 {
+    let base = (ability as u32) * (ability as u32) * 4_000;
+    let rep_boost = (current_reputation.max(0) as u32) * 8_000;
+    ((base + rep_boost) as f32 * scale) as u32
+}
 
 /// Personality-aware scaling helpers used by happiness emit sites.
 ///
@@ -300,7 +449,29 @@ impl Player {
             let club_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
             WageCalculator::expected_annual_wage(self, age, club_score, buying_league_reputation)
         });
-        self.contract = Some(PlayerClubContract::new(salary, expiry));
+        let mut contract = PlayerClubContract::new(salary, expiry);
+        // Install a profile-appropriate set of bonuses + clauses so
+        // transfer-completed contracts feel like the same market as
+        // renewals. Without this every transfer signs a bare
+        // salary/years deal and never pays a goal/clean-sheet/loyalty
+        // bonus.
+        install_transfer_package(
+            &mut contract,
+            self,
+            age,
+            buying_club_reputation,
+        );
+        // Anchor international-cap baseline so any cap bonus added to
+        // this fresh contract pays only on FUTURE caps, not on the
+        // ones the player accumulated before the transfer.
+        if contract
+            .bonuses
+            .iter()
+            .any(|b| matches!(b.bonus_type, ContractBonusType::InternationalCapFee))
+        {
+            self.last_intl_caps_paid = self.player_attributes.international_apps;
+        }
+        self.contract = Some(contract);
         self.contract_loan = None;
     }
 
@@ -1111,34 +1282,82 @@ impl Player {
         self.happiness.add_event_default(HappinessEventType::ContractTerminated);
     }
 
-    /// Apply the physical cost of featuring in a match: condition floor,
-    /// readiness boost, jadedness accumulation, injury roll, workload.
-    /// Called by the league/match-result pipeline once per featured player.
+    /// Apply the physical cost of featuring in a match. The match engine
+    /// already drained condition tick-by-tick during the sim; this hook
+    /// owns *post-match* effects only:
+    ///
+    ///   * minute & physical-load bookkeeping (`PlayerLoad`)
+    ///   * recovery-debt accumulation, scaled by depletion + congestion
+    ///   * jadedness, scaled by position group and minutes (no more
+    ///     step-function 200/400)
+    ///   * match-readiness boost (sharpness)
+    ///   * "Rst" status flagging when jadedness crosses the threshold
+    ///   * post-match injury roll, with workload spike + in-recovery
+    ///     setback risk feeding the unified risk model.
+    ///
+    /// Friendlies get a reduced load and reduced injury chance, but
+    /// still some sharpness gain — pre-season cameos really do build
+    /// match fitness.
     pub fn on_match_exertion(&mut self, minutes: f32, now: NaiveDate, is_friendly: bool) {
         self.load.record_match_minutes(minutes, is_friendly);
 
-        let age = self.age(now);
-        let natural_fitness = self.skills.physical.natural_fitness;
+        let position = self.position();
+        let group = position.position_group();
+        let position_factor = position_match_load_factor(position);
+        let hi_share = position_high_intensity_share(group);
 
-        // Condition floor — the match engine drains condition during sim;
-        // here we enforce an FM-style 30% minimum so nobody finishes a 90
-        // at 0%. A full 90 should leave players at 55–70%.
+        // Condition entering the second half / late game already ticked
+        // the engine's drain, so the post-match condition is our best
+        // proxy for "how empty is the tank?". Below ~50% it amplifies
+        // load/debt — running on fumes hurts more than running fresh.
+        let condition_pct = self.player_attributes.condition_percentage() as f32;
+        let depletion_factor = if condition_pct < 50.0 {
+            1.0 + (50.0 - condition_pct) / 80.0
+        } else {
+            1.0
+        };
+
+        let friendly_factor = if is_friendly { 0.45 } else { 1.0 };
+
+        // 1.0 unit per minute at neutral CB intensity, scaled by position
+        // and how empty the player finished. A 90-min FB tops ~118 units;
+        // a 90-min keeper sits around 40.
+        let match_load = minutes * position_factor * depletion_factor * friendly_factor;
+        let hi_load = match_load * hi_share;
+        self.load.record_match_load(match_load, hi_load, is_friendly);
+
+        // Debt: half from raw load, half from "running on fumes" tax.
+        // A 90-min midfielder at 60% finish adds ~45 units; a 90-min
+        // forward at 30% finish adds ~80.
+        let depletion_tax = match_load * (50.0 - condition_pct).max(0.0) / 100.0;
+        self.load.add_recovery_debt(match_load * 0.5 + depletion_tax * friendly_factor);
+
+        // Hard floor — engine clamps to 1500 in-match, but we lift to 30%
+        // so nobody finishes the post-match book on empty.
         let condition_floor: i16 = 3000;
         if self.player_attributes.condition < condition_floor {
             self.player_attributes.condition = condition_floor;
         }
 
+        // Sharpness: cameo subs (<15 min) don't rebuild readiness; full
+        // 90 = +3.0; friendlies sharpen at 70%.
         if minutes >= 15.0 {
-            let readiness_boost = minutes / 90.0 * 3.0;
+            let mut readiness_boost = minutes / 90.0 * 3.0;
+            if is_friendly {
+                readiness_boost *= 0.7;
+            }
             self.skills.physical.match_readiness =
                 (self.skills.physical.match_readiness + readiness_boost).min(20.0);
         }
 
-        if minutes > 60.0 {
-            self.player_attributes.jadedness += 400;
-        } else if minutes >= 30.0 {
-            self.player_attributes.jadedness += 200;
-        }
+        // Jadedness: scaled by match_load and recent congestion. Replaces
+        // the previous 200/400 step function. A keeper's 90 now adds
+        // ~160; a wingback's 90 in a 3-game week tops ~520.
+        let congestion = self.load.matches_last_14() as f32;
+        let congestion_mult = 1.0 + (congestion - 2.0).max(0.0) * 0.20;
+        let jad_gain = (match_load * 4.0 * congestion_mult).round() as i32;
+        let new_jad = self.player_attributes.jadedness as i32 + jad_gain;
+        self.player_attributes.jadedness = new_jad.clamp(0, 10_000) as i16;
 
         if self.player_attributes.jadedness > 7000
             && !self.statuses.get().contains(&PlayerStatusType::Rst)
@@ -1149,40 +1368,44 @@ impl Player {
         self.player_attributes.days_since_last_match = 0;
 
         if !self.player_attributes.is_injured {
-            self.roll_for_match_injury(minutes, age, natural_fitness, now);
+            let in_recovery = self.player_attributes.is_in_recovery();
+            self.roll_for_match_injury(minutes, match_load, now, in_recovery);
         }
     }
 
+    /// Match injury roll using the unified risk model. Inputs feed the
+    /// shared `compute_injury_risk` helper so spontaneous, training,
+    /// match, and setback risks all read from the same recipe.
     fn roll_for_match_injury(
         &mut self,
         minutes: f32,
-        age: u8,
-        natural_fitness: f32,
+        match_load: f32,
         now: NaiveDate,
+        in_recovery: bool,
     ) {
-        let injury_proneness = self.player_attributes.injury_proneness;
-        let proneness_modifier = injury_proneness as f32 / 10.0;
+        let age = self.age(now);
+        let natural_fitness = self.skills.physical.natural_fitness;
         let condition_pct = self.player_attributes.condition_percentage();
+        let injury_proneness = self.player_attributes.injury_proneness;
 
-        let mut injury_chance: f32 = 0.005 * (minutes / 90.0);
-        if age > 30 {
-            injury_chance += (age as f32 - 30.0) * 0.001;
-        }
-        if condition_pct < 40 {
-            injury_chance += (40.0 - condition_pct as f32) * 0.0001;
-        }
-        if self.player_attributes.jadedness > 7000 {
-            injury_chance += 0.002;
-        }
-        if natural_fitness < 8.0 {
-            injury_chance += 0.001;
-        }
-        injury_chance *= proneness_modifier;
-        if self.player_attributes.last_injury_body_part != 0 {
-            injury_chance += 0.002;
-        }
+        // Base rate: 0.5% scaled by minutes; the unified helper applies
+        // the multiplicative modifiers (proneness, age, NF, jadedness,
+        // workload spike, last body part, congestion, in-recovery).
+        let base_rate = 0.005 * (minutes / 90.0).max(0.05);
 
-        if rand::random::<f32>() < injury_chance {
+        let intensity = (match_load / 90.0).clamp(0.4, 2.0);
+
+        let chance = self.compute_injury_risk(
+            crate::club::player::condition::InjuryRiskInputs {
+                base_rate,
+                intensity,
+                in_recovery,
+                medical_multiplier: 1.0,
+                now,
+            },
+        );
+
+        if rand::random::<f32>() < chance {
             let injury = InjuryType::random_match_injury(
                 minutes,
                 age,
@@ -1225,6 +1448,40 @@ impl Player {
                 contract.expiration = min_expiry;
             }
         }
+    }
+}
+
+/// Position-specific multiplier applied to match minutes when computing
+/// physical load. Calibrated so a CB at neutral intensity is the
+/// reference (1.0 ≈ minute-equivalent), keepers materially under, and
+/// modern fullbacks/wide-mids over.
+fn position_match_load_factor(position: crate::PlayerPositionType) -> f32 {
+    use crate::PlayerPositionType::*;
+    match position {
+        Goalkeeper => 0.45,
+        Sweeper | DefenderCenter | DefenderCenterLeft | DefenderCenterRight => 0.85,
+        DefenderLeft | DefenderRight => 1.05,
+        WingbackLeft | WingbackRight => 1.18,
+        DefensiveMidfielder => 0.95,
+        MidfielderCenter | MidfielderCenterLeft | MidfielderCenterRight => 1.05,
+        MidfielderLeft | MidfielderRight => 1.10,
+        AttackingMidfielderLeft | AttackingMidfielderRight => 1.05,
+        AttackingMidfielderCenter => 0.95,
+        Striker | ForwardCenter => 0.95,
+        ForwardLeft | ForwardRight => 1.05,
+    }
+}
+
+/// Share of physical load that comes from high-intensity actions
+/// (sprints, presses, repeated accelerations). Forwards and wide
+/// midfielders sprint more than holding mids; keepers very little.
+fn position_high_intensity_share(group: crate::club::PlayerFieldPositionGroup) -> f32 {
+    use crate::club::PlayerFieldPositionGroup::*;
+    match group {
+        Goalkeeper => 0.05,
+        Defender => 0.20,
+        Midfielder => 0.30,
+        Forward => 0.32,
     }
 }
 
@@ -2581,4 +2838,157 @@ mod match_event_tests {
             .magnitude;
         assert!(fmag > amag, "famous {} should exceed anon {}", fmag, amag);
     }
+
+    // ── Match-load model (post-match exertion) ────────────────────
+
+    fn fresh_player(pos: PlayerPositionType) -> Player {
+        let mut p = build_player(pos, PersonAttributes::default());
+        p.player_attributes.condition = 9_500;
+        p.player_attributes.fitness = 9_000;
+        p.player_attributes.jadedness = 1_000;
+        p.skills.physical.match_readiness = 15.0;
+        p.skills.physical.natural_fitness = 14.0;
+        p
+    }
+
+    #[test]
+    fn full_match_keeper_has_lower_load_than_full_match_fullback() {
+        let mut gk = fresh_player(PlayerPositionType::Goalkeeper);
+        let mut fb = fresh_player(PlayerPositionType::WingbackLeft);
+        let date = d(2025, 9, 14);
+        gk.on_match_exertion(90.0, date, false);
+        fb.on_match_exertion(90.0, date, false);
+        // Wingback's load should be at least 2× the keeper's.
+        assert!(
+            fb.load.physical_load_7 > gk.load.physical_load_7 * 2.0,
+            "fb={} gk={}",
+            fb.load.physical_load_7,
+            gk.load.physical_load_7
+        );
+        // High-intensity share should also be much higher for the FB.
+        assert!(
+            fb.load.high_intensity_load_7 > gk.load.high_intensity_load_7 * 4.0,
+            "fb_hi={} gk_hi={}",
+            fb.load.high_intensity_load_7,
+            gk.load.high_intensity_load_7
+        );
+    }
+
+    #[test]
+    fn keeper_full_match_jadedness_lower_than_fullback_full_match() {
+        let mut gk = fresh_player(PlayerPositionType::Goalkeeper);
+        let mut fb = fresh_player(PlayerPositionType::WingbackLeft);
+        let date = d(2025, 9, 14);
+        gk.on_match_exertion(90.0, date, false);
+        fb.on_match_exertion(90.0, date, false);
+        assert!(
+            (fb.player_attributes.jadedness as i32) > (gk.player_attributes.jadedness as i32) + 100,
+            "fb jad={} gk jad={}",
+            fb.player_attributes.jadedness,
+            gk.player_attributes.jadedness
+        );
+    }
+
+    #[test]
+    fn friendly_cameo_adds_less_load_than_competitive_full_match() {
+        let mut friendly = fresh_player(PlayerPositionType::MidfielderCenter);
+        let mut competitive = fresh_player(PlayerPositionType::MidfielderCenter);
+        let date = d(2025, 9, 14);
+        friendly.on_match_exertion(90.0, date, true);
+        competitive.on_match_exertion(90.0, date, false);
+        assert!(
+            friendly.load.physical_load_7 < competitive.load.physical_load_7,
+            "friendly load {} should be less than competitive load {}",
+            friendly.load.physical_load_7,
+            competitive.load.physical_load_7
+        );
+        // Friendly didn't push minute window
+        assert_eq!(friendly.load.minutes_last_7, 0.0);
+        assert_eq!(competitive.load.minutes_last_7, 90.0);
+    }
+
+    #[test]
+    fn three_matches_in_seven_days_accrue_higher_debt_than_one_match() {
+        let mut once = fresh_player(PlayerPositionType::ForwardLeft);
+        let mut thrice = fresh_player(PlayerPositionType::ForwardLeft);
+
+        // Seed the rolling decay clocks
+        once.load.daily_decay(d(2025, 9, 1));
+        thrice.load.daily_decay(d(2025, 9, 1));
+
+        once.on_match_exertion(90.0, d(2025, 9, 7), false);
+
+        thrice.load.daily_decay(d(2025, 9, 1));
+        thrice.on_match_exertion(90.0, d(2025, 9, 1), false);
+        thrice.load.daily_decay(d(2025, 9, 4));
+        thrice.on_match_exertion(90.0, d(2025, 9, 4), false);
+        thrice.load.daily_decay(d(2025, 9, 7));
+        thrice.on_match_exertion(90.0, d(2025, 9, 7), false);
+
+        // 3-day recency-decay between matches eats some of the cumulative
+        // load, but the three-game week still ends materially heavier than
+        // the single match.
+        assert!(
+            thrice.load.recovery_debt > once.load.recovery_debt * 1.5,
+            "thrice debt {} vs once debt {}",
+            thrice.load.recovery_debt,
+            once.load.recovery_debt
+        );
+        // Jadedness has a congestion multiplier (matches_last_14 ≥ 3 →
+        // ×1.2 on the third match), so the gap is wider than load alone.
+        assert!(
+            thrice.player_attributes.jadedness > once.player_attributes.jadedness + 600,
+            "thrice jad {} vs once jad {}",
+            thrice.player_attributes.jadedness,
+            once.player_attributes.jadedness
+        );
+    }
+
+    #[test]
+    fn condition_floor_is_enforced_post_match() {
+        let mut p = fresh_player(PlayerPositionType::Striker);
+        p.player_attributes.condition = 1_500; // engine-floor low
+        p.on_match_exertion(90.0, d(2025, 9, 14), false);
+        assert!(p.player_attributes.condition >= 3_000);
+    }
+
+    #[test]
+    fn long_idle_player_match_rebuilds_readiness() {
+        let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+        p.skills.physical.match_readiness = 8.0;
+        let before = p.skills.physical.match_readiness;
+        p.on_match_exertion(90.0, d(2025, 9, 14), false);
+        assert!(p.skills.physical.match_readiness > before + 2.0);
+    }
+
+    #[test]
+    fn returning_from_injury_player_carries_elevated_match_risk() {
+        let mut healthy = fresh_player(PlayerPositionType::DefenderCenter);
+        let mut returning = fresh_player(PlayerPositionType::DefenderCenter);
+        // Same builder; mark returning as in-recovery.
+        returning.player_attributes.recovery_days_remaining = 10;
+        // Build chronic baseline so the spike branch isn't disabled.
+        healthy.load.physical_load_30 = 300.0;
+        returning.load.physical_load_30 = 300.0;
+
+        let date = d(2025, 9, 14);
+        let inputs_h = crate::club::player::condition::InjuryRiskInputs {
+            base_rate: 0.005,
+            intensity: 1.0,
+            in_recovery: false,
+            medical_multiplier: 1.0,
+            now: date,
+        };
+        let inputs_r = crate::club::player::condition::InjuryRiskInputs {
+            base_rate: 0.005,
+            intensity: 1.0,
+            in_recovery: true,
+            medical_multiplier: 1.0,
+            now: date,
+        };
+        let h = healthy.compute_injury_risk(inputs_h);
+        let r = returning.compute_injury_risk(inputs_r);
+        assert!(r > h * 2.0, "returning {} should be much higher than healthy {}", r, h);
+    }
 }
+

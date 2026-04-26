@@ -27,6 +27,9 @@ impl PlayerTrainingResult {
                 fatigue_change: 0.0,
                 injury_risk: 0.0,
                 morale_change: 0.0,
+                physical_load_units: 0.0,
+                high_intensity_share: 0.0,
+                readiness_change: 0.0,
             },
             session_performance: 10.0,
         }
@@ -101,13 +104,53 @@ impl PlayerTrainingResult {
             let condition_cap = if self.effects.fatigue_change < 0.0 { 9000.0 } else { 10000.0 };
             player.player_attributes.condition = new_condition.clamp(3000.0, condition_cap) as i16;
 
-            // Apply injury risk — use proper injury system
-            let injury_proneness = player.player_attributes.injury_proneness;
-            let proneness_modifier = injury_proneness as f32 / 10.0;
-            if rand::random::<f32>() < self.effects.injury_risk * proneness_modifier {
+            // Workload bookkeeping into PlayerLoad. Heavy sessions add to
+            // physical_load_7/30 + recovery_debt; recovery sessions burn
+            // off accumulated debt. This is the single signal selection
+            // and injury-risk consult — keeping training and matches on
+            // the same scale.
+            if self.effects.physical_load_units > 0.0 {
+                let hi = self.effects.physical_load_units * self.effects.high_intensity_share;
+                player
+                    .load
+                    .record_training_load(self.effects.physical_load_units, hi);
+                // Heavy training adds debt at ~20% the session load.
+                player
+                    .load
+                    .add_recovery_debt(self.effects.physical_load_units * 0.20);
+            }
+            if self.effects.fatigue_change < 0.0 {
+                // Recovery sessions drain debt at ~30% of the magnitude
+                // of the condition gain (so a Recovery session worth
+                // -800 burns ~240 debt — a real bounce-back).
+                player
+                    .load
+                    .consume_recovery_debt(-self.effects.fatigue_change * 0.30);
+            }
+
+            // Apply injury risk — unified recipe. Translate the
+            // session-type base risk into the shared model so the same
+            // workload signals (jadedness, condition, ACWR spike,
+            // congestion, recovery phase) are read by spontaneous,
+            // training, and match paths consistently.
+            let intensity_factor =
+                ((self.effects.fatigue_change.abs() + self.effects.physical_load_units) / 60.0)
+                    .clamp(0.4, 2.0);
+            let in_recovery = player.player_attributes.is_in_recovery();
+            let chance = player.compute_injury_risk(
+                crate::club::player::condition::InjuryRiskInputs {
+                    base_rate: self.effects.injury_risk.max(0.0),
+                    intensity: intensity_factor,
+                    in_recovery,
+                    medical_multiplier: 1.0,
+                    now: current_date,
+                },
+            );
+            if rand::random::<f32>() < chance {
                 let age = crate::utils::DateUtils::age(player.birth_date, current_date);
                 let condition_pct = player.player_attributes.condition_percentage();
                 let natural_fitness = player.skills.physical.natural_fitness;
+                let injury_proneness = player.player_attributes.injury_proneness;
 
                 let injury = InjuryType::random_training_injury(age, condition_pct, natural_fitness, injury_proneness);
                 player.player_attributes.set_injury(injury);
@@ -117,13 +160,25 @@ impl PlayerTrainingResult {
                 );
             }
 
-            // Update match readiness based on training
-            if self.effects.fatigue_change < 0.0 {
-                // Recovery training improves match readiness
-                player.skills.physical.match_readiness = (player.skills.physical.match_readiness + 2.0).min(20.0);
-            } else if self.effects.fatigue_change > 20.0 {
-                // Intense training reduces match readiness
-                player.skills.physical.match_readiness = (player.skills.physical.match_readiness - 1.0).max(0.0);
+            // Update match readiness from the per-session readiness_change
+            // — replaces the old blanket "any negative fatigue gives +2"
+            // rule. PressingDrills / MatchPreparation now sharpen players
+            // properly; passive video / RestDay barely move the needle.
+            if self.effects.readiness_change != 0.0 {
+                player.skills.physical.match_readiness = (player
+                    .skills
+                    .physical
+                    .match_readiness
+                    + self.effects.readiness_change)
+                    .clamp(0.0, 20.0);
+            }
+            // Very intense sessions on already-tired legs blunt readiness
+            // (a hard pressing drill on a Friday with the legs gone).
+            if self.effects.fatigue_change > 120.0
+                && player.player_attributes.condition_percentage() < 60
+            {
+                player.skills.physical.match_readiness =
+                    (player.skills.physical.match_readiness - 0.5).max(0.0);
             }
 
             // Apply morale changes to happiness system

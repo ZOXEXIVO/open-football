@@ -44,6 +44,9 @@ struct PlayerLlm {
     positions: BTreeMap<String, String>,
     preferred_foot: String,
     physical_condition: String,
+    /// Single human-readable summary derived from condition / load /
+    /// jadedness / readiness — see ConditionLabel.
+    condition_label: String,
     match_readiness: String,
     fitness: String,
     jadedness: String,
@@ -208,6 +211,7 @@ impl Player {
             positions,
             preferred_foot: self.preferred_foot_str().to_string(),
             physical_condition: format!("{}%", attr.condition_percentage()),
+            condition_label: self.condition_label().as_str().to_string(),
             match_readiness: pct(self.skills.physical.match_readiness),
             fitness: format!("{}%", (attr.fitness as f32 / 10000.0 * 100.0).round() as u32),
             jadedness: format!("{}%", (attr.jadedness as f32 / 10000.0 * 100.0).round() as u32),

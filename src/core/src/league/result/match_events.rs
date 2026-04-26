@@ -4,7 +4,9 @@ use crate::club::player::events::{MatchOutcome, MatchParticipation};
 use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
 };
-use crate::club::team::team_talks::{apply_team_talk, MatchPhase, TeamTalkContext, TeamTalkTone};
+use crate::club::team::team_talks::{
+    apply_team_talk_dated, MatchPhase, TeamTalkContext, TeamTalkTone,
+};
 use crate::club::StaffPosition;
 use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, EUROPA_LEAGUE_ID};
 use crate::r#match::engine::result::MatchResultRaw;
@@ -92,6 +94,20 @@ impl LeagueResult {
             home_team_id,
             away_team_id,
         );
+
+        // Post-match social fallout — bonds, friction, admiration, envy.
+        // Only fires for competitive matches where the dressing-room stakes
+        // are real; friendlies don't move relationships.
+        if !is_friendly {
+            Self::apply_match_relationship_updates(
+                result,
+                details,
+                data,
+                now_date,
+                home_team_id,
+                best_player_id,
+            );
+        }
 
         if !is_friendly {
             Self::process_loan_match_fees(details, data);
@@ -366,21 +382,27 @@ impl LeagueResult {
 
         // Pass 1 (read): compute (club_id, total_payout) aggregates without holding
         // a mutable borrow of a club while reading another player.
+        //
+        // Bonus payer ownership for loanees:
+        //   - Bonuses written on the *parent* contract are owed by the
+        //     parent club. The borrower can negotiate its own bonuses on
+        //     `contract_loan` and those bill the borrower. A loanee
+        //     scoring 10 goals at the borrower must NOT charge the
+        //     borrower for a goal bonus the parent agreed to.
+        //   - Permanent players: contract bonuses billed to current club
+        //     as before.
         let mut club_totals: HashMap<u32, i64> = HashMap::new();
         for pid in &appearance_ids {
             if let Some(player) = data.player(*pid) {
-                // Player's current club comes from the player index (updated by
-                // the simulator whenever a transfer moves someone).
-                let club_id = match data
+                // Permanent-deal payer (current club from index). Loaned
+                // players' borrower id is the same lookup result; we
+                // override below for parent-contract bonuses.
+                let borrower_club_id = match data
                     .indexes
                     .as_ref()
                     .and_then(|i| i.get_player_location(*pid))
                 {
                     Some((_, _, club_id, _)) => club_id,
-                    None => continue,
-                };
-                let contract = match player.contract.as_ref() {
-                    Some(c) => c,
                     None => continue,
                 };
 
@@ -393,31 +415,67 @@ impl LeagueResult {
 
                 let goals = goals_per_player.get(pid).copied().unwrap_or(0) as i64;
 
-                let mut payout: i64 = 0;
-                for bonus in &contract.bonuses {
-                    let v = bonus.value as i64;
-                    if v <= 0 {
-                        continue;
+                // Parent contract bonuses → parent club. Pull the parent
+                // club id off the loan contract so cross-country loans
+                // route correctly.
+                if let Some(parent_contract) = player.contract.as_ref() {
+                    let parent_club_id = player
+                        .contract_loan
+                        .as_ref()
+                        .and_then(|l| l.loan_from_club_id)
+                        .unwrap_or(borrower_club_id);
+                    let mut parent_payout: i64 = 0;
+                    for bonus in &parent_contract.bonuses {
+                        let v = bonus.value as i64;
+                        if v <= 0 {
+                            continue;
+                        }
+                        match bonus.bonus_type {
+                            ContractBonusType::AppearanceFee => parent_payout += v,
+                            ContractBonusType::GoalFee => parent_payout += v * goals,
+                            ContractBonusType::CleanSheetFee if gk_clean_sheet => {
+                                parent_payout += v
+                            }
+                            _ => {}
+                        }
                     }
-                    match bonus.bonus_type {
-                        ContractBonusType::AppearanceFee => payout += v,
-                        ContractBonusType::GoalFee => payout += v * goals,
-                        ContractBonusType::CleanSheetFee if gk_clean_sheet => payout += v,
-                        _ => {}
+                    if parent_payout > 0 {
+                        *club_totals.entry(parent_club_id).or_insert(0) += parent_payout;
                     }
                 }
-                if payout > 0 {
-                    *club_totals.entry(club_id).or_insert(0) += payout;
+
+                // Loan-contract bonuses (if the borrower negotiated any)
+                // bill the borrower.
+                if let Some(loan_contract) = player.contract_loan.as_ref() {
+                    let mut borrower_payout: i64 = 0;
+                    for bonus in &loan_contract.bonuses {
+                        let v = bonus.value as i64;
+                        if v <= 0 {
+                            continue;
+                        }
+                        match bonus.bonus_type {
+                            ContractBonusType::AppearanceFee => borrower_payout += v,
+                            ContractBonusType::GoalFee => borrower_payout += v * goals,
+                            ContractBonusType::CleanSheetFee if gk_clean_sheet => {
+                                borrower_payout += v
+                            }
+                            _ => {}
+                        }
+                    }
+                    if borrower_payout > 0 {
+                        *club_totals.entry(borrower_club_id).or_insert(0) += borrower_payout;
+                    }
                 }
             }
         }
 
         // Unused-substitute fee: bench players who didn't get on the
-        // pitch are still paid their negotiated showup fee. Routed
-        // through the same per-club aggregation as appearance bonuses.
+        // pitch are still paid their negotiated showup fee. Same payer
+        // routing as the in-play bonuses — parent contract bills the
+        // parent, loan contract bills the borrower.
         for pid in &unused_sub_ids {
             if let Some(player) = data.player(*pid) {
-                let club_id = match data
+                let borrower_club_id = match data
                     .indexes
                     .as_ref()
                     .and_then(|i| i.get_player_location(*pid))
@@ -425,20 +483,36 @@ impl LeagueResult {
                     Some((_, _, club_id, _)) => club_id,
                     None => continue,
                 };
-                let contract = match player.contract.as_ref() {
-                    Some(c) => c,
-                    None => continue,
-                };
-                let mut payout: i64 = 0;
-                for bonus in &contract.bonuses {
-                    if matches!(bonus.bonus_type, ContractBonusType::UnusedSubstitutionFee)
-                        && bonus.value > 0
-                    {
-                        payout += bonus.value as i64;
+                if let Some(parent_contract) = player.contract.as_ref() {
+                    let parent_club_id = player
+                        .contract_loan
+                        .as_ref()
+                        .and_then(|l| l.loan_from_club_id)
+                        .unwrap_or(borrower_club_id);
+                    let mut payout: i64 = 0;
+                    for bonus in &parent_contract.bonuses {
+                        if matches!(bonus.bonus_type, ContractBonusType::UnusedSubstitutionFee)
+                            && bonus.value > 0
+                        {
+                            payout += bonus.value as i64;
+                        }
+                    }
+                    if payout > 0 {
+                        *club_totals.entry(parent_club_id).or_insert(0) += payout;
                     }
                 }
-                if payout > 0 {
-                    *club_totals.entry(club_id).or_insert(0) += payout;
+                if let Some(loan_contract) = player.contract_loan.as_ref() {
+                    let mut payout: i64 = 0;
+                    for bonus in &loan_contract.bonuses {
+                        if matches!(bonus.bonus_type, ContractBonusType::UnusedSubstitutionFee)
+                            && bonus.value > 0
+                        {
+                            payout += bonus.value as i64;
+                        }
+                    }
+                    if payout > 0 {
+                        *club_totals.entry(borrower_club_id).or_insert(0) += payout;
+                    }
                 }
             }
         }
@@ -517,6 +591,7 @@ impl LeagueResult {
             });
         }
 
+        let now = data.date.date();
         for side in sides {
             // Find the head coach (Manager) for this club. Scans each team's
             // staff collection via StaffCollection::find_by_position — the
@@ -543,7 +618,351 @@ impl LeagueResult {
                     // apply_team_talk takes an iterator of &mut Player; use a
                     // single-element array for the per-player loop.
                     let single = std::slice::from_mut(player);
-                    apply_team_talk(single.iter_mut(), manager_clone.as_ref(), tone, ctx);
+                    apply_team_talk_dated(
+                        single.iter_mut(),
+                        manager_clone.as_ref(),
+                        tone,
+                        ctx,
+                        Some(now),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Post-match relationship updates. The match itself is the most
+    /// emotionally loaded moment in a player's week — a clean sheet, a
+    /// heavy defeat, a red card all leave traces in the dressing room.
+    /// We update underlying relations and emit at most two visible
+    /// happiness events per player per match, so the player history
+    /// surfaces meaningful incidents without overwhelming readers.
+    fn apply_match_relationship_updates(
+        result: &MatchResult,
+        details: &MatchResultRaw,
+        data: &mut SimulatorData,
+        now: chrono::NaiveDate,
+        home_team_id: u32,
+        best_player_id: Option<u32>,
+    ) {
+        use crate::club::ChangeType;
+        use crate::club::HappinessEventType;
+        use crate::club::RelationshipChange;
+        use crate::r#match::player::statistics::MatchStatisticType;
+
+        let home_goals = result.score.home_team.get();
+        let away_goals = result.score.away_team.get();
+
+        for side in [&details.left_team_players, &details.right_team_players] {
+            let (scored, conceded) = if side.team_id == home_team_id {
+                (home_goals, away_goals)
+            } else {
+                (away_goals, home_goals)
+            };
+            let team_won = scored > conceded;
+            let team_lost = scored < conceded;
+            let heavy_defeat = team_lost && (conceded - scored) >= 4;
+
+            // Roster snapshot — we need ids + position groups + a couple of
+            // personality bits. Walk once.
+            struct SidePlayer {
+                id: u32,
+                group: crate::PlayerFieldPositionGroup,
+                position: crate::PlayerPositionType,
+                temperament: f32,
+                controversy: f32,
+                professionalism: f32,
+                is_captain: bool,
+            }
+
+            let appeared: Vec<u32> = side
+                .main
+                .iter()
+                .copied()
+                .chain(side.substitutes_used.iter().copied())
+                .collect();
+
+            // Resolve captain id — read team metadata via player location.
+            let team_captain_id: Option<u32> = data
+                .indexes
+                .as_ref()
+                .and_then(|i| i.get_player_location(*appeared.first()?))
+                .and_then(|(_, _, _, team_id)| data.team(team_id))
+                .and_then(|t| t.captain_id);
+
+            let mut players: Vec<SidePlayer> = Vec::new();
+            for pid in &appeared {
+                if let Some(p) = data.player(*pid) {
+                    players.push(SidePlayer {
+                        id: *pid,
+                        group: p.position().position_group(),
+                        position: p.position(),
+                        temperament: p.attributes.temperament,
+                        controversy: p.attributes.controversy,
+                        professionalism: p.attributes.professionalism,
+                        is_captain: Some(*pid) == team_captain_id,
+                    });
+                }
+            }
+
+            // Goal scorers and red-card recipients — built from the match
+            // detail stream. We don't have an assister↔scorer mapping in
+            // the current stat model, so the assist↔scorer cooperation
+            // bonus is omitted here (kept for a future model upgrade).
+            let mut scorer_goals: HashMap<u32, u8> = HashMap::new();
+            let mut red_carded: Vec<u32> = Vec::new();
+            for d in &result.score.details {
+                if !appeared.contains(&d.player_id) {
+                    continue;
+                }
+                match d.stat_type {
+                    MatchStatisticType::Goal => {
+                        *scorer_goals.entry(d.player_id).or_insert(0) += 1;
+                    }
+                    MatchStatisticType::RedCard => {
+                        red_carded.push(d.player_id);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Track per-player visible event count so we cap at 2.
+            let mut event_budget: HashMap<u32, u8> = HashMap::new();
+            let bump_event = |budget: &mut HashMap<u32, u8>, id: u32| -> bool {
+                let slot = budget.entry(id).or_insert(0);
+                if *slot >= 2 {
+                    false
+                } else {
+                    *slot += 1;
+                    true
+                }
+            };
+
+            // Pending updates — applied after the read pass.
+            struct Update {
+                from: u32,
+                to: u32,
+                change_type: ChangeType,
+                magnitude: f32,
+                event: Option<(HappinessEventType, f32)>,
+            }
+            let mut updates: Vec<Update> = Vec::new();
+
+            // ── Clean sheet bonds: GK ↔ CBs, CB ↔ CB ────────────────
+            if conceded == 0 {
+                let gk_ids: Vec<u32> = players
+                    .iter()
+                    .filter(|p| p.group == crate::PlayerFieldPositionGroup::Goalkeeper)
+                    .map(|p| p.id)
+                    .collect();
+                let cb_ids: Vec<u32> = players
+                    .iter()
+                    .filter(|p| {
+                        matches!(
+                            p.position,
+                            crate::PlayerPositionType::DefenderCenter
+                                | crate::PlayerPositionType::DefenderCenterLeft
+                                | crate::PlayerPositionType::DefenderCenterRight
+                        )
+                    })
+                    .map(|p| p.id)
+                    .collect();
+                for &gk in &gk_ids {
+                    for &cb in &cb_ids {
+                        updates.push(Update {
+                            from: gk,
+                            to: cb,
+                            change_type: ChangeType::MatchCooperation,
+                            magnitude: 0.12,
+                            event: None,
+                        });
+                        updates.push(Update {
+                            from: cb,
+                            to: gk,
+                            change_type: ChangeType::MatchCooperation,
+                            magnitude: 0.12,
+                            event: None,
+                        });
+                    }
+                }
+                for i in 0..cb_ids.len() {
+                    for j in (i + 1)..cb_ids.len() {
+                        updates.push(Update {
+                            from: cb_ids[i],
+                            to: cb_ids[j],
+                            change_type: ChangeType::MatchCooperation,
+                            magnitude: 0.15,
+                            event: None,
+                        });
+                        updates.push(Update {
+                            from: cb_ids[j],
+                            to: cb_ids[i],
+                            change_type: ChangeType::MatchCooperation,
+                            magnitude: 0.15,
+                            event: None,
+                        });
+                    }
+                }
+            }
+
+            // ── Heavy defeat: captain steps in or implodes ──────────
+            if heavy_defeat {
+                let captain = players.iter().find(|p| p.is_captain);
+                if let Some(cap) = captain {
+                    if cap.professionalism < 8.0 {
+                        // Captain takes it out on dressing room.
+                        for p in players.iter().filter(|p| p.id != cap.id) {
+                            updates.push(Update {
+                                from: cap.id,
+                                to: p.id,
+                                change_type: ChangeType::PersonalConflict,
+                                magnitude: 0.15,
+                                event: None,
+                            });
+                        }
+                    } else {
+                        // Captain consoles the soft-temperament players.
+                        for p in players
+                            .iter()
+                            .filter(|p| p.id != cap.id && p.temperament <= 8.0)
+                        {
+                            updates.push(Update {
+                                from: p.id,
+                                to: cap.id,
+                                change_type: ChangeType::PersonalSupport,
+                                magnitude: 0.10,
+                                event: None,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // ── Red card: friction within the same unit ─────────────
+            for &offender in &red_carded {
+                let group = match players.iter().find(|p| p.id == offender) {
+                    Some(p) => p.group,
+                    None => continue,
+                };
+                for p in players
+                    .iter()
+                    .filter(|p| p.id != offender && p.group == group)
+                {
+                    updates.push(Update {
+                        from: p.id,
+                        to: offender,
+                        change_type: ChangeType::PersonalConflict,
+                        magnitude: 0.20,
+                        event: Some((HappinessEventType::ConflictWithTeammate, -0.8)),
+                    });
+                }
+            }
+
+            // ── Player of the match: admiration vs envy ────────────
+            if let Some(motm) = best_player_id {
+                if appeared.contains(&motm) {
+                    let motm_controversy = players
+                        .iter()
+                        .find(|p| p.id == motm)
+                        .map(|p| p.controversy)
+                        .unwrap_or(10.0);
+                    for p in players.iter().filter(|p| p.id != motm) {
+                        let same_group = p.group
+                            == players
+                                .iter()
+                                .find(|q| q.id == motm)
+                                .map(|q| q.group)
+                                .unwrap_or(p.group);
+                        if p.controversy <= 11.0 {
+                            updates.push(Update {
+                                from: p.id,
+                                to: motm,
+                                change_type: ChangeType::ReputationAdmiration,
+                                magnitude: 0.10,
+                                event: None,
+                            });
+                        } else if p.controversy >= 14.0
+                            && motm_controversy >= 11.0
+                            && same_group
+                        {
+                            updates.push(Update {
+                                from: p.id,
+                                to: motm,
+                                change_type: ChangeType::ReputationTension,
+                                magnitude: 0.10,
+                                event: None,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // ── Goal scorer admiration (single-direction proxy) ─────
+            // Without an assist↔scorer pairing in the stat stream we
+            // approximate the cooperation lift with a generic admiration
+            // signal from teammates toward each scorer. Caps at 2 goals
+            // per scorer to avoid runaway updates.
+            for (scorer, goals) in &scorer_goals {
+                let n = (*goals).min(2) as f32;
+                for p in players.iter().filter(|p| p.id != *scorer) {
+                    updates.push(Update {
+                        from: p.id,
+                        to: *scorer,
+                        change_type: ChangeType::ReputationAdmiration,
+                        magnitude: 0.08 * n,
+                        event: None,
+                    });
+                }
+            }
+
+            // ── Apply updates with cooldown / event budget ──────────
+            for upd in updates {
+                if let Some(player) = data.player_mut(upd.from) {
+                    let signed = match upd.change_type {
+                        ChangeType::PersonalConflict
+                        | ChangeType::TrainingFriction
+                        | ChangeType::CompetitionRivalry
+                        | ChangeType::ReputationTension => -upd.magnitude.abs(),
+                        _ => upd.magnitude.abs(),
+                    };
+                    let change = if signed >= 0.0 {
+                        RelationshipChange::positive(upd.change_type, signed.abs())
+                    } else {
+                        RelationshipChange::negative(upd.change_type, signed.abs())
+                    };
+                    player.relations.update_player_relationship(upd.to, change, now);
+                    if let Some((kind, mag)) = upd.event {
+                        if bump_event(&mut event_budget, upd.from) {
+                            player.happiness.add_event_with_partner(kind, mag, Some(upd.to));
+                        }
+                    }
+                }
+            }
+
+            // Win/loss generic team-mate cooperation lift — softer signal
+            // shared by every player on the winning side. Friction lift
+            // skipped on losses; the captain block above captured the
+            // emotional payload for heavy defeats. A team that just wins
+            // narrowly doesn't accumulate dressing-room damage.
+            if team_won {
+                for i in 0..players.len() {
+                    for j in (i + 1)..players.len() {
+                        if let Some(player) = data.player_mut(players[i].id) {
+                            player.relations.update_with_type(
+                                players[j].id,
+                                0.05,
+                                ChangeType::MatchCooperation,
+                                now,
+                            );
+                        }
+                        if let Some(player) = data.player_mut(players[j].id) {
+                            player.relations.update_with_type(
+                                players[i].id,
+                                0.05,
+                                ChangeType::MatchCooperation,
+                                now,
+                            );
+                        }
+                    }
                 }
             }
         }

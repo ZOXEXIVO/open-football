@@ -23,10 +23,12 @@ impl CountryResult {
                         continue;
                     }
 
-                    // Match readiness recovers faster with better facilities
+                    // Match readiness recovers faster with better facilities.
+                    // Scale is 0-20, not 0-100 — older code mis-capped at
+                    // 100 which let preseason readiness silently overrun.
                     let readiness_gain = 0.3 + training_quality * 0.4;
                     player.skills.physical.match_readiness =
-                        (player.skills.physical.match_readiness + readiness_gain).min(100.0);
+                        (player.skills.physical.match_readiness + readiness_gain).min(20.0);
 
                     // Stamina recovery during off-season rest
                     let fitness = player.skills.physical.natural_fitness;

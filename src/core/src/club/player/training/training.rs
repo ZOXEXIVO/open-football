@@ -40,6 +40,9 @@ impl PlayerTraining {
             fatigue_change: 0.0,
             injury_risk: 0.0,
             morale_change: 0.0,
+            physical_load_units: 0.0,
+            high_intensity_share: 0.0,
+            readiness_change: 0.0,
         };
 
         // Base effectiveness factors
@@ -63,93 +66,192 @@ impl PlayerTraining {
             TrainingIntensity::VeryHigh => 2.0,
         };
 
-        // Calculate gains based on training type
-        // Injury risk: real-world training injury rate is ~0.1-0.4% per session.
-        // Previous values (1-4%) caused 80%+ of squads to be injured at any time.
+        // Calculate gains based on training type. Each arm now also fills
+        // in the load profile (fatigue cost, physical-load units booked
+        // into PlayerLoad, HI-share, and per-session readiness gain).
+        // The previous model treated almost every non-physical session as
+        // "net recovery" which made the squad permanently fresh on a
+        // light-tactical week — and any negative fatigue blanket-gifted
+        // +2 readiness, equating passive video with hard match-prep.
+        //
+        // New shape:
+        //   * Endurance / Strength / Speed → cost condition, build fitness
+        //   * Pressing / Transition / MatchPrep → high readiness gain
+        //   * Recovery / RestDay / Video → restore condition, ~zero sharpness
+        //   * Rehab / LightRecovery → small readiness rebuild
         match session.session_type {
             TrainingType::Endurance => {
                 effects.physical_gains.stamina = 0.05 * coach_quality * player_receptiveness * age_factor;
                 effects.physical_gains.natural_fitness = 0.03 * coach_quality * player_receptiveness * age_factor;
-                effects.fatigue_change = -100.0 * intensity_multiplier; // Net recovery — endurance builds fitness
+                effects.fatigue_change = 100.0 * intensity_multiplier; // Real cost — endurance is hard
                 effects.injury_risk = 0.002 * intensity_multiplier;
+                effects.physical_load_units = 30.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.20;
+                effects.readiness_change = 0.4;
             }
             TrainingType::Strength => {
                 effects.physical_gains.strength = 0.04 * coach_quality * player_receptiveness * age_factor;
                 effects.physical_gains.jumping = 0.02 * coach_quality * player_receptiveness * age_factor;
-                effects.fatigue_change = 100.0 * intensity_multiplier; // Tiring — heavy session
+                effects.fatigue_change = 100.0 * intensity_multiplier;
                 effects.injury_risk = 0.003 * intensity_multiplier;
+                effects.physical_load_units = 22.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.15;
+                effects.readiness_change = 0.3;
             }
             TrainingType::Speed => {
                 effects.physical_gains.pace = 0.03 * coach_quality * player_receptiveness * age_factor;
                 effects.physical_gains.agility = 0.04 * coach_quality * player_receptiveness * age_factor;
-                effects.fatigue_change = 150.0 * intensity_multiplier; // Most tiring physical session
+                effects.fatigue_change = 150.0 * intensity_multiplier;
                 effects.injury_risk = 0.004 * intensity_multiplier;
+                effects.physical_load_units = 32.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.55;
+                effects.readiness_change = 0.5;
             }
             TrainingType::BallControl => {
                 effects.technical_gains.first_touch = 0.05 * coach_quality * player_receptiveness;
                 effects.technical_gains.technique = 0.04 * coach_quality * player_receptiveness;
                 effects.technical_gains.dribbling = 0.03 * coach_quality * player_receptiveness;
-                effects.fatigue_change = -50.0 * intensity_multiplier; // Light — slight recovery
+                effects.fatigue_change = 15.0 * intensity_multiplier;
                 effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 12.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.4;
             }
             TrainingType::Passing => {
                 effects.technical_gains.passing = 0.06 * coach_quality * player_receptiveness;
                 effects.mental_gains.vision = 0.02 * coach_quality * player_receptiveness;
-                effects.fatigue_change = -100.0 * intensity_multiplier; // Light — net recovery
+                effects.fatigue_change = 10.0 * intensity_multiplier;
                 effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 10.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.05;
+                effects.readiness_change = 0.4;
             }
             TrainingType::Shooting => {
                 effects.technical_gains.finishing = 0.05 * coach_quality * player_receptiveness;
                 effects.technical_gains.technique = 0.02 * coach_quality * player_receptiveness;
                 effects.mental_gains.decisions = 0.01 * coach_quality * player_receptiveness;
-                effects.fatigue_change = 50.0 * intensity_multiplier; // Moderate physical load
+                effects.fatigue_change = 50.0 * intensity_multiplier;
                 effects.injury_risk = 0.002 * intensity_multiplier;
+                effects.physical_load_units = 16.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.20;
+                effects.readiness_change = 0.5;
             }
             TrainingType::Positioning => {
                 effects.mental_gains.positioning = 0.06 * coach_quality * player_receptiveness;
                 effects.mental_gains.concentration = 0.03 * coach_quality * player_receptiveness;
                 effects.mental_gains.decisions = 0.02 * coach_quality * player_receptiveness;
-                effects.fatigue_change = -150.0 * intensity_multiplier; // Tactical — good recovery
+                // Tactical walkthrough — slight net recovery, real
+                // sharpness gain (you're rehearsing match shape).
+                effects.fatigue_change = -30.0 * intensity_multiplier;
                 effects.injury_risk = 0.0005 * intensity_multiplier;
+                effects.physical_load_units = 4.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.4;
             }
             TrainingType::TeamShape => {
                 effects.mental_gains.teamwork = 0.05 * coach_quality * player_receptiveness;
                 effects.mental_gains.positioning = 0.04 * coach_quality * player_receptiveness;
                 effects.mental_gains.work_rate = 0.02 * coach_quality * player_receptiveness;
-                effects.fatigue_change = -50.0 * intensity_multiplier; // Moderate — slight recovery
+                effects.fatigue_change = 30.0 * intensity_multiplier;
                 effects.injury_risk = 0.001 * intensity_multiplier;
                 effects.morale_change = 0.1; // Team activities boost morale
+                effects.physical_load_units = 14.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.6;
             }
             TrainingType::Recovery => {
                 effects.fatigue_change = -800.0; // Strong recovery — main condition restoration
                 effects.injury_risk = -0.002;
                 effects.morale_change = 0.05;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.1;
             }
             TrainingType::VideoAnalysis => {
                 effects.mental_gains.decisions = 0.03 * coach_quality;
                 effects.mental_gains.positioning = 0.02 * coach_quality;
                 effects.mental_gains.vision = 0.02 * coach_quality;
-                effects.fatigue_change = -200.0; // Light recovery while watching video
+                effects.fatigue_change = -120.0; // Sat in a meeting room — body recovers a touch
                 effects.injury_risk = 0.0;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.1; // Tactical sharpness, not match sharpness
             }
             TrainingType::RestDay => {
-                effects.fatigue_change = -600.0; // Full rest day — good recovery
+                effects.fatigue_change = -600.0;
                 effects.injury_risk = -0.003;
                 effects.morale_change = 0.03;
+                effects.physical_load_units = 0.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.0;
             }
             TrainingType::LightRecovery => {
-                effects.fatigue_change = -500.0; // Light recovery session
+                effects.fatigue_change = -500.0;
                 effects.injury_risk = -0.001;
                 effects.morale_change = 0.02;
+                effects.physical_load_units = 2.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.2;
             }
             TrainingType::Rehabilitation => {
-                effects.fatigue_change = -400.0; // Rehab recovery
+                effects.fatigue_change = -300.0;
                 effects.injury_risk = -0.002;
+                effects.physical_load_units = 4.0;
+                effects.high_intensity_share = 0.0;
+                effects.readiness_change = 0.3;
+            }
+            TrainingType::PressingDrills => {
+                effects.mental_gains.work_rate = 0.04 * coach_quality * player_receptiveness;
+                effects.mental_gains.teamwork = 0.03 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 180.0 * intensity_multiplier;
+                effects.injury_risk = 0.004 * intensity_multiplier;
+                effects.physical_load_units = 38.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.50;
+                effects.readiness_change = 1.0;
+            }
+            TrainingType::TransitionPlay => {
+                effects.technical_gains.passing = 0.03 * coach_quality * player_receptiveness;
+                effects.mental_gains.decisions = 0.03 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 160.0 * intensity_multiplier;
+                effects.injury_risk = 0.003 * intensity_multiplier;
+                effects.physical_load_units = 34.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.45;
+                effects.readiness_change = 1.0;
+            }
+            TrainingType::MatchPreparation => {
+                effects.mental_gains.concentration = 0.03 * coach_quality * player_receptiveness;
+                effects.mental_gains.positioning = 0.02 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 30.0 * intensity_multiplier;
+                effects.injury_risk = 0.0015 * intensity_multiplier;
+                effects.physical_load_units = 18.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.20;
+                effects.readiness_change = 1.2; // Top-up sharpness without burning condition
+            }
+            TrainingType::SetPieces => {
+                effects.technical_gains.crossing = 0.03 * coach_quality * player_receptiveness;
+                effects.technical_gains.heading = 0.02 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 20.0 * intensity_multiplier;
+                effects.injury_risk = 0.0008 * intensity_multiplier;
+                effects.physical_load_units = 8.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.4;
+            }
+            TrainingType::OpponentSpecific => {
+                effects.mental_gains.decisions = 0.02 * coach_quality;
+                effects.mental_gains.vision = 0.02 * coach_quality;
+                effects.fatigue_change = 20.0 * intensity_multiplier;
+                effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 10.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.6;
             }
             _ => {
-                // Default minimal gains for unspecified training types
+                // Default minimal load for unspecified training types
                 effects.fatigue_change = 10.0 * intensity_multiplier;
                 effects.injury_risk = 0.001 * intensity_multiplier;
+                effects.physical_load_units = 8.0 * intensity_multiplier;
+                effects.high_intensity_share = 0.10;
+                effects.readiness_change = 0.2;
             }
         }
 
@@ -396,5 +498,147 @@ impl PlayerTraining {
         gains.work_rate *= factor;
         gains.leadership *= factor;
         gains
+    }
+}
+
+#[cfg(test)]
+mod training_load_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::staff::staff_stub::StaffStub;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, TrainingIntensity, TrainingSession, TrainingType,
+    };
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> chrono::NaiveDateTime {
+        NaiveDate::from_ymd_opt(y, m, day)
+            .unwrap()
+            .and_hms_opt(10, 0, 0)
+            .unwrap()
+    }
+
+    fn build_player(pos: PlayerPositionType) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.condition = 9_000;
+        attrs.fitness = 9_000;
+        let mut skills = PlayerSkills::default();
+        skills.physical.natural_fitness = 14.0;
+        skills.physical.match_readiness = 12.0;
+        skills.mental.work_rate = 10.0;
+        skills.mental.determination = 10.0;
+        let mut person = PersonAttributes::default();
+        person.professionalism = 10.0;
+        person.ambition = 10.0;
+        PlayerBuilder::new()
+            .id(7)
+            .full_name(FullName::new("T".to_string(), "P".to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(person)
+            .skills(skills)
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition { position: pos, level: 18 }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap()
+    }
+
+    fn session(t: TrainingType, intensity: TrainingIntensity) -> TrainingSession {
+        TrainingSession {
+            session_type: t,
+            intensity,
+            duration_minutes: 60,
+            focus_positions: vec![],
+            participants: vec![],
+        }
+    }
+
+    #[test]
+    fn endurance_costs_condition_not_recovers_it() {
+        let player = build_player(PlayerPositionType::MidfielderCenter);
+        let coach = StaffStub::default();
+        let s = session(TrainingType::Endurance, TrainingIntensity::Moderate);
+        let r = PlayerTraining::train(&player, &coach, &s, d(2025, 9, 14), 0.6);
+        // Endurance must be a positive (costing) fatigue change.
+        assert!(
+            r.effects.fatigue_change > 0.0,
+            "endurance should cost condition, got {}",
+            r.effects.fatigue_change
+        );
+        // It should also book a non-trivial physical_load.
+        assert!(r.effects.physical_load_units > 10.0);
+    }
+
+    #[test]
+    fn recovery_session_restores_condition_with_little_sharpness() {
+        let player = build_player(PlayerPositionType::MidfielderCenter);
+        let coach = StaffStub::default();
+        let s = session(TrainingType::Recovery, TrainingIntensity::VeryLight);
+        let r = PlayerTraining::train(&player, &coach, &s, d(2025, 9, 14), 0.6);
+        assert!(r.effects.fatigue_change < -300.0);
+        // Recovery sharpness should be tiny — far below match-prep / pressing.
+        assert!(
+            r.effects.readiness_change < 0.3,
+            "recovery readiness should be small, got {}",
+            r.effects.readiness_change
+        );
+    }
+
+    #[test]
+    fn pressing_drills_load_higher_than_video_analysis() {
+        let player = build_player(PlayerPositionType::ForwardLeft);
+        let coach = StaffStub::default();
+        let pressing = PlayerTraining::train(
+            &player,
+            &coach,
+            &session(TrainingType::PressingDrills, TrainingIntensity::High),
+            d(2025, 9, 14),
+            0.6,
+        );
+        let video = PlayerTraining::train(
+            &player,
+            &coach,
+            &session(TrainingType::VideoAnalysis, TrainingIntensity::VeryLight),
+            d(2025, 9, 14),
+            0.6,
+        );
+        assert!(
+            pressing.effects.fatigue_change > video.effects.fatigue_change + 200.0,
+            "pressing fatigue {} vs video fatigue {}",
+            pressing.effects.fatigue_change,
+            video.effects.fatigue_change,
+        );
+        assert!(pressing.effects.physical_load_units > video.effects.physical_load_units + 20.0);
+        assert!(pressing.effects.readiness_change > video.effects.readiness_change + 0.5);
+    }
+
+    #[test]
+    fn match_preparation_gains_more_sharpness_than_rest_day() {
+        let player = build_player(PlayerPositionType::MidfielderCenter);
+        let coach = StaffStub::default();
+        let prep = PlayerTraining::train(
+            &player,
+            &coach,
+            &session(TrainingType::MatchPreparation, TrainingIntensity::Light),
+            d(2025, 9, 14),
+            0.6,
+        );
+        let rest = PlayerTraining::train(
+            &player,
+            &coach,
+            &session(TrainingType::RestDay, TrainingIntensity::VeryLight),
+            d(2025, 9, 14),
+            0.6,
+        );
+        assert!(
+            prep.effects.readiness_change > rest.effects.readiness_change + 0.5,
+            "prep readiness {} vs rest readiness {}",
+            prep.effects.readiness_change,
+            rest.effects.readiness_change
+        );
     }
 }

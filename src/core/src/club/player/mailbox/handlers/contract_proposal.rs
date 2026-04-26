@@ -1,5 +1,7 @@
 use crate::club::player::agent::PlayerAgent;
-use crate::club::player::calculators::{ContractValuation, ValuationContext};
+use crate::club::player::calculators::{
+    expected_annual_value, package_inputs_from_proposal, ContractValuation, ValuationContext,
+};
 use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
 use crate::handlers::AcceptContractHandler;
 use crate::utils::DateUtils;
@@ -107,22 +109,12 @@ fn accept_and_clear(player: &mut Player, proposal: PlayerContractProposal, now: 
     player.pending_contract_ask = None;
 }
 
-/// Total annual package value used in acceptance scoring. Includes base
-/// wage and a conservative present-value estimate of bonuses (signing
-/// amortised over the contract length, loyalty taken at face).
-fn package_value(proposal: &PlayerContractProposal) -> u32 {
-    let years = proposal.years.max(1) as u32;
-    let signing_amortised = proposal.signing_bonus / years.max(1);
-    let appearance = proposal.appearance_fee.unwrap_or(0).saturating_mul(20);
-    let goal = proposal.goal_bonus.unwrap_or(0).saturating_mul(8);
-    let cleansheet = proposal.clean_sheet_bonus.unwrap_or(0).saturating_mul(8);
-    proposal
-        .salary
-        .saturating_add(proposal.loyalty_bonus)
-        .saturating_add(signing_amortised)
-        .saturating_add(appearance)
-        .saturating_add(goal)
-        .saturating_add(cleansheet)
+/// Total annual package value used in acceptance scoring. Delegates to
+/// the shared `expected_annual_value` helper so happiness, acceptance,
+/// and renewal-tuning all evaluate the same package shape consistently.
+fn package_value(proposal: &PlayerContractProposal, player: &Player) -> u32 {
+    let inputs = package_inputs_from_proposal(proposal, player);
+    expected_annual_value(&inputs)
 }
 
 impl ProcessContractHandler {
@@ -179,15 +171,15 @@ impl ProcessContractHandler {
                     || proposal.relegation_release.is_some()
                     || proposal.non_promotion_release.is_some();
 
-                let pkg_value = package_value(&proposal);
+                let pkg_value = package_value(&proposal, player);
                 let pkg_ratio = pkg_value as f32 / current_salary as f32;
 
                 // Compare the package against what the player thinks they
-                // are actually worth, not just against their current deal.
-                // Without this an underpaid star auto-accepts a token raise
-                // because their existing salary anchors the comparison too
-                // low. Use the ContractValuation that the renewal AI uses
-                // so the two systems agree on the floor.
+                // are actually worth. Prefer the offer-time valuation
+                // stamped by the renewal AI (real club/league reputation,
+                // status, leverage); fall back to a freshly-computed
+                // valuation with neutral reputation only when the offer
+                // came from a legacy code path that didn't supply context.
                 let age = DateUtils::age(player.birth_date, now);
                 let market_interest = player.statuses.get().iter().any(|s| {
                     matches!(
@@ -197,23 +189,43 @@ impl ProcessContractHandler {
                 });
                 let months_remaining =
                     ((player_contract.expiration - now).num_days() / 30).max(0) as i32;
-                let valuation_ctx = ValuationContext {
-                    age,
-                    // Happiness-default reputation here — the renewal AI
-                    // already had real club/league context when shaping
-                    // the offer, so the player-side check just needs the
-                    // status premium + ability + age curve.
-                    club_reputation_score: 0.5,
-                    league_reputation: 5_000,
-                    squad_status: proposal
-                        .squad_status_promise
-                        .clone()
-                        .unwrap_or(player_contract.squad_status.clone()),
-                    current_salary: player_contract.salary,
-                    months_remaining,
-                    has_market_interest: market_interest,
+                let valuation = match (
+                    proposal.valuation_expected_wage,
+                    proposal.valuation_min_acceptable,
+                ) {
+                    (Some(expected), Some(min_acc)) => {
+                        // Offer carried explicit valuation — use it.
+                        ContractValuation {
+                            expected_wage: expected,
+                            min_acceptable: min_acc,
+                            // Recompute remaining fields from the offer-time
+                            // reputation so leverage / status_premium stay
+                            // consistent with the offer's framing.
+                            max_acceptable: ((expected as f32) * 1.30) as u32,
+                            leverage: 0.3,
+                            status_premium: 1.0,
+                        }
+                    }
+                    _ => {
+                        let valuation_ctx = ValuationContext {
+                            age,
+                            club_reputation_score: proposal
+                                .valuation_club_reputation
+                                .unwrap_or(0.5),
+                            league_reputation: proposal
+                                .valuation_league_reputation
+                                .unwrap_or(5_000),
+                            squad_status: proposal
+                                .squad_status_promise
+                                .clone()
+                                .unwrap_or(player_contract.squad_status.clone()),
+                            current_salary: player_contract.salary,
+                            months_remaining,
+                            has_market_interest: market_interest,
+                        };
+                        ContractValuation::evaluate(player, &valuation_ctx)
+                    }
                 };
-                let valuation = ContractValuation::evaluate(player, &valuation_ctx);
 
                 // Loyal veterans and players with strong release clauses /
                 // signing bonuses tolerate a 15% underpay vs market.

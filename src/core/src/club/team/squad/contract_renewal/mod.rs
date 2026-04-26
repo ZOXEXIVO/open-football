@@ -232,36 +232,70 @@ impl ContractRenewalManager {
             }
 
             // Decide whether the optional extension is worth exercising
-            // BEFORE we mutate the contract. Heuristic: only for first-team
-            // contributors who started enough games this season.
-            let should_extend = {
-                let played_share = (player.statistics.played as f32)
-                    .max(player.statistics.played_subs as f32 / 2.0);
-                let is_contributor = matches!(
-                    player.contract.as_ref().map(|c| &c.squad_status),
-                    Some(crate::PlayerSquadStatus::KeyPlayer)
-                        | Some(crate::PlayerSquadStatus::FirstTeamRegular)
-                        | Some(crate::PlayerSquadStatus::FirstTeamSquadRotation)
-                ) && played_share >= 8.0;
-                is_contributor
-            };
+            // BEFORE we mutate the contract. The gate is deliberately
+            // strict — early extensions (3+ years before expiry) burn
+            // future flexibility for no upside.
+            //
+            // Fire only when ALL of these hold:
+            //   1. Inside the final 12 months (extensions exist to avoid
+            //      losing the player to a Bosman, not to lock them in
+            //      mid-deal).
+            //   2. Player is a first-team contributor (KeyPlayer /
+            //      FirstTeamRegular / FirstTeamSquadRotation) with
+            //      meaningful match minutes this season.
+            //   3. Player isn't transfer-listed or pushing for a move —
+            //      a Req/Lst/Frt player extending is just paperwork.
+            //   4. Ability hasn't visibly fallen off a cliff vs potential
+            //      (>40% decline = the player is finished, let the deal run).
+            let now_status = player
+                .contract
+                .as_ref()
+                .map(|c| c.squad_status.clone());
+            let days_to_expiry = player
+                .contract
+                .as_ref()
+                .map(|c| (c.expiration - date).num_days())
+                .unwrap_or(i64::MAX);
+            let in_final_year = days_to_expiry > 0 && days_to_expiry <= 365;
+            let played_share = (player.statistics.played as f32)
+                .max(player.statistics.played_subs as f32 / 2.0);
+            let is_contributor = matches!(
+                now_status.as_ref(),
+                Some(crate::PlayerSquadStatus::KeyPlayer)
+                    | Some(crate::PlayerSquadStatus::FirstTeamRegular)
+                    | Some(crate::PlayerSquadStatus::FirstTeamSquadRotation)
+            ) && played_share >= 8.0;
+            let unsettled = player.statuses.get().iter().any(|s| {
+                matches!(
+                    s,
+                    crate::PlayerStatusType::Req
+                        | crate::PlayerStatusType::Lst
+                        | crate::PlayerStatusType::Frt
+                )
+            }) || player
+                .contract
+                .as_ref()
+                .map(|c| c.is_transfer_listed)
+                .unwrap_or(false);
+            let ca = player.player_attributes.current_ability;
+            let pa = player.player_attributes.potential_ability.max(ca);
+            let declining = pa > 0 && (ca as f32 / pa as f32) < 0.60;
+
+            let should_extend = in_final_year && is_contributor && !unsettled && !declining;
 
             if let Some(c) = player.contract.as_mut() {
                 let _ = c.try_apply_match_highest_earner(top_excl);
                 if should_extend {
                     let _ = c.exercise_optional_extension();
-                } else {
-                    // Drop unused options so they don't linger past the
-                    // expiry date and pollute future audits.
-                    let final_year = (c.expiration - date).num_days() <= 60;
-                    if final_year {
-                        c.clauses.retain(|cl| {
-                            !matches!(
-                                cl.bonus_type,
-                                crate::ContractClauseType::OptionalContractExtensionByClub
-                            )
-                        });
-                    }
+                } else if days_to_expiry <= 60 {
+                    // Drop unused options once expiry is near so the
+                    // clause doesn't linger in stale-data audits.
+                    c.clauses.retain(|cl| {
+                        !matches!(
+                            cl.bonus_type,
+                            crate::ContractClauseType::OptionalContractExtensionByClub
+                        )
+                    });
                 }
             }
         }
@@ -553,6 +587,14 @@ impl ContractRenewalManager {
             match_highest_already_used,
         );
 
+        // Stamp the offer-time valuation context onto the proposal so
+        // acceptance evaluates against the SAME elite-club / mid-tier
+        // expectations this offer was tuned for.
+        proposal.valuation_club_reputation = Some(team_rep_factor);
+        proposal.valuation_league_reputation = Some(league_reputation);
+        proposal.valuation_expected_wage = Some(valuation.expected_wage);
+        proposal.valuation_min_acceptable = Some(valuation.min_acceptable);
+
         // Honor demanded clauses from the previous rejection.
         if let Some(ask) = &player.pending_contract_ask {
             if ask.demanded_release_clause.is_some() && proposal.release_clause.is_none() {
@@ -599,13 +641,30 @@ impl WageStructureSnapshot {
         let mut backup_count: u32 = 0;
 
         for p in team.players.players.iter() {
-            let c = match p.contract.as_ref() {
-                Some(c) => c,
-                None => continue,
+            // Loaned-in players are billed against the loan contract,
+            // not the parent contract. Their parent salary (which can
+            // be 1M+ for an elite-club loanee at a tier-3 borrower) must
+            // not anchor the borrower's top earner — the renewal AI
+            // would then refuse to offer reasonable wages to permanent
+            // squad members because "we already pay X".
+            let c = if let Some(loan) = p.contract_loan.as_ref() {
+                loan
+            } else if let Some(c) = p.contract.as_ref() {
+                c
+            } else {
+                continue;
             };
             bill = bill.saturating_add(c.salary);
             top = top.max(c.salary);
-            match c.squad_status {
+            // Squad-status counters use the player's *resolved* status —
+            // a loanee's status sits on the parent contract; we still
+            // bucket them by it so the wage-tier averages stay coherent.
+            let status = p
+                .contract
+                .as_ref()
+                .map(|c| c.squad_status.clone())
+                .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+            match status {
                 PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular => {
                     first_team_sum = first_team_sum.saturating_add(c.salary);
                     first_team_count += 1;

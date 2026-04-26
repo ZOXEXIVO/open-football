@@ -2,7 +2,6 @@ use crate::club::player::injury::{BodyPart, InjuryType};
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
 use crate::HappinessEventType;
-use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
 /// Additional factor tracking recovery acceleration.
@@ -52,7 +51,6 @@ impl Player {
         medical: &MedicalStaffQuality,
     ) {
         let injury_proneness = self.player_attributes.injury_proneness;
-        let proneness_modifier = injury_proneness as f32 / 10.0;
 
         if self.player_attributes.is_injured {
             // Phase 1: Injured — decrement injury days
@@ -68,15 +66,21 @@ impl Player {
                 self.statuses.add(now, PlayerStatusType::Lmp);
                 result.injury_recovered = true;
 
+                // Match readiness takes a hit on return — even a small
+                // injury blunts sharpness. Long-term layoffs lose more.
+                let recovery_left = self.player_attributes.recovery_days_remaining as f32;
+                let readiness_drop = (recovery_left / 30.0 * 8.0).clamp(2.0, 12.0);
+                self.skills.physical.match_readiness =
+                    (self.skills.physical.match_readiness - readiness_drop).max(0.0);
+
                 // Morale event: being cleared to play lifts morale, more so
                 // after a long absence. Recovery days remaining is our proxy
                 // for the severity of what they just went through.
-                let recovery_left = self.player_attributes.recovery_days_remaining;
-                let magnitude = if recovery_left >= 30 {
+                let magnitude = if recovery_left >= 30.0 {
                     8.0 // long-term injury — big lift, been in rehab for weeks
-                } else if recovery_left >= 14 {
+                } else if recovery_left >= 14.0 {
                     5.0
-                } else if recovery_left >= 7 {
+                } else if recovery_left >= 7.0 {
                     3.0
                 } else {
                     1.5
@@ -86,8 +90,17 @@ impl Player {
             }
         } else if self.player_attributes.is_in_recovery() {
             // Phase 2: Recovery — post-injury low match fitness phase.
-            // Setback chance reduced by medical staff quality.
-            let setback_chance = 0.001 * proneness_modifier * medical.setback_multiplier();
+            // Setback risk now uses the unified recipe so workload
+            // spikes during rehab actually leak into recurrence chance.
+            let setback_chance = self.compute_injury_risk(
+                crate::club::player::condition::InjuryRiskInputs {
+                    base_rate: 0.001,
+                    intensity: 0.5,
+                    in_recovery: true,
+                    medical_multiplier: medical.setback_multiplier(),
+                    now,
+                },
+            );
             if rand::random::<f32>() < setback_chance {
                 if let Some(body_part) = BodyPart::from_u8(
                     self.player_attributes.last_injury_body_part,
@@ -112,41 +125,20 @@ impl Player {
                 self.player_attributes.last_injury_body_part = 0;
             }
         } else {
-            // Phase 3: Healthy — small daily random injury chance
-            let age = DateUtils::age(self.birth_date, now);
-            let condition_pct = self.player_attributes.condition_percentage();
-            let natural_fitness = self.skills.physical.natural_fitness;
-            let jadedness = self.player_attributes.jadedness;
-
-            // Base chance: 0.0001 (0.01%)
-            let mut injury_chance: f32 = 0.0001;
-
-            // Age modifier: players 30+ have higher risk
-            if age > 30 {
-                injury_chance += (age as f32 - 30.0) * 0.00004;
-            }
-
-            // Low condition increases risk
-            if condition_pct < 50 {
-                injury_chance += (50.0 - condition_pct as f32) * 0.00001;
-            }
-
-            // Low natural fitness increases risk
-            if natural_fitness < 10.0 {
-                injury_chance += (10.0 - natural_fitness) * 0.00002;
-            }
-
-            // Jadedness increases risk
-            if jadedness > 5000 {
-                injury_chance += (jadedness as f32 - 5000.0) * 0.000002;
-            }
-
-            // Injury proneness multiplier
-            injury_chance *= proneness_modifier;
-
-            // Sports science multiplier — elite staff cuts spontaneous
-            // injury risk roughly in half.
-            injury_chance *= medical.risk_multiplier();
+            // Phase 3: Healthy — daily spontaneous injury risk through the
+            // unified recipe. Base 0.0001 / day; the recipe applies age,
+            // condition, NF, jadedness, workload spike, congestion,
+            // proneness and medical multipliers consistently with the
+            // match/training paths.
+            let injury_chance = self.compute_injury_risk(
+                crate::club::player::condition::InjuryRiskInputs {
+                    base_rate: 0.0001,
+                    intensity: 0.6,
+                    in_recovery: false,
+                    medical_multiplier: medical.risk_multiplier(),
+                    now,
+                },
+            );
 
             if rand::random::<f32>() < injury_chance {
                 let injury = InjuryType::random_spontaneous_injury(injury_proneness);

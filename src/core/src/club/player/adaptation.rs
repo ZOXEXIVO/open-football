@@ -5,6 +5,36 @@ use crate::club::{Person, PlayerPositionType};
 use crate::HappinessEventType;
 use chrono::NaiveDate;
 
+/// Squad-side context for [`Player::adaptation_score`]. Caller-supplied so
+/// the player doesn't need to walk the squad to compute its own number.
+/// Empty-default fields contribute neutrally — the score still works
+/// without context, just less informed.
+#[derive(Debug, Clone, Default)]
+pub struct AdaptationSquadContext {
+    /// How many other senior squad members speak one of this player's
+    /// languages well enough to chat off the pitch (≥40 proficiency or
+    /// native). Drives the "language buddy" axis of adaptation.
+    pub same_language_teammates: u8,
+    /// How many other senior squad members share the player's primary
+    /// nationality (country_id). Stack-once: caller may pre-cap at 2.
+    pub same_nationality_teammates: u8,
+    /// Has a mentor been assigned and is the relationship positive?
+    /// `Some(true)` = good mentor, `Some(false)` = bad mentor or open
+    /// conflict, `None` = no mentor.
+    pub mentor_quality: Option<bool>,
+    /// Squad chemistry as the team sees it (0..100). Pulled from
+    /// `Relations::get_team_chemistry()`.
+    pub squad_chemistry: f32,
+    /// Highest staff/manager relation level for this player on the
+    /// signed -100..100 axis. 0 if unknown.
+    pub manager_relation_level: f32,
+    /// Is the player a loan signing? Caps max adaptation at 85 unless they
+    /// share the local language or this is a favorite club.
+    pub is_loan: bool,
+    /// True if signing is to a favorite club — relaxes the loan cap.
+    pub is_favorite_club: bool,
+}
+
 /// Post-transfer settling window. For the first ~12 weeks at a new club the
 /// player's match rating is dampened, and weekly integration events fire.
 ///
@@ -59,6 +89,194 @@ impl Player {
             self.attributes.adaptability,
             self.is_step_up_move(club_rep_0_to_1),
         )
+    }
+
+    /// Settlement multiplier adjusted by the adaptation_score. Slots into
+    /// rating in match_events the same way the legacy version does, but
+    /// reads the richer adaptation signal so a well-supported foreign
+    /// signing recovers form much faster than an isolated one.
+    ///
+    /// Bands map to multipliers as:
+    ///   * adaptation ≥ 80 → 0.98..1.00 (essentially no penalty)
+    ///   * 60-79 → 0.94..0.98
+    ///   * 40-59 → 0.88..0.94
+    ///   * 20-39 → 0.82..0.88
+    ///   * <20 → 0.78..0.82 (worst case, never below 0.78)
+    /// Highly-adapted dream moves can earn a tiny positive lift up to 1.02.
+    pub fn settlement_form_multiplier_from_adaptation(
+        &self,
+        adaptation_score: f32,
+        is_dream_move: bool,
+    ) -> f32 {
+        let s = adaptation_score.clamp(0.0, 100.0);
+        let base = if s >= 80.0 {
+            // 0.98..1.00 across [80, 100]
+            0.98 + ((s - 80.0) / 20.0) * 0.02
+        } else if s >= 60.0 {
+            0.94 + ((s - 60.0) / 20.0) * 0.04
+        } else if s >= 40.0 {
+            0.88 + ((s - 40.0) / 20.0) * 0.06
+        } else if s >= 20.0 {
+            0.82 + ((s - 20.0) / 20.0) * 0.06
+        } else {
+            0.78 + (s / 20.0) * 0.04
+        };
+        if is_dream_move && s >= 80.0 {
+            (base + 0.02).clamp(0.78, 1.02)
+        } else {
+            base.clamp(0.78, 1.02)
+        }
+    }
+
+    /// Derived 0..100 adaptation score. Read by:
+    ///   * settlement form multiplier (via
+    ///     [`Player::settlement_form_multiplier_from_adaptation`]);
+    ///   * `ScoringEngine::newcomer_penalty` for selection;
+    ///   * isolation / bonding event gates;
+    ///   * training receptiveness modifier in coach-vs-player coaching.
+    ///
+    /// Inputs follow the spec exactly so behaviour is reproducible:
+    ///   - time at club (linear up to 84 days)
+    ///   - local-language proficiency (fluent / basic / none)
+    ///   - adaptability and professionalism personality attributes
+    ///   - role fit against the formation
+    ///   - manager relationship
+    ///   - mentor presence + quality
+    ///   - same-language and same-nationality teammates
+    ///   - squad chemistry deviation from neutral
+    ///   - recent appearances + starts post-transfer
+    ///   - loan cap, dream-move lift, salary/ambition shock
+    /// Final score clamped to 0..100.
+    pub fn adaptation_score(
+        &self,
+        now: NaiveDate,
+        country_code: &str,
+        club_rep_0_to_1: f32,
+        formation: Option<&[PlayerPositionType; 11]>,
+        squad: &AdaptationSquadContext,
+    ) -> f32 {
+        let mut score: f32 = 35.0;
+
+        // Time at club — caps at 84 days (12 weeks).
+        if let Some(days) = self.days_since_transfer(now) {
+            let factor = ((days as f32) / 84.0).clamp(0.0, 1.0);
+            score += factor * 25.0;
+        } else {
+            // Player has been at the club a long time — full settle bonus.
+            score += 25.0;
+        }
+
+        // Local language tier.
+        if !country_code.is_empty() {
+            let langs = Language::from_country_code(country_code);
+            if !langs.is_empty() {
+                let mut highest_proficiency: u8 = 0;
+                let mut native_or_fluent = false;
+                for target in &langs {
+                    for pl in &self.languages {
+                        if pl.language != *target {
+                            continue;
+                        }
+                        if pl.is_native || pl.proficiency >= 70 {
+                            native_or_fluent = true;
+                        }
+                        if pl.proficiency > highest_proficiency {
+                            highest_proficiency = pl.proficiency;
+                        }
+                    }
+                }
+                if native_or_fluent {
+                    score += 15.0;
+                } else if (40..=69).contains(&highest_proficiency) {
+                    score += 7.0;
+                } else if highest_proficiency == 0 {
+                    score -= 10.0;
+                }
+            }
+        }
+
+        // Adaptability + professionalism contributions.
+        let adapt_contribution =
+            ((self.attributes.adaptability - 10.0) * 1.2).clamp(-10.0, 12.0);
+        score += adapt_contribution;
+        let prof_contribution =
+            ((self.attributes.professionalism - 10.0) * 0.7).clamp(-6.0, 7.0);
+        score += prof_contribution;
+
+        // Role fit against the formation.
+        if let Some(f) = formation {
+            let primary = self.position();
+            if f.iter().any(|p| *p == primary) {
+                score += 10.0;
+            } else if f.iter().any(|p| p.position_group() == primary.position_group()) {
+                score += 4.0;
+            } else {
+                score -= 12.0;
+            }
+        }
+
+        // Manager relationship — normalise -100..100 → -8..+8.
+        let manager_norm = (squad.manager_relation_level / 100.0 * 8.0).clamp(-8.0, 8.0);
+        score += manager_norm;
+
+        // Mentor support.
+        match squad.mentor_quality {
+            Some(true) => score += 8.0,
+            Some(false) => score -= 8.0,
+            None => {}
+        }
+
+        // Language buddies in the squad.
+        match squad.same_language_teammates {
+            0 => {}
+            1 => score += 4.0,
+            _ => score += 7.0,
+        }
+
+        // Same-nationality presence — stack once only.
+        if squad.same_nationality_teammates >= 1 {
+            score += 3.0;
+        }
+
+        // Squad chemistry deviation.
+        let chem_contribution = ((squad.squad_chemistry - 50.0) * 0.15).clamp(-7.5, 7.5);
+        score += chem_contribution;
+
+        // Recent appearances bonus — first 5 appearances and starts after a
+        // transfer count for a small lift each. Without per-window tracking,
+        // approximate with total post-transfer matches.
+        let appearances_after_transfer =
+            (self.statistics.played + self.statistics.played_subs) as i32;
+        let starts_after_transfer = self.statistics.played as i32;
+        let app_bonus = appearances_after_transfer.min(5) as f32 * 2.0;
+        let start_bonus = starts_after_transfer.min(5) as f32 * 2.0;
+        score += app_bonus + start_bonus;
+
+        // Step-up dream move.
+        if self.is_step_up_move(club_rep_0_to_1) {
+            score += 5.0;
+        }
+
+        // Salary / ambition shock penalty — a recent shock event signals
+        // the player still hasn't reconciled with the move's terms.
+        let recent_shock = self.happiness.recent_events.iter().any(|e| {
+            (e.event_type == HappinessEventType::SalaryShock
+                || e.event_type == HappinessEventType::AmbitionShock)
+                && e.days_ago <= 60
+        });
+        if recent_shock {
+            score -= 8.0;
+        }
+
+        // Loan cap — capped at 85 unless same language or favorite club.
+        if squad.is_loan {
+            let speaks_local = self.speaks_local_language(country_code);
+            if !(speaks_local || squad.is_favorite_club) {
+                score = score.min(85.0);
+            }
+        }
+
+        score.clamp(0.0, 100.0)
     }
 
     /// A step-up move is one where the club's reputation visibly exceeds
@@ -310,6 +528,23 @@ impl Player {
     /// fluency, personality, and age. Runs for ~24 weeks after a transfer so
     /// there's a tail of recovery even once the form penalty has faded.
     pub fn process_integration(&mut self, now: NaiveDate, country_code: &str) {
+        // Default: caller doesn't supply squad context — same behaviour as
+        // before, but shared-language buddies and mentor support default to
+        // zero / none so we err toward firing isolation events when the
+        // information isn't available.
+        self.process_integration_with_squad(now, country_code, &AdaptationSquadContext::default());
+    }
+
+    /// Integration tick variant that reads the [`AdaptationSquadContext`] —
+    /// shared-language teammates reduce isolation chance, mentor support
+    /// accelerates language progress, and a no-shared-language low-adaptability
+    /// player sees a higher early isolation rate.
+    pub fn process_integration_with_squad(
+        &mut self,
+        now: NaiveDate,
+        country_code: &str,
+        squad: &AdaptationSquadContext,
+    ) {
         let cfg = AdaptationConfig::default();
         let Some(days) = self.days_since_transfer(now) else {
             self.process_chronic_language_isolation(now, country_code);
@@ -326,21 +561,48 @@ impl Player {
         let prof = self.attributes.professionalism.clamp(0.0, 20.0);
         let pull_toward_bonding = (adapt + prof) / 40.0;
 
-        if weeks < cfg.early_isolation_max_weeks
+        // Shared-language buddies in the squad shave the isolation chance.
+        // 1 buddy → −40% chance; 2+ → −70%.
+        let isolation_dampener: f32 = match squad.same_language_teammates {
+            0 => 1.0,
+            1 => 0.6,
+            _ => 0.3,
+        };
+
+        // Local-language fluency tier reduces settlement penalty.
+        // (Settlement multiplier branches handle this; we mirror the same
+        // tiering when deciding whether to fire isolation.)
+        let in_early_window = weeks < cfg.early_isolation_max_weeks;
+        let strict_isolation_gate = !speaks_local
+            && adapt < cfg.early_isolation_max_adaptability;
+        let no_shared_language_low_adapt = squad.same_language_teammates == 0
             && !speaks_local
-            && adapt < cfg.early_isolation_max_adaptability
-        {
-            self.happiness
-                .add_event(HappinessEventType::FeelingIsolated, -2.0);
-            return;
+            && adapt < 8.0;
+
+        // Higher chance for no-shared-language low-adaptability foreign
+        // signings (35% per week for first 4 weeks, before dampener).
+        let isolation_base_chance = if no_shared_language_low_adapt && in_early_window {
+            0.35
+        } else if strict_isolation_gate && in_early_window {
+            // Original behaviour — fires reliably.
+            1.0
+        } else {
+            0.0
+        };
+        let isolation_chance =
+            (isolation_base_chance * isolation_dampener).clamp(0.0, 1.0);
+
+        if isolation_chance > 0.0 {
+            // Use deterministic per-day roll so testing stays stable.
+            let roll = isolation_roll(self.id, now);
+            if roll < isolation_chance {
+                self.happiness
+                    .add_event(HappinessEventType::FeelingIsolated, -2.0);
+                return;
+            }
         }
 
-        // Generic "bonding with the squad" without a specific teammate is
-        // a confusing event to surface in the player's history ("bonded
-        // with a teammate" — which one?). The SettledIntoSquad event below
-        // covers the same integration moment with honest framing. The
-        // TeammateBonding event remains, but is now reserved for emit
-        // sites that can name the partner (mentorship, behaviour result).
+        // Settled-into-squad lift.
         if weeks >= cfg.settled_min_weeks
             && (pull_toward_bonding > cfg.settled_pull_threshold || speaks_local)
         {
@@ -349,6 +611,20 @@ impl Player {
         }
     }
 
+}
+
+/// Deterministic per-day per-player isolation roll, in `[0, 1)`. Same date +
+/// id produces the same number — keeps weekly tests stable.
+fn isolation_roll(player_id: u32, date: NaiveDate) -> f32 {
+    use chrono::Datelike;
+    let h = (player_id as u64)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(date.num_days_from_ce() as u64);
+    let frac = ((h >> 13) as u32 as f32) / (u32::MAX as f32);
+    frac.clamp(0.0, 0.999)
+}
+
+impl Player {
     /// Post-settlement ongoing language check. A player who's been at a
     /// foreign club for years but never picked up the language keeps
     /// accruing small isolation hits — the dressing-room outsider model.

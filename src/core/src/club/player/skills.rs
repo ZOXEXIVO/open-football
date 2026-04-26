@@ -338,12 +338,15 @@ impl Physical {
     }
 
     /// Physical recovery between matches — stamina and match readiness
-    /// recover based on natural_fitness.
+    /// recover based on natural_fitness. `match_readiness` is on the
+    /// 0–20 scale (the source of truth across this crate); the previous
+    /// `min(100.0)` cap was leftover scale drift that let readiness
+    /// silently exceed its real bounds.
     pub fn rest(&mut self) {
         // Natural fitness determines recovery rate (0-20 scale → 0.5%-2% per rest)
         let recovery_rate = 0.005 + (self.natural_fitness / 20.0) * 0.015;
         self.stamina = (self.stamina + recovery_rate * 20.0).min(20.0);
-        self.match_readiness = (self.match_readiness + recovery_rate * 15.0).min(100.0);
+        self.match_readiness = (self.match_readiness + recovery_rate * 3.0).min(20.0);
     }
 }
 

@@ -1,4 +1,7 @@
-use crate::club::player::load::{FATIGUE_LOAD_DANGER, FATIGUE_LOAD_THRESHOLD};
+use crate::club::player::load::{
+    FATIGUE_LOAD_DANGER, FATIGUE_LOAD_THRESHOLD, PHYSICAL_LOAD_DANGER, PHYSICAL_LOAD_THRESHOLD,
+    RECOVERY_DEBT_HEAVY,
+};
 use crate::club::staff::perception::CoachProfile;
 use crate::club::{ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, Staff};
 use crate::utils::DateUtils;
@@ -192,22 +195,44 @@ impl ScoringEngine {
     /// naturally rotate through weeks of congested fixtures instead of
     /// flogging the same XI into the ground.
     ///
+    /// The signal is the *worse* of:
+    ///   * weekly minutes vs. FATIGUE_LOAD_THRESHOLD (legacy line)
+    ///   * weekly physical load vs. PHYSICAL_LOAD_THRESHOLD (position-
+    ///     weighted: 90 wingback minutes register heavier than 90 GK
+    ///     minutes)
+    ///   * recovery debt vs. RECOVERY_DEBT_HEAVY (deep tiredness even
+    ///     when weekly minutes are low — e.g., a player who came off a
+    ///     punishing midweek cup tie)
+    ///
+    /// Goalkeepers are protected from outfield-style rotation: a #1
+    /// keeper plays every week in real football, so the load-based
+    /// penalty is heavily damped for them.
+    ///
     /// Friendlies don't rotate — preseason / testimonial XIs already
     /// feature a different player pool — so this returns 0 there.
     pub fn fatigue_penalty(&self, player: &Player, is_friendly: bool) -> f32 {
         if is_friendly {
             return 0.0;
         }
-        let load = player.load.minutes_last_7;
-        if load <= FATIGUE_LOAD_THRESHOLD {
+        let minutes_load = player.load.minutes_last_7;
+        let physical_load = player.load.physical_load_7;
+        let debt = player.load.recovery_debt;
+
+        let minutes_t = ramp(minutes_load, FATIGUE_LOAD_THRESHOLD, FATIGUE_LOAD_DANGER);
+        let physical_t = ramp(physical_load, PHYSICAL_LOAD_THRESHOLD, PHYSICAL_LOAD_DANGER);
+        // Debt ramp: 0 at no debt, full penalty at 2× HEAVY threshold.
+        let debt_t = ramp(debt, RECOVERY_DEBT_HEAVY, RECOVERY_DEBT_HEAVY * 2.0);
+
+        let t = minutes_t.max(physical_t).max(debt_t);
+        if t <= 0.0 {
             return 0.0;
         }
-        // Linear ramp from 0 at the threshold to -3.0 at the danger line.
-        let over = load - FATIGUE_LOAD_THRESHOLD;
-        let span = (FATIGUE_LOAD_DANGER - FATIGUE_LOAD_THRESHOLD).max(1.0);
-        let t = (over / span).min(2.0); // allow overshoot beyond danger
-                                        // Risk-tolerant coaches shrug off load; conservative coaches rotate early.
-        let scale = 1.0 - self.profile.risk_tolerance * 0.4;
+
+        let mut scale = 1.0 - self.profile.risk_tolerance * 0.4;
+        // Goalkeepers don't rotate the way outfielders do.
+        if player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper {
+            scale *= 0.4;
+        }
         -(t * 3.0) * scale
     }
 
@@ -300,12 +325,18 @@ impl ScoringEngine {
         max_penalty * (1.0 - integration)
     }
 
-    /// Pairwise chemistry bonus (-0.8..+1.0)
+    /// Pairwise chemistry bonus (-1.2..+1.0). Sharper position-proximity
+    /// weights so a CB-CB pair (1.0) clearly outweighs a striker-fullback
+    /// pair (0.15) — defensive units feel rapport more than far-flung ones.
+    /// Captain proximity adds a small stabiliser; deep-disliked teammates
+    /// in the same unit floor the score so the manager sees the friction.
     pub fn cohesion_bonus(
         &self,
         player: &Player,
         selected_players: &[&Player],
+        slot_position: PlayerPositionType,
         slot_group: PlayerFieldPositionGroup,
+        captain_id: Option<u32>,
     ) -> f32 {
         if selected_players.is_empty() {
             return 0.0;
@@ -314,18 +345,23 @@ impl ScoringEngine {
         let p = &self.profile;
         let mut total = 0.0f32;
         let mut weight_sum = 0.0f32;
+        let mut worst_same_unit_rel: Option<f32> = None;
+        let mut captain_stabiliser = 0.0f32;
+
+        let player_pos = player.position();
 
         for teammate in selected_players {
-            let proximity_weight = {
-                let teammate_group = teammate.position().position_group();
-                if teammate_group == slot_group {
-                    1.0
-                } else if helpers::is_adjacent_group(teammate_group, slot_group) {
-                    0.5
-                } else {
-                    0.2
-                }
-            };
+            let teammate_pos = teammate.position();
+            let teammate_group = teammate.position().position_group();
+
+            // Sharper proximity weighting reflecting football positional units.
+            let proximity_weight = position_proximity_weight(
+                player_pos,
+                slot_position,
+                teammate_pos,
+                slot_group,
+                teammate_group,
+            );
 
             let rel_quality = match player.relations.get_player(teammate.id) {
                 Some(rel) => {
@@ -337,18 +373,43 @@ impl ScoringEngine {
                 None => 0.0,
             };
 
+            // Track worst same-unit relation — a deep dislike between two
+            // CBs is worth more than the average pulls.
+            if teammate_group == slot_group {
+                worst_same_unit_rel = Some(match worst_same_unit_rel {
+                    Some(prev) if prev <= rel_quality => prev,
+                    _ => rel_quality,
+                });
+            }
+
+            // Captain stabiliser: a leader in the XI lifts every teammate's
+            // cohesion a touch — only fires for high-leadership captains.
+            if Some(teammate.id) == captain_id && teammate.skills.mental.leadership >= 14.0 {
+                captain_stabiliser = 0.2;
+            }
+
             total += rel_quality * proximity_weight;
             weight_sum += proximity_weight;
         }
 
         if weight_sum == 0.0 {
-            return 0.0;
+            return captain_stabiliser;
         }
 
         let avg = total / weight_sum;
         let scale = 1.0 + p.conservatism * 0.3;
+        let mut score = (avg * scale * 2.0).clamp(-1.2, 1.0);
+        score += captain_stabiliser;
 
-        (avg * scale * 2.0).clamp(-0.8, 1.0)
+        // Floor for severe same-unit dislike — even if every other pair is
+        // cordial, two CBs at -50 should pull at least -0.4.
+        if let Some(worst) = worst_same_unit_rel {
+            if worst <= -0.5 {
+                score = score.min(-0.4);
+            }
+        }
+
+        score.clamp(-1.2, 1.2)
     }
 
     /// Score for a specific tactical slot (starting XI selection)
@@ -404,7 +465,13 @@ impl ScoringEngine {
 
         score += (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
 
-        score += self.cohesion_bonus(player, selected_players, slot_group);
+        score += self.cohesion_bonus(
+            player,
+            selected_players,
+            slot_position,
+            slot_group,
+            None,
+        );
 
         // Squad status tilt — labelled starters get their planned minutes.
         score += self.squad_status_bonus(player);
@@ -475,6 +542,12 @@ impl ScoringEngine {
     /// Risk of asking a player to start while physically fragile. This is
     /// separate from the hard availability gate: managers will sometimes
     /// risk a tired star in a final, but usually protect them in normal games.
+    ///
+    /// Now reads the richer load model:
+    ///   * physical_load_7 (position-weighted) instead of raw minutes
+    ///   * recovery_debt (deep tiredness flag)
+    ///   * acute:chronic workload spike (sports-science danger zone)
+    ///   * is_in_recovery() — Lmp players carry a big risk premium
     pub fn injury_risk_penalty(
         &self,
         player: &Player,
@@ -488,19 +561,35 @@ impl ScoringEngine {
         let condition = player.player_attributes.condition_percentage() as f32;
         let fitness = (player.player_attributes.fitness as f32 / 10000.0).clamp(0.0, 1.0);
         let natural_fitness = (player.skills.physical.natural_fitness / 20.0).clamp(0.0, 1.0);
-        let load_7 = (player.load.minutes_last_7 / FATIGUE_LOAD_DANGER).clamp(0.0, 1.8);
+        let physical_load_norm =
+            (player.load.physical_load_7 / PHYSICAL_LOAD_DANGER).clamp(0.0, 1.8);
+        let debt_norm = (player.load.recovery_debt / (RECOVERY_DEBT_HEAVY * 2.0)).clamp(0.0, 1.5);
         let matches_14 = player.load.matches_last_14() as f32;
+        let spike = if player.load.is_workload_spike() {
+            (player.load.workload_spike_ratio() - 1.0).clamp(0.0, 1.5)
+        } else {
+            0.0
+        };
 
         let condition_risk = ((65.0 - condition) / 65.0).clamp(0.0, 1.0);
         let fitness_risk = 1.0 - fitness;
         let durability_risk = 1.0 - natural_fitness;
         let match_density_risk = ((matches_14 - 3.0) / 3.0).clamp(0.0, 1.0);
 
-        let raw = condition_risk * 2.4
+        let mut raw = condition_risk * 2.4
             + fitness_risk * 1.4
             + durability_risk * 0.8
-            + load_7 * 1.6
-            + match_density_risk * 1.2;
+            + physical_load_norm * 1.6
+            + debt_norm * 1.4
+            + match_density_risk * 1.2
+            + spike * 1.8;
+
+        // Recovery phase: starting a Lmp player is a coaching choice with
+        // a real recurrence risk. Heavy premium so managers don't rush
+        // returns unless match_importance forces their hand.
+        if player.player_attributes.is_in_recovery() {
+            raw += 4.5;
+        }
 
         let importance_dampener = (1.15 - match_importance).clamp(0.25, 1.10);
         raw * importance_dampener * (1.0 - self.profile.risk_tolerance * 0.35)
@@ -584,6 +673,25 @@ impl ScoringEngine {
             score += need_minutes_bonus;
         }
 
+        // Sharpness top-up: a fit-but-rusty regular (good condition,
+        // low recent load, fading match-readiness, not in recovery)
+        // belongs on the bench so they can come on for cameo minutes.
+        // This is the "needs sharpness" lever distinct from "needs
+        // development minutes".
+        if !player.player_attributes.is_in_recovery() {
+            let condition = player.player_attributes.condition_percentage() as f32;
+            let days_idle = player.player_attributes.days_since_last_match as f32;
+            let physical_readiness = player.skills.physical.match_readiness;
+            if condition >= 70.0
+                && days_idle >= 7.0
+                && physical_readiness < 14.0
+                && player.load.physical_load_7 < PHYSICAL_LOAD_THRESHOLD * 0.5
+            {
+                let sharpness_need = (14.0 - physical_readiness).clamp(0.0, 8.0);
+                score += sharpness_need * 0.10;
+            }
+        }
+
         // Loan match fee incentive: if the parent club pays per appearance,
         // the borrowing club has a financial reason to include the player.
         if let Some(ref loan) = player.contract_loan {
@@ -643,4 +751,122 @@ impl ScoringEngine {
             + sweeper * 0.10
             + distribution * 0.10
     }
+}
+
+/// Sharper position-proximity weight for cohesion calculations.
+///
+/// Football positional units rather than abstract groups:
+///   * GK ↔ CB: 1.0 (set-piece communication, last-line trust)
+///   * CB ↔ CB: 1.0 (back-line partnership)
+///   * Fullback ↔ Winger same side: 0.9 (overlapping runs)
+///   * CM/DM/AM cluster: 0.8 (midfield triangulation)
+///   * Striker ↔ AM/winger: 0.7 (final-third combination)
+///   * Adjacent groups: 0.4 fallback (better than the legacy 0.5
+///     because it forces the calculation to lean on the unit pairs above)
+///   * Distant unrelated roles: 0.15
+fn position_proximity_weight(
+    player_pos: PlayerPositionType,
+    slot_pos: PlayerPositionType,
+    teammate_pos: PlayerPositionType,
+    slot_group: PlayerFieldPositionGroup,
+    teammate_group: PlayerFieldPositionGroup,
+) -> f32 {
+    use PlayerPositionType::*;
+
+    // GK ↔ CB
+    let gk_cb = |a: PlayerPositionType, b: PlayerPositionType| -> bool {
+        matches!(a, Goalkeeper)
+            && matches!(b, DefenderCenter | DefenderCenterLeft | DefenderCenterRight)
+    };
+    if gk_cb(slot_pos, teammate_pos) || gk_cb(teammate_pos, slot_pos) {
+        return 1.0;
+    }
+
+    // CB ↔ CB
+    let is_cb = |p: PlayerPositionType| -> bool {
+        matches!(p, DefenderCenter | DefenderCenterLeft | DefenderCenterRight)
+    };
+    if is_cb(slot_pos) && is_cb(teammate_pos) {
+        return 1.0;
+    }
+
+    // Fullback ↔ Winger same side
+    let left_pair = |a: PlayerPositionType, b: PlayerPositionType| -> bool {
+        matches!(a, DefenderLeft | WingbackLeft)
+            && matches!(b, MidfielderLeft | AttackingMidfielderLeft | ForwardLeft)
+    };
+    let right_pair = |a: PlayerPositionType, b: PlayerPositionType| -> bool {
+        matches!(a, DefenderRight | WingbackRight)
+            && matches!(b, MidfielderRight | AttackingMidfielderRight | ForwardRight)
+    };
+    if left_pair(slot_pos, teammate_pos)
+        || left_pair(teammate_pos, slot_pos)
+        || right_pair(slot_pos, teammate_pos)
+        || right_pair(teammate_pos, slot_pos)
+    {
+        return 0.9;
+    }
+
+    // Midfield cluster (CM / DM / AM, any flank)
+    let is_mid_cluster = |p: PlayerPositionType| -> bool {
+        matches!(
+            p,
+            MidfielderCenter
+                | MidfielderCenterLeft
+                | MidfielderCenterRight
+                | DefensiveMidfielder
+                | AttackingMidfielderCenter
+                | AttackingMidfielderLeft
+                | AttackingMidfielderRight
+                | MidfielderLeft
+                | MidfielderRight
+        )
+    };
+    if is_mid_cluster(slot_pos) && is_mid_cluster(teammate_pos) {
+        return 0.8;
+    }
+
+    // Striker ↔ AM / winger
+    let is_striker = |p: PlayerPositionType| -> bool {
+        matches!(p, Striker | ForwardCenter | ForwardLeft | ForwardRight)
+    };
+    let is_am_winger = |p: PlayerPositionType| -> bool {
+        matches!(
+            p,
+            AttackingMidfielderLeft
+                | AttackingMidfielderRight
+                | AttackingMidfielderCenter
+                | MidfielderLeft
+                | MidfielderRight
+        )
+    };
+    if (is_striker(slot_pos) && is_am_winger(teammate_pos))
+        || (is_striker(teammate_pos) && is_am_winger(slot_pos))
+    {
+        return 0.7;
+    }
+
+    // Same group fallback (post-specific-pair).
+    if slot_group == teammate_group {
+        return 0.6;
+    }
+
+    // Adjacent groups — defenders↔midfielders or midfielders↔forwards.
+    if helpers::is_adjacent_group(slot_group, teammate_group) {
+        return 0.4;
+    }
+
+    // Distant pairs (e.g. striker↔fullback or GK↔striker).
+    let _ = player_pos; // reserved for future per-player fine-tuning
+    0.15
+}
+
+/// Linear ramp: 0.0 below `lo`, 1.0 at `hi`, allowed to overshoot up to
+/// 2.0 for "deep into the danger zone" signals.
+fn ramp(value: f32, lo: f32, hi: f32) -> f32 {
+    if value <= lo {
+        return 0.0;
+    }
+    let span = (hi - lo).max(1.0);
+    ((value - lo) / span).min(2.0)
 }

@@ -289,15 +289,24 @@ impl ClubResult {
                 0
             };
 
+            let mut reactive_proposal = PlayerContractProposal::basic(
+                final_salary,
+                years,
+                negotiation_skill,
+                0,
+                loyalty_bonus,
+                None,
+            );
+            // Pass the valuation context through so player acceptance
+            // evaluates against the same club/league expectations this
+            // reactive offer was built from — matches the proactive path.
+            reactive_proposal.valuation_club_reputation = Some(club_rep_score);
+            reactive_proposal.valuation_league_reputation = Some(league_reputation);
+            reactive_proposal.valuation_expected_wage = Some(valuation.expected_wage);
+            reactive_proposal.valuation_min_acceptable = Some(valuation.min_acceptable);
+
             Self::deliver_message(data, club_id, result.player_id, PlayerMessage {
-                message_type: PlayerMessageType::ContractProposal(PlayerContractProposal::basic(
-                    final_salary,
-                    years,
-                    negotiation_skill,
-                    0,
-                    loyalty_bonus,
-                    None,
-                )),
+                message_type: PlayerMessageType::ContractProposal(reactive_proposal),
             });
 
             // Record the offer so the cooldown + attempt cap at the top

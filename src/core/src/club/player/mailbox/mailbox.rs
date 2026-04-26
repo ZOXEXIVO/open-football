@@ -60,6 +60,22 @@ pub struct PlayerContractProposal {
     /// True if the club promises to match the highest earner. Used very
     /// sparingly — elite players only.
     pub match_highest_earner: bool,
+
+    /// Snapshot of the club + league reputation context the offer was
+    /// built against. Stashed so the player can evaluate acceptance
+    /// against the SAME elite-club / mid-tier expectations the renewal
+    /// AI used — without it, the player and the club disagree on what a
+    /// fair wage is and the same offer gets rejected at an elite club
+    /// while sailing through at a small one. `None` for legacy callers
+    /// that don't supply context (acceptance falls back to neutral 0.5
+    /// / 5000 in that case).
+    pub valuation_club_reputation: Option<f32>,
+    pub valuation_league_reputation: Option<u16>,
+    /// The expected wage the renewal AI computed for this player at this
+    /// club/league/status. Used by acceptance to detect the
+    /// "underpaid star" case without re-running the valuation pass.
+    pub valuation_expected_wage: Option<u32>,
+    pub valuation_min_acceptable: Option<u32>,
 }
 
 impl PlayerContractProposal {
@@ -99,6 +115,10 @@ impl PlayerContractProposal {
             wage_after_apps: None,
             wage_after_caps: None,
             match_highest_earner: false,
+            valuation_club_reputation: None,
+            valuation_league_reputation: None,
+            valuation_expected_wage: None,
+            valuation_min_acceptable: None,
         }
     }
 }

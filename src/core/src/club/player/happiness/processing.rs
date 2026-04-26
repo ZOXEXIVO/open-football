@@ -1,4 +1,6 @@
-use crate::club::player::calculators::{ContractValuation, ValuationContext};
+use crate::club::player::calculators::{
+    expected_annual_value, package_inputs_from_contract, ContractValuation, ValuationContext,
+};
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
@@ -233,15 +235,14 @@ impl Player {
             return 0.0;
         }
 
-        // Bonuses partially compensate base wage — half their face value
-        // counts toward closing the gap so a star with a generous signing
-        // bonus doesn't grow furious purely on base.
-        let bonus_extra: u32 = contract
-            .bonuses
-            .iter()
-            .map(|b| (b.value.max(0) as u32) / 2)
-            .sum();
-        let effective_salary = (contract.salary as f32) + (bonus_extra as f32);
+        // Use the shared package-value helper so happiness, acceptance,
+        // and renewal scoring agree on what the package is "really
+        // worth" annually. The helper amortises the signing bonus
+        // (zeroing it out once paid via `signing_bonus_paid`),
+        // probability-weights promotion / avoid-relegation bonuses, and
+        // values per-event bonuses by realistic season frequencies.
+        let inputs = package_inputs_from_contract(contract, self);
+        let effective_salary = expected_annual_value(&inputs) as f32;
 
         let ratio = effective_salary / expected;
         let mut factor = if ratio >= 1.20 {
@@ -273,15 +274,109 @@ impl Player {
     }
 
     fn calculate_manager_relationship_factor(&mut self) -> f32 {
-        // Driven by manager talks which write directly to the factor, but
-        // without decay a single good (or bad) chat anchored a player's
-        // morale forever. Drift the stored factor 12% toward zero every
-        // week so the effect of any single talk fades over ~2 months.
-        let decayed = self.happiness.factors.manager_relationship * 0.88;
-        // Snap tiny residues to 0 so they don't drift forever.
-        let decayed = if decayed.abs() < 0.1 { 0.0 } else { decayed };
-        self.happiness.factors.manager_relationship = decayed;
-        decayed
+        // Manager-relationship factor is now a **derived** weekly summary,
+        // not a free-floating accumulator. Three sources feed it:
+        //
+        //   * Staff relation level — long-term trust/respect with the
+        //     coaching staff. The strongest negative or strongest positive
+        //     dominates so a single broken-down relationship with the head
+        //     coach isn't drowned out by neutral assistants.
+        //   * Coach rapport — short-term delivery / training-talk rapport,
+        //     stored on `PlayerRapport`. Maps the strongest existing rapport
+        //     score onto a smaller −5..+5 contribution.
+        //   * Recent promise & praise/discipline events — kept promises and
+        //     manager praise lift the factor; broken promises and discipline
+        //     drag it down.
+        //
+        // Each weekly evaluation overwrites the stored factor so a single
+        // good (or bad) talk doesn't anchor morale forever — the underlying
+        // staff relation has to actually be there for the factor to persist.
+        // Old in-place writes from team_talks / behaviour result still feed
+        // the staff relation + rapport stores, so their effect now decays
+        // naturally with the rest of the social graph.
+
+        // Strongest staff relation level — pick the signed maximum-magnitude
+        // entry rather than averaging, so a single really bad coach
+        // relationship registers.
+        let staff_level: f32 = {
+            let mut strongest = 0.0f32;
+            for (_id, rel) in self.relations.staff_relations_iter() {
+                if rel.level.abs() > strongest.abs() {
+                    strongest = rel.level;
+                }
+            }
+            // Map [-100, 100] → [-8, +8].
+            (strongest / 100.0 * 8.0).clamp(-8.0, 8.0)
+        };
+
+        // Strongest rapport entry — same magnitude logic.
+        let rapport_score: f32 = {
+            let mut strongest: i16 = 0;
+            for entry in self.rapport.coaches.iter() {
+                if entry.score.abs() > strongest.abs() {
+                    strongest = entry.score;
+                }
+            }
+            // Map roughly [-50, 100] → [-5, +5]. Asymmetric because rapport
+            // floor is -50 not -100.
+            let normalised = if strongest >= 0 {
+                (strongest as f32 / 100.0) * 5.0
+            } else {
+                (strongest as f32 / 50.0) * 5.0
+            };
+            normalised.clamp(-5.0, 5.0)
+        };
+
+        // Recent promise outcomes — kept lifts, broken hits hard.
+        // Limit window to 60 days so the contribution decays naturally.
+        let promise_kept: f32 = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.event_type == crate::HappinessEventType::PromiseKept && e.days_ago <= 60
+            })
+            .count() as f32;
+        let promise_broken: f32 = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.event_type == crate::HappinessEventType::PromiseBroken && e.days_ago <= 60
+            })
+            .count() as f32;
+        // Cap so a flurry of promise events doesn't dominate.
+        let promise_contribution = (promise_kept * 4.0 - promise_broken * 8.0).clamp(-12.0, 8.0);
+
+        // Recent praise / discipline — softer than promises, since the
+        // dedicated factors `recent_praise` / `recent_discipline` already
+        // count those events. We include them here too to anchor the
+        // relationship summary on actual interactions.
+        let praise_count: f32 = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.event_type == crate::HappinessEventType::ManagerPraise && e.days_ago <= 30
+            })
+            .count() as f32;
+        let discipline_count: f32 = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                e.event_type == crate::HappinessEventType::ManagerDiscipline && e.days_ago <= 30
+            })
+            .count() as f32;
+        let praise_contribution = (praise_count * 2.0 - discipline_count * 3.0).clamp(-6.0, 5.0);
+
+        let derived = (staff_level + rapport_score + promise_contribution + praise_contribution)
+            .clamp(-15.0, 15.0);
+
+        // Persist the snapshot so external consumers (UI, debug tools) see
+        // the same number this week.
+        self.happiness.factors.manager_relationship = derived;
+        derived
     }
 
     fn calculate_injury_frustration(&self) -> f32 {

@@ -430,7 +430,10 @@ fn policy_starting_adjustment(
         .unwrap_or(false);
     let is_development_age = age <= 21;
     let idle = player.player_attributes.days_since_last_match as f32;
-    let load = player.load.minutes_last_7;
+    // Use position-weighted physical_load so a 90-min wingback gets
+    // rotated where a 90-min keeper isn't. Falls back to minutes_last_7
+    // when the new field hasn't accumulated yet (early sim, fresh save).
+    let load = player.load.physical_load_7.max(player.load.minutes_last_7 * 0.95);
     let morale = player.happiness.morale;
 
     (match policy {

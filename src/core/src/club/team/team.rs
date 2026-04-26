@@ -1,3 +1,4 @@
+use crate::club::relations::ChemistryContext;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::builder::TeamBuilder;
 use crate::club::team::mentorship::process_mentorship;
@@ -72,12 +73,38 @@ impl Team {
         // before player development so any personality drift from mentoring
         // is already visible when weekly skill growth is computed.
         if ctx.simulation.is_week_beginning() {
+            let week_date = ctx.simulation.date.date();
             let hoy_wwy = self.staffs.best_youth_development_wwy(10);
             let _pairings = process_mentorship(
                 &mut self.players.players,
-                ctx.simulation.date.date(),
+                week_date,
                 hoy_wwy,
             );
+
+            // Weekly social decay. Without this, every relationship and
+            // rapport entry that ever fired stays at its peak forever —
+            // squads wouldn't naturally drift toward neutral when contact
+            // fades. Relations decay toward neutral if interaction was
+            // light; rapport drifts to 0 after 21+ days of no training
+            // contact. Runs before any new weekly relationship event so
+            // today's events overwrite the decayed baseline.
+            for player in self.players.players.iter_mut() {
+                player.relations.process_weekly_update(week_date);
+                player.rapport.decay(week_date);
+            }
+
+            // Squad-wide chemistry refresh. The per-relation update inside
+            // each player's `process_weekly_update` recalculates a local
+            // (per-player) view of chemistry but can't see captain,
+            // leadership, turnover. We now feed those squad-level signals
+            // back to every player so they all share a coherent chemistry
+            // number — the one read by training, match rating, selection.
+            let chem_ctx = build_chemistry_context(self, week_date);
+            for player in self.players.players.iter_mut() {
+                player
+                    .relations
+                    .recalculate_chemistry_with_context(&chem_ctx);
+            }
 
             // Weekly physio preventive-rest pass. Elite sports-science staff
             // can predict which players are heading into the injury danger
@@ -88,7 +115,7 @@ impl Team {
             apply_preventive_rest(
                 &mut self.players.players,
                 best_sports_sci,
-                ctx.simulation.date.date(),
+                week_date,
             );
         }
 
@@ -375,6 +402,71 @@ impl Team {
     }
 }
 
+/// Build the squad-wide [`ChemistryContext`] consumed by every player's
+/// chemistry recalculation this week. Centralised here so all players see
+/// the same captain / leadership / turnover signals — otherwise per-player
+/// chemistry numbers would drift apart and downstream consumers (training
+/// chemistry multiplier, match-rating shift, selection cohesion) would
+/// disagree on the dressing room mood.
+fn build_chemistry_context(team: &Team, today: chrono::NaiveDate) -> ChemistryContext {
+    use std::collections::HashMap;
+
+    // Top-3 leadership scores. Raw 0..20 attribute (skills.mental.leadership).
+    let mut leadership: Vec<f32> = team
+        .players
+        .players
+        .iter()
+        .map(|p| p.skills.mental.leadership.clamp(0.0, 20.0))
+        .collect();
+    leadership.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let top_leadership_scores = leadership.into_iter().take(3).collect();
+
+    // Top-3 influence scores — sum of `relation.influence` references TO
+    // each player from every other player. Captures dressing-room standing
+    // distinct from raw leadership.
+    let mut influence_totals: HashMap<u32, f32> = HashMap::new();
+    for p in team.players.players.iter() {
+        for (id, rel) in p.relations.player_relations_iter() {
+            *influence_totals.entry(*id).or_insert(0.0) += rel.influence;
+        }
+    }
+    let mut influences: Vec<f32> = influence_totals.into_values().collect();
+    influences.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let top_influence_scores = influences.into_iter().take(3).collect();
+
+    // Recent signings — anyone whose last_transfer_date is within 90 days.
+    let cutoff = today - chrono::Duration::days(90);
+    let recent_signings_90d = team
+        .players
+        .players
+        .iter()
+        .filter(|p| p.last_transfer_date.map(|d| d >= cutoff).unwrap_or(false))
+        .count()
+        .min(u8::MAX as usize) as u8;
+
+    // Average inner-circle cohesion across the squad — a coarse signal of
+    // how clique-y / cohesive the dressing room feels.
+    let cohesion_avg: f32 = if team.players.players.is_empty() {
+        0.0
+    } else {
+        team.players
+            .players
+            .iter()
+            .map(|p| p.relations.inner_circle_cohesion())
+            .sum::<f32>()
+            / team.players.players.len() as f32
+    };
+
+    ChemistryContext {
+        top_leadership_scores,
+        top_influence_scores,
+        captain_id: team.captain_id,
+        vice_captain_id: team.vice_captain_id,
+        recent_signings_90d,
+        inner_circle_cohesion: cohesion_avg,
+    }
+}
+
 /// Preventive-rest pass. An elite sports-science department flags players
 /// whose fatigue/jadedness profile predicts an imminent injury and sets
 /// the `Rst` status — a hint that the squad selector treats as "don't pick
@@ -582,6 +674,37 @@ mod payroll_tests {
         let team = build_team_with(vec![p]);
         // 120k loan, not 500k parent.
         assert_eq!(team.get_annual_salary(), 120_000);
+    }
+
+    #[test]
+    fn wage_structure_uses_loan_salary_for_loanees_not_parent() {
+        // Borrower has one permanent player (100k) and one loaned-in
+        // player whose parent contract is 1M but loan contract is just
+        // 100k. Top-earner must NOT be 1M — that would let the renewal
+        // AI argue "we already pay 1M" against permanent squad members.
+        use crate::club::team::squad::WageStructureSnapshot;
+
+        let mut perm = make_player(1, 100_000);
+        // Mark as KeyPlayer so it counts in the first_team bucket.
+        if let Some(c) = perm.contract.as_mut() {
+            c.squad_status = PlayerSquadStatus::KeyPlayer;
+        }
+
+        let mut loanee = make_player(2, 1_000_000);
+        let mut loan = PlayerClubContract::new_loan(100_000, d(2027, 6, 30), 99, 1, 1);
+        loan.salary = 100_000;
+        loanee.contract_loan = Some(loan);
+        if let Some(c) = loanee.contract.as_mut() {
+            c.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        }
+
+        let team = build_team_with(vec![perm, loanee]);
+        let snap = WageStructureSnapshot::from_team(&team);
+        // Top earner is 100k (permanent player), NOT the loanee's 1M
+        // parent contract.
+        assert_eq!(snap.top_earner, 100_000);
+        // Wage bill is 100k + 100k (loan), not 100k + 1M.
+        assert_eq!(snap.current_bill, 200_000);
     }
 }
 

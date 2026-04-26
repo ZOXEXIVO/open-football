@@ -178,6 +178,65 @@ impl Club {
     }
 }
 
+/// True when `today` falls on or past `started`'s month/day in the
+/// current calendar year. Used to gate annual loyalty payouts so a
+/// Dec-31 contract doesn't accidentally pay a Jan-1 loyalty in the
+/// following year — the contract hasn't reached its anniversary yet.
+fn has_reached_anniversary(today: chrono::NaiveDate, started: chrono::NaiveDate) -> bool {
+    if today.month() > started.month() {
+        return true;
+    }
+    if today.month() < started.month() {
+        return false;
+    }
+    today.day() >= started.day()
+}
+
+#[cfg(test)]
+mod anniversary_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn dec_31_signing_does_not_pay_jan_1_next_year() {
+        // The classic edge case: a Dec-31 signing must NOT pay a
+        // loyalty bonus on Jan 1 — that's not the anniversary.
+        let signed = d(2026, 12, 31);
+        assert!(!has_reached_anniversary(d(2027, 1, 1), signed));
+        assert!(!has_reached_anniversary(d(2027, 6, 1), signed));
+        assert!(!has_reached_anniversary(d(2027, 12, 30), signed));
+        // Pays on the anniversary itself.
+        assert!(has_reached_anniversary(d(2027, 12, 31), signed));
+    }
+
+    #[test]
+    fn mid_year_signing_pays_after_anniversary_in_following_year() {
+        let signed = d(2026, 7, 1);
+        // Same month, before the day.
+        assert!(!has_reached_anniversary(d(2027, 6, 30), signed));
+        // Anniversary day.
+        assert!(has_reached_anniversary(d(2027, 7, 1), signed));
+        // Later in the year.
+        assert!(has_reached_anniversary(d(2027, 11, 1), signed));
+    }
+
+    #[test]
+    fn signing_year_does_not_pay_anniversary() {
+        // Even though the date passes the month/day check WITHIN the
+        // signing year, callers must additionally gate on year >
+        // started.year() — the loyalty bonus pays from the FIRST
+        // anniversary onward, not from "the day after signing".
+        let signed = d(2026, 7, 1);
+        // The helper itself just checks month/day — the year guard is
+        // upstream in settle_lump_sum_bonuses.
+        assert!(has_reached_anniversary(d(2026, 12, 31), signed));
+    }
+}
+
 /// Pay every lump-sum bonus owed to a player on this monthly tick. Walks
 /// the club's player contracts and, for each one:
 ///   - SigningBonus pays once on the first finance pass after acceptance.
@@ -210,13 +269,21 @@ fn settle_lump_sum_bonuses(club: &mut Club, date: chrono::NaiveDate) -> i64 {
                             }
                         }
                         ContractBonusType::LoyaltyBonus => {
-                            // Pay only on or after the contract anniversary
-                            // and at most once per calendar year. Year of
-                            // signing pays nothing — it's the signing bonus.
+                            // Pay only when the calendar date is on or
+                            // past the contract's month/day anniversary
+                            // for the current year. A Dec-31 signing
+                            // therefore pays nothing on Jan 1 of the
+                            // following year — payout falls due on the
+                            // next Dec 31. Pay at most once per
+                            // calendar year (last_loyalty_paid_year
+                            // memo). Year of signing pays nothing —
+                            // that's the signing bonus.
                             if let Some(started) = contract.started {
-                                if year > started.year()
-                                    && contract.last_loyalty_paid_year != Some(year)
-                                {
+                                if year <= started.year() {
+                                    // Signing year — no loyalty payout.
+                                } else if contract.last_loyalty_paid_year == Some(year) {
+                                    // Already paid this calendar year.
+                                } else if has_reached_anniversary(date, started) {
                                     total += bonus.value as i64;
                                 }
                             }
@@ -244,6 +311,7 @@ fn settle_lump_sum_bonuses(club: &mut Club, date: chrono::NaiveDate) -> i64 {
                 if let Some(started) = contract.started {
                     if year > started.year()
                         && contract.last_loyalty_paid_year != Some(year)
+                        && has_reached_anniversary(date, started)
                         && contract
                             .bonuses
                             .iter()
