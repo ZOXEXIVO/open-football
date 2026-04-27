@@ -76,6 +76,19 @@ impl SquadManager {
 
 pub(crate) fn execute_moves(teams: &mut [Team], from_idx: usize, to_idx: usize, player_ids: &[u32]) {
     for &player_id in player_ids {
+        // Force-selected players are pinned to their current team — admin
+        // demotion, AI rotation, transfer-listing-driven moves all skip
+        // them. Single point of denial for every caller of this helper.
+        let locked = teams[from_idx]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == player_id)
+            .map(|p| p.is_force_match_selection)
+            .unwrap_or(false);
+        if locked {
+            continue;
+        }
         if let Some(player) = teams[from_idx].players.take_player(&player_id) {
             teams[from_idx].transfer_list.remove(player_id);
             teams[to_idx].players.add(player);

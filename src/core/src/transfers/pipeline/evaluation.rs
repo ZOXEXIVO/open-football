@@ -843,6 +843,12 @@ impl PipelineProcessor {
                 if player.is_on_loan() {
                     continue;
                 }
+                // Manager-pinned players bypass the position-glut path:
+                // even at a positional surplus they don't get listed or
+                // loaned out — the pin is the whole point.
+                if player.is_force_match_selection {
+                    continue;
+                }
                 let statuses = player.statuses.get();
                 let already_listed = statuses.contains(&PlayerStatusType::Lst);
 
@@ -922,6 +928,13 @@ impl PipelineProcessor {
 
             // Skip players already on loan
             if player.is_on_loan() {
+                continue;
+            }
+
+            // Manager-pinned: never propose a loan-out, regardless of
+            // philosophy / playing-time / surplus signals. The pin is
+            // the manager's decision; the AI must respect it.
+            if player.is_force_match_selection {
                 continue;
             }
 

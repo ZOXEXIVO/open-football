@@ -26,7 +26,7 @@
             </thead>
             <tbody>
                 {% for player in players %}
-                <tr data-player-id="{{ player.id }}"{% if player.is_loan %} class="sq-loan-in"{% endif %}{% if player.is_loaned_out %} class="sq-loan-out"{% endif %}>
+                <tr data-player-id="{{ player.id }}" class="{% if player.is_loan %}sq-loan-in {% endif %}{% if player.is_loaned_out %}sq-loan-out {% endif %}{% if player.is_force_match_selection %}sq-force-pick{% endif %}">
                     <td class="sq-inf">
                         <div class="fm-badge-deck">
                             {% if player.injured %}

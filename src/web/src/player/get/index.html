@@ -1,6 +1,6 @@
 {% extends "player/player_layout.html" %}
 
-{% block html_title %}{{ title }} - {{ player.team_name }} | {{ i18n.t("site_name") }}{% endblock %}
+{% block html_title %}{{ title }}{% if !player.team_name.is_empty() %}, {{ player.team_name }}{% endif %} | {{ i18n.t("site_name") }}{% endblock %}
 
 {% block content %}
 <div class="fm-page">

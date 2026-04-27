@@ -194,8 +194,10 @@ impl League {
                 away_team.get_rotation_match_squad_with_reserves(&away_supplements, &away_ctx),
             )
         } else {
-            let home_reserves = Self::collect_reserve_players(clubs, home_team.club_id, home_team.id, friendly);
-            let away_reserves = Self::collect_reserve_players(clubs, away_team.club_id, away_team.id, friendly);
+            let home_is_main = home_team.team_type == TeamType::Main;
+            let away_is_main = away_team.team_type == TeamType::Main;
+            let home_reserves = Self::collect_reserve_players(clubs, home_team.club_id, home_team.id, friendly, home_is_main);
+            let away_reserves = Self::collect_reserve_players(clubs, away_team.club_id, away_team.id, friendly, away_is_main);
             (
                 home_team.get_enhanced_match_squad(&home_reserves, &selection_ctx),
                 away_team.get_enhanced_match_squad(&away_reserves, &away_ctx),
@@ -217,17 +219,32 @@ impl League {
 
     /// Collect available reserve players from the same club.
     /// Only pulls from B/U21/U23 teams — not from youth academies (U18/U19/U20).
+    /// Force-selected players from anywhere in the club are added only when
+    /// the assembling team is the Main team — the pin is a senior-XI override,
+    /// so a U18 starlet flagged for the first team must not also be pulled
+    /// into the B-team's reserve pool.
     fn collect_reserve_players<'a>(
         clubs: &'a [Club],
         club_id: u32,
         team_id: u32,
         is_friendly: bool,
+        for_main_team: bool,
     ) -> Vec<&'a Player> {
         let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
             return Vec::new();
         };
 
-        club.teams
+        let mut reserves: Vec<&'a Player> = if for_main_team {
+            club.get_force_selected_players()
+                .into_iter()
+                .filter(|p| Self::is_player_available(p, is_friendly))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        for p in club
+            .teams
             .teams
             .iter()
             .filter(|t| {
@@ -236,7 +253,14 @@ impl League {
             })
             .flat_map(|t| t.players.iter())
             .filter(|p| Self::is_player_available(p, is_friendly))
-            .collect()
+        {
+            if reserves.iter().any(|r| r.id == p.id) {
+                continue;
+            }
+            reserves.push(p);
+        }
+
+        reserves
     }
 
     /// Collect supplementary players from other teams in the same club.

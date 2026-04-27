@@ -13,7 +13,7 @@
     <button type="button" id="player-watchlist-toggle" class="fm-watchlist-toggle" data-player-id="{{ player_id }}" data-in="{% if is_on_watchlist %}true{% else %}false{% endif %}" aria-pressed="{% if is_on_watchlist %}true{% else %}false{% endif %}" aria-label="{% if is_on_watchlist %}{{ i18n.t("remove_from_watchlist") }}{% else %}{{ i18n.t("add_to_watchlist") }}{% endif %}" data-tooltip="{% if is_on_watchlist %}{{ i18n.t("remove_from_watchlist") }}{% else %}{{ i18n.t("add_to_watchlist") }}{% endif %}">
         <i class="fa fa-{% if is_on_watchlist %}minus{% else %}plus{% endif %}"></i>
     </button>
-    <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}" data-club-id="{{ club_id }}" data-is-loan="{{ is_on_loan }}" data-is-injured="{{ is_injured }}" data-is-unhappy="{{ is_unhappy }}">
+    <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}" data-club-id="{{ club_id }}" data-is-loan="{{ is_on_loan }}" data-is-injured="{{ is_injured }}" data-is-unhappy="{{ is_unhappy }}" data-is-force-match-selection="{{ is_force_match_selection }}">
         <button class="fm-tabbar-dropdown-toggle" onclick="var p=this.parentElement;p.classList.toggle('fm-dd-open');if(p.classList.contains('fm-dd-open')){var t=this.closest('.fm-tabbar').getBoundingClientRect();var m=document.getElementById('player-edit-menu');m.style.top=t.bottom+'px';if(window.innerWidth>=576){var b=this.getBoundingClientRect();m.style.right=(window.innerWidth-b.right)+'px';m.style.left='';m.style.width=''}else{m.style.right='';m.style.left='0';m.style.width='100%'}}">
             {{ i18n.t("edit") }} <span class="fm-dd-arrow">&#9660;</span>
         </button>
@@ -113,6 +113,7 @@
     var isInjured = dd.dataset.isInjured === 'true';
     var isLoan = dd.dataset.isLoan === 'true';
     var isUnhappy = dd.dataset.isUnhappy === 'true';
+    var isForceMatchSelection = dd.dataset.isForceMatchSelection === 'true';
     var isFreeAgent = clubId === '0';
     var sep = '<div class="fm-dd-sep"></div>';
     var groups = [];
@@ -141,6 +142,20 @@
     }
     if (transferItems.length > 0) groups.push(transferItems.join(''));
 
+    // Group last: Force match selection toggle. Rendered as a checkbox-style
+    // item via `aria-checked`; CSS shows the tick when set. Click flips
+    // server-side state and refreshes the page so the dropdown rebuilds
+    // with the new value.
+    var fmsCheck = isForceMatchSelection
+        ? '<i class="fa fa-check-square"></i>'
+        : '<i class="fa fa-square"></i>';
+    groups.push(
+        '<button class="fm-dd-check" role="menuitemcheckbox" aria-checked="'
+        + (isForceMatchSelection ? 'true' : 'false')
+        + '" onclick="playerToggleForceMatchSelection(' + playerId + ')">'
+        + fmsCheck + ' {{ i18n.t("force_match_selection") }}</button>'
+    );
+
     menu.innerHTML = groups.join(sep);
 
     window.playerMoveOnFree = function(pid) {
@@ -166,6 +181,12 @@
     window.playerClearInjury = function(pid) {
         dd.classList.remove('fm-dd-open');
         fetch('/api/players/' + pid + '/clear-injury', { method: 'POST' })
+            .then(function() { refreshContent(); });
+    };
+
+    window.playerToggleForceMatchSelection = function(pid) {
+        dd.classList.remove('fm-dd-open');
+        fetch('/api/players/' + pid + '/toggle-force-match-selection', { method: 'POST' })
             .then(function() { refreshContent(); });
     };
 

@@ -192,11 +192,16 @@ impl TeamBehaviourResult {
                             promise_created = true;
                         }
                         ManagerTalkType::LoanRequest => {
-                            player.statuses.add(sim_date, PlayerStatusType::Loa);
-                            player.happiness.add_event(
-                                HappinessEventType::LoanListingAccepted,
-                                5.0,
-                            );
+                            // Force-pinned players: the listing flag wins
+                            // even over a successful loan-request talk —
+                            // nothing actually happens, the player stays.
+                            if !player.is_force_match_selection {
+                                player.statuses.add(sim_date, PlayerStatusType::Loa);
+                                player.happiness.add_event(
+                                    HappinessEventType::LoanListingAccepted,
+                                    5.0,
+                                );
+                            }
                         }
                         _ => {}
                     }

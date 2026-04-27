@@ -54,6 +54,17 @@ impl StateProcessingHandler for ForwardTacklingState {
             ));
         }
 
+        // Skill gate — most strikers don't drill defensive tackles
+        // (Haaland, Mbappe profile). Threshold 8/20 admits forwards
+        // with at least functional defensive ability while excluding
+        // pure attackers; without this gate forwards engaged in
+        // tackling 14.9 times per team per match (real 1-3).
+        if ctx.player.skills.technical.tackling < 8.0 {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Pressing,
+            ));
+        }
+
         let opponents = ctx.players().opponents();
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 

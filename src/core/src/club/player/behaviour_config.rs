@@ -287,7 +287,6 @@ pub struct MoraleEventCatalog {
     pub good_training: f32,
     pub poor_training: f32,
     // Match selection
-    pub match_selection: f32,
     pub match_dropped: f32,
     // Contract & transfers
     pub contract_offer: f32,
@@ -377,7 +376,6 @@ impl Default for MoraleEventCatalog {
             manager_tactical_instruction: 1.0,
             good_training: 2.0,
             poor_training: -2.0,
-            match_selection: 1.0,
             match_dropped: -1.5,
             contract_offer: 2.0,
             contract_renewal: 5.0,
@@ -476,7 +474,6 @@ impl MoraleEventCatalog {
             ManagerTacticalInstruction => self.manager_tactical_instruction,
             GoodTraining => self.good_training,
             PoorTraining => self.poor_training,
-            MatchSelection => self.match_selection,
             MatchDropped => self.match_dropped,
             ContractOffer => self.contract_offer,
             ContractRenewal => self.contract_renewal,

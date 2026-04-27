@@ -101,6 +101,8 @@ impl DatabaseGenerator {
                 country.code.clone(),
                 country.slug.clone(),
                 country.name.clone(),
+                country.continent_id,
+                country.reputation,
             );
         }
 

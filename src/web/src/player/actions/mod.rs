@@ -140,6 +140,26 @@ pub async fn clear_unhappy_action(
     StatusCode::NOT_FOUND
 }
 
+// ── Toggle force match selection ───────────────────────────────
+
+pub async fn toggle_force_match_selection_action(
+    State(state): State<GameAppData>,
+    Path(params): Path<PlayerPathParam>,
+) -> impl IntoResponse {
+    let data = Arc::clone(&state.data);
+    let mut guard = data.write().await;
+
+    if let Some(ref mut arc_data) = *guard {
+        let sim = Arc::make_mut(arc_data);
+        if let Some(player) = sim.player_mut(params.player_id) {
+            player.is_force_match_selection = !player.is_force_match_selection;
+            return StatusCode::OK;
+        }
+    }
+
+    StatusCode::NOT_FOUND
+}
+
 // ── Clear injury ────────────────────────────────────────────────
 
 pub async fn clear_injury_action(
@@ -252,6 +272,14 @@ pub async fn transfer_action(
         let sim = Arc::make_mut(arc_data);
         let date = sim.date.date();
         let fee = body.fee.unwrap_or(0) as f64;
+
+        // Manager-pinned players: refuse manual transfers too.
+        if sim.player(params.player_id)
+            .map(|p| p.is_force_match_selection)
+            .unwrap_or(false)
+        {
+            return StatusCode::FORBIDDEN;
+        }
 
         let (dci, dcoi, dcli, dti) = match sim.find_club_main_team(body.to_club_id) {
             Some(pos) => pos,
@@ -406,6 +434,14 @@ pub async fn loan_action(
     if let Some(ref mut arc_data) = *guard {
         let sim = Arc::make_mut(arc_data);
         let date = sim.date.date();
+
+        // Manager-pinned players: refuse manual loans too.
+        if sim.player(params.player_id)
+            .map(|p| p.is_force_match_selection)
+            .unwrap_or(false)
+        {
+            return StatusCode::FORBIDDEN;
+        }
 
         let (ci, coi, cli, ti) = match sim.find_player_position(params.player_id) {
             Some(pos) => pos,

@@ -41,16 +41,35 @@ pub fn process_substitutions(
         let goal_diff = own_goals - opp_goals;
         let match_minutes = context.total_match_time / 60_000;
 
-        // Collect outfield players sorted by condition (worst first)
+        // Collect outfield players sorted by condition (worst first).
+        // Force-selected players are excluded — the manager pinned them in,
+        // so neither fatigue rotation nor development subs are allowed to
+        // pull them off. The injury-driven force-sub pass below runs over a
+        // separate, unfiltered list so a critical condition still wins.
         let mut candidates: Vec<(u32, i16, PlayerPositionType)> = field
             .players
             .iter()
             .filter(|p| p.team_id == team_id)
             .filter(|p| p.tactical_position.current_position != PlayerPositionType::Goalkeeper)
+            .filter(|p| !p.is_force_match_selection)
             .map(|p| (p.id, p.player_attributes.condition, p.tactical_position.current_position))
             .collect();
 
         candidates.sort_by_key(|&(_, cond, _)| cond);
+
+        // Critical-injury candidates ignore the force-selection flag —
+        // a sub-2000 condition models an in-match injury the coach can't
+        // ignore even for a pinned player.
+        let mut critical_candidates: Vec<(u32, i16, PlayerPositionType)> = field
+            .players
+            .iter()
+            .filter(|p| p.team_id == team_id)
+            .filter(|p| p.tactical_position.current_position != PlayerPositionType::Goalkeeper)
+            .filter(|p| p.player_attributes.condition < 2000)
+            .map(|p| (p.id, p.player_attributes.condition, p.tactical_position.current_position))
+            .collect();
+
+        critical_candidates.sort_by_key(|&(_, cond, _)| cond);
 
         // Determine sub strategy based on match situation:
         // - Tired subs: always replace the most fatigued player
@@ -63,15 +82,13 @@ pub fn process_substitutions(
 
         // Zero: force-sub critically-broken players regardless of score /
         // minute. Condition below 20% models an in-match injury the coach
-        // can't ignore — a real manager pulls them straight off. Takes
+        // can't ignore — a real manager pulls them straight off, even if
+        // the player carries the manager's force-selection flag. Takes
         // priority over strategic fatigue rotation.
         const CRITICAL_CONDITION: i16 = 2000;
-        for (player_out_id, condition, position) in &candidates {
+        for (player_out_id, _condition, position) in &critical_candidates {
             if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
                 break;
-            }
-            if *condition >= CRITICAL_CONDITION {
-                continue;
             }
             let position_group = position.position_group();
             if let Some(player_in_id) = find_best_substitute(field, team_id, position_group) {

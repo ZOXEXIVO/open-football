@@ -135,21 +135,20 @@ impl PlayerMemory {
     /// Can this player take a shot right now?
     ///
     /// After shooting, a player is physically unable to strike again
-    /// instantly — their momentum carries them forward, the ball is
-    /// gone from their feet, and their stance has broken down. Real
-    /// football: a striker effectively takes at most 3-5 shots per
-    /// match; back-to-back strikes (<1 s apart) only happen on
-    /// rebounds, which are a different state entirely.
+    /// instantly — momentum carries them forward, the ball has left
+    /// their feet, stance is broken. Real football: rebound shots
+    /// (saved → tap-in by the same striker) take ~1-2 seconds. The
+    /// per-possession shot cap and team-level cooldown handle "shot
+    /// spam" prevention; this cooldown only needs to be long enough
+    /// to make a back-to-back strike physically unrealistic, not to
+    /// cap match-long shot totals (the team cooldown does that).
     ///
-    /// Cooldown: 800 ticks (8 sim seconds). Paired with the team
-    /// cooldown (500 ticks / 5 s) this caps a striker to at most one
-    /// shot per 8 s and limits any single player to ~12 shots in a
-    /// full match — elite real-world strikers top out around 5-6
-    /// shots per 90. 400 was still letting the same striker blast
-    /// three or four attempts in the same possession when rebounds
-    /// fell back to their feet.
+    /// 200 ticks (2 sim seconds) — balanced for rebound goals to
+    /// remain possible from a parry/loose-ball scramble. The previous
+    /// 800-tick lockout blocked all rebound mechanics, removing one
+    /// of football's key goal patterns.
     pub fn can_shoot(&self, current_tick: u64) -> bool {
-        const PLAYER_SHOT_COOLDOWN_TICKS: u64 = 800;
+        const PLAYER_SHOT_COOLDOWN_TICKS: u64 = 200;
         if self.shots_taken == 0 {
             return true;
         }

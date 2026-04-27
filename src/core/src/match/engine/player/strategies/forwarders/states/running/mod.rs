@@ -200,15 +200,24 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // PATIENT POSSESSION — forwards also recycle the ball when
-            // the team is in possession mode (see `should_play_possession`
-            // for the full set of real-football triggers: just won ball,
-            // tired, leading, late game, no attack ready). Gated on not
-            // being in the real finishing zone (>50u from goal) so
-            // strikers in the box still strike; only applied in the
-            // build-up phase.
+            // PATIENT POSSESSION (forward recycle): only fires when the
+            // forward is genuinely STUCK — outside the finishing zone,
+            // boxed in by multiple opponents, with no progressive path
+            // to goal. The previous version triggered on any
+            // `should_play_possession()` reading, which made forwards
+            // recycle every time the team won the ball (300-tick
+            // post-possession window) regardless of whether the
+            // forward had a path forward. That single condition was
+            // the dominant shot-volume suppressor.
+            //
+            // The new gate keeps the safety valve (forward genuinely
+            // can't progress → lay off) without abandoning the attack
+            // every time the team enters possession mode.
             let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
+            let stuck = ctx.players().opponents().nearby(15.0).count() >= 2
+                && !self.has_open_space_ahead(ctx);
             if !under_pressure
+                && stuck
                 && distance_to_goal > 50.0
                 && ctx.tick_context.ball.ownership_duration > 10
                 && ctx.team().should_play_possession()
@@ -216,11 +225,6 @@ impl StateProcessingHandler for ForwardRunningState {
                 let player_pos = ctx.player.position;
                 let goal_pos = ctx.player().opponent_goal_position();
                 let to_goal = (goal_pos - player_pos).normalize();
-                // Find a safe outlet: teammate in space, not a recent
-                // passer, pass lane clear. Prefer teammates BEHIND us
-                // (lateral/backward) so we're recycling to a midfielder
-                // or defender rather than forcing the ball further upfield
-                // into a covered attacker.
                 let safe_outlet = ctx.players().teammates().nearby(180.0)
                     .filter(|t| {
                         if t.id == ctx.player.id { return false; }
@@ -228,15 +232,12 @@ impl StateProcessingHandler for ForwardRunningState {
                         if dist < 25.0 || dist > 180.0 { return false; }
                         let to_t = (t.position - player_pos).normalize();
                         let fwd = to_t.dot(&to_goal);
-                        // Accept lateral or backward passes only
                         if fwd >= 0.3 { return false; }
                         let opp_near = ctx.tick_context.grid
                             .opponents(t.id, 12.0).count();
                         opp_near < 2 && ctx.player().has_clear_pass(t.id)
                     })
                     .max_by(|a, b| {
-                        // Prefer midfielders over other forwards for
-                        // recycling — they can start a new build-up.
                         let sa = if a.tactical_positions.is_midfielder() { 10.0 } else { 0.0 };
                         let sb = if b.tactical_positions.is_midfielder() { 10.0 } else { 0.0 };
                         sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
@@ -381,7 +382,19 @@ impl StateProcessingHandler for ForwardRunningState {
             } else {
                 1.0
             };
-            let willingness = base_willingness * gm_suppression;
+            // Shot-quality gate: scale willingness by expected xG.
+            // Real strikers don't fire from low-xG positions when alternatives
+            // exist — they look for a pass. Without this gate, the willingness
+            // floor (0.70) made forwards blast from anywhere they had a clear
+            // sight, producing 35+ shots per team per match with most below
+            // 0.05 xG. xG curve: 0.55 at 6yd, 0.08 at 20yd, 0.02 beyond 60yd.
+            //   xg ≥ 0.20  → quality_mult 1.00 (premium chances always taken)
+            //   xg = 0.10  → quality_mult 0.70
+            //   xg = 0.05  → quality_mult 0.45
+            //   xg ≤ 0.02  → quality_mult 0.15 (hopeful blasts discouraged)
+            let exp_xg = ctx.player().shooting().expected_xg();
+            let quality_mult = (0.15 + exp_xg * 4.25).clamp(0.15, 1.0);
+            let willingness = base_willingness * gm_suppression * quality_mult;
             let shot_triggered = rand::random::<f32>() < willingness;
 
             // Gate waterfall instrumentation (match-logs only). Counts how
@@ -432,10 +445,21 @@ impl StateProcessingHandler for ForwardRunningState {
             // team in a 0-0 match flipped the coach to `SlowDown`, which
             // made `prefer_possession()` true and silently killed 94%
             // of the remaining shot pipeline.
+            // Hopeless-shot reject: expected xG < 0.04 means a 25-yard
+            // blast at a steep angle, marked, with low finishing — real
+            // strikers don't take this shot. They look for a pass or
+            // dribble. Tighter thresholds (0.06+) caused forwards to
+            // hold the ball forever waiting for box opportunities,
+            // accumulating into very-high-xG shots and blowing goals
+            // out of proportion. 0.04 is a "skip the worst quartile"
+            // filter — keeps medium-range attempts in the mix.
+            let viable_shot = exp_xg >= 0.04;
+
             let shot_condition_met = has_settled
                 && can_shoot
                 && !defer_to_teammate
                 && distance_to_goal <= max_shot_distance
+                && viable_shot
                 && ctx.player().has_clear_shot();
 
             if shot_condition_met && shot_triggered {
@@ -1129,8 +1153,14 @@ impl ForwardRunningState {
         let work_rate = ctx.player.skills.mental.work_rate / 20.0;
         let intensity = ctx.team().tactics().pressing_intensity();
 
-        // Adjust pressing distance based on stamina, work rate, and tactical intensity
-        let effective_press_distance = 150.0 * stamina_level * (0.5 + work_rate) * (0.5 + intensity * 0.5);
+        // Pressing distance: 60u base (~30m) calibrated to real forward
+        // press radii. Real forwards engage at 15-25m (30-50u), and a
+        // high-press striker (intensity 1.0, work_rate 1.0, full stamina)
+        // gets boosted to 60u. The previous 150u base meant a forward
+        // pressed at half the field's length, producing 9.8 forward
+        // tackles per match (real ~1-2) and pulling forwards out of
+        // attacking position whenever the opposition won the ball.
+        let effective_press_distance = 60.0 * stamina_level * (0.5 + work_rate) * (0.5 + intensity * 0.5);
 
         // Check tactical instruction (high press vs low block)
         let high_press = ctx.team().tactics().is_high_pressing();

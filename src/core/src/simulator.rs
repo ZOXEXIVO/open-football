@@ -26,6 +26,16 @@ pub struct CountryInfo {
     pub code: String,
     pub slug: String,
     pub name: String,
+    /// Continent the country sits on. Carried here so the region-prestige
+    /// gate used by the loan market, scouting, and personal-terms
+    /// negotiation can resolve a `ScoutingRegion` even for nationalities
+    /// whose country has no active leagues in this save.
+    pub continent_id: u32,
+    /// Football reputation (0..10000). Mirrors the same field on `Country`
+    /// so the country-reputation realism gate keeps working when the
+    /// nationality's leagues aren't loaded — without this it falls back to
+    /// `0` and an Argentinian free agent slips through to a Mali buyer.
+    pub reputation: u16,
 }
 
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> &'static str {
@@ -266,6 +276,8 @@ impl SimulatorData {
                 code: c.code.clone(),
                 slug: c.slug.clone(),
                 name: c.name.clone(),
+                continent_id: c.continent_id,
+                reputation: c.reputation,
             }))
             .collect();
 
@@ -298,8 +310,8 @@ impl SimulatorData {
 
     /// Register country info for countries that may not have active leagues in the simulation.
     /// Called by the database generator to ensure nationality lookups always succeed.
-    pub fn add_country_info(&mut self, id: u32, code: String, slug: String, name: String) {
-        self.country_info.entry(id).or_insert(CountryInfo { id, code, slug, name });
+    pub fn add_country_info(&mut self, id: u32, code: String, slug: String, name: String, continent_id: u32, reputation: u16) {
+        self.country_info.entry(id).or_insert(CountryInfo { id, code, slug, name, continent_id, reputation });
     }
 
     /// Remove a country from the nationality lookup map.

@@ -340,6 +340,11 @@ impl CountryResult {
             return ListingDecision::Keep;
         }
 
+        // Manager has pinned this player to the squad — never auto-list.
+        if player.is_force_match_selection {
+            return ListingDecision::Keep;
+        }
+
         // Same-window protection: signed during this open window → can't be listed
         if let (Some(transfer_date), Some((window_start, window_end))) =
             (player.last_transfer_date, current_window)

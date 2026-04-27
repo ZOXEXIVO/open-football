@@ -365,6 +365,12 @@ impl TransferListManager {
                 continue;
             }
 
+            // Same protection used by the transfer-listing pass — covers
+            // KeyPlayer/FirstTeamRegular/HotProspect and force-selected.
+            if is_protected_from_listing(teams, team_indices, decision.player_id) {
+                continue;
+            }
+
             // Guard: skip listing main team players when budget exhausted
             let is_main_team_player = teams[main_idx].players.contains(decision.player_id);
             if is_main_team_player && *listing_budget == 0 {
@@ -505,6 +511,12 @@ fn is_protected_from_listing(
 ) -> bool {
     for &(idx, _) in indices {
         if let Some(p) = teams[idx].players.find(player_id) {
+            // Manager-pinned players are absolutely protected — even an
+            // explicit player request to leave is overridden, since the
+            // flag's whole purpose is "do not move this player".
+            if p.is_force_match_selection {
+                return true;
+            }
             let wants_out = p.statuses.get().iter().any(|s| {
                 matches!(s, PlayerStatusType::Req | PlayerStatusType::Unh)
             });

@@ -85,7 +85,6 @@ pub enum HappinessEventType {
     GoodTraining,
     PoorTraining,
     // Match selection
-    MatchSelection,
     MatchDropped,
     // Contract & transfers
     ContractOffer,

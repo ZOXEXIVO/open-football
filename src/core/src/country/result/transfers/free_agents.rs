@@ -7,6 +7,7 @@ use crate::simulator::SimulatorData;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationStatus, TransferNegotiation};
 use crate::transfers::offer::TransferOffer;
 use crate::transfers::pipeline::{PipelineProcessor, TransferRequest, TransferRequestStatus};
+use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::utils::IntegerUtils;
 use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType, TeamInfo};
@@ -17,10 +18,9 @@ use log::debug;
 /// Built before the per-country borrow so `handle_free_agents` can match
 /// these players against club needs without holding a SimulatorData borrow.
 ///
-/// `nationality_country_reputation` and `world_reputation` are carried so
-/// the matching pipeline can apply the same realism gates the regular
-/// scouting pipeline uses — preventing e.g. a Russian player landing at
-/// a Nigerian club just because the global pool has no nationality info.
+/// Reputation and region fields mirror what `PlayerSummary` carries for
+/// the regular scouting / loan pipelines, so the same realism gates
+/// (country-rep + region-prestige) work uniformly here.
 #[derive(Clone)]
 pub(crate) struct GlobalFreeAgentSummary {
     pub player_id: u32,
@@ -29,16 +29,13 @@ pub(crate) struct GlobalFreeAgentSummary {
     pub potential: u8,
     pub age: u8,
     pub position_group: PlayerFieldPositionGroup,
-    /// Reputation (0–10000) of the player's nationality country. Mirrors
-    /// the `country_reputation` field on `PlayerSummary` used by the
-    /// regular scouting pipeline. Zero when nationality is unknown —
-    /// effectively making the player visible to every country (the
-    /// permissive fallback).
+    /// Reputation (0–10000) of the player's nationality country.
     pub nationality_country_reputation: u16,
-    /// Player's `world_reputation` — used to gate signings to clubs that
-    /// are far below the player's standing (a Ballon d'Or winner won't
-    /// drop into a third-division side, regardless of country).
-    pub world_reputation: i16,
+    /// Continent of the player's nationality. Together with
+    /// `nationality_country_code` resolves a `ScoutingRegion` for the
+    /// region-prestige gate (same pattern as `scan_foreign_loan_market`).
+    pub nationality_continent_id: u32,
+    pub nationality_country_code: String,
 }
 
 /// A free-agent signing decided by `handle_free_agents` for a player who
@@ -89,9 +86,10 @@ impl CountryResult {
             /// For global-pool free agents it's the player's nationality
             /// country reputation, captured in the snapshot.
             nationality_country_reputation: u16,
-            /// Player's `world_reputation`, used to gate signings to clubs
-            /// far below the player's standing.
-            world_reputation: i16,
+            /// Region of the player's nationality. Same gate the loan
+            /// market and personal-terms negotiation use to block moves
+            /// across a clear prestige drop (e.g. SouthAmerica→WestAfrica).
+            nationality_region: ScoutingRegion,
         }
 
         // Pass 1: Find players with expiring contracts (< 90 days) or already expired
@@ -151,9 +149,14 @@ impl CountryResult {
                             // In-country candidates are by definition at a
                             // club in this country, so the country-rep gate
                             // always passes — record `country.reputation`
-                            // directly.
+                            // directly. Same for the region gate: the
+                            // candidate sits in `country`, so the buyer's
+                            // own region is its own reference point.
                             nationality_country_reputation: country.reputation,
-                            world_reputation: player.player_attributes.world_reputation,
+                            nationality_region: ScoutingRegion::from_country(
+                                country.continent_id,
+                                &country.code,
+                            ),
                         });
                     }
                 }
@@ -179,7 +182,10 @@ impl CountryResult {
                 position_group: fa.position_group,
                 days_to_expiry: 0,
                 nationality_country_reputation: fa.nationality_country_reputation,
-                world_reputation: fa.world_reputation,
+                nationality_region: ScoutingRegion::from_country(
+                    fa.nationality_continent_id,
+                    &fa.nationality_country_code,
+                ),
             });
         }
 
@@ -222,8 +228,11 @@ impl CountryResult {
         let mut signings: Vec<FreeAgentSigning> = Vec::new();
         let max_signings_per_day = config.max_free_agent_signings_per_day;
         let ability_slack = config.free_agent_ability_slack;
-        let world_rep_gap_max = config.free_agent_world_rep_gap_max;
         let buyer_country_reputation = country.reputation;
+        // Mirrors `scan_foreign_loan_market`: same region the country sits
+        // in, used as the prestige anchor for cross-region gating.
+        let buyer_region = ScoutingRegion::from_country(country.continent_id, &country.code);
+        let buyer_region_prestige = buyer_region.league_prestige();
 
         for club in &country.clubs {
             if signings.len() >= max_signings_per_day {
@@ -244,17 +253,6 @@ impl CountryResult {
                 continue;
             }
 
-            // Buying club's world reputation — used as the anchor for the
-            // world-rep gap gate. Mirrors `helpers::club_world_reputation`
-            // from the scouting pipeline (kept inline here to avoid the
-            // cross-module dep for one trivial lookup).
-            let buyer_club_world_rep: i16 = club
-                .teams
-                .iter()
-                .find(|t| matches!(t.team_type, crate::TeamType::Main))
-                .map(|t| t.reputation.world as i16)
-                .unwrap_or(0);
-
             // Check unfulfilled transfer requests
             let unfulfilled: Vec<&TransferRequest> = plan
                 .transfer_requests
@@ -270,16 +268,17 @@ impl CountryResult {
                     break;
                 }
 
-                // Find a matching free agent candidate. Two realism gates
-                // mirror the regular scouting pipeline:
+                // Find a matching free agent candidate. Realism gates
+                // mirror the foreign-loan and personal-terms paths so all
+                // three player-decision flows agree on what counts as a
+                // plausible cross-country move:
                 //  1. Country-reputation gate — buying country must be at
                 //     or above the player's nationality country reputation.
-                //     Stops e.g. a Russian free agent landing at a Nigerian
-                //     club (Russia > Nigeria on the rep scale).
-                //  2. World-reputation gap gate — player's world reputation
-                //     can't exceed the club's by more than the configured
-                //     headroom. Stops elite free agents drifting into tiny
-                //     clubs even when the country gate would let them through.
+                //  2. Region-prestige gate — player's home region can be at
+                //     most `+0.20` more prestigious than the buyer's.
+                //     Stops e.g. an Argentinian (SouthAmerica, 0.45) landing
+                //     at a Mali club (WestAfrica, 0.20). Same threshold as
+                //     `scan_foreign_loan_market`.
                 if let Some(best) = candidates
                     .iter()
                     .filter(|c| {
@@ -287,8 +286,8 @@ impl CountryResult {
                             && c.position_group == request.position.position_group()
                             && c.ability >= request.min_ability.saturating_sub(ability_slack)
                             && c.nationality_country_reputation <= buyer_country_reputation
-                            && c.world_reputation
-                                <= buyer_club_world_rep.saturating_add(world_rep_gap_max)
+                            && c.nationality_region.league_prestige()
+                                <= buyer_region_prestige + 0.20
                             && !signings.iter().any(|s| s.player_id == c.player_id)
                     })
                     .max_by_key(|c| c.ability as u16 + c.potential as u16)
@@ -473,15 +472,25 @@ pub(crate) fn snapshot_global_free_agents(
     data.free_agents
         .iter()
         .map(|p| {
-            // Look up the player's nationality country reputation. A free
-            // agent may have a stale or unknown `country_id`; in that case
-            // we fall back to 0 (visible to everyone) — the permissive
-            // default avoids accidentally locking out players whose data
-            // failed to populate.
-            let nationality_rep = data
+            // Resolve nationality info in two stages: an active country
+            // (full `Country`) first, then the lighter `country_info` map
+            // that covers *every* country — including ones whose leagues
+            // aren't simulated this save. Without the second stage, the
+            // gates fall back to permissive defaults and an Argentinian
+            // free agent slips through to a Mali buyer.
+            let (nationality_rep, nationality_continent_id, nationality_country_code) = data
                 .country(p.country_id)
-                .map(|c| c.reputation)
-                .unwrap_or(0);
+                .map(|c| (c.reputation, c.continent_id, c.code.clone()))
+                .or_else(|| {
+                    data.country_info
+                        .get(&p.country_id)
+                        .map(|c| (c.reputation, c.continent_id, c.code.clone()))
+                })
+                // Truly unknown nationality: fail-closed on the rep gate
+                // (`u16::MAX` blocks every buyer) and pin the region to
+                // the most prestigious one so the prestige gate also
+                // rejects, instead of opening every door.
+                .unwrap_or_else(|| (u16::MAX, 1, "gb".to_string()));
             GlobalFreeAgentSummary {
                 player_id: p.id,
                 player_name: p.full_name.to_string(),
@@ -490,7 +499,8 @@ pub(crate) fn snapshot_global_free_agents(
                 age: p.age(date),
                 position_group: p.position().position_group(),
                 nationality_country_reputation: nationality_rep,
-                world_reputation: p.player_attributes.world_reputation,
+                nationality_continent_id,
+                nationality_country_code,
             }
         })
         .collect()

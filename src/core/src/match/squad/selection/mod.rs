@@ -8,7 +8,7 @@ mod tests;
 
 use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
-use crate::{MatchTacticType, Player, PlayerStatusType, Tactics, Team};
+use crate::{MatchTacticType, Player, PlayerStatusType, Tactics, Team, TeamType};
 use chrono::NaiveDate;
 use log::debug;
 use std::borrow::Borrow;
@@ -110,7 +110,12 @@ impl SquadSelector {
         tactics: &Tactics,
         ctx: &SelectionContext,
     ) -> PlayerSelectionResult {
-        let engine = ScoringEngine::from_staff_with_philosophy(staff, ctx.philosophy.clone());
+        let is_main_team = team.team_type == TeamType::Main;
+        let engine = ScoringEngine::from_staff_for_team(
+            staff,
+            ctx.philosophy.clone(),
+            is_main_team,
+        );
         let policy = SelectionPolicy::from_context(ctx);
 
         let mut available: Vec<&Player> = team
@@ -122,6 +127,12 @@ impl SquadSelector {
             .collect();
 
         for &rp in reserve_players {
+            // Force-selection is a Main-team pin; non-Main squads ignore
+            // pinned players in their reserve pool so a U18 starlet flagged
+            // for the first team doesn't get pulled into the B-team XI too.
+            if !is_main_team && rp.is_force_match_selection {
+                continue;
+            }
             if is_available(rp, ctx.is_friendly) && !available.iter().any(|p| p.id == rp.id) {
                 available.push(rp);
             }
@@ -306,6 +317,7 @@ impl SquadSelector {
         ctx: &SelectionContext,
     ) -> PlayerSelectionResult {
         let tactics = team.tactics();
+        let is_main_team = team.team_type == TeamType::Main;
 
         let mut available: Vec<&Player> = team
             .players
@@ -320,6 +332,9 @@ impl SquadSelector {
             let mut supplements: Vec<&Player> = reserve_players
                 .iter()
                 .filter(|&&rp| {
+                    if !is_main_team && rp.is_force_match_selection {
+                        return false;
+                    }
                     is_available(rp, ctx.is_friendly) && !available.iter().any(|p| p.id == rp.id)
                 })
                 .copied()

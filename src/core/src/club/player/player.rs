@@ -100,6 +100,13 @@ pub struct Player {
     /// Signature moves — trained traits that bias in-match decisions.
     pub traits: Vec<PlayerTrait>,
 
+    /// Manager override forcing this player into the starting XI on every
+    /// match where they're available (not injured, banned, suspended). The
+    /// squad selector treats them as a hard pick before scoring runs, and
+    /// the in-match sub logic refuses to pull them off for fatigue or
+    /// development reasons (critical injuries still force the swap).
+    pub is_force_match_selection: bool,
+
     /// Rapport with the coaches who have trained this player.
     pub rapport: PlayerRapport,
 
@@ -311,6 +318,14 @@ impl Player {
         date: NaiveDate,
         current_window: Option<(NaiveDate, NaiveDate)>,
     ) -> bool {
+        // Manager has pinned this player to the squad — no outbound move
+        // is acceptable, full stop. Same predicate the recommendation
+        // pipeline, negotiation initiator, and seller-side offer
+        // evaluation all read, so every flow refuses uniformly.
+        if self.is_force_match_selection {
+            return true;
+        }
+
         // Same-window protection: signed during this open window → protected
         if let (Some(transfer_date), Some((window_start, window_end))) =
             (self.last_transfer_date, current_window)

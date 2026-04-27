@@ -1617,6 +1617,10 @@ a:link, a:visited, a:hover, a:active {
     color: #07385a;
 }
 
+.fm-squad tbody tr.sq-force-pick a {
+    color: #59c63a !important;
+}
+
 .fm-squad-center thead th,
 .fm-squad-center tbody td {
     text-align: center;
@@ -6147,6 +6151,10 @@ a:link, a:visited, a:hover, a:active {
     height: 1px;
     background: var(--header-border, #e0e3e6);
     margin: 4px 0;
+}
+
+.fm-tabbar-dropdown-menu .fm-dd-check i {
+    margin-right: 8px;
 }
 
 /* ============================================

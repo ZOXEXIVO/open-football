@@ -48,7 +48,7 @@
     </div>
     <div class="container-fluid">
         <div class="row">
-            <div class="col-lg-2 d-none d-lg-block">
+            <div class="col-xl-2 d-none d-xl-block">
                 <div class="fm-match-squad fm-match-squad-home">
                     <div class="fm-squad-hdr">
                         <span class="fm-squad-hdr-dot fm-squad-hdr-dot-home"></span>
@@ -80,7 +80,7 @@
                     </div>
                 </div>
             </div>
-            <div class="col-lg-8">
+            <div class="col-xl-8">
                 {% if match_recordings_enabled %}
                 <div id="match-play-area">
                     <div class="time-scrollbar-wrapper" id="time-scrollbar-wrapper" style="display:none">
@@ -120,7 +120,7 @@
                 </div>
                 {% endif %}
             </div>
-            <div class="col-lg-2 d-none d-lg-block">
+            <div class="col-xl-2 d-none d-xl-block">
                 <div class="fm-match-squad fm-match-squad-away">
                     <div class="fm-squad-hdr">
                         <span class="fm-squad-hdr-dot fm-squad-hdr-dot-away"></span>
@@ -153,7 +153,7 @@
                 </div>
             </div>
         </div>
-        <div class="fm-match-squads-mobile d-lg-none">
+        <div class="fm-match-squads-mobile d-xl-none">
             <div class="fm-match-squad fm-match-squad-home">
                 <div class="fm-squad-hdr">
                     <span class="fm-squad-hdr-dot fm-squad-hdr-dot-home"></span>
@@ -164,8 +164,9 @@
                     <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
                         <small>{{ player.position }}</small>
                         <span class="fm-sp-name">{{ player.last_name }}</span>
-                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}{% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
                         {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                        {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
                     </a>
                     {% endfor %}
                 </div>
@@ -173,11 +174,12 @@
                 <div class="fm-squad-section">
                     {% for player in home_squad_subs %}
                     <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
-                        {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
                         <small>{{ player.position }}</small>
                         <span class="fm-sp-name">{{ player.last_name }}</span>
-                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}{% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
                         {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                        {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
                     </a>
                     {% endfor %}
                 </div>
@@ -192,8 +194,9 @@
                     <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
                         <small>{{ player.position }}</small>
                         <span class="fm-sp-name">{{ player.last_name }}</span>
-                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}{% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
                         {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                        {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
                     </a>
                     {% endfor %}
                 </div>
@@ -201,11 +204,12 @@
                 <div class="fm-squad-section">
                     {% for player in away_squad_subs %}
                     <a href="/{{ lang }}/players/{{ player.slug }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
-                        {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
                         <small>{{ player.position }}</small>
                         <span class="fm-sp-name">{{ player.last_name }}</span>
-                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}{% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
                         {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                        {% if !player.rating.is_empty() %}<span class="fm-rating-badge fm-rating-{{ player.rating_tier }}">{{ player.rating }}</span>{% endif %}
                     </a>
                     {% endfor %}
                 </div>

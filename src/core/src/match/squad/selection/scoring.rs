@@ -15,6 +15,11 @@ pub(crate) struct ScoringEngine {
     /// Club philosophy tilts selection — DevelopAndSell pushes youth further
     /// up the XI, LoanFocused prefers loan signings when merit is close.
     pub(crate) philosophy: Option<ClubPhilosophy>,
+    /// `is_force_match_selection` is a Main-team pin — the manager wants
+    /// the player in the senior matchday XI. B / Reserve / U-team squad
+    /// selection ignores it, so a U18 starlet flagged for the first team
+    /// doesn't also override scoring on his youth team's match day.
+    pub(crate) honor_force_selection: bool,
 }
 
 impl ScoringEngine {
@@ -22,13 +27,19 @@ impl ScoringEngine {
         ScoringEngine {
             profile: CoachProfile::from_staff(staff),
             philosophy: None,
+            honor_force_selection: true,
         }
     }
 
-    pub fn from_staff_with_philosophy(staff: &Staff, philosophy: Option<ClubPhilosophy>) -> Self {
+    pub fn from_staff_for_team(
+        staff: &Staff,
+        philosophy: Option<ClubPhilosophy>,
+        is_main_team: bool,
+    ) -> Self {
         ScoringEngine {
             profile: CoachProfile::from_staff(staff),
             philosophy,
+            honor_force_selection: is_main_team,
         }
     }
 
@@ -476,6 +487,9 @@ impl ScoringEngine {
         // Squad status tilt — labelled starters get their planned minutes.
         score += self.squad_status_bonus(player);
 
+        // Manager override — forced selections dwarf every other signal.
+        score += self.force_selection_bonus(player);
+
         // Club philosophy tilt — development clubs push youth up, loan-
         // focused clubs reward borrowed talent.
         score += self.philosophy_bonus(player, date);
@@ -485,6 +499,21 @@ impl ScoringEngine {
         }
 
         score
+    }
+
+    /// Manager override pinning a player into the starting XI. Returns a
+    /// constant large enough to dominate every other signal (quality,
+    /// fatigue, relationship, philosophy, …) so the DP slot assigner picks
+    /// flagged players before anyone else when available. Pre-selection
+    /// availability filters (injury / banned / suspended) are applied
+    /// upstream in `available`, so this only fires for players who *can*
+    /// play but might otherwise lose the contest on merit.
+    pub fn force_selection_bonus(&self, player: &Player) -> f32 {
+        if self.honor_force_selection && player.is_force_match_selection {
+            1000.0
+        } else {
+            0.0
+        }
     }
 
     /// Squad status tilt — the coach has a plan for each player's minutes
@@ -725,6 +754,7 @@ impl ScoringEngine {
 
         score += self.reputation_score(player) * 0.30;
         score += self.relationship_score(player, staff) * 0.30;
+        score += self.force_selection_bonus(player);
 
         score
     }

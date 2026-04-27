@@ -70,6 +70,10 @@ pub struct MatchPlayer {
     /// per-match shot-reason log shows which code path fired the shot.
     /// Cleared after consumption.
     pub pending_shot_reason: Option<&'static str>,
+
+    /// Manager flag protecting this player from fatigue / development subs.
+    /// Mirrored from `Player::is_force_match_selection` at squad-build time.
+    pub is_force_match_selection: bool,
 }
 
 impl MatchPlayer {
@@ -118,6 +122,7 @@ impl MatchPlayer {
             is_sent_off: false,
             tackle_cooldown: 0,
             pending_shot_reason: None,
+            is_force_match_selection: player.is_force_match_selection,
         }
     }
 

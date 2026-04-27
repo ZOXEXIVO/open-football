@@ -470,6 +470,12 @@ impl ClubResult {
                 return;
             }
 
+            // Manager-pinned players: skip the salary-dispute fallback
+            // entirely. Neither transfer-list nor free-release applies.
+            if player.is_force_match_selection {
+                return;
+            }
+
             let ability = player.player_attributes.current_ability as i16;
             let age = DateUtils::age(player.birth_date, date);
             let loyalty = player.attributes.loyalty;

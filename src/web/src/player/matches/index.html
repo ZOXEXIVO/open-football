@@ -1,6 +1,6 @@
 {% extends "player/player_layout.html" %}
 
-{% block html_title %}{{ title }} - {{ sub_title }} | {{ i18n.t("site_name") }}{% endblock %}
+{% block html_title %}{{ title }}{% if !sub_title_link.is_empty() %}, {{ sub_title }}{% endif %} - {{ i18n.t("matches") }} | {{ i18n.t("site_name") }}{% endblock %}
 
 {% block content %}
 <div class="fm-page">

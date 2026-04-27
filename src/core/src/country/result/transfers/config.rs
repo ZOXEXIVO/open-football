@@ -54,14 +54,6 @@ pub struct TransferConfig {
     /// agent slightly below their nominal target because the price (zero
     /// fee, possibly lower wage) compensates.
     pub free_agent_ability_slack: u8,
-
-    /// Maximum allowed `player.world_reputation - club.world_reputation`
-    /// gap for a free-agent signing. Above this, the player is treated as
-    /// out-of-reach for the buyer (a Ballon d'Or-tier player won't drop
-    /// into a third-division side regardless of country). This is a hard
-    /// reject — distinct from the scouting `WageDemands` risk flag, which
-    /// is informational and uses a smaller gap.
-    pub free_agent_world_rep_gap_max: i16,
 }
 
 impl Default for TransferConfig {
@@ -113,7 +105,6 @@ impl Default for TransferConfig {
             daily_chance_max_pct: 30.0,
             max_free_agent_signings_per_day: 2,
             free_agent_ability_slack: 5,
-            free_agent_world_rep_gap_max: 2500,
         }
     }
 }

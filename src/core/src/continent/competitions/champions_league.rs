@@ -222,8 +222,11 @@ impl ChampionsLeague {
                 let home_team = home_club.teams.teams.first()?;
                 let away_team = away_club.teams.teams.first()?;
 
-                let home_squad = home_team.get_enhanced_match_squad(&[], &selection_ctx);
-                let away_squad = away_team.get_enhanced_match_squad(&[], &selection_ctx);
+                let home_force = home_club.get_force_selected_players();
+                let away_force = away_club.get_force_selected_players();
+
+                let home_squad = home_team.get_enhanced_match_squad(&home_force, &selection_ctx);
+                let away_squad = away_team.get_enhanced_match_squad(&away_force, &selection_ctx);
 
                 let match_id = format!("cl_{}_{}_{}",
                     date.format("%Y%m%d"), cm.home_team, cm.away_team);

@@ -12,6 +12,20 @@ const MIN_YOUTH_SQUAD: usize = 11;
 const MIN_MAIN_SQUAD: usize = 22;
 
 impl Club {
+    /// Every force-selected player across the club, regardless of the
+    /// team they're rostered on. Callers pass these straight to the
+    /// squad selector as the first reserves so the +1000 selection
+    /// bonus pins them into the match-day XI before the usual scoring
+    /// logic decides anything else.
+    pub fn get_force_selected_players(&self) -> Vec<&Player> {
+        self.teams
+            .teams
+            .iter()
+            .flat_map(|t| t.players.iter())
+            .filter(|p| p.is_force_match_selection)
+            .collect()
+    }
+
     /// Weekly squad rebalance across all teams.
     ///
     /// Evaluates every player's current team placement and moves them when
@@ -157,15 +171,15 @@ impl Club {
 
         let mut surplus: Vec<(u32, u8)> = Vec::new();
         for (group, depth) in MAIN_DEPTH {
-            let mut ranked: Vec<(u32, u8, u8, bool)> = self.teams.teams[main_idx]
+            let mut ranked: Vec<(u32, u8, u8, bool, bool)> = self.teams.teams[main_idx]
                 .players
                 .iter()
                 .filter(|p| p.position().position_group() == *group)
-                .map(|p| (p.id, p.player_attributes.current_ability, p.age(date), p.is_on_loan()))
+                .map(|p| (p.id, p.player_attributes.current_ability, p.age(date), p.is_on_loan(), p.is_force_match_selection))
                 .collect();
             ranked.sort_by(|a, b| b.1.cmp(&a.1));
-            for (player_id, _, age, is_loan_in) in ranked.into_iter().skip(*depth) {
-                if is_loan_in {
+            for (player_id, _, age, is_loan_in, is_locked) in ranked.into_iter().skip(*depth) {
+                if is_loan_in || is_locked {
                     continue;
                 }
                 surplus.push((player_id, age));
@@ -280,6 +294,9 @@ impl Club {
                     if st.contains(&PlayerStatusType::Lst) || st.contains(&PlayerStatusType::Loa) {
                         continue;
                     }
+                    if p.is_force_match_selection {
+                        continue;
+                    }
                     candidates.push((ti, p.id, p.player_attributes.current_ability));
                 }
             }
@@ -373,9 +390,11 @@ impl Club {
             None => return, // no reserve team, stay on main
         };
 
-        // Find main team players with no contract (returned from loan)
+        // Find main team players with no contract (returned from loan).
+        // Force-selected players stay on main even if their contract slot
+        // is empty — the manager has pinned them in.
         let to_move: Vec<u32> = self.teams.teams[main_idx].players.iter()
-            .filter(|p| p.contract.is_none())
+            .filter(|p| p.contract.is_none() && !p.is_force_match_selection)
             .map(|p| p.id)
             .collect();
 

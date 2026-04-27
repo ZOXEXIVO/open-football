@@ -30,14 +30,17 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             return None;
         }
 
-        // If ball is moving away (not towards with angle 0.6 and speed > 2.0), give up.
-        // If we still have an active shot target at this point, the ball just
-        // escaped past the GK after a failed catch attempt — that's a parry,
-        // not "GK gave up." Credit a save and exit. The handler clears the
-        // shot target so subsequent events don't double-count.
+        // Ball is moving away from the keeper at speed — only credit
+        // a parry when the ball was actually within reach (the keeper
+        // got a hand to it). Otherwise the shot just missed past the
+        // keeper and "parry" would falsely credit a save for a wide
+        // shot the GK never touched.
         let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
+        let ball_distance = ctx.ball().distance();
         if ball_speed > 2.0 && !ctx.ball().is_towards_player_with_angle(0.6) {
-            if ctx.tick_context.ball.cached_shot_target.is_some() {
+            if ctx.tick_context.ball.cached_shot_target.is_some()
+                && ball_distance < 25.0
+            {
                 return Some(StateChangeResult::with_goalkeeper_state_and_event(
                     GoalkeeperState::Standing,
                     Event::PlayerEvent(PlayerEvent::ParriedBall(ctx.player.id)),

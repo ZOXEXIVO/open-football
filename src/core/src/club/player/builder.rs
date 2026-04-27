@@ -218,6 +218,7 @@ impl PlayerBuilder {
             sold_from: None,
             sell_on_obligations: Vec::new(),
             traits,
+            is_force_match_selection: false,
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
             interactions: crate::club::player::interaction::ManagerInteractionLog::new(),

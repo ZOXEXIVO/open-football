@@ -548,12 +548,6 @@ impl Player {
 
     fn record_match_events(&mut self, o: &MatchOutcome<'_>) {
         if !o.is_friendly {
-            let mag = match o.participation {
-                MatchParticipation::Starter => 1.5,
-                MatchParticipation::Substitute => 0.6,
-            };
-            self.happiness.add_event(HappinessEventType::MatchSelection, mag);
-
             // Rolling starter-share tracking — drives the WonStartingPlace /
             // LostStartingPlace one-shot transitions. Only competitive
             // matches count: pre-season minutes don't tell us anything
@@ -2742,10 +2736,9 @@ mod match_event_tests {
                 .count() as u32
         };
 
-        // Hard ceilings per event type. `MatchSelection` legitimately
-        // fires every match (no cooldown by design — it's the routine
-        // tick) so it gets a generous cap. Everything else should be
-        // gated by its emit-site cooldown.
+        // Hard ceilings per event type. Everything below should be gated
+        // by its emit-site cooldown — these caps are the safety net for
+        // anything that slips through.
         let assertions: &[(HappinessEventType, u32)] = &[
             (HappinessEventType::FanPraise, 4),       // 21d cooldown × 44 matches
             (HappinessEventType::FanCriticism, 4),

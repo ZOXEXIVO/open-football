@@ -48,34 +48,26 @@ impl<'b> TeamOperationsImpl<'b> {
     }
 
     /// Is the attack ready to progress? True when at least one of our
-    /// forwards is in a genuine scoring threat — close to goal, in space,
-    /// and facing a clear lane. When FALSE, defenders and midfielders
-    /// should hold possession and recycle rather than force a forward
-    /// pass: there's nobody to pass TO whose reception would lead to a
-    /// shot, so a risky forward ball will just turn over possession and
-    /// become the opponent's next attack.
+    /// forwards / attacking midfielders is positioned in the final
+    /// third (≤80 u from goal). Marking is NOT a disqualifier — real
+    /// defences always mark forwards in the box, so requiring a
+    /// completely-unmarked forward made `is_attack_ready` essentially
+    /// always false against organised defences and forced the team
+    /// into permanent possession-recycle mode.
+    ///
+    /// The signal is intentionally generous: the *forward's job* is
+    /// to receive the ball under marking and create the chance; the
+    /// recycle gate's job is to avoid blind hopeful balls when no one
+    /// is anywhere near goal at all. Distance alone covers that.
     pub fn is_attack_ready(&self) -> bool {
         let ctx = self.ctx;
         let goal_pos = ctx.player().opponent_goal_position();
-        // Scan our forwards / attacking midfielders — any one of them
-        // positioned within ~35m of goal in open space means the attack
-        // is a legitimate threat.
         ctx.players().teammates().all()
             .filter(|t| {
                 t.tactical_positions.is_forward()
                     || t.tactical_positions.is_midfielder()
             })
-            .any(|t| {
-                let to_goal = (t.position - goal_pos).magnitude();
-                if to_goal > 70.0 {
-                    return false;
-                }
-                // Check space around the forward — an opponent within
-                // 8u means they're marked and not a live shooting threat.
-                let marked_closely = ctx.tick_context.grid
-                    .opponents(t.id, 8.0).count() > 0;
-                !marked_closely
-            })
+            .any(|t| (t.position - goal_pos).magnitude() <= 80.0)
     }
 
     /// Should the team play in "possession mode" right now — i.e. slow

@@ -1562,9 +1562,18 @@ impl PlayerEventDispatcher {
         if field.ball.cached_shot_target.is_none() {
             return;
         }
+        let shooter_id = field.ball.previous_owner;
         if let Some(gk) = field.get_player_mut(player_id) {
             gk.statistics.saves += 1;
             gk.statistics.shots_faced += 1;
+        }
+        // Credit on-target to the shooter — a parry IS the keeper
+        // touching a shot that reached the goal frame. Without this,
+        // saves > on-target shots, an impossible ratio.
+        if let Some(sid) = shooter_id {
+            if let Some(shooter) = field.get_player_mut(sid) {
+                shooter.memory.credit_shot_on_target();
+            }
         }
         field.ball.cached_shot_target = None;
     }
@@ -1576,23 +1585,19 @@ impl PlayerEventDispatcher {
             .and_then(|prev_id| field.players.iter().find(|p| p.id == prev_id).map(|p| p.team_id));
         let gk_team = field.players.iter().find(|p| p.id == player_id).map(|p| p.team_id);
 
-        // Keeper caught a ball that was moving from an opponent — that's a
-        // save. Credit the save AND credit on-target to the shooter
-        // (previous_owner) only now: the shot actually reached the
-        // goalmouth. Gated on `cached_shot_target.is_some()` so a pass
-        // or random clearance the keeper happens to intercept doesn't
-        // count as an on-target shot — and now also gates `shots_faced`
-        // so save-percentage in the rating formula stays meaningful.
+        // Save credit requires both: the ball was moving from an opponent
+        // AND the catch resolves a real shot (cached_shot_target set).
+        // Without the shot gate, every cross / through-ball / clearance
+        // that ends in the keeper's hands counted as a save — pushing
+        // saves/on-target above 100% (more "saves" than on-target shots).
         if ball_was_moving && last_owner_team.is_some() && last_owner_team != gk_team {
             let was_shot = field.ball.cached_shot_target.is_some();
-            let shooter_id = field.ball.previous_owner;
-            if let Some(player) = field.get_player_mut(player_id) {
-                player.statistics.saves += 1;
-                if was_shot {
+            if was_shot {
+                let shooter_id = field.ball.previous_owner;
+                if let Some(player) = field.get_player_mut(player_id) {
+                    player.statistics.saves += 1;
                     player.statistics.shots_faced += 1;
                 }
-            }
-            if was_shot {
                 if let Some(sid) = shooter_id {
                     if let Some(shooter) = field.get_player_mut(sid) {
                         shooter.memory.credit_shot_on_target();
@@ -1966,9 +1971,18 @@ impl PlayerEventDispatcher {
         // parried shots stayed at zero saves regardless of effort.
         let gk_save_id = Self::gk_clearing_shot(field);
         if let Some(gk_id) = gk_save_id {
+            // Capture shooter BEFORE we mutate the field — the previous
+            // owner is the player whose shot the GK is now clearing.
+            let shooter_id = field.ball.previous_owner
+                .filter(|&sid| sid != gk_id);
             if let Some(gk) = field.get_player_mut(gk_id) {
                 gk.statistics.saves += 1;
                 gk.statistics.shots_faced += 1;
+            }
+            if let Some(sid) = shooter_id {
+                if let Some(shooter) = field.get_player_mut(sid) {
+                    shooter.memory.credit_shot_on_target();
+                }
             }
             field.ball.cached_shot_target = None;
         }

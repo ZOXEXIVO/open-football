@@ -628,6 +628,17 @@ impl TeamBehaviour {
                     Some(c) if c.salary > 0 => c.salary,
                     _ => continue,
                 };
+                // Only established players notice salary gaps. A reserve
+                // or recent academy graduate at a top club isn't unsettled
+                // when the star striker re-signs for ten times their wage —
+                // they're grateful to be in the changing room. Without this
+                // gate, a CA-60 squad filler at Real Madrid produces an
+                // "unsettled by teammate's salary" event every renewal.
+                if player.player_attributes.current_ability < 100
+                    && player.player_attributes.world_reputation < 3000
+                {
+                    continue;
+                }
                 // Only noticed when the gap is ≥25%.
                 let ratio = own_salary as f32 / signer_salary as f32;
                 if ratio >= 0.75 {
@@ -855,6 +866,15 @@ impl TeamBehaviour {
                     | PlayerSquadStatus::FirstTeamRegular
                     | PlayerSquadStatus::FirstTeamSquadRotation
             ) {
+                continue;
+            }
+            // Reputation gate (mirror of `process_contract_jealousy`).
+            // Squad-status alone isn't enough — a top club may slot a
+            // CA-60 youth into rotation as cover, and that player has no
+            // business being unsettled by the star earner's wages.
+            if player.player_attributes.current_ability < 100
+                && player.player_attributes.world_reputation < 3000
+            {
                 continue;
             }
             let group = player.position().position_group();
@@ -1747,6 +1767,13 @@ impl TeamBehaviour {
 
         for player in &players.players {
             if player.player_attributes.is_injured {
+                continue;
+            }
+
+            // Manager-pinned players don't initiate loan / playing-time
+            // grievances — being a guaranteed starter is exactly what these
+            // talks would be asking for.
+            if player.is_force_match_selection {
                 continue;
             }
 

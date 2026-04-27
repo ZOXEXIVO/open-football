@@ -72,6 +72,7 @@ pub struct PlayerEventsTemplate {
     pub is_on_loan: bool,
     pub is_injured: bool,
     pub is_unhappy: bool,
+    pub is_force_match_selection: bool,
     pub is_on_watchlist: bool,
     pub events: Vec<PlayerEventDto>,
 }
@@ -181,6 +182,7 @@ pub async fn player_events_action(
         is_on_loan: player.is_on_loan(),
         is_injured: player.player_attributes.is_injured,
         is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
+        is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         events,
     }.into_response())
@@ -249,7 +251,6 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::ManagerTacticalInstruction => "event_manager_tactical_instruction",
         HappinessEventType::GoodTraining => "event_good_training",
         HappinessEventType::PoorTraining => "event_poor_training",
-        HappinessEventType::MatchSelection => "event_match_selection",
         HappinessEventType::MatchDropped => "event_match_dropped",
         HappinessEventType::ContractOffer => "event_contract_offer",
         HappinessEventType::ContractRenewal => "event_contract_renewal",

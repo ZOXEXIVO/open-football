@@ -64,6 +64,11 @@ impl Club {
                     continue;
                 }
 
+                // Manager-pinned players: never auto-list, transfer or loan.
+                if player.is_force_match_selection {
+                    continue;
+                }
+
                 let days_idle = player.player_attributes.days_since_last_match;
                 let total_games = player.statistics.total_games();
 

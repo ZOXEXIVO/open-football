@@ -554,6 +554,13 @@ impl Ball {
                 self.claim_cooldown = 15;
                 self.velocity = Vector3::zeros();
                 self.position.z = 0.0;
+                // Interception ends any in-flight shot — a defender taking
+                // control downfield extinguishes the shot. Without this,
+                // the next time the keeper grabs a moving ball from an
+                // opponent (a long pass that loops to them), the stale
+                // shot flag credits a phantom save and inflates the
+                // saves/on-target ratio above 100%.
+                self.cached_shot_target = None;
                 events.add_ball_event(BallEvent::Intercepted(interceptor_id, self.previous_owner));
             }
         }
@@ -870,18 +877,33 @@ impl Ball {
         // 1.07, skill matters (10-pt skill gap = ~30% save-rate gap)
         // but weak keepers can't single-handedly lose 13-4.
         let skill = scaled_handling * 0.4 + scaled_reflexes * 0.4 + scaled_agility * 0.2;
-        let skill_mult = 0.72 + skill * 0.35;
-        let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.10, 0.96);
+        // Per-tick save rate. This save check runs every tick the ball
+        // is within reach of the goal line, AND the GK state-machine
+        // (Catching, Diving) runs its OWN per-tick save roll. Both
+        // compound across the 5-15 ticks of shot flight, so per-tick
+        // rates need to be calibrated to give a CUMULATIVE ~67% save
+        // rate (real-world). Old skill_mult 0.72-1.07 + cap 0.96 left
+        // the cumulative chance >95% for any centred shot. New
+        // calibration: skill_mult 0.45-0.80, cap 0.55, so a centred
+        // shot (base 0.88) at average skill (mult 0.6) lands per-tick
+        // at 0.50, cumulative ~75% across the contact window — the
+        // catching-state rolls add another tick and drop the leak rate
+        // toward the realistic 30%.
+        let skill_mult = 0.45 + skill * 0.35;
+        let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.05, 0.55);
 
         if rand::random::<f32>() >= save_prob {
             return; // Keeper beaten — shot goes on.
         }
 
-        // Save made. Zero the velocity and hand ownership to the keeper —
-        // `move_to` tracks the ball to the keeper's hands at 1.5 u/tick
-        // over the next couple of ticks, so the save visually looks like
-        // the keeper catching a decelerating ball rather than the ball
-        // teleporting into their gloves.
+        // Save made. Stop the ball, hand it to the keeper, clear the
+        // shot flag, and emit BallEvent::Claimed. The save is silent
+        // at this layer — handle_caught_ball_event won't credit
+        // because cached_shot_target is gone — but the GK Catching
+        // state running a per-tick save roll BEFORE this physics-level
+        // save fires already credits saves through the gated handler.
+        // try_save_shot is the safety net that catches shots the
+        // state-machine catch missed.
         self.position.z = 0.0;
         self.velocity = Vector3::zeros();
         self.previous_owner = self.current_owner.or(self.previous_owner);
@@ -889,13 +911,6 @@ impl Ball {
         self.pass_target_player_id = None;
         self.flags.in_flight_state = 0;
         self.cached_shot_target = None;
-        // Long hold — a save is functionally a catch. The keeper has the
-        // ball in their hands and needs unchallenged time to get up, look
-        // upfield, and distribute. The in-hands catch handler uses 200
-        // ticks (2 s); the save path must match it. Without this, opposing
-        // attackers re-engaged within 0.3 s, making every save-→-distribute
-        // cycle a ~50/50 turnover that fed the 150-300 shot-per-match
-        // total: the defending team never actually stabilised possession.
         self.claim_cooldown = 200;
         events.add_ball_event(BallEvent::Claimed(keeper.id));
     }

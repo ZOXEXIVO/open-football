@@ -67,7 +67,6 @@
   "event_manager_discipline": "Disciplined by manager",
   "event_manager_praise": "Praised by manager",
   "event_match_dropped": "Dropped from match squad",
-  "event_match_selection": "Selected for match",
   "event_playing_time_promise": "Promised playing time by manager",
   "event_player_of_the_match": "Named Player of the Match",
   "event_poor_training": "Performed poorly in training",
@@ -684,6 +683,7 @@
   "cancel_loan_confirm": "Cancel this player's loan and return to parent club?",
   "move_on_free": "Move on Free",
   "move_on_free_confirm": "Release this player on a free transfer?",
+  "force_match_selection": "Force match selection",
   "clear_unhappy": "Clear Unhappy",
   "n_seasons": "{n} Season|{n} Seasons",
 

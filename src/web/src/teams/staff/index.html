@@ -1,5 +1,7 @@
 {% extends "teams/team_layout.html" %}
 
+{% block html_title %}{{ title }} - {{ i18n.t("staff") }} | {{ i18n.t("site_name") }}{% endblock %}
+
 {% block content %}
 <div class="fm-page">
     {% if staff_groups.is_empty() %}

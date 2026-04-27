@@ -43,6 +43,7 @@ pub struct PlayerHistoryTemplate {
     pub is_on_loan: bool,
     pub is_injured: bool,
     pub is_unhappy: bool,
+    pub is_force_match_selection: bool,
     pub is_on_watchlist: bool,
 }
 
@@ -254,6 +255,7 @@ pub async fn player_history_action(
             is_on_loan: false,
             is_injured: false,
             is_unhappy: false,
+            is_force_match_selection: player.is_force_match_selection,
             is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         }.into_response())
     } else {
@@ -288,6 +290,7 @@ pub async fn player_history_action(
             is_on_loan: player.is_on_loan(),
             is_injured: player.player_attributes.is_injured,
             is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
+            is_force_match_selection: player.is_force_match_selection,
             is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         }.into_response())
     }

@@ -17,6 +17,10 @@ pub fn routes() -> Router<GameAppData> {
             post(super::clear_injury_action),
         )
         .route(
+            "/api/players/{player_id}/toggle-force-match-selection",
+            post(super::toggle_force_match_selection_action),
+        )
+        .route(
             "/api/players/{player_id}/cancel-loan",
             post(super::cancel_loan_action),
         )
