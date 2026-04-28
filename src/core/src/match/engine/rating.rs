@@ -75,36 +75,23 @@ pub fn calculate_match_rating(
     // ── Goalkeeper saves ─────────────────────────────────────────────────
 
     if pos == PlayerFieldPositionGroup::Goalkeeper {
-        // Each save is a tangible contribution. Bumped from +0.15 to
-        // +0.2 per save (cap +2.0): real match ratings reward busy
-        // keepers heavily, and this keeps a GK who made 8 saves but
-        // conceded 2 comfortably at 6.5+ instead of sitting at 6.0.
-        let save_bonus = (stats.saves as f32 * 0.2).min(2.0);
+        // Real-football season averages for elite GKs sit at 7.0-7.3.
+        // Per-save / save% / surplus all reward high-volume saving, so
+        // each individual layer has to be modest — stacked, they
+        // compose to ~+1.7 max above base, which is the right max for
+        // a single great game.
+        let save_bonus = (stats.saves as f32 * 0.15).min(1.2);
         rating += save_bonus;
 
-        // Busy keeper who kept a clean sheet — exceptional performance,
-        // the kind of shutout that should read 8-9+.
-        if stats.saves >= 5 && opponent_goals == 0 {
-            rating += 0.5;
-        }
-
-        // Save-percentage bonus: rewards GKs whose effective save rate
-        // is high regardless of conceded volume. A keeper who stopped
-        // 6 of 8 shots (75%) was excellent even if his team lost 2-0.
-        // Use `shots_faced` from the stats; fall back to `saves +
-        // opponent_goals` for the legacy code paths that don't set it
-        // (test fixtures, older save files).
         let shots_faced = stats.shots_faced.max(stats.saves + opponent_goals as u16);
         if shots_faced >= 3 {
             let save_pct = stats.saves as f32 / shots_faced as f32;
-            // Tiered bonus: > 80% elite, > 70% great, > 60% solid.
-            // Below 50% the GK was beaten too often; small penalty.
             let pct_bonus = if save_pct > 0.80 {
-                0.6
+                0.3
             } else if save_pct > 0.70 {
-                0.4
+                0.15
             } else if save_pct > 0.60 {
-                0.2
+                0.05
             } else if save_pct < 0.50 {
                 -0.2
             } else {
@@ -113,15 +100,9 @@ pub fn calculate_match_rating(
             rating += pct_bonus;
         }
 
-        // "Saves outnumber goals conceded" recognition: even a GK who
-        // shipped goals had a strong outing if he stopped meaningfully
-        // more than he conceded. The user's reported bug was "saves >
-        // conceded but rating still 6.7" — this branch is the explicit
-        // fix. Caps at +0.5 so a 10-save / 1-conceded performance
-        // doesn't spike past the existing 8+ ceiling.
         if stats.saves > opponent_goals as u16 {
             let surplus = stats.saves - opponent_goals as u16;
-            rating += (surplus as f32 * 0.1).min(0.5);
+            rating += (surplus as f32 * 0.05).min(0.2);
         }
     }
 
@@ -137,10 +118,7 @@ pub fn calculate_match_rating(
 
     if opponent_goals == 0 {
         match pos {
-            // A clean sheet is the keeper's highest-value outcome —
-            // raised from +0.5 to +1.0 so a quiet shutout lands at
-            // 7 and a busy one (5+ saves) comfortably at 8+.
-            PlayerFieldPositionGroup::Goalkeeper => rating += 1.0,
+            PlayerFieldPositionGroup::Goalkeeper => rating += 0.3,
             PlayerFieldPositionGroup::Defender => rating += 0.3,
             PlayerFieldPositionGroup::Midfielder => rating += 0.1,
             _ => {}
@@ -345,10 +323,15 @@ mod tests {
         let busy = make_stats(0, 0, 15, 12, 0, 0, 0, 0, 6, 0.0, PlayerFieldPositionGroup::Goalkeeper);
         let quiet_rating = calculate_match_rating(&quiet, 1, 0);
         let busy_rating = calculate_match_rating(&busy, 1, 0);
-        assert!(quiet_rating >= 7.0,
-            "Quiet CS rated {} — should be 7+", quiet_rating);
-        assert!(busy_rating >= 8.0,
-            "Busy CS (6 saves, clean sheet) rated {} — should be 8+", busy_rating);
+        // Real match-rating reference: a quiet shutout lands above
+        // average (6.7+); a busy shutout reaches the 7.5+ band. Going
+        // higher inflates GK season averages past world-class levels.
+        assert!(quiet_rating >= 6.7,
+            "Quiet CS rated {} — should be above 6.7", quiet_rating);
+        assert!(busy_rating >= 7.5,
+            "Busy CS (6 saves, clean sheet) rated {} — should reach 7.5+", busy_rating);
+        assert!(busy_rating > quiet_rating + 0.5,
+            "Busy CS ({}) should clearly outrate quiet CS ({})", busy_rating, quiet_rating);
     }
 
     #[test]
@@ -387,29 +370,29 @@ mod tests {
     }
 
     #[test]
-    fn saves_greater_than_goals_conceded_rated_above_six_seven() {
-        // The user-reported bug: a GK with more saves than goals conceded
-        // was settling at 6.7 because the formula only gave a flat save
-        // bonus + linear conceded penalty, with no recognition of the
-        // ratio. After the fix this GK should clear 7.0 comfortably.
+    fn saves_greater_than_goals_conceded_lifts_rating() {
+        // Saves outnumbering conceded goals must read above baseline.
+        // Loss + 2 conceded drag the rating down, but 5 saves at a
+        // 71% rate keeps the keeper visibly above a flat 6.0.
         let gk = make_gk(5, 7); // 5 saves, 2 conceded → ~71% save rate
         let rating = calculate_match_rating(&gk, 1, 2);
         assert!(
-            rating > 7.0,
-            "GK with 5 saves vs 2 conceded rated {} — should be > 7.0, the previous bug capped it at ~6.7",
+            rating >= 6.4,
+            "GK with 5 saves vs 2 conceded rated {} — should be ≥ 6.4",
             rating
         );
     }
 
     #[test]
     fn elite_save_percentage_lifts_rating() {
-        // High save% (8 of 9 shots stopped) should land in the 8+ band
-        // even if the team lost 1-0.
+        // 8 of 9 stopped is a man-of-the-match performance. Even with
+        // a 0-1 loss the rating should land in the 7+ band — that's
+        // where real match-rating systems put a single elite GK game.
         let gk = make_gk(8, 9);
         let rating = calculate_match_rating(&gk, 0, 1);
         assert!(
-            rating >= 8.0,
-            "Elite save-percentage GK rated {} — should be in the 8+ band",
+            rating >= 7.0,
+            "Elite save-percentage GK rated {} — should be in the 7+ band",
             rating
         );
     }
@@ -431,9 +414,10 @@ mod tests {
         // ratings stay sensible.
         let gk = make_gk(5, 0); // shots_faced unset
         let rating = calculate_match_rating(&gk, 1, 2);
-        // Same shape as the populated case above — should still clear 7.
+        // Same shape as the populated case above — should land at the
+        // same above-baseline tier (≥ 6.4).
         assert!(
-            rating > 7.0,
+            rating >= 6.4,
             "Legacy GK (shots_faced=0) rated {} — fallback denominator should still produce a sensible rating",
             rating
         );
@@ -442,7 +426,7 @@ mod tests {
     #[test]
     fn surplus_saves_bonus_is_capped() {
         // 10 saves vs 1 conceded shouldn't push the rating to absurd
-        // values — the surplus bonus caps at +0.5.
+        // values — the surplus bonus caps at +0.2.
         let elite = make_gk(10, 11);
         let rating = calculate_match_rating(&elite, 1, 1);
         // Ceiling check: with all bonuses (saves cap, save%, surplus)

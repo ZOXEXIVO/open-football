@@ -13,6 +13,7 @@ use core::r#match::player::statistics::MatchStatisticType;
 use core::r#match::GoalDetail;
 use itertools::*;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 pub struct LeagueGetRequest {
@@ -275,37 +276,123 @@ pub async fn league_get_action(
         })
         .collect();
 
-    // Collect player statistics from all teams in this league
-    let mut scorer_data: Vec<(u32, String, String, String, u16, u16)> = Vec::new(); // (player_id, name, team_name, team_slug, played, goals)
+    // League-scoped goal & assist tally — count from this league's
+    // own match results, not from `player.statistics` (which is the
+    // player's full competitive bucket and would also include any
+    // other league spell from the same season). Also: a force-pinned
+    // youth player only appears in goal-detail records of THIS
+    // league's matches when he actually played here, so this is the
+    // single source that gets him on the right top-scorer list.
+    let mut goals_per_player: HashMap<u32, u16> = HashMap::new();
+    let mut assists_per_player: HashMap<u32, u16> = HashMap::new();
+    let mut apps_per_player: HashMap<u32, u16> = HashMap::new();
+
+    for tour in &league.schedule.tours {
+        for item in &tour.items {
+            let Some(score) = &item.result else {
+                continue;
+            };
+            for d in &score.details {
+                match d.stat_type {
+                    MatchStatisticType::Goal if !d.is_auto_goal => {
+                        *goals_per_player.entry(d.player_id).or_insert(0) += 1;
+                    }
+                    MatchStatisticType::Assist => {
+                        *assists_per_player.entry(d.player_id).or_insert(0) += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let resolve_team_for_player = |player_id: u32| -> Option<(String, String)> {
+        let (_player, roster_team) = simulator_data.player_with_team(player_id)?;
+        let club = simulator_data.club(roster_team.club_id)?;
+        // Prefer the player's actual roster team if it's in this
+        // league. Otherwise (force-pinned youth, or rare reserve
+        // entries), fall back to the club's team that participates
+        // in this league.
+        if league_table.iter().any(|r| r.team_id == roster_team.id) {
+            return Some((roster_team.name.clone(), roster_team.slug.clone()));
+        }
+        for team in &club.teams.teams {
+            if league_table.iter().any(|r| r.team_id == team.id) {
+                return Some((team.name.clone(), team.slug.clone()));
+            }
+        }
+        None
+    };
+
+    let mut scorer_data: Vec<(u32, String, String, String, u16, u16)> = Vec::new();
     let mut assister_data: Vec<(u32, String, String, String, u16, u16)> = Vec::new();
     let mut rating_data: Vec<(u32, String, String, String, u16, f32)> = Vec::new();
 
+    for (&pid, &goals) in &goals_per_player {
+        let Some(player) = simulator_data.player(pid) else { continue };
+        let Some((team_name, team_slug)) = resolve_team_for_player(pid) else { continue };
+        let played = player.statistics.played + player.statistics.played_subs;
+        apps_per_player.insert(pid, played);
+        scorer_data.push((
+            pid,
+            player.full_name.to_string(),
+            team_name,
+            team_slug,
+            played,
+            goals,
+        ));
+    }
+
+    for (&pid, &assists) in &assists_per_player {
+        let Some(player) = simulator_data.player(pid) else { continue };
+        let Some((team_name, team_slug)) = resolve_team_for_player(pid) else { continue };
+        let played = *apps_per_player.entry(pid).or_insert_with(|| {
+            player.statistics.played + player.statistics.played_subs
+        });
+        assister_data.push((
+            pid,
+            player.full_name.to_string(),
+            team_name,
+            team_slug,
+            played,
+            assists,
+        ));
+    }
+
+    // Average rating still flows from `player.statistics.average_rating`
+    // — per-league rating tracking would need new storage on the
+    // player. Iterate over the same effective rosters we use for
+    // matchday selection so force-pinned youth players surface here
+    // too.
+    let mut seen_in_table: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for table_row in league_table {
         if let Some(team) = simulator_data.team(table_row.team_id) {
             let team_name = team.name.clone();
             let team_slug = team.slug.clone();
-            for player in &team.players.players {
+
+            let mut effective: Vec<&core::Player> = team.players.players.iter().collect();
+            if team.team_type == core::TeamType::Main {
+                if let Some(club) = simulator_data.club(team.club_id) {
+                    for sibling in &club.teams.teams {
+                        if sibling.id == team.id {
+                            continue;
+                        }
+                        for p in &sibling.players.players {
+                            if p.is_force_match_selection
+                                && !effective.iter().any(|q| q.id == p.id)
+                            {
+                                effective.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for player in effective {
+                if !seen_in_table.insert(player.id) {
+                    continue;
+                }
                 let played = player.statistics.played + player.statistics.played_subs;
-                if player.statistics.goals > 0 {
-                    scorer_data.push((
-                        player.id,
-                        player.full_name.to_string(),
-                        team_name.clone(),
-                        team_slug.clone(),
-                        played,
-                        player.statistics.goals,
-                    ));
-                }
-                if player.statistics.assists > 0 {
-                    assister_data.push((
-                        player.id,
-                        player.full_name.to_string(),
-                        team_name.clone(),
-                        team_slug.clone(),
-                        played,
-                        player.statistics.assists,
-                    ));
-                }
                 if played > 0 && player.statistics.average_rating > 0.0 {
                     rating_data.push((
                         player.id,

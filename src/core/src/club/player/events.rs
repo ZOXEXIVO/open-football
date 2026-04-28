@@ -392,10 +392,11 @@ impl Player {
             self.statuses.remove(s);
         }
         self.happiness = PlayerHappiness::new();
-        // Workload doesn't carry across clubs — minutes-played at the old
-        // side don't burden the new manager's selection choice, and form
-        // naturally resets as the player settles.
         self.load = PlayerLoad::new();
+        // Force-selection is the previous manager's pin — the new
+        // club's manager hasn't expressed a preference yet, so the
+        // flag mustn't survive the move.
+        self.is_force_match_selection = false;
     }
 
 }

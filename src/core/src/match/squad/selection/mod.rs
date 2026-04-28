@@ -118,18 +118,20 @@ impl SquadSelector {
         );
         let policy = SelectionPolicy::from_context(ctx);
 
+        // Force-selection is a Main-team pin: a flagged player is committed
+        // to the senior XI, so non-Main squads must drop them from every
+        // entry path — both their own roster (a B-team player flagged for
+        // the first team) and the cross-team reserve pool.
         let mut available: Vec<&Player> = team
             .players
             .players()
             .iter()
             .filter(|&&p| is_available(p, ctx.is_friendly))
+            .filter(|&&p| is_main_team || !p.is_force_match_selection)
             .copied()
             .collect();
 
         for &rp in reserve_players {
-            // Force-selection is a Main-team pin; non-Main squads ignore
-            // pinned players in their reserve pool so a U18 starlet flagged
-            // for the first team doesn't get pulled into the B-team XI too.
             if !is_main_team && rp.is_force_match_selection {
                 continue;
             }
@@ -155,6 +157,9 @@ impl SquadSelector {
                     continue;
                 }
                 if p.player_attributes.is_banned && !ctx.is_friendly {
+                    continue;
+                }
+                if !is_main_team && p.is_force_match_selection {
                     continue;
                 }
                 if available.iter().any(|q| q.id == p.id) {
@@ -324,6 +329,7 @@ impl SquadSelector {
             .players()
             .iter()
             .filter(|&&p| is_available(p, ctx.is_friendly))
+            .filter(|&&p| is_main_team || !p.is_force_match_selection)
             .copied()
             .collect();
 

@@ -175,6 +175,7 @@ impl Player {
         self.cup_statistics = Default::default();
         self.statistics_history.record_departure_transfer(stats, from, to, fee, is_loan, date);
         self.last_transfer_date = Some(date);
+        self.is_force_match_selection = false;
     }
 
     /// Record a manual signing of a free agent from the web UI.
@@ -187,6 +188,7 @@ impl Player {
         self.cup_statistics = Default::default();
         self.statistics_history.record_free_agent_signing(stats, to, date);
         self.last_transfer_date = Some(date);
+        self.is_force_match_selection = false;
     }
 
     /// Record a manual loan from the web UI.
@@ -204,6 +206,7 @@ impl Player {
         self.cup_statistics = Default::default();
         self.statistics_history.record_departure_loan(stats, from, parent, to, is_loan, date);
         self.last_transfer_date = Some(date);
+        self.is_force_match_selection = false;
     }
 }
 

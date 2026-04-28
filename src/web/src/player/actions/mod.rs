@@ -273,14 +273,6 @@ pub async fn transfer_action(
         let date = sim.date.date();
         let fee = body.fee.unwrap_or(0) as f64;
 
-        // Manager-pinned players: refuse manual transfers too.
-        if sim.player(params.player_id)
-            .map(|p| p.is_force_match_selection)
-            .unwrap_or(false)
-        {
-            return StatusCode::FORBIDDEN;
-        }
-
         let (dci, dcoi, dcli, dti) = match sim.find_club_main_team(body.to_club_id) {
             Some(pos) => pos,
             None => return StatusCode::NOT_FOUND,
@@ -434,14 +426,6 @@ pub async fn loan_action(
     if let Some(ref mut arc_data) = *guard {
         let sim = Arc::make_mut(arc_data);
         let date = sim.date.date();
-
-        // Manager-pinned players: refuse manual loans too.
-        if sim.player(params.player_id)
-            .map(|p| p.is_force_match_selection)
-            .unwrap_or(false)
-        {
-            return StatusCode::FORBIDDEN;
-        }
 
         let (ci, coi, cli, ti) = match sim.find_player_position(params.player_id) {
             Some(pos) => pos,
