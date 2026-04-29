@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use super::lookups::world_country_elo;
 use crate::continent::Continent;
-use crate::country::national_team::{NationalTeamFixture, NationalTeamMatchResult};
+use crate::country::national::{NationalTeamFixture, NationalTeamMatchResult};
 
 /// Update apps/goals/reputation for every player on either side's
 /// squad, no matter which continent their club sits on.

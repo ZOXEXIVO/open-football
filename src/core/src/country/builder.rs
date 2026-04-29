@@ -1,4 +1,4 @@
-use crate::country::national_team::NationalTeam;
+use crate::country::national::NationalTeam;
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::{Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations, CountrySettings, InternationalCompetition, MediaCoverage};

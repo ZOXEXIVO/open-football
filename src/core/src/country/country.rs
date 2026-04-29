@@ -1,7 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
-use crate::country::national_team::NationalTeam;
+use crate::country::national::NationalTeam;
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::{Club, ClubResult, Player};
