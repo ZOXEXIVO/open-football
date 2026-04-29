@@ -7,14 +7,11 @@ evolve by itself.
 
 
 
-
 It simulates clubs, leagues, matches, players, transfers, reputations, finances, and
 long-term football dynamics without manual match control.
 
 The goal is not to create another manager game, but to build a realistic simulation engine
 where football ecosystems can run, develop, and surprise you on their own.
-
-Open Football is distributed as a fully functional single 11 MB binary.
 
 Download one file, run it on any CPU, and you get the complete simulator with the built-in
 web application, the same experience shown in the live demo.
@@ -39,6 +36,14 @@ The project is designed to answer questions like:
 - How does a transfer affect a player's career and a club's future?
 - Can data-driven match simulation produce believable league tables and results?
 - What happens when an entire football world keeps running without intervention?
+
+
+### Fully functional single binary
+
+You can run it on your local computer with single binary file
+
+<img src=".docs/images/single_binary.png" alt="Open Football Banner" width="900">
+
 
 ## For Football Manager Scouts and Database Editors
 
