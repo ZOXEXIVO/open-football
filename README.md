@@ -38,9 +38,10 @@ The project is designed to answer questions like:
 - What happens when an entire football world keeps running without intervention?
 
 
-### Fully functional single binary
+### Single binary with full-functional simulator
 
-You can run it on your local computer with single binary file
+You can run it on your local computer with a
+[single binary file](https://github.com/ZOXEXIVO/open-football/releases).
 
 <img src=".docs/images/single_binary.png" alt="Open Football Banner" width="900">
 
@@ -128,7 +129,8 @@ information, and more leagues.
 
 ## Running Locally
 
-Download a release build and run the single binary.
+Download a release build and run the
+[single binary](https://github.com/ZOXEXIVO/open-football/releases).
 
 It contains the simulator and the web application.
 
