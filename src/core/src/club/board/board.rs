@@ -1,4 +1,5 @@
 use crate::MatchTacticType;
+use crate::club::board::context::FfpStatus;
 use crate::club::board::manager_market::ManagerCandidate;
 use crate::club::team::reputation::AchievementType;
 use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClubContract};
@@ -582,48 +583,68 @@ impl ClubBoard {
     fn calculate_season_targets(&mut self, board_ctx: &BoardContext) {
         let rep = board_ctx.reputation_score;
 
-        // Transfer budget: % of balance based on reputation tier
-        let budget_pct = if rep >= 0.8 {
-            0.40
-        } else if rep >= 0.6 {
-            0.35
-        } else if rep >= 0.4 {
-            0.30
-        } else if rep >= 0.2 {
-            0.25
-        } else {
-            0.20
+        // Revenue-based budgets: a club's transfer war chest comes from
+        // the slack between projected income and projected expenses, not
+        // from the cash balance. Clubs that spent the offseason hauling
+        // in TV money get a meaningful budget; clubs running at a deficit
+        // get nothing — even if the bank account looks healthy from a
+        // recent owner injection.
+        let projected_income = board_ctx.trailing_annual_income.max(0) as f64;
+        let projected_expenses = board_ctx.trailing_annual_outcome.max(0) as f64;
+        let projected_free_cash = (projected_income - projected_expenses).max(0.0);
+
+        let ambition_mult = ambition_budget_multiplier(self.vision.long_term_goal);
+        let chair_mult = self.chairman.budget_multiplier() as f64;
+        let ffp_mult = match board_ctx.ffp_status {
+            FfpStatus::Clean => 1.00,
+            FfpStatus::Watchlist => 0.70,
+            FfpStatus::Breach => 0.35,
         };
 
-        let raw_budget = if board_ctx.balance > 0 {
-            (board_ctx.balance as f64 * budget_pct) as i64
+        // Cold-start fallback: a freshly created club with no twelve-month
+        // history would have free_cash == 0 and never get a budget. Seed
+        // the calculation with a reputation-scaled allowance so the first
+        // season can make signings — slightly smaller than the legacy
+        // cash-based budget to avoid over-spending when the club hasn't
+        // earned anything yet.
+        let seed_budget = if projected_income < 1.0 {
+            let cash = board_ctx.balance.max(0) as f64;
+            let seed_pct = if rep >= 0.8 {
+                0.30
+            } else if rep >= 0.6 {
+                0.25
+            } else if rep >= 0.4 {
+                0.20
+            } else {
+                0.15
+            };
+            cash * seed_pct
         } else {
-            0
+            0.0
         };
+
+        let revenue_budget = projected_free_cash * ambition_mult * chair_mult * ffp_mult;
+        let raw_budget = (revenue_budget + seed_budget).max(0.0);
 
         let eco = board_ctx.country_economic_factor as f64;
         let price = board_ctx.country_price_level as f64;
         let price_ceiling = price * price * 80_000_000.0;
         let eco_ceiling = eco * eco * 300_000_000.0;
-        let budget_ceiling = price_ceiling.min(eco_ceiling) as i64;
-        // Chairman tilts the budget — reckless spends harder, conservative
-        // throttles. Applied to the raw budget before hitting the sanity
-        // ceiling, so a reckless owner at a mid-table club gets a real
-        // war chest but can't breach the country-wide economic cap.
-        let chair_mult = self.chairman.budget_multiplier() as f64;
-        let tilted_budget = (raw_budget as f64 * chair_mult) as i64;
-        let transfer_budget = tilted_budget.min(budget_ceiling) as i32;
+        let budget_ceiling = price_ceiling.min(eco_ceiling);
+        let transfer_budget = raw_budget.min(budget_ceiling) as i32;
 
-        // Wage budget: current annual wages * growth factor
-        let wage_growth = if rep >= 0.7 {
-            1.10
-        } else if rep >= 0.4 {
-            1.05
-        } else {
-            1.00
-        };
-        let annual_wages = board_ctx.total_annual_wages as f64;
-        let wage_budget = (annual_wages * wage_growth) as i32;
+        // Wage budget: target wage/revenue ratio. Healthy clubs run
+        // 55–65% wages on revenue; distressed clubs squeeze that down to
+        // 45–50%; reckless elite owners are allowed to push to 70%.
+        let target_ratio = wage_revenue_target(
+            board_ctx.ffp_status,
+            self.chairman.ambition,
+            rep,
+        );
+        let revenue_floor = projected_income.max(board_ctx.total_annual_wages as f64);
+        let wage_budget = (revenue_floor * target_ratio).max(board_ctx.total_annual_wages as f64
+            * 0.95)
+            as i32;
 
         // Squad size limits based on reputation
         let (min_squad, max_squad) = if rep >= 0.8 {
@@ -1111,4 +1132,120 @@ mod style_fit_tests {
             BoardTransferDecision::Conditional(BoardTransferConcern::ConflictsWithVision)
         ));
     }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    fn make_ctx(income: i64, outcome: i64, ffp: FfpStatus) -> BoardContext {
+        let mut c = BoardContext::new();
+        c.balance = 10_000_000;
+        c.total_annual_wages = 50_000_000;
+        c.reputation_score = 0.6;
+        c.country_economic_factor = 1.0;
+        c.country_price_level = 1.0;
+        c.trailing_annual_income = income;
+        c.trailing_annual_outcome = outcome;
+        c.ffp_status = ffp;
+        c
+    }
+
+    fn calc(ctx: &BoardContext) -> SeasonTargets {
+        let mut board = ClubBoard::new();
+        board.calculate_season_targets(ctx);
+        board.season_targets.expect("should produce targets")
+    }
+
+    #[test]
+    fn budget_shrinks_under_ffp_breach() {
+        let clean = make_ctx(120_000_000, 90_000_000, FfpStatus::Clean);
+        let breach = make_ctx(120_000_000, 90_000_000, FfpStatus::Breach);
+        let watchlist = make_ctx(120_000_000, 90_000_000, FfpStatus::Watchlist);
+
+        let t_clean = calc(&clean);
+        let t_breach = calc(&breach);
+        let t_watch = calc(&watchlist);
+
+        assert!(
+            t_breach.transfer_budget < t_clean.transfer_budget,
+            "breach must cut transfer budget vs clean: {} vs {}",
+            t_breach.transfer_budget,
+            t_clean.transfer_budget
+        );
+        assert!(
+            t_watch.transfer_budget < t_clean.transfer_budget,
+            "watchlist must cut transfer budget vs clean"
+        );
+        assert!(
+            t_breach.transfer_budget <= t_watch.transfer_budget,
+            "breach must cut harder than watchlist"
+        );
+    }
+
+    #[test]
+    fn budget_zero_when_outflows_exceed_inflows_and_no_seed_cash() {
+        let mut ctx = make_ctx(80_000_000, 95_000_000, FfpStatus::Clean);
+        ctx.balance = 0; // no seed cash
+        let t = calc(&ctx);
+        assert_eq!(t.transfer_budget, 0);
+    }
+
+    #[test]
+    fn cold_start_with_zero_history_falls_back_to_cash_seed() {
+        let mut ctx = make_ctx(0, 0, FfpStatus::Clean);
+        ctx.balance = 50_000_000;
+        ctx.reputation_score = 0.85; // 0.30 seed pct
+        let t = calc(&ctx);
+        assert!(t.transfer_budget > 0);
+    }
+
+    #[test]
+    fn wage_budget_distress_ratio_lower_than_clean() {
+        let clean = make_ctx(100_000_000, 60_000_000, FfpStatus::Clean);
+        let distress = make_ctx(100_000_000, 60_000_000, FfpStatus::Breach);
+        let t_clean = calc(&clean);
+        let t_distress = calc(&distress);
+        assert!(
+            t_distress.wage_budget <= t_clean.wage_budget,
+            "distressed wage budget should not exceed clean"
+        );
+    }
+}
+
+/// Long-term goal → ambition multiplier on the season's transfer budget.
+/// Title chasers get the biggest budget; survival sides keep their wallet
+/// closed. None defaults to a mid-table rating.
+fn ambition_budget_multiplier(goal: Option<LongTermGoal>) -> f64 {
+    match goal {
+        Some(LongTermGoal::WinLeague)
+        | Some(LongTermGoal::WinContinental)
+        | Some(LongTermGoal::WinDomesticCup)
+        | Some(LongTermGoal::PromotionToTopFlight) => 1.35,
+        Some(LongTermGoal::EstablishTopHalf) => 1.15,
+        Some(LongTermGoal::Survive) => 0.55,
+        None => 0.85,
+    }
+}
+
+/// Target wage-to-revenue ratio. Healthy clubs target 55–65%; distressed
+/// clubs squeeze it to 45–50%; reckless owners at the elite tier are
+/// allowed up to 70%.
+fn wage_revenue_target(
+    ffp: FfpStatus,
+    ambition: ChairmanAmbition,
+    reputation_score: f32,
+) -> f64 {
+    let base: f64 = match ffp {
+        FfpStatus::Clean => 0.62,
+        FfpStatus::Watchlist => 0.55,
+        FfpStatus::Breach => 0.48,
+    };
+    if matches!(ambition, ChairmanAmbition::Reckless) && reputation_score >= 0.75 {
+        return 0.70;
+    }
+    if matches!(ambition, ChairmanAmbition::Conservative) {
+        return (base - 0.05_f64).max(0.35);
+    }
+    base
 }

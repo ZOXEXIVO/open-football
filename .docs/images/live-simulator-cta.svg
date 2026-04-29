@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="150" viewBox="0 0 760 150" role="img" aria-labelledby="title desc">
+  <title id="title">Open Football Live Demo</title>
+  <desc id="desc">Modern teal call-to-action banner linking to the Open Football live demo.</desc>
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07393d"/>
+      <stop offset="0.55" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#042f33"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2dd4bf" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#67e8f9" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="softShadow" x="-8%" y="-25%" width="116%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#021617" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <rect x="18" y="18" width="724" height="114" rx="20" fill="url(#surface)"/>
+    <rect x="19" y="19" width="722" height="112" rx="19" fill="none" stroke="#99f6e4" stroke-opacity="0.36"/>
+  </g>
+
+  <path d="M48 98 C125 60 204 105 282 66 C363 25 446 72 524 44 C586 22 642 36 708 24"
+        fill="none" stroke="#ccfbf1" stroke-opacity="0.16" stroke-width="2"/>
+  <path d="M51 103 C127 67 205 108 281 72 C362 35 444 78 522 52 C585 32 641 43 706 34"
+        fill="none" stroke="#14b8a6" stroke-opacity="0.28" stroke-width="5" stroke-linecap="round"/>
+
+  <g opacity="0.18">
+    <circle cx="603" cy="44" r="4" fill="#ecfeff"/>
+    <circle cx="642" cy="40" r="4" fill="#ecfeff"/>
+    <circle cx="676" cy="32" r="4" fill="#ecfeff"/>
+    <rect x="596" y="82" width="9" height="24" rx="2" fill="#ecfeff"/>
+    <rect x="618" y="72" width="9" height="34" rx="2" fill="#ecfeff"/>
+    <rect x="640" y="62" width="9" height="44" rx="2" fill="#ecfeff"/>
+    <rect x="662" y="50" width="9" height="56" rx="2" fill="#ecfeff"/>
+    <rect x="684" y="36" width="9" height="70" rx="2" fill="#ecfeff"/>
+  </g>
+
+  <rect x="52" y="47" width="78" height="56" rx="15" fill="#042f33" fill-opacity="0.6" stroke="#5eead4" stroke-opacity="0.45"/>
+  <circle cx="91" cy="75" r="20" fill="none" stroke="#d9fff9" stroke-width="2"/>
+  <path d="M91 55 L91 95 M71 75 L111 75" stroke="#d9fff9" stroke-width="1.4" stroke-opacity="0.7"/>
+  <path d="M76 64 C84 69 98 69 106 64 M76 86 C84 81 98 81 106 86" fill="none" stroke="#d9fff9" stroke-width="1.4" stroke-opacity="0.7"/>
+
+  <text x="158" y="69"
+        font-family="Inter, Segoe UI, Arial, sans-serif"
+        font-size="23"
+        font-weight="700"
+        letter-spacing="3"
+        fill="#99f6e4">
+    OPEN FOOTBALL
+  </text>
+  <text x="158" y="104"
+        font-family="Inter, Segoe UI, Arial, sans-serif"
+        font-size="25"
+        font-weight="850"
+        letter-spacing="0"
+        fill="#ffffff">
+    TRY DEMO
+  </text>
+
+  <g transform="translate(637 55)">
+    <rect width="54" height="40" rx="20" fill="#ecfeff" fill-opacity="0.14" stroke="#ccfbf1" stroke-opacity="0.32"/>
+    <path d="M21 14 L33 20 L21 26 Z" fill="#ecfeff"/>
+  </g>
+
+  <rect x="18" y="18" width="724" height="3" fill="url(#glow)" opacity="0.9"/>
+</svg>

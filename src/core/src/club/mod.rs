@@ -30,6 +30,9 @@ pub use finance::{
     ClubFinances, ClubFinancialBalance, ClubFinancialBalanceHistory,
     ClubSponsorship, ClubSponsorshipContract,
     ClubFinanceContext, ClubFinanceResult,
+    SponsorRenewalContext, SponsorPerformance,
+    TransferObligation, DistressLevel,
+    classify_distress,
 };
 
 // Relations exports

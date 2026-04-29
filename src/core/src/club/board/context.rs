@@ -1,5 +1,15 @@
 use crate::MatchTacticType;
 
+/// FFP status from the board's perspective. Drives the budget multiplier
+/// so a club teetering on a breach can't sign its way deeper into one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FfpStatus {
+    #[default]
+    Clean,
+    Watchlist,
+    Breach,
+}
+
 #[derive(Clone)]
 pub struct BoardContext {
     pub balance: i64,
@@ -9,6 +19,13 @@ pub struct BoardContext {
     pub reserve_squad_size: usize,
     pub country_economic_factor: f32,
     pub country_price_level: f32,
+    /// Total income across the trailing twelve months — read from the
+    /// finance history. Drives revenue-based budget calculations.
+    pub trailing_annual_income: i64,
+    /// Total operating expenses across the trailing twelve months.
+    pub trailing_annual_outcome: i64,
+    /// FFP standing. Throttles transfer budget when breached/watchlisted.
+    pub ffp_status: FfpStatus,
 
     // Performance tracking
     /// Current league position (1-based, 0 = unknown)
@@ -41,6 +58,9 @@ impl BoardContext {
             reserve_squad_size: 0,
             country_economic_factor: 1.0,
             country_price_level: 1.0,
+            trailing_annual_income: 0,
+            trailing_annual_outcome: 0,
+            ffp_status: FfpStatus::Clean,
             league_position: 0,
             league_size: 0,
             recent_wins: 0,

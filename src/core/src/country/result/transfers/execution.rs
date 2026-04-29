@@ -7,6 +7,11 @@ use crate::{Country, Player, PlayerClubContract, TeamInfo, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
+/// Default contract length used to amortize a transfer fee on the buying
+/// club's P&L when a more specific length isn't available at execution
+/// time. Matches the IFRS football-finance norm.
+const DEFAULT_AMORTIZATION_YEARS: u8 = 4;
+
 /// Snapshot of a departing player's traits captured BEFORE they leave the
 /// selling club. Drives the per-teammate social events (close-friend lost,
 /// mentor departed) that fire on the leftover squad.
@@ -268,7 +273,10 @@ pub(crate) fn execute_transfer_within_country(
         let club_country_code = country.code.clone();
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-            buying_club.finance.spend_from_transfer_budget(fee);
+            // Cash leaves immediately, P&L spread across DEFAULT_AMORTIZATION_YEARS.
+            buying_club
+                .finance
+                .register_transfer_purchase(fee, DEFAULT_AMORTIZATION_YEARS);
             if !buying_club.teams.teams.is_empty() {
                 buying_club.teams.teams[0].players.add(player);
             }
@@ -415,7 +423,7 @@ fn execute_loan_within_country(
 
         // Only credit income when player was actually found and taken
         if player.is_some() {
-            selling_club.finance.add_transfer_income(loan_fee);
+            selling_club.finance.receive_loan_fee(loan_fee);
         }
     }
 
@@ -450,7 +458,7 @@ fn execute_loan_within_country(
                 if !selling_club.teams.teams.is_empty() {
                     selling_club.teams.teams[0].players.add(player);
                 }
-                selling_club.finance.add_transfer_income(-loan_fee);
+                selling_club.finance.refund_loan_fee(loan_fee);
             }
             return false;
         }
@@ -497,7 +505,7 @@ fn execute_loan_within_country(
         });
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-            buying_club.finance.spend_from_transfer_budget(loan_fee);
+            buying_club.finance.pay_loan_fee(loan_fee);
             if !buying_club.teams.teams.is_empty() {
                 buying_club.teams.teams[0].players.add(player);
             }
@@ -584,7 +592,11 @@ fn take_player_from_selling_country(
 
     // Only credit income when player was actually found and taken
     if player.is_some() {
-        selling_club.finance.add_transfer_income(fee);
+        if is_loan {
+            selling_club.finance.receive_loan_fee(fee);
+        } else {
+            selling_club.finance.add_transfer_income(fee);
+        }
     }
 
     // Resolve league name
@@ -704,6 +716,7 @@ fn execute_transfer_across_countries(
                 selling_club_id,
                 player,
                 fee,
+                false,
             );
             return false;
         }
@@ -738,7 +751,9 @@ fn execute_transfer_across_countries(
         .iter_mut()
         .find(|c| c.id == buying_club_id)
     {
-        buying_club.finance.spend_from_transfer_budget(fee);
+        buying_club
+            .finance
+            .register_transfer_purchase(fee, DEFAULT_AMORTIZATION_YEARS);
         if !buying_club.teams.teams.is_empty() {
             buying_club.teams.teams[0].players.add(player);
         }
@@ -904,6 +919,7 @@ fn execute_loan_across_countries(
                 selling_club_id,
                 player,
                 loan_fee,
+                true,
             );
             return false;
         }
@@ -953,7 +969,7 @@ fn execute_loan_across_countries(
         .iter_mut()
         .find(|c| c.id == buying_club_id)
     {
-        buying_club.finance.spend_from_transfer_budget(loan_fee);
+        buying_club.finance.pay_loan_fee(loan_fee);
         if !buying_club.teams.teams.is_empty() {
             buying_club.teams.teams[0].players.add(player);
         }
@@ -1102,6 +1118,7 @@ fn return_player_to_selling_country(
     selling_club_id: u32,
     player: Player,
     credited_fee: f64,
+    is_loan: bool,
 ) {
     if let Some(selling_country) = data.country_mut(selling_country_id) {
         if let Some(selling_club) = selling_country
@@ -1112,7 +1129,11 @@ fn return_player_to_selling_country(
             if !selling_club.teams.teams.is_empty() {
                 selling_club.teams.teams[0].players.add(player);
             }
-            selling_club.finance.add_transfer_income(-credited_fee);
+            if is_loan {
+                selling_club.finance.refund_loan_fee(credited_fee);
+            } else {
+                selling_club.finance.add_transfer_income(-credited_fee);
+            }
         }
     }
 }

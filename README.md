@@ -1,100 +1,144 @@
 # Open Football
 
-OpenFootball is an ambitious attempt to recreate the depth and realism of the Football Manager simulation engine—without
-any manual control.
+Open Football is a football world simulator built for people who want to watch the game
+evolve by itself.
 
-### **[LIVE DEMO](https://open-football.org)**
 
-![alt text](.docs/images/logo.jpg "OpenFootball Logo")
+![Open Football logo](.docs/images/logo.jpg "Open Football Logo")
 
-#### This is not a traditional game.
+It simulates clubs, leagues, matches, players, transfers, reputations, finances, and
+long-term football dynamics without manual match control.
 
-OpenFootball is a pure football simulation platform, where matches, careers, and outcomes unfold entirely on their own,
-driven by data and logic rather than player input.
+The goal is not to create another manager game, but to build a realistic simulation engine
+where football ecosystems can run, develop, and surprise you on their own.
 
-### What’s the goal?
+Open Football is distributed as a fully functional single 11 MB binary.
 
-To build a highly realistic football simulation capable of:
+Download one file, run it on any CPU, and you get the complete simulator with the built-in
+web application, the same experience shown in the live demo.
 
-📊 Predicting match results with data-driven accuracy
+<a href="https://open-football.org">
+  <img src=".docs/images/live-simulator-cta.svg" alt="Open Football Live Demo" width="520">
+</a>
 
-🔄 Evaluating and forecasting player transfers and their long-term success
+## What Makes It Different
 
-### How it works
+Open Football is focused on simulation first.
 
-OpenFootball is delivered as a single, self-contained binary application.
+- Matches are resolved by the engine, not by user input.
+- Clubs and leagues exist inside a connected football ecosystem.
+- Transfers, squad building, finances, and reputation all influence long-term outcomes.
+- The app is distributed as a single self-contained binary.
+- The web interface lets you explore leagues, clubs, players, match details, and simulation results.
 
-No setup, no dependencies—just run it and simulate entire football ecosystems, from individual matches to long-term
-dynamics across leagues and clubs.
+The project is designed to answer questions like:
 
----
+- Which club becomes dominant after several simulated seasons?
+- How does a transfer affect a player's career and a club's future?
+- Can data-driven match simulation produce believable league tables and results?
+- What happens when an entire football world keeps running without intervention?
 
-## Database & Future Roadmap
+## For Football Manager Scouts and Database Editors
 
-OpenFootball is powered by a structured internal database located at /src/database/data/*.*, built using clean and
-flexible JSON formats. This database already includes a realistic hierarchy of countries and clubs, along with closely
-modeled reputation levels and financial data to ensure an authentic football ecosystem.
+Are you a Football Manager scout, researcher, or database editor?
 
-At the moment, players are generated dynamically using a randomized system, as a fully detailed real-world player
-database (including individual skills and attributes) is not yet integrated.
+If you are tired of recreating and maintaining custom Football Manager databases for
+different game versions, Open Football gives you a more stable simulation base.
 
-What’s coming next:
+Its data model is designed to keep evolving while preserving a consistent structure, so
+long-term database work can stay useful instead of being rebuilt every cycle.
 
-⚽ Real Player Database Integration
+You no longer need to get used to a new interface with every version. The interface and
+database structure stay stable and familiar; only the simulation logic and football
+mechanics continue to change and improve.
 
-Incorporating real player data sourced from Transfermarkt, including detailed attributes and performance metrics.
+## Transfer and Loan Experiments
 
-🔄 Dynamic Shared Database
+Open Football also includes an editor-oriented workflow for football experiments.
 
-A centralized, continuously updated database that will automatically sync and download the latest data each time the app
-starts.
+You can transfer or loan any player to any club, run the simulation, and watch what
+happens next.
 
---- 
+Try a realistic rebuild, test a wonderkid in a stronger league, or create a strange
+scenario like Messi at Wolverhampton and see whether the squad, league, tactics,
+finances, and match engine can turn it into success.
 
-[Player page example (click on any player)](https://open-football.org/en/teams/napoli)
-![alt text](.docs/images/player.jpg "Player page")
+## Database
+
+Open Football uses a structured football database maintained in a separate repository:
+
+**https://github.com/ZOXEXIVO/open-football-database**
+
+If you want to improve club data, player details, league structures, country data, or add
+new leagues, please open a pull request in the database repository.
+
+Keeping the data separate makes it easier to update the football world without changing
+the simulator code.
+
+The simulator currently combines real structured data with generated player data where
+detailed real-world attributes are not available yet.
+
+The long-term goal is to keep expanding the database with better coverage, richer player
+information, and more leagues.
+
+## Features
+
+- Autonomous football simulation
+- Club, league, and country hierarchy
+- Match simulation with detailed match pages
+- Player profiles and generated player development
+- Club pages with squad and financial context
+- League tables and competition views
+- Transfer and squad evaluation logic
+- Web UI with desktop and mobile layouts
+- High CPU scalability for large simulation workloads
+
+## Screenshots
+
+[Player page example](https://open-football.org/en/teams/napoli)
+
+![Player page](.docs/images/player.jpg "Player page")
 
 [Club page example](https://open-football.org/en/teams/napoli)
 
-![alt text](.docs/images/club.jpg "Club page")
+![Club page](.docs/images/club.jpg "Club page")
 
-![alt text](.docs/images/player_personal.jpg "Player Personal page")
+![Player personal page](.docs/images/player_personal.jpg "Player personal page")
 
 [Mobile view example](https://open-football.org/en/leagues/italian-serie-a)
-
 
 <img src=".docs/images/mobile.png?v=1" alt="Mobile team page" width="300">
 
 [League page example](https://open-football.org/en/leagues/italian-serie-a)
 
-![alt text](.docs/images/league.jpg "League page")
+![League page](.docs/images/league.jpg "League page")
 
-[Match example (click on any goals)](https://open-football.org/en/leagues/italian-serie-a)
+[Match example](https://open-football.org/en/leagues/italian-serie-a)
 
-![alt text](.docs/images/match.jpg "Match page")
+![Match page](.docs/images/match.jpg "Match page")
 
-![alt text](.docs/images/match.avif "Match page")
+![Match event view](.docs/images/match.avif "Match event view")
 
---- 
+## Running Locally
 
-You can run it locally, just download release and run single binary that contains fully simulation
+Download a release build and run the single binary.
 
-Be carefully, it can consume all you CPU cores.
-Experiment with running it on 256 CPU cores
+It contains the simulator and the web application.
 
-(Don't worry, it can run on all consumers CPUs)
+Open Football can use all available CPU cores during heavy simulations.
 
-![alt text](.docs/images/cores.png "256 CPU Core utilization")
+It has been tested on machines with very high core counts, including 256 CPU cores, but it
+also runs on normal consumer CPUs.
 
-#### Project structure
+![256 CPU core utilization](.docs/images/cores.png "256 CPU core utilization")
 
-/src/core - Core app logic (including match)
-/src/database - Simulation data source logic
-/src/web - HTTP server for running API with self contained Askama-templates
+## Project Structure
 
-/.dev/match - Dev utils for must result fast checking and processing duration
+- `src/core` - core simulation logic, including match simulation
+- `src/database` - data loading and generation logic
+- `src/web` - HTTP server, API routes, and Askama templates
+- `.dev/match` - development utilities for fast match-result checks and duration profiling
 
-
-### License
+## License
 
 Apache License 2.0

@@ -1,3 +1,4 @@
+use crate::club::{classify_distress, DistressLevel};
 use crate::context::GlobalContext;
 use crate::{ContractBonusType, ReputationLevel};
 use super::Club;
@@ -9,6 +10,86 @@ fn get_price_level(ctx: &GlobalContext<'_>) -> f64 {
     ctx.country.as_ref()
         .map(|c| c.price_level as f64)
         .unwrap_or(1.0)
+}
+
+/// Tier-1 monthly TV base by reputation tier — sized to look right at a
+/// market multiplier of 1.0 (a top-five league country) before the league
+/// tier and league-position fan-out runs on top of it.
+fn tv_revenue_base(rep: ReputationLevel) -> i64 {
+    match rep {
+        ReputationLevel::Elite => 8_000_000,
+        ReputationLevel::Continental => 3_200_000,
+        ReputationLevel::National => 900_000,
+        ReputationLevel::Regional => 180_000,
+        ReputationLevel::Local => 35_000,
+        ReputationLevel::Amateur => 5_000,
+    }
+}
+
+fn ticket_base_price(rep: ReputationLevel) -> f64 {
+    match rep {
+        ReputationLevel::Elite => 55.0,
+        ReputationLevel::Continental => 40.0,
+        ReputationLevel::National => 28.0,
+        ReputationLevel::Regional => 15.0,
+        ReputationLevel::Local => 8.0,
+        ReputationLevel::Amateur => 4.0,
+    }
+}
+
+/// Stadium-capacity ceiling derived from reputation tier. Used to cap
+/// dynamic attendance so an in-form National-tier club isn't projected to
+/// pull Premier League gates. Replace with per-club capacity once the
+/// `ClubFacilities` ground-capacity field is plumbed in.
+fn stadium_capacity_for(rep: ReputationLevel) -> u32 {
+    match rep {
+        ReputationLevel::Elite => 55_000,
+        ReputationLevel::Continental => 38_000,
+        ReputationLevel::National => 22_000,
+        ReputationLevel::Regional => 9_000,
+        ReputationLevel::Local => 3_500,
+        ReputationLevel::Amateur => 1_000,
+    }
+}
+
+fn league_tier_of(ctx: &GlobalContext<'_>, _league_id: Option<u32>) -> u8 {
+    ctx.club
+        .as_ref()
+        .map(|c| c.main_league_tier.max(1))
+        .unwrap_or(1)
+}
+
+fn league_tier_multiplier(tier: u8) -> f64 {
+    match tier {
+        1 => 1.00,
+        2 => 0.28,
+        3 => 0.10,
+        _ => 0.04,
+    }
+}
+
+/// Position-based TV bonus. Champion: 1.20; top-4: 1.10; top half: 1.00;
+/// bottom half: 0.90; relegation zone (bottom three or bottom 15%): 0.80.
+/// Mid-table is the neutral baseline.
+fn placement_multiplier(position: u16, total_teams: u16) -> f64 {
+    if position == 0 || total_teams == 0 {
+        return 1.0;
+    }
+    if position == 1 {
+        return 1.20;
+    }
+    let n = total_teams as f64;
+    let p = position as f64;
+    let rel = p / n; // 0 (top) → 1 (bottom)
+    if p <= 4.0 {
+        1.10
+    } else if rel <= 0.5 {
+        1.00
+    } else if p > n - 3.5 || rel >= 0.85 {
+        0.80
+    } else {
+        0.90
+    }
 }
 
 impl Club {
@@ -68,48 +149,59 @@ impl Club {
         // 4. TV, matchday, merchandising, facility costs — from main team reputation
         let main_team = self.teams.main();
         if let Some(team) = main_team {
-            // TV revenue (reputation-based, scaled by country TV multiplier)
-            let tv_base: i64 = match team.reputation.level() {
-                ReputationLevel::Elite => 2_000_000,
-                ReputationLevel::Continental => 800_000,
-                ReputationLevel::National => 300_000,
-                ReputationLevel::Regional => 70_000,
-                ReputationLevel::Local => 20_000,
-                ReputationLevel::Amateur => 5_000,
-            };
-            let tv_revenue = (tv_base as f64 * tv_multiplier as f64) as i64;
-            self.finance.balance.push_income_tv(tv_revenue);
-
-            // Matchday revenue (dynamic attendance × ticket price scaled by country economy)
-            let price_level = get_price_level(&ctx);
-            let base_attendance = self.facilities.average_attendance as f64;
-
-            // Form + table position modifier. Reads recent stats from the
-            // main team: wins over the last few games and current position.
+            let rep = team.reputation.level();
+            let league_id = team.league_id;
             let (recent_wins_ratio, league_pos, total_teams) =
                 self.compute_team_form_and_position(&ctx);
+
+            // TV: reputation base × country market × league tier × placement.
+            // The reputation base is what a tier-1 club earns in a "world-
+            // average" market with mid-table placement; tier and placement
+            // multipliers fan that out to give relegation strugglers and
+            // tier-2 clubs realistic-looking numbers.
+            let tv_base = tv_revenue_base(rep);
+            let league_tier = league_tier_of(&ctx, league_id);
+            let tier_mult = league_tier_multiplier(league_tier);
+            let placement_mult = placement_multiplier(league_pos, total_teams);
+            let tv_revenue =
+                (tv_base as f64 * tv_multiplier as f64 * tier_mult * placement_mult) as i64;
+            self.finance.balance.push_income_tv(tv_revenue);
+            // Decompose so the UI can show base vs placement separately.
+            // The placement bonus is the slice that wouldn't have been paid
+            // at neutral mid-table — clamped to non-negative to keep the
+            // base/placement story coherent for relegation-band clubs.
+            let placement_premium = ((placement_mult - 1.0).max(0.0)
+                * tv_base as f64
+                * tv_multiplier as f64
+                * tier_mult) as i64;
+            if placement_premium > 0 {
+                self.finance
+                    .balance
+                    .push_income_tv_placement(placement_premium);
+                // Avoid double-counting against `income_tv` total.
+                self.finance.balance.income_tv -= placement_premium;
+            }
+
+            // Matchday: actual home matches this month × per-match gate.
+            let price_level = get_price_level(&ctx);
+            let base_attendance = self.facilities.average_attendance as f64;
             let form_mult = self.facilities.dynamic_attendance_multiplier(
                 recent_wins_ratio,
                 league_pos,
                 total_teams,
             ) as f64;
+            let stadium_capacity = stadium_capacity_for(rep) as f64;
+            let raw_attendance = base_attendance * attendance_factor as f64 * form_mult;
+            let attendance = raw_attendance.min(stadium_capacity).max(0.0) as i64;
+            let ticket_price = (ticket_base_price(rep) * price_level) as i64;
+            let home_matches = self.finance.take_home_match_count() as i64;
+            let matchday_revenue = attendance * ticket_price * home_matches;
+            if matchday_revenue > 0 {
+                self.finance.balance.push_income_matchday(matchday_revenue);
+            }
 
-            let dynamic_attendance =
-                (base_attendance * attendance_factor as f64 * form_mult) as i64;
-            let ticket_base: f64 = match team.reputation.level() {
-                ReputationLevel::Elite => 55.0,
-                ReputationLevel::Continental => 40.0,
-                ReputationLevel::National => 28.0,
-                ReputationLevel::Regional => 15.0,
-                ReputationLevel::Local => 8.0,
-                ReputationLevel::Amateur => 4.0,
-            };
-            let ticket_price = (ticket_base * price_level) as i64;
-            let matchday_revenue = dynamic_attendance * ticket_price * 2;
-            self.finance.balance.push_income_matchday(matchday_revenue);
-
-            // Merchandising (reputation-based, scaled by sponsorship market AND price level)
-            let merch_base: f64 = match team.reputation.level() {
+            // Merchandising scales with rep, country market, and price level.
+            let merch_base: f64 = match rep {
                 ReputationLevel::Elite => 500_000.0,
                 ReputationLevel::Continental => 150_000.0,
                 ReputationLevel::National => 50_000.0,
@@ -121,7 +213,13 @@ impl Club {
             self.finance.balance.push_income_merchandising(merch_revenue);
         }
 
-        // 5. Facility maintenance costs
+        // 5. Amortization: each outstanding transfer purchase contributes
+        // its monthly slice as a P&L expense. Cash already left the
+        // balance at the upfront purchase, so this only hits `outcome` and
+        // the categorised `expense_amortization` bucket.
+        self.finance.tick_amortization();
+
+        // 6. Facility maintenance costs
         let facility_cost: i64 = (
             self.facilities.training.to_rating() as i64 +
             self.facilities.youth.to_rating() as i64 +
@@ -129,13 +227,9 @@ impl Club {
         ) * 5_000;
         self.finance.balance.push_expense_facilities(facility_cost);
 
-        // 6. Operating overhead: administration, taxes, community, infrastructure
-        // Scales with both balance and revenue to prevent infinite wealth accumulation.
-        // Wealthy clubs have higher overhead (better facilities, more staff, legal, etc.)
+        // 7. Operating overhead: administration, taxes, community, infrastructure
         let balance = self.finance.balance.balance;
         if balance > 1_000_000 {
-            // Progressive tax-like overhead: 0.3% of balance per month (~3.6% annually)
-            // Plus a flat overhead based on club tier
             let balance_overhead = (balance as f64 * 0.003) as i64;
             let tier_overhead: i64 = if let Some(team) = main_team {
                 match team.reputation.level() {
@@ -151,6 +245,27 @@ impl Club {
             };
             self.finance.balance.push_expense_facilities(balance_overhead + tier_overhead);
         }
+
+        // 8. Debt interest: only when the club is genuinely in the red.
+        // Scales with distress severity — a club drowning in long-term
+        // debt pays more than one with a short cash-flow dip.
+        let post_balance = self.finance.balance.balance;
+        if post_balance < 0 {
+            let avg_wages = self.finance.trailing_avg_monthly_wages(date);
+            let level = classify_distress(post_balance, avg_wages);
+            let rate = match level {
+                DistressLevel::None => 0.006,
+                DistressLevel::Distress => 0.006,
+                DistressLevel::Severe => 0.010,
+                DistressLevel::Insolvency => 0.015,
+            };
+            let interest = ((-post_balance) as f64 * rate) as i64;
+            if interest > 0 {
+                self.finance.balance.push_expense_debt_interest(interest);
+            }
+        }
+
+        let _ = club_name;
     }
 
     /// Returns (recent_wins_ratio, league_position, total_teams) for the
@@ -330,4 +445,49 @@ fn settle_lump_sum_bonuses(club: &mut Club, date: chrono::NaiveDate) -> i64 {
         }
     }
     total
+}
+
+#[cfg(test)]
+mod helpers_tests {
+    use super::{
+        league_tier_multiplier, placement_multiplier, stadium_capacity_for, tv_revenue_base,
+    };
+    use crate::ReputationLevel;
+
+    #[test]
+    fn tv_revenue_base_scales_with_reputation() {
+        assert!(tv_revenue_base(ReputationLevel::Elite) > tv_revenue_base(ReputationLevel::Continental));
+        assert!(
+            tv_revenue_base(ReputationLevel::Continental)
+                > tv_revenue_base(ReputationLevel::National)
+        );
+        assert!(tv_revenue_base(ReputationLevel::Amateur) > 0);
+    }
+
+    #[test]
+    fn league_tier_mult_decays_below_top_flight() {
+        assert_eq!(league_tier_multiplier(1), 1.00);
+        assert!((league_tier_multiplier(2) - 0.28).abs() < 1e-6);
+        assert!((league_tier_multiplier(3) - 0.10).abs() < 1e-6);
+        assert!((league_tier_multiplier(4) - 0.04).abs() < 1e-6);
+    }
+
+    #[test]
+    fn placement_multiplier_handles_table_extremes() {
+        assert_eq!(placement_multiplier(0, 0), 1.00); // unknown
+        assert_eq!(placement_multiplier(1, 20), 1.20); // champion
+        assert_eq!(placement_multiplier(3, 20), 1.10); // top-4
+        assert_eq!(placement_multiplier(10, 20), 1.00); // top half
+        assert_eq!(placement_multiplier(13, 20), 0.90); // bottom half
+        assert_eq!(placement_multiplier(19, 20), 0.80); // relegation zone
+    }
+
+    #[test]
+    fn stadium_capacity_grows_with_reputation() {
+        assert!(
+            stadium_capacity_for(ReputationLevel::Elite)
+                > stadium_capacity_for(ReputationLevel::Regional)
+        );
+        assert!(stadium_capacity_for(ReputationLevel::Amateur) >= 100);
+    }
 }

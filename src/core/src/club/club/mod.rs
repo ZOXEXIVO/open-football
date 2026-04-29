@@ -6,7 +6,7 @@ mod utilization;
 use graduation::graduation_salary;
 
 use crate::club::academy::ClubAcademy;
-use crate::club::board::{BoardContext, ClubBoard};
+use crate::club::board::{BoardContext, ClubBoard, FfpStatus};
 use crate::club::facilities::ClubFacilities;
 use crate::club::status::ClubStatus;
 use crate::club::{ClubFinances, ClubResult};
@@ -203,6 +203,15 @@ impl Club {
         board_ctx.league_position = league_pos;
         board_ctx.league_size = league_sz;
         board_ctx.total_matches = total_matches;
+        board_ctx.trailing_annual_income = self.finance.trailing_annual_income(date);
+        board_ctx.trailing_annual_outcome = self.finance.trailing_annual_outcome(date);
+        board_ctx.ffp_status = if self.finance.is_ffp_breach(date) {
+            FfpStatus::Breach
+        } else if self.finance.is_ffp_watchlist(date) {
+            FfpStatus::Watchlist
+        } else {
+            FfpStatus::Clean
+        };
 
         // Build club context with facility data for training/academy + best
         // staff attribute scores so per-player systems can consult them
@@ -350,6 +359,9 @@ impl Club {
             reserve_squad_size,
             country_economic_factor,
             country_price_level,
+            trailing_annual_income: 0,
+            trailing_annual_outcome: 0,
+            ffp_status: FfpStatus::Clean,
             league_position: 0,
             league_size: 0,
             recent_wins,

@@ -122,19 +122,19 @@ impl Country {
     }
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {
-        // Build team_id → (position, league_size, total_matches, matches_played)
-        let mut team_league_info: std::collections::HashMap<u32, (u8, u8, u8, u8)> = std::collections::HashMap::new();
+        // Build team_id → (position, league_size, total_matches, matches_played, tier)
+        let mut team_league_info: std::collections::HashMap<u32, (u8, u8, u8, u8, u8)> = std::collections::HashMap::new();
         for league in &self.leagues.leagues {
             if league.friendly {
                 continue;
             }
             let league_size = league.table.rows.len() as u8;
-            // Total matches in a full season: (n-1) * 2 for double round-robin
             let total_matches = if league_size > 1 { (league_size - 1) * 2 } else { 0 };
+            let tier = league.settings.tier.max(1);
             for (pos, row) in league.table.rows.iter().enumerate() {
                 team_league_info.insert(
                     row.team_id,
-                    ((pos + 1) as u8, league_size, total_matches, row.played),
+                    ((pos + 1) as u8, league_size, total_matches, row.played, tier),
                 );
             }
         }
@@ -145,16 +145,18 @@ impl Country {
                 let league_info = club.teams.main()
                     .and_then(|t| team_league_info.get(&t.id))
                     .copied()
-                    .unwrap_or((0, 0, 0, 0));
+                    .unwrap_or((0, 0, 0, 0, 1));
 
                 let name = club.name.clone();
                 let club_ctx = ctx.with_club(club.id, &name);
                 let club_ctx = {
                     let mut c = club_ctx;
                     if let Some(ref mut cc) = c.club {
-                        *cc = cc.clone().with_league_position(
-                            league_info.0, league_info.1, league_info.2, league_info.3,
-                        );
+                        *cc = cc.clone()
+                            .with_league_position(
+                                league_info.0, league_info.1, league_info.2, league_info.3,
+                            )
+                            .with_main_league_tier(league_info.4);
                     }
                     c
                 };

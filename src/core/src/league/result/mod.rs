@@ -68,6 +68,20 @@ impl LeagueResult {
         }
 
         let home_team_id = result.score.home_team.team_id;
+        // Credit a home match against the club's matchday counter so the
+        // monthly finance pass can scale the gate by actual fixtures
+        // rather than a hardcoded `* 2`. Friendlies don't draw paying
+        // crowds for the model, so they're skipped.
+        if !result.friendly {
+            let home_club_id = data
+                .team(home_team_id)
+                .map(|t| t.club_id);
+            if let Some(club_id) = home_club_id {
+                if let Some(home_club) = data.club_mut(club_id) {
+                    home_club.finance.record_home_match();
+                }
+            }
+        }
         let home_team = data.team_mut(home_team_id)
             .expect(&format!("home team not found: {}", home_team_id));
         home_team.match_history.add(MatchHistoryItem::new(

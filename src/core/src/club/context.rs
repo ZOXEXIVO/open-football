@@ -14,6 +14,9 @@ pub struct ClubContext<'c> {
     pub total_league_matches: u8,
     /// League matches the main team has actually played this season.
     pub league_matches_played: u8,
+    /// Tier of the main team's primary league (1 = top flight, 2 = second
+    /// division, …). Drives the TV revenue ladder.
+    pub main_league_tier: u8,
     /// Best physiotherapy score on the club staff (0.0-1.0).
     /// Drives injury recovery speedup and preventive rest.
     pub medical_quality: f32,
@@ -46,6 +49,7 @@ impl<'c> ClubContext<'c> {
             league_size: 0,
             total_league_matches: 0,
             league_matches_played: 0,
+            main_league_tier: 1,
             medical_quality: 0.35,
             sports_science_quality: 0.35,
             youth_coaching_quality: 0.35,
@@ -75,6 +79,11 @@ impl<'c> ClubContext<'c> {
         self.league_size = league_size;
         self.total_league_matches = total_matches;
         self.league_matches_played = matches_played;
+        self
+    }
+
+    pub fn with_main_league_tier(mut self, tier: u8) -> Self {
+        self.main_league_tier = tier;
         self
     }
 

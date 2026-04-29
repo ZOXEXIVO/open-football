@@ -389,7 +389,7 @@ impl ReputationFactors {
 }
 
 /// Reputation level categories
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReputationLevel {
     Amateur,
     Local,
