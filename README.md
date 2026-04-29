@@ -5,16 +5,18 @@
 Football world simulator built for people who want to watch the game
 evolve by itself.
 
-
-
 It simulates clubs, leagues, matches, players, transfers, reputations, finances, and
 long-term football dynamics without manual match control.
 
 The goal is not to create another manager game, but to build a realistic simulation engine
 where football ecosystems can run, develop, and surprise you on their own.
 
-Download one file, run it on any CPU, and you get the complete simulator with the built-in
-web application, the same experience shown in the live demo.
+Tired of Football Manager changing its interface, editor workflow, and database format
+every year? 
+
+Open Football is built around a stable structure: the interface and data model
+stay familiar while the simulation logic, mechanics, and football intelligence keep
+improving.
 
 <a href="https://open-football.org">
   <img src=".docs/images/live-simulator-cta.svg" alt="Open Football Live Demo" width="520">
