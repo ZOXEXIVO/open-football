@@ -1,10 +1,12 @@
+<img src=".docs/images/banner.png" alt="Open Football Banner" width="900">
+
 # Open Football
 
-Open Football is a football world simulator built for people who want to watch the game
+Football world simulator built for people who want to watch the game
 evolve by itself.
 
 
-![Open Football logo](.docs/images/logo.jpg "Open Football Logo")
+
 
 It simulates clubs, leagues, matches, players, transfers, reputations, finances, and
 long-term football dynamics without manual match control.
