@@ -84,9 +84,15 @@ pub async fn move_on_free_action(
 
     if let Some(ref mut arc_data) = *guard {
         let sim = Arc::make_mut(arc_data);
+        let date = sim.date.date();
 
         let (ci, coi, cli, ti) = match sim.find_player_position(params.player_id) {
             Some(pos) => pos,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let from_info = match get_team_info(sim, ci, coi, cli) {
+            Some(t) => t.info,
             None => return StatusCode::NOT_FOUND,
         };
 
@@ -96,6 +102,12 @@ pub async fn move_on_free_action(
             Some(p) => p,
             None => return StatusCode::NOT_FOUND,
         };
+
+        // Snapshot in-flight competitive stats onto the source club's
+        // career row before the player leaves it; otherwise those games
+        // would later be misattributed to the destination — or, in the
+        // global-pool path, to a synthetic "Free Agent" row.
+        player.on_release(&from_info, date);
 
         player.contract = None;
         player.contract_loan = None;

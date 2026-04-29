@@ -1,7 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 use log::info;
 
-use crate::continent::national_competitions::{
+use crate::continent::national::{
     CompetitionPhase, NationalCompetitionConfig,
     NationalCompetitionPhase, NationalTeamCompetition,
 };

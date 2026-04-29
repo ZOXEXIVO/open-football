@@ -788,5 +788,16 @@
   "search_countries": "國家",
   "search_clubs": "俱樂部",
   "search_players": "球員",
-  "search_no_results": "無結果"
+  "search_no_results": "無結果",
+  "callup_reason": "理由",
+  "callup_reason_key_player": "核心球員",
+  "callup_reason_current_form": "近期狀態",
+  "callup_reason_regular_starter": "常規主力",
+  "callup_reason_strong_league": "強勁聯賽",
+  "callup_reason_tactical_fit": "戰術契合",
+  "callup_reason_position_need": "位置需求",
+  "callup_reason_international_experience": "經驗",
+  "callup_reason_leadership": "領導力",
+  "callup_reason_youth_prospect": "新星",
+  "callup_reason_synthetic_depth": "陣容厚度"
 }

@@ -120,17 +120,15 @@ pub async fn search_api_action(
         }));
     }
 
-    let mut countries: Vec<SearchCountryDto> = Vec::new();
-    let mut clubs: Vec<SearchClubDto> = Vec::new();
-    let mut players: Vec<SearchPlayerDto> = Vec::new();
+    let mut countries: Vec<SearchCountryDto> = Vec::with_capacity(MAX_RESULTS_PER_KIND);
+    let mut clubs: Vec<(u16, SearchClubDto)> = Vec::with_capacity(MAX_RESULTS_PER_KIND);
+    let mut players: Vec<(u8, SearchPlayerDto)> = Vec::with_capacity(MAX_RESULTS_PER_KIND);
 
     let now = simulator_data.date.date();
 
-    'outer: for continent in &simulator_data.continents {
+    for continent in &simulator_data.continents {
         for country in &continent.countries {
-            if countries.len() < MAX_RESULTS_PER_KIND
-                && country.name.to_lowercase().contains(&needle)
-            {
+            if country.name.to_lowercase().contains(&needle) {
                 countries.push(SearchCountryDto {
                     name: country.name.clone(),
                     slug: country.slug.clone(),
@@ -139,32 +137,20 @@ pub async fn search_api_action(
             }
 
             for club in &country.clubs {
-                if clubs.len() < MAX_RESULTS_PER_KIND
-                    && club.name.to_lowercase().contains(&needle)
-                {
+                if club.name.to_lowercase().contains(&needle) {
                     if let Some(main) = club.teams.main() {
-                        clubs.push(SearchClubDto {
-                            name: club.name.clone(),
-                            team_slug: main.slug.clone(),
-                        });
+                        clubs.push((
+                            main.reputation.world,
+                            SearchClubDto {
+                                name: club.name.clone(),
+                                team_slug: main.slug.clone(),
+                            },
+                        ));
                     }
-                }
-
-                if players.len() >= MAX_RESULTS_PER_KIND
-                    && clubs.len() >= MAX_RESULTS_PER_KIND
-                    && countries.len() >= MAX_RESULTS_PER_KIND
-                {
-                    break 'outer;
                 }
 
                 for team in &club.teams.teams {
-                    if players.len() >= MAX_RESULTS_PER_KIND {
-                        break;
-                    }
                     for player in team.players.players() {
-                        if players.len() >= MAX_RESULTS_PER_KIND {
-                            break;
-                        }
                         let first = player.full_name.display_first_name();
                         let last = player.full_name.display_last_name();
                         let full = format!("{} {}", first, last);
@@ -179,16 +165,19 @@ pub async fn search_api_action(
                                         .map(|i| i.code.clone())
                                 })
                                 .unwrap_or_default();
-                            players.push(SearchPlayerDto {
-                                id: player.id,
-                                slug: player.slug(),
-                                name: full.trim().to_string(),
-                                country_code,
-                                team_name: team.name.clone(),
-                                age: core::utils::DateUtils::age(player.birth_date, now),
-                                generated: player.is_generated(),
-                                is_free_agent: false,
-                            });
+                            players.push((
+                                player.player_attributes.current_ability,
+                                SearchPlayerDto {
+                                    id: player.id,
+                                    slug: player.slug(),
+                                    name: full.trim().to_string(),
+                                    country_code,
+                                    team_name: team.name.clone(),
+                                    age: core::utils::DateUtils::age(player.birth_date, now),
+                                    generated: player.is_generated(),
+                                    is_free_agent: false,
+                                },
+                            ));
                         }
                     }
                 }
@@ -197,9 +186,6 @@ pub async fn search_api_action(
     }
 
     for player in &simulator_data.free_agents {
-        if players.len() >= MAX_RESULTS_PER_KIND {
-            break;
-        }
         let first = player.full_name.display_first_name();
         let last = player.full_name.display_last_name();
         let full = format!("{} {}", first, last);
@@ -214,18 +200,37 @@ pub async fn search_api_action(
                         .map(|i| i.code.clone())
                 })
                 .unwrap_or_default();
-            players.push(SearchPlayerDto {
-                id: player.id,
-                slug: player.slug(),
-                name: full.trim().to_string(),
-                country_code,
-                team_name: String::new(),
-                age: core::utils::DateUtils::age(player.birth_date, now),
-                generated: player.is_generated(),
-                is_free_agent: true,
-            });
+            players.push((
+                player.player_attributes.current_ability,
+                SearchPlayerDto {
+                    id: player.id,
+                    slug: player.slug(),
+                    name: full.trim().to_string(),
+                    country_code,
+                    team_name: String::new(),
+                    age: core::utils::DateUtils::age(player.birth_date, now),
+                    generated: player.is_generated(),
+                    is_free_agent: true,
+                },
+            ));
         }
     }
+
+    countries.truncate(MAX_RESULTS_PER_KIND);
+
+    clubs.sort_by(|a, b| b.0.cmp(&a.0));
+    players.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let clubs = clubs
+        .into_iter()
+        .take(MAX_RESULTS_PER_KIND)
+        .map(|(_, dto)| dto)
+        .collect();
+    let players = players
+        .into_iter()
+        .take(MAX_RESULTS_PER_KIND)
+        .map(|(_, dto)| dto)
+        .collect();
 
     Ok(Json(SearchResultsDto {
         countries,

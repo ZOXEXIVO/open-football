@@ -5,7 +5,7 @@ mod club;
 mod continent;
 mod data_tree;
 mod names;
-pub mod national_competition;
+pub mod national;
 pub mod players;
 
 pub use country::*;
@@ -14,5 +14,5 @@ pub use club::*;
 pub use continent::*;
 pub use data_tree::*;
 pub use names::*;
-pub use national_competition::*;
+pub use national::*;
 pub use players::{OdbContract, OdbHistoryItem, OdbLoan, OdbPlayer, OdbPosition, OdbReputation, PlayersOdb};

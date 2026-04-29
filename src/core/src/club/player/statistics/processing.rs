@@ -178,6 +178,23 @@ impl Player {
         self.is_force_match_selection = false;
     }
 
+    /// React to being released into the free-agent pool. Snapshots the
+    /// in-flight `player.statistics` onto the source club's career entry
+    /// and marks it as departed, so the games the player accumulated
+    /// before the release stay attributed to the club where they were
+    /// played — not to a synthetic "Free Agent" row at the next signing.
+    /// Caller is responsible for clearing contract / statuses / happiness;
+    /// this method only owns the history side, mirroring the existing
+    /// `on_manual_transfer` split.
+    pub fn on_release(&mut self, from: &TeamInfo, date: NaiveDate) {
+        let stats = std::mem::take(&mut self.statistics);
+        self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
+        self.statistics_history.record_release(stats, from, date);
+        self.last_transfer_date = Some(date);
+        self.is_force_match_selection = false;
+    }
+
     /// Record a manual signing of a free agent from the web UI.
     /// No source club exists, so this records only the destination — the
     /// generic `record_departure_transfer` path duplicates the row by

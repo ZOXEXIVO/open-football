@@ -6,7 +6,7 @@ use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::continent::national_competitions::CompetitionPhase;
+use core::continent::national::CompetitionPhase;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -135,11 +135,11 @@ pub async fn national_competitions_get_action(
             // Build knockout brackets
             let knockout: Vec<KnockoutDto> = comp.knockout.iter().map(|bracket| {
                 let round_name = match &bracket.round {
-                    core::continent::national_competitions::KnockoutRound::RoundOf16 => "Round of 16",
-                    core::continent::national_competitions::KnockoutRound::QuarterFinals => "Quarter-Finals",
-                    core::continent::national_competitions::KnockoutRound::SemiFinals => "Semi-Finals",
-                    core::continent::national_competitions::KnockoutRound::ThirdPlace => "Third Place",
-                    core::continent::national_competitions::KnockoutRound::Final => "Final",
+                    core::continent::national::KnockoutRound::RoundOf16 => "Round of 16",
+                    core::continent::national::KnockoutRound::QuarterFinals => "Quarter-Finals",
+                    core::continent::national::KnockoutRound::SemiFinals => "Semi-Finals",
+                    core::continent::national::KnockoutRound::ThirdPlace => "Third Place",
+                    core::continent::national::KnockoutRound::Final => "Final",
                 };
 
                 let fixtures = bracket.fixtures.iter().map(|fix| {

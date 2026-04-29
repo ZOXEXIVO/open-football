@@ -14,7 +14,6 @@ use core::{
 use crate::DatabaseEntity;
 use crate::generators::PlayerGenerator;
 use crate::generators::convert::convert_national_competition;
-use crate::generators::player::seed_player_id_sequence;
 use log::info;
 use rayon::prelude::*;
 
@@ -22,16 +21,16 @@ pub struct DatabaseGenerator;
 
 impl DatabaseGenerator {
     pub fn generate(data: &DatabaseEntity) -> SimulatorData {
-        // Seed the procedural id sequence past every ODB-supplied player id
-        // so generated players for non-ODB clubs cannot collide with the
-        // hand-curated records in `players.odb`. Both generators share the
-        // same namespace (the simulator indexes all players by global id),
-        // so both must be seeded — otherwise the core generator's counter
-        // still starts at 100_000 and collides with ODB ids above that,
-        // producing "click Giovanni Pavone, see Ibrahim Al-Hafith" bugs
-        // when the global index resolves the shared id to the ODB record.
+        // Seed the procedural id sequence past every ODB-supplied player
+        // id so generated players for non-ODB clubs cannot collide with
+        // the hand-curated records in `players.odb`. Both the database
+        // loader (this pass) and the core generator (runtime academy
+        // intake) draw from the same single counter via `next_player_id`
+        // — one source of truth, one stream of monotonic ids. After
+        // generation finishes we re-seed from the actual world (see end
+        // of this function) as belt-and-suspenders against any id source
+        // we don't know about today.
         if let Some(max_odb_id) = data.players_odb.as_ref().and_then(|o| o.max_player_id()) {
-            seed_player_id_sequence(max_odb_id);
             seed_core_player_id_sequence(max_odb_id);
         }
 
@@ -135,6 +134,14 @@ impl DatabaseGenerator {
                 info!("free agents hydrated from compiled DB: {count}");
             }
         }
+
+        // Final seed: walk the fully-populated world and bump the counter
+        // past the highest id we actually placed. ODB ids, procedurally
+        // generated club fillers, hydrated free agents, retired-pool
+        // veterans — anything that ended up in the simulator. Runtime
+        // academy intake then cannot mint a colliding id no matter what
+        // mix of sources fed the world.
+        simulator_data.seed_player_id_sequence();
 
         simulator_data
     }

@@ -22,6 +22,7 @@
                     <th class="sq-cond">{{ i18n.t("condition") }}</th>
                     <th class="sq-games">{{ i18n.t("int_apps") }}</th>
                     <th class="sq-games">{{ i18n.t("int_goals") }}</th>
+                    <th class="sq-reason">{{ i18n.t("callup_reason") }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -53,6 +54,7 @@
                     </td>
                     <td class="sq-games">{{ player.international_apps }}</td>
                     <td class="sq-games">{{ player.international_goals }}</td>
+                    <td class="sq-reason">{{ i18n.t(player.reason_key) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

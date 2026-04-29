@@ -7,7 +7,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::utils::DateUtils;
-use core::{Country, PlayerPositionType};
+use core::{CallUpReason, Country, PlayerPositionType, SquadPick};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -51,6 +51,8 @@ pub struct NationalSquadPlayerDto {
     pub conditions: u8,
     pub international_apps: u16,
     pub international_goals: u16,
+    /// i18n key of the player's primary call-up reason
+    pub reason_key: &'static str,
 }
 
 pub async fn country_squad_action(
@@ -87,51 +89,76 @@ pub async fn country_squad_action(
 
     let now = simulator_data.date.date();
 
-    // Build national squad player DTOs
+    // Build national squad player DTOs. `squad_picks` returns real
+    // call-ups + synthetic depth players in one pass — both kinds are
+    // shown in the squad table so weak nations don't appear empty.
     let mut players: Vec<NationalSquadPlayerDto> = country
         .national_team
-        .squad
-        .iter()
-        .filter_map(|squad_player| {
-            // Find the player globally — they may play for a club in another country
-            let player = simulator_data.player(squad_player.player_id)?;
-            let club = simulator_data.club(squad_player.club_id);
-            let club_name = club.map(|c| c.name.clone()).unwrap_or_default();
-            let club_slug = club
-                .and_then(|c| c.teams.teams.first())
-                .map(|t| t.slug.clone())
-                .unwrap_or_default();
+        .squad_picks()
+        .into_iter()
+        .filter_map(|pick| match pick {
+            SquadPick::Real(squad_player) => {
+                let player = simulator_data.player(squad_player.player_id)?;
+                let club = simulator_data.club(squad_player.club_id);
+                let club_name = club.map(|c| c.name.clone()).unwrap_or_default();
+                let club_slug = club
+                    .and_then(|c| c.teams.teams.first())
+                    .map(|t| t.slug.clone())
+                    .unwrap_or_default();
 
-            let position = player.positions.display_positions_compact();
+                let position = player.positions.display_positions_compact();
 
-            // Use the player's team's head coach for ability assessment
-            let (judging, coach_id) = simulator_data
-                .player_with_team(squad_player.player_id)
-                .map(|(_, t)| {
-                    let hc = t.staffs.head_coach();
-                    (hc.staff_attributes.knowledge.judging_player_potential, hc.id)
+                let (judging, coach_id) = simulator_data
+                    .player_with_team(squad_player.player_id)
+                    .map(|(_, t)| {
+                        let hc = t.staffs.head_coach();
+                        (hc.staff_attributes.knowledge.judging_player_potential, hc.id)
+                    })
+                    .unwrap_or((10, 0));
+
+                Some(NationalSquadPlayerDto {
+                    slug: player.slug(),
+                    first_name: player.full_name.display_first_name().to_string(),
+                    last_name: player.full_name.display_last_name().to_string(),
+                    position,
+                    position_sort: player.position(),
+                    club_name,
+                    club_slug,
+                    age: DateUtils::age(player.birth_date, now),
+                    current_ability: get_current_ability_stars(player),
+                    potential_ability: get_potential_ability_stars_by_staff(
+                        player,
+                        judging,
+                        coach_id,
+                    ),
+                    conditions: get_conditions(player),
+                    international_apps: player.player_attributes.international_apps,
+                    international_goals: player.player_attributes.international_goals,
+                    reason_key: squad_player.primary_reason.as_i18n_key(),
                 })
-                .unwrap_or((10, 0));
-
-            Some(NationalSquadPlayerDto {
-                slug: player.slug(),
-                first_name: player.full_name.display_first_name().to_string(),
-                last_name: player.full_name.display_last_name().to_string(),
-                position,
-                position_sort: player.position(),
-                club_name,
-                club_slug,
-                age: DateUtils::age(player.birth_date, now),
-                current_ability: get_current_ability_stars(player),
-                potential_ability: get_potential_ability_stars_by_staff(
-                    player,
-                    judging,
-                    coach_id,
-                ),
-                conditions: get_conditions(player),
-                international_apps: player.player_attributes.international_apps,
-                international_goals: player.player_attributes.international_goals,
-            })
+            }
+            SquadPick::Synthetic(player) => {
+                // Synthetic players don't belong to any club; render
+                // with no club link and a SyntheticDepth reason so the
+                // UI is honest about which slots are stand-ins.
+                let position = player.positions.display_positions_compact();
+                Some(NationalSquadPlayerDto {
+                    slug: player.slug(),
+                    first_name: player.full_name.display_first_name().to_string(),
+                    last_name: player.full_name.display_last_name().to_string(),
+                    position,
+                    position_sort: player.position(),
+                    club_name: String::new(),
+                    club_slug: String::new(),
+                    age: DateUtils::age(player.birth_date, now),
+                    current_ability: get_current_ability_stars(player),
+                    potential_ability: get_potential_ability_stars_by_staff(player, 10, 0),
+                    conditions: get_conditions(player),
+                    international_apps: player.player_attributes.international_apps,
+                    international_goals: player.player_attributes.international_goals,
+                    reason_key: CallUpReason::SyntheticDepth.as_i18n_key(),
+                })
+            }
         })
         .collect();
 
@@ -188,5 +215,9 @@ fn get_potential_ability_stars_by_staff(player: &core::Player, staff_judging: u8
     let hash = hash ^ (hash >> 16);
     let noise = (hash & 0xFFFF) as f32 / 32768.0 - 1.0;
 
-    (raw_stars + noise * noise_scale).round().clamp(0.0, 5.0) as u8
+    let stars = (raw_stars + noise * noise_scale).round().clamp(0.0, 5.0) as u8;
+    // Real potential is always ≥ current ability, so the display must
+    // be too. Without this, scout noise can push potential below the
+    // un-noised current rating (e.g. CA 65 → 2 ★, PA 75 → 1 ★).
+    stars.max(get_current_ability_stars(player))
 }

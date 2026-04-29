@@ -788,5 +788,16 @@
   "search_countries": "Ülkeler",
   "search_clubs": "Kulüpler",
   "search_players": "Oyuncular",
-  "search_no_results": "Sonuç bulunamadı"
+  "search_no_results": "Sonuç bulunamadı",
+  "callup_reason": "Sebep",
+  "callup_reason_key_player": "Kilit oyuncu",
+  "callup_reason_current_form": "Güncel form",
+  "callup_reason_regular_starter": "Düzenli ilk 11",
+  "callup_reason_strong_league": "Güçlü lig",
+  "callup_reason_tactical_fit": "Taktik uyumu",
+  "callup_reason_position_need": "Mevki ihtiyacı",
+  "callup_reason_international_experience": "Tecrübe",
+  "callup_reason_leadership": "Liderlik",
+  "callup_reason_youth_prospect": "Genç yetenek",
+  "callup_reason_synthetic_depth": "Kadro derinliği"
 }

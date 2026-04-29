@@ -17,10 +17,13 @@ static PLAYER_ID_SEQUENCE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU32::new
 
 /// Bump the procedural id sequence so the next generated player gets an id
 /// strictly greater than `min_exclusive`. No-op if the counter is already
-/// past it. The database crate seeds its own generator past the ODB max
-/// before world generation; this lets the host do the same for the core
-/// generator (academy intake, U18/U19 fallback) so procedurally assigned
-/// ids cannot collide with hand-curated records in `players.odb`.
+/// past it. This is the single source of truth for player-id allocation:
+/// both the database loader (initial world generation) and the core
+/// generator (academy intake, U18/U19 fallback) draw from it via
+/// `next_player_id`. Two independent counters seeded to the same starting
+/// value will hand out the same ids — the bug that put the academy youth
+/// "Afran Ramazanov" at the same id as ODB veteran "Sandro Tsitaishvili".
+/// One counter, one truth.
 pub fn seed_player_id_sequence(min_exclusive: u32) {
     let target = min_exclusive.saturating_add(1);
     let mut current = PLAYER_ID_SEQUENCE.load(Ordering::SeqCst);
@@ -35,6 +38,13 @@ pub fn seed_player_id_sequence(min_exclusive: u32) {
             Err(actual) => current = actual,
         }
     }
+}
+
+/// Allocate the next procedural player id. Atomic and monotonically
+/// increasing — never returns the same value twice within a process.
+/// Called by every generator path that mints a new `Player`.
+pub fn next_player_id() -> u32 {
+    PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst)
 }
 
 const SKILL_COUNT: usize = 37;
@@ -737,7 +747,7 @@ impl PlayerGenerator {
         let contract = PlayerClubContract::new_youth(salary, expiration);
 
         Player {
-            id: PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst),
+            id: next_player_id(),
             full_name,
             birth_date,
             country_id,
@@ -1205,5 +1215,40 @@ fn cross_side_position(primary: PlayerPositionType) -> Option<PlayerPositionType
         PlayerPositionType::ForwardLeft => Some(PlayerPositionType::ForwardRight),
         PlayerPositionType::ForwardRight => Some(PlayerPositionType::ForwardLeft),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod player_id_sequence_tests {
+    use super::{next_player_id, seed_player_id_sequence};
+    use std::sync::Mutex;
+
+    // The id counter is process-global; serialise the tests so they don't
+    // interleave and read each other's mid-flight values.
+    static GUARD: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn next_id_is_strictly_above_seed() {
+        let _g = GUARD.lock().unwrap();
+        seed_player_id_sequence(2_000_000_000);
+        let a = next_player_id();
+        let b = next_player_id();
+        assert!(a > 2_000_000_000, "id {a} did not advance past seed");
+        assert!(b > a, "ids did not increase: {a} then {b}");
+    }
+
+    #[test]
+    fn reseed_to_lower_value_does_not_regress() {
+        let _g = GUARD.lock().unwrap();
+        seed_player_id_sequence(2_500_000_000);
+        let high = next_player_id();
+        // Pretend a stale ODB scan finds a smaller max — the counter
+        // must NOT walk back and start handing out colliding ids.
+        seed_player_id_sequence(100_000);
+        let next = next_player_id();
+        assert!(
+            next > high,
+            "counter regressed: handed out {next} after {high}"
+        );
     }
 }

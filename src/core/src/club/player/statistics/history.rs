@@ -269,6 +269,18 @@ impl PlayerStatisticsHistory {
         }
     }
 
+    /// Record a release to the free-agent pool. Snapshots in-flight stats
+    /// onto the source club's current-season entry and marks it as
+    /// departed. Unlike `record_transfer`, no destination is written —
+    /// the player will sit unaffiliated until a club picks them up. The
+    /// "Free Agent" string belongs on the country-level market log only,
+    /// not in a player's career history, so we never push a synthetic row
+    /// for it here.
+    pub fn record_release(&mut self, last_stats: PlayerStatistics, from: &TeamInfo, date: NaiveDate) {
+        self.upsert_current(from, last_stats, false, None, date);
+        self.mark_departed(&from.slug, false, date);
+    }
+
     /// Record a free-agent signing. Unlike `record_departure_transfer`,
     /// there is no source club — only the destination — so we just freeze
     /// any prior-season entries and push one fresh row for the new club.
@@ -292,7 +304,7 @@ impl PlayerStatisticsHistory {
                 entry.statistics = last_stats;
             }
         }
-        self.push_new_entry(to, PlayerStatistics::default(), false, None, date);
+        self.push_new_entry(to, PlayerStatistics::default(), false, Some(0.0), date);
     }
 
     pub fn record_departure_transfer(&mut self, old_stats: PlayerStatistics, from: &TeamInfo, to: &TeamInfo, fee: Option<f64>, is_loan: bool, date: NaiveDate) {

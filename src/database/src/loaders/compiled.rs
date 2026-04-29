@@ -17,7 +17,7 @@ use super::continent::ContinentEntity;
 use super::country::CountryEntity;
 use super::league::LeagueEntity;
 use super::names::NamesByCountryEntity;
-use super::national_competition::NationalCompetitionEntity;
+use super::national::NationalCompetitionEntity;
 use super::players::OdbPlayer;
 
 pub const SUPPORTED_VERSION: &str = "0.01";

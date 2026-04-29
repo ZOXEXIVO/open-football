@@ -788,5 +788,16 @@
   "search_countries": "Страны",
   "search_clubs": "Клубы",
   "search_players": "Игроки",
-  "search_no_results": "Ничего не найдено"
+  "search_no_results": "Ничего не найдено",
+  "callup_reason": "Причина",
+  "callup_reason_key_player": "Ключевой игрок",
+  "callup_reason_current_form": "Текущая форма",
+  "callup_reason_regular_starter": "Игрок основы",
+  "callup_reason_strong_league": "Сильная лига",
+  "callup_reason_tactical_fit": "Тактическая роль",
+  "callup_reason_position_need": "Нехватка позиции",
+  "callup_reason_international_experience": "Опыт",
+  "callup_reason_leadership": "Лидерство",
+  "callup_reason_youth_prospect": "Молодой талант",
+  "callup_reason_synthetic_depth": "Глубина состава"
 }

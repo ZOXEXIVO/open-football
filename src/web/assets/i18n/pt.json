@@ -788,5 +788,16 @@
   "search_countries": "Países",
   "search_clubs": "Clubes",
   "search_players": "Jogadores",
-  "search_no_results": "Sem resultados"
+  "search_no_results": "Sem resultados",
+  "callup_reason": "Motivo",
+  "callup_reason_key_player": "Jogador-chave",
+  "callup_reason_current_form": "Forma atual",
+  "callup_reason_regular_starter": "Titular regular",
+  "callup_reason_strong_league": "Liga forte",
+  "callup_reason_tactical_fit": "Encaixe tático",
+  "callup_reason_position_need": "Necessidade de posição",
+  "callup_reason_international_experience": "Experiência",
+  "callup_reason_leadership": "Liderança",
+  "callup_reason_youth_prospect": "Promessa juvenil",
+  "callup_reason_synthetic_depth": "Profundidade de elenco"
 }

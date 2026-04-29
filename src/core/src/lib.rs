@@ -56,9 +56,10 @@ pub use crate::r#match::engine::player::strategies::forwarders::states::running:
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
 
 pub mod simulator;
-pub mod simulator_config;
+pub mod config;
 pub use simulator::*;
-pub use simulator_config::SimulatorConfig;
+pub use config::SimulatorConfig;
+pub use continent::national::world::emergency_callups_total;
 
 pub mod club;
 pub mod context;
@@ -109,7 +110,7 @@ pub use club::{
     PlayerTraining, PlayerTrainingHistory, TrainingRecord, PlayerTrainingResult,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
     PlayerValueCalculator, WageCalculator, PlayerGenerator, PlayerUtils,
-    seed_player_id_sequence as seed_core_player_id_sequence,
+    seed_player_id_sequence as seed_core_player_id_sequence, next_player_id,
 
     PlayerPlan, PlayerPlanRole,
     Language, PlayerLanguage,
@@ -167,9 +168,10 @@ pub use country::{
     PeopleNameGeneratorData, CountrySettings, CountryPricing, SkinColorDistribution,
     NationalTeam, NationalTeamStaffMember, NationalTeamStaffRole,
     NationalSquadPlayer, NationalTeamFixture, NationalTeamMatchResult,
+    CallUpReason, SquadPick,
 };
 
-pub use continent::national_competitions::{
+pub use continent::national::{
     NationalTeamCompetitions, NationalCompetitionFixture, NationalCompetitionPhase,
     NationalTeamCompetition, NationalCompetitionConfig, CompetitionScope,
     QualifyingPosition, QualifyingConfig, QualifyingZoneConfig,

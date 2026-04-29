@@ -1,6 +1,5 @@
 use super::config::TransferConfig;
 use super::types::{can_club_accept_player, TransferActivitySummary};
-use crate::club::player::events::TransferCompletion;
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::simulator::SimulatorData;
@@ -508,8 +507,8 @@ pub(crate) fn snapshot_global_free_agents(
 
 /// Snapshot of the buying side captured *before* we take a mutable borrow
 /// on `SimulatorData` to remove the player from the global pool. Holds
-/// everything `Player::complete_transfer` needs to install the contract,
-/// reset stats, and record the career history line.
+/// everything `Player::complete_free_agent_signing` needs to install the
+/// contract, seed the signing plan, and push the destination career row.
 struct BuyingClubSnapshot {
     to_info: TeamInfo,
     league_reputation: u16,
@@ -552,12 +551,13 @@ fn snapshot_buying_club(
 /// already claimed the player earlier in the same tick, the lookup misses
 /// and we return false silently.
 ///
-/// The signing flows through `Player::complete_transfer` — the same
-/// pipeline used by the in-country AI executor — so the career history,
-/// wage installation, signing plan, and settlement-shock events all land
-/// just like a regular transfer. The only differences vs an in-country
-/// move are `selling_club_id = 0` and a synthetic "Free Agent" `from`
-/// `TeamInfo`.
+/// The signing flows through `Player::complete_free_agent_signing` — the
+/// no-source-club mirror of `complete_transfer`. Career history goes
+/// through `record_free_agent_signing`, which only pushes the destination
+/// row, so games the player accumulated at their previous club stay
+/// attributed to that club rather than to a synthetic "Free Agent" entry.
+/// The "Free Agent" string survives only on the country-level
+/// `CompletedTransfer` log written below, where it is the correct label.
 pub(crate) fn execute_global_free_agent_signing(
     data: &mut SimulatorData,
     signing: &GlobalFreeAgentSigning,
@@ -585,34 +585,18 @@ pub(crate) fn execute_global_free_agent_signing(
     // All pre-checks passed — take the player out of the pool.
     let mut player = data.free_agents.swap_remove(player_idx);
 
-    // Synthetic "Free Agent" origin so `record_transfer` has a valid
-    // `from` to display in the player's career history.
-    let from_info = TeamInfo {
-        name: "Free Agent".to_string(),
-        slug: "free-agent".to_string(),
-        reputation: 0,
-        league_name: String::new(),
-        league_slug: String::new(),
-    };
-
-    // Run the canonical transfer-completion pipeline. This is what writes
-    // `player.statistics_history.record_transfer(...)` (the per-player
-    // career line, including the "Free" entry the UI surfaces), installs
-    // the contract via `WageCalculator`, seeds the signing plan, and
-    // stages a `PendingSigning` so the next sim tick can fire settlement
-    // events. Skipping any of this — as the previous implementation did —
-    // leaves the player with a phantom move that has no career trace.
-    player.complete_transfer(TransferCompletion {
-        from: &from_info,
-        to: &snapshot.to_info,
-        fee: 0.0,
+    // Use the no-source-club completion path: contract install, signing
+    // plan, and pending-signing run identically to a paid transfer, but
+    // career history goes through `on_free_agent_signing` so we don't
+    // fabricate a "Free Agent" career row for games that were actually
+    // played at the player's previous club.
+    player.complete_free_agent_signing(
+        &snapshot.to_info,
         date,
-        selling_club_id: 0,
-        buying_club_id: signing.buying_club_id,
-        agreed_wage: None,
-        buying_league_reputation: snapshot.league_reputation,
-        record_sell_on: None,
-    });
+        signing.buying_club_id,
+        snapshot.league_reputation,
+        None,
+    );
 
     // Now place the player at the buying club and write the country-level
     // market history entry. Re-borrow mutably; pre-checks above guarantee
@@ -646,7 +630,7 @@ pub(crate) fn execute_global_free_agent_signing(
         .add(player);
 
     // Country-level market log (separate from the player's career history
-    // populated above by `complete_transfer`).
+    // populated above by `complete_free_agent_signing`).
     buying_country.transfer_market.transfer_history.push(
         CompletedTransfer::new(
             signing.player_id,

@@ -788,5 +788,16 @@
   "search_countries": "Länder",
   "search_clubs": "Vereine",
   "search_players": "Spieler",
-  "search_no_results": "Keine Ergebnisse"
+  "search_no_results": "Keine Ergebnisse",
+  "callup_reason": "Grund",
+  "callup_reason_key_player": "Schlüsselspieler",
+  "callup_reason_current_form": "Aktuelle Form",
+  "callup_reason_regular_starter": "Stammspieler",
+  "callup_reason_strong_league": "Starke Liga",
+  "callup_reason_tactical_fit": "Taktisch passend",
+  "callup_reason_position_need": "Positionsbedarf",
+  "callup_reason_international_experience": "Erfahrung",
+  "callup_reason_leadership": "Führung",
+  "callup_reason_youth_prospect": "Nachwuchstalent",
+  "callup_reason_synthetic_depth": "Kadertiefe"
 }

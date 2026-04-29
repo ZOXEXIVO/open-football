@@ -765,7 +765,11 @@ pub fn get_potential_ability_stars_by_staff(player: &Player, staff_judging: u8, 
     let hash = hash ^ (hash >> 16);
     let noise = (hash & 0xFFFF) as f32 / 32768.0 - 1.0;
 
-    (raw_stars + noise * noise_scale).round().clamp(0.0, 5.0) as u8
+    let stars = (raw_stars + noise * noise_scale).round().clamp(0.0, 5.0) as u8;
+    // Real potential is always ≥ current ability, so the display must
+    // be too. Without this, scout noise can push potential below the
+    // un-noised current rating.
+    stars.max(get_current_ability_stars(player))
 }
 
 fn format_salary(salary: u32) -> String {

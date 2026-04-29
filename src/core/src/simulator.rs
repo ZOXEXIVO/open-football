@@ -4,11 +4,12 @@ use crate::club::board::manager_market;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::competitions::GlobalCompetitions;
 use crate::context::{GlobalContext, SimulationContext};
+use crate::continent::national::world as national_world;
 use crate::continent::{Continent, ContinentResult};
 use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
-use crate::simulator_config::SimulatorConfig;
+use crate::config::SimulatorConfig;
 use crate::transfers::TransferPool;
 use crate::utils::random::engine as rng_engine;
 use crate::{Player, Staff, TeamInfo};
@@ -79,6 +80,26 @@ impl FootballSimulator {
         let current_date = data.date;
 
         let ctx = GlobalContext::new(SimulationContext::new(data.date), Ai::new());
+
+        // National-team call-ups run at the world level so a player's
+        // nationality and their club's continent can differ. Must
+        // happen BEFORE the world-level national-competition phase —
+        // those matches need a populated squad with world visibility.
+        data.process_world_national_team_callups();
+
+        // National-team competition matches simulate at the world level
+        // so squads can include foreign-based players and post-match
+        // stats updates fan out across every continent. Lifted out of
+        // the parallel continent phase because squad construction needs
+        // read access to clubs in *every* continent.
+        let national_match_results = national_world::simulate_world_national_competitions(
+            &mut data.continents,
+            current_date.date(),
+        );
+        for match_result in &national_match_results {
+            data.match_store.push(match_result.clone(), current_date.date());
+        }
+        result.match_results.extend(national_match_results);
 
         // Phase ordering note:
         // A simulates continents and emits AI requests as FnOnce closures that
@@ -166,6 +187,11 @@ impl FootballSimulator {
 
         // Global competitions (Champions League, World Cup, etc.)
         GlobalCompetitionSimulator::simulate(data);
+
+        // Release Int statuses AFTER all matches (continent + global) —
+        // a tournament final on the release date should be played
+        // before the squad's flags are cleared.
+        data.process_world_national_team_release();
 
         // Move any player whose contract was cleared this tick (positional
         // surplus, free-transfer release, contract expiry) off their old
@@ -314,6 +340,45 @@ impl SimulatorData {
         self.country_info.entry(id).or_insert(CountryInfo { id, code, slug, name, continent_id, reputation });
     }
 
+    /// Walk every player slot in the simulator and bump the procedural id
+    /// sequence past the highest id seen. The single source of truth for
+    /// future id allocation — call this after world generation (and after
+    /// any future save-load path) so runtime academy intake / U18 fallback
+    /// can never collide with an id that already exists in the world.
+    /// Cheap: a single pass over all rosters; only runs at startup.
+    pub fn seed_player_id_sequence(&self) {
+        let mut max_id: u32 = 0;
+        for continent in &self.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        for player in &team.players.players {
+                            if player.id > max_id {
+                                max_id = player.id;
+                            }
+                        }
+                    }
+                }
+                for player in &country.retired_players {
+                    if player.id > max_id {
+                        max_id = player.id;
+                    }
+                }
+                for player in &country.national_team.generated_squad {
+                    if player.id > max_id {
+                        max_id = player.id;
+                    }
+                }
+            }
+        }
+        for player in &self.free_agents {
+            if player.id > max_id {
+                max_id = player.id;
+            }
+        }
+        crate::seed_core_player_id_sequence(max_id);
+    }
+
     /// Remove a country from the nationality lookup map.
     pub fn remove_country_info(&mut self, id: u32) {
         self.country_info.remove(&id);
@@ -440,6 +505,70 @@ impl SimulatorData {
 
     pub fn next_date(&mut self) {
         self.date += Duration::days(1);
+    }
+
+    /// World-level national-team call-ups. Runs at the start of each
+    /// break/tournament window, before any continent simulates, so
+    /// candidate visibility spans the entire world — a Brazilian
+    /// playing at a Spanish club is reachable from Brazil's selection
+    /// pool without per-continent plumbing.
+    pub fn process_world_national_team_callups(&mut self) {
+        let date = self.date.date();
+        let need_callups = crate::NationalTeam::is_break_start(date)
+            || crate::NationalTeam::is_tournament_start(date);
+        if !need_callups {
+            return;
+        }
+
+        // Build a global candidate pool from every club in every country.
+        let mut candidates_by_country = crate::NationalTeam::collect_all_candidates_by_country(
+            self.continents.iter().flat_map(|c| c.countries.iter()),
+            date,
+        );
+
+        // Country IDs across the whole world — used to draw friendly
+        // opponents from any nation, not just same-continent.
+        let country_ids: Vec<(u32, String)> = self
+            .continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .map(|c| (c.id, c.name.clone()))
+            .collect();
+
+        for continent in &mut self.continents {
+            for country in &mut continent.countries {
+                country.national_team.country_name = country.name.clone();
+                country.national_team.reputation = country.reputation;
+                let candidates = candidates_by_country
+                    .remove(&country.id)
+                    .unwrap_or_default();
+                let cid = country.id;
+                country
+                    .national_team
+                    .call_up_squad(candidates, date, cid, &country_ids);
+            }
+        }
+
+        // Apply Int status across every club in every continent.
+        crate::NationalTeam::apply_callup_statuses_across_world(
+            &mut self.continents,
+            date,
+        );
+    }
+
+    /// World-level Int release. Runs after all matches (continent
+    /// matches + global tournament matches) so a tournament final
+    /// landing on a release date is played with squad statuses still
+    /// attached. Squad data itself is preserved for the squad UI; only
+    /// the per-player Int flag is cleared.
+    pub fn process_world_national_team_release(&mut self) {
+        let date = self.date.date();
+        let need_release = crate::NationalTeam::is_break_end(date)
+            || crate::NationalTeam::is_tournament_end(date);
+        if !need_release {
+            return;
+        }
+        crate::NationalTeam::release_callup_statuses_across_world(&mut self.continents);
     }
 }
 

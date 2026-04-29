@@ -799,5 +799,16 @@
   "search_countries": "Countries",
   "search_clubs": "Clubs",
   "search_players": "Players",
-  "search_no_results": "No results"
+  "search_no_results": "No results",
+  "callup_reason": "Reason",
+  "callup_reason_key_player": "Key player",
+  "callup_reason_current_form": "Current form",
+  "callup_reason_regular_starter": "Regular starter",
+  "callup_reason_strong_league": "Strong league",
+  "callup_reason_tactical_fit": "Tactical fit",
+  "callup_reason_position_need": "Position need",
+  "callup_reason_international_experience": "Experience",
+  "callup_reason_leadership": "Leadership",
+  "callup_reason_youth_prospect": "Youth prospect",
+  "callup_reason_synthetic_depth": "Squad depth"
 }
