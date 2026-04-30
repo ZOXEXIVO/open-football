@@ -235,7 +235,7 @@ impl PlayerEventDispatcher {
 
                 // Record shot at team level for cooldown. Log reason +
                 // source context only when `match-logs` feature is
-                // enabled (see `core/src/match_logs.rs`).
+                // enabled (see `core/src/match/logs.rs`).
                 if let Some(player) = field.get_player(shoot_event_model.from_player_id) {
                     let team_id = player.team_id;
                     let tick = context.current_tick();
