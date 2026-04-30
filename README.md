@@ -77,24 +77,6 @@ Try a realistic rebuild, test a wonderkid in a stronger league, or create a stra
 scenario like Messi at Wolverhampton and see whether the squad, league, tactics,
 finances, and match engine can turn it into success.
 
-## Database
-
-Open Football uses a structured football database maintained in a separate repository:
-
-**https://github.com/ZOXEXIVO/open-football-database**
-
-If you want to improve club data, player details, league structures, country data, or add
-new leagues, please open a pull request in the database repository.
-
-Keeping the data separate makes it easier to update the football world without changing
-the simulator code.
-
-The simulator currently combines real structured data with generated player data where
-detailed real-world attributes are not available yet.
-
-The long-term goal is to keep expanding the database with better coverage, richer player
-information, and more leagues.
-
 ## Features
 
 - Autonomous football simulation
@@ -146,6 +128,24 @@ It has been tested on machines with very high core counts, including 256 CPU cor
 also runs on normal consumer CPUs.
 
 ![256 CPU core utilization](.docs/images/cores.png "256 CPU core utilization")
+
+## Database
+
+Open Football uses a structured football database maintained in a separate repository:
+
+**https://github.com/ZOXEXIVO/open-football-database**
+
+If you want to improve club data, player details, league structures, country data, or add
+new leagues, please open a pull request in the database repository.
+
+Keeping the data separate makes it easier to update the football world without changing
+the simulator code.
+
+The simulator currently combines real structured data with generated player data where
+detailed real-world attributes are not available yet.
+
+The long-term goal is to keep expanding the database with better coverage, richer player
+information, and more leagues.
 
 ## Project Structure
 
