@@ -1,6 +1,6 @@
 use crate::generators::{PlayerGenerator, PositionType};
 use crate::{DatabaseEntity, ForeignPlayerEntry};
-use core::PlayerGenerator as CorePlayerGenerator;
+use core::{AcademyGenerationContext, AcademyIntakeState, PlayerGenerator as CorePlayerGenerator};
 use core::PeopleNameGeneratorData;
 use core::utils::IntegerUtils;
 use core::{Player, TeamType};
@@ -48,14 +48,49 @@ impl DatabaseGenerator {
                 _ => (14, 19),
             };
 
+            // World-init U18/U19 squads also flow through the reputation-
+            // aware academy context — the team_reputation we already have
+            // at this point used to be ignored, which is why a small club
+            // with strong facility data could mint elite prospects as
+            // freely as a top one. League-level prestige isn't surfaced
+            // here, so we use the team's own reputation as the league
+            // proxy (same correlation argument used elsewhere in the
+            // codebase). Pathway reputation seeds at 50 — a fresh academy.
+            let league_proxy = team_reputation;
+            let pathway_seed = 50;
+            let staff_youth_quality_proxy = academy_quality; // best-known proxy at world-init time
+            let gen_ctx = AcademyGenerationContext::from_components(
+                academy_level,
+                youth_quality,
+                academy_quality,
+                recruitment_quality,
+                staff_youth_quality_proxy,
+                team_reputation,
+                league_proxy,
+                country_reputation,
+                pathway_seed,
+            );
+            let mut intake_state = AcademyIntakeState::new();
+
             let (gk_range, def_range, mid_range, st_range) = ((3, 5), (4, 9), (6, 10), (3, 6));
 
-            for _ in 0..IntegerUtils::random(gk_range.0, gk_range.1) {
-                players.push(CorePlayerGenerator::generate_for_age_range(
-                    country_id, now, core::PlayerPositionType::Goalkeeper,
-                    academy_level, &people_names, youth_quality, academy_quality, recruitment_quality,
-                    min_age, max_age,
+            let emit = |pos: core::PlayerPositionType,
+                        players: &mut Vec<Player>,
+                        state: &mut AcademyIntakeState| {
+                players.push(CorePlayerGenerator::generate_with_context(
+                    country_id,
+                    now,
+                    pos,
+                    &people_names,
+                    &gen_ctx,
+                    min_age,
+                    max_age,
+                    Some(state),
                 ));
+            };
+
+            for _ in 0..IntegerUtils::random(gk_range.0, gk_range.1) {
+                emit(core::PlayerPositionType::Goalkeeper, &mut players, &mut intake_state);
             }
             for _ in 0..IntegerUtils::random(def_range.0, def_range.1) {
                 let pos = match IntegerUtils::random(0, 4) {
@@ -63,11 +98,7 @@ impl DatabaseGenerator {
                     1 => core::PlayerPositionType::DefenderRight,
                     _ => core::PlayerPositionType::DefenderCenter,
                 };
-                players.push(CorePlayerGenerator::generate_for_age_range(
-                    country_id, now, pos,
-                    academy_level, &people_names, youth_quality, academy_quality, recruitment_quality,
-                    min_age, max_age,
-                ));
+                emit(pos, &mut players, &mut intake_state);
             }
             for _ in 0..IntegerUtils::random(mid_range.0, mid_range.1) {
                 let pos = match IntegerUtils::random(0, 3) {
@@ -76,11 +107,7 @@ impl DatabaseGenerator {
                     2 => core::PlayerPositionType::MidfielderRight,
                     _ => core::PlayerPositionType::MidfielderCenter,
                 };
-                players.push(CorePlayerGenerator::generate_for_age_range(
-                    country_id, now, pos,
-                    academy_level, &people_names, youth_quality, academy_quality, recruitment_quality,
-                    min_age, max_age,
-                ));
+                emit(pos, &mut players, &mut intake_state);
             }
             for _ in 0..IntegerUtils::random(st_range.0, st_range.1) {
                 let pos = match IntegerUtils::random(0, 2) {
@@ -88,11 +115,7 @@ impl DatabaseGenerator {
                     1 => core::PlayerPositionType::ForwardLeft,
                     _ => core::PlayerPositionType::ForwardRight,
                 };
-                players.push(CorePlayerGenerator::generate_for_age_range(
-                    country_id, now, pos,
-                    academy_level, &people_names, youth_quality, academy_quality, recruitment_quality,
-                    min_age, max_age,
-                ));
+                emit(pos, &mut players, &mut intake_state);
             }
 
             return players;

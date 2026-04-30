@@ -332,14 +332,20 @@ impl PipelineProcessor {
             let plan = &club.transfer_plan;
 
             for match_assignment in &plan.scout_match_assignments {
-                // Find the target team and check if it played today
-                let target_team = country.clubs.iter()
-                    .find(|c| c.id == match_assignment.target_club_id)
+                // Find the target club + team. The selling club's market
+                // context drives the estimated_value attached to the
+                // scouting report (a player at Real Madrid is worth more
+                // than the same skill set at a Maltese club).
+                let target_club = country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == match_assignment.target_club_id);
+                let target_team = target_club
                     .and_then(|c| c.teams.find(match_assignment.target_team_id));
 
-                let target_team = match target_team {
-                    Some(t) => t,
-                    None => continue,
+                let (target_club, target_team) = match (target_club, target_team) {
+                    (Some(c), Some(t)) => (c, t),
+                    _ => continue,
                 };
 
                 // Check if this team played today
@@ -472,11 +478,14 @@ impl PipelineProcessor {
                         };
 
                         if recommendation != ScoutingRecommendation::Pass {
+                            let (target_league_rep, target_club_rep) =
+                                PlayerValuationCalculator::seller_context(country, target_club);
                             let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
                                 player,
                                 current_date,
                                 country.settings.pricing.price_level,
-                                0, 0,
+                                target_league_rep,
+                                target_club_rep,
                             );
 
                             let player_age = player.age(current_date);
@@ -620,13 +629,19 @@ impl PipelineProcessor {
         let mut players = Vec::new();
 
         for club in &country.clubs {
+            // Seller market context once per club — flat 0/0 used to
+            // drag every domestic player to the same baseline regardless
+            // of the league/club they actually played for.
+            let (seller_league_rep, seller_club_rep) =
+                PlayerValuationCalculator::seller_context(country, club);
+
             for team in &club.teams.teams {
                 for player in &team.players.players {
                     if player.is_on_loan() {
                         continue;
                     }
                     let value = PlayerValuationCalculator::calculate_value_with_price_level(
-                        player, date, price_level, 0, 0,
+                        player, date, price_level, seller_league_rep, seller_club_rep,
                     );
                     let statuses = player.statuses.get();
                     let (contract_months_remaining, salary) = player

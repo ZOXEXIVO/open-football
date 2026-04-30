@@ -147,6 +147,32 @@ impl<'gc> GlobalContext<'gc> {
     pub fn club_youth_coaching_quality(&self) -> f32 {
         self.club.as_ref().map(|c| c.youth_coaching_quality).unwrap_or(0.35)
     }
+
+    /// Main team's blended reputation (0..10000) from club context.
+    pub fn club_main_reputation(&self) -> u16 {
+        self.club.as_ref().map(|c| c.main_team_reputation).unwrap_or(0)
+    }
+
+    /// Main team's world reputation (0..10000) from club context.
+    pub fn club_main_world_reputation(&self) -> u16 {
+        self.club.as_ref().map(|c| c.main_team_world_reputation).unwrap_or(0)
+    }
+
+    /// Main team's league reputation (0..10000).
+    pub fn club_league_reputation(&self) -> u16 {
+        self.club.as_ref().map(|c| c.league_reputation).unwrap_or(0)
+    }
+
+    /// Country football-ecosystem reputation (0..10000).
+    pub fn club_country_reputation(&self) -> u16 {
+        self.club.as_ref().map(|c| c.country_reputation).unwrap_or(0)
+    }
+
+    /// Academy pathway reputation (0..100) — internal prestige of the youth
+    /// pipeline, separate from the club's outward-facing reputation.
+    pub fn club_pathway_reputation(&self) -> u8 {
+        self.club.as_ref().map(|c| c.pathway_reputation).unwrap_or(50)
+    }
 }
 
 #[derive(Clone)]

@@ -756,11 +756,14 @@ impl PipelineProcessor {
                         }
                     } else {
                         // Loan fee is ~10% of player value, not full value
+                        let (seller_league_rep, seller_club_rep) =
+                            PlayerValuationCalculator::seller_context(country, club);
                         let full_value = PlayerValuationCalculator::calculate_value_with_price_level(
                             player,
                             date,
                             price_level,
-                            0, 0,
+                            seller_league_rep,
+                            seller_club_rep,
                         );
                         CurrencyValue {
                             amount: FormattingUtils::round_fee(full_value.amount * 0.10),

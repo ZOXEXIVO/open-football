@@ -159,6 +159,8 @@
   "dec_reason_blocked_top_club": "在強隊受阻，需要到其他地方獲得上場時間",
   "dec_reason_club_listed": "被俱樂部掛牌轉會",
   "dec_reason_contract_expiring": "合約即將到期，尋求轉會費",
+  "dec_reason_contract_expired": "合約到期 — 以自由球員身份離隊",
+  "dec_reason_released_free": "雙方同意解約",
   "dec_reason_financial_relief": "租出以減輕薪資負擔",
   "dec_reason_lack_playing_time": "本賽季上場時間不足",
   "dec_reason_loan_playing_time": "租借以獲得穩定上場時間",

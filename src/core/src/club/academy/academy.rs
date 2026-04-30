@@ -24,8 +24,11 @@ pub struct AcademyPathwayPolicy {
 }
 
 impl AcademyPathwayPolicy {
+    /// `level` is the academy facility rating (1..20, matches
+    /// `FacilityLevel::to_rating`). Internally we collapse to a 1..10
+    /// pathway tier so the policy thresholds stay readable.
     pub fn for_level(level: u8) -> Self {
-        let tier = level.clamp(1, 10);
+        let tier = academy_tier(level);
         AcademyPathwayPolicy {
             min_graduation_age: if tier >= 8 { 14 } else { 15 },
             readiness_threshold: 70 + (tier as i16 * 3),
@@ -33,6 +36,14 @@ impl AcademyPathwayPolicy {
             max_group_imbalance: if tier >= 8 { 2 } else { 3 },
         }
     }
+}
+
+/// Collapse the 1..20 facility-rating scale into a 1..10 pathway tier.
+/// Used everywhere pathway logic wants "how strong is this academy" on a
+/// short scale; keeps the storage scale (1..20) consistent.
+pub(crate) fn academy_tier(level: u8) -> u8 {
+    let lvl = level.clamp(1, 20) as u16;
+    (((lvl + 1) / 2) as u8).clamp(1, 10)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -81,7 +92,7 @@ impl ClubAcademy {
             graduates_produced: 0,
             development_identity: AcademyDevelopmentIdentity::Balanced,
             pathway_policy: AcademyPathwayPolicy::for_level(level),
-            pathway_reputation: (35 + level.saturating_mul(5)).min(90),
+            pathway_reputation: (35 + academy_tier(level).saturating_mul(5)).min(90),
             recruitment_priorities: Vec::new(),
             last_pathway_review: None,
         }
@@ -205,7 +216,7 @@ impl ClubAcademy {
     }
 
     fn calculate_pathway_reputation(&self, health: &AcademyPipelineHealth) -> u8 {
-        let base = 30 + self.level.saturating_mul(5) as i16;
+        let base = 30 + (academy_tier(self.level).saturating_mul(5)) as i16;
         let graduate_bonus = (self.graduates_produced.min(50) / 5) as i16;
         let ready_bonus = (health.ready_for_youth.min(8) as i16) * 2;
         let elite_bonus = (health.elite_prospects.min(5) as i16) * 3;
@@ -214,7 +225,7 @@ impl ClubAcademy {
     }
 
     fn calibrate_player_count_range(&mut self, health: &AcademyPipelineHealth) {
-        let base_min = 24 + self.level.clamp(1, 10);
+        let base_min = 24 + academy_tier(self.level);
         let mut min_players = base_min;
         if health.ready_for_youth >= 6 {
             min_players = min_players.saturating_add(2);
@@ -284,7 +295,7 @@ fn pathway_readiness_score_for(
         + player.skills.mental.determination * 0.30
         + player.skills.mental.work_rate * 0.25) as i16;
     let age_bonus = ((age.saturating_sub(policy.min_graduation_age)) as i16) * 3;
-    let academy_bonus = level.clamp(1, 10) as i16;
+    let academy_bonus = academy_tier(level) as i16;
     let late_dev_bonus = if policy.protect_late_developers && potential_gap >= 35 {
         8
     } else {
@@ -351,8 +362,12 @@ mod tests {
 
     #[test]
     fn pathway_policy_scales_with_academy_level() {
-        let modest = AcademyPathwayPolicy::for_level(2);
-        let elite = AcademyPathwayPolicy::for_level(9);
+        // ClubAcademy.level is on the 1..20 facility-rating scale; the
+        // pathway policy collapses internally to a 1..10 tier. Use facility
+        // ratings directly here so the test mirrors how the field is
+        // populated in production (FacilityLevel::to_rating).
+        let modest = AcademyPathwayPolicy::for_level(4);
+        let elite = AcademyPathwayPolicy::for_level(18);
 
         assert!(elite.protect_late_developers);
         assert!(elite.readiness_threshold > modest.readiness_threshold);

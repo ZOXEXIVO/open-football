@@ -111,6 +111,7 @@ impl Country {
                 country_ctx.sponsorship_market_strength = self.economic_factors.sponsorship_market_strength;
                 country_ctx.stadium_attendance_factor = self.economic_factors.stadium_attendance_factor;
                 country_ctx.price_level = self.settings.pricing.price_level;
+                country_ctx.reputation = self.reputation;
             }
             c
         };
@@ -122,8 +123,9 @@ impl Country {
     }
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {
-        // Build team_id → (position, league_size, total_matches, matches_played, tier)
-        let mut team_league_info: std::collections::HashMap<u32, (u8, u8, u8, u8, u8)> = std::collections::HashMap::new();
+        // Build team_id → (position, league_size, total_matches, matches_played, tier, league_rep)
+        let mut team_league_info: std::collections::HashMap<u32, (u8, u8, u8, u8, u8, u16)> =
+            std::collections::HashMap::new();
         for league in &self.leagues.leagues {
             if league.friendly {
                 continue;
@@ -131,13 +133,16 @@ impl Country {
             let league_size = league.table.rows.len() as u8;
             let total_matches = if league_size > 1 { (league_size - 1) * 2 } else { 0 };
             let tier = league.settings.tier.max(1);
+            let league_rep = league.reputation;
             for (pos, row) in league.table.rows.iter().enumerate() {
                 team_league_info.insert(
                     row.team_id,
-                    ((pos + 1) as u8, league_size, total_matches, row.played, tier),
+                    ((pos + 1) as u8, league_size, total_matches, row.played, tier, league_rep),
                 );
             }
         }
+
+        let country_reputation = self.reputation;
 
         self.clubs
             .iter_mut()
@@ -145,7 +150,15 @@ impl Country {
                 let league_info = club.teams.main()
                     .and_then(|t| team_league_info.get(&t.id))
                     .copied()
-                    .unwrap_or((0, 0, 0, 0, 1));
+                    .unwrap_or((0, 0, 0, 0, 1, 0));
+
+                let (main_blended_rep, main_world_rep) = club.teams.main()
+                    .map(|t| {
+                        let blended = t.reputation.market_value_score();
+                        let world = t.reputation.world;
+                        (blended, world)
+                    })
+                    .unwrap_or((0, 0));
 
                 let name = club.name.clone();
                 let club_ctx = ctx.with_club(club.id, &name);
@@ -156,7 +169,13 @@ impl Country {
                             .with_league_position(
                                 league_info.0, league_info.1, league_info.2, league_info.3,
                             )
-                            .with_main_league_tier(league_info.4);
+                            .with_main_league_tier(league_info.4)
+                            .with_reputations(
+                                main_blended_rep,
+                                main_world_rep,
+                                league_info.5,
+                                country_reputation,
+                            );
                     }
                     c
                 };

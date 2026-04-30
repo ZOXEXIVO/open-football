@@ -1,5 +1,5 @@
 use crate::shared::{Currency, CurrencyValue};
-use crate::{Player, PlayerStatusType, PlayerValueCalculator};
+use crate::{Club, Country, Player, PlayerStatusType, PlayerValueCalculator};
 use chrono::{Datelike, NaiveDate};
 use std::collections::HashMap;
 
@@ -150,5 +150,39 @@ impl PlayerValuationCalculator {
             amount: market_value,
             currency: Currency::Usd,
         }
+    }
+
+    /// Resolve (league_reputation, club_market_score) for a club within
+    /// its country. Single source of truth for seller-side market
+    /// context — avoids each call site re-implementing the same league
+    /// lookup or, worse, passing 0/0 and flattening price levels across
+    /// every league. Returns (0, 0) only when the club has no main team
+    /// or its league isn't registered.
+    pub fn seller_context(country: &Country, club: &Club) -> (u16, u16) {
+        let main = club.teams.main();
+        let club_rep = main
+            .map(|t| t.reputation.market_value_score())
+            .unwrap_or(0);
+        let league_rep = main
+            .and_then(|t| t.league_id)
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+        (league_rep, club_rep)
+    }
+
+    /// Variant for callers that don't carry a `Country` reference (board
+    /// audits, AI transfer-listing AI). League reputation is approximated
+    /// from the club's blended score since the two correlate strongly
+    /// (top-rep clubs play in top-rep leagues), keeping market values
+    /// roughly correct without forcing every caller to plumb the country
+    /// down.
+    pub fn seller_context_from_club(club: &Club) -> (u16, u16) {
+        let club_rep = club
+            .teams
+            .main()
+            .map(|t| t.reputation.market_value_score())
+            .unwrap_or(0);
+        (club_rep, club_rep)
     }
 }

@@ -1,4 +1,4 @@
-use crate::{Person, Player, PlayerPositionType, PlayerStatusType};
+use crate::{Person, Player, PlayerPositionType, PlayerSquadStatus, PlayerStatusType};
 use chrono::NaiveDate;
 
 pub struct PlayerValueCalculator;
@@ -15,8 +15,10 @@ impl PlayerValueCalculator {
         let age_factor = determine_age_factor(player, now);
         let potential_factor = determine_potential_factor(player, now);
         let status_factor = determine_status_factor(player);
+        let squad_role_factor = determine_squad_role_factor(player);
         let contract_factor = determine_contract_factor(player, now);
-        let performance_factor = determine_performance_factor(player);
+        let performance_factor =
+            determine_performance_factor(player, league_reputation);
         let recent_form_factor = determine_recent_form_factor(player);
         let career_factor = determine_career_consistency_factor(player);
         let reputation_factor = determine_reputation_factor(player);
@@ -27,6 +29,7 @@ impl PlayerValueCalculator {
             * age_factor
             * potential_factor
             * status_factor
+            * squad_role_factor
             * contract_factor
             * performance_factor
             * recent_form_factor
@@ -110,7 +113,13 @@ fn determine_age_factor(player: &Player, date: NaiveDate) -> f64 {
     }
 }
 
-/// Young players with high potential get a premium
+/// Young players with high potential get a premium. The base bonus
+/// scales with the gap between PA and CA; on top, wonderkids (age ≤ 21
+/// with absolute PA ≥ 150) carry an additional multiplier so a 17-year-
+/// old with PA 200 isn't priced like a journeyman just because his age
+/// factor is small. Without this, the steep `determine_age_factor` curve
+/// (e.g. 0.40 at age 18) silently capped elite young prospects far
+/// below realistic transfer fees.
 fn determine_potential_factor(player: &Player, date: NaiveDate) -> f64 {
     let age = player.age(date);
     let current = player.player_attributes.current_ability as f64;
@@ -129,8 +138,28 @@ fn determine_potential_factor(player: &Player, date: NaiveDate) -> f64 {
         1.0
     };
 
-    // Potential gap adds 1-40% value for young players
-    1.0 + (gap / 200.0) * age_bonus * 0.4
+    // Base potential gap: adds 1-40% value for young players
+    let gap_factor = 1.0 + (gap / 200.0) * age_bonus * 0.4;
+
+    // Wonderkid premium: amplifies value for the rare ≤21yo with very
+    // high absolute PA. Compensates for the steep age_factor curve so
+    // realistic CA-110 / PA-180 17yos don't end up priced at <2M.
+    let wonderkid_factor = if age <= 21 && potential >= 150.0 {
+        let pa_excess = (potential - 150.0).min(50.0); // 0..50
+        let age_weight = match age {
+            0..=17 => 3.0,
+            18 => 2.5,
+            19 => 2.0,
+            20 => 1.4,
+            21 => 1.0,
+            _ => 0.0,
+        };
+        1.0 + (pa_excess / 50.0) * age_weight
+    } else {
+        1.0
+    };
+
+    gap_factor * wonderkid_factor
 }
 
 /// Player statuses that affect value
@@ -181,8 +210,12 @@ fn determine_contract_factor(player: &Player, date: NaiveDate) -> f64 {
     }
 }
 
-/// Season performance: goals, assists, appearances, average rating
-fn determine_performance_factor(player: &Player) -> f64 {
+/// Season performance: goals, assists, appearances, average rating.
+/// League-aware: deviations from neutral (1.0) are scaled by league
+/// strength so a goal in a top-5 league is worth more to the market
+/// than a goal in a semi-pro division. Half-weight when no league
+/// context is available (academy, free agents, calibration tests).
+fn determine_performance_factor(player: &Player, league_reputation: u16) -> f64 {
     let stats = &player.statistics;
     let mut factor = 1.0;
 
@@ -251,7 +284,36 @@ fn determine_performance_factor(player: &Player) -> f64 {
         factor *= 1.05;
     }
 
-    factor
+    // League-aware scaling: deviations from neutral (1.0) get more
+    // weight in stronger leagues, less in weaker ones. A goal in Serie A
+    // is a stronger market signal than the same number in a semi-pro
+    // division. Half-weight floor when no league context is provided.
+    let league_weight =
+        0.5 + 0.5 * (league_reputation as f64 / 10_000.0).clamp(0.0, 1.0);
+    1.0 + (factor - 1.0) * league_weight
+}
+
+/// Squad-status premium/discount. Owner-side leverage signal: a club's
+/// designated KeyPlayer is more expensive to prise away than a backup
+/// at the same CA. NotNeeded players carry an explicit "we'd take
+/// less" tag — they get a real discount on intrinsic value, separate
+/// from the Lst/Req/Unh market discounts applied in `window.rs`.
+fn determine_squad_role_factor(player: &Player) -> f64 {
+    let Some(contract) = &player.contract else {
+        return 1.0;
+    };
+    match contract.squad_status {
+        PlayerSquadStatus::KeyPlayer => 1.10,
+        PlayerSquadStatus::FirstTeamRegular => 1.05,
+        PlayerSquadStatus::HotProspectForTheFuture => 1.05,
+        PlayerSquadStatus::FirstTeamSquadRotation => 1.0,
+        PlayerSquadStatus::DecentYoungster => 0.97,
+        PlayerSquadStatus::MainBackupPlayer => 0.95,
+        PlayerSquadStatus::NotNeeded => 0.85,
+        PlayerSquadStatus::Invalid
+        | PlayerSquadStatus::NotYetSet
+        | PlayerSquadStatus::SquadStatusCount => 1.0,
+    }
 }
 
 /// Recent-form EMA multiplier. Complements the longer-horizon
@@ -417,6 +479,7 @@ fn determine_position_factor(player: &Player) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     #[test]
     fn base_value_low_ability_is_cheap() {
@@ -446,5 +509,247 @@ mod tests {
         assert_eq!(round_market_value(237_000.0), 250_000.0);
         assert_eq!(round_market_value(43_000.0), 40_000.0);
         assert_eq!(round_market_value(7_500.0), 8_000.0);
+    }
+
+    /// Build a fully-formed test player from `PlayerGenerator`, then
+    /// surgically reset the fields the valuation tests care about so
+    /// the result is deterministic. Generator handles all the deep
+    /// initialisation we'd otherwise have to copy into the test file.
+    fn make_valuation_player(
+        now: NaiveDate,
+        ca: u8,
+        pa: u8,
+        age: u8,
+        position: PlayerPositionType,
+    ) -> Player {
+        use crate::club::player::generators::PlayerGenerator;
+        use crate::PeopleNameGeneratorData;
+
+        let names = PeopleNameGeneratorData {
+            first_names: vec!["T".to_string()],
+            last_names: vec!["Tester".to_string()],
+            nicknames: Vec::new(),
+        };
+        let mut player = PlayerGenerator::generate(1, now, position, 100, &names);
+
+        let bd = NaiveDate::from_ymd_opt(now.year() - age as i32, 6, 15)
+            .unwrap_or(now);
+        player.birth_date = bd;
+
+        player.player_attributes.current_ability = ca;
+        player.player_attributes.potential_ability = pa.max(ca);
+        player.player_attributes.current_reputation = 800;
+        player.player_attributes.world_reputation = 800;
+        player.player_attributes.home_reputation = 1000;
+        player.player_attributes.international_apps = 0;
+
+        if let Some(c) = player.contract.as_mut() {
+            c.expiration = NaiveDate::from_ymd_opt(now.year() + 3, now.month(), 1)
+                .unwrap();
+            c.squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
+        }
+
+        // Reset noisy/random state from the generator so tests are
+        // deterministic.
+        player.statuses = crate::PlayerStatus::new();
+        player.statistics = crate::PlayerStatistics::default();
+        player.statistics_history = crate::PlayerStatisticsHistory::default();
+
+        player
+    }
+
+    fn d(year: i32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, 7, 1).unwrap()
+    }
+
+    #[test]
+    fn elite_league_club_values_player_far_above_minnow() {
+        // Same physical player, two market contexts. The elite-league /
+        // elite-club price should dwarf the lowly-league / small-club
+        // price. The previous 0/0 callers flattened these to identical
+        // values.
+        let now = d(2025);
+        let player = make_valuation_player(now, 130, 140, 26, PlayerPositionType::MidfielderCenter);
+
+        let elite_value = PlayerValueCalculator::calculate(&player, now, 1.0, 9000, 9000);
+        let small_value = PlayerValueCalculator::calculate(&player, now, 1.0, 2000, 2000);
+
+        assert!(
+            elite_value >= small_value * 3.0,
+            "elite-context value {} should be at least 3x small-context {}",
+            elite_value,
+            small_value
+        );
+    }
+
+    #[test]
+    fn passing_real_seller_context_changes_value_vs_neutral() {
+        // The 0/0 path returns the neutral 1.0 league_club_factor —
+        // exactly the bug the audit flagged. Compare against a clearly
+        // non-neutral context (a low-rep seller) so the test isn't
+        // fooled by the curve happening to graze 1.0 around the
+        // upper-mid tier.
+        let now = d(2025);
+        let player = make_valuation_player(now, 120, 130, 25, PlayerPositionType::MidfielderCenter);
+
+        let neutral = PlayerValueCalculator::calculate(&player, now, 1.0, 0, 0);
+        let with_low_context =
+            PlayerValueCalculator::calculate(&player, now, 1.0, 2500, 2500);
+        let with_high_context =
+            PlayerValueCalculator::calculate(&player, now, 1.0, 9500, 9500);
+
+        assert!(
+            with_low_context < neutral * 0.5,
+            "low-rep seller context should sharply discount vs neutral (neutral={}, low={})",
+            neutral,
+            with_low_context
+        );
+        assert!(
+            with_high_context > neutral * 1.05,
+            "elite seller context should premium vs neutral (neutral={}, high={})",
+            neutral,
+            with_high_context
+        );
+    }
+
+    #[test]
+    fn listed_and_requested_players_are_discounted() {
+        // Lst → 0.9× and Req → 0.85× applied at the market layer
+        // (window.rs). Verify the wrapper does what the calculator
+        // doesn't, and that the discounts compound when both flags
+        // are set.
+        use crate::transfers::window::PlayerValuationCalculator as Vp;
+        let now = d(2025);
+        let mut player = make_valuation_player(
+            now, 130, 135, 26, PlayerPositionType::MidfielderCenter,
+        );
+
+        let baseline = Vp::calculate_value_with_price_level(
+            &player, now, 1.0, 7000, 7000,
+        )
+        .amount;
+
+        player.statuses.add(now, PlayerStatusType::Lst);
+        let listed = Vp::calculate_value_with_price_level(
+            &player, now, 1.0, 7000, 7000,
+        )
+        .amount;
+        assert!(
+            listed < baseline,
+            "listed player value {} should be below baseline {}",
+            listed,
+            baseline
+        );
+
+        player.statuses.add(now, PlayerStatusType::Req);
+        let requested = Vp::calculate_value_with_price_level(
+            &player, now, 1.0, 7000, 7000,
+        )
+        .amount;
+        assert!(
+            requested < listed,
+            "transfer-requested + listed value {} should fall further below {}",
+            requested,
+            listed
+        );
+    }
+
+    #[test]
+    fn key_player_costs_more_than_backup_at_same_ca() {
+        // Two identical CA-130 midfielders, one tagged KeyPlayer, the
+        // other MainBackupPlayer. The key player must command a
+        // measurable premium — squad role is genuine seller leverage.
+        let now = d(2025);
+        let mut key = make_valuation_player(now, 130, 135, 27, PlayerPositionType::MidfielderCenter);
+        let mut backup = make_valuation_player(now, 130, 135, 27, PlayerPositionType::MidfielderCenter);
+
+        if let Some(c) = key.contract.as_mut() {
+            c.squad_status = PlayerSquadStatus::KeyPlayer;
+            // Long contract — adds to the key-player premium.
+            c.expiration = NaiveDate::from_ymd_opt(now.year() + 4, now.month(), 1).unwrap();
+        }
+        if let Some(c) = backup.contract.as_mut() {
+            c.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        }
+
+        let key_val = PlayerValueCalculator::calculate(&key, now, 1.0, 7000, 7000);
+        let backup_val = PlayerValueCalculator::calculate(&backup, now, 1.0, 7000, 7000);
+
+        assert!(
+            key_val > backup_val * 1.1,
+            "KeyPlayer value {} must clearly exceed MainBackupPlayer {} at same CA",
+            key_val,
+            backup_val
+        );
+    }
+
+    #[test]
+    fn elite_wonderkid_is_not_undervalued_by_age_factor() {
+        // 18yo with PA 180, CA 110 at a top club: the old age_factor
+        // (0.40) without a wonderkid premium left this player priced
+        // like a journeyman. With the new potential factor, value
+        // should reach realistic wonderkid territory.
+        let now = d(2025);
+        let player = make_valuation_player(
+            now, 110, 180, 18, PlayerPositionType::MidfielderCenter,
+        );
+
+        let value = PlayerValueCalculator::calculate(&player, now, 1.0, 9000, 9000);
+
+        assert!(
+            value >= 15_000_000.0,
+            "elite wonderkid value {} too low — age factor should not flatten high-PA youth",
+            value
+        );
+    }
+
+    #[test]
+    fn league_strength_amplifies_performance_value() {
+        // Same prolific scoring season. The market should pay more for
+        // those goals in a top league than in a weaker one. Compares
+        // performance-driven uplift (deviation from neutral 1.0)
+        // alone — league_club_factor is held constant by passing the
+        // same blended `club_reputation` in both calls.
+        let now = d(2025);
+        let mut player =
+            make_valuation_player(now, 120, 125, 27, PlayerPositionType::Striker);
+        // 30 goals / 30 games with a strong rating — exactly the
+        // scenario that should price up in a strong league.
+        player.statistics.played = 30;
+        player.statistics.goals = 18;
+        player.statistics.assists = 4;
+        player.statistics.average_rating = 7.6;
+
+        let strong = PlayerValueCalculator::calculate(&player, now, 1.0, 9000, 7000);
+        let weak = PlayerValueCalculator::calculate(&player, now, 1.0, 2000, 7000);
+
+        assert!(
+            strong > weak,
+            "strong-league value {} should exceed weak-league {} for the same scorer",
+            strong,
+            weak
+        );
+    }
+
+    #[test]
+    fn squad_role_factor_orders_statuses_correctly() {
+        // Pure unit test of the role factor — KeyPlayer > Regular >
+        // Rotation > Backup > NotNeeded. Pinning calibration so the
+        // ordering can't silently invert.
+        use PlayerSquadStatus::*;
+        let now = d(2025);
+        let mut p = make_valuation_player(now, 120, 125, 26, PlayerPositionType::MidfielderCenter);
+
+        let with_status = |status: PlayerSquadStatus, p: &mut Player| {
+            if let Some(c) = p.contract.as_mut() {
+                c.squad_status = status;
+            }
+            determine_squad_role_factor(p)
+        };
+
+        assert!(with_status(KeyPlayer, &mut p) > with_status(FirstTeamRegular, &mut p));
+        assert!(with_status(FirstTeamRegular, &mut p) > with_status(FirstTeamSquadRotation, &mut p));
+        assert!(with_status(FirstTeamSquadRotation, &mut p) > with_status(MainBackupPlayer, &mut p));
+        assert!(with_status(MainBackupPlayer, &mut p) > with_status(NotNeeded, &mut p));
     }
 }

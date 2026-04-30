@@ -560,6 +560,139 @@ fn generate_gk_skills(pa_final: f32, age: u32) -> crate::Goalkeeping {
     }
 }
 
+/// Inputs to youth-player generation. The academy realism overhaul moved
+/// from facility-only positional parameters to a single context so callers
+/// can express *why* a player should turn out a certain way: the club's
+/// reputation, the league's prestige, the country's football ecosystem,
+/// pathway prestige, coaching, and physical facility ratings all contribute.
+///
+/// All `_score` fields are normalised to 0.0..1.0 so the generator math
+/// stays in one continuous space — no special-cased "if elite" branches.
+#[derive(Debug, Clone, Copy)]
+pub struct AcademyGenerationContext {
+    /// Academy facility rating, 1..20 (matches `FacilityLevel::to_rating`).
+    pub academy_level: u8,
+    /// Youth-team facilities (0..1). Drives starting CA / day-to-day
+    /// coaching environment.
+    pub youth_facility_quality: f32,
+    /// Academy programme quality (0..1). Drives PA ceiling.
+    pub academy_quality: f32,
+    /// Recruitment network reach (0..1). Drives gem chance and the size of
+    /// the candidate pool, *not* the average elite output.
+    pub recruitment_quality: f32,
+    /// Best `working_with_youngsters` on staff (0..1). Modest PA bonus.
+    pub youth_coaching_quality: f32,
+    /// Main team's blended reputation (0..1) — Real Madrid = ~0.95,
+    /// regional minnow = ~0.05.
+    pub club_reputation_score: f32,
+    /// League reputation (0..1) — top-flight Premier League ≈ 0.95,
+    /// fourth tier ≈ 0.15.
+    pub league_reputation_score: f32,
+    /// Country football ecosystem (0..1) — Brazil/Spain ~0.95,
+    /// micro-nations ~0.05.
+    pub country_reputation_score: f32,
+    /// Internal academy pathway prestige (0..1) — lifts when the pathway
+    /// keeps producing graduates, drops when it stalls.
+    pub pathway_reputation_score: f32,
+}
+
+impl AcademyGenerationContext {
+    /// Average-quality fallback. Used by tests and any caller that doesn't
+    /// know the surrounding club state.
+    pub fn average() -> Self {
+        AcademyGenerationContext {
+            academy_level: 7,
+            youth_facility_quality: 0.35,
+            academy_quality: 0.35,
+            recruitment_quality: 0.35,
+            youth_coaching_quality: 0.35,
+            club_reputation_score: 0.30,
+            league_reputation_score: 0.30,
+            country_reputation_score: 0.30,
+            pathway_reputation_score: 0.45,
+        }
+    }
+
+    /// Build from raw 0..10000 reputation values + 0..1 facility/staff
+    /// multipliers. Both the in-game academy intake and the initial U18/U19
+    /// world generation funnel through here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_components(
+        academy_level: u8,
+        youth_facility_quality: f32,
+        academy_quality: f32,
+        recruitment_quality: f32,
+        youth_coaching_quality: f32,
+        main_team_reputation: u16,
+        league_reputation: u16,
+        country_reputation: u16,
+        pathway_reputation: u8,
+    ) -> Self {
+        AcademyGenerationContext {
+            academy_level,
+            youth_facility_quality: youth_facility_quality.clamp(0.0, 1.0),
+            academy_quality: academy_quality.clamp(0.0, 1.0),
+            recruitment_quality: recruitment_quality.clamp(0.0, 1.0),
+            youth_coaching_quality: youth_coaching_quality.clamp(0.0, 1.0),
+            club_reputation_score: (main_team_reputation as f32 / 10000.0).clamp(0.0, 1.0),
+            league_reputation_score: (league_reputation as f32 / 10000.0).clamp(0.0, 1.0),
+            country_reputation_score: (country_reputation as f32 / 10000.0).clamp(0.0, 1.0),
+            pathway_reputation_score: (pathway_reputation as f32 / 100.0).clamp(0.0, 1.0),
+        }
+    }
+
+    /// Combined-potential score (0..1). Single continuous signal that
+    /// drives PA ceiling and gem rolls. Weights are tuned so:
+    /// - top European club at top-flight, top country: ~0.85
+    /// - mid-table top-flight, top country: ~0.55
+    /// - lower-division, weaker country: ~0.20
+    /// - regional minnow with poor facilities: ~0.05
+    pub fn combined_potential_score(&self) -> f32 {
+        let s = 0.30 * self.club_reputation_score
+            + 0.18 * self.league_reputation_score
+            + 0.10 * self.country_reputation_score
+            + 0.22 * self.academy_quality
+            + 0.10 * self.pathway_reputation_score
+            + 0.10 * self.youth_coaching_quality;
+        s.clamp(0.0, 1.0)
+    }
+}
+
+/// Per-intake state passed across one annual academy class. Lets the
+/// generator dampen successive elite rolls so that even a top academy
+/// rarely ships three world-class prospects in the same year.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AcademyIntakeState {
+    /// Players in this intake with PA >= 160.
+    pub elite_seen: u8,
+    /// Players in this intake with PA >= 180.
+    pub world_class_seen: u8,
+}
+
+impl AcademyIntakeState {
+    pub fn new() -> Self {
+        AcademyIntakeState::default()
+    }
+
+    /// Multiplier applied to gem chance / prodigy odds for the next pick.
+    /// Each elite already in the bag halves the next attempt; each
+    /// world-class one halves it again. Multiplicative so the effect
+    /// compounds inside a single intake.
+    pub fn elite_damping_factor(&self) -> f32 {
+        let elite = self.elite_seen as f32;
+        let wc = self.world_class_seen as f32;
+        (0.5_f32.powf(elite) * 0.5_f32.powf(wc)).max(0.05)
+    }
+
+    pub fn record(&mut self, pa: u8) {
+        if pa >= 180 {
+            self.world_class_seen = self.world_class_seen.saturating_add(1);
+        } else if pa >= 160 {
+            self.elite_seen = self.elite_seen.saturating_add(1);
+        }
+    }
+}
+
 pub struct PlayerGenerator;
 
 impl PlayerGenerator {
@@ -570,129 +703,123 @@ impl PlayerGenerator {
         level: u8,
         people_names: &PeopleNameGeneratorData,
     ) -> Player {
-        Self::generate_with_facilities(
-            country_id, now, position, level, people_names,
-            0.35, 0.35, 0.35, // Average defaults
-        )
+        let mut ctx = AcademyGenerationContext::average();
+        ctx.academy_level = level;
+        Self::generate_with_context(country_id, now, position, people_names, &ctx, 14, 14, None)
     }
 
-    /// Generate a youth player with facility modifiers:
-    /// - youth_facility_quality: affects starting CA (skill quality of intake)
-    /// - academy_quality: affects PA ceiling (potential of intake)
-    /// - recruitment_quality: affects gem chance (finding exceptional talent)
-    pub fn generate_with_facilities(
+    /// Reputation-aware academy intake. The single entry point for both the
+    /// in-game academy (`ClubAcademy::produce_youth_players`) and the
+    /// world-init U18/U19 generator. `intake_state` is `Some` when callers
+    /// want elite-cluster damping across one annual class; `None` for
+    /// one-off generation.
+    pub fn generate_with_context(
         country_id: u32,
         now: NaiveDate,
         position: PlayerPositionType,
-        level: u8,
         people_names: &PeopleNameGeneratorData,
-        youth_facility_quality: f32,
-        academy_quality: f32,
-        recruitment_quality: f32,
-    ) -> Player {
-        Self::generate_for_age_range(
-            country_id, now, position, level, people_names,
-            youth_facility_quality, academy_quality, recruitment_quality,
-            14, 14,
-        )
-    }
-
-    /// Generate a youth player with facility modifiers and custom age range.
-    /// Used both for academy intake (age 12-14) and initial U18 squad generation (age 15-18).
-    pub fn generate_for_age_range(
-        country_id: u32,
-        now: NaiveDate,
-        position: PlayerPositionType,
-        level: u8,
-        people_names: &PeopleNameGeneratorData,
-        youth_facility_quality: f32,
-        academy_quality: f32,
-        recruitment_quality: f32,
+        gen_ctx: &AcademyGenerationContext,
         min_age: i32,
         max_age: i32,
+        intake_state: Option<&mut AcademyIntakeState>,
     ) -> Player {
         let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 28) as u32;
         let age = (now.year() as u32).saturating_sub(year);
 
-        // Academy level (1-20 from facility rating) → reputation factor via power curve.
-        // Softer exponent (1.2) so mid-tier academies produce competitive youth:
-        //   Level  1 (Poor):       ~0.012  →  raw_ca ~13
-        //   Level  7 (Average):    ~0.128  →  raw_ca ~36
-        //   Level  9 (Adequate):   ~0.176  →  raw_ca ~45
-        //   Level 11 (Good):       ~0.220  →  raw_ca ~54
-        //   Level 15 (Excellent):  ~0.318  →  raw_ca ~74
-        //   Level 20 (Best):       ~0.450  →  raw_ca ~100
-        let norm = (level as f32 / 20.0).clamp(0.0, 1.0);
-        let base_rep_factor = (norm.powf(1.2) * 0.45).clamp(0.01, 0.45);
+        let level = gen_ctx.academy_level;
+        let youth_facility_quality = gen_ctx.youth_facility_quality;
+        let academy_quality = gen_ctx.academy_quality;
+        let recruitment_quality = gen_ctx.recruitment_quality;
 
-        // Youth Facilities boost the effective rep_factor for skill generation
-        // Poor youth facilities (0.05) → -20% CA, Best (1.0) → +30% CA
-        let youth_boost = 0.80 + youth_facility_quality * 0.50; // 0.83 to 1.30
-        let rep_factor = (base_rep_factor * youth_boost).clamp(0.01, 0.55);
+        // Combined potential score blends club / league / country reputation,
+        // academy programme, pathway prestige, and coaching into a single
+        // 0..1 driver. Same continuous signal whether the club is Real
+        // Madrid (~0.85) or a regional minnow (~0.05) — no special-cased
+        // tier branches.
+        let cps = gen_ctx.combined_potential_score();
 
-        // Raw CA = peak potential before age reduction
+        // Per-intake elite-cluster damping: each prior elite (PA>=160)
+        // hit in the same intake squeezes the next one's gem/talent rolls,
+        // so a single class doesn't accidentally graduate three world-class
+        // youngsters at once.
+        let elite_damping = intake_state
+            .as_ref()
+            .map(|s| s.elite_damping_factor())
+            .unwrap_or(1.0);
+
+        // Floor (raw_ca) — physical facilities + youth coaching dominate the
+        // floor; reputation contributes only modestly. Cambodian academy
+        // with great facilities still produces a competent CA player.
+        let norm_level = (level as f32 / 20.0).clamp(0.0, 1.0);
+        let base_rep_factor = (norm_level.powf(1.2) * 0.45).clamp(0.01, 0.45);
+        let youth_boost = 0.80 + youth_facility_quality * 0.40
+            + gen_ctx.youth_coaching_quality * 0.10; // 0.83..1.30
+        let cps_floor_lift = 1.0 + cps * 0.22; // up to +22% from reputation
+        let rep_factor = (base_rep_factor * youth_boost * cps_floor_lift).clamp(0.01, 0.55);
         let raw_ca = 10.0 + rep_factor * 200.0;
 
-        // Calculate PA first — skills are PA-anchored for proper position differentiation
-        // Youth Recruitment affects gem chance (rare exceptional talent)
-        // Poor recruitment (0.05) → 0.9%, Average (0.35) → 1.6%, Best (1.0) → 3.0%
-        // Gives small clubs a realistic path to occasional standout talents
-        let gem_chance = 0.008 + recruitment_quality * 0.022;
+        // Gem chance: recruitment widens the candidate pool, but elite
+        // candidates only show up where reputation can attract them. Even
+        // CPS=0 still leaves a tiny floor so small clubs can produce a
+        // standout — just very rarely.
+        let gem_chance = (0.0035
+            + recruitment_quality * 0.012
+            + cps * 0.022)
+            * elite_damping;
+        let is_gem = rand::random::<f32>() < gem_chance;
 
-        let gem_roll = rand::random::<f32>();
-        let is_gem = gem_roll < gem_chance;
+        // PA ceiling: a single continuous curve of CPS — academies at the
+        // bottom cap around 110, mid clubs at 145, top clubs at 180+ before
+        // any prodigy roll. Note: even at CPS=1 the cap stays under 190;
+        // PA 190+ requires the prodigy path, never the regular one.
+        let mut academy_pa_cap = (110.0 + cps.powf(1.15) * 78.0) as i32; // ~110..188
 
-        // Academy quality is the primary driver of PA ceiling.
-        // Higher floor so good academies regularly produce strong players without needing gems:
-        //   Poor academy (0.05): PA cap ~107, typical PA 15-75
-        //   Average (0.35):      PA cap ~147, typical PA 25-120
-        //   Good (0.55):         PA cap ~159, typical PA 35-140
-        //   Excellent (0.75):    PA cap ~169, typical PA 40-155
-        //   Best (1.0):          PA cap ~180, typical PA 50-170
-        let mut academy_pa_cap = (100.0 + academy_quality.sqrt() * 80.0) as i32; // 102..180
-
-        // Rare prodigy: tiered chance for exceptional talent beyond normal academy cap.
-        // Even a small club can produce a generational talent — just extremely rarely.
-        let prodigy_roll = rand::random::<f32>();
-        if prodigy_roll < 0.00005 {
-            // Once-in-a-generation: ~0.005% → across 400 players/year = once per ~50 years
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(175, 195));
-        } else if prodigy_roll < 0.00025 {
-            // World-class potential: ~0.02% → roughly once per ~12 years globally
+        // Rare prodigy: gates beyond the standard cap. The high tiers (PA
+        // 175+, 190+) require the prodigy roll AND meaningful CPS, so a
+        // hopeless minnow does not regularly mint world-class kids.
+        let prodigy_roll = rand::random::<f32>() / elite_damping.max(1e-3);
+        if prodigy_roll < 0.00005 && cps >= 0.55 {
+            // Generational, only at well-resourced clubs.
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(178, 195));
+        } else if prodigy_roll < 0.00025 && cps >= 0.40 {
+            // World-class — credible top-flight or strong second-flight.
             academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(160, 180));
-        } else if prodigy_roll < 0.001 {
-            // Very high potential: ~0.075% → roughly once per ~4 years globally
+        } else if prodigy_roll < 0.0010 {
+            // Very high potential — open to any club, including small ones,
+            // because even a Norwich or Brentford can occasionally turn up
+            // a future star.
             academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(145, 165));
         }
 
-        // Use raw_ca (peak potential) as PA base, not age-reduced current_ability.
-        // A 14-year-old at Inter has low CA (age factor 0.50) but should have high PA.
+        // PA base anchored on raw CA so we don't fight the age reduction.
         let pa_base = raw_ca as i32;
 
         let potential_ability = if is_gem {
-            // Gems: PA spread between base and a high fraction of academy cap.
-            // Gems represent exceptional finds — they should reach near the ceiling.
             let gem_min = (pa_base + 10).min(academy_pa_cap - 10).max(pa_base);
-            let gem_max = (academy_pa_cap as f32 * (0.85 + rep_factor * 0.15)) as i32;
+            let gem_max = (academy_pa_cap as f32 * (0.85 + cps * 0.15)) as i32;
             IntegerUtils::random(gem_min, gem_max.clamp(gem_min, 200)).min(200) as u8
         } else {
-            // Better academies develop more talent to higher levels through superior training.
-            // Squared distribution (not cubed) — good academies regularly push players
-            // toward their PA ceiling, not just occasionally:
-            //   ~25% modest (factor 0.35-0.55), ~35% average (0.55-0.85),
-            //   ~25% good (0.85-1.15), ~15% standout (1.15-1.45)
+            // Talent factor max climbs with CPS so top academies regularly
+            // graduate the high-PA bands without needing a gem roll. CPS=0
+            // tops out at ~0.85, CPS=1 at ~1.50.
             let talent_roll = rand::random::<f32>();
-            let talent_factor = 0.35 + talent_roll.powi(2) * 1.10; // 0.35..1.45
+            let talent_max = 0.85 + cps * 0.65;
+            let talent_factor = 0.35 + talent_roll.powi(2) * (talent_max - 0.35);
             let jittered_base = (raw_ca as f32 * talent_factor) as i32;
 
-            // Modest headroom on top of jittered base, capped by academy quality
-            let base_headroom = 8.0 + academy_quality * 35.0; // 9.8..43
+            // Headroom: bigger at well-resourced clubs (academy programme
+            // + reputation pull) so the right-tail still has reach.
+            let base_headroom = 8.0 + academy_quality * 28.0 + cps * 12.0; // ~9..48
             let headroom = (base_headroom * (0.70 + academy_quality * 0.30)) as i32;
             let raw_pa = jittered_base + IntegerUtils::random(0, headroom.max(5));
             raw_pa.max(20).min(academy_pa_cap).min(200) as u8
         };
+
+        if let Some(state) = intake_state {
+            state.record(potential_ability);
+        }
 
         let pos_type = position_type_from(position);
         let skills = Self::generate_skills(&pos_type, age, rep_factor, potential_ability);
@@ -1215,6 +1342,159 @@ fn cross_side_position(primary: PlayerPositionType) -> Option<PlayerPositionType
         PlayerPositionType::ForwardLeft => Some(PlayerPositionType::ForwardRight),
         PlayerPositionType::ForwardRight => Some(PlayerPositionType::ForwardLeft),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod academy_realism_tests {
+    use super::{AcademyGenerationContext, AcademyIntakeState, PlayerGenerator};
+    use crate::{PeopleNameGeneratorData, PlayerPositionType};
+    use chrono::NaiveDate;
+
+    fn empty_names() -> PeopleNameGeneratorData {
+        PeopleNameGeneratorData {
+            first_names: vec!["A".into()],
+            last_names: vec!["B".into()],
+            nicknames: vec![],
+        }
+    }
+
+    fn now() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()
+    }
+
+    fn generate_batch(ctx: &AcademyGenerationContext, n: usize) -> Vec<u8> {
+        let names = empty_names();
+        (0..n)
+            .map(|_| {
+                let p = PlayerGenerator::generate_with_context(
+                    1,
+                    now(),
+                    PlayerPositionType::MidfielderCenter,
+                    &names,
+                    ctx,
+                    14,
+                    14,
+                    None,
+                );
+                p.player_attributes.potential_ability
+            })
+            .collect()
+    }
+
+    fn weak_minnow_ctx() -> AcademyGenerationContext {
+        AcademyGenerationContext::from_components(
+            3, 0.10, 0.10, 0.10, 0.10,
+            500, 800, 1500, 30,
+        )
+    }
+
+    fn elite_ctx() -> AcademyGenerationContext {
+        AcademyGenerationContext::from_components(
+            20, 1.0, 1.0, 1.0, 1.0,
+            9500, 9500, 9500, 90,
+        )
+    }
+
+    fn cps_score(ctx: &AcademyGenerationContext) -> f32 {
+        ctx.combined_potential_score()
+    }
+
+    #[test]
+    fn cps_separates_minnow_from_elite() {
+        let weak = weak_minnow_ctx();
+        let elite = elite_ctx();
+        assert!(cps_score(&weak) < 0.20);
+        assert!(cps_score(&elite) > 0.85);
+    }
+
+    #[test]
+    fn weak_club_mostly_low_pa() {
+        let ctx = weak_minnow_ctx();
+        let pas = generate_batch(&ctx, 400);
+        let elite_count = pas.iter().filter(|&&pa| pa >= 140).count();
+        let world_class = pas.iter().filter(|&&pa| pa >= 180).count();
+        let avg = pas.iter().map(|&pa| pa as u32).sum::<u32>() / pas.len() as u32;
+
+        assert!(avg < 90, "weak academy avg PA {avg} too high");
+        assert!(
+            elite_count <= pas.len() / 20,
+            "weak academy produced too many 140+ PA: {elite_count} of {}",
+            pas.len()
+        );
+        assert_eq!(
+            world_class, 0,
+            "weak academy minted a world-class prospect ({world_class}); expected zero in this batch"
+        );
+    }
+
+    #[test]
+    fn elite_club_better_average_but_few_world_class() {
+        let weak_pas = generate_batch(&weak_minnow_ctx(), 400);
+        let elite_pas = generate_batch(&elite_ctx(), 400);
+        let weak_avg = weak_pas.iter().map(|&pa| pa as u32).sum::<u32>() / weak_pas.len() as u32;
+        let elite_avg = elite_pas.iter().map(|&pa| pa as u32).sum::<u32>() / elite_pas.len() as u32;
+        let world_class = elite_pas.iter().filter(|&&pa| pa >= 180).count();
+
+        assert!(
+            elite_avg >= weak_avg + 30,
+            "elite avg PA {elite_avg} should be substantially higher than weak {weak_avg}"
+        );
+        assert!(
+            world_class <= elite_pas.len() / 10,
+            "even elite academy shouldn't produce {} (>10%) world-class prospects in 400 picks",
+            world_class
+        );
+    }
+
+    #[test]
+    fn same_facilities_different_reputation_diverge() {
+        // Identical physical facility ratings, only the reputation/league
+        // signal differs. The realism overhaul means CA/PA distributions
+        // should respond.
+        let mid_facilities = (0.55, 0.55, 0.55, 0.55);
+        let small = AcademyGenerationContext::from_components(
+            11, mid_facilities.0, mid_facilities.1, mid_facilities.2, mid_facilities.3,
+            800, 1000, 1500, 50,
+        );
+        let big = AcademyGenerationContext::from_components(
+            11, mid_facilities.0, mid_facilities.1, mid_facilities.2, mid_facilities.3,
+            9000, 9000, 9000, 80,
+        );
+
+        let small_pas = generate_batch(&small, 300);
+        let big_pas = generate_batch(&big, 300);
+        let small_avg = small_pas.iter().map(|&pa| pa as u32).sum::<u32>() / small_pas.len() as u32;
+        let big_avg = big_pas.iter().map(|&pa| pa as u32).sum::<u32>() / big_pas.len() as u32;
+
+        assert!(
+            big_avg >= small_avg + 8,
+            "reputation should shift PA: small={small_avg}, big={big_avg}"
+        );
+    }
+
+    #[test]
+    fn intake_state_dampens_successive_elites() {
+        let mut state = AcademyIntakeState::new();
+        assert!((state.elite_damping_factor() - 1.0).abs() < 1e-6);
+
+        state.record(170);
+        assert!(state.elite_damping_factor() < 0.6);
+
+        state.record(190);
+        assert!(state.elite_damping_factor() < 0.3);
+    }
+
+    #[test]
+    fn academy_level_scale_normalised() {
+        // tier collapsing should map facility rating 1..20 to pathway tier 1..10
+        use crate::club::academy::academy::academy_tier;
+        assert_eq!(academy_tier(1), 1);
+        assert_eq!(academy_tier(2), 1);
+        assert_eq!(academy_tier(11), 6);
+        assert_eq!(academy_tier(15), 8);
+        assert_eq!(academy_tier(19), 10);
+        assert_eq!(academy_tier(20), 10);
     }
 }
 

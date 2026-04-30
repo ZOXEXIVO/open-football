@@ -175,7 +175,12 @@ pub async fn team_academy_action(
 }
 
 fn get_ability_stars(ability: u8) -> u8 {
-    (5.0f32 * (ability as f32 / 200.0)).round() as u8
+    // Absolute scale: PA 200 → 5★, PA 0 → 0.0, rounded half-up.
+    // After the academy realism overhaul PA 180+ is genuinely rare even at
+    // top clubs, so 5★ now reads as "world-class prospect" rather than
+    // "anyone the academy minted today".
+    let raw = (5.0f32 * (ability as f32 / 200.0)).round() as u8;
+    raw.max(1).min(5)
 }
 
 fn get_neighbor_teams(

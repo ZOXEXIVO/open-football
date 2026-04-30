@@ -242,7 +242,7 @@ impl PipelineProcessor {
                     };
 
                     let asking_price =
-                        Self::calculate_asking_price(player, selling_club, date, price_level);
+                        Self::calculate_asking_price(player, country, selling_club, date, price_level);
 
                     let actual_asking = if is_loan {
                         let salary_proxy = player
@@ -935,7 +935,7 @@ impl PipelineProcessor {
                 None => continue,
             };
             let asking_price =
-                Self::calculate_asking_price(player, sell_club, date, sell_price_level);
+                Self::calculate_asking_price(player, sell_country, sell_club, date, sell_price_level);
             let player_age = player.age(date);
             let player_ambition = player.skills.mental.determination;
             let player_name = player.full_name.to_string();

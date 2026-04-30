@@ -1,5 +1,6 @@
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
+use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{ContractType, Person, PlayerStatusType, ReputationLevel, TransferItem};
 use chrono::NaiveDate;
@@ -130,6 +131,13 @@ impl Club {
             _ => 0.0, // Local/Amateur: free loan
         };
 
+        // Use the seller's actual blended reputation (not 0/0) so the
+        // board's loan/transfer estimates track the player's true market
+        // price. Country isn't visible here, so the helper approximates
+        // league rep from the club's reputation score.
+        let (seller_league_rep, seller_club_rep) =
+            PlayerValuationCalculator::seller_context_from_club(self);
+
         // Process loan recommendations
         for (team_idx, player_id, reason) in loan_players {
             let team_idx = *team_idx;
@@ -138,7 +146,7 @@ impl Club {
 
             let loan_fee = if rep_multiplier > 0.0 {
                 let player_value = self.teams.teams[team_idx].players.find(player_id)
-                    .map(|p| p.value(date, 0, 0))
+                    .map(|p| p.value(date, seller_league_rep, seller_club_rep))
                     .unwrap_or(0.0);
                 FormattingUtils::round_fee(player_value * rep_multiplier)
             } else {
@@ -182,7 +190,7 @@ impl Club {
                     Some(p) => p,
                     None => continue,
                 };
-                player.value(date, 0, 0) * 0.5
+                player.value(date, seller_league_rep, seller_club_rep) * 0.5
             };
 
             let player = match self.teams.teams[team_idx].players.find_mut(player_id) {

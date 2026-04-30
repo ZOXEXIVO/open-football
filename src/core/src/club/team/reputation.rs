@@ -39,6 +39,19 @@ impl TeamReputation {
         (self.home as f32 * 0.2 + self.national as f32 * 0.3 + self.world as f32 * 0.5) / 10000.0
     }
 
+    /// Blended 0..10000 reputation score for market valuation. Same
+    /// weighting as `overall_score` (home 20%, national 30%, world 50%) —
+    /// world reputation drives the international market most, but a club
+    /// can carry strong domestic standing even with limited continental
+    /// exposure. Single source of truth for every transfer/valuation call
+    /// site so they stop reading just `world` and flattening domestic
+    /// strength.
+    pub fn market_value_score(&self) -> u16 {
+        let blended =
+            self.home as f32 * 0.2 + self.national as f32 * 0.3 + self.world as f32 * 0.5;
+        blended.round().clamp(0.0, 10000.0) as u16
+    }
+
     /// Get reputation level category
     pub fn level(&self) -> ReputationLevel {
         match self.overall_score() {

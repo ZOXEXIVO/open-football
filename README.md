@@ -22,6 +22,8 @@ improving.
   <img src=".docs/images/live-simulator-cta.svg" alt="Open Football Live Demo" width="520">
 </a>
 
+or download [single binary file](https://github.com/ZOXEXIVO/open-football/releases) to run on your PC / Server
+
 ## What Makes It Different
 
 Open Football is focused on simulation first.
@@ -44,6 +46,8 @@ The project is designed to answer questions like:
 
 You can run it on your local computer with a
 [single binary file](https://github.com/ZOXEXIVO/open-football/releases).
+
+You can run it on your local PC or remote server (and open it with {SERVER_IP}:18000)
 
 <img src=".docs/images/single_binary.png" alt="Open Football Banner" width="900">
 

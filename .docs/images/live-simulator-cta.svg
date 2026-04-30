@@ -45,7 +45,7 @@
 
   <text x="158" y="69"
         font-family="Inter, Segoe UI, Arial, sans-serif"
-        font-size="23"
+        font-size="27"
         font-weight="700"
         letter-spacing="3"
         fill="#99f6e4">
@@ -53,17 +53,12 @@
   </text>
   <text x="158" y="104"
         font-family="Inter, Segoe UI, Arial, sans-serif"
-        font-size="25"
+        font-size="21"
         font-weight="850"
         letter-spacing="0"
         fill="#ffffff">
-    TRY DEMO
+    TRY ONLINE
   </text>
-
-  <g transform="translate(637 55)">
-    <rect width="54" height="40" rx="20" fill="#ecfeff" fill-opacity="0.14" stroke="#ccfbf1" stroke-opacity="0.32"/>
-    <path d="M21 14 L33 20 L21 26 Z" fill="#ecfeff"/>
-  </g>
 
   <rect x="18" y="18" width="724" height="3" fill="url(#glow)" opacity="0.9"/>
 </svg>

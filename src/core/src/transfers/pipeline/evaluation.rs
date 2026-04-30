@@ -29,6 +29,115 @@ struct SquadEvaluation {
     max_concurrent: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::transfers::pipeline) enum NeedKind {
+    FormationGap,
+    QualityUpgrade,
+    DepthCover,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::transfers::pipeline) struct GroupNeed {
+    pub group: PlayerFieldPositionGroup,
+    pub representative_pos: PlayerPositionType,
+    pub kind: NeedKind,
+}
+
+/// Bench depth a group needs in addition to the formation slots —
+/// pure function of the formation, used to detect "too thin to cover
+/// rotations and injuries." Centralised so evaluation and tests share
+/// one source of truth.
+pub(in crate::transfers::pipeline) fn group_depth_requirement(
+    formation_positions: &[PlayerPositionType; 11],
+    group: PlayerFieldPositionGroup,
+) -> usize {
+    let formation_count = formation_positions
+        .iter()
+        .filter(|p| p.position_group() == group)
+        .count();
+    match group {
+        PlayerFieldPositionGroup::Goalkeeper => 2,
+        PlayerFieldPositionGroup::Defender => formation_count + 2,
+        PlayerFieldPositionGroup::Midfielder => formation_count + 1,
+        PlayerFieldPositionGroup::Forward => formation_count + 1,
+    }
+}
+
+/// Detect the recruitment need for each position group, deduped at the
+/// group level. Pure function — no side effects, no AI / network.
+/// Priority order per group: FormationGap > QualityUpgrade > DepthCover.
+/// Each group emits at most one entry, eliminating the slot-level
+/// triple-count that distorted budget allocation in the old layout.
+pub(in crate::transfers::pipeline) fn compute_group_needs(
+    squad: &[crate::transfers::pipeline::processor::SquadPlayerInfo],
+    position_coverage: &[(PlayerPositionType, Option<u32>, u8)],
+    formation_positions: &[PlayerPositionType; 11],
+    rep_score: f32,
+    quality_tolerance: i16,
+) -> Vec<GroupNeed> {
+    let mut needs: Vec<GroupNeed> = Vec::new();
+    let mut visited: Vec<PlayerFieldPositionGroup> = Vec::new();
+
+    for (pos, _, _) in position_coverage {
+        let group = pos.position_group();
+        if visited.contains(&group) {
+            continue;
+        }
+        visited.push(group);
+
+        let representative_pos = formation_positions
+            .iter()
+            .copied()
+            .find(|p| p.position_group() == group)
+            .unwrap_or(*pos);
+
+        // (1) Formation gap — any slot in the group has no covering player
+        let group_has_gap = position_coverage
+            .iter()
+            .any(|(p, pid, _)| p.position_group() == group && pid.is_none());
+        if group_has_gap {
+            needs.push(GroupNeed {
+                group,
+                representative_pos,
+                kind: NeedKind::FormationGap,
+            });
+            continue;
+        }
+
+        // (2) Quality upgrade — best player at this group below tier baseline
+        let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
+        let best_in_group = squad
+            .iter()
+            .filter(|p| p.primary_position.position_group() == group)
+            .map(|p| p.current_ability)
+            .max()
+            .unwrap_or(0);
+        if (best_in_group as i16) < baseline as i16 - quality_tolerance {
+            needs.push(GroupNeed {
+                group,
+                representative_pos,
+                kind: NeedKind::QualityUpgrade,
+            });
+            continue;
+        }
+
+        // (3) Depth cover — group thinner than formation footprint
+        let group_count = squad
+            .iter()
+            .filter(|p| p.primary_position.position_group() == group)
+            .count();
+        if group_count < group_depth_requirement(formation_positions, group) {
+            needs.push(GroupNeed {
+                group,
+                representative_pos,
+                kind: NeedKind::DepthCover,
+            });
+        }
+    }
+
+    needs
+}
+
 impl PipelineProcessor {
     // ============================================================
     // Step 2: Squad Evaluation - Coach-driven, formation-based
@@ -346,181 +455,82 @@ impl PipelineProcessor {
         let available_budget = budget * 0.9; // Keep 10% reserve
         let mut budget_used = 0.0;
 
-        // Count how many requests we'll make to divide budget
-        let formation_gaps: Vec<_> = position_coverage
-            .iter()
-            .filter(|(_, player, _)| player.is_none())
-            .collect();
+        // Continuous reputation score — drives tier baselines without
+        // snapping to enum boundaries. A team mid-Continental gets a
+        // different threshold from a team top-of-Continental.
+        let rep_score = team.reputation.overall_score();
+        let quality_tolerance = Self::tier_quality_tolerance_score(rep_score);
+        let _ = ability_tolerance; // philosophy-driven tolerance retained
+                                   // elsewhere; tier baselines drive the
+                                   // recruitment thresholds now.
 
-        // Quality issues: a formation slot's best player is well below squad level.
-        // But only flag positions where the group genuinely lacks quality starters —
-        // a weak 4th-choice defender is normal, not a reason to buy another one.
+        // ── Build group-level needs in one pass ──────────────────────
         //
-        // Threshold is position-group aware: goalkeepers naturally score
-        // lower on the raw CA scale (fewer outfield-style attributes feed
-        // their rating), so a -15 gate against a team's top-11 mean fired
-        // on nearly every mid-tier starting keeper and generated a "need
-        // an upgrade" request immediately. The wider -25 gate for GKs
-        // mirrors how clubs actually look at the position: the starter
-        // stays unless he's clearly a weak link, not just "below the
-        // striker's numbers on paper".
-        let quality_gap = |group: PlayerFieldPositionGroup| -> i16 {
-            match group {
-                PlayerFieldPositionGroup::Goalkeeper => 25,
-                _ => 15,
-            }
-        };
+        // Each position group can produce AT MOST one need per evaluation,
+        // chosen by priority FormationGap > QualityUpgrade > DepthCover.
+        // The previous slot-level construction triple-counted groups in
+        // `total_needs`, distorting `budget_per_need`: a back-three with
+        // two empty slots looked like "two gaps" for budget purposes
+        // even though both were filled by one signing in practice.
+        //
+        // Detection lives in `compute_group_needs` (pure function, unit
+        // tested in helpers' test module).
+        let group_needs = compute_group_needs(
+            &squad,
+            &position_coverage,
+            formation_positions,
+            rep_score,
+            quality_tolerance,
+        );
 
-        let quality_issues: Vec<_> = position_coverage
-            .iter()
-            .filter(|(pos, player, quality)| {
-                let group = pos.position_group();
-                let gap = quality_gap(group);
-                if player.is_none() || (*quality as i16) >= avg_ability as i16 - gap {
-                    return false;
-                }
-
-                // How many formation slots need this position group?
-                let formation_need = formation_positions
-                    .iter()
-                    .filter(|p| p.position_group() == group)
-                    .count();
-
-                // How many squad players in this group are already good enough?
-                let good_players = squad
-                    .iter()
-                    .filter(|p| p.primary_position.position_group() == group)
-                    .filter(|p| (p.current_ability as i16) >= avg_ability as i16 - gap)
-                    .count();
-
-                // If we have enough good players to fill all formation slots,
-                // the flagged player is just a backup — no upgrade needed.
-                good_players < formation_need
-            })
-            .collect();
-
-        // Count positions with only one player (need depth)
-        let depth_issues: Vec<_> = formation_positions
-            .iter()
-            .filter(|&&pos| {
-                let group = pos.position_group();
-                let group_count = squad
-                    .iter()
-                    .filter(|p| p.primary_position.position_group() == group)
-                    .count();
-                // Need at least some depth per position group
-                let min_needed = match group {
-                    PlayerFieldPositionGroup::Goalkeeper => 2,
-                    PlayerFieldPositionGroup::Defender => {
-                        let formation_def = formation_positions
-                            .iter()
-                            .filter(|p| p.is_defender())
-                            .count();
-                        formation_def + 2 // +2 backup
-                    }
-                    PlayerFieldPositionGroup::Midfielder => {
-                        let formation_mid = formation_positions
-                            .iter()
-                            .filter(|p| p.is_midfielder())
-                            .count();
-                        formation_mid + 1
-                    }
-                    PlayerFieldPositionGroup::Forward => {
-                        let formation_fwd = formation_positions
-                            .iter()
-                            .filter(|p| p.is_forward())
-                            .count();
-                        formation_fwd + 1
-                    }
-                };
-                group_count < min_needed
-            })
-            .collect();
-
-        let total_needs = formation_gaps.len() + quality_issues.len() + depth_issues.len();
+        let total_needs = group_needs.len();
         let budget_per_need = if total_needs > 0 {
             available_budget / total_needs as f64
         } else {
             0.0
         };
 
-        // Formation gaps - CRITICAL: no one can play the position
-        for (pos, _, _) in &formation_gaps {
-            let alloc = (budget_per_need * 1.5).min(available_budget - budget_used);
+        // Generate one request per group with priority and budget
+        // appropriate to the kind of need.
+        for need in &group_needs {
+            let group = need.group;
+            let baseline = Self::tier_starter_ca_score(rep_score, group);
+            let (priority, reason, mult, min_ca, ideal_ca) = match need.kind {
+                NeedKind::FormationGap => (
+                    TransferNeedPriority::Critical,
+                    TransferNeedReason::FormationGap,
+                    1.5,
+                    baseline.saturating_sub(12),
+                    baseline,
+                ),
+                NeedKind::QualityUpgrade => (
+                    TransferNeedPriority::Important,
+                    TransferNeedReason::QualityUpgrade,
+                    1.0,
+                    baseline.saturating_sub(8),
+                    baseline.saturating_add(5),
+                ),
+                NeedKind::DepthCover => (
+                    TransferNeedPriority::Optional,
+                    TransferNeedReason::DepthCover,
+                    0.6,
+                    baseline.saturating_sub(15),
+                    baseline.saturating_sub(5),
+                ),
+            };
+
+            let alloc = (budget_per_need * mult).min(available_budget - budget_used);
             if alloc <= 0.0 {
                 break;
             }
 
-            let min_ca = (avg_ability as i16 - ability_tolerance).max(1) as u8;
             requests.push(TransferRequest::new(
                 next_id,
-                *pos,
-                TransferNeedPriority::Critical,
-                TransferNeedReason::FormationGap,
+                need.representative_pos,
+                priority,
+                reason,
                 min_ca,
-                avg_ability,
-                alloc,
-            ));
-            next_id += 1;
-            budget_used += alloc;
-        }
-
-        // Quality issues - IMPORTANT: player is significantly below squad level
-        // Deduplicate within the same position group — buying two CBs when one
-        // is enough causes the second to sit on 0 apps and get dumped at a loss.
-        let mut quality_groups_handled: Vec<PlayerFieldPositionGroup> = Vec::new();
-        for (pos, _, _) in &quality_issues {
-            let group = pos.position_group();
-            if quality_groups_handled.contains(&group) {
-                continue;
-            }
-            // Don't duplicate a FormationGap request for the same group
-            if requests.iter().any(|r| r.position.position_group() == group) {
-                continue;
-            }
-            quality_groups_handled.push(group);
-
-            let alloc = budget_per_need.min(available_budget - budget_used);
-            if alloc <= 0.0 {
-                break;
-            }
-
-            let min_ca = (avg_ability as i16 - ability_tolerance / 2).max(1) as u8;
-            requests.push(TransferRequest::new(
-                next_id,
-                *pos,
-                TransferNeedPriority::Important,
-                TransferNeedReason::QualityUpgrade,
-                min_ca,
-                avg_ability + 5,
-                alloc,
-            ));
-            next_id += 1;
-            budget_used += alloc;
-        }
-
-        // Depth issues - OPTIONAL: need backup for a position group
-        let mut depth_positions_handled: Vec<PlayerFieldPositionGroup> = Vec::new();
-        for &&pos in &depth_issues {
-            let group = pos.position_group();
-            if depth_positions_handled.contains(&group) {
-                continue;
-            }
-            depth_positions_handled.push(group);
-
-            let alloc = (budget_per_need * 0.6).min(available_budget - budget_used);
-            if alloc <= 0.0 {
-                break;
-            }
-
-            let min_ca = (avg_ability as i16 - ability_tolerance).max(1) as u8;
-            requests.push(TransferRequest::new(
-                next_id,
-                pos,
-                TransferNeedPriority::Optional,
-                TransferNeedReason::DepthCover,
-                min_ca,
-                avg_ability.saturating_sub(5),
+                ideal_ca,
                 alloc,
             ));
             next_id += 1;

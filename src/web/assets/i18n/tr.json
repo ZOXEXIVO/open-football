@@ -159,6 +159,8 @@
   "dec_reason_blocked_top_club": "Büyük kulüpte engelleniyor, başka yerde oynama süresine ihtiyacı var",
   "dec_reason_club_listed": "Kulüp tarafından transfer listesine alındı",
   "dec_reason_contract_expiring": "Sözleşmesi bitiyor, serbest ayrılmadan önce ücret aranıyor",
+  "dec_reason_contract_expired": "Sözleşmesi sona erdi — serbest oyuncu olarak ayrıldı",
+  "dec_reason_released_free": "Karşılıklı anlaşmayla serbest bırakıldı",
   "dec_reason_financial_relief": "Maaş yükünü azaltmak için kiraya verildi",
   "dec_reason_lack_playing_time": "Bu sezon yetersiz oynama süresi",
   "dec_reason_loan_playing_time": "Düzenli oynama süresi için kiralık",

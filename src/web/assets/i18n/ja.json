@@ -159,6 +159,8 @@
   "dec_reason_blocked_top_club": "強豪クラブで出番なし、他で出場機会が必要",
   "dec_reason_club_listed": "クラブにより移籍リスト登録",
   "dec_reason_contract_expiring": "契約満了間近、フリー移籍前に移籍金を確保",
+  "dec_reason_contract_expired": "契約満了 — フリーエージェントとして解放",
+  "dec_reason_released_free": "合意による契約解除",
   "dec_reason_financial_relief": "人件費削減のためレンタル放出",
   "dec_reason_lack_playing_time": "今シーズン出場機会不足",
   "dec_reason_loan_playing_time": "定期的な出場機会のためレンタル",

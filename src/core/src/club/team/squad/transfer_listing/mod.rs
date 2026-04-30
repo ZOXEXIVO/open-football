@@ -317,8 +317,13 @@ impl TransferListManager {
                 continue;
             }
 
+            // Asking price uses the selling club's actual blended
+            // reputation so the listing fee reflects market context, not
+            // a flat 0/0 baseline. The main team carries the canonical
+            // market score for the club.
+            let club_rep = teams[main_idx].reputation.market_value_score();
             let asking_price = find_player_in_teams(teams, team_indices, decision.player_id)
-                .map(|p| p.value(date, 0, 0))
+                .map(|p| p.value(date, club_rep, club_rep))
                 .unwrap_or(0.0);
 
             teams[main_idx]

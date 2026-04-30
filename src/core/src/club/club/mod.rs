@@ -218,11 +218,16 @@ impl Club {
         // without walking the whole staff list each call.
         let staff_q = self.compute_staff_qualities();
 
+        // Preserve any reputation/league info already injected by the
+        // country-level orchestrator (`Country::simulate_clubs`) — without
+        // this, a fresh `with_club` here would wipe main-team / league /
+        // country reputation before the academy pipeline reads them.
+        let preserved = ctx.club.as_ref().cloned();
         let club_ctx = ctx.with_club(self.id, &self.name);
         let club_ctx = {
             let mut c = club_ctx;
             if let Some(ref mut cc) = c.club {
-                *cc = cc
+                let mut next = cc
                     .clone()
                     .with_facilities(
                         self.facilities.training.multiplier(),
@@ -236,7 +241,27 @@ impl Club {
                         staff_q.coach_mental,
                         staff_q.coach_fitness,
                         staff_q.coach_goalkeeping,
-                    );
+                    )
+                    .with_pathway_reputation(self.academy.pathway_reputation);
+
+                if let Some(prev) = preserved {
+                    next = next
+                        .with_league_position(
+                            prev.league_position,
+                            prev.league_size,
+                            prev.total_league_matches,
+                            prev.league_matches_played,
+                        )
+                        .with_main_league_tier(prev.main_league_tier)
+                        .with_reputations(
+                            prev.main_team_reputation,
+                            prev.main_team_world_reputation,
+                            prev.league_reputation,
+                            prev.country_reputation,
+                        );
+                }
+
+                *cc = next;
             }
             c
         };

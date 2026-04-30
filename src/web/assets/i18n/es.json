@@ -159,6 +159,8 @@
   "dec_reason_blocked_top_club": "Bloqueado en club grande, necesita minutos en otro lugar",
   "dec_reason_club_listed": "El club ha puesto al jugador en transferencia",
   "dec_reason_contract_expiring": "Contrato expirando, buscando traspaso antes de salir gratis",
+  "dec_reason_contract_expired": "Contrato expirado — liberado como agente libre",
+  "dec_reason_released_free": "Liberado por mutuo acuerdo",
   "dec_reason_financial_relief": "Cesión para reducir la masa salarial",
   "dec_reason_lack_playing_time": "Tiempo de juego insuficiente esta temporada",
   "dec_reason_loan_playing_time": "Cesión para obtener minutos regulares",

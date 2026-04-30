@@ -13,6 +13,11 @@ pub struct CountryContext {
     /// Country-level price multiplier for transfers and budgets (from country data).
     /// England 1.5, Spain 1.2, Colombia 0.4, etc. Default 1.0.
     pub price_level: f32,
+    /// Country football-ecosystem strength (0..10000). Drives, among other
+    /// things, how realistic the academy generator is allowed to be when
+    /// minting elite prospects: a Brazilian academy of the same physical
+    /// quality as a Cambodian one should produce stronger youth on average.
+    pub reputation: u16,
 }
 
 impl CountryContext {
@@ -24,6 +29,7 @@ impl CountryContext {
             sponsorship_market_strength: 1.0,
             stadium_attendance_factor: 1.0,
             price_level: 1.0,
+            reputation: 0,
         }
     }
 
@@ -35,6 +41,7 @@ impl CountryContext {
             sponsorship_market_strength: 1.0,
             stadium_attendance_factor: 1.0,
             price_level: 1.0,
+            reputation: 0,
         }
     }
 

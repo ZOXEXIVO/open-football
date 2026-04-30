@@ -52,7 +52,10 @@ impl CountryResult {
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                 .map(|l| l.reputation)
                 .unwrap_or(0);
-            let club_reputation = main_team.reputation.world;
+            // Blend home/national/world rather than reading just `world` —
+            // a club with strong domestic standing but limited continental
+            // exposure should still command a domestic premium.
+            let club_reputation = main_team.reputation.market_value_score();
             let decided_by = main_team.staffs.head_coach().full_name.to_string();
 
             for player in &main_team.players.players {

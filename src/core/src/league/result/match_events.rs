@@ -219,12 +219,28 @@ impl LeagueResult {
                     .player_attributes
                     .potential_ability
                     .max(assessed_ability);
+                // Use the host club's blended reputation as the seller
+                // proxy for memory snapshots — the player is appearing
+                // in this country, so the local league/club context is
+                // the right anchor for the buyer's mental price tag.
+                let (host_league_rep, host_club_rep) = data
+                    .country(current_country_id)
+                    .and_then(|country| {
+                        country
+                            .clubs
+                            .iter()
+                            .find(|c| c.id == current_club_id)
+                            .map(|club| {
+                                PlayerValuationCalculator::seller_context(country, club)
+                            })
+                    })
+                    .unwrap_or((0, 0));
                 let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
                     player,
                     date,
                     current_price_level,
-                    0,
-                    0,
+                    host_league_rep,
+                    host_club_rep,
                 )
                 .amount;
 

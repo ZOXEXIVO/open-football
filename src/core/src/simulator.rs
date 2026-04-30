@@ -147,21 +147,12 @@ impl FootballSimulator {
         result.panicked_continents =
             (PANICKED_CONTINENTS.load(Ordering::Relaxed) - panicks_before) as u32;
 
-        // Phase B: collect and batch-execute all AI requests. Guarded by
-        // a timeout so a hung upstream provider can't stall the whole
-        // simulation forever — on timeout, responses are dropped and the
-        // tick advances without applying AI decisions.
+        // Phase B: collect and batch-execute all AI requests. The tick
+        // waits for the batch to finish — no timeout, no dropped responses.
         let all_requests = ctx.ai.drain();
-        let ai_count = all_requests.len();
         if !all_requests.is_empty() {
-            let fut = AiBatchProcessor::execute(all_requests);
-            match tokio::time::timeout(config.ai_batch_timeout, fut).await {
-                Ok(completed) => apply_ai_responses(completed, data),
-                Err(_) => log::error!(
-                    "AI batch timed out after {:?} ({} requests dropped), tick continues",
-                    config.ai_batch_timeout, ai_count
-                ),
-            }
+            let completed = AiBatchProcessor::execute(all_requests).await;
+            apply_ai_responses(completed, data);
         }
 
         // Phase C: process the collected results against post-AI data
@@ -471,30 +462,71 @@ impl SimulatorData {
     /// inconsistently — the header reads the team name while the contract
     /// panel reads "Free Agent."
     ///
+    /// Each move is logged as a `CompletedTransfer` (zero fee, `Free`
+    /// type) on the losing club's country, so the transfer history page
+    /// reflects the departure. Reason is derived from the player's
+    /// status: `Frt` set means the club explicitly released early
+    /// (mutual / surplus / unresolved-salary path); otherwise the
+    /// contract simply expired.
+    ///
     /// Loanees are skipped (their `contract` is the parent-club contract
     /// and stays `Some` during the loan), as are retired players (already
     /// removed from team rosters by the retirement pipeline). Sets
     /// `dirty_player_index` so the next index rebuild picks up the moves.
     pub fn sweep_released_to_free_agents(&mut self) {
+        use crate::shared::{Currency, CurrencyValue};
+        use crate::transfers::{CompletedTransfer, TransferType};
+        use crate::PlayerStatusType;
+
+        let date = self.date.date();
         let mut released: Vec<Player> = Vec::new();
         for continent in &mut self.continents {
             for country in &mut continent.countries {
+                let mut new_history: Vec<CompletedTransfer> = Vec::new();
                 for club in &mut country.clubs {
+                    let club_id = club.id;
                     for team in &mut club.teams.teams {
-                        let ids: Vec<u32> = team
+                        let team_id = team.id;
+                        let team_name = team.name.clone();
+                        let candidates: Vec<(u32, String, bool)> = team
                             .players
                             .players
                             .iter()
                             .filter(|p| p.contract.is_none() && !p.is_on_loan() && !p.retired)
-                            .map(|p| p.id)
+                            .map(|p| {
+                                let was_released_early =
+                                    p.statuses.get().contains(&PlayerStatusType::Frt);
+                                (p.id, p.full_name.to_string(), was_released_early)
+                            })
                             .collect();
-                        for id in ids {
+                        for (id, player_name, released_early) in candidates {
                             if let Some(p) = team.players.take_player(&id) {
+                                let reason = if released_early {
+                                    "dec_reason_released_free".to_string()
+                                } else {
+                                    "dec_reason_contract_expired".to_string()
+                                };
+                                new_history.push(
+                                    CompletedTransfer::new(
+                                        id,
+                                        player_name,
+                                        club_id,
+                                        team_id,
+                                        team_name.clone(),
+                                        0,
+                                        "Free Agent".to_string(),
+                                        date,
+                                        CurrencyValue::new(0.0, Currency::Usd),
+                                        TransferType::Free,
+                                    )
+                                    .with_reason(reason),
+                                );
                                 released.push(p);
                             }
                         }
                     }
                 }
+                country.transfer_market.transfer_history.extend(new_history);
             }
         }
         if !released.is_empty() {

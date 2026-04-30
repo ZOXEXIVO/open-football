@@ -7,15 +7,9 @@
 //! instead of calling `default()` internally).
 
 use chrono::Datelike;
-use std::time::Duration as StdDuration;
 
 #[derive(Debug, Clone)]
 pub struct SimulatorConfig {
-    /// Hard cap on one Phase-B AI batch. Long enough for a cross-continent
-    /// monthly run with a slow provider; short enough that a hung service
-    /// still yields within a reasonable window and the sim keeps ticking.
-    pub ai_batch_timeout: StdDuration,
-
     /// Day-of-month on which `MatchStorage::trim` runs. Once-a-month is a
     /// cheap BTreeMap range walk over evicted dates only — no need to do
     /// it daily, but doing it less often risks unbounded growth.
@@ -25,7 +19,6 @@ pub struct SimulatorConfig {
 impl Default for SimulatorConfig {
     fn default() -> Self {
         SimulatorConfig {
-            ai_batch_timeout: StdDuration::from_secs(60),
             match_store_trim_day_of_month: 1,
         }
     }
@@ -46,7 +39,6 @@ mod tests {
     #[test]
     fn default_values_match_documented_constants() {
         let c = SimulatorConfig::default();
-        assert_eq!(c.ai_batch_timeout, StdDuration::from_secs(60));
         assert_eq!(c.match_store_trim_day_of_month, 1);
     }
 

@@ -34,6 +34,26 @@ pub struct ClubContext<'c> {
     pub coach_best_fitness: u8,
     /// Best goalkeeping (shot stopping) score on the club staff (0-20).
     pub coach_best_goalkeeping: u8,
+    /// Main team's blended reputation (0..10000). Used by the academy
+    /// generator and other systems that should treat a youth player at Real
+    /// Madrid differently from one at a regional minnow with the same
+    /// facility ratings.
+    pub main_team_reputation: u16,
+    /// Main team's world reputation (0..10000) — the international-stage
+    /// signal that pulls top youth talent regardless of league context.
+    pub main_team_world_reputation: u16,
+    /// Reputation of the league the main team plays in (0..10000). Drives
+    /// pathway prestige and how much development opportunity youth get from
+    /// stepping up.
+    pub league_reputation: u16,
+    /// Country-level football-ecosystem reputation (0..10000). Same value as
+    /// CountryContext.reputation, surfaced here so the academy doesn't have
+    /// to walk back up the context tree.
+    pub country_reputation: u16,
+    /// Internal academy pathway reputation (0..100). Owned by the academy,
+    /// mirrored here so the player generator can consult it without taking
+    /// a reference to the academy struct itself.
+    pub pathway_reputation: u8,
 }
 
 impl<'c> ClubContext<'c> {
@@ -57,6 +77,11 @@ impl<'c> ClubContext<'c> {
             coach_best_mental: 10,
             coach_best_fitness: 10,
             coach_best_goalkeeping: 10,
+            main_team_reputation: 0,
+            main_team_world_reputation: 0,
+            league_reputation: 0,
+            country_reputation: 0,
+            pathway_reputation: 50,
         }
     }
 
@@ -110,6 +135,25 @@ impl<'c> ClubContext<'c> {
         self.coach_best_mental = mental;
         self.coach_best_fitness = fitness;
         self.coach_best_goalkeeping = goalkeeping;
+        self
+    }
+
+    pub fn with_reputations(
+        mut self,
+        main_team_reputation: u16,
+        main_team_world_reputation: u16,
+        league_reputation: u16,
+        country_reputation: u16,
+    ) -> Self {
+        self.main_team_reputation = main_team_reputation;
+        self.main_team_world_reputation = main_team_world_reputation;
+        self.league_reputation = league_reputation;
+        self.country_reputation = country_reputation;
+        self
+    }
+
+    pub fn with_pathway_reputation(mut self, pathway_reputation: u8) -> Self {
+        self.pathway_reputation = pathway_reputation;
         self
     }
 }

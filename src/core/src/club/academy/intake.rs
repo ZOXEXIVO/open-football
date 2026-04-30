@@ -2,7 +2,7 @@ use super::ClubAcademy;
 use crate::academy::result::ProduceYouthPlayersResult;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
-use crate::{PlayerGenerator, PlayerPositionType};
+use crate::{AcademyGenerationContext, AcademyIntakeState, PlayerGenerator, PlayerPositionType};
 use chrono::Datelike;
 use log::debug;
 
@@ -38,25 +38,33 @@ impl ClubAcademy {
             None => return ProduceYouthPlayersResult::new(Vec::new()),
         };
 
-        // Youth Facilities affect intake CA, Academy affects PA,
-        // Recruitment affects gem chance
-        let youth_facility_quality = ctx.club_facilities_youth();
-        let academy_quality = ctx.club_academy_quality();
+        let gen_ctx = AcademyGenerationContext::from_components(
+            self.level,
+            ctx.club_facilities_youth(),
+            ctx.club_academy_quality(),
+            recruitment_quality,
+            ctx.club_youth_coaching_quality(),
+            ctx.club_main_reputation(),
+            ctx.club_league_reputation(),
+            ctx.club_country_reputation(),
+            self.pathway_reputation,
+        );
+        let mut intake_state = AcademyIntakeState::new();
 
         for i in 0..players_to_produce {
             let position = self
                 .recruitment_priority_position(i)
                 .unwrap_or_else(|| self.select_position_for_youth_player(i, players_to_produce));
 
-            let generated_player = PlayerGenerator::generate_with_facilities(
+            let generated_player = PlayerGenerator::generate_with_context(
                 country_id,
                 ctx.simulation.date.date(),
                 position,
-                self.level,
                 people_names,
-                youth_facility_quality,
-                academy_quality,
-                recruitment_quality,
+                &gen_ctx,
+                14,
+                14,
+                Some(&mut intake_state),
             );
 
             generated_players.push(generated_player);
@@ -81,12 +89,15 @@ impl ClubAcademy {
     }
 
     fn calculate_annual_intake(&self, recruitment_quality: f32) -> usize {
-        // Base: 5-10 players per year, scaled by academy level
+        // ClubAcademy.level is the facility rating, 1..20 (matches
+        // FacilityLevel::to_rating). Bracket on that scale directly so a
+        // level-15 academy doesn't get the same intake band as a level-10
+        // one.
         let (min_intake, max_intake) = match self.level {
-            1..=3 => (5, 7),
-            4..=6 => (5, 8),
-            7..=9 => (6, 9),
-            10 => (7, 10),
+            1..=5 => (5, 7),
+            6..=11 => (5, 8),
+            12..=17 => (6, 9),
+            18..=20 => (7, 10),
             _ => (5, 7),
         };
 
@@ -114,23 +125,32 @@ impl ClubAcademy {
         };
         let date = ctx.simulation.date.date();
 
-        let youth_quality = ctx.club_facilities_youth();
-        let academy_quality = ctx.club_academy_quality();
-        let recruitment_quality = ctx.club_recruitment_quality();
+        let gen_ctx = AcademyGenerationContext::from_components(
+            self.level,
+            ctx.club_facilities_youth(),
+            ctx.club_academy_quality(),
+            ctx.club_recruitment_quality(),
+            ctx.club_youth_coaching_quality(),
+            ctx.club_main_reputation(),
+            ctx.club_league_reputation(),
+            ctx.club_country_reputation(),
+            self.pathway_reputation,
+        );
+        let mut intake_state = AcademyIntakeState::new();
 
         for i in 0..needed {
             let position = self
                 .recruitment_priority_position(i)
                 .unwrap_or_else(|| self.select_position_for_youth_player(i, needed));
-            let player = PlayerGenerator::generate_with_facilities(
+            let player = PlayerGenerator::generate_with_context(
                 country_id,
                 date,
                 position,
-                self.level,
                 people_names,
-                youth_quality,
-                academy_quality,
-                recruitment_quality,
+                &gen_ctx,
+                14,
+                14,
+                Some(&mut intake_state),
             );
             self.players.add(player);
         }

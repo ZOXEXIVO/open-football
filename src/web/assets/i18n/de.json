@@ -159,6 +159,8 @@
   "dec_reason_blocked_top_club": "Bei Topverein blockiert, braucht Spielzeit anderswo",
   "dec_reason_club_listed": "Vom Verein auf die Transferliste gesetzt",
   "dec_reason_contract_expiring": "Vertrag läuft aus, Ablöse vor Vertragsende gesucht",
+  "dec_reason_contract_expired": "Vertrag ausgelaufen — als ablösefrei freigegeben",
+  "dec_reason_released_free": "Vertrag einvernehmlich aufgelöst",
   "dec_reason_financial_relief": "Leihe zur Reduzierung der Gehaltslast",
   "dec_reason_lack_playing_time": "Unzureichende Spielzeit in dieser Saison",
   "dec_reason_loan_playing_time": "Leihe für regelmäßige Spielzeit",

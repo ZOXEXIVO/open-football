@@ -720,6 +720,8 @@
   "dec_reason_aging_declining": "Aging player, declining value",
   "dec_reason_squad_oversized": "Squad oversized, below average ability",
   "dec_reason_contract_expiring": "Contract expiring, seeking fee before free departure",
+  "dec_reason_contract_expired": "Contract expired — released as free agent",
+  "dec_reason_released_free": "Released by mutual agreement",
   "dec_reason_young_needs_practice": "Young talent needs match practice to develop",
   "dec_reason_blocked_top_club": "Blocked at top club, needs game time elsewhere",
   "dec_reason_peaked_declining": "Peaked or declining, permanent move preferred",
