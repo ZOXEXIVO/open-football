@@ -22,7 +22,15 @@ impl TeamBehaviour {
                 let position_j = player_j.position();
 
                 if position_i == position_j {
-                    let competition_factor = Self::calculate_competition_factor(player_i, player_j);
+                    // Halved here because `process_unit_partnerships`
+                    // already emits the high-signal same-position rivalry
+                    // for this exact pair (with depth-chart asymmetry,
+                    // ambition gating, etc.). Keeping a half-strength
+                    // legacy contribution lets coarse signals (CA gap,
+                    // reputation amplification) still register without
+                    // double-counting the headline rivalry.
+                    let competition_factor =
+                        Self::calculate_competition_factor(player_i, player_j) * 0.5;
 
                     result
                         .players

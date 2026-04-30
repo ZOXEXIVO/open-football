@@ -180,13 +180,26 @@ impl TeamBehaviour {
             .map(|r| (r.level / 100.0) * 0.2)
             .unwrap_or(0.0);
 
+        // Rapport, kept-promise track record, and lived experience of
+        // the coach's competence move success_chance on top of the raw
+        // attribute formula. Trusted coaches have an easier time
+        // landing every kind of talk; an exposed coach (low credibility,
+        // broken promises) is fighting uphill.
+        let rapport_score = player.rapport.score(manager.id) as f32;
+        let rapport_chance = (rapport_score / 400.0).clamp(-0.125, 0.25);
+        let promise_chance = player.happiness.factors.promise_trust / 100.0;
+        let credibility_chance = player.happiness.factors.coach_credibility / 120.0;
+
         let success_chance = (0.5
             + man_management / 40.0
             + motivating / 60.0
             - temperament / 60.0
             + professionalism / 80.0
             + loyalty / 80.0
-            + relationship_bonus)
+            + relationship_bonus
+            + rapport_chance
+            + promise_chance
+            + credibility_chance)
             .clamp(0.1, 0.95);
 
         let success = rand::random::<f32>() < success_chance;
@@ -266,6 +279,22 @@ impl TeamBehaviour {
         let (tone_morale_mul, tone_rel_mul) = tone_modifier(tone, player);
         morale_change *= tone_morale_mul;
         relationship_change *= tone_rel_mul;
+
+        // Rapport reception — praise from a trusted coach lands harder,
+        // criticism from an untrusted coach lands much harder. Decide
+        // tone from the *outcome* (morale_change sign) rather than the
+        // talk type alone: a failed playing-time talk that drops morale
+        // should read as criticism even though the talk type is
+        // nominally "positive". Discipline always reads negative unless
+        // the disciplined player ended up morale-positive (rare — e.g.
+        // a pro who wanted clear standards).
+        let positive_tone = if matches!(talk_type, ManagerTalkType::Discipline) {
+            morale_change > 0.0
+        } else {
+            morale_change >= 0.0
+        };
+        let rapport_mult = player.rapport.talk_reception_multiplier(manager.id, positive_tone);
+        morale_change *= rapport_mult;
 
         debug!(
             "Manager talk: {} with player {} - type {:?}, tone {:?}, honest {}, success: {}, cred {}",
@@ -491,23 +520,45 @@ impl TeamBehaviour {
                 + professionalism / 20.0 * 0.2 + 0.1;
             let coach_willingness = man_management / 20.0 * 0.5 + motivating / 20.0 * 0.3;
 
+            // Same trio of modifiers as conduct_manager_talk: rapport
+            // history, kept-promise track record, and lived coach
+            // credibility. A player who trusts the coach tilts the
+            // negotiation; a player who doesn't fights uphill.
+            let rapport_score = player.rapport.score(manager.id) as f32;
+            let rapport_chance = (rapport_score / 400.0).clamp(-0.125, 0.25);
+            let promise_chance = player.happiness.factors.promise_trust / 100.0;
+            let credibility_chance = player.happiness.factors.coach_credibility / 120.0;
+
             // Base: 50% chance. Player conviction pushes it up, loyalty pulls it down.
+            // Final clamp matches conduct_manager_talk so the two paths stay aligned.
             let success_chance = (0.50
                 + player_conviction * 0.25
                 + coach_willingness * 0.15
                 - loyalty / 40.0  // loyal players are less insistent
-                + relationship_bonus)
-                .clamp(0.20, 0.90);
+                + relationship_bonus
+                + rapport_chance
+                + promise_chance
+                + credibility_chance)
+                .clamp(0.10, 0.95);
 
             let success = rand::random::<f32>() < success_chance;
 
-            let (morale_change, rel_change) = if success {
+            let (mut morale_change, rel_change) = if success {
                 (5.0, 0.2)   // Player happy — loan agreed
             } else {
                 // Denied loan — ambitious players take it harder
                 let morale_hit = -3.0 - (ambition / 20.0) * 4.0; // -3 to -7
                 (morale_hit, -0.15)
             };
+
+            // Rapport reception — agreement from a trusted coach lands
+            // harder; refusal from an untrusted coach lands much harder
+            // (the player reads it as confirmation that the coach
+            // doesn't rate them).
+            let positive_tone = success;
+            let rapport_mult =
+                player.rapport.talk_reception_multiplier(manager.id, positive_tone);
+            morale_change *= rapport_mult;
 
             let tone = pick_tone(&talk_type, manager, player);
             ManagerTalkResult {
@@ -709,5 +760,96 @@ fn tone_modifier(tone: InteractionTone, player: &Player) -> (f32, f32) {
             }
         }
         InteractionTone::Apologetic => (1.05, 1.15),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::club::player::rapport::PlayerRapport;
+    use chrono::NaiveDate;
+
+    fn d() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()
+    }
+
+    /// Polarity of `positive_tone` in `conduct_manager_talk` is now
+    /// driven by the actual sign of the talk outcome, not the talk
+    /// type. A failed PlayingTimeTalk produces morale_change = -5.0,
+    /// which should read as negative tone — and through the rapport
+    /// multiplier, low rapport should amplify the hit.
+    #[test]
+    fn failed_playing_time_talk_with_low_rapport_hurts_more_than_neutral() {
+        let mut low_rapport = PlayerRapport::new();
+        // 30 negative ticks → ramp lands the score around -45 (the
+        // floor), the lowest meaningful rapport.
+        low_rapport.on_negative(99, d(), 30);
+
+        let neutral = PlayerRapport::new();
+
+        // Replicate the polarity decision from conduct_manager_talk
+        // for a failed playing-time talk.
+        let morale_change: f32 = -5.0;
+        let positive_tone = morale_change >= 0.0;
+        assert!(!positive_tone);
+
+        let low_rapport_mult = low_rapport.talk_reception_multiplier(99, positive_tone);
+        let neutral_mult = neutral.talk_reception_multiplier(99, positive_tone);
+
+        let low_rapport_morale = morale_change * low_rapport_mult;
+        let neutral_morale = morale_change * neutral_mult;
+
+        assert!(
+            low_rapport_morale < neutral_morale,
+            "failed talk with low rapport should hurt more ({} vs {})",
+            low_rapport_morale,
+            neutral_morale
+        );
+    }
+
+    /// Refused LoanRequest with low rapport should likewise hurt
+    /// more than the neutral-rapport baseline. The LoanRequest path
+    /// already uses `let positive_tone = success;` so the multiplier
+    /// is queried with `false` for refusals.
+    #[test]
+    fn refused_loan_request_with_low_rapport_hurts_more_than_neutral() {
+        let mut low_rapport = PlayerRapport::new();
+        low_rapport.on_negative(99, d(), 30);
+        let neutral = PlayerRapport::new();
+
+        // Default refused-loan morale hit for an ambition=14 player:
+        // -3 - (14/20)*4 = -5.8.
+        let morale_change: f32 = -5.8;
+        let positive_tone = false;
+
+        let low_rapport_morale = morale_change
+            * low_rapport.talk_reception_multiplier(99, positive_tone);
+        let neutral_morale = morale_change
+            * neutral.talk_reception_multiplier(99, positive_tone);
+
+        assert!(
+            low_rapport_morale < neutral_morale,
+            "refused loan with low rapport should hurt more ({} vs {})",
+            low_rapport_morale,
+            neutral_morale
+        );
+    }
+
+    /// Discipline criticism still uses negative rapport reception
+    /// even when the talk "succeeds" (morale_change = -3.0 in the
+    /// successful Discipline branch). This is the polarity carve-out
+    /// for Discipline — a stern talk that the player accepts is
+    /// still criticism.
+    #[test]
+    fn successful_discipline_still_reads_as_criticism() {
+        // Replicate the polarity decision from conduct_manager_talk
+        // for a successful Discipline talk (morale_change = -3.0).
+        let morale_change: f32 = -3.0;
+        let is_discipline = true;
+        let positive_tone = if is_discipline {
+            morale_change > 0.0
+        } else {
+            morale_change >= 0.0
+        };
+        assert!(!positive_tone, "successful Discipline should still read negative");
     }
 }

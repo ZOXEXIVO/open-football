@@ -89,6 +89,17 @@ impl PlayerRapport {
         entry.score = (entry.score - hit).clamp(RAPPORT_MIN, RAPPORT_MAX);
     }
 
+    /// Raw rapport score with a coach, or 0 when no entry exists. Used by
+    /// callers that need the score itself (e.g. success-chance modifiers
+    /// for manager talks) rather than a derived multiplier.
+    pub fn score(&self, coach_id: u32) -> i16 {
+        self.coaches
+            .iter()
+            .find(|c| c.coach_id == coach_id)
+            .map(|c| c.score)
+            .unwrap_or(0)
+    }
+
     /// Apply monthly decay — unused coach pairings drift toward 0.
     pub fn decay(&mut self, now: NaiveDate) {
         self.coaches.retain_mut(|entry| {
@@ -149,5 +160,50 @@ impl PlayerRapport {
                 (1.0 - (score as f32 / 100.0) * 0.5).clamp(1.0, 1.5)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn d() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()
+    }
+
+    #[test]
+    fn praise_lands_harder_with_high_rapport() {
+        let neutral = PlayerRapport::new();
+        let mut trusted = PlayerRapport::new();
+        trusted.on_positive(42, d(), 60);
+        let neutral_mult = neutral.talk_reception_multiplier(42, true);
+        let trusted_mult = trusted.talk_reception_multiplier(42, true);
+        assert!(
+            trusted_mult > neutral_mult,
+            "trusted coach praise should land harder ({} vs {})",
+            trusted_mult,
+            neutral_mult
+        );
+    }
+
+    #[test]
+    fn criticism_hurts_more_with_low_rapport() {
+        let neutral = PlayerRapport::new();
+        let mut broken = PlayerRapport::new();
+        broken.on_negative(42, d(), 30); // ramp lands at -45
+        let neutral_mult = neutral.talk_reception_multiplier(42, false);
+        let broken_mult = broken.talk_reception_multiplier(42, false);
+        assert!(
+            broken_mult > neutral_mult,
+            "untrusted coach criticism should hurt more ({} vs {})",
+            broken_mult,
+            neutral_mult
+        );
+    }
+
+    #[test]
+    fn score_getter_returns_zero_when_absent() {
+        let r = PlayerRapport::new();
+        assert_eq!(r.score(99), 0);
     }
 }

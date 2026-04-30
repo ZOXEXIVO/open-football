@@ -380,6 +380,23 @@ impl PlayerHappiness {
             .any(|e| e.event_type == *event_type && e.days_ago <= days)
     }
 
+    /// Same as [`Self::has_recent_event`] but filtered to events tagged
+    /// with the given partner. Use this for per-pair cooldowns — e.g.
+    /// to avoid emitting "ConflictWithTeammate (vs player X)" every
+    /// week when the underlying friction is constant.
+    pub fn has_recent_event_with_partner(
+        &self,
+        event_type: &HappinessEventType,
+        partner_player_id: u32,
+        days: u16,
+    ) -> bool {
+        self.recent_events.iter().any(|e| {
+            e.event_type == *event_type
+                && e.partner_player_id == Some(partner_player_id)
+                && e.days_ago <= days
+        })
+    }
+
     /// Add an event only if no event of this type was emitted in the
     /// last `cooldown_days`. Returns `true` if the event was recorded.
     /// Centralised cooldown gate so emit sites don't reimplement the

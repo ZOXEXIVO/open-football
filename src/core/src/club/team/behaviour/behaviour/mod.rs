@@ -22,10 +22,13 @@ use log::debug;
 
 mod calculations;
 mod dynamics;
+mod hierarchy;
 mod interactions;
 mod leadership;
+mod manager_credibility;
 mod manager_talks;
 mod morale;
+mod partnerships;
 mod relationships;
 
 #[derive(Debug, Clone)]
@@ -125,6 +128,18 @@ impl TeamBehaviour {
         Self::process_reputation_dynamics(players, &mut result);
         Self::process_mentorship_dynamics(players, &mut result, &ctx);
 
+        // Unit-level partnership chemistry (CB pairs, FB+W flank,
+        // DM-CM, CM-AM, W-ST, GK-CB) plus same-position rivalry and
+        // language/nationality bonds. Runs after the broader passes
+        // so its emit can tilt totals without being swamped.
+        Self::process_unit_partnerships(players, &mut result, &ctx);
+
+        // Senior-leader influence on youth + controversial-star clique
+        // tension. Captain mediation already runs below; these are the
+        // slower drifts that build between teammates around the leadership
+        // group rather than acts the captain directly performs.
+        Self::process_dressing_room_hierarchy(players, &mut result, &ctx);
+
         // Additional full-update processes
         Self::process_contract_satisfaction(players, &mut result, &ctx);
         Self::process_injury_sympathy(players, &mut result, &ctx);
@@ -163,6 +178,11 @@ impl TeamBehaviour {
         // hit their contractual minimum apps, the parent club's recall
         // window opens and the player feels the frustration.
         Self::process_loan_playing_time_audit(players, &ctx);
+
+        // Background manager-trust drift — runs before the talk
+        // picker so per-talk modifiers (rapport, credibility) read the
+        // post-drift values rather than last week's snapshot.
+        Self::process_manager_relationship_context(players, staffs, &mut result, &ctx);
 
         // Manager-player talks (weekly during full update). Pass the
         // simulation date so the per-(player, topic) cooldown gate

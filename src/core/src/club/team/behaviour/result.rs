@@ -285,26 +285,77 @@ impl PlayerBehaviourResult {
                     sim_date,
                 );
 
-                // Generate teammate relationship events visible in player history.
-                // Use a higher threshold to prevent event spam from routine friction.
-                // Tag the partner so the UI can link to the specific teammate.
-                let partner_id = Some(relationship_result.to_player_id);
-                if relationship_result.relationship_change > 0.5 {
+                // Generate teammate relationship events visible in player
+                // history. The raw `relationship_change` doesn't reflect
+                // what `PlayerRelation::apply_change` actually applies —
+                // PersonalConflict, MatchCooperation, ConflictResolution
+                // and others multiply the magnitude internally. Compare
+                // the *applied* magnitude against the threshold so a
+                // raw -0.20 PersonalConflict (≈-0.60 applied) actually
+                // surfaces. Tag the partner so the UI can link to the
+                // specific teammate.
+                let applied = applied_level_magnitude(
+                    relationship_result.relationship_change,
+                    &relationship_result.change_type,
+                );
+                let partner_id = relationship_result.to_player_id;
+                // 45-day per-partner cooldown so a chronic friction
+                // pair (or a long-running bonding pair) doesn't spam
+                // history with one event per weekly tick.
+                const PARTNER_EVENT_COOLDOWN_DAYS: u16 = 45;
+                if applied > 0.5
+                    && !player_to_modify.happiness.has_recent_event_with_partner(
+                        &HappinessEventType::TeammateBonding,
+                        partner_id,
+                        PARTNER_EVENT_COOLDOWN_DAYS,
+                    )
+                {
                     player_to_modify.happiness.add_event_with_partner(
                         HappinessEventType::TeammateBonding,
                         1.0,
-                        partner_id,
+                        Some(partner_id),
                     );
-                } else if relationship_result.relationship_change < -0.5 {
+                } else if applied < -0.5
+                    && !player_to_modify.happiness.has_recent_event_with_partner(
+                        &HappinessEventType::ConflictWithTeammate,
+                        partner_id,
+                        PARTNER_EVENT_COOLDOWN_DAYS,
+                    )
+                {
                     player_to_modify.happiness.add_event_with_partner(
                         HappinessEventType::ConflictWithTeammate,
                         -1.5,
-                        partner_id,
+                        Some(partner_id),
                     );
                 }
             }
         }
     }
+}
+
+/// Estimate the level-axis movement that
+/// [`PlayerRelation::apply_change`] applies for a given raw delta and
+/// change type. Mirrors the multipliers in `relations.rs` so the
+/// event-emission threshold reflects the change the player actually
+/// experiences. Keep these in sync if `apply_change` changes.
+fn applied_level_magnitude(raw: f32, change_type: &ChangeType) -> f32 {
+    let magnitude = raw.abs();
+    let level_mult = match change_type {
+        ChangeType::MatchCooperation => 2.0,
+        ChangeType::TrainingBonding => 1.0,
+        ChangeType::ConflictResolution => 2.0,
+        ChangeType::PersonalSupport => 2.0,
+        ChangeType::CompetitionRivalry => 2.0,
+        ChangeType::TrainingFriction => 1.0,
+        ChangeType::PersonalConflict => 3.0,
+        ChangeType::ReputationAdmiration => 1.5,
+        ChangeType::ReputationTension => 1.5,
+        // Catch-all changes (CoachingSuccess, MentorshipBond, …) hit
+        // level_axis 1:1 in apply_change's default arm.
+        _ => 1.0,
+    };
+    let signed = if raw >= 0.0 { 1.0 } else { -1.0 };
+    signed * magnitude * level_mult
 }
 
 pub struct PlayerRelationshipChangeResult {

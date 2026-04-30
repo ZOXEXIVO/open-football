@@ -78,11 +78,26 @@ impl TeamBehaviour {
                 if level_ab > -25.0 {
                     continue;
                 }
+                // Mediation effectiveness depends on how each party
+                // feels about the captain. If either of them dislikes
+                // the captain (relation level <= -20), the intervention
+                // lands with half the force; if both already respect
+                // the captain (level >= 30) it lands a quarter harder.
+                let a_to_cap = a.relations.get_player(captain_id).map(|r| r.level).unwrap_or(0.0);
+                let b_to_cap = b.relations.get_player(captain_id).map(|r| r.level).unwrap_or(0.0);
+                let captain_relation_mult = if a_to_cap <= -20.0 || b_to_cap <= -20.0 {
+                    0.5
+                } else if a_to_cap >= 30.0 && b_to_cap >= 30.0 {
+                    1.25
+                } else {
+                    1.0
+                };
                 // Healing nudge sized by mediation strength and how
                 // bad the relationship is (worse → more visible
                 // intervention, but still small per week).
                 let intensity = ((-level_ab - 25.0) / 75.0).clamp(0.0, 1.0);
-                let nudge = (strength * 0.4 + intensity * 0.2).clamp(0.0, 0.6);
+                let nudge = ((strength * 0.4 + intensity * 0.2) * captain_relation_mult)
+                    .clamp(0.0, 0.6);
                 if nudge < 0.05 {
                     continue;
                 }

@@ -19,12 +19,40 @@ impl TeamBehaviour {
 
         let temperament_factor =
             (player_a.attributes.temperament + player_b.attributes.temperament) / 40.0;
-        let base_change = FloatUtils::random(-0.02, 0.02) * temperament_factor;
+        // Tighter random envelope than the previous -0.02..0.02 — daily
+        // drift was overpowering the football-context passes (partnership
+        // chemistry, rivalry, manager-credibility) over a season. Most
+        // movement should come from those signals; this is just the
+        // small day-to-day noise on top.
+        let base_random = FloatUtils::random(-0.008, 0.008) * temperament_factor;
+
+        // Interaction-frequency modulator — chatty pairs swing more,
+        // pairs who barely interact see only a fraction of the random
+        // drift. Without this, every pair drifts identically regardless
+        // of how often they actually meet on the training pitch.
+        let interaction_mult = if existing_relationship.interaction_frequency > 0.6 {
+            1.25
+        } else if existing_relationship.interaction_frequency < 0.2 {
+            0.5
+        } else {
+            1.0
+        };
+        let base_change = base_random * interaction_mult;
 
         let trust_factor = existing_relationship.trust / 100.0;
         let friendship_factor = existing_relationship.friendship / 100.0;
 
-        if relationship_level > 50.0 {
+        // Strong relationships should trend stable — a level-70 pair
+        // shouldn't keep drifting toward 100 on random noise alone. We
+        // let negatives through (someone *can* fall out with a friend)
+        // but heavily damp positive drift past the threshold.
+        if relationship_level > 60.0 {
+            if base_change >= 0.0 {
+                base_change * 0.25
+            } else {
+                base_change * 0.6
+            }
+        } else if relationship_level > 50.0 {
             let stability_bonus = (trust_factor * 0.3 + friendship_factor * 0.2) * base_change;
             base_change * 0.5 + stability_bonus
         } else if relationship_level < -50.0 {
