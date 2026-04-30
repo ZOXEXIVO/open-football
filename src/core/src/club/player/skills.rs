@@ -1,4 +1,13 @@
 use crate::club::player::position::{PlayerFieldPositionGroup, PlayerPositionType};
+use crate::club::player::position_weights::{
+    PositionWeights, SK_ACCELERATION, SK_AGGRESSION, SK_AGILITY, SK_ANTICIPATION, SK_BALANCE,
+    SK_BRAVERY, SK_COMPOSURE, SK_CONCENTRATION, SK_CORNERS, SK_CROSSING, SK_DECISIONS,
+    SK_DETERMINATION, SK_DRIBBLING, SK_FINISHING, SK_FIRST_TOUCH, SK_FLAIR, SK_FREE_KICKS,
+    SK_HEADING, SK_JUMPING, SK_LEADERSHIP, SK_LONG_SHOTS, SK_LONG_THROWS, SK_MARKING,
+    SK_NATURAL_FITNESS, SK_OFF_THE_BALL, SK_PACE, SK_PASSING, SK_PENALTY_TAKING, SK_POSITIONING,
+    SK_STAMINA, SK_STRENGTH, SK_TACKLING, SK_TEAMWORK, SK_TECHNIQUE, SK_VISION, SK_WORK_RATE,
+    SKILL_COUNT,
+};
 
 #[derive(Debug, Copy, Clone, Default)]
 pub struct PlayerSkills {
@@ -34,22 +43,67 @@ impl PlayerSkills {
         Self::skill_to_ability(overall)
     }
 
-    /// Position-weighted ability calculation — skills that matter for the position count more.
+    /// Position-weighted ability calculation — every skill is weighed by how
+    /// much it matters for this *exact* position (DC vs WBL vs AMC etc.).
+    /// Goalkeepers route through the dedicated GK calculation that accounts
+    /// for the Goalkeeping attributes alongside the outfield ones.
     pub fn calculate_ability_for_position(&self, position: PlayerPositionType) -> u8 {
-        let group = position.position_group();
-        if group == PlayerFieldPositionGroup::Goalkeeper {
+        if position.position_group() == PlayerFieldPositionGroup::Goalkeeper {
             return self.calculate_gk_ability();
         }
-        let (tech_w, mental_w, phys_w) = match group {
-            PlayerFieldPositionGroup::Goalkeeper => unreachable!(),
-            PlayerFieldPositionGroup::Defender => (0.25, 0.40, 0.35),
-            PlayerFieldPositionGroup::Midfielder => (0.40, 0.35, 0.25),
-            PlayerFieldPositionGroup::Forward => (0.45, 0.25, 0.30),
-        };
-        let weighted = self.technical.average() * tech_w
-            + self.mental.average() * mental_w
-            + self.physical.average() * phys_w;
-        Self::skill_to_ability(weighted)
+        let weights = PositionWeights::for_position(position);
+        let weighted_avg = self.weighted_skill_average(&weights);
+        Self::skill_to_ability(weighted_avg)
+    }
+
+    /// Compute Σ(skill_i · w_i) / Σ(w_i) using the position-weight table.
+    /// match_readiness is excluded because its slot weight is always 0.
+    pub fn weighted_skill_average(&self, weights: &[f32; SKILL_COUNT]) -> f32 {
+        let total = PositionWeights::total(weights);
+        if total <= 0.0 {
+            return 1.0;
+        }
+        let t = &self.technical;
+        let m = &self.mental;
+        let p = &self.physical;
+        let mut acc = 0.0;
+        acc += t.corners * weights[SK_CORNERS];
+        acc += t.crossing * weights[SK_CROSSING];
+        acc += t.dribbling * weights[SK_DRIBBLING];
+        acc += t.finishing * weights[SK_FINISHING];
+        acc += t.first_touch * weights[SK_FIRST_TOUCH];
+        acc += t.free_kicks * weights[SK_FREE_KICKS];
+        acc += t.heading * weights[SK_HEADING];
+        acc += t.long_shots * weights[SK_LONG_SHOTS];
+        acc += t.long_throws * weights[SK_LONG_THROWS];
+        acc += t.marking * weights[SK_MARKING];
+        acc += t.passing * weights[SK_PASSING];
+        acc += t.penalty_taking * weights[SK_PENALTY_TAKING];
+        acc += t.tackling * weights[SK_TACKLING];
+        acc += t.technique * weights[SK_TECHNIQUE];
+        acc += m.aggression * weights[SK_AGGRESSION];
+        acc += m.anticipation * weights[SK_ANTICIPATION];
+        acc += m.bravery * weights[SK_BRAVERY];
+        acc += m.composure * weights[SK_COMPOSURE];
+        acc += m.concentration * weights[SK_CONCENTRATION];
+        acc += m.decisions * weights[SK_DECISIONS];
+        acc += m.determination * weights[SK_DETERMINATION];
+        acc += m.flair * weights[SK_FLAIR];
+        acc += m.leadership * weights[SK_LEADERSHIP];
+        acc += m.off_the_ball * weights[SK_OFF_THE_BALL];
+        acc += m.positioning * weights[SK_POSITIONING];
+        acc += m.teamwork * weights[SK_TEAMWORK];
+        acc += m.vision * weights[SK_VISION];
+        acc += m.work_rate * weights[SK_WORK_RATE];
+        acc += p.acceleration * weights[SK_ACCELERATION];
+        acc += p.agility * weights[SK_AGILITY];
+        acc += p.balance * weights[SK_BALANCE];
+        acc += p.jumping * weights[SK_JUMPING];
+        acc += p.natural_fitness * weights[SK_NATURAL_FITNESS];
+        acc += p.pace * weights[SK_PACE];
+        acc += p.stamina * weights[SK_STAMINA];
+        acc += p.strength * weights[SK_STRENGTH];
+        acc / total
     }
 
     /// GK ability uses goalkeeping attributes as the primary factor,

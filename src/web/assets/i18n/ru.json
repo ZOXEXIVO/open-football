@@ -468,7 +468,7 @@
   "marking": "Опека",
   "match_history": "История матчей",
   "match_recording_disabled": "Визуализация матча отключена, так как она ресурсоёмкая.",
-  "match_recording_disabled_link": "Скачать open-football на GitHub",
+  "match_recording_disabled_link": "Скачать OpenFootball для локального использования",
   "match_recording_disabled_local": "Вы можете запустить её локально на своём оборудовании.",
   "matches": "Матчи",
   "mental": "Ментальные",

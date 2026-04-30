@@ -199,7 +199,7 @@
   "loading_match": "Loading match data...",
   "match_recording_disabled": "Match visualization is disabled as it is resource-intensive.",
   "match_recording_disabled_local": "You can run it locally on your own hardware.",
-  "match_recording_disabled_link": "Get open-football on GitHub",
+  "match_recording_disabled_link": "Download OpenFootball for local use",
   "loan": "Loan",
   "loan_from": "from",
   "loan_to": "to",

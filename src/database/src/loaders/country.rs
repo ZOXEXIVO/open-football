@@ -47,14 +47,18 @@ impl CountryLoader {
         compiled().countries.clone()
     }
 
-    /// Look up a country code by its ID. Used during player generation
-    /// to assign native languages.
+    /// Look up a country code by its ID. Always returns lowercase ASCII —
+    /// the loaded data is lowercase ("br", "nl", "jp"), and consumers
+    /// (`Language::from_country_code`, `country_skill_bias`,
+    /// `PhysicalProfile::country_height_offset`) all match on lowercase.
+    /// Forcing the cast here makes the contract explicit and immune to any
+    /// future data file accidentally storing mixed case.
     pub fn code_for_id(country_id: u32) -> String {
         compiled()
             .countries
             .iter()
             .find(|c| c.id == country_id)
-            .map(|c| c.code.clone())
+            .map(|c| c.code.to_ascii_lowercase())
             .unwrap_or_default()
     }
 }

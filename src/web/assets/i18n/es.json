@@ -468,7 +468,7 @@
   "marking": "Marcaje",
   "match_history": "Historial de partidos",
   "match_recording_disabled": "La visualización del partido está desactivada ya que consume muchos recursos.",
-  "match_recording_disabled_link": "Obtener open-football en GitHub",
+  "match_recording_disabled_link": "Descargar OpenFootball para uso local",
   "match_recording_disabled_local": "Puedes ejecutarla localmente en tu propio hardware.",
   "matches": "Partidos",
   "mental": "Mentales",

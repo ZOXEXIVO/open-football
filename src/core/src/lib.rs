@@ -98,7 +98,7 @@ pub use club::{
     PlayerAttributes, PlayerContext,
     PlayerPreferredFoot, PlayerPositionType, PlayerFieldPositionGroup, PlayerStatusType,
     PlayerSkills, Technical, Mental, Physical, Goalkeeping,
-    PlayerPositions, PlayerPosition, PlayerStatus, StatusData,
+    PlayerPositions, PlayerPosition, PlayerStatus, StatusData, PositionWeights,
     PlayerStatistics, PlayerStatisticsHistory, PlayerStatisticsHistoryItem, TeamInfo,
     PlayerHappiness, PositiveHappiness, NegativeHappiness,
     HappinessFactors, HappinessEvent, HappinessEventType,

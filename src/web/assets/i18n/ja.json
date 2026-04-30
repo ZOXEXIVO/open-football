@@ -468,7 +468,7 @@
   "marking": "マーキング",
   "match_history": "試合履歴",
   "match_recording_disabled": "試合のビジュアライゼーションはリソースを多く消費するため無効になっています。",
-  "match_recording_disabled_link": "GitHubでopen-footballを入手",
+  "match_recording_disabled_link": "ローカル利用のためにOpenFootballをダウンロード",
   "match_recording_disabled_local": "お手元のハードウェアでローカル実行できます。",
   "matches": "試合",
   "mental": "メンタル",

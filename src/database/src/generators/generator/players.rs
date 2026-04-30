@@ -1,3 +1,4 @@
+use crate::generators::player::SquadRole;
 use crate::generators::{PlayerGenerator, PositionType};
 use crate::{DatabaseEntity, ForeignPlayerEntry};
 use core::{AcademyGenerationContext, AcademyIntakeState, PlayerGenerator as CorePlayerGenerator};
@@ -5,6 +6,99 @@ use core::PeopleNameGeneratorData;
 use core::utils::IntegerUtils;
 use core::{Player, TeamType};
 use chrono::Local;
+
+/// Per-position role allocation. Each position bucket (GK/DEF/MID/ST)
+/// carries its own queue of `SquadRole` slots so role quality is spread
+/// realistically across the squad spine — Stars and Starters can't all
+/// land on goalkeepers by chance, and a Main squad always has a clear
+/// #1 GK + a backup rather than two random Backups.
+///
+/// Quotas are tuned per `TeamType`:
+///   - Main: stars/starters across DEF/MID/ST spine, GK is 1 Starter +
+///     a #2 + depth, attack carries a Star and a prospect.
+///   - B/Reserve/Second: senior depth, no Stars, mostly backups + prospects.
+///   - U-teams: prospect-heavy with rotation/backup mix.
+struct PositionRoleQueue {
+    gk: Vec<SquadRole>,
+    def: Vec<SquadRole>,
+    mid: Vec<SquadRole>,
+    st: Vec<SquadRole>,
+}
+
+impl PositionRoleQueue {
+    fn for_team(team_type: TeamType) -> Self {
+        let (gk, def, mid, st) = match team_type {
+            TeamType::Main => (
+                Self::shuffled(&[(SquadRole::Starter, 1), (SquadRole::Rotation, 1),
+                                 (SquadRole::Backup, 2), (SquadRole::Prospect, 1)]),
+                Self::shuffled(&[(SquadRole::Star, 1), (SquadRole::Starter, 4),
+                                 (SquadRole::Rotation, 2), (SquadRole::Backup, 1),
+                                 (SquadRole::Prospect, 1)]),
+                Self::shuffled(&[(SquadRole::Star, 1), (SquadRole::Starter, 4),
+                                 (SquadRole::Rotation, 2), (SquadRole::Backup, 1),
+                                 (SquadRole::Prospect, 1)]),
+                Self::shuffled(&[(SquadRole::Star, 1), (SquadRole::Starter, 3),
+                                 (SquadRole::Rotation, 1), (SquadRole::Backup, 1),
+                                 (SquadRole::Prospect, 1), (SquadRole::Fringe, 1)]),
+            ),
+            TeamType::Second | TeamType::B | TeamType::Reserve => (
+                Self::shuffled(&[(SquadRole::Starter, 1), (SquadRole::Backup, 2),
+                                 (SquadRole::Prospect, 2)]),
+                Self::shuffled(&[(SquadRole::Starter, 1), (SquadRole::Rotation, 2),
+                                 (SquadRole::Backup, 3), (SquadRole::Prospect, 2),
+                                 (SquadRole::Fringe, 1)]),
+                Self::shuffled(&[(SquadRole::Starter, 1), (SquadRole::Rotation, 2),
+                                 (SquadRole::Backup, 3), (SquadRole::Prospect, 3),
+                                 (SquadRole::Fringe, 1)]),
+                Self::shuffled(&[(SquadRole::Rotation, 1), (SquadRole::Backup, 2),
+                                 (SquadRole::Prospect, 2), (SquadRole::Fringe, 1)]),
+            ),
+            TeamType::U23 | TeamType::U21 | TeamType::U20 => (
+                Self::shuffled(&[(SquadRole::Rotation, 1), (SquadRole::Backup, 1),
+                                 (SquadRole::Prospect, 3)]),
+                Self::shuffled(&[(SquadRole::Rotation, 1), (SquadRole::Backup, 2),
+                                 (SquadRole::Prospect, 5), (SquadRole::Fringe, 1)]),
+                Self::shuffled(&[(SquadRole::Rotation, 2), (SquadRole::Backup, 2),
+                                 (SquadRole::Prospect, 5), (SquadRole::Fringe, 1)]),
+                Self::shuffled(&[(SquadRole::Rotation, 1), (SquadRole::Backup, 1),
+                                 (SquadRole::Prospect, 4), (SquadRole::Fringe, 1)]),
+            ),
+            // U18/U19 don't use this distribution (academy path), but cover
+            // the case for completeness.
+            TeamType::U18 | TeamType::U19 => (
+                Self::shuffled(&[(SquadRole::Prospect, 4), (SquadRole::Fringe, 1)]),
+                Self::shuffled(&[(SquadRole::Prospect, 7), (SquadRole::Fringe, 2)]),
+                Self::shuffled(&[(SquadRole::Prospect, 8), (SquadRole::Fringe, 2)]),
+                Self::shuffled(&[(SquadRole::Prospect, 5), (SquadRole::Fringe, 1)]),
+            ),
+        };
+        PositionRoleQueue { gk, def, mid, st }
+    }
+
+    fn shuffled(slots: &[(SquadRole, usize)]) -> Vec<SquadRole> {
+        let total: usize = slots.iter().map(|(_, n)| n).sum();
+        let mut v: Vec<SquadRole> = Vec::with_capacity(total);
+        for (role, n) in slots { for _ in 0..*n { v.push(*role); } }
+        for i in (1..v.len()).rev() {
+            let j = IntegerUtils::random(0, i as i32) as usize;
+            v.swap(i, j);
+        }
+        v
+    }
+
+    /// Pop the next role for this bucket. When a bucket runs out (squad
+    /// generation produced more players than the quota provided), fall back
+    /// to a sensible filler tier so we don't accidentally promote leftovers.
+    fn next(&mut self, bucket: PositionType) -> SquadRole {
+        let q = match bucket {
+            PositionType::Goalkeeper => &mut self.gk,
+            PositionType::Defender => &mut self.def,
+            PositionType::Midfielder => &mut self.mid,
+            PositionType::Striker => &mut self.st,
+        };
+        q.pop().unwrap_or(SquadRole::Backup)
+    }
+}
 
 use super::DatabaseGenerator;
 
@@ -131,11 +225,13 @@ impl DatabaseGenerator {
             _ => (15, 18),
         };
 
-        let is_youth = false;
-
-        // Youth gem system: 10-20% of non-main team players get boosted reputation
-        let is_non_main = *team_type != TeamType::Main;
-        let gem_rep = (team_reputation as f32 * 2.5).min(10000.0) as u16;
+        // League reputation drives the new senior generator. Falls back to
+        // team reputation when the team has no league (rare; covers cases
+        // like satellite squads without a league_id assigned).
+        let league_reputation = league_id
+            .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(team_reputation);
 
         let foreign_players: &[ForeignPlayerEntry] = league_id
             .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
@@ -149,18 +245,14 @@ impl DatabaseGenerator {
             .map(|c| c.continent_id)
             .unwrap_or(1);
 
-        let generate_one = |pos: PositionType| -> Player {
-            // 10-20% chance this player is a youth gem with boosted skills
-            let effective_rep = if is_non_main && IntegerUtils::random(0, 100) < 15 {
-                gem_rep
-            } else {
-                team_reputation
-            };
+        let mut roles = PositionRoleQueue::for_team(*team_type);
+
+        let mut generate_one = |pos: PositionType| -> Player {
+            let role = roles.next(pos);
 
             if total_foreign_weight > 0 {
                 let roll = IntegerUtils::random(0, 100);
                 if roll < total_foreign_weight {
-                    // Pick a foreign country via weighted random walk
                     let mut acc = 0i32;
                     for fp in foreign_players {
                         acc += fp.weight as i32;
@@ -183,12 +275,34 @@ impl DatabaseGenerator {
                                 .find(|c| c.id == fp.country_id);
                             let foreign_country_rep = foreign_country.map(|c| c.reputation).unwrap_or(3000);
                             let foreign_continent_id = foreign_country.map(|c| c.continent_id).unwrap_or(1);
-                            return foreign_gen.generate(fp.country_id, foreign_continent_id, pos, effective_rep, foreign_country_rep, min_age, max_age, is_youth);
+                            return foreign_gen.generate(
+                                fp.country_id,
+                                foreign_continent_id,
+                                pos,
+                                team_reputation,
+                                league_reputation,
+                                foreign_country_rep,
+                                *team_type,
+                                role,
+                                min_age,
+                                max_age,
+                            );
                         }
                     }
                 }
             }
-            player_generator.generate(country_id, domestic_continent_id, pos, effective_rep, country_reputation, min_age, max_age, is_youth)
+            player_generator.generate(
+                country_id,
+                domestic_continent_id,
+                pos,
+                team_reputation,
+                league_reputation,
+                country_reputation,
+                *team_type,
+                role,
+                min_age,
+                max_age,
+            )
         };
 
         // Main teams need larger squads to avoid fielding fewer than 11 after
