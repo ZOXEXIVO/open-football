@@ -142,8 +142,7 @@ impl NationalTeam {
                         player.player_attributes.international_apps += 1;
 
                         if let Some(stats) = match_result.player_stats.get(&player.id) {
-                            player.player_attributes.international_goals +=
-                                stats.goals as u16;
+                            player.player_attributes.international_goals += stats.goals as u16;
                         }
                     }
                 }
@@ -169,7 +168,8 @@ impl NationalTeam {
     /// Update Elo rating after a match
     pub fn update_elo(&mut self, our_score: u8, opponent_score: u8, opponent_elo: u16) {
         let k: f32 = 20.0;
-        let expected = 1.0 / (1.0 + 10.0_f32.powf((opponent_elo as f32 - self.elo_rating as f32) / 400.0));
+        let expected =
+            1.0 / (1.0 + 10.0_f32.powf((opponent_elo as f32 - self.elo_rating as f32) / 400.0));
 
         let actual = if our_score > opponent_score {
             1.0
@@ -362,7 +362,10 @@ impl NationalTeam {
     }
 
     /// Build a synthetic opponent squad for friendly matches
-    pub fn build_synthetic_opponent_squad(opponent_country_id: u32, opponent_name: &str) -> MatchSquad {
+    pub fn build_synthetic_opponent_squad(
+        opponent_country_id: u32,
+        opponent_name: &str,
+    ) -> MatchSquad {
         let team_id = opponent_country_id;
 
         // Generate 18 synthetic players with moderate ability
@@ -418,7 +421,9 @@ impl NationalTeam {
             if let Some(player) = players
                 .iter()
                 .filter(|p| !used_ids.contains(&p.id))
-                .max_by_key(|p| p.positions.get_level(pos) as u16 + p.player_attributes.current_ability as u16)
+                .max_by_key(|p| {
+                    p.positions.get_level(pos) as u16 + p.player_attributes.current_ability as u16
+                })
             {
                 main_squad.push(MatchPlayer::from_player(team_id, player, pos, false));
                 used_ids.push(player.id);

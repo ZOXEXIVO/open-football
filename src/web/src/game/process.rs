@@ -1,9 +1,9 @@
-use crate::r#match::stores::MatchStore;
 use crate::GameAppData;
+use crate::r#match::stores::MatchStore;
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use core::FootballSimulator;
 use core::SimulationResult;
 use log::debug;
@@ -89,7 +89,8 @@ pub async fn game_process_action(
             let mut guard = data.write().await;
             *guard = Some(Arc::new(simulator_data));
         });
-    }).await;
+    })
+    .await;
 
     StatusCode::OK
 }
@@ -106,9 +107,7 @@ pub async fn game_processing_status_action(
     Json(ProcessingStatus { processing })
 }
 
-pub async fn game_cancel_action(
-    State(state): State<GameAppData>,
-) -> StatusCode {
+pub async fn game_cancel_action(State(state): State<GameAppData>) -> StatusCode {
     state.cancel_flag.store(true, Ordering::SeqCst);
     StatusCode::OK
 }

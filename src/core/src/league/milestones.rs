@@ -21,21 +21,28 @@ impl LeagueMilestones {
     pub fn check_records(&mut self, stats: &LeagueStatistics, table: &LeagueTable) {
         if let Some(leader) = table.rows.first() {
             if leader.points > self.all_time_records.most_points_in_season.1 {
-                debug!("📊 NEW RECORD! Team {} has {} points!", leader.team_id, leader.points);
+                debug!(
+                    "📊 NEW RECORD! Team {} has {} points!",
+                    leader.team_id, leader.points
+                );
                 self.all_time_records.most_points_in_season = (leader.team_id, leader.points);
             }
 
             if leader.goal_scored > self.all_time_records.most_goals_in_season.1 {
-                debug!("⚽ NEW RECORD! Team {} has scored {} goals!",
-                      leader.team_id, leader.goal_scored);
-                self.all_time_records.most_goals_in_season =
-                    (leader.team_id, leader.goal_scored);
+                debug!(
+                    "⚽ NEW RECORD! Team {} has scored {} goals!",
+                    leader.team_id, leader.goal_scored
+                );
+                self.all_time_records.most_goals_in_season = (leader.team_id, leader.goal_scored);
             }
         }
 
         if let Some((player_id, goals)) = stats.top_scorer {
             if goals > self.all_time_records.most_goals_by_player.1 {
-                debug!("🎯 NEW RECORD! Player {} has scored {} goals!", player_id, goals);
+                debug!(
+                    "🎯 NEW RECORD! Player {} has scored {} goals!",
+                    player_id, goals
+                );
                 self.all_time_records.most_goals_by_player = (player_id, goals);
             }
         }
@@ -58,8 +65,10 @@ impl LeagueMilestones {
                     matches_played,
                 };
                 self.season_milestones.push(milestone);
-                debug!("🏆 {} wins the title with {} matches remaining!",
-                      leader.team_id, matches_remaining);
+                debug!(
+                    "🏆 {} wins the title with {} matches remaining!",
+                    leader.team_id, matches_remaining
+                );
             }
         }
 
@@ -72,12 +81,14 @@ impl LeagueMilestones {
                     matches_played,
                 };
 
-                if !self.season_milestones.iter().any(|m|
-                    m.milestone_type == MilestoneType::UnbeatenRun &&
-                        m.team_id == row.team_id
-                ) {
+                if !self.season_milestones.iter().any(|m| {
+                    m.milestone_type == MilestoneType::UnbeatenRun && m.team_id == row.team_id
+                }) {
                     self.season_milestones.push(milestone);
-                    debug!("💪 Team {} is unbeaten after {} matches!", row.team_id, matches_played);
+                    debug!(
+                        "💪 Team {} is unbeaten after {} matches!",
+                        row.team_id, matches_played
+                    );
                 }
             }
         }
@@ -87,14 +98,18 @@ impl LeagueMilestones {
         let year = date.year() as u16;
         self.historic_champions.push((year, team_id));
 
-        let consecutive_titles = self.historic_champions.iter()
+        let consecutive_titles = self
+            .historic_champions
+            .iter()
             .rev()
             .take_while(|(_, id)| *id == team_id)
             .count();
 
         if consecutive_titles >= 3 {
-            debug!("👑 Dynasty! Team {} wins {} consecutive titles!",
-                  team_id, consecutive_titles);
+            debug!(
+                "👑 Dynasty! Team {} wins {} consecutive titles!",
+                team_id, consecutive_titles
+            );
         }
     }
 }

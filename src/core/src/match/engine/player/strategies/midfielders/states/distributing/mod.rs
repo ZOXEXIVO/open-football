@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -44,7 +44,6 @@ impl StateProcessingHandler for MidfielderDistributingState {
         None
     }
 
-
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
@@ -62,12 +61,12 @@ impl MidfielderDistributingState {
     ) -> Option<MatchPlayerLite> {
         let vision_range = ctx.player.skills.mental.vision * 10.0; // Adjust the factor as needed
 
-        let open_teammates: Vec<MatchPlayerLite> = ctx.players().teammates()
+        let open_teammates: Vec<MatchPlayerLite> = ctx
+            .players()
+            .teammates()
             .nearby(vision_range)
             .filter(|t| !t.tactical_positions.is_goalkeeper())
-            .filter(|t| {
-                self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id)
-            })
+            .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))
             .collect();
 
         if !open_teammates.is_empty() {
@@ -94,8 +93,11 @@ impl MidfielderDistributingState {
         let opponent_distance_threshold = 5.0; // Adjust the threshold as needed
 
         // Use distance closure: from teammate's perspective, opponents are nearby
-        ctx.tick_context.grid.opponents(teammate.id, opponent_distance_threshold)
-            .next().is_none()
+        ctx.tick_context
+            .grid
+            .opponents(teammate.id, opponent_distance_threshold)
+            .next()
+            .is_none()
     }
 
     fn calculate_space_around_player(
@@ -106,8 +108,11 @@ impl MidfielderDistributingState {
         let space_radius = 10.0; // Adjust the radius as needed
 
         // Use distance closure instead of scanning all opponents
-        let num_opponents_nearby = ctx.tick_context.grid
-            .opponents(player.id, space_radius).count();
+        let num_opponents_nearby = ctx
+            .tick_context
+            .grid
+            .opponents(player.id, space_radius)
+            .count();
 
         space_radius - num_opponents_nearby as f32
     }

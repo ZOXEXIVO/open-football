@@ -1,5 +1,8 @@
 use crate::club::team::behaviour::TeamBehaviour;
-use crate::{MatchHistory, PlayerCollection, StaffCollection, Tactics, Team, TeamReputation, TeamType, TrainingSchedule, Transfers};
+use crate::{
+    MatchHistory, PlayerCollection, StaffCollection, Tactics, Team, TeamReputation, TeamType,
+    TrainingSchedule, Transfers,
+};
 
 #[derive(Default, Clone)]
 pub struct TeamBuilder {
@@ -97,7 +100,7 @@ impl TeamBuilder {
     pub fn build(self) -> Result<Team, String> {
         Ok(Team {
             id: self.id.ok_or("id is required")?,
-            league_id: self.league_id.ok_or("league_id is required")?,  // Option<Option<u32>> → Option<u32>
+            league_id: self.league_id.ok_or("league_id is required")?, // Option<Option<u32>> → Option<u32>
             club_id: self.club_id.ok_or("club_id is required")?,
             name: self.name.ok_or("name is required")?,
             slug: self.slug.ok_or("slug is required")?,
@@ -107,7 +110,9 @@ impl TeamBuilder {
             staffs: self.staffs.ok_or("staffs is required")?,
             behaviour: self.behaviour.unwrap_or_else(TeamBehaviour::new),
             reputation: self.reputation.ok_or("reputation is required")?,
-            training_schedule: self.training_schedule.ok_or("training_schedule is required")?,
+            training_schedule: self
+                .training_schedule
+                .ok_or("training_schedule is required")?,
             transfer_list: self.transfer_list.unwrap_or_else(Transfers::new),
             match_history: self.match_history.unwrap_or_else(MatchHistory::new),
             captain_id: None,

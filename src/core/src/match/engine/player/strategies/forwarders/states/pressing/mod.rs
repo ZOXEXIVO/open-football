@@ -1,5 +1,5 @@
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -24,16 +24,12 @@ impl StateProcessingHandler for ForwardPressingState {
 
         // Back off during foul protection — don't crowd the free kick
         if ctx.ball().is_in_flight() && ctx.ball().is_owned() {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running,
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         // Opponent GK holds ball in hands — can't challenge, retreat
         if ctx.ball().is_held_by_opponent_goalkeeper() {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running,
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         // Loose ball nearby — go claim it directly instead of pressing thin air
@@ -78,7 +74,6 @@ impl StateProcessingHandler for ForwardPressingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_distance = ctx.ball().distance();
 
@@ -91,7 +86,8 @@ impl StateProcessingHandler for ForwardPressingState {
                         target_velocity: ctx.tick_context.positions.ball.velocity,
                     }
                     .calculate(ctx.player)
-                    .velocity + ctx.player().separation_velocity(),
+                    .velocity
+                        + ctx.player().separation_velocity(),
                 );
             }
         } else if !ctx.ball().is_owned() && ball_distance < 80.0 {
@@ -102,7 +98,8 @@ impl StateProcessingHandler for ForwardPressingState {
                     target_velocity: ctx.tick_context.positions.ball.velocity,
                 }
                 .calculate(ctx.player)
-                .velocity + ctx.player().separation_velocity(),
+                .velocity
+                    + ctx.player().separation_velocity(),
             );
         }
 

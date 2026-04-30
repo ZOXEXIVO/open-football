@@ -1,5 +1,5 @@
+use crate::r#match::MatchField;
 use crate::r#match::player_positions::{BallFieldData, PlayerFieldData};
-use crate::r#match::{MatchField};
 
 pub struct MatchObjectsPositions {
     pub ball: BallFieldData,
@@ -10,7 +10,7 @@ impl MatchObjectsPositions {
     pub fn from(field: &MatchField) -> Self {
         MatchObjectsPositions {
             ball: BallFieldData::from(&field.ball),
-            players: PlayerFieldData::from(field)
+            players: PlayerFieldData::from(field),
         }
     }
 

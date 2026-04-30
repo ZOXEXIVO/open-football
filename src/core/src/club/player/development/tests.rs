@@ -93,7 +93,10 @@ fn gk_skills() -> PlayerSkills {
 
 fn positions(p: PlayerPositionType) -> PlayerPositions {
     PlayerPositions {
-        positions: vec![PlayerPosition { position: p, level: 20 }],
+        positions: vec![PlayerPosition {
+            position: p,
+            level: 20,
+        }],
     }
 }
 
@@ -149,7 +152,9 @@ fn skill_array_round_trip_preserves_all_fields() {
         assert!(
             (round_tripped[i] - tagged[i]).abs() < 1e-6,
             "skill index {} did not round-trip: wrote {}, read {}",
-            i, tagged[i], round_tripped[i]
+            i,
+            tagged[i],
+            round_tripped[i]
         );
     }
 }
@@ -165,7 +170,12 @@ fn skill_count_matches_enum() {
 fn workload_growth_modifier_drops_with_fatigue() {
     let fresh = workload_growth_modifier(100, 0);
     let drained = workload_growth_modifier(35, 8000);
-    assert!(fresh > drained, "fresh {} should exceed drained {}", fresh, drained);
+    assert!(
+        fresh > drained,
+        "fresh {} should exceed drained {}",
+        fresh,
+        drained
+    );
     assert!(drained <= 0.7);
     assert!(fresh >= 0.99);
 }
@@ -215,7 +225,9 @@ fn defender_marking_grows_faster_than_finishing() {
 
 // ── Behavioral tests using the deterministic roll seam ────────────
 
-fn high_roll() -> FixedRolls { FixedRolls(1.0) }
+fn high_roll() -> FixedRolls {
+    FixedRolls(1.0)
+}
 
 #[test]
 fn young_professional_grows_more_than_low_professionalism_peer() {
@@ -224,11 +236,17 @@ fn young_professional_grows_more_than_low_professionalism_peer() {
     let pa = 170u8;
 
     let mut pro = make_player(
-        birth, PlayerPositionType::Striker, baseline_skills(), pa,
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        pa,
         person_pro(18.0, 16.0),
     );
     let mut sloth = make_player(
-        birth, PlayerPositionType::Striker, baseline_skills(), pa,
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        pa,
         person_pro(4.0, 6.0),
     );
     // Same starting CA so the gap factor is identical.
@@ -247,7 +265,8 @@ fn young_professional_grows_more_than_low_professionalism_peer() {
     assert!(
         pro_gain > sloth_gain,
         "pro_gain={}, sloth_gain={}",
-        pro_gain, sloth_gain
+        pro_gain,
+        sloth_gain
     );
 }
 
@@ -275,13 +294,15 @@ fn old_player_declines_physically_but_can_still_grow_mentally() {
     assert!(
         p.skills.physical.pace <= pre_pace,
         "old pace should not grow: pre={}, post={}",
-        pre_pace, p.skills.physical.pace
+        pre_pace,
+        p.skills.physical.pace
     );
     // Leadership has a +3 peak offset so a 36yo is effectively 33 for it.
     assert!(
         p.skills.mental.leadership >= pre_leadership,
         "leadership should hold or grow: pre={}, post={}",
-        pre_leadership, p.skills.mental.leadership
+        pre_leadership,
+        p.skills.mental.leadership
     );
 }
 
@@ -306,7 +327,9 @@ fn injured_player_skips_development_entirely() {
         assert!(
             (snapshot[i] - after[i]).abs() < 1e-6,
             "injured player skill {} changed: {} -> {}",
-            i, snapshot[i], after[i]
+            i,
+            snapshot[i],
+            after[i]
         );
     }
 }
@@ -331,12 +354,18 @@ fn recovering_player_only_gains_mental() {
     let coach = CoachingEffect::neutral();
     p.process_development_with(d(2025, 6, 1), 8000, &coach, 0.6, &mut high_roll());
 
-    assert_eq!(p.skills.technical.finishing, pre_finishing,
-        "recovering player should not gain technical");
-    assert_eq!(p.skills.physical.pace, pre_pace,
-        "recovering player should not gain physical");
-    assert!(p.skills.mental.decisions >= pre_decisions,
-        "recovering player can still gain mental");
+    assert_eq!(
+        p.skills.technical.finishing, pre_finishing,
+        "recovering player should not gain technical"
+    );
+    assert_eq!(
+        p.skills.physical.pace, pre_pace,
+        "recovering player should not gain physical"
+    );
+    assert!(
+        p.skills.mental.decisions >= pre_decisions,
+        "recovering player can still gain mental"
+    );
 }
 
 #[test]
@@ -346,11 +375,17 @@ fn fatigued_jaded_player_grows_less_than_fresh_peer() {
     let pa = 170u8;
 
     let mut fresh = make_player(
-        birth, PlayerPositionType::Striker, baseline_skills(), pa,
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        pa,
         person_pro(15.0, 14.0),
     );
     let mut drained = make_player(
-        birth, PlayerPositionType::Striker, baseline_skills(), pa,
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        pa,
         person_pro(15.0, 14.0),
     );
     drained.player_attributes.condition = 3500;
@@ -369,7 +404,8 @@ fn fatigued_jaded_player_grows_less_than_fresh_peer() {
     assert!(
         fresh_gain > drained_gain,
         "fresh {} should grow more than drained {}",
-        fresh_gain, drained_gain
+        fresh_gain,
+        drained_gain
     );
 }
 
@@ -378,12 +414,18 @@ fn deterministic_seeded_rolls_produce_stable_output() {
     let now = d(2025, 6, 1);
     let coach = CoachingEffect::neutral();
     let mut p1 = make_player(
-        d(2007, 1, 1), PlayerPositionType::MidfielderCenter,
-        baseline_skills(), 160, person_pro(15.0, 12.0),
+        d(2007, 1, 1),
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        160,
+        person_pro(15.0, 12.0),
     );
     let mut p2 = make_player(
-        d(2007, 1, 1), PlayerPositionType::MidfielderCenter,
-        baseline_skills(), 160, person_pro(15.0, 12.0),
+        d(2007, 1, 1),
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        160,
+        person_pro(15.0, 12.0),
     );
 
     p1.process_development_with(now, 6000, &coach, 0.4, &mut FixedRolls(0.5));
@@ -395,7 +437,9 @@ fn deterministic_seeded_rolls_produce_stable_output() {
         assert!(
             (a[i] - b[i]).abs() < 1e-6,
             "deterministic skill {} differed: {} vs {}",
-            i, a[i], b[i]
+            i,
+            a[i],
+            b[i]
         );
     }
 }
@@ -419,7 +463,8 @@ fn goalkeeping_skills_use_later_peak_curve() {
     assert!(
         gk.skills.goalkeeping.handling > pre_handling,
         "30yo GK handling should still grow: pre={} post={}",
-        pre_handling, gk.skills.goalkeeping.handling
+        pre_handling,
+        gk.skills.goalkeeping.handling
     );
 
     let mut out = make_player(
@@ -434,7 +479,8 @@ fn goalkeeping_skills_use_later_peak_curve() {
     assert!(
         out.skills.physical.pace <= pre_pace,
         "30yo outfield pace should not grow: pre={} post={}",
-        pre_pace, out.skills.physical.pace
+        pre_pace,
+        out.skills.physical.pace
     );
 }
 
@@ -442,12 +488,18 @@ fn goalkeeping_skills_use_later_peak_curve() {
 fn coaching_effect_amplifies_growth() {
     let now = d(2025, 6, 1);
     let mut weak = make_player(
-        d(2007, 1, 1), PlayerPositionType::MidfielderCenter,
-        baseline_skills(), 160, person_pro(15.0, 12.0),
+        d(2007, 1, 1),
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        160,
+        person_pro(15.0, 12.0),
     );
     let mut strong = make_player(
-        d(2007, 1, 1), PlayerPositionType::MidfielderCenter,
-        baseline_skills(), 160, person_pro(15.0, 12.0),
+        d(2007, 1, 1),
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        160,
+        person_pro(15.0, 12.0),
     );
 
     let no_coach = CoachingEffect::neutral();
@@ -464,6 +516,7 @@ fn coaching_effect_amplifies_growth() {
     assert!(
         strong_gain > weak_gain,
         "elite coach gain {} should exceed neutral coach gain {}",
-        strong_gain, weak_gain
+        strong_gain,
+        weak_gain
     );
 }

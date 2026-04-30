@@ -1,6 +1,6 @@
+use crate::Relations;
 use crate::shared::FullName;
 use crate::utils::DateUtils;
-use crate::Relations;
 use chrono::NaiveDate;
 
 pub trait Person {

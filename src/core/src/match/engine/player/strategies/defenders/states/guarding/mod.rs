@@ -1,5 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -178,7 +178,6 @@ impl StateProcessingHandler for DefenderGuardingState {
         }
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if let Some(opponent) = self.find_guard_target(ctx) {
             let opponent_velocity = opponent.velocity(ctx);
@@ -262,12 +261,13 @@ impl DefenderGuardingState {
             }
 
             // Factor 4: Is this opponent unmarked? (no other defender nearby)
-            let has_nearby_defender = ctx.players().teammates().defenders()
-                .any(|def| {
-                    if def.id == ctx.player.id { return false; }
-                    let dist = (def.position - opponent.position).magnitude();
-                    dist < 15.0
-                });
+            let has_nearby_defender = ctx.players().teammates().defenders().any(|def| {
+                if def.id == ctx.player.id {
+                    return false;
+                }
+                let dist = (def.position - opponent.position).magnitude();
+                dist < 15.0
+            });
 
             if !has_nearby_defender {
                 score += 30.0; // Big bonus for unmarked attackers
@@ -280,8 +280,9 @@ impl DefenderGuardingState {
             // Factor 6: Opponent attacking skill
             let player_ops = ctx.player();
             let skills = player_ops.skills(opponent.id);
-            let attacking_quality = (skills.physical.pace + skills.technical.finishing
-                + skills.mental.off_the_ball) / 3.0;
+            let attacking_quality =
+                (skills.physical.pace + skills.technical.finishing + skills.mental.off_the_ball)
+                    / 3.0;
             score += attacking_quality / 4.0; // Max ~5 points
 
             if score > best_score {

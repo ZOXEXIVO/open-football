@@ -1,5 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -35,17 +35,20 @@ impl StateProcessingHandler for DefenderHeadingState {
                 DefenderState::Standing,
             ));
         }
-       
+
         // 2. Attempt to head the ball
         if self.attempt_heading(ctx) {
             // Defenders clear the ball AWAY from own goal, not toward opponent goal
-            Some(StateChangeResult::with_defender_state_and_event(DefenderState::HoldingLine, Event::PlayerEvent(PlayerEvent::Shoot(
-                ShootingEventContext::new()
-                    .with_player_id(ctx.player.id)
-                    .with_target(ctx.player().clearing_direction())
-                    .with_reason("DEF_HEADING")
-                    .build(ctx)
-            ))))
+            Some(StateChangeResult::with_defender_state_and_event(
+                DefenderState::HoldingLine,
+                Event::PlayerEvent(PlayerEvent::Shoot(
+                    ShootingEventContext::new()
+                        .with_player_id(ctx.player.id)
+                        .with_target(ctx.player().clearing_direction())
+                        .with_reason("DEF_HEADING")
+                        .build(ctx),
+                )),
+            ))
         } else {
             // Heading failed; transition to appropriate state (e.g., Standing)
             Some(StateChangeResult::with_defender_state(
@@ -53,7 +56,6 @@ impl StateProcessingHandler for DefenderHeadingState {
             ))
         }
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;
@@ -76,8 +78,8 @@ impl StateProcessingHandler for DefenderHeadingState {
 impl DefenderHeadingState {
     /// Determines if the defender successfully heads the ball based on skills and random chance.
     fn attempt_heading(&self, ctx: &StateProcessingContext) -> bool {
-        let heading_skill = ctx.player.skills.technical.heading  / 20.0; // Normalize skill to [0,1]
-        let jumping_skill = ctx.player.skills.physical.jumping  / 20.0;
+        let heading_skill = ctx.player.skills.technical.heading / 20.0; // Normalize skill to [0,1]
+        let jumping_skill = ctx.player.skills.physical.jumping / 20.0;
         let overall_skill = (heading_skill + jumping_skill) / 2.0;
 
         // Simulate chance of success

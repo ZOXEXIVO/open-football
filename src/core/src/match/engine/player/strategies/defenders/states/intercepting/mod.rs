@@ -1,6 +1,9 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::{
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
+};
 use nalgebra::Vector3;
 
 const HEADING_HEIGHT: f32 = 1.5;
@@ -23,7 +26,8 @@ impl StateProcessingHandler for DefenderInterceptingState {
 
         if ball_position.z > HEADING_HEIGHT
             && ball_distance < HEADING_DISTANCE
-            && ctx.ball().is_towards_player_with_angle(0.6) {
+            && ctx.ball().is_towards_player_with_angle(0.6)
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Heading,
             ));
@@ -63,15 +67,14 @@ impl StateProcessingHandler for DefenderInterceptingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Pursuit {
                 target: ctx.tick_context.positions.ball.position,
                 target_velocity: ctx.tick_context.positions.ball.velocity,
             }
-                .calculate(ctx.player)
-                .velocity,
+            .calculate(ctx.player)
+            .velocity,
         )
     }
 

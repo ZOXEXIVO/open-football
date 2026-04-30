@@ -1,6 +1,7 @@
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
+use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
     RecommendationSource, RecommendationType, ShortlistCandidate, ShortlistCandidateStatus,
@@ -8,7 +9,6 @@ use crate::transfers::pipeline::{
     TransferRequestStatus, TransferShortlist,
 };
 use crate::transfers::window::PlayerValuationCalculator;
-use crate::transfers::TransferWindowManager;
 use crate::utils::IntegerUtils;
 use crate::{
     Country, Person, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType,
@@ -115,14 +115,10 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
         return Reject(NotListed);
     }
 
-    let baseline = PipelineProcessor::tier_starter_ca_score(
-        ctx.buyer_rep_score,
-        target.position_group,
-    );
-    let ceiling = PipelineProcessor::tier_target_ceiling_score(
-        ctx.buyer_rep_score,
-        target.position_group,
-    );
+    let baseline =
+        PipelineProcessor::tier_starter_ca_score(ctx.buyer_rep_score, target.position_group);
+    let ceiling =
+        PipelineProcessor::tier_target_ceiling_score(ctx.buyer_rep_score, target.position_group);
     let floor = baseline.saturating_sub(20);
     if target.ability < floor || target.ability > ceiling {
         return Reject(OutOfTierWindow);
@@ -147,8 +143,7 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
         ctx.buyer_rep_score,
         ctx.buyer_league_reputation,
     );
-    let wage_headroom =
-        (ctx.buyer_wage_budget as i64 - ctx.buyer_total_wages as i64).max(0);
+    let wage_headroom = (ctx.buyer_wage_budget as i64 - ctx.buyer_total_wages as i64).max(0);
     let wage_cap = (wage_headroom as f64 * 1.3) as u64;
     if wage_cap > 0 && (estimated_wage as u64) > wage_cap {
         return Reject(UnaffordableWage);
@@ -201,8 +196,7 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
     }
 
     let headroom_ratio = if affordability_cap > 0.0 {
-        ((affordability_cap - target.estimated_value) / affordability_cap).clamp(0.0, 1.0)
-            as f32
+        ((affordability_cap - target.estimated_value) / affordability_cap).clamp(0.0, 1.0) as f32
     } else {
         0.0
     };
@@ -391,11 +385,7 @@ impl PipelineProcessor {
 
             let avg_ability = {
                 let avg = team.players.current_ability_avg();
-                if avg == 0 {
-                    50
-                } else {
-                    avg
-                }
+                if avg == 0 { 50 } else { avg }
             };
 
             let club_rep = team.reputation.level();
@@ -406,11 +396,7 @@ impl PipelineProcessor {
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                 .map(|l| l.reputation)
                 .unwrap_or(0);
-            let club_total_wages: u32 = club
-                .teams
-                .iter()
-                .map(|t| t.get_annual_salary())
-                .sum();
+            let club_total_wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
             let club_wage_budget: u32 = club
                 .finance
                 .wage_budget
@@ -688,7 +674,13 @@ impl PipelineProcessor {
                 for p in team.players.players.iter() {
                     let g = p.position().position_group();
                     let ca = p.player_attributes.current_ability;
-                    m.entry(g).and_modify(|v| { if ca > *v { *v = ca } }).or_insert(ca);
+                    m.entry(g)
+                        .and_modify(|v| {
+                            if ca > *v {
+                                *v = ca
+                            }
+                        })
+                        .or_insert(ca);
                 }
                 m
             };
@@ -1079,9 +1071,57 @@ impl PipelineProcessor {
                     _ => 6,
                 };
                 if club.transfer_plan.staff_recommendations.len() < cap {
-                    club.transfer_plan
-                        .staff_recommendations
-                        .push(action.recommendation);
+                    let rec = action.recommendation;
+                    let recommender_id = rec.recommender_staff_id;
+                    let player_id = rec.player_id;
+                    let assessed_ability = rec.assessed_ability;
+                    let assessed_potential = rec.assessed_potential;
+                    let confidence = rec.confidence;
+                    let estimated_fee = rec.estimated_fee;
+                    let source = match rec.source {
+                        crate::transfers::pipeline::RecommendationSource::ScoutNetwork => {
+                            crate::transfers::pipeline::ScoutMonitoringSource::StaffRecommendation
+                        }
+                        crate::transfers::pipeline::RecommendationSource::ChiefScoutReport => {
+                            crate::transfers::pipeline::ScoutMonitoringSource::StaffRecommendation
+                        }
+                        crate::transfers::pipeline::RecommendationSource::DirectorOfFootball => {
+                            crate::transfers::pipeline::ScoutMonitoringSource::StaffRecommendation
+                        }
+                        crate::transfers::pipeline::RecommendationSource::HeadCoach => {
+                            crate::transfers::pipeline::ScoutMonitoringSource::StaffRecommendation
+                        }
+                    };
+                    club.transfer_plan.staff_recommendations.push(rec);
+
+                    // Mirror the recommendation into a monitoring row
+                    // so the recruitment meeting and UI surfaces see
+                    // the player on this scout's books too.
+                    let plan = &mut club.transfer_plan;
+                    if plan
+                        .find_monitoring_mut(recommender_id, player_id)
+                        .is_none()
+                    {
+                        let id = plan.next_monitoring_id();
+                        let mut row = crate::transfers::pipeline::ScoutPlayerMonitoring::new(
+                            id,
+                            recommender_id,
+                            player_id,
+                            source,
+                            date,
+                        );
+                        row.record_observation(
+                            assessed_ability,
+                            assessed_potential,
+                            confidence,
+                            1.0,
+                            estimated_fee,
+                            Vec::new(),
+                            date,
+                            false,
+                        );
+                        plan.scout_monitoring.push(row);
+                    }
                 }
             }
         }

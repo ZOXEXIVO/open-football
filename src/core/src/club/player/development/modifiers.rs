@@ -25,10 +25,8 @@ pub(super) fn personality_multiplier(
     determination: f32,
     work_rate: f32,
 ) -> f32 {
-    let weighted = professionalism * 0.40
-        + ambition * 0.25
-        + determination * 0.20
-        + work_rate * 0.15;
+    let weighted =
+        professionalism * 0.40 + ambition * 0.25 + determination * 0.20 + work_rate * 0.15;
     // Map 0-20 -> 0.4-1.6
     let norm = weighted / 20.0;
     0.4 + norm * 1.2

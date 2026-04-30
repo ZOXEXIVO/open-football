@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -28,7 +28,7 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(teammate_id)
                         .with_reason("MID_SWITCHING_PLAY")
-                        .build(ctx)
+                        .build(ctx),
                 )),
             ));
         }
@@ -43,14 +43,13 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the best position to switch play
         if let Some((_, teammate_position)) = self.find_switch_play_target(ctx) {
             let steering = SteeringBehavior::Seek {
                 target: teammate_position,
             }
-                .calculate(ctx.player);
+            .calculate(ctx.player);
 
             Some(steering.velocity)
         } else {
@@ -76,7 +75,9 @@ impl MidfielderSwitchingPlayState {
         let perpendicular_direction = Vector3::new(-forward_direction.y, forward_direction.x, 0.0);
 
         // Find teammates on the opposite side of the field
-        let opposite_side_teammates: Vec<MatchPlayerLite> = ctx.players().teammates()
+        let opposite_side_teammates: Vec<MatchPlayerLite> = ctx
+            .players()
+            .teammates()
             .all()
             .filter(|teammate| {
                 let teammate_to_player = player_position - teammate.position;
@@ -106,8 +107,11 @@ impl MidfielderSwitchingPlayState {
     ) -> f32 {
         // Calculate the amount of free space around a player
         let space_radius = 10.0; // Adjust the radius as needed
-        let num_opponents_nearby = ctx.tick_context.grid
-            .opponents(player.id, space_radius).count();
+        let num_opponents_nearby = ctx
+            .tick_context
+            .grid
+            .opponents(player.id, space_radius)
+            .count();
 
         space_radius - num_opponents_nearby as f32
     }

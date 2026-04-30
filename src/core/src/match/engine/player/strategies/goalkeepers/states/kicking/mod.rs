@@ -1,9 +1,12 @@
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler};
-use crate::PlayerFieldPositionGroup;
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler,
+};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -35,7 +38,6 @@ impl StateProcessingHandler for GoalkeeperKickingState {
         None
     }
 
-
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
@@ -61,7 +63,10 @@ impl GoalkeeperKickingState {
         let anticipation_skill = ctx.player.skills.mental.anticipation / 20.0;
 
         // Calculate extreme pass capability (kicking emphasized)
-        let extreme_capability = (kicking_skill * 0.5) + (vision_skill * 0.3) + (technique_skill * 0.15) + (anticipation_skill * 0.05);
+        let extreme_capability = (kicking_skill * 0.5)
+            + (vision_skill * 0.3)
+            + (technique_skill * 0.15)
+            + (anticipation_skill * 0.05);
 
         // Determine if goalkeeper should attempt extreme clearances
         let can_attempt_extreme = extreme_capability > 0.7;
@@ -160,7 +165,12 @@ impl GoalkeeperKickingState {
             };
 
             // Combine all factors with vision-based weighting and recency penalty
-            let score = distance_score * space_factor * position_bonus * (1.0 + field_progress) * (0.5 + vision_skill * 0.5) * recency_penalty;
+            let score = distance_score
+                * space_factor
+                * position_bonus
+                * (1.0 + field_progress)
+                * (0.5 + vision_skill * 0.5)
+                * recency_penalty;
 
             if score > best_score {
                 best_score = score;
@@ -176,4 +186,3 @@ impl GoalkeeperKickingState {
         }
     }
 }
-

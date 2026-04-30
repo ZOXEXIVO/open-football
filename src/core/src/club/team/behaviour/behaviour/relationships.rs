@@ -32,22 +32,24 @@ impl TeamBehaviour {
                     let respect_bonus = 0.03 * (max_rep / 10000.0).clamp(0.1, 1.0);
 
                     if respect_bonus > 0.005 {
-                        result.players.relationship_result.push(
-                            PlayerRelationshipChangeResult {
+                        result
+                            .players
+                            .relationship_result
+                            .push(PlayerRelationshipChangeResult {
                                 from_player_id: player_i.id,
                                 to_player_id: player_j.id,
                                 relationship_change: respect_bonus,
                                 change_type: ChangeType::ReputationAdmiration,
-                            },
-                        );
-                        result.players.relationship_result.push(
-                            PlayerRelationshipChangeResult {
+                            });
+                        result
+                            .players
+                            .relationship_result
+                            .push(PlayerRelationshipChangeResult {
                                 from_player_id: player_j.id,
                                 to_player_id: player_i.id,
                                 relationship_change: respect_bonus,
                                 change_type: ChangeType::ReputationAdmiration,
-                            },
-                        );
+                            });
                     }
                 } else if rep_diff > 3000.0 {
                     // Large reputation gap: admiration or resentment
@@ -77,14 +79,15 @@ impl TeamBehaviour {
                             ChangeType::ReputationTension
                         };
 
-                        result.players.relationship_result.push(
-                            PlayerRelationshipChangeResult {
+                        result
+                            .players
+                            .relationship_result
+                            .push(PlayerRelationshipChangeResult {
                                 from_player_id: lesser_id,
                                 to_player_id: star_id,
                                 relationship_change: lesser_to_star,
                                 change_type,
-                            },
-                        );
+                            });
                     }
 
                     // Star player's reaction: professional stars are approachable,
@@ -104,14 +107,15 @@ impl TeamBehaviour {
                             ChangeType::ReputationTension
                         };
 
-                        result.players.relationship_result.push(
-                            PlayerRelationshipChangeResult {
+                        result
+                            .players
+                            .relationship_result
+                            .push(PlayerRelationshipChangeResult {
                                 from_player_id: star_id,
                                 to_player_id: lesser_id,
                                 relationship_change: star_to_lesser,
                                 change_type,
-                            },
-                        );
+                            });
                     }
                 } else if rep_diff > 1000.0 {
                     // Moderate reputation gap: small professional respect toward higher-rep player
@@ -123,14 +127,15 @@ impl TeamBehaviour {
 
                     let respect = 0.02 * (rep_i.max(rep_j) / 10000.0).clamp(0.1, 1.0);
 
-                    result.players.relationship_result.push(
-                        PlayerRelationshipChangeResult {
+                    result
+                        .players
+                        .relationship_result
+                        .push(PlayerRelationshipChangeResult {
                             from_player_id: lower_id,
                             to_player_id: higher_id,
                             relationship_change: respect,
                             change_type: ChangeType::ReputationAdmiration,
-                        },
-                    );
+                        });
                 }
             }
         }
@@ -179,12 +184,10 @@ impl TeamBehaviour {
                 // - Veteran's reputation (experienced, respected players mentor better)
                 // - Youth's adaptability (how well they receive mentorship)
                 // - Position compatibility (same position = more relevant)
-                let leadership_factor =
-                    (veteran.skills.mental.leadership / 20.0).clamp(0.0, 1.0);
+                let leadership_factor = (veteran.skills.mental.leadership / 20.0).clamp(0.0, 1.0);
                 let rep_factor =
                     (veteran.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
-                let adaptability_factor =
-                    (youth.attributes.adaptability / 20.0).clamp(0.0, 1.0);
+                let adaptability_factor = (youth.attributes.adaptability / 20.0).clamp(0.0, 1.0);
 
                 let same_position = veteran.position() == youth.position();
                 let position_bonus = if same_position { 1.5 } else { 1.0 };
@@ -201,24 +204,26 @@ impl TeamBehaviour {
 
                 if mentorship_strength > 0.015 {
                     // Youth admires and learns from veteran
-                    result.players.relationship_result.push(
-                        PlayerRelationshipChangeResult {
+                    result
+                        .players
+                        .relationship_result
+                        .push(PlayerRelationshipChangeResult {
                             from_player_id: youth.id,
                             to_player_id: veteran.id,
                             relationship_change: mentorship_strength,
                             change_type: ChangeType::MentorshipBond,
-                        },
-                    );
+                        });
 
                     // Veteran gains satisfaction from mentoring (slightly less)
-                    result.players.relationship_result.push(
-                        PlayerRelationshipChangeResult {
+                    result
+                        .players
+                        .relationship_result
+                        .push(PlayerRelationshipChangeResult {
                             from_player_id: veteran.id,
                             to_player_id: youth.id,
                             relationship_change: mentorship_strength * 0.6,
                             change_type: ChangeType::MentorshipBond,
-                        },
-                    );
+                        });
                 }
             }
         }

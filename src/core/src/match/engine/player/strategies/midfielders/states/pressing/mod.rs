@@ -1,5 +1,5 @@
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -65,7 +65,10 @@ impl StateProcessingHandler for MidfielderPressingState {
         let ball_distance = ctx.ball().distance();
         let ball_position = ctx.tick_context.positions.ball.position;
 
-        if let Some(closest_teammate) = ctx.players().teammates().all()
+        if let Some(closest_teammate) = ctx
+            .players()
+            .teammates()
+            .all()
             .filter(|t| t.id != ctx.player.id)
             .min_by(|a, b| {
                 let dist_a = (a.position - ball_position).magnitude();
@@ -99,7 +102,10 @@ impl StateProcessingHandler for MidfielderPressingState {
         // But only if no teammate is closer (avoid chasing ball during teammate's pass)
         if !ctx.ball().is_owned() && ball_distance < 50.0 && ctx.ball().speed() < 3.0 {
             let ball_pos = ctx.tick_context.positions.ball.position;
-            let closer_teammate = ctx.players().teammates().all()
+            let closer_teammate = ctx
+                .players()
+                .teammates()
+                .all()
                 .any(|t| (t.position - ball_pos).magnitude() < ball_distance - 5.0);
 
             if !closer_teammate {
@@ -126,10 +132,15 @@ impl StateProcessingHandler for MidfielderPressingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Only pursue if opponent has the ball
-        if let Some(opponent) = ctx.players().opponents().nearby(500.0).with_ball(ctx).next() {
+        if let Some(opponent) = ctx
+            .players()
+            .opponents()
+            .nearby(500.0)
+            .with_ball(ctx)
+            .next()
+        {
             let distance_to_opponent = (opponent.position - ctx.player.position).magnitude();
 
             // Predictive pursuit — lead the carrier based on their
@@ -174,7 +185,8 @@ impl StateProcessingHandler for MidfielderPressingState {
             Some(pressing_velocity + separation)
         } else if !ctx.ball().is_owned() && ctx.ball().distance() < 100.0 {
             // Loose ball — pursue it directly
-            let direction = (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
+            let direction =
+                (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
             let speed = ctx.player.skills.physical.pace;
             Some(direction * speed)
         } else {
@@ -205,7 +217,10 @@ impl MidfielderPressingState {
         let moving_toward_ball = player_velocity.dot(&to_ball_normalized) > 0.0;
 
         // Check if other teammates are better positioned to press
-        let other_pressing_teammates = ctx.players().teammates().all()
+        let other_pressing_teammates = ctx
+            .players()
+            .teammates()
+            .all()
             .filter(|t| {
                 let dist = (t.position - ctx.tick_context.positions.ball.position).magnitude();
                 dist < ctx.ball().distance() * 0.8 // 20% closer than current player

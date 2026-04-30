@@ -1,6 +1,9 @@
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::{
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
+};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -19,8 +22,7 @@ impl StateProcessingHandler for MidfielderInterceptingState {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
-        }
-        else {
+        } else {
             let ball_distance = ctx.ball().distance();
 
             // Loose ball nearby — claim it directly instead of tackling thin air
@@ -46,15 +48,14 @@ impl StateProcessingHandler for MidfielderInterceptingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Pursuit {
                 target: ctx.tick_context.positions.ball.position,
                 target_velocity: ctx.tick_context.positions.ball.velocity,
             }
-                .calculate(ctx.player)
-                .velocity,
+            .calculate(ctx.player)
+            .velocity,
         )
     }
 
@@ -80,7 +81,7 @@ impl MidfielderInterceptingState {
             .map(|opponent| {
                 let player = ctx.player();
                 let skills = player.skills(opponent.id);
-                
+
                 let opponent_speed = skills.physical.pace.max(0.1);
                 let opponent_distance = (interception_point - opponent.position).magnitude();
                 opponent_distance / opponent_speed

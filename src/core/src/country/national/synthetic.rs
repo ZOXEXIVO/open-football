@@ -4,8 +4,8 @@
 //! nation faces opponents at roughly the right level instead of
 //! conceding 17-0 with an empty net.
 
-use super::types::{SQUAD_SIZE, SYNTHETIC_POSITIONS};
 use super::NationalTeam;
+use super::types::{SQUAD_SIZE, SYNTHETIC_POSITIONS};
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::rapport::PlayerRapport;

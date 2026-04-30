@@ -1,13 +1,14 @@
-use crate::club::{classify_distress, DistressLevel};
+use super::Club;
+use crate::club::{DistressLevel, classify_distress};
 use crate::context::GlobalContext;
 use crate::{ContractBonusType, ReputationLevel};
-use super::Club;
 use chrono::Datelike;
 
 /// Country price level: scales ticket prices, merchandising etc. by local economy.
 /// England 1.5, Colombia 0.4, default 1.0.
 fn get_price_level(ctx: &GlobalContext<'_>) -> f64 {
-    ctx.country.as_ref()
+    ctx.country
+        .as_ref()
         .map(|c| c.price_level as f64)
         .unwrap_or(1.0)
 }
@@ -98,13 +99,19 @@ impl Club {
         let date = ctx.simulation.date.date();
 
         // Economic factors from country
-        let tv_multiplier = ctx.country.as_ref()
+        let tv_multiplier = ctx
+            .country
+            .as_ref()
             .map(|c| c.tv_revenue_multiplier)
             .unwrap_or(1.0);
-        let attendance_factor = ctx.country.as_ref()
+        let attendance_factor = ctx
+            .country
+            .as_ref()
             .map(|c| c.stadium_attendance_factor)
             .unwrap_or(1.0);
-        let sponsorship_strength = ctx.country.as_ref()
+        let sponsorship_strength = ctx
+            .country
+            .as_ref()
             .map(|c| c.sponsorship_market_strength)
             .unwrap_or(1.0);
 
@@ -123,27 +130,31 @@ impl Club {
         // memos so a re-run of this pass cannot double-charge.
         let bonus_payout = settle_lump_sum_bonuses(self, date);
         if bonus_payout > 0 {
-            self.finance
-                .balance
-                .push_expense_player_wages(bonus_payout);
+            self.finance.balance.push_expense_player_wages(bonus_payout);
         }
 
         // 2. Staff wages: coaching, medical, scouting staff
         for team in self.teams.iter() {
             let staff_monthly = team.staffs.get_annual_salary() / 12;
             if staff_monthly > 0 {
-                self.finance.balance.push_expense_staff_wages(staff_monthly as i64);
+                self.finance
+                    .balance
+                    .push_expense_staff_wages(staff_monthly as i64);
             }
         }
 
         // 3. Sponsorship income
-        let sponsorship_income: i64 = self.finance.sponsorship
+        let sponsorship_income: i64 = self
+            .finance
+            .sponsorship
             .get_sponsorship_incomes(date)
             .iter()
             .map(|c| (c.wage / 12) as i64)
             .sum();
         if sponsorship_income > 0 {
-            self.finance.balance.push_income_sponsorship(sponsorship_income);
+            self.finance
+                .balance
+                .push_income_sponsorship(sponsorship_income);
         }
 
         // 4. TV, matchday, merchandising, facility costs — from main team reputation
@@ -210,7 +221,9 @@ impl Club {
                 ReputationLevel::Amateur => 500.0,
             };
             let merch_revenue = (merch_base * sponsorship_strength as f64 * price_level) as i64;
-            self.finance.balance.push_income_merchandising(merch_revenue);
+            self.finance
+                .balance
+                .push_income_merchandising(merch_revenue);
         }
 
         // 5. Amortization: each outstanding transfer purchase contributes
@@ -220,11 +233,10 @@ impl Club {
         self.finance.tick_amortization();
 
         // 6. Facility maintenance costs
-        let facility_cost: i64 = (
-            self.facilities.training.to_rating() as i64 +
-            self.facilities.youth.to_rating() as i64 +
-            self.facilities.academy.to_rating() as i64
-        ) * 5_000;
+        let facility_cost: i64 = (self.facilities.training.to_rating() as i64
+            + self.facilities.youth.to_rating() as i64
+            + self.facilities.academy.to_rating() as i64)
+            * 5_000;
         self.finance.balance.push_expense_facilities(facility_cost);
 
         // 7. Operating overhead: administration, taxes, community, infrastructure
@@ -243,7 +255,9 @@ impl Club {
             } else {
                 0
             };
-            self.finance.balance.push_expense_facilities(balance_overhead + tier_overhead);
+            self.finance
+                .balance
+                .push_expense_facilities(balance_overhead + tier_overhead);
         }
 
         // 8. Debt interest: only when the club is genuinely in the red.
@@ -272,10 +286,7 @@ impl Club {
     /// club's main team. Form comes from the last ~5 matches in the team's
     /// `match_history`; league position rides through `ClubContext` —
     /// which the country simulation populates from the live table.
-    fn compute_team_form_and_position(
-        &self,
-        ctx: &GlobalContext<'_>,
-    ) -> (f32, u16, u16) {
+    fn compute_team_form_and_position(&self, ctx: &GlobalContext<'_>) -> (f32, u16, u16) {
         let wins_ratio = self
             .teams
             .main()
@@ -404,8 +415,7 @@ fn settle_lump_sum_bonuses(club: &mut Club, date: chrono::NaiveDate) -> i64 {
                             }
                         }
                         ContractBonusType::InternationalCapFee => {
-                            let new_caps =
-                                current_caps.saturating_sub(baseline_caps) as i64;
+                            let new_caps = current_caps.saturating_sub(baseline_caps) as i64;
                             if new_caps > 0 {
                                 total += bonus.value as i64 * new_caps;
                             }
@@ -456,7 +466,9 @@ mod helpers_tests {
 
     #[test]
     fn tv_revenue_base_scales_with_reputation() {
-        assert!(tv_revenue_base(ReputationLevel::Elite) > tv_revenue_base(ReputationLevel::Continental));
+        assert!(
+            tv_revenue_base(ReputationLevel::Elite) > tv_revenue_base(ReputationLevel::Continental)
+        );
         assert!(
             tv_revenue_base(ReputationLevel::Continental)
                 > tv_revenue_base(ReputationLevel::National)

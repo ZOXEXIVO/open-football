@@ -17,10 +17,10 @@ mod motion;
 mod ownership;
 mod stall;
 
-use std::collections::VecDeque;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
+use std::collections::VecDeque;
 
 pub struct Ball {
     pub start_position: Vector3<f32>,
@@ -351,7 +351,8 @@ impl Ball {
         if self.pass_target_player_id == Some(player_id) {
             self.pass_target_player_id = None;
         }
-        self.take_ball_notified_players.retain(|&id| id != player_id);
+        self.take_ball_notified_players
+            .retain(|&id| id != player_id);
         self.recent_passers.retain(|&id| id != player_id);
     }
 

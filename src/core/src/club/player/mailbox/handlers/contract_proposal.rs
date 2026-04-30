@@ -1,6 +1,6 @@
 use crate::club::player::agent::PlayerAgent;
 use crate::club::player::calculators::{
-    expected_annual_value, package_inputs_from_proposal, ContractValuation, ValuationContext,
+    ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_proposal,
 };
 use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
 use crate::handlers::AcceptContractHandler;
@@ -146,8 +146,7 @@ impl ProcessContractHandler {
             proposal.squad_status_promise.clone(),
             player.contract.as_ref().map(|c| c.squad_status.clone()),
         ) {
-            if status_rank(&promised) < status_rank(&current)
-                && player.attributes.ambition >= 12.0
+            if status_rank(&promised) < status_rank(&current) && player.attributes.ambition >= 12.0
             {
                 result.contract.contract_rejected = true;
                 record_counter_offer(
@@ -287,7 +286,9 @@ impl ProcessContractHandler {
                         + agent.renewal_delta_with(1.0, sweetener_ratio, has_clause);
                     if accept_score >= 20.0 || pkg_ratio >= 1.10 {
                         accept_and_clear(player, proposal, now);
-                        player.happiness.add_event(HappinessEventType::ContractOffer, 2.0);
+                        player
+                            .happiness
+                            .add_event(HappinessEventType::ContractOffer, 2.0);
                     } else {
                         result.contract.contract_rejected = true;
                         let reason = if !has_clause && player.attributes.ambition >= 14.0 {
@@ -297,13 +298,7 @@ impl ProcessContractHandler {
                         } else {
                             RejectionReason::LowSalary
                         };
-                        record_counter_offer(
-                            player,
-                            &proposal,
-                            now,
-                            min_acceptable_years,
-                            reason,
-                        );
+                        record_counter_offer(player, &proposal, now, min_acceptable_years, reason);
                         log_rejection(player, &proposal, now);
                     }
                 } else {
@@ -320,7 +315,9 @@ impl ProcessContractHandler {
                     };
                     if eligible {
                         accept_and_clear(player, proposal, now);
-                        player.happiness.add_event(HappinessEventType::ContractOffer, 1.0);
+                        player
+                            .happiness
+                            .add_event(HappinessEventType::ContractOffer, 1.0);
                     } else {
                         result.contract.contract_rejected = true;
                         record_counter_offer(
@@ -350,9 +347,7 @@ impl ProcessContractHandler {
                     has_market_interest: player.statuses.get().iter().any(|s| {
                         matches!(
                             s,
-                            PlayerStatusType::Wnt
-                                | PlayerStatusType::Enq
-                                | PlayerStatusType::Bid
+                            PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
                         )
                     }),
                 };

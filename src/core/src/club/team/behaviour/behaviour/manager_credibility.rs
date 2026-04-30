@@ -16,8 +16,8 @@ use crate::club::team::behaviour::TeamBehaviourResult;
 use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{
-    ChangeType, Player, PlayerCollection, PlayerSquadStatus, RelationshipChange,
-    StaffCollection, StaffPosition,
+    ChangeType, Player, PlayerCollection, PlayerSquadStatus, RelationshipChange, StaffCollection,
+    StaffPosition,
 };
 
 impl TeamBehaviour {
@@ -104,26 +104,19 @@ impl TeamBehaviour {
             let promise_modifier =
                 (player.happiness.factors.promise_trust / 15.0).clamp(-0.35, 0.25);
 
-            let trust_delta = ((credibility_gap * 0.18
-                + promise_modifier * 0.10
-                + role_pressure * 0.10)
-                * personality_reception)
-                .clamp(-0.18, 0.18);
+            let trust_delta =
+                ((credibility_gap * 0.18 + promise_modifier * 0.10 + role_pressure * 0.10)
+                    * personality_reception)
+                    .clamp(-0.18, 0.18);
 
             if trust_delta.abs() < 0.005 {
                 continue;
             }
 
             let change = if trust_delta >= 0.0 {
-                RelationshipChange::positive(
-                    ChangeType::CoachingSuccess,
-                    trust_delta.abs(),
-                )
+                RelationshipChange::positive(ChangeType::CoachingSuccess, trust_delta.abs())
             } else {
-                RelationshipChange::negative(
-                    ChangeType::TacticalDisagreement,
-                    trust_delta.abs(),
-                )
+                RelationshipChange::negative(ChangeType::TacticalDisagreement, trust_delta.abs())
             };
             player
                 .relations
@@ -138,9 +131,9 @@ impl TeamBehaviour {
             // saturating the factor in the days between recalcs.
             let credibility_target = (credibility_gap * 6.0).clamp(-8.0, 6.0);
             let credibility_current = player.happiness.factors.coach_credibility;
-            player.happiness.factors.coach_credibility =
-                (credibility_current + (credibility_target - credibility_current) * 0.20)
-                    .clamp(-8.0, 6.0);
+            player.happiness.factors.coach_credibility = (credibility_current
+                + (credibility_target - credibility_current) * 0.20)
+                .clamp(-8.0, 6.0);
 
             // manager_relationship factor — target-based smoothing too,
             // sized so a sustained trust_delta of ±0.18 lands the target
@@ -195,21 +188,13 @@ fn compute_role_pressure(player: &Player, age: u8) -> f32 {
         //   * a 3-week gap since *any* match (clear benching).
         PlayerSquadStatus::KeyPlayer => {
             let bad_starts = apps_tracked >= 5 && starter_ratio < 0.45;
-            if bad_starts || days > 21 {
-                -0.35
-            } else {
-                0.0
-            }
+            if bad_starts || days > 21 { -0.35 } else { 0.0 }
         }
         // First-team regular tolerates rotation; complains only if
         // starter_ratio falls below 0.30 or the gap exceeds 24 days.
         PlayerSquadStatus::FirstTeamRegular => {
             let bad_starts = apps_tracked >= 5 && starter_ratio < 0.30;
-            if bad_starts || days > 24 {
-                -0.25
-            } else {
-                0.0
-            }
+            if bad_starts || days > 24 { -0.25 } else { 0.0 }
         }
         // Rotation player: pressure only when they're not seeing the
         // pitch at all — a month without an appearance.
@@ -223,12 +208,8 @@ fn compute_role_pressure(player: &Player, age: u8) -> f32 {
         // Prospects benefit from role clarity: a positive drift only
         // when they're young, recently active, and the starter_ratio
         // is climbing (proxy: ≥0.20).
-        PlayerSquadStatus::HotProspectForTheFuture
-        | PlayerSquadStatus::DecentYoungster => {
-            if age <= 21
-                && days < 30
-                && (apps_tracked >= 1 || starter_ratio >= 0.20)
-            {
+        PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster => {
+            if age <= 21 && days < 30 && (apps_tracked >= 1 || starter_ratio >= 0.20) {
                 0.04
             } else {
                 0.0
@@ -312,7 +293,8 @@ mod tests {
         // Replicates the bug where the old 1.25 expectation cap meant a
         // CA-180 / rep-9000 player perpetually saw a negative
         // credibility_gap even with the best possible manager.
-        let player = build_player_with_status(180, 9000, PlayerSquadStatus::KeyPlayer, d(1995, 1, 1));
+        let player =
+            build_player_with_status(180, 9000, PlayerSquadStatus::KeyPlayer, d(1995, 1, 1));
         let player_expectation = (player.player_attributes.current_ability as f32 / 160.0
             + player.player_attributes.current_reputation as f32 / 12000.0)
             .clamp(0.35, 1.0);
@@ -330,27 +312,22 @@ mod tests {
 
     #[test]
     fn injured_key_player_has_no_role_pressure_loss() {
-        let mut player = build_player_with_status(
-            150,
-            5_000,
-            PlayerSquadStatus::KeyPlayer,
-            d(1995, 1, 1),
-        );
+        let mut player =
+            build_player_with_status(150, 5_000, PlayerSquadStatus::KeyPlayer, d(1995, 1, 1));
         player.player_attributes.is_injured = true;
         player.player_attributes.injury_days_remaining = 21;
         player.player_attributes.days_since_last_match = 30;
         let role_pressure = compute_role_pressure(&player, 30);
-        assert_eq!(role_pressure, 0.0, "injured key player should not feel role pressure");
+        assert_eq!(
+            role_pressure, 0.0,
+            "injured key player should not feel role pressure"
+        );
     }
 
     #[test]
     fn key_player_starting_regularly_does_not_lose_trust_to_role_pressure() {
-        let mut player = build_player_with_status(
-            150,
-            5_000,
-            PlayerSquadStatus::KeyPlayer,
-            d(1995, 1, 1),
-        );
+        let mut player =
+            build_player_with_status(150, 5_000, PlayerSquadStatus::KeyPlayer, d(1995, 1, 1));
         player.happiness.starter_ratio = 0.85;
         player.happiness.appearances_tracked = 10;
         player.player_attributes.days_since_last_match = 4;
@@ -359,12 +336,8 @@ mod tests {
 
     #[test]
     fn key_player_benched_with_low_starter_ratio_feels_role_pressure() {
-        let mut player = build_player_with_status(
-            150,
-            5_000,
-            PlayerSquadStatus::KeyPlayer,
-            d(1995, 1, 1),
-        );
+        let mut player =
+            build_player_with_status(150, 5_000, PlayerSquadStatus::KeyPlayer, d(1995, 1, 1));
         player.happiness.starter_ratio = 0.20;
         player.happiness.appearances_tracked = 8;
         player.player_attributes.days_since_last_match = 6;

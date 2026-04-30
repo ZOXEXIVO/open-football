@@ -1,6 +1,6 @@
-use crate::r#match::MatchResult;
-use crate::league::LeagueTable;
 use crate::Club;
+use crate::league::LeagueTable;
+use crate::r#match::MatchResult;
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
@@ -22,8 +22,7 @@ impl LeagueRegulations {
         }
     }
 
-    pub fn process_disciplinary_actions(&mut self, _result: &MatchResult) {
-    }
+    pub fn process_disciplinary_actions(&mut self, _result: &MatchResult) {}
 
     pub fn check_ffp_violation(&self, club: &Club) -> bool {
         let deficit = club.finance.balance.outcome - club.finance.balance.income;
@@ -43,7 +42,8 @@ impl LeagueRegulations {
     }
 
     pub fn process_pending_cases(&mut self, current_date: NaiveDate) {
-        self.pending_cases.retain(|case| case.hearing_date > current_date);
+        self.pending_cases
+            .retain(|case| case.hearing_date > current_date);
     }
 }
 

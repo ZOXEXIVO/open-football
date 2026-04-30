@@ -27,79 +27,60 @@ pub use status::*;
 
 // Finance exports
 pub use finance::{
-    ClubFinances, ClubFinancialBalance, ClubFinancialBalanceHistory,
-    ClubSponsorship, ClubSponsorshipContract,
-    ClubFinanceContext, ClubFinanceResult,
-    SponsorRenewalContext, SponsorPerformance,
-    TransferObligation, DistressLevel,
-    classify_distress,
+    ClubFinanceContext, ClubFinanceResult, ClubFinances, ClubFinancialBalance,
+    ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract, DistressLevel,
+    SponsorPerformance, SponsorRenewalContext, TransferObligation, classify_distress,
 };
 
 // Relations exports
 pub use relations::{
-    Relations, PlayerRelation, StaffRelation, ChemistryFactors,
-    ChangeType, MentorshipType, InfluenceLevel, ConflictType, ConflictSeverity,
-    RelationshipChange, ConflictInfo,
+    ChangeType, ChemistryFactors, ConflictInfo, ConflictSeverity, ConflictType, InfluenceLevel,
+    MentorshipType, PlayerRelation, Relations, RelationshipChange, StaffRelation,
 };
 
 // Transfers exports
-pub use transfers::{
-    ClubTransferStrategy,
-};
+pub use transfers::ClubTransferStrategy;
 
 // Player exports (except conflicting modules)
 pub use player::{
-    Player, PlayerCollection, PlayerBuilder, SellOnObligation,
-    PlayerAttributes, PlayerContext,
-    PlayerPreferredFoot, PlayerPositionType, PlayerFieldPositionGroup, PlayerStatusType,
-    PlayerSkills, Technical, Mental, Physical, Goalkeeping,
-    PositionWeights,
-    PlayerPositions, PlayerPosition, PlayerStatus, StatusData,
-    PlayerStatistics, PlayerStatisticsHistory, PlayerStatisticsHistoryItem, TeamInfo,
-    PlayerHappiness, PositiveHappiness, NegativeHappiness,
-    HappinessFactors, HappinessEvent, HappinessEventType,
-    PlayerClubContract, ContractType, PlayerSquadStatus, PlayerTransferStatus,
-    ContractBonusType, ContractBonus, ContractClauseType, ContractClause,
-    PlayerMailbox, PlayerMessage, PlayerMessageType, PlayerContractProposal, PlayerMailboxResult,
-    PlayerDecisionHistory, PlayerDecision,
-    PlayerTraining, PlayerTrainingHistory, TrainingRecord,
-    PlayerResult, PlayerCollectionResult, PlayerContractResult,
-    PlayerValueCalculator, WageCalculator, PlayerGenerator, PlayerUtils,
-    AcademyGenerationContext, AcademyIntakeState,
-    seed_player_id_sequence, next_player_id,
-    PlayerPlan, PlayerPlanRole,
-    Language, PlayerLanguage,
-    InjuryType, InjurySeverity,
-    CONDITION_MAX_VALUE,
+    AcademyGenerationContext, AcademyIntakeState, CONDITION_MAX_VALUE, ContractBonus,
+    ContractBonusType, ContractClause, ContractClauseType, ContractType, Goalkeeping,
+    HappinessEvent, HappinessEventType, HappinessFactors, InjurySeverity, InjuryType, Language,
+    Mental, NegativeHappiness, Physical, Player, PlayerAttributes, PlayerBuilder,
+    PlayerClubContract, PlayerCollection, PlayerCollectionResult, PlayerContext,
+    PlayerContractProposal, PlayerContractResult, PlayerDecision, PlayerDecisionHistory,
+    PlayerFieldPositionGroup, PlayerGenerator, PlayerHappiness, PlayerLanguage, PlayerMailbox,
+    PlayerMailboxResult, PlayerMessage, PlayerMessageType, PlayerPlan, PlayerPlanRole,
+    PlayerPosition, PlayerPositionType, PlayerPositions, PlayerPreferredFoot, PlayerResult,
+    PlayerSkills, PlayerSquadStatus, PlayerStatistics, PlayerStatisticsHistory,
+    PlayerStatisticsHistoryItem, PlayerStatus, PlayerStatusType, PlayerTraining,
+    PlayerTrainingHistory, PlayerTransferStatus, PlayerUtils, PlayerValueCalculator,
+    PositionWeights, PositiveHappiness, SellOnObligation, StatusData, TeamInfo, Technical,
+    TrainingRecord, WageCalculator, next_player_id, seed_player_id_sequence,
 };
 // Also export the missing types
-pub use player::training::result::PlayerTrainingResult;
 pub use player::mailbox::handlers::{AcceptContractHandler, ProcessContractHandler};
+pub use player::training::result::PlayerTrainingResult;
 // Also export context module for those who want to import from it
 pub use player::context as player_context;
 // Also keep module aliases for those who want to import from the module
 pub use player::attributes as player_attributes_mod;
-pub use player::contract as player_contract_mod;
 pub use player::builder as player_builder_mod;
+pub use player::contract as player_contract_mod;
 pub use player::mailbox::handlers;
 
 // Staff exports (except conflicting modules)
 pub use staff::{
-    Staff, StaffCollection, StaffStub,
-    StaffAttributes, StaffContext,
-    StaffCoaching, StaffGoalkeeperCoaching, StaffMental,
-    StaffKnowledge, StaffDataAnalysis, StaffMedical, RegionFamiliarity,
-    StaffClubContract, StaffPosition, StaffStatus,
-    CoachFocus, TechnicalFocusType, MentalFocusType, PhysicalFocusType,
-    StaffResponsibility, BoardResponsibility, RecruitmentResponsibility,
-    IncomingTransfersResponsibility, OutgoingTransfersResponsibility,
-    ContractRenewalResponsibility, ScoutingResponsibility, TrainingResponsibility,
-    StaffPerformance, CoachingStyle,
-    StaffResult, StaffCollectionResult, StaffContractResult, StaffTrainingResult,
-    StaffWarning, StaffMoraleEvent, ResignationReason, HealthIssue,
-    RelationshipEvent, StaffLicenseType, StaffTrainingSession,
-    StaffEvent, StaffEventType,
-    ScoutingReport, ScoutRecommendation,
+    BoardResponsibility, CoachFocus, CoachingStyle, ContractRenewalResponsibility, HealthIssue,
+    IncomingTransfersResponsibility, MentalFocusType, OutgoingTransfersResponsibility,
+    PhysicalFocusType, RecruitmentResponsibility, RegionFamiliarity, RelationshipEvent,
+    ResignationReason, ScoutRecommendation, ScoutingReport, ScoutingResponsibility, Staff,
+    StaffAttributes, StaffClubContract, StaffCoaching, StaffCollection, StaffCollectionResult,
+    StaffContext, StaffContractResult, StaffDataAnalysis, StaffEvent, StaffEventType,
+    StaffGoalkeeperCoaching, StaffKnowledge, StaffLicenseType, StaffMedical, StaffMental,
+    StaffMoraleEvent, StaffPerformance, StaffPosition, StaffResponsibility, StaffResult,
+    StaffStatus, StaffStub, StaffTrainingResult, StaffTrainingSession, StaffWarning,
+    TechnicalFocusType, TrainingResponsibility,
 };
 // Also export context module for those who want to import from it
 pub use staff::context as staff_context;
@@ -112,29 +93,24 @@ pub use staff::contract as staff_contract_mod;
 
 // Team exports (except conflicting modules)
 pub use team::{
-    Team, TeamCollection, TeamType, TeamBuilder, TeamContext,
-    TeamResult,
-    TeamBehaviour, TeamBehaviourResult, PlayerBehaviourResult, PlayerRelationshipChangeResult,
-    ManagerTalkResult, ManagerTalkType,
-    Tactics, TacticalStyle, MatchTacticType, TacticSelectionReason, TacticsSelector,
-    TacticalDecisionEngine, TacticalDecisionResult, FormationChange, SquadAnalysis,
-    TacticalRecommendation, RecommendationPriority, RecommendationCategory,
-    TeamTraining, TeamTrainingResult, TrainingSchedule, TrainingType,
-    TrainingSession, TrainingIntensity, WeeklyTrainingPlan, PeriodizationPhase,
-    TrainingEffects, PhysicalGains, TechnicalGains, MentalGains,
-    IndividualTrainingPlan, TrainingFocus, SkillType, SpecialInstruction,
-    CoachingPhilosophy, TacticalFocus, TrainingIntensityPreference, RotationPreference,
-    TrainingFacilities, FacilityQuality, TrainingLoadManager, PlayerTrainingLoad,
-    Transfers, TransferItem,
-    MatchHistory, MatchHistoryItem,
-    TeamReputation, ReputationLevel, ReputationTrend, Achievement, AchievementType,
-    MatchResultInfo, MatchOutcome, ReputationRequirements,
-    TACTICS_POSITIONS,
+    Achievement, AchievementType, CoachingPhilosophy, FacilityQuality, FormationChange,
+    IndividualTrainingPlan, ManagerTalkResult, ManagerTalkType, MatchHistory, MatchHistoryItem,
+    MatchOutcome, MatchResultInfo, MatchTacticType, MentalGains, PeriodizationPhase, PhysicalGains,
+    PlayerBehaviourResult, PlayerRelationshipChangeResult, PlayerTrainingLoad,
+    RecommendationCategory, RecommendationPriority, ReputationLevel, ReputationRequirements,
+    ReputationTrend, RotationPreference, SkillType, SpecialInstruction, SquadAnalysis,
+    TACTICS_POSITIONS, TacticSelectionReason, TacticalDecisionEngine, TacticalDecisionResult,
+    TacticalFocus, TacticalRecommendation, TacticalStyle, Tactics, TacticsSelector, Team,
+    TeamBehaviour, TeamBehaviourResult, TeamBuilder, TeamCollection, TeamContext, TeamReputation,
+    TeamResult, TeamTraining, TeamTrainingResult, TeamType, TechnicalGains, TrainingEffects,
+    TrainingFacilities, TrainingFocus, TrainingIntensity, TrainingIntensityPreference,
+    TrainingLoadManager, TrainingSchedule, TrainingSession, TrainingType, TransferItem, Transfers,
+    WeeklyTrainingPlan,
 };
 // Also export context module for those who want to import from it
-pub use team::context as team_context;
 pub use team::behaviour;
 pub use team::collection;
+pub use team::context as team_context;
 pub use team::matches;
 pub use team::reputation;
 pub use team::tactics;

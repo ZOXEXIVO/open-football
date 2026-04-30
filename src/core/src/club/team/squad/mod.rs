@@ -44,12 +44,25 @@ impl SquadManager {
 
         if !demotions.is_empty() {
             execute_moves(teams, main_idx, reserve_idx, &demotions);
-            record_player_decisions(teams, main_idx, reserve_idx, &demotions, date, &coach_name, "dec_administrative_demotion");
-            record_moves(coach_state, &demotions, RecentMoveType::DemotedToReserves, date);
+            record_player_decisions(
+                teams,
+                main_idx,
+                reserve_idx,
+                &demotions,
+                date,
+                &coach_name,
+                "dec_administrative_demotion",
+            );
+            record_moves(
+                coach_state,
+                &demotions,
+                RecentMoveType::DemotedToReserves,
+                date,
+            );
 
             if let Some(state) = coach_state {
-                state.trigger_pressure = (state.trigger_pressure + 0.15 * demotions.len() as f32)
-                    .clamp(0.0, 1.0);
+                state.trigger_pressure =
+                    (state.trigger_pressure + 0.15 * demotions.len() as f32).clamp(0.0, 1.0);
             }
         }
     }
@@ -74,7 +87,12 @@ impl SquadManager {
 
 // ─── Shared helpers ─────────────────────────────────────────────────
 
-pub(crate) fn execute_moves(teams: &mut [Team], from_idx: usize, to_idx: usize, player_ids: &[u32]) {
+pub(crate) fn execute_moves(
+    teams: &mut [Team],
+    from_idx: usize,
+    to_idx: usize,
+    player_ids: &[u32],
+) {
     for &player_id in player_ids {
         // Force-selected players are pinned to their current team — admin
         // demotion, AI rotation, transfer-listing-driven moves all skip
@@ -113,8 +131,18 @@ pub(crate) fn record_player_decisions(
     let to_label = team_label(&teams[to_idx]);
     let movement = format!("{} → {}", from_label, to_label);
     for &pid in player_ids {
-        if let Some(player) = teams[to_idx].players.players.iter_mut().find(|p| p.id == pid) {
-            player.decision_history.add(date, movement.clone(), reason.to_string(), decided_by.to_string());
+        if let Some(player) = teams[to_idx]
+            .players
+            .players
+            .iter_mut()
+            .find(|p| p.id == pid)
+        {
+            player.decision_history.add(
+                date,
+                movement.clone(),
+                reason.to_string(),
+                decided_by.to_string(),
+            );
         }
     }
 }

@@ -52,12 +52,7 @@ pub fn apply_global_tournament_result(
         .map(|(&id, stats)| (id, stats.goals))
         .collect();
 
-    apply_world_international_stats(
-        continents,
-        home_country_id,
-        away_country_id,
-        &player_goals,
-    );
+    apply_world_international_stats(continents, home_country_id, away_country_id, &player_goals);
     apply_world_elo(
         continents,
         home_country_id,

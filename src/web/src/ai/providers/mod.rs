@@ -12,6 +12,9 @@ pub trait AiProvider: Send + Sync {
     fn port(&self) -> u16;
     fn model(&self) -> &str;
     fn batch_size(&self) -> usize;
-    fn query(&self, query: String, format: String)
-        -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + '_>>;
+    fn query(
+        &self,
+        query: String,
+        format: String,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + '_>>;
 }

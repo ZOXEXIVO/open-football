@@ -2,17 +2,16 @@ use chrono::NaiveDate;
 use log::debug;
 use std::collections::HashMap;
 
-use crate::transfers::pipeline::{
-    ClubTransferPlan, LoanOutCandidate, LoanOutReason, LoanOutStatus,
-    TransferNeedPriority, TransferNeedReason, TransferRequest,
-    TransferRequestStatus,
-};
-use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
 use crate::transfers::TransferWindowManager;
+use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
+use crate::transfers::pipeline::{
+    ClubTransferPlan, LoanOutCandidate, LoanOutReason, LoanOutStatus, TransferNeedPriority,
+    TransferNeedReason, TransferRequest, TransferRequestStatus,
+};
 use crate::{
-    Club, ClubPhilosophy, Country, MatchTacticType, Person, Player,
-    PlayerFieldPositionGroup, PlayerPlanRole, PlayerPositionType, PlayerStatusType,
-    ReputationLevel, TacticsSelector, TACTICS_POSITIONS,
+    Club, ClubPhilosophy, Country, MatchTacticType, Person, Player, PlayerFieldPositionGroup,
+    PlayerPlanRole, PlayerPositionType, PlayerStatusType, ReputationLevel, TACTICS_POSITIONS,
+    TacticsSelector,
 };
 
 struct SquadEvaluation {
@@ -174,7 +173,10 @@ impl PipelineProcessor {
             if !eval.requests.is_empty() {
                 debug!(
                     "Transfer pipeline: Club {} has {} requests, {} loan-outs, budget={:.0}",
-                    eval.club_id, eval.requests.len(), eval.loan_outs.len(), eval.total_budget
+                    eval.club_id,
+                    eval.requests.len(),
+                    eval.loan_outs.len(),
+                    eval.total_budget
                 );
             }
 
@@ -203,17 +205,25 @@ impl PipelineProcessor {
                 // for the same position group. Without this, each weekly re-evaluation
                 // adds duplicate requests (e.g. "need GK") that all get acted on independently,
                 // causing clubs to loan 10+ players for the same position.
-                let new_requests: Vec<_> = eval.requests.into_iter().filter(|new_req| {
-                    !plan.transfer_requests.iter().any(|existing| {
-                        existing.position.position_group() == new_req.position.position_group()
-                            && existing.status != TransferRequestStatus::Fulfilled
-                            && existing.status != TransferRequestStatus::Abandoned
+                let new_requests: Vec<_> = eval
+                    .requests
+                    .into_iter()
+                    .filter(|new_req| {
+                        !plan.transfer_requests.iter().any(|existing| {
+                            existing.position.position_group() == new_req.position.position_group()
+                                && existing.status != TransferRequestStatus::Fulfilled
+                                && existing.status != TransferRequestStatus::Abandoned
+                        })
                     })
-                }).collect();
+                    .collect();
                 plan.transfer_requests.extend(new_requests);
                 // Deduplicate loan-out candidates — don't re-add players already in the list
                 for candidate in eval.loan_outs {
-                    if !plan.loan_out_candidates.iter().any(|existing| existing.player_id == candidate.player_id) {
+                    if !plan
+                        .loan_out_candidates
+                        .iter()
+                        .any(|existing| existing.player_id == candidate.player_id)
+                    {
                         plan.loan_out_candidates.push(candidate);
                     }
                 }
@@ -250,7 +260,11 @@ impl PipelineProcessor {
 
     /// Core squad evaluation: the head coach analyzes the squad based on their preferred
     /// formation and identifies tactical gaps.
-    fn evaluate_single_club(club: &Club, date: NaiveDate, current_window: Option<(NaiveDate, NaiveDate)>) -> SquadEvaluation {
+    fn evaluate_single_club(
+        club: &Club,
+        date: NaiveDate,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+    ) -> SquadEvaluation {
         let mut requests = Vec::new();
         let mut loan_outs = Vec::new();
         let mut next_id = club.transfer_plan.next_request_id;
@@ -379,8 +393,8 @@ impl PipelineProcessor {
         // Ability threshold adjustment: youth-focused clubs accept lower CA
         // because they invest in potential; compete-now clubs need immediate quality
         let ability_tolerance: i16 = match philosophy {
-            ClubPhilosophy::DevelopAndSell => 25,   // accept CA 25 below avg
-            ClubPhilosophy::SignToCompete => 5,     // only near or above avg
+            ClubPhilosophy::DevelopAndSell => 25, // accept CA 25 below avg
+            ClubPhilosophy::SignToCompete => 5,   // only near or above avg
             ClubPhilosophy::LoanFocused => 15,
             ClubPhilosophy::Balanced => 15,
         };
@@ -461,8 +475,8 @@ impl PipelineProcessor {
         let rep_score = team.reputation.overall_score();
         let quality_tolerance = Self::tier_quality_tolerance_score(rep_score);
         let _ = ability_tolerance; // philosophy-driven tolerance retained
-                                   // elsewhere; tier baselines drive the
-                                   // recruitment thresholds now.
+        // elsewhere; tier baselines drive the
+        // recruitment thresholds now.
 
         // ── Build group-level needs in one pass ──────────────────────
         //
@@ -543,9 +557,13 @@ impl PipelineProcessor {
 
         // Succession planning: proactive clubs replace aging stars before decline.
         // SignToCompete and DevelopAndSell clubs always plan; Balanced only at top tiers.
-        let does_succession = matches!(philosophy,
-            ClubPhilosophy::SignToCompete | ClubPhilosophy::DevelopAndSell)
-            || matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental);
+        let does_succession = matches!(
+            philosophy,
+            ClubPhilosophy::SignToCompete | ClubPhilosophy::DevelopAndSell
+        ) || matches!(
+            rep_level,
+            ReputationLevel::Elite | ReputationLevel::Continental
+        );
         if does_succession {
             for player_info in &squad {
                 if player_info.age >= 30
@@ -558,7 +576,10 @@ impl PipelineProcessor {
                     }
 
                     // Only if we don't already have a request for this position
-                    if !requests.iter().any(|r| r.position == player_info.primary_position) {
+                    if !requests
+                        .iter()
+                        .any(|r| r.position == player_info.primary_position)
+                    {
                         requests.push(TransferRequest::new(
                             next_id,
                             player_info.primary_position,
@@ -588,7 +609,10 @@ impl PipelineProcessor {
         // LoanFocused clubs borrow young players instead.
         let wants_youth = match philosophy {
             ClubPhilosophy::DevelopAndSell => true,
-            ClubPhilosophy::Balanced => matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National),
+            ClubPhilosophy::Balanced => matches!(
+                rep_level,
+                ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National
+            ),
             ClubPhilosophy::LoanFocused => false, // they borrow, not buy
             ClubPhilosophy::SignToCompete => false, // they buy proven players
         };
@@ -617,11 +641,17 @@ impl PipelineProcessor {
                 // Count young players in this position group
                 let young_in_group = squad
                     .iter()
-                    .filter(|p| p.primary_position.position_group() == *group && p.age <= youth_age_max)
+                    .filter(|p| {
+                        p.primary_position.position_group() == *group && p.age <= youth_age_max
+                    })
                     .count();
 
                 // DevelopAndSell wants more youth pipeline depth
-                let min_young = if matches!(philosophy, ClubPhilosophy::DevelopAndSell) { 3 } else { 2 };
+                let min_young = if matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
+                    3
+                } else {
+                    2
+                };
                 if young_in_group < min_young {
                     let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
                     if alloc <= 0.0 {
@@ -630,13 +660,18 @@ impl PipelineProcessor {
 
                     let pos = match group {
                         PlayerFieldPositionGroup::Defender => PlayerPositionType::DefenderCenter,
-                        PlayerFieldPositionGroup::Midfielder => PlayerPositionType::MidfielderCenter,
+                        PlayerFieldPositionGroup::Midfielder => {
+                            PlayerPositionType::MidfielderCenter
+                        }
                         PlayerFieldPositionGroup::Forward => PlayerPositionType::Striker,
                         _ => continue,
                     };
 
                     // Don't duplicate if we already have a request for this position group
-                    if !requests.iter().any(|r| r.position.position_group() == *group) {
+                    if !requests
+                        .iter()
+                        .any(|r| r.position.position_group() == *group)
+                    {
                         requests.push(TransferRequest::new(
                             next_id,
                             pos,
@@ -693,7 +728,9 @@ impl PipelineProcessor {
             }
 
             // No experienced players? Request one
-            let has_experienced = squad.iter().any(|p| p.age >= 28 && p.current_ability >= avg_ability);
+            let has_experienced = squad
+                .iter()
+                .any(|p| p.age >= 28 && p.current_ability >= avg_ability);
             if !has_experienced && budget_used < available_budget {
                 let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
                 if alloc > 0.0 {
@@ -760,12 +797,8 @@ impl PipelineProcessor {
         // explicitly excludes. A club with 8 GKs needs to *eject* the
         // worst, not wait for a deficit signal that never fires when
         // the surplus itself is dragging the average down.
-        let force_transfer_list = Self::identify_position_glut(
-            &squad,
-            date,
-            players,
-            &mut loan_outs,
-        );
+        let force_transfer_list =
+            Self::identify_position_glut(&squad, date, players, &mut loan_outs);
 
         SquadEvaluation {
             club_id: club.id,
@@ -924,8 +957,8 @@ impl PipelineProcessor {
 
         // Philosophy-based loan-out aggressiveness
         let (age_threshold, ability_gap, min_appearances_pct) = match philosophy {
-            ClubPhilosophy::DevelopAndSell => (21, 5i16, 30u16),  // Aggressively loan young players
-            ClubPhilosophy::SignToCompete => (19, 10i16, 20u16),  // Only loan clearly surplus
+            ClubPhilosophy::DevelopAndSell => (21, 5i16, 30u16), // Aggressively loan young players
+            ClubPhilosophy::SignToCompete => (19, 10i16, 20u16), // Only loan clearly surplus
             ClubPhilosophy::LoanFocused => (23, 3i16, 40u16),    // Loan to reduce wages
             ClubPhilosophy::Balanced => (21, 8i16, 25u16),       // Standard
         };
@@ -956,7 +989,10 @@ impl PipelineProcessor {
 
             // Players loaned out 2+ times should be sold, not loaned again.
             // Repeated loans from the same parent club are unrealistic.
-            let previous_loan_count = player.statistics_history.items.iter()
+            let previous_loan_count = player
+                .statistics_history
+                .items
+                .iter()
                 .filter(|h| h.is_loan)
                 .count();
             if previous_loan_count >= 2 {
@@ -983,7 +1019,8 @@ impl PipelineProcessor {
             // Development plans are the exception: loaning IS the plan.
             if let Some(ref plan) = player.plan {
                 let total_apps = player_info.appearances;
-                if !plan.is_evaluated(date, total_apps) && !plan.is_expired(date)
+                if !plan.is_evaluated(date, total_apps)
+                    && !plan.is_expired(date)
                     && plan.role != PlayerPlanRole::Development
                 {
                     continue;
@@ -1002,14 +1039,23 @@ impl PipelineProcessor {
             let min_needed = match group {
                 PlayerFieldPositionGroup::Goalkeeper => 2,
                 PlayerFieldPositionGroup::Defender => {
-                    formation_positions.iter().filter(|p| p.is_defender()).count() + 1
+                    formation_positions
+                        .iter()
+                        .filter(|p| p.is_defender())
+                        .count()
+                        + 1
                 }
                 PlayerFieldPositionGroup::Midfielder => {
-                    formation_positions.iter().filter(|p| p.is_midfielder()).count() + 1
+                    formation_positions
+                        .iter()
+                        .filter(|p| p.is_midfielder())
+                        .count()
+                        + 1
                 }
-                PlayerFieldPositionGroup::Forward => {
-                    formation_positions.iter().filter(|p| p.is_forward()).count()
-                }
+                PlayerFieldPositionGroup::Forward => formation_positions
+                    .iter()
+                    .filter(|p| p.is_forward())
+                    .count(),
             };
 
             // Don't loan out if we'd drop below minimum
@@ -1194,9 +1240,7 @@ impl PipelineProcessor {
             // sitting below the outfield-dominated squad mean is normal.
             // Depth cushion makes the first-choice extremely hard to flag.
             let deficit_vs_group = group_avg as i16 - player_info.current_ability as i16;
-            if group_count >= surplus_threshold
-                && deficit_vs_group >= 5 + depth_cushion
-            {
+            if group_count >= surplus_threshold && deficit_vs_group >= 5 + depth_cushion {
                 loan_outs.push(LoanOutCandidate {
                     player_id: player_info.player_id,
                     reason: LoanOutReason::Surplus,

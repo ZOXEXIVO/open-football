@@ -1,10 +1,10 @@
-use chrono::NaiveDate;
-use log::debug;
 use super::CountryResult;
-use crate::utils::DateUtils;
-use crate::{ClubResult, Country};
 use crate::league::{League, LeagueResult};
 use crate::simulator::SimulatorData;
+use crate::utils::DateUtils;
+use crate::{ClubResult, Country};
+use chrono::NaiveDate;
+use log::debug;
 
 impl CountryResult {
     pub(super) fn simulate_international_competitions(
@@ -38,7 +38,9 @@ impl CountryResult {
     ) {
         if let Some(country) = data.country_mut(country_id) {
             country.media_coverage.update_from_results(league_results);
-            country.media_coverage.generate_weekly_stories(&country.clubs);
+            country
+                .media_coverage
+                .generate_weekly_stories(&country.clubs);
         }
     }
 
@@ -62,7 +64,8 @@ impl CountryResult {
             let transfer_reputation = Self::calculate_transfer_market_reputation(country);
             reputation_change += transfer_reputation as i16;
 
-            let new_reputation = (country.reputation as i32 + reputation_change as i32).clamp(0, 10000) as u16;
+            let new_reputation =
+                (country.reputation as i32 + reputation_change as i32).clamp(0, 10000) as u16;
 
             if new_reputation != country.reputation {
                 debug!(
@@ -108,10 +111,16 @@ impl CountryResult {
 
     fn calculate_international_success(country: &Country) -> i16 {
         // Count clubs in continental competitions (approximated by having high world reputation)
-        let high_rep_clubs = country.clubs.iter()
-            .filter(|c| c.teams.teams.first()
-                .map(|t| t.reputation.overall_score() >= 0.6)
-                .unwrap_or(false))
+        let high_rep_clubs = country
+            .clubs
+            .iter()
+            .filter(|c| {
+                c.teams
+                    .teams
+                    .first()
+                    .map(|t| t.reputation.overall_score() >= 0.6)
+                    .unwrap_or(false)
+            })
             .count();
 
         match high_rep_clubs {

@@ -1,15 +1,15 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::common::slug::player_history_slug;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::r#match::player::statistics::MatchStatisticType;
-use core::r#match::MatchResultRaw;
 use core::SimulatorData;
+use core::r#match::MatchResultRaw;
+use core::r#match::player::statistics::MatchStatisticType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -108,10 +108,14 @@ pub async fn match_get_action(
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
     // Look up match from global store, then fall back to scanning leagues
-    let match_result = simulator_data.match_store.get(&route_params.match_id)
+    let match_result = simulator_data
+        .match_store
+        .get(&route_params.match_id)
         .or_else(|| {
             // Fall back: scan all leagues for the match (league matches stored per-league)
-            simulator_data.continents.iter()
+            simulator_data
+                .continents
+                .iter()
                 .flat_map(|c| &c.countries)
                 .flat_map(|c| &c.leagues.leagues)
                 .find_map(|l| l.matches.get(&route_params.match_id))
@@ -126,25 +130,35 @@ pub async fn match_get_action(
 
     // For international matches, team IDs are country IDs — resolve names differently
     let (home_team_name, home_team_slug, home_club_id) = if is_international {
-        let name = simulator_data.country(match_result.home_team_id)
-            .map(|c| c.name.clone()).unwrap_or_else(|| "Home".to_string());
-        let slug = simulator_data.country(match_result.home_team_id)
-            .map(|c| c.slug.clone()).unwrap_or_default();
+        let name = simulator_data
+            .country(match_result.home_team_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| "Home".to_string());
+        let slug = simulator_data
+            .country(match_result.home_team_id)
+            .map(|c| c.slug.clone())
+            .unwrap_or_default();
         (name, slug, 0u32)
     } else {
-        let t = simulator_data.team(match_result.home_team_id)
+        let t = simulator_data
+            .team(match_result.home_team_id)
             .ok_or_else(|| ApiError::NotFound("Home team not found".to_string()))?;
         (t.name.clone(), t.slug.clone(), t.club_id)
     };
 
     let (away_team_name, away_team_slug, away_club_id) = if is_international {
-        let name = simulator_data.country(match_result.away_team_id)
-            .map(|c| c.name.clone()).unwrap_or_else(|| "Away".to_string());
-        let slug = simulator_data.country(match_result.away_team_id)
-            .map(|c| c.slug.clone()).unwrap_or_default();
+        let name = simulator_data
+            .country(match_result.away_team_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| "Away".to_string());
+        let slug = simulator_data
+            .country(match_result.away_team_id)
+            .map(|c| c.slug.clone())
+            .unwrap_or_default();
         (name, slug, 0u32)
     } else {
-        let t = simulator_data.team(match_result.away_team_id)
+        let t = simulator_data
+            .team(match_result.away_team_id)
             .ok_or_else(|| ApiError::NotFound("Away team not found".to_string()))?;
         (t.name.clone(), t.slug.clone(), t.club_id)
     };
@@ -242,17 +256,32 @@ pub async fn match_get_action(
         .filter(|g| g.stat_type == MatchStatisticType::Goal)
         .filter(|g| {
             let is_home_player = result_details.left_team_players.main.contains(&g.player_id)
-                || result_details.left_team_players.substitutes.contains(&g.player_id);
-            if g.is_auto_goal { !is_home_player } else { is_home_player }
+                || result_details
+                    .left_team_players
+                    .substitutes
+                    .contains(&g.player_id);
+            if g.is_auto_goal {
+                !is_home_player
+            } else {
+                is_home_player
+            }
         })
         .map(|g| {
             let player_name = simulator_data
                 .player(g.player_id)
-                .map(|p| format!("{} {}", p.full_name.display_first_name(), p.full_name.display_last_name()))
+                .map(|p| {
+                    format!(
+                        "{} {}",
+                        p.full_name.display_first_name(),
+                        p.full_name.display_last_name()
+                    )
+                })
                 .unwrap_or_else(|| "Unknown".to_string());
             let minute = if result_details.match_time_ms > 0 {
                 (g.time * 90 / result_details.match_time_ms) as u32
-            } else { 0 };
+            } else {
+                0
+            };
             GoalEventDisplay {
                 player_slug: player_history_slug(simulator_data, g.player_id, &player_name),
                 player_name,
@@ -267,18 +296,36 @@ pub async fn match_get_action(
         .iter()
         .filter(|g| g.stat_type == MatchStatisticType::Goal)
         .filter(|g| {
-            let is_away_player = result_details.right_team_players.main.contains(&g.player_id)
-                || result_details.right_team_players.substitutes.contains(&g.player_id);
-            if g.is_auto_goal { !is_away_player } else { is_away_player }
+            let is_away_player = result_details
+                .right_team_players
+                .main
+                .contains(&g.player_id)
+                || result_details
+                    .right_team_players
+                    .substitutes
+                    .contains(&g.player_id);
+            if g.is_auto_goal {
+                !is_away_player
+            } else {
+                is_away_player
+            }
         })
         .map(|g| {
             let player_name = simulator_data
                 .player(g.player_id)
-                .map(|p| format!("{} {}", p.full_name.display_first_name(), p.full_name.display_last_name()))
+                .map(|p| {
+                    format!(
+                        "{} {}",
+                        p.full_name.display_first_name(),
+                        p.full_name.display_last_name()
+                    )
+                })
                 .unwrap_or_else(|| "Unknown".to_string());
             let minute = if result_details.match_time_ms > 0 {
                 (g.time * 90 / result_details.match_time_ms) as u32
-            } else { 0 };
+            } else {
+                0
+            };
             GoalEventDisplay {
                 player_slug: player_history_slug(simulator_data, g.player_id, &player_name),
                 player_name,
@@ -291,7 +338,13 @@ pub async fn match_get_action(
     let motm_id = result_details.player_of_the_match_id;
     let motm_name = motm_id
         .and_then(|id| simulator_data.player(id))
-        .map(|p| format!("{} {}", p.full_name.display_first_name(), p.full_name.display_last_name()))
+        .map(|p| {
+            format!(
+                "{} {}",
+                p.full_name.display_first_name(),
+                p.full_name.display_last_name()
+            )
+        })
         .unwrap_or_default();
     let motm_slug = motm_id
         .map(|id| player_history_slug(simulator_data, id, &motm_name))
@@ -300,7 +353,10 @@ pub async fn match_get_action(
     let title = format!("{} - {}", home_team_name, away_team_name);
 
     let (sub_title, sub_title_link) = if let Some(l) = league {
-        (views::league_display_name(l, &i18n, simulator_data), format!("/{}/leagues/{}", &route_params.lang, &l.slug))
+        (
+            views::league_display_name(l, &i18n, simulator_data),
+            format!("/{}/leagues/{}", &route_params.lang, &l.slug),
+        )
     } else {
         let name = match match_result.league_slug.as_str() {
             "champions-league" => "Champions League",
@@ -331,8 +387,12 @@ pub async fn match_get_action(
         menu_sections: vec![],
         i18n,
         lang: route_params.lang.clone(),
-        league_slug: league.map(|l| l.slug.clone()).unwrap_or_else(|| "international".to_string()),
-        league_name: league.map(|l| l.name.clone()).unwrap_or_else(|| "International".to_string()),
+        league_slug: league
+            .map(|l| l.slug.clone())
+            .unwrap_or_else(|| "international".to_string()),
+        league_name: league
+            .map(|l| l.name.clone())
+            .unwrap_or_else(|| "International".to_string()),
         match_id: route_params.match_id.clone(),
         home_team_name: home_team_name.clone(),
         home_team_slug: home_team_slug.clone(),
@@ -344,8 +404,15 @@ pub async fn match_get_action(
             .iter()
             .filter_map(|pid| {
                 let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
-                if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_out_id == *pid) {
-                    p.subbed_off_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
+                if let Some(sub) = result_details
+                    .substitutions
+                    .iter()
+                    .find(|s| s.player_out_id == *pid)
+                {
+                    p.subbed_off_minute = Some(sub_time_to_minute(
+                        sub.match_time_ms,
+                        result_details.match_time_ms,
+                    ));
                 }
                 Some(p)
             })
@@ -356,12 +423,26 @@ pub async fn match_get_action(
             .iter()
             .filter_map(|pid| {
                 let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
-                if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_in_id == *pid) {
-                    p.sub_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
+                if let Some(sub) = result_details
+                    .substitutions
+                    .iter()
+                    .find(|s| s.player_in_id == *pid)
+                {
+                    p.sub_minute = Some(sub_time_to_minute(
+                        sub.match_time_ms,
+                        result_details.match_time_ms,
+                    ));
                 }
                 // Check if this sub was also later subbed off (sub-of-sub)
-                if let Some(sub_off) = result_details.substitutions.iter().find(|s| s.player_out_id == *pid) {
-                    p.subbed_off_minute = Some(sub_time_to_minute(sub_off.match_time_ms, result_details.match_time_ms));
+                if let Some(sub_off) = result_details
+                    .substitutions
+                    .iter()
+                    .find(|s| s.player_out_id == *pid)
+                {
+                    p.subbed_off_minute = Some(sub_time_to_minute(
+                        sub_off.match_time_ms,
+                        result_details.match_time_ms,
+                    ));
                 }
                 Some(p)
             })
@@ -376,8 +457,15 @@ pub async fn match_get_action(
             .iter()
             .filter_map(|pid| {
                 let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
-                if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_out_id == *pid) {
-                    p.subbed_off_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
+                if let Some(sub) = result_details
+                    .substitutions
+                    .iter()
+                    .find(|s| s.player_out_id == *pid)
+                {
+                    p.subbed_off_minute = Some(sub_time_to_minute(
+                        sub.match_time_ms,
+                        result_details.match_time_ms,
+                    ));
                 }
                 Some(p)
             })
@@ -388,12 +476,26 @@ pub async fn match_get_action(
             .iter()
             .filter_map(|pid| {
                 let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
-                if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_in_id == *pid) {
-                    p.sub_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
+                if let Some(sub) = result_details
+                    .substitutions
+                    .iter()
+                    .find(|s| s.player_in_id == *pid)
+                {
+                    p.sub_minute = Some(sub_time_to_minute(
+                        sub.match_time_ms,
+                        result_details.match_time_ms,
+                    ));
                 }
                 // Check if this sub was also later subbed off (sub-of-sub)
-                if let Some(sub_off) = result_details.substitutions.iter().find(|s| s.player_out_id == *pid) {
-                    p.subbed_off_minute = Some(sub_time_to_minute(sub_off.match_time_ms, result_details.match_time_ms));
+                if let Some(sub_off) = result_details
+                    .substitutions
+                    .iter()
+                    .find(|s| s.player_out_id == *pid)
+                {
+                    p.subbed_off_minute = Some(sub_time_to_minute(
+                        sub_off.match_time_ms,
+                        result_details.match_time_ms,
+                    ));
                 }
                 Some(p)
             })
@@ -406,29 +508,38 @@ pub async fn match_get_action(
                 .club(home_club_id)
                 .map(|c| c.colors.background.clone())
                 .unwrap_or_else(|| "#00307d".to_string())
-        } else { "#00307d".to_string() },
+        } else {
+            "#00307d".to_string()
+        },
         home_color_foreground: if home_club_id > 0 {
             simulator_data
                 .club(home_club_id)
                 .map(|c| c.colors.foreground.clone())
                 .unwrap_or_else(|| "#ffffff".to_string())
-        } else { "#ffffff".to_string() },
+        } else {
+            "#ffffff".to_string()
+        },
         away_color_background: if away_club_id > 0 {
             simulator_data
                 .club(away_club_id)
                 .map(|c| c.colors.background.clone())
                 .unwrap_or_else(|| "#b33f00".to_string())
-        } else { "#b33f00".to_string() },
+        } else {
+            "#b33f00".to_string()
+        },
         away_color_foreground: if away_club_id > 0 {
             simulator_data
                 .club(away_club_id)
                 .map(|c| c.colors.foreground.clone())
                 .unwrap_or_else(|| "#ffffff".to_string())
-        } else { "#ffffff".to_string() },
+        } else {
+            "#ffffff".to_string()
+        },
         player_of_the_match_id: motm_id.unwrap_or(0),
         player_of_the_match_slug: motm_slug,
         player_of_the_match_name: motm_name,
-        match_recordings_enabled: core::is_match_recordings_mode() && league.is_some_and(|l| !l.friendly),
+        match_recordings_enabled: core::is_match_recordings_mode()
+            && league.is_some_and(|l| !l.friendly),
     })
 }
 

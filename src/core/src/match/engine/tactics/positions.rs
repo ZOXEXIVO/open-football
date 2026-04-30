@@ -1,6 +1,6 @@
-use crate::r#match::{PositionType, POSITION_POSITIONING};
-use crate::r#match::player::PlayerSide;
 use crate::PlayerPositionType;
+use crate::r#match::player::PlayerSide;
+use crate::r#match::{POSITION_POSITIONING, PositionType};
 
 #[derive(Debug, Clone)]
 pub struct MatchTacticalPosition {
@@ -16,12 +16,10 @@ pub struct TacticalPositions {
 
 impl TacticalPositions {
     pub fn new(current_position: PlayerPositionType, side: Option<PlayerSide>) -> Self {
-        let tactical_positions = vec![
-            MatchTacticalPosition {
-                position: current_position,
-                waypoints: Self::generate_waypoints_for_position(current_position, side),
-            }
-        ];
+        let tactical_positions = vec![MatchTacticalPosition {
+            position: current_position,
+            waypoints: Self::generate_waypoints_for_position(current_position, side),
+        }];
 
         TacticalPositions {
             current_position,
@@ -31,14 +29,15 @@ impl TacticalPositions {
 
     pub fn regenerate_waypoints(&mut self, side: Option<PlayerSide>) {
         for tactical_position in &mut self.tactical_positions {
-            tactical_position.waypoints = Self::generate_waypoints_for_position(
-                tactical_position.position,
-                side,
-            );
+            tactical_position.waypoints =
+                Self::generate_waypoints_for_position(tactical_position.position, side);
         }
     }
 
-    fn generate_waypoints_for_position(position: PlayerPositionType, side: Option<PlayerSide>) -> Vec<(f32, f32)> {
+    fn generate_waypoints_for_position(
+        position: PlayerPositionType,
+        side: Option<PlayerSide>,
+    ) -> Vec<(f32, f32)> {
         // Get base position coordinates for this position and side
         let (base_x, base_y) = Self::get_base_position_coordinates(position, side);
 
@@ -53,32 +52,30 @@ impl TacticalPositions {
 
         // Goal positions
         let (goal_x, goal_y) = match side {
-            Some(PlayerSide::Left) => (840.0, 275.0),  // Attacking right goal
-            Some(PlayerSide::Right) => (0.0, 275.0),   // Attacking left goal
-            None => (840.0, 275.0), // Default
+            Some(PlayerSide::Left) => (840.0, 275.0), // Attacking right goal
+            Some(PlayerSide::Right) => (0.0, 275.0),  // Attacking left goal
+            None => (840.0, 275.0),                   // Default
         };
 
         match position {
             // Goalkeeper - stay near own goal with minimal movement pattern
             PlayerPositionType::Goalkeeper => {
-                vec![
-                    (base_x + 20.0 * direction, base_y),
-                ]
+                vec![(base_x + 20.0 * direction, base_y)]
             }
 
             // Defenders - extended path from defensive position through midfield
             PlayerPositionType::DefenderLeft => {
                 vec![
-                    (base_x + 80.0 * direction, base_y),      // First push
-                    (base_x + 160.0 * direction, base_y),     // Midfield approach
-                    (base_x + 240.0 * direction, base_y),     // Deep into midfield
-                    (base_x + 320.0 * direction, base_y),     // Attacking third
+                    (base_x + 80.0 * direction, base_y),  // First push
+                    (base_x + 160.0 * direction, base_y), // Midfield approach
+                    (base_x + 240.0 * direction, base_y), // Deep into midfield
+                    (base_x + 320.0 * direction, base_y), // Attacking third
                 ]
             }
 
-            PlayerPositionType::DefenderCenterLeft |
-            PlayerPositionType::DefenderCenter |
-            PlayerPositionType::DefenderCenterRight => {
+            PlayerPositionType::DefenderCenterLeft
+            | PlayerPositionType::DefenderCenter
+            | PlayerPositionType::DefenderCenterRight => {
                 vec![
                     (base_x + 80.0 * direction, base_y),
                     (base_x + 160.0 * direction, base_y),
@@ -147,9 +144,9 @@ impl TacticalPositions {
                 ]
             }
 
-            PlayerPositionType::MidfielderCenterLeft |
-            PlayerPositionType::MidfielderCenter |
-            PlayerPositionType::MidfielderCenterRight => {
+            PlayerPositionType::MidfielderCenterLeft
+            | PlayerPositionType::MidfielderCenter
+            | PlayerPositionType::MidfielderCenterRight => {
                 vec![
                     (base_x + 120.0 * direction, base_y),
                     (base_x + 240.0 * direction, base_y),
@@ -168,9 +165,9 @@ impl TacticalPositions {
             }
 
             // Attacking midfielders - progressive path toward goal
-            PlayerPositionType::AttackingMidfielderLeft |
-            PlayerPositionType::AttackingMidfielderCenter |
-            PlayerPositionType::AttackingMidfielderRight => {
+            PlayerPositionType::AttackingMidfielderLeft
+            | PlayerPositionType::AttackingMidfielderCenter
+            | PlayerPositionType::AttackingMidfielderRight => {
                 let distance_to_goal = (goal_x - base_x).abs();
                 let step = distance_to_goal / 4.0;
                 vec![
@@ -182,9 +179,9 @@ impl TacticalPositions {
             }
 
             // Forwards - extended path to opponent's goal with intermediate waypoints
-            PlayerPositionType::ForwardLeft |
-            PlayerPositionType::ForwardCenter |
-            PlayerPositionType::ForwardRight => {
+            PlayerPositionType::ForwardLeft
+            | PlayerPositionType::ForwardCenter
+            | PlayerPositionType::ForwardRight => {
                 let distance_to_goal = (goal_x - base_x).abs();
                 let step = distance_to_goal / 3.0;
                 vec![
@@ -207,7 +204,10 @@ impl TacticalPositions {
         }
     }
 
-    fn get_base_position_coordinates(position: PlayerPositionType, side: Option<PlayerSide>) -> (f32, f32) {
+    fn get_base_position_coordinates(
+        position: PlayerPositionType,
+        side: Option<PlayerSide>,
+    ) -> (f32, f32) {
         // Find the base coordinates from POSITION_POSITIONING constant based on side
         for (pos, home, away) in POSITION_POSITIONING {
             if *pos == position {

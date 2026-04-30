@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -22,9 +22,7 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
         if ball_ops.distance() <= 10.0 {
             // Aerial ball — head it
             if ctx.tick_context.positions.ball.position.z >= 1.5 {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Heading,
-                ));
+                return Some(StateChangeResult::with_forward_state(ForwardState::Heading));
             }
 
             // Ground ball — control it
@@ -35,7 +33,6 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;

@@ -1,5 +1,5 @@
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -33,7 +33,6 @@ impl StateProcessingHandler for ForwardTakeBallState {
         // deferred to the other and a stationary ball sat untouched.
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // For an in-flight pass, the ball has real velocity — Seek would
@@ -81,7 +80,8 @@ impl StateProcessingHandler for ForwardTakeBallState {
         let separation_factor = if distance_to_ball < NO_SEPARATION_DISTANCE {
             0.0 // No separation at all — let the player reach the ball
         } else if distance_to_ball < BALL_CLAIM_DISTANCE {
-            let ratio = (distance_to_ball - NO_SEPARATION_DISTANCE) / (BALL_CLAIM_DISTANCE - NO_SEPARATION_DISTANCE);
+            let ratio = (distance_to_ball - NO_SEPARATION_DISTANCE)
+                / (BALL_CLAIM_DISTANCE - NO_SEPARATION_DISTANCE);
             ratio * 0.3 // Gentle ramp from 0 to 0.3
         } else {
             1.0
@@ -91,7 +91,10 @@ impl StateProcessingHandler for ForwardTakeBallState {
         let mut neighbor_count = 0;
 
         // Check all nearby players (teammates and opponents)
-        let all_players: Vec<_> = ctx.players().teammates().all()
+        let all_players: Vec<_> = ctx
+            .players()
+            .teammates()
+            .all()
             .chain(ctx.players().opponents().all())
             .filter(|p| p.id != ctx.player.id)
             .collect();
@@ -111,21 +114,31 @@ impl StateProcessingHandler for ForwardTakeBallState {
         if neighbor_count > 0 {
             // Average and scale the separation force
             separation_force = separation_force / (neighbor_count as f32);
-            separation_force = separation_force * ctx.player.skills.max_speed_with_condition(
-                ctx.player.player_attributes.condition,
-            ) * SEPARATION_WEIGHT * separation_factor;
+            separation_force = separation_force
+                * ctx
+                    .player
+                    .skills
+                    .max_speed_with_condition(ctx.player.player_attributes.condition)
+                * SEPARATION_WEIGHT
+                * separation_factor;
 
             // Blend arrive and separation velocities
             arrive_velocity = arrive_velocity + separation_force;
 
             // Limit to max speed
             let magnitude = arrive_velocity.magnitude();
-            if magnitude > ctx.player.skills.max_speed_with_condition(
-                ctx.player.player_attributes.condition,
-            ) {
-                arrive_velocity = arrive_velocity * (ctx.player.skills.max_speed_with_condition(
-                    ctx.player.player_attributes.condition,
-                ) / magnitude);
+            if magnitude
+                > ctx
+                    .player
+                    .skills
+                    .max_speed_with_condition(ctx.player.player_attributes.condition)
+            {
+                arrive_velocity = arrive_velocity
+                    * (ctx
+                        .player
+                        .skills
+                        .max_speed_with_condition(ctx.player.player_attributes.condition)
+                        / magnitude);
             }
         }
 

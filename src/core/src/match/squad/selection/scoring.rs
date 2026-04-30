@@ -476,13 +476,7 @@ impl ScoringEngine {
 
         score += (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
 
-        score += self.cohesion_bonus(
-            player,
-            selected_players,
-            slot_position,
-            slot_group,
-            None,
-        );
+        score += self.cohesion_bonus(player, selected_players, slot_position, slot_group, None);
 
         // Squad status tilt — labelled starters get their planned minutes.
         score += self.squad_status_bonus(player);

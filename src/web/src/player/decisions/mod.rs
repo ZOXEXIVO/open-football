@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
-use crate::common::slug::{resolve_player_page, PlayerPage};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -68,7 +68,11 @@ pub async fn player_decisions_action(
         &route_params.lang,
         "/decisions",
     )? {
-        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Found {
+            player,
+            team,
+            canonical_slug,
+        } => (player, team, canonical_slug),
         PlayerPage::Redirect(r) => return Ok(r),
     };
 
@@ -113,15 +117,13 @@ pub async fn player_decisions_action(
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
-        sub_title: team_opt
-            .map(|t| t.name.clone())
-            .unwrap_or_else(|| {
-                if player.is_retired() {
-                    i18n.t("retired").to_string()
-                } else {
-                    i18n.t("free_agent").to_string()
-                }
-            }),
+        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| {
+            if player.is_retired() {
+                i18n.t("retired").to_string()
+            } else {
+                i18n.t("free_agent").to_string()
+            }
+        }),
         sub_title_link: team_opt
             .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
             .unwrap_or_default(),
@@ -172,7 +174,8 @@ pub async fn player_decisions_action(
         is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         decisions,
-    }.into_response())
+    }
+    .into_response())
 }
 
 fn get_neighbor_teams(

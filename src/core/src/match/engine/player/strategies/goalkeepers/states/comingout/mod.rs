@@ -38,7 +38,9 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         let distance_from_goal = ctx.player().distance_from_start_position();
         const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 50.0; // Only catch near goal area
 
-        if ball_distance < CLAIM_BALL_DISTANCE && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH {
+        if ball_distance < CLAIM_BALL_DISTANCE
+            && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH
+        {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
@@ -73,7 +75,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         // Check if opponent has the ball
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let opponent_distance = opponent.distance(ctx);
-            let opponent_ball_distance = (opponent.position - ctx.tick_context.positions.ball.position).magnitude();
+            let opponent_ball_distance =
+                (opponent.position - ctx.tick_context.positions.ball.position).magnitude();
 
             // If opponent has control and is very close
             if opponent_ball_distance < 2.0 && opponent_distance < 20.0 {
@@ -144,7 +147,6 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
@@ -189,7 +191,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
                     slowing_distance: 1.0,
                 }
                 .calculate(ctx.player)
-                .velocity * (speed_multiplier * 0.9), // Still fast but controllable
+                .velocity
+                    * (speed_multiplier * 0.9), // Still fast but controllable
             )
         } else if ball_distance < 15.0 {
             // Close - sprint with slight deceleration zone
@@ -199,7 +202,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
                     slowing_distance: 6.0,
                 }
                 .calculate(ctx.player)
-                .velocity * (speed_multiplier * urgency_multiplier),
+                .velocity
+                    * (speed_multiplier * urgency_multiplier),
             )
         } else {
             // Far - full sprint using Pursuit for maximum speed
@@ -216,7 +220,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
                     target_velocity: Vector3::zeros(), // Static target position
                 }
                 .calculate(ctx.player)
-                .velocity * final_multiplier,
+                .velocity
+                    * final_multiplier,
             )
         }
     }
@@ -270,7 +275,7 @@ impl GoalkeeperComingOutState {
 
             (
                 (keeper_intercept_pos - keeper_position).magnitude(),
-                (opponent_intercept_pos - opponent_position).magnitude()
+                (opponent_intercept_pos - opponent_position).magnitude(),
             )
         } else {
             // Ball is stationary
@@ -358,7 +363,8 @@ impl GoalkeeperComingOutState {
         let ball_getting_closer = predicted_distance < ball_distance;
 
         // Calculate if keeper can reach the ball by running
-        let keeper_sprint_speed = ctx.player.skills.physical.pace * (1.0 + ctx.player.skills.physical.acceleration / 40.0);
+        let keeper_sprint_speed = ctx.player.skills.physical.pace
+            * (1.0 + ctx.player.skills.physical.acceleration / 40.0);
         let time_to_run_to_ball = ball_distance / keeper_sprint_speed.max(1.0);
 
         // Dive if:

@@ -1,7 +1,9 @@
-use crate::game::{game_cancel_action, game_create_action, game_process_action, game_processing_status_action};
 use crate::GameAppData;
-use axum::routing::{get, post};
+use crate::game::{
+    game_cancel_action, game_create_action, game_process_action, game_processing_status_action,
+};
 use axum::Router;
+use axum::routing::{get, post};
 
 pub fn game_routes() -> Router<GameAppData> {
     Router::new()

@@ -1,5 +1,5 @@
-use crate::r#match::MatchField;
 use crate::PlayerPositionType;
+use crate::r#match::MatchField;
 use nalgebra::Vector3;
 
 const CELL_SIZE: f32 = 100.0;
@@ -213,7 +213,11 @@ impl SpatialGrid {
 
     /// Opponents within max_distance — returns (player_id, distance).
     /// Same signature as PlayerDistanceClosure::opponents().
-    pub fn opponents(&self, player_id: u32, max_distance: f32) -> impl Iterator<Item = (u32, f32)> + '_ {
+    pub fn opponents(
+        &self,
+        player_id: u32,
+        max_distance: f32,
+    ) -> impl Iterator<Item = (u32, f32)> + '_ {
         self.create_iter(player_id, 0.0, max_distance, false)
             .map(|(gp, dist)| (gp.id, dist))
     }
@@ -302,7 +306,13 @@ impl SpatialGrid {
 
     // ─── Internal ───
 
-    fn create_iter(&self, player_id: u32, min_distance: f32, max_distance: f32, same_team: bool) -> NearbyIter<'_> {
+    fn create_iter(
+        &self,
+        player_id: u32,
+        min_distance: f32,
+        max_distance: f32,
+        same_team: bool,
+    ) -> NearbyIter<'_> {
         let info = self.lookup_index(player_id).map(|i| {
             let gp = &self.all_players[i];
             (gp.position, gp.team_id)

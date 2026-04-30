@@ -1,6 +1,6 @@
+use crate::Club;
 use crate::league::LeagueResult;
 use crate::utils::IntegerUtils;
-use crate::Club;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

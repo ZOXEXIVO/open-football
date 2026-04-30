@@ -1,11 +1,10 @@
 use chrono::{Datelike, NaiveDate};
 use log::info;
 
-use crate::continent::national::{
-    CompetitionPhase, NationalCompetitionConfig,
-    NationalCompetitionPhase, NationalTeamCompetition,
-};
 use crate::continent::Continent;
+use crate::continent::national::{
+    CompetitionPhase, NationalCompetitionConfig, NationalCompetitionPhase, NationalTeamCompetition,
+};
 
 /// Manages global-scope competitions (e.g. World Cup) at the SimulatorData level.
 /// Qualifying runs per-continent; the tournament is assembled here from all zones.
@@ -45,9 +44,10 @@ impl GlobalCompetitions {
             }
 
             // Check if we already have an active tournament for this config
-            let already_active = self.tournaments.iter().any(|t| {
-                t.config.id == config.id && t.cycle_year == year as u16
-            });
+            let already_active = self
+                .tournaments
+                .iter()
+                .any(|t| t.config.id == config.id && t.cycle_year == year as u16);
 
             if already_active {
                 continue;
@@ -96,9 +96,7 @@ impl GlobalCompetitions {
                     for (group_idx, fix_idx) in
                         tournament.get_todays_tournament_group_fixtures(date)
                     {
-                        if let Some(group) =
-                            tournament.tournament_groups.get(group_idx as usize)
-                        {
+                        if let Some(group) = tournament.tournament_groups.get(group_idx as usize) {
                             if let Some(fixture) = group.fixtures.get(fix_idx) {
                                 matches.push(GlobalCompetitionFixture {
                                     home_country_id: fixture.home_country_id,

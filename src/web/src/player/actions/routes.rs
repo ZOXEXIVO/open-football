@@ -1,6 +1,6 @@
 use crate::GameAppData;
-use axum::routing::{get, post};
 use axum::Router;
+use axum::routing::{get, post};
 
 pub fn routes() -> Router<GameAppData> {
     Router::new()
@@ -28,12 +28,6 @@ pub fn routes() -> Router<GameAppData> {
             "/api/players/{player_id}/transfer",
             post(super::transfer_action),
         )
-        .route(
-            "/api/players/{player_id}/loan",
-            post(super::loan_action),
-        )
-        .route(
-            "/api/clubs",
-            get(super::list_clubs_action),
-        )
+        .route("/api/players/{player_id}/loan", post(super::loan_action))
+        .route("/api/clubs", get(super::list_clubs_action))
 }

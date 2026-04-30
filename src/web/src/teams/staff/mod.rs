@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -105,8 +105,7 @@ fn position_to_group_key(position: &StaffPosition) -> &'static str {
         | StaffPosition::HeadOfRecruitment
         | StaffPosition::DataAnalyst => "staff_group_scouting",
 
-        StaffPosition::Physio
-        | StaffPosition::HeadOfPhysio => "staff_group_medical",
+        StaffPosition::Physio | StaffPosition::HeadOfPhysio => "staff_group_medical",
 
         StaffPosition::Chairman
         | StaffPosition::Director
@@ -211,15 +210,32 @@ pub async fn team_staff_action(
         .iter()
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let league_refs: Vec<(&str, &str)> = country_leagues
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
     let current_path = format!("/{}/teams/{}/staff", &route_params.lang, &team.slug);
-    let menu_params = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main);
+    let menu_params = views::MenuParams {
+        i18n: &i18n,
+        lang: &route_params.lang,
+        current_path: &current_path,
+        country_name: cn,
+        country_slug: cs,
+    };
+    let menu_sections = views::team_menu(
+        &menu_params,
+        &neighbor_refs,
+        &team.slug,
+        &league_refs,
+        team.team_type == core::TeamType::Main,
+    );
 
     let title = team.name.clone();
-    let league_title = league.map(|l| views::league_display_name(l, &i18n, simulator_data)).unwrap_or_default();
+    let league_title = league
+        .map(|l| views::league_display_name(l, &i18n, simulator_data))
+        .unwrap_or_default();
 
     Ok(TeamStaffTemplate {
         css_version: CSS_VERSION,
@@ -246,7 +262,8 @@ pub async fn team_staff_action(
         team_slug: team.slug.clone(),
         active_tab: "staff",
         show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
+        show_academy_tab: team.team_type == core::TeamType::Main
+            || team.team_type == core::TeamType::U18,
         staff_groups,
     })
 }
@@ -265,7 +282,10 @@ fn get_neighbor_teams(
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
         .map(|country| {
-            country.leagues.leagues.iter()
+            country
+                .leagues
+                .leagues
+                .iter()
                 .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
@@ -275,6 +295,9 @@ fn get_neighbor_teams(
 
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }

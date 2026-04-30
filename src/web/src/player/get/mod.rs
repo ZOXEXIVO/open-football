@@ -1,13 +1,12 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
-use crate::common::slug::{resolve_player_page, PlayerPage};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
-use core::utils::FormattingUtils;
 use core::Person;
 use core::Player;
 use core::PlayerPositionType;
@@ -15,6 +14,7 @@ use core::PlayerSquadStatus;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::Team;
+use core::utils::FormattingUtils;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -292,7 +292,11 @@ pub async fn player_get_action(
         &route_params.lang,
         "",
     )? {
-        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Found {
+            player,
+            team,
+            canonical_slug,
+        } => (player, team, canonical_slug),
         PlayerPage::Redirect(r) => return Ok(r),
     };
 
@@ -302,17 +306,29 @@ pub async fn player_get_action(
     // retired players (team is None) follow the compact flow below.
     if let Some(team) = team_opt {
         // Resolve country: try simulation participant first, fall back to country_info map
-        let (country_slug, country_code, country_name) = if let Some(country) = simulator_data.country(player.country_id) {
-            (country.slug.clone(), country.code.clone(), country.name.clone())
-        } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
-            (info.slug.clone(), info.code.clone(), info.name.clone())
-        } else {
-            (String::new(), String::new(), String::new())
-        };
+        let (country_slug, country_code, country_name) =
+            if let Some(country) = simulator_data.country(player.country_id) {
+                (
+                    country.slug.clone(),
+                    country.code.clone(),
+                    country.name.clone(),
+                )
+            } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
+                (info.slug.clone(), info.code.clone(), info.name.clone())
+            } else {
+                (String::new(), String::new(), String::new())
+            };
 
-        let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-        let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
-        let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+        let (neighbor_teams, country_leagues) =
+            get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
+        let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
+            .iter()
+            .map(|(n, s)| (n.as_str(), s.as_str()))
+            .collect();
+        let league_refs: Vec<(&str, &str)> = country_leagues
+            .iter()
+            .map(|(n, s)| (n.as_str(), s.as_str()))
+            .collect();
 
         let contract = player.contract.as_ref().map(|c| PlayerContractDto {
             salary: format_salary(c.salary),
@@ -320,16 +336,28 @@ pub async fn player_get_action(
             squad_status: format_squad_status(&c.squad_status),
         });
 
-        let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
+        let title = format!(
+            "{} {}",
+            player.full_name.display_first_name(),
+            player.full_name.display_last_name()
+        );
         let loan_status = get_loan_status(player, team, simulator_data);
 
         let head_coach = team.staffs.head_coach();
-        let staff_judging = head_coach.staff_attributes.knowledge.judging_player_potential;
+        let staff_judging = head_coach
+            .staff_attributes
+            .knowledge
+            .judging_player_potential;
         let staff_id = head_coach.id;
 
         let (main_team_name, main_team_slug) = simulator_data
             .club(team.club_id)
-            .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == core::TeamType::Main))
+            .and_then(|c| {
+                c.teams
+                    .teams
+                    .iter()
+                    .find(|t| t.team_type == core::TeamType::Main)
+            })
             .map(|t| (t.name.clone(), t.slug.clone()))
             .unwrap_or_else(|| (team.name.clone(), team.slug.clone()));
 
@@ -346,12 +374,21 @@ pub async fn player_get_action(
             skills: get_skills(player),
             conditions: get_conditions(player),
             current_ability: get_current_ability_stars(player),
-            potential_ability: get_potential_ability_stars_by_staff(player, staff_judging, staff_id),
-            value: FormattingUtils::format_money(player.value(
-                now,
-                team.league_id.and_then(|lid| simulator_data.league(lid)).map(|l| l.reputation).unwrap_or(0),
-                team.reputation.world,
-            )),
+            potential_ability: get_potential_ability_stars_by_staff(
+                player,
+                staff_judging,
+                staff_id,
+            ),
+            value: FormattingUtils::format_money(
+                player.value(
+                    now,
+                    team.league_id
+                        .and_then(|lid| simulator_data.league(lid))
+                        .map(|l| l.reputation)
+                        .unwrap_or(0),
+                    team.reputation.market_value_score(),
+                ),
+            ),
             preferred_foot: player.preferred_foot_str().to_string(),
             player_attributes: get_attributes(player),
             statistics: get_statistics(player),
@@ -373,7 +410,11 @@ pub async fn player_get_action(
         let is_injured = player.player_attributes.is_injured;
         let is_unhappy = player.statuses.get().contains(&PlayerStatusType::Unh);
         let is_on_watchlist = simulator_data.watchlist.contains(&player.id);
-        let debug = if debug_enabled { Some(build_debug_dto(player)) } else { None };
+        let debug = if debug_enabled {
+            Some(build_debug_dto(player))
+        } else {
+            None
+        };
 
         return Ok(PlayerGetTemplate {
             css_version: CSS_VERSION,
@@ -384,13 +425,31 @@ pub async fn player_get_action(
             sub_title: team.name.clone(),
             sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
             sub_title_country_code: String::new(),
-            header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
-            foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
+            header_color: simulator_data
+                .club(team.club_id)
+                .map(|c| c.colors.background.clone())
+                .unwrap_or_default(),
+            foreground_color: simulator_data
+                .club(team.club_id)
+                .map(|c| c.colors.foreground.clone())
+                .unwrap_or_default(),
             menu_sections: {
                 let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
                 let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
-                let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-                views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main)
+                let mp = views::MenuParams {
+                    i18n: &i18n,
+                    lang: &route_params.lang,
+                    current_path: &current_path,
+                    country_name: cn,
+                    country_slug: cs,
+                };
+                views::team_menu(
+                    &mp,
+                    &neighbor_refs,
+                    &team.slug,
+                    &league_refs,
+                    team.team_type == core::TeamType::Main,
+                )
             },
             i18n,
             lang: route_params.lang.clone(),
@@ -406,19 +465,29 @@ pub async fn player_get_action(
             is_force_match_selection: player.is_force_match_selection,
             is_on_watchlist,
             debug,
-        }.into_response());
+        }
+        .into_response());
     }
 
     // Retired player branch (team is None)
-    let (country_slug, country_code, country_name) = if let Some(country) = simulator_data.country(player.country_id) {
-        (country.slug.clone(), country.code.clone(), country.name.clone())
-    } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
-        (info.slug.clone(), info.code.clone(), info.name.clone())
-    } else {
-        (String::new(), String::new(), String::new())
-    };
+    let (country_slug, country_code, country_name) =
+        if let Some(country) = simulator_data.country(player.country_id) {
+            (
+                country.slug.clone(),
+                country.code.clone(),
+                country.name.clone(),
+            )
+        } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
+            (info.slug.clone(), info.code.clone(), info.name.clone())
+        } else {
+            (String::new(), String::new(), String::new())
+        };
 
-    let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
+    let title = format!(
+        "{} {}",
+        player.full_name.display_first_name(),
+        player.full_name.display_last_name()
+    );
 
     let player_vm = PlayerViewModel {
         id: player.id,
@@ -453,7 +522,11 @@ pub async fn player_get_action(
     } else {
         i18n.t("free_agent").to_string()
     };
-    let debug = if debug_enabled { Some(build_debug_dto(player)) } else { None };
+    let debug = if debug_enabled {
+        Some(build_debug_dto(player))
+    } else {
+        None
+    };
 
     Ok(PlayerGetTemplate {
         css_version: CSS_VERSION,
@@ -481,7 +554,8 @@ pub async fn player_get_action(
         is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         debug,
-    }.into_response())
+    }
+    .into_response())
 }
 
 fn build_debug_dto(player: &Player) -> PlayerDebugDto {
@@ -664,7 +738,10 @@ fn get_neighbor_teams(
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
         .map(|country| {
-            country.leagues.leagues.iter()
+            country
+                .leagues
+                .leagues
+                .iter()
                 .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
@@ -674,7 +751,10 @@ fn get_neighbor_teams(
 
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }
 
@@ -752,7 +832,11 @@ pub fn get_potential_ability_stars(player: &Player) -> u8 {
     (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)).round() as u8
 }
 
-pub fn get_potential_ability_stars_by_staff(player: &Player, staff_judging: u8, staff_id: u32) -> u8 {
+pub fn get_potential_ability_stars_by_staff(
+    player: &Player,
+    staff_judging: u8,
+    staff_id: u32,
+) -> u8 {
     let raw_stars = 5.0 * (player.player_attributes.potential_ability as f32 / 200.0);
     let accuracy = (staff_judging as f32 / 20.0).clamp(0.0, 1.0);
     let noise_scale = (1.0 - accuracy) * 1.5;
@@ -791,9 +875,11 @@ fn format_squad_status(status: &PlayerSquadStatus) -> String {
         PlayerSquadStatus::HotProspectForTheFuture => "squad_hot_prospect",
         PlayerSquadStatus::DecentYoungster => "squad_decent_youngster",
         PlayerSquadStatus::NotNeeded => "squad_not_needed",
-        PlayerSquadStatus::NotYetSet | PlayerSquadStatus::Invalid | PlayerSquadStatus::SquadStatusCount => "",
+        PlayerSquadStatus::NotYetSet
+        | PlayerSquadStatus::Invalid
+        | PlayerSquadStatus::SquadStatusCount => "",
     }
-        .to_string()
+    .to_string()
 }
 
 fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {

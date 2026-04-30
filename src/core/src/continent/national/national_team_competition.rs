@@ -50,7 +50,9 @@ impl NationalTeamCompetition {
 
         let team_count = country_ids_by_reputation.len();
         let target = zone_config.teams_per_group_target as usize;
-        let group_count = (team_count / target).max(1).min(zone_config.max_groups as usize);
+        let group_count = (team_count / target)
+            .max(1)
+            .min(zone_config.max_groups as usize);
 
         let mut groups: Vec<Vec<u32>> = (0..group_count).map(|_| Vec::new()).collect();
 
@@ -161,8 +163,7 @@ impl NationalTeamCompetition {
         }
 
         // Cap at total tournament spots
-        self.qualified_teams
-            .truncate(zone_config.spots as usize);
+        self.qualified_teams.truncate(zone_config.spots as usize);
 
         // For global scope: qualifying complete, tournament assembled elsewhere
         // For continental scope: transition directly to GroupStage
@@ -211,11 +212,14 @@ impl NationalTeamCompetition {
 
                 for i in 0..team_ids.len() {
                     for j in (i + 1)..team_ids.len() {
-                        let date_idx =
-                            group.fixtures.len().min(group_dates.len().saturating_sub(1));
-                        let date = group_dates.get(date_idx).copied().unwrap_or(
-                            NaiveDate::from_ymd_opt(tournament_year, 6, 14).unwrap(),
-                        );
+                        let date_idx = group
+                            .fixtures
+                            .len()
+                            .min(group_dates.len().saturating_sub(1));
+                        let date = group_dates
+                            .get(date_idx)
+                            .copied()
+                            .unwrap_or(NaiveDate::from_ymd_opt(tournament_year, 6, 14).unwrap());
 
                         group.fixtures.push(GroupFixture {
                             matchday: (group.fixtures.len() + 1) as u8,
@@ -366,9 +370,10 @@ impl NationalTeamCompetition {
         for i in 0..pair_count {
             let home = r16_teams[i];
             let away = r16_teams[r16_teams.len() - 1 - i];
-            let date = knockout_dates.first().copied().unwrap_or(
-                NaiveDate::from_ymd_opt(tournament_year, 6, 28).unwrap(),
-            );
+            let date = knockout_dates
+                .first()
+                .copied()
+                .unwrap_or(NaiveDate::from_ymd_opt(tournament_year, 6, 28).unwrap());
             r16.fixtures.push(KnockoutFixture {
                 date,
                 home_country_id: home,
@@ -466,9 +471,10 @@ impl NationalTeamCompetition {
                     KnockoutRound::Final => 6,
                     _ => 0,
                 };
-                let date = knockout_dates.get(date_idx).copied().unwrap_or(
-                    NaiveDate::from_ymd_opt(tournament_year, 7, 10).unwrap(),
-                );
+                let date = knockout_dates
+                    .get(date_idx)
+                    .copied()
+                    .unwrap_or(NaiveDate::from_ymd_opt(tournament_year, 7, 10).unwrap());
 
                 let mut next_bracket = KnockoutBracket::new(round);
                 let pair_count = winners.len() / 2;

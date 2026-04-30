@@ -1,5 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -31,9 +31,7 @@ impl StateProcessingHandler for DefenderRestingState {
         // crisis we walk toward the ball (see `velocity`) but don't
         // sprint into a press we'll immediately exit due to fatigue.
         // Stops the Resting ↔ Pressing flicker the user was seeing.
-        if ctx.player().defensive().is_defensive_crisis()
-            && stamina >= CRISIS_ENGAGE_STAMINA
-        {
+        if ctx.player().defensive().is_defensive_crisis() && stamina >= CRISIS_ENGAGE_STAMINA {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Pressing,
             ));
@@ -71,7 +69,6 @@ impl StateProcessingHandler for DefenderRestingState {
         // Remain in Resting state
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Crisis is active but we're too tired to press — walk toward

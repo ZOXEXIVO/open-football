@@ -16,10 +16,20 @@ pub(crate) fn select_rotation_starting_eleven(
     let required = tactics.positions();
 
     if let Some(gk) = pick_rotation_goalkeeper(available, &used_ids) {
-        squad.push(MatchPlayer::from_player(team_id, gk, PlayerPositionType::Goalkeeper, false));
+        squad.push(MatchPlayer::from_player(
+            team_id,
+            gk,
+            PlayerPositionType::Goalkeeper,
+            false,
+        ));
         used_ids.push(gk.id);
     } else if let Some(any) = helpers::pick_best_unused(available, &used_ids) {
-        squad.push(MatchPlayer::from_player(team_id, any, PlayerPositionType::Goalkeeper, false));
+        squad.push(MatchPlayer::from_player(
+            team_id,
+            any,
+            PlayerPositionType::Goalkeeper,
+            false,
+        ));
         used_ids.push(any.id);
     }
 
@@ -105,7 +115,12 @@ pub(crate) fn select_rotation_substitutes(
     let mut used_ids: Vec<u32> = Vec::new();
 
     if let Some(gk) = pick_rotation_goalkeeper(remaining, &used_ids) {
-        subs.push(MatchPlayer::from_player(team_id, gk, PlayerPositionType::Goalkeeper, false));
+        subs.push(MatchPlayer::from_player(
+            team_id,
+            gk,
+            PlayerPositionType::Goalkeeper,
+            false,
+        ));
         used_ids.push(gk.id);
     }
 
@@ -182,10 +197,7 @@ fn rotation_overall_quality(player: &Player) -> f32 {
         + (player.player_attributes.current_ability as f32 / 200.0 * 20.0) * 0.25
 }
 
-fn pick_rotation_goalkeeper<'p>(
-    available: &[&'p Player],
-    used_ids: &[u32],
-) -> Option<&'p Player> {
+fn pick_rotation_goalkeeper<'p>(available: &[&'p Player], used_ids: &[u32]) -> Option<&'p Player> {
     available
         .iter()
         .filter(|p| !used_ids.contains(&p.id))
@@ -195,7 +207,8 @@ fn pick_rotation_goalkeeper<'p>(
             let ca = a.player_attributes.condition_percentage();
             let cb = b.player_attributes.condition_percentage();
             ca.cmp(&cb).then_with(|| {
-                a.player_attributes.days_since_last_match
+                a.player_attributes
+                    .days_since_last_match
                     .cmp(&b.player_attributes.days_since_last_match)
             })
         })

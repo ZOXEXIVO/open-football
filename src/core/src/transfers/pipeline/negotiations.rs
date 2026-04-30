@@ -1,7 +1,9 @@
 use chrono::NaiveDate;
 use log::debug;
 
+use crate::SimulatorData;
 use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::TransferWindowManager;
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::processor::PipelineProcessor;
@@ -9,9 +11,7 @@ use crate::transfers::pipeline::{
     ShortlistCandidateStatus, TransferApproach, TransferNeedPriority, TransferNeedReason,
     TransferRequest, TransferRequestStatus,
 };
-use crate::transfers::TransferWindowManager;
 use crate::utils::FormattingUtils;
-use crate::SimulatorData;
 use crate::{
     ClubPhilosophy, ClubTransferStrategy, Country, Person, PlayerStatusType, ReputationLevel,
     StaffPosition, WageCalculator,
@@ -112,11 +112,7 @@ impl PipelineProcessor {
 
             let avg_ability = {
                 let avg = team.players.current_ability_avg();
-                if avg == 0 {
-                    50
-                } else {
-                    avg
-                }
+                if avg == 0 { 50 } else { avg }
             };
 
             let slots_available = plan
@@ -241,8 +237,13 @@ impl PipelineProcessor {
                         reputation_level: avg_ability as u16,
                     };
 
-                    let asking_price =
-                        Self::calculate_asking_price(player, country, selling_club, date, price_level);
+                    let asking_price = Self::calculate_asking_price(
+                        player,
+                        country,
+                        selling_club,
+                        date,
+                        price_level,
+                    );
 
                     let actual_asking = if is_loan {
                         let salary_proxy = player
@@ -625,6 +626,21 @@ impl PipelineProcessor {
         if let Some(club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             let plan = &mut club.transfer_plan;
 
+            // Monitoring lifecycle: mirror the negotiation outcome
+            // onto every active monitoring row for this player. Signed
+            // = scouts got their man; Lost = the pursuit collapsed.
+            if accepted {
+                plan.set_monitoring_status_for_player(
+                    player_id,
+                    crate::transfers::pipeline::ScoutMonitoringStatus::Signed,
+                );
+            } else {
+                plan.set_monitoring_status_for_player(
+                    player_id,
+                    crate::transfers::pipeline::ScoutMonitoringStatus::Lost,
+                );
+            }
+
             for shortlist in &mut plan.shortlists {
                 if let Some(candidate) = shortlist
                     .candidates
@@ -735,6 +751,10 @@ impl PipelineProcessor {
             // at this club's disposal to be loaned out.
             plan.loan_out_candidates
                 .retain(|c| c.player_id != player_id);
+
+            // Drop active monitoring rows so the player no longer
+            // appears as "watched" by clubs that didn't sign them.
+            plan.scout_monitoring.retain(|m| m.player_id != player_id);
         }
     }
 
@@ -765,6 +785,14 @@ impl PipelineProcessor {
             }
             for r in &plan.staff_recommendations {
                 tracked.insert(r.player_id);
+            }
+            // Active monitoring rows count as live interest — the
+            // recruitment department is still watching the player even
+            // if no scouting assignment row exists yet.
+            for m in &plan.scout_monitoring {
+                if m.is_active_interest() {
+                    tracked.insert(m.player_id);
+                }
             }
         }
 
@@ -934,8 +962,13 @@ impl PipelineProcessor {
                 Some(c) => c,
                 None => continue,
             };
-            let asking_price =
-                Self::calculate_asking_price(player, sell_country, sell_club, date, sell_price_level);
+            let asking_price = Self::calculate_asking_price(
+                player,
+                sell_country,
+                sell_club,
+                date,
+                sell_price_level,
+            );
             let player_age = player.age(date);
             let player_ambition = player.skills.mental.determination;
             let player_name = player.full_name.to_string();
@@ -1024,11 +1057,7 @@ impl PipelineProcessor {
                 .first()
                 .map(|t| {
                     let avg = t.players.current_ability_avg();
-                    if avg == 0 {
-                        50
-                    } else {
-                        avg
-                    }
+                    if avg == 0 { 50 } else { avg }
                 })
                 .unwrap_or(50);
 
@@ -1175,8 +1204,10 @@ impl PipelineProcessor {
                     plan.active_negotiation_count += 1;
                 }
 
-                debug!("Foreign negotiation: Club {} started negotiation for player {} from country {}",
-                    action.buying_club_id, action.player_id, action.selling_country_id);
+                debug!(
+                    "Foreign negotiation: Club {} started negotiation for player {} from country {}",
+                    action.buying_club_id, action.player_id, action.selling_country_id
+                );
             }
         }
     }

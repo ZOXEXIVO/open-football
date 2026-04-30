@@ -1,10 +1,10 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use rand::RngExt;
@@ -94,7 +94,8 @@ impl StateProcessingHandler for DefenderTacklingState {
 
             return if tackle_success {
                 #[cfg(feature = "match-logs")]
-                crate::tackle_stats::DEF_SUCCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::tackle_stats::DEF_SUCCESSES
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut result = StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
@@ -109,9 +110,7 @@ impl StateProcessingHandler for DefenderTacklingState {
                 result.start_tackle_cooldown = true;
                 Some(result)
             } else {
-                let mut result = StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                );
+                let mut result = StateChangeResult::with_defender_state(DefenderState::Pressing);
                 result.start_tackle_cooldown = true;
                 Some(result)
             };
@@ -136,7 +135,8 @@ impl StateProcessingHandler for DefenderTacklingState {
 
             // Fallback: if ball is loose and very close, try to claim it
             // Double-check not in flight before claiming
-            if !ctx.tick_context.ball.is_owned && ball_distance < 5.0 && !ctx.ball().is_in_flight() {
+            if !ctx.tick_context.ball.is_owned && ball_distance < 5.0 && !ctx.ball().is_in_flight()
+            {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Running,
                     Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
@@ -156,15 +156,18 @@ impl StateProcessingHandler for DefenderTacklingState {
         if ctx.in_state_time > 30 {
             let ball_distance = ctx.ball().distance();
             if ball_distance > PRESSING_DISTANCE {
-                return Some(StateChangeResult::with_defender_state(DefenderState::Returning));
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ));
             }
             // Stuck in tackling too long without engaging — drop back to standing
-            return Some(StateChangeResult::with_defender_state(DefenderState::Standing));
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Standing,
+            ));
         }
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let target = self.calculate_intelligent_target(ctx);
@@ -179,8 +182,9 @@ impl StateProcessingHandler for DefenderTacklingState {
                 target,
                 target_velocity: Vector3::zeros(),
             }
-                .calculate(ctx.player)
-                .velocity * speed_boost
+            .calculate(ctx.player)
+            .velocity
+                * speed_boost
                 + ctx.player().separation_velocity() * 0.15,
         )
     }
@@ -199,7 +203,8 @@ impl DefenderTacklingState {
 
         // Check if ball is dangerously close to own goal
         let ball_distance_to_own_goal = (ball_position - own_goal_position).magnitude();
-        let is_ball_near_own_goal = ball_distance_to_own_goal < ctx.context.field_size.width as f32 * 0.2;
+        let is_ball_near_own_goal =
+            ball_distance_to_own_goal < ctx.context.field_size.width as f32 * 0.2;
 
         // Check if we're between the ball and our goal
         let player_distance_to_own_goal = (player_position - own_goal_position).magnitude();
@@ -263,10 +268,7 @@ impl DefenderTacklingState {
         //   tackling     — clean technical tackler doesn't need to foul
         // Clamped to a 0.5% floor so even an elite defender has some
         // risk on a 50/50 challenge.
-        let base_foul = 0.02
-            + aggression * 0.10
-            - composure * 0.05
-            - tackling_skill * 0.03;
+        let base_foul = 0.02 + aggression * 0.10 - composure * 0.05 - tackling_skill * 0.03;
         let base_foul = base_foul.max(0.005);
 
         // Clean successful tackles rarely foul — you won the ball

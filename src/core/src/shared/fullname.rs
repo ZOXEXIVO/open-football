@@ -33,7 +33,11 @@ impl FullName {
         // data (odb / generator tables) sometimes carries `Some("")`, which
         // would otherwise render the player as a blank name in every view
         // that goes through `display_last_name()`.
-        let nickname = if nickname.is_empty() { None } else { Some(nickname) };
+        let nickname = if nickname.is_empty() {
+            None
+        } else {
+            Some(nickname)
+        };
         FullName {
             first_name,
             last_name,
@@ -174,8 +178,11 @@ mod tests {
 
     #[test]
     fn test_with_nickname() {
-        let fullname =
-            FullName::with_nickname("Ronaldo".to_string(), "de Lima".to_string(), "Ronaldinho".to_string());
+        let fullname = FullName::with_nickname(
+            "Ronaldo".to_string(),
+            "de Lima".to_string(),
+            "Ronaldinho".to_string(),
+        );
 
         assert_eq!(format!("{}", fullname), "Ronaldinho");
         assert_eq!(fullname.display_last_name(), "Ronaldinho");

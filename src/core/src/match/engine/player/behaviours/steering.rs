@@ -14,7 +14,7 @@ pub enum SteeringBehavior<'a> {
         target_velocity: Vector3<f32>,
     },
     Evade {
-        target: Vector3<f32>
+        target: Vector3<f32>,
     },
     Wander {
         target: Vector3<f32>,
@@ -38,9 +38,9 @@ impl<'a> SteeringBehavior<'a> {
         match self {
             SteeringBehavior::Seek { target } => {
                 let to_target = *target - player.position;
-                let max_speed = player.skills.max_speed_with_condition(
-                    player.player_attributes.condition,
-                );
+                let max_speed = player
+                    .skills
+                    .max_speed_with_condition(player.player_attributes.condition);
                 let desired_velocity = if to_target.norm() > 0.0 {
                     to_target.normalize() * max_speed
                 } else {
@@ -88,9 +88,9 @@ impl<'a> SteeringBehavior<'a> {
 
                 // Calculate desired speed based on distance (with condition factor)
                 // max_speed already incorporates pace, no additional multiplier needed
-                let max_speed = player.skills.max_speed_with_condition(
-                    player.player_attributes.condition,
-                );
+                let max_speed = player
+                    .skills
+                    .max_speed_with_condition(player.player_attributes.condition);
                 let desired_speed = if distance < safe_slowing_distance {
                     // Quadratic deceleration — no minimum speed floor so player
                     // can smoothly decelerate to zero without overshooting
@@ -111,9 +111,11 @@ impl<'a> SteeringBehavior<'a> {
                 let steering = desired_velocity - player.velocity;
 
                 // Limit steering force based on agility (with condition)
-                let max_force = player.skills.max_speed_with_condition(
-                    player.player_attributes.condition,
-                ) * agility_normalized * 0.7;
+                let max_force = player
+                    .skills
+                    .max_speed_with_condition(player.player_attributes.condition)
+                    * agility_normalized
+                    * 0.7;
                 let steering = Self::limit_magnitude(steering, max_force);
 
                 // Apply steering force to current velocity to get new absolute velocity
@@ -127,7 +129,10 @@ impl<'a> SteeringBehavior<'a> {
                     rotation: 0.0,
                 }
             }
-            SteeringBehavior::Pursuit { target, target_velocity } => {
+            SteeringBehavior::Pursuit {
+                target,
+                target_velocity,
+            } => {
                 // Calculate interception point by predicting where the target will be
                 let to_target = *target - player.position;
                 let distance = to_target.norm();
@@ -146,13 +151,14 @@ impl<'a> SteeringBehavior<'a> {
                     };
                 }
 
-                let acceleration_normalized = 0.8 + (player.skills.physical.acceleration - 1.0) / 19.0;
+                let acceleration_normalized =
+                    0.8 + (player.skills.physical.acceleration - 1.0) / 19.0;
                 let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
 
                 // max_speed already incorporates pace/acceleration via the skill blend
-                let max_speed = player.skills.max_speed_with_condition(
-                    player.player_attributes.condition,
-                );
+                let max_speed = player
+                    .skills
+                    .max_speed_with_condition(player.player_attributes.condition);
 
                 // Calculate interception point
                 let interception_point = Self::calculate_interception_point(
@@ -192,9 +198,11 @@ impl<'a> SteeringBehavior<'a> {
                 } else {
                     // Far from target - use normal steering accumulation
                     let steering = desired_velocity - player.velocity;
-                    let max_acceleration = player.skills.max_speed_with_condition(
-                        player.player_attributes.condition,
-                    ) * agility_normalized * acceleration_normalized;
+                    let max_acceleration = player
+                        .skills
+                        .max_speed_with_condition(player.player_attributes.condition)
+                        * agility_normalized
+                        * acceleration_normalized;
                     let limited_steering = Self::limit_magnitude(steering, max_acceleration);
 
                     let move_velocity = player.velocity + limited_steering;
@@ -208,9 +216,9 @@ impl<'a> SteeringBehavior<'a> {
             }
             SteeringBehavior::Evade { target } => {
                 let to_player = player.position - *target;
-                let max_speed = player.skills.max_speed_with_condition(
-                    player.player_attributes.condition,
-                );
+                let max_speed = player
+                    .skills
+                    .max_speed_with_condition(player.player_attributes.condition);
 
                 let desired_velocity = if to_player.norm() > 0.0 {
                     to_player.normalize() * max_speed
@@ -237,17 +245,13 @@ impl<'a> SteeringBehavior<'a> {
                 radius,
                 jitter: _,
                 distance,
-                angle
+                angle,
             } => {
                 // The wander circle is projected in front of the player
                 let circle_center = player.position + player.velocity.normalize() * *distance;
 
                 // Calculate the displacement around the circle using the stored angle
-                let displacement = Vector3::new(
-                    angle.cos() * *radius,
-                    angle.sin() * *radius,
-                    0.0,
-                );
+                let displacement = Vector3::new(angle.cos() * *radius, angle.sin() * *radius, 0.0);
 
                 // The wander target is on the circle's edge
                 let wander_target = circle_center + displacement;
@@ -255,9 +259,11 @@ impl<'a> SteeringBehavior<'a> {
                 // Calculate desired velocity toward the wander target
                 let to_target = wander_target - player.position;
                 let desired_velocity = if to_target.norm() > 0.0 {
-                    to_target.normalize() * player.skills.max_speed_with_condition(
-                        player.player_attributes.condition,
-                    ) * 0.3 // Reduced speed for wandering
+                    to_target.normalize()
+                        * player
+                            .skills
+                            .max_speed_with_condition(player.player_attributes.condition)
+                        * 0.3 // Reduced speed for wandering
                 } else {
                     Vector3::zeros()
                 };
@@ -270,9 +276,10 @@ impl<'a> SteeringBehavior<'a> {
 
                 // Apply steering force to get new absolute velocity
                 let new_velocity = player.velocity + steering;
-                let wander_max_speed = player.skills.max_speed_with_condition(
-                    player.player_attributes.condition,
-                ) * 0.3; // Wandering is slower
+                let wander_max_speed = player
+                    .skills
+                    .max_speed_with_condition(player.player_attributes.condition)
+                    * 0.3; // Wandering is slower
                 let final_velocity = Self::limit_magnitude(new_velocity, wander_max_speed);
 
                 let rotation = if final_velocity.x != 0.0 || final_velocity.y != 0.0 {
@@ -288,9 +295,9 @@ impl<'a> SteeringBehavior<'a> {
             }
             SteeringBehavior::Flee { target } => {
                 let to_player = player.position - *target;
-                let max_speed = player.skills.max_speed_with_condition(
-                    player.player_attributes.condition,
-                );
+                let max_speed = player
+                    .skills
+                    .max_speed_with_condition(player.player_attributes.condition);
                 let desired_velocity = if to_player.norm() > 0.0 {
                     to_player.normalize() * max_speed
                 } else {
@@ -311,7 +318,11 @@ impl<'a> SteeringBehavior<'a> {
                 }
             }
 
-            SteeringBehavior::FollowPath { waypoints, current_waypoint, path_offset } => {
+            SteeringBehavior::FollowPath {
+                waypoints,
+                current_waypoint,
+                path_offset,
+            } => {
                 if waypoints.is_empty() {
                     return SteeringOutput {
                         velocity: Vector3::zeros(),
@@ -348,9 +359,9 @@ impl<'a> SteeringBehavior<'a> {
                     Vector3::zeros()
                 };
 
-                let max_speed = player.skills.max_speed_with_condition(
-                    player.player_attributes.condition,
-                );
+                let max_speed = player
+                    .skills
+                    .max_speed_with_condition(player.player_attributes.condition);
                 let desired_velocity = (direction + offset_direction.normalize() * 0.1) * max_speed;
                 let steering = desired_velocity - player.velocity;
 
@@ -419,11 +430,7 @@ impl<'a> SteeringBehavior<'a> {
             1.0
         } else if a.abs() < 0.001 {
             // Linear case (pursuer and target have same speed)
-            if b.abs() < 0.001 {
-                0.0
-            } else {
-                -c / b
-            }
+            if b.abs() < 0.001 { 0.0 } else { -c / b }
         } else {
             // Quadratic case - take the smaller positive root
             let sqrt_discriminant = discriminant.sqrt();

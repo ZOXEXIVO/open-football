@@ -11,7 +11,7 @@ pub struct ShootingEventContext {
 }
 
 impl ShootingEventContext {
-    pub fn new() -> ShootingEventBuilder{
+    pub fn new() -> ShootingEventBuilder {
         ShootingEventBuilder::new()
     }
 }

@@ -1,5 +1,5 @@
-use crate::club::player::player::Player;
 use crate::club::PlayerStatusType;
+use crate::club::player::player::Player;
 use crate::league::SeasonPhase;
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
@@ -77,8 +77,7 @@ impl Player {
 
         // Jadedness natural decay: -150/day when no match for 3+ days
         if self.player_attributes.days_since_last_match > 3 {
-            self.player_attributes.jadedness =
-                (self.player_attributes.jadedness - 150).max(0);
+            self.player_attributes.jadedness = (self.player_attributes.jadedness - 150).max(0);
         }
 
         // Remove Rst status when jadedness drops below threshold
@@ -176,7 +175,10 @@ mod recovery_tests {
             .attributes(PersonAttributes::default())
             .skills(skills)
             .positions(PlayerPositions {
-                positions: vec![PlayerPosition { position: PlayerPositionType::MidfielderCenter, level: 18 }],
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 18,
+                }],
             })
             .player_attributes(attrs)
             .build()
@@ -255,7 +257,10 @@ mod recovery_tests {
         let mut p = make_player(d(2000, 1, 1), 14.0);
         p.player_attributes.is_injured = false;
         p.player_attributes.recovery_days_remaining = 21;
-        assert_eq!(p.condition_label(), ConditionLabel::LimitedMinutesRecommended);
+        assert_eq!(
+            p.condition_label(),
+            ConditionLabel::LimitedMinutesRecommended
+        );
     }
 
     #[test]

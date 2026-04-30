@@ -93,7 +93,6 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
@@ -116,11 +115,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             // Arrive at (goal_line_x, target_y) — i.e. the post-to-post
             // line, Y offset is where the shot is going. Z ignored: we
             // move on the ground.
-            let intercept_point = Vector3::new(
-                goal_pos.x,
-                target.goal_line_y,
-                0.0,
-            );
+            let intercept_point = Vector3::new(goal_pos.x, target.goal_line_y, 0.0);
             return Some(
                 SteeringBehavior::Arrive {
                     target: intercept_point,
@@ -201,7 +196,8 @@ impl GoalkeeperPreparingForSaveState {
         // Dive decisions — elite GKs react from much further out and faster
         if ball_speed > 1.5 {
             // Strong shot — dive immediately (skilled keepers react further out)
-            ball_distance < (30.0 + reflexes * 25.0 + agility * 10.0) && time_to_ball < (18.0 + reflexes * 22.0)
+            ball_distance < (30.0 + reflexes * 25.0 + agility * 10.0)
+                && time_to_ball < (18.0 + reflexes * 22.0)
         } else if ball_speed > 0.8 {
             // Medium speed — dive if in range
             ball_distance < (25.0 + agility * 18.0 + reflexes * 10.0) && bravery > 0.10
@@ -309,7 +305,8 @@ impl GoalkeeperPreparingForSaveState {
         let positioning_ratio = 0.15 + (positioning * 0.15); // 15-30% toward ball
 
         // Calculate optimal position on the line between goal and ball
-        let optimal_position = goal_line_position + (predicted_ball_position - goal_line_position) * positioning_ratio;
+        let optimal_position =
+            goal_line_position + (predicted_ball_position - goal_line_position) * positioning_ratio;
 
         // Ensure goalkeeper stays near the goal line (don't go too far out)
         let max_distance_from_goal = 8.0 + (positioning * 4.0); // 8-12 units
@@ -317,7 +314,8 @@ impl GoalkeeperPreparingForSaveState {
 
         if distance_from_goal > max_distance_from_goal {
             // Clamp to max distance
-            goal_line_position + (optimal_position - goal_line_position).normalize() * max_distance_from_goal
+            goal_line_position
+                + (optimal_position - goal_line_position).normalize() * max_distance_from_goal
         } else {
             optimal_position
         }

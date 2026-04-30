@@ -1,8 +1,11 @@
-use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
-use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions};
 use crate::IntegerUtils;
+use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions,
+};
 use nalgebra::Vector3;
 
 const INTERCEPTION_DISTANCE: f32 = 150.0;
@@ -111,7 +114,6 @@ impl StateProcessingHandler for DefenderWalkingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Check if player should follow waypoints
         if ctx.player.should_follow_waypoints(ctx) {
@@ -123,14 +125,14 @@ impl StateProcessingHandler for DefenderWalkingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 5.0 // Some randomness for natural movement
+                        path_offset: 5.0, // Some randomness for natural movement
                     }
-                        .calculate(ctx.player)
-                        .velocity,
+                    .calculate(ctx.player)
+                    .velocity,
                 );
             }
         }
-        
+
         // 1. If this is the first tick in the state, initialize wander behavior
         if ctx.in_state_time % 100 == 0 {
             return Some(
@@ -150,7 +152,9 @@ impl StateProcessingHandler for DefenderWalkingState {
         let optimal_position = self.calculate_optimal_position(ctx);
         let direction = (optimal_position - ctx.player.position).normalize();
 
-        let walking_speed = (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.stamina) / 2.0 * 0.1;
+        let walking_speed =
+            (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.stamina) / 2.0
+                * 0.1;
 
         Some(direction * walking_speed)
     }
@@ -182,7 +186,7 @@ impl DefenderWalkingState {
     fn has_nearby_threats(&self, ctx: &StateProcessingContext) -> bool {
         let threat_distance = 20.0; // Adjust this value as needed
 
-        if ctx.players().opponents().exists(threat_distance){
+        if ctx.players().opponents().exists(threat_distance) {
             return true;
         }
 

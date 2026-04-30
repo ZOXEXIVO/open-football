@@ -1,5 +1,5 @@
 use crate::club::player::calculators::{
-    expected_annual_value, package_inputs_from_contract, ContractValuation, ValuationContext,
+    ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_contract,
 };
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
@@ -73,17 +73,16 @@ impl Player {
         self.happiness.factors.playing_time = playing_time_factor;
 
         // 2. Salary vs ability
-        let mut salary_factor = self.calculate_salary_factor(
-            age,
-            team_reputation,
-            season_state.league_reputation,
-        );
+        let mut salary_factor =
+            self.calculate_salary_factor(age, team_reputation, season_state.league_reputation);
 
         // After 2 years of unresolved salary unhappiness, player accepts situation
         // and salary frustration dampens — prevents permanent unhappiness loops.
         // Must be applied BEFORE recalculate_morale() so dampening actually affects morale.
         let gave_up_on_salary = salary_factor <= -5.0
-            && self.happiness.last_salary_negotiation
+            && self
+                .happiness
+                .last_salary_negotiation
                 .map(|d| (now - d).num_days() > 730)
                 .unwrap_or(false);
 
@@ -108,13 +107,19 @@ impl Player {
         self.happiness.factors.ambition_fit = ambition_factor;
 
         // 6. Praise/discipline from recent events (tracked separately)
-        let praise: f32 = self.happiness.recent_events.iter()
+        let praise: f32 = self
+            .happiness
+            .recent_events
+            .iter()
             .filter(|e| e.event_type == HappinessEventType::ManagerPraise)
             .map(|e| e.magnitude * (1.0 - e.days_ago as f32 / 60.0).max(0.0))
             .sum();
         self.happiness.factors.recent_praise = praise.clamp(0.0, 10.0);
 
-        let discipline: f32 = self.happiness.recent_events.iter()
+        let discipline: f32 = self
+            .happiness
+            .recent_events
+            .iter()
             .filter(|e| e.event_type == HappinessEventType::ManagerDiscipline)
             .map(|e| e.magnitude * (1.0 - e.days_ago as f32 / 60.0).max(0.0))
             .sum();
@@ -131,15 +136,10 @@ impl Player {
         self.happiness.factors.role_clarity = self.calculate_role_clarity();
         self.happiness.factors.coach_credibility = self.calculate_coach_credibility(&club_ctx);
         self.happiness.factors.dressing_room_status = self.calculate_dressing_room_status();
-        self.happiness.factors.club_fit = self.calculate_club_fit(
-            team_reputation,
-            season_state.league_reputation,
-            &club_ctx,
-        );
-        self.happiness.factors.pressure_load = self.calculate_pressure_load(
-            team_reputation,
-            season_state.league_reputation,
-        );
+        self.happiness.factors.club_fit =
+            self.calculate_club_fit(team_reputation, season_state.league_reputation, &club_ctx);
+        self.happiness.factors.pressure_load =
+            self.calculate_pressure_load(team_reputation, season_state.league_reputation);
         self.happiness.factors.promise_trust = self.calculate_promise_trust(now);
 
         // Recalculate overall morale (now uses dampened salary factor + derived axes)
@@ -147,7 +147,9 @@ impl Player {
 
         // Salary unhappy: player wants contract renegotiation (with 1-year cooldown)
         if salary_factor <= -5.0 && !gave_up_on_salary {
-            let cooldown_passed = self.happiness.last_salary_negotiation
+            let cooldown_passed = self
+                .happiness
+                .last_salary_negotiation
                 .map(|d| (now - d).num_days() >= 365)
                 .unwrap_or(true);
 
@@ -267,8 +269,16 @@ impl Player {
         // player's expectation isn't computed against a generic "mid-tier"
         // baseline. Falls back to the neutral 0.5 / 5000 only when the
         // caller couldn't provide context (zero values).
-        let club_rep = if team_reputation > 0.0 { team_reputation.clamp(0.0, 1.0) } else { 0.5 };
-        let league_rep = if league_reputation > 0 { league_reputation } else { 5_000 };
+        let club_rep = if team_reputation > 0.0 {
+            team_reputation.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        let league_rep = if league_reputation > 0 {
+            league_reputation
+        } else {
+            5_000
+        };
         let ctx = ValuationContext {
             age,
             club_reputation_score: club_rep,
@@ -385,9 +395,7 @@ impl Player {
             .happiness
             .recent_events
             .iter()
-            .filter(|e| {
-                e.event_type == crate::HappinessEventType::PromiseKept && e.days_ago <= 60
-            })
+            .filter(|e| e.event_type == crate::HappinessEventType::PromiseKept && e.days_ago <= 60)
             .count() as f32;
         let promise_broken: f32 = self
             .happiness
@@ -452,7 +460,8 @@ impl Player {
             return 0.0;
         }
 
-        let status_dampening = ambition_status_dampening(self.contract.as_ref().map(|c| &c.squad_status));
+        let status_dampening =
+            ambition_status_dampening(self.contract.as_ref().map(|c| &c.squad_status));
         let prestige = self.prestige_fit_component(ambition, team_reputation, status_dampening);
         let trajectory = self.season_trajectory_component(ambition, season, status_dampening);
 
@@ -504,8 +513,7 @@ impl Player {
         }
 
         // 0.0 = top, 1.0 = bottom
-        let pos_pct = (s.league_position as f32 - 1.0)
-            / (s.league_size as f32 - 1.0).max(1.0);
+        let pos_pct = (s.league_position as f32 - 1.0) / (s.league_size as f32 - 1.0).max(1.0);
 
         // Ambition 20 expects top (~5%), ambition 15 expects top-third
         // (~33%), ambition 10 accepts mid-table (~70%).
@@ -609,10 +617,7 @@ impl Player {
             return 0.0;
         }
 
-        let is_gk = matches!(
-            self.position(),
-            crate::PlayerPositionType::Goalkeeper
-        );
+        let is_gk = matches!(self.position(), crate::PlayerPositionType::Goalkeeper);
         let coach_score = if is_gk {
             ctx.coach_best_goalkeeping as f32
         } else {
@@ -711,9 +716,7 @@ impl Player {
             .happiness
             .recent_events
             .iter()
-            .filter(|e| {
-                e.event_type == HappinessEventType::CompatriotJoined && e.days_ago <= 180
-            })
+            .filter(|e| e.event_type == HappinessEventType::CompatriotJoined && e.days_ago <= 180)
             .count() as f32;
         score += compatriots.min(2.0) * 0.8;
 
@@ -721,9 +724,7 @@ impl Player {
             .happiness
             .recent_events
             .iter()
-            .filter(|e| {
-                e.event_type == HappinessEventType::LanguageProgress && e.days_ago <= 180
-            })
+            .filter(|e| e.event_type == HappinessEventType::LanguageProgress && e.days_ago <= 180)
             .count() as f32;
         score += lang_progress.min(3.0) * 0.5;
 
@@ -754,10 +755,9 @@ impl Player {
         // Pressure index — bigger club, bigger league, higher player
         // rep → more eyes. Player_rep doubled because the public talks
         // about the player, not just the badge.
-        let pressure_index = (club_rep_score * 0.4
-            + league_score * 0.3
-            + (player_rep / 100.0) * 0.6)
-            .clamp(0.0, 100.0);
+        let pressure_index =
+            (club_rep_score * 0.4 + league_score * 0.3 + (player_rep / 100.0) * 0.6)
+                .clamp(0.0, 100.0);
 
         // Tolerance: pressure attribute 0..20 → 0..100.
         let tolerance = pressure * 5.0;
@@ -776,8 +776,7 @@ impl Player {
         // camera regardless of league or club rep. Adds a floor of
         // pressure that scales with how far the rep gap is.
         let outlier_pull: f32 = if rep_gap.is_outlier_above() {
-            (rep_gap.player_vs_club.max(rep_gap.player_vs_league) as f32 / 1000.0)
-                .clamp(0.0, 8.0)
+            (rep_gap.player_vs_club.max(rep_gap.player_vs_league) as f32 / 1000.0).clamp(0.0, 8.0)
         } else {
             0.0
         };
@@ -817,9 +816,7 @@ impl Player {
         let overhang: f32 = self
             .promises
             .iter()
-            .filter(|p| {
-                p.credibility_at_creation < 40 && p.importance_to_player >= 60
-            })
+            .filter(|p| p.credibility_at_creation < 40 && p.importance_to_player >= 60)
             .count() as f32;
         score -= overhang * 1.5;
 
@@ -849,11 +846,8 @@ impl Player {
         // Veteran humiliation — elite vet (32+, world_rep ≥ 6500)
         // sitting in a clearly smaller league. Gentle ongoing drag.
         if age >= 32 && world_rep >= 6500 && gap.is_outlier_above() {
-            self.happiness.add_event_with_cooldown(
-                HappinessEventType::AmbitionShock,
-                -3.0,
-                30,
-            );
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::AmbitionShock, -3.0, 30);
         }
 
         // Young loanee enjoying responsibility — under-23, in a
@@ -865,11 +859,8 @@ impl Player {
             && starts >= 5
             && (gap.player_vs_club <= 0 || gap.player_vs_league <= 0)
         {
-            self.happiness.add_event_with_cooldown(
-                HappinessEventType::SettledIntoSquad,
-                2.5,
-                60,
-            );
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::SettledIntoSquad, 2.5, 60);
         }
 
         // Used out of position — RoleMismatch event still active and
@@ -878,15 +869,10 @@ impl Player {
             .happiness
             .recent_events
             .iter()
-            .any(|e| {
-                e.event_type == HappinessEventType::RoleMismatch && e.days_ago <= 28
-            });
+            .any(|e| e.event_type == HappinessEventType::RoleMismatch && e.days_ago <= 28);
         if recent_mismatch {
-            self.happiness.add_event_with_cooldown(
-                HappinessEventType::LackOfPlayingTime,
-                -2.0,
-                21,
-            );
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::LackOfPlayingTime, -2.0, 21);
         }
 
         // Loan underperformance — apps but rating < 6.0 means the loan
@@ -895,11 +881,8 @@ impl Player {
         let apps = self.statistics.played + self.statistics.played_subs;
         let form = self.statistics.average_rating;
         if apps >= 6 && form > 0.0 && form < 6.0 {
-            self.happiness.add_event_with_cooldown(
-                HappinessEventType::PoorTraining,
-                -1.5,
-                28,
-            );
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::PoorTraining, -1.5, 28);
         }
     }
 }

@@ -1,15 +1,15 @@
-use chrono::NaiveDate;
-use log::debug;
-use std::collections::HashMap;
 use super::types::{SquadAnalysis, TransferActivitySummary};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
-use crate::transfers::{TransferListing, TransferListingType};
 use crate::transfers::TransferWindowManager;
+use crate::transfers::{TransferListing, TransferListingType};
 use crate::{
-    Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType,
-    PlayerSquadStatus, PlayerStatusType, ReputationLevel,
+    Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus,
+    PlayerStatusType, ReputationLevel,
 };
+use chrono::NaiveDate;
+use log::debug;
+use std::collections::HashMap;
 
 enum ListingDecision {
     Keep,
@@ -48,7 +48,8 @@ impl CountryResult {
             }
 
             let main_team = &club.teams.teams[0];
-            let league_reputation = main_team.league_id
+            let league_reputation = main_team
+                .league_id
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                 .map(|l| l.reputation)
                 .unwrap_or(0);
@@ -59,10 +60,19 @@ impl CountryResult {
             let decided_by = main_team.staffs.head_coach().full_name.to_string();
 
             for player in &main_team.players.players {
-                match Self::evaluate_player_listing(player, &squad_analysis, club, date, current_window) {
+                match Self::evaluate_player_listing(
+                    player,
+                    &squad_analysis,
+                    club,
+                    date,
+                    current_window,
+                ) {
                     ListingDecision::Keep => {}
                     ListingDecision::FreeTransfer => {
-                        let free_price = CurrencyValue { amount: 0.0, currency: Currency::Usd };
+                        let free_price = CurrencyValue {
+                            amount: 0.0,
+                            currency: Currency::Usd,
+                        };
                         listings_to_add.push(PendingListing {
                             player_id: player.id,
                             club_id: club.id,
@@ -74,7 +84,14 @@ impl CountryResult {
                         });
                     }
                     ListingDecision::Transfer { reason } => {
-                        let asking_price = Self::calculate_asking_price(player, club, date, price_level, league_reputation, club_reputation);
+                        let asking_price = Self::calculate_asking_price(
+                            player,
+                            club,
+                            date,
+                            price_level,
+                            league_reputation,
+                            club_reputation,
+                        );
                         listings_to_add.push(PendingListing {
                             player_id: player.id,
                             club_id: club.id,
@@ -90,7 +107,10 @@ impl CountryResult {
                             player_id: player.id,
                             club_id: club.id,
                             team_id: main_team.id,
-                            asking_price: CurrencyValue { amount: 0.0, currency: Currency::Usd },
+                            asking_price: CurrencyValue {
+                                amount: 0.0,
+                                currency: Currency::Usd,
+                            },
                             listing_type: TransferListingType::Loan,
                             reason,
                             decided_by: decided_by.clone(),
@@ -107,7 +127,10 @@ impl CountryResult {
         let listings_to_add = Self::enforce_position_group_minimums(country, listings_to_add);
 
         if !listings_to_add.is_empty() {
-            debug!("Transfer market: listing {} players for transfer/loan", listings_to_add.len());
+            debug!(
+                "Transfer market: listing {} players for transfer/loan",
+                listings_to_add.len()
+            );
         }
 
         // Apply listings
@@ -138,7 +161,12 @@ impl CountryResult {
 
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
-                    if let Some(player) = team.players.players.iter_mut().find(|p| p.id == listing_data.player_id) {
+                    if let Some(player) = team
+                        .players
+                        .players
+                        .iter_mut()
+                        .find(|p| p.id == listing_data.player_id)
+                    {
                         if !player.statuses.get().contains(&status_type) {
                             player.statuses.add(date, status_type);
                         }
@@ -208,7 +236,10 @@ impl CountryResult {
             HashMap::new();
         for listing in capped {
             if let Some(group) = player_group(listing.club_id, listing.player_id) {
-                groups.entry((listing.club_id, group)).or_default().push(listing);
+                groups
+                    .entry((listing.club_id, group))
+                    .or_default()
+                    .push(listing);
             }
         }
 
@@ -306,22 +337,46 @@ impl CountryResult {
         let avg_ability = (total_ability / players.len() as u32) as u8;
         let avg_age = total_age as f32 / players.len() as f32;
 
-        let gk = *group_counts.get(&PlayerFieldPositionGroup::Goalkeeper).unwrap_or(&0);
-        let def = *group_counts.get(&PlayerFieldPositionGroup::Defender).unwrap_or(&0);
-        let mid = *group_counts.get(&PlayerFieldPositionGroup::Midfielder).unwrap_or(&0);
-        let fwd = *group_counts.get(&PlayerFieldPositionGroup::Forward).unwrap_or(&0);
+        let gk = *group_counts
+            .get(&PlayerFieldPositionGroup::Goalkeeper)
+            .unwrap_or(&0);
+        let def = *group_counts
+            .get(&PlayerFieldPositionGroup::Defender)
+            .unwrap_or(&0);
+        let mid = *group_counts
+            .get(&PlayerFieldPositionGroup::Midfielder)
+            .unwrap_or(&0);
+        let fwd = *group_counts
+            .get(&PlayerFieldPositionGroup::Forward)
+            .unwrap_or(&0);
 
         let mut surplus = Vec::new();
         let mut needed = Vec::new();
 
-        if gk > 2 { surplus.push(PlayerPositionType::Goalkeeper); }
-        if gk < 2 { needed.push(PlayerPositionType::Goalkeeper); }
-        if def > 7 { surplus.push(PlayerPositionType::DefenderCenter); }
-        if def < 4 { needed.push(PlayerPositionType::DefenderCenter); }
-        if mid > 7 { surplus.push(PlayerPositionType::MidfielderCenter); }
-        if mid < 4 { needed.push(PlayerPositionType::MidfielderCenter); }
-        if fwd > 5 { surplus.push(PlayerPositionType::Striker); }
-        if fwd < 2 { needed.push(PlayerPositionType::Striker); }
+        if gk > 2 {
+            surplus.push(PlayerPositionType::Goalkeeper);
+        }
+        if gk < 2 {
+            needed.push(PlayerPositionType::Goalkeeper);
+        }
+        if def > 7 {
+            surplus.push(PlayerPositionType::DefenderCenter);
+        }
+        if def < 4 {
+            needed.push(PlayerPositionType::DefenderCenter);
+        }
+        if mid > 7 {
+            surplus.push(PlayerPositionType::MidfielderCenter);
+        }
+        if mid < 4 {
+            needed.push(PlayerPositionType::MidfielderCenter);
+        }
+        if fwd > 5 {
+            surplus.push(PlayerPositionType::Striker);
+        }
+        if fwd < 2 {
+            needed.push(PlayerPositionType::Striker);
+        }
 
         SquadAnalysis {
             surplus_positions: surplus,
@@ -360,7 +415,10 @@ impl CountryResult {
         let statuses = player.statuses.get();
 
         // Already listed
-        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Loa) || statuses.contains(&PlayerStatusType::Frt) {
+        if statuses.contains(&PlayerStatusType::Lst)
+            || statuses.contains(&PlayerStatusType::Loa)
+            || statuses.contains(&PlayerStatusType::Frt)
+        {
             return ListingDecision::Keep;
         }
 
@@ -378,50 +436,72 @@ impl CountryResult {
         let ca_i = ca as i16;
         let avg = analysis.quality_level as i16;
 
-        let rep_level = club.teams.teams.first()
+        let rep_level = club
+            .teams
+            .teams
+            .first()
             .map(|t| t.reputation.level())
             .unwrap_or(ReputationLevel::Amateur);
 
         // Check if evaluation pipeline already identified as loan candidate
-        let loan_candidate = club.transfer_plan.loan_out_candidates
+        let loan_candidate = club
+            .transfer_plan
+            .loan_out_candidates
             .iter()
             .find(|c| c.player_id == player.id);
 
         if let Some(candidate) = loan_candidate {
             let reason = match &candidate.reason {
-                crate::transfers::pipeline::LoanOutReason::NeedsGameTime =>
-                    "dec_reason_needs_game_time",
-                crate::transfers::pipeline::LoanOutReason::BlockedByBetterPlayer =>
-                    "dec_reason_blocked_by_better",
-                crate::transfers::pipeline::LoanOutReason::Surplus =>
-                    "dec_reason_surplus_tactical",
-                crate::transfers::pipeline::LoanOutReason::FinancialRelief =>
-                    "dec_reason_financial_relief",
-                crate::transfers::pipeline::LoanOutReason::LackOfPlayingTime =>
-                    "dec_reason_lack_playing_time",
-                crate::transfers::pipeline::LoanOutReason::PostInjuryFitness =>
-                    "dec_reason_post_injury_fitness",
+                crate::transfers::pipeline::LoanOutReason::NeedsGameTime => {
+                    "dec_reason_needs_game_time"
+                }
+                crate::transfers::pipeline::LoanOutReason::BlockedByBetterPlayer => {
+                    "dec_reason_blocked_by_better"
+                }
+                crate::transfers::pipeline::LoanOutReason::Surplus => "dec_reason_surplus_tactical",
+                crate::transfers::pipeline::LoanOutReason::FinancialRelief => {
+                    "dec_reason_financial_relief"
+                }
+                crate::transfers::pipeline::LoanOutReason::LackOfPlayingTime => {
+                    "dec_reason_lack_playing_time"
+                }
+                crate::transfers::pipeline::LoanOutReason::PostInjuryFitness => {
+                    "dec_reason_post_injury_fitness"
+                }
             };
-            return ListingDecision::Loan { reason: reason.to_string() };
+            return ListingDecision::Loan {
+                reason: reason.to_string(),
+            };
         }
 
         // Player-initiated departures
         if let Some(ref contract) = player.contract {
             if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
-                return Self::decide_listing_type(player, &rep_level, avg, date,
-                    "dec_reason_surplus_squad".to_string());
+                return Self::decide_listing_type(
+                    player,
+                    &rep_level,
+                    avg,
+                    date,
+                    "dec_reason_surplus_squad".to_string(),
+                );
             }
             if contract.is_transfer_listed {
-                return ListingDecision::Transfer { reason: "dec_reason_club_listed".to_string() };
+                return ListingDecision::Transfer {
+                    reason: "dec_reason_club_listed".to_string(),
+                };
             }
         }
 
         if statuses.contains(&PlayerStatusType::Req) {
-            return ListingDecision::Transfer { reason: "dec_reason_player_requested".to_string() };
+            return ListingDecision::Transfer {
+                reason: "dec_reason_player_requested".to_string(),
+            };
         }
 
         if statuses.contains(&PlayerStatusType::Unh) {
-            return ListingDecision::Transfer { reason: "dec_reason_player_unhappy".to_string() };
+            return ListingDecision::Transfer {
+                reason: "dec_reason_player_unhappy".to_string(),
+            };
         }
 
         // Squad members the club wouldn't move on pure maths. Runs after
@@ -444,12 +524,18 @@ impl CountryResult {
         };
 
         // Well below squad average
-        if analysis.quality_level > 15 && ca_i < avg - quality_gap_threshold && !is_promising_youth {
+        if analysis.quality_level > 15 && ca_i < avg - quality_gap_threshold && !is_promising_youth
+        {
             if !Self::position_group_has_depth(club, player, date) {
                 return ListingDecision::Keep;
             }
-            return Self::decide_listing_type(player, &rep_level, avg, date,
-                "dec_reason_well_below_avg".to_string());
+            return Self::decide_listing_type(
+                player,
+                &rep_level,
+                avg,
+                date,
+                "dec_reason_well_below_avg".to_string(),
+            );
         }
 
         // Surplus position and below average
@@ -457,8 +543,13 @@ impl CountryResult {
         for surplus_pos in &analysis.surplus_positions {
             if surplus_pos.position_group() == player_group {
                 if ca_i < avg && !is_promising_youth {
-                    return Self::decide_listing_type(player, &rep_level, avg, date,
-                        "dec_reason_below_avg_surplus".to_string());
+                    return Self::decide_listing_type(
+                        player,
+                        &rep_level,
+                        avg,
+                        date,
+                        "dec_reason_below_avg_surplus".to_string(),
+                    );
                 }
             }
         }
@@ -477,7 +568,12 @@ impl CountryResult {
         }
 
         // Below-average players in large squads — wealth-aware threshold
-        let squad_size = club.teams.teams.first().map(|t| t.players.players.len()).unwrap_or(0);
+        let squad_size = club
+            .teams
+            .teams
+            .first()
+            .map(|t| t.players.players.len())
+            .unwrap_or(0);
         let max_comfortable_squad = match rep_level {
             ReputationLevel::Elite => 45,
             ReputationLevel::Continental => 40,
@@ -486,12 +582,14 @@ impl CountryResult {
             _ => 22,
         };
 
-        if squad_size > max_comfortable_squad
-            && ca_i < avg - 10
-            && !is_promising_youth
-        {
-            return Self::decide_listing_type(player, &rep_level, avg, date,
-                "dec_reason_squad_oversized".to_string());
+        if squad_size > max_comfortable_squad && ca_i < avg - 10 && !is_promising_youth {
+            return Self::decide_listing_type(
+                player,
+                &rep_level,
+                avg,
+                date,
+                "dec_reason_squad_oversized".to_string(),
+            );
         }
 
         // Contract expiring within 6 months. ContractRenewalManager runs
@@ -537,7 +635,10 @@ impl CountryResult {
 
         // At wealthy club, young enough and decent quality → loan to preserve asset
         if age <= 25
-            && matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental)
+            && matches!(
+                rep_level,
+                ReputationLevel::Elite | ReputationLevel::Continental
+            )
             && (ca as i16) >= avg - 20
         {
             return ListingDecision::Loan {
@@ -550,7 +651,8 @@ impl CountryResult {
         // winger. Requires both conditions — the previous OR labelled any
         // 27-year-old who'd reached his potential as "peaked or declining",
         // which is simply a mature player, not a selling point.
-        let peaked_age = aging_listing_threshold(player.position().position_group()).saturating_sub(2);
+        let peaked_age =
+            aging_listing_threshold(player.position().position_group()).saturating_sub(2);
         if age >= peaked_age && pa <= ca {
             return ListingDecision::Transfer {
                 reason: "dec_reason_peaked_declining".to_string(),
@@ -558,14 +660,21 @@ impl CountryResult {
         }
 
         // Mid-career at wealthy club → loan to preserve value
-        if age <= 27 && matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental) {
+        if age <= 27
+            && matches!(
+                rep_level,
+                ReputationLevel::Elite | ReputationLevel::Continental
+            )
+        {
             return ListingDecision::Loan {
                 reason: "dec_reason_loan_playing_time".to_string(),
             };
         }
 
         // Default: transfer
-        ListingDecision::Transfer { reason: base_reason }
+        ListingDecision::Transfer {
+            reason: base_reason,
+        }
     }
 
     /// Is this a player the club would keep on non-numeric grounds?
@@ -668,18 +777,16 @@ impl CountryResult {
     }
 
     /// Returns true if the player's position group already has enough players.
-    fn position_group_has_depth(
-        club: &Club,
-        player: &Player,
-        _date: NaiveDate,
-    ) -> bool {
+    fn position_group_has_depth(club: &Club, player: &Player, _date: NaiveDate) -> bool {
         let team = match club.teams.teams.first() {
             Some(t) => t,
             None => return false,
         };
 
         let group = player.position().position_group();
-        let group_count = team.players.iter()
+        let group_count = team
+            .players
+            .iter()
             .filter(|p| p.position().position_group() == group)
             .count();
 
@@ -703,7 +810,13 @@ impl CountryResult {
     ) -> CurrencyValue {
         use crate::transfers::window::PlayerValuationCalculator;
 
-        let base_value = PlayerValuationCalculator::calculate_value_with_price_level(player, date, price_level, league_reputation, club_reputation);
+        let base_value = PlayerValuationCalculator::calculate_value_with_price_level(
+            player,
+            date,
+            price_level,
+            league_reputation,
+            club_reputation,
+        );
 
         let multiplier = if club.finance.balance.balance < 0 {
             0.9

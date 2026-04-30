@@ -244,8 +244,7 @@ impl PlayerLoad {
     }
 
     pub fn is_overloaded(&self) -> bool {
-        self.minutes_last_7 >= FATIGUE_LOAD_DANGER
-            || self.physical_load_7 >= PHYSICAL_LOAD_DANGER
+        self.minutes_last_7 >= FATIGUE_LOAD_DANGER || self.physical_load_7 >= PHYSICAL_LOAD_DANGER
     }
 
     /// Acute:chronic workload ratio. The chronic baseline is the 30-day
@@ -368,12 +367,24 @@ mod tests {
         for i in 2..=8 {
             l.daily_decay(d(2025, 1, i));
         }
-        assert!(l.minutes_last_7 < 45.0, "after a week: {}", l.minutes_last_7);
-        assert!(l.minutes_last_7 > 20.0, "decay shouldn't be complete: {}", l.minutes_last_7);
+        assert!(
+            l.minutes_last_7 < 45.0,
+            "after a week: {}",
+            l.minutes_last_7
+        );
+        assert!(
+            l.minutes_last_7 > 20.0,
+            "decay shouldn't be complete: {}",
+            l.minutes_last_7
+        );
 
         // last_30 decays slower — after 7 days it should still be > 65
         // (factor (29/30)^7 ≈ 0.79).
-        assert!(l.minutes_last_30 > 65.0, "last_30 after a week: {}", l.minutes_last_30);
+        assert!(
+            l.minutes_last_30 > 65.0,
+            "last_30 after a week: {}",
+            l.minutes_last_30
+        );
     }
 
     #[test]
@@ -403,7 +414,11 @@ mod tests {
             l.daily_decay(d(2025, 1, i));
         }
         // After 3 days, debt half-life ≈ 3d → roughly halved.
-        assert!(l.recovery_debt < 250.0, "debt after 3d: {}", l.recovery_debt);
+        assert!(
+            l.recovery_debt < 250.0,
+            "debt after 3d: {}",
+            l.recovery_debt
+        );
         // Minutes window decays slower: (6/7)^3 ≈ 0.63 → ~57.
         assert!(l.minutes_last_7 > 50.0);
     }
@@ -476,10 +491,10 @@ mod tests {
         l.daily_decay(d(2025, 1, 1));
 
         l.record_match_minutes(90.0, false); // day 0
-        l.daily_decay(d(2025, 1, 3));         // +2
-        l.record_match_minutes(90.0, false);  // day 2
-        l.daily_decay(d(2025, 1, 6));         // +3
-        l.record_match_minutes(90.0, false);  // day 5
+        l.daily_decay(d(2025, 1, 3)); // +2
+        l.record_match_minutes(90.0, false); // day 2
+        l.daily_decay(d(2025, 1, 6)); // +3
+        l.record_match_minutes(90.0, false); // day 5
         assert_eq!(l.matches_last_14(), 3);
 
         // Fourteen days after the first match — it should drop out.

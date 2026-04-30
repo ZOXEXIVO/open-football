@@ -1,5 +1,5 @@
-use crate::club::{PersonBehaviourState, Player, PlayerPositionType, Staff};
 use crate::Team;
+use crate::club::{PersonBehaviourState, Player, PlayerPositionType, Staff};
 
 #[derive(Debug, Clone)]
 pub struct Tactics {
@@ -715,8 +715,8 @@ impl TeamCompositionAnalysis {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::fullname::FullName;
     use crate::PersonAttributes;
+    use crate::shared::fullname::FullName;
     fn create_test_player(id: u32, position: PlayerPositionType, ability: u8) -> Player {
         use crate::club::player::builder::PlayerBuilder;
         use crate::club::player::*;

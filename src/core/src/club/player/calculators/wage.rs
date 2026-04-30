@@ -1,5 +1,5 @@
-use crate::club::player::player::Player;
 use crate::PlayerSquadStatus;
+use crate::club::player::player::Player;
 
 /// Wage expectations and club willingness-to-pay.
 ///
@@ -111,8 +111,8 @@ impl WageCalculator {
         // Borrower share scales 35-80% of parent wage.
         let share = 0.35 + (borrower_score.clamp(0.0, 1.0) as f64) * 0.45;
         // Development-focused parents accept absorbing more wage.
-        let share = (share - (parent_desire_to_develop.clamp(0.0, 1.0) as f64) * 0.10)
-            .clamp(0.30, 0.85);
+        let share =
+            (share - (parent_desire_to_develop.clamp(0.0, 1.0) as f64) * 0.10).clamp(0.30, 0.85);
         let borrower = (parent * share).max(2_400.0) as u32;
         // Match fee climbs steeply with borrower size — Premier-League
         // borrowers pay enough that benching the loanee actually hurts.
@@ -412,7 +412,14 @@ mod tests {
         );
         let backup = ContractValuation::evaluate(
             &p,
-            &ctx(26, PlayerSquadStatus::MainBackupPlayer, 0.6, 6000, 24, false),
+            &ctx(
+                26,
+                PlayerSquadStatus::MainBackupPlayer,
+                0.6,
+                6000,
+                24,
+                false,
+            ),
         );
         assert!(
             key.expected_wage > backup.expected_wage * 2,
@@ -427,7 +434,14 @@ mod tests {
         let p = player_with(120, 26, 12.0, 12.0);
         let two_year = ContractValuation::evaluate(
             &p,
-            &ctx(26, PlayerSquadStatus::FirstTeamRegular, 0.6, 6000, 24, false),
+            &ctx(
+                26,
+                PlayerSquadStatus::FirstTeamRegular,
+                0.6,
+                6000,
+                24,
+                false,
+            ),
         );
         let final_six = ContractValuation::evaluate(
             &p,
@@ -441,7 +455,14 @@ mod tests {
         let p = player_with(120, 26, 12.0, 12.0);
         let no_interest = ContractValuation::evaluate(
             &p,
-            &ctx(26, PlayerSquadStatus::FirstTeamRegular, 0.6, 6000, 12, false),
+            &ctx(
+                26,
+                PlayerSquadStatus::FirstTeamRegular,
+                0.6,
+                6000,
+                12,
+                false,
+            ),
         );
         let with_interest = ContractValuation::evaluate(
             &p,
@@ -454,7 +475,14 @@ mod tests {
     fn higher_ability_pays_more() {
         let weak = player_with(60, 26, 10.0, 10.0);
         let strong = player_with(150, 26, 10.0, 10.0);
-        let c = ctx(26, PlayerSquadStatus::FirstTeamRegular, 0.6, 6000, 24, false);
+        let c = ctx(
+            26,
+            PlayerSquadStatus::FirstTeamRegular,
+            0.6,
+            6000,
+            24,
+            false,
+        );
         let weak_wage = ContractValuation::evaluate(&weak, &c).expected_wage;
         let strong_wage = ContractValuation::evaluate(&strong, &c).expected_wage;
         assert!(strong_wage > weak_wage * 5);
@@ -465,11 +493,25 @@ mod tests {
         let p = player_with(120, 26, 12.0, 12.0);
         let elite = ContractValuation::evaluate(
             &p,
-            &ctx(26, PlayerSquadStatus::FirstTeamRegular, 0.7, 9000, 24, false),
+            &ctx(
+                26,
+                PlayerSquadStatus::FirstTeamRegular,
+                0.7,
+                9000,
+                24,
+                false,
+            ),
         );
         let minor = ContractValuation::evaluate(
             &p,
-            &ctx(26, PlayerSquadStatus::FirstTeamRegular, 0.4, 2000, 24, false),
+            &ctx(
+                26,
+                PlayerSquadStatus::FirstTeamRegular,
+                0.4,
+                2000,
+                24,
+                false,
+            ),
         );
         assert!(elite.expected_wage > minor.expected_wage * 2);
     }
@@ -508,8 +550,22 @@ mod tests {
     fn old_player_earns_less_than_peak_player_same_status() {
         let young = player_with(120, 26, 10.0, 10.0);
         let old = player_with(120, 34, 10.0, 10.0);
-        let c = ctx(26, PlayerSquadStatus::FirstTeamRegular, 0.6, 6000, 24, false);
-        let c_old = ctx(34, PlayerSquadStatus::FirstTeamRegular, 0.6, 6000, 24, false);
+        let c = ctx(
+            26,
+            PlayerSquadStatus::FirstTeamRegular,
+            0.6,
+            6000,
+            24,
+            false,
+        );
+        let c_old = ctx(
+            34,
+            PlayerSquadStatus::FirstTeamRegular,
+            0.6,
+            6000,
+            24,
+            false,
+        );
         let young_wage = ContractValuation::evaluate(&young, &c).expected_wage;
         let old_wage = ContractValuation::evaluate(&old, &c_old).expected_wage;
         assert!(young_wage > old_wage);

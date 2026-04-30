@@ -1,13 +1,17 @@
 use super::ContinentResult;
+use crate::HappinessEventType;
 use crate::continent::Continent;
 use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
-use crate::HappinessEventType;
 use log::debug;
 
 impl ContinentResult {
-    pub(crate) fn process_continental_awards(&self, data: &mut SimulatorData, _country_results: &[CountryResult]) {
+    pub(crate) fn process_continental_awards(
+        &self,
+        data: &mut SimulatorData,
+        _country_results: &[CountryResult],
+    ) {
         debug!("Processing continental awards");
 
         let continent_id = self.get_continent_id();
@@ -67,22 +71,23 @@ impl ContinentResult {
         // Snapshot finals up front so we don't keep an immutable borrow
         // while emitting. (CL 1.5 / EL 1.3 / Conference 1.2 reflect the
         // real-world prestige gap.)
-        let finals: Vec<(u32, u32, f32, f32)> = if let Some(continent) = data.continent(continent_id) {
-            let comps = &continent.continental_competitions;
-            let mut v = Vec::new();
-            if let Some((w, l)) = comps.champions_league.final_result() {
-                v.push((w, l, 1.5, 1.4));
-            }
-            if let Some((w, l)) = comps.europa_league.final_result() {
-                v.push((w, l, 1.3, 1.2));
-            }
-            if let Some((w, l)) = comps.conference_league.final_result() {
-                v.push((w, l, 1.2, 1.0));
-            }
-            v
-        } else {
-            return;
-        };
+        let finals: Vec<(u32, u32, f32, f32)> =
+            if let Some(continent) = data.continent(continent_id) {
+                let comps = &continent.continental_competitions;
+                let mut v = Vec::new();
+                if let Some((w, l)) = comps.champions_league.final_result() {
+                    v.push((w, l, 1.5, 1.4));
+                }
+                if let Some((w, l)) = comps.europa_league.final_result() {
+                    v.push((w, l, 1.3, 1.2));
+                }
+                if let Some((w, l)) = comps.conference_league.final_result() {
+                    v.push((w, l, 1.2, 1.0));
+                }
+                v
+            } else {
+                return;
+            };
 
         for (winner_team, loser_team, win_prestige, lose_prestige) in finals {
             // Locate which country owns each team. Continental cups can
@@ -117,7 +122,10 @@ impl ContinentResult {
 
         for country in &continent.countries {
             // League reputation multiplier: top leagues produce better candidates
-            let league_rep = country.leagues.leagues.first()
+            let league_rep = country
+                .leagues
+                .leagues
+                .first()
                 .map(|l| l.reputation as f32 / 10000.0)
                 .unwrap_or(0.1);
 
@@ -208,7 +216,10 @@ impl ContinentResult {
         let mut best_score: f32 = 0.0;
 
         for country in &continent.countries {
-            let league_rep = country.leagues.leagues.first()
+            let league_rep = country
+                .leagues
+                .leagues
+                .first()
                 .map(|l| l.reputation as f32 / 10000.0)
                 .unwrap_or(0.1);
 
@@ -231,8 +242,9 @@ impl ContinentResult {
                         let potential = player.player_attributes.potential_ability as f32;
 
                         // Young player score includes potential
-                        let score = (goals * 2.0 + assists * 1.5 + avg_rating * 3.0 + potential / 20.0)
-                            * (0.5 + league_rep * 0.5);
+                        let score =
+                            (goals * 2.0 + assists * 1.5 + avg_rating * 3.0 + potential / 20.0)
+                                * (0.5 + league_rep * 0.5);
 
                         if score > best_score {
                             best_score = score;

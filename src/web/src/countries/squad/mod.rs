@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -74,18 +74,30 @@ pub async fn country_squad_action(
     let country_id = indexes
         .slug_indexes
         .get_country_by_slug(&route_params.country_slug)
-        .ok_or_else(|| ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug)))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug))
+        })?;
 
     let country: &Country = simulator_data
         .continents
         .iter()
         .flat_map(|c| &c.countries)
         .find(|country| country.id == country_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Country with ID {} not found in continents", country_id)))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "Country with ID {} not found in continents",
+                country_id
+            ))
+        })?;
 
     let continent = simulator_data
         .continent(country.continent_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Continent with ID {} not found", country.continent_id)))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "Continent with ID {} not found",
+                country.continent_id
+            ))
+        })?;
 
     let now = simulator_data.date.date();
 
@@ -112,7 +124,10 @@ pub async fn country_squad_action(
                     .player_with_team(squad_player.player_id)
                     .map(|(_, t)| {
                         let hc = t.staffs.head_coach();
-                        (hc.staff_attributes.knowledge.judging_player_potential, hc.id)
+                        (
+                            hc.staff_attributes.knowledge.judging_player_potential,
+                            hc.id,
+                        )
                     })
                     .unwrap_or((10, 0));
 
@@ -127,9 +142,7 @@ pub async fn country_squad_action(
                     age: DateUtils::age(player.birth_date, now),
                     current_ability: get_current_ability_stars(player),
                     potential_ability: get_potential_ability_stars_by_staff(
-                        player,
-                        judging,
-                        coach_id,
+                        player, judging, coach_id,
                     ),
                     conditions: get_conditions(player),
                     international_apps: player.player_attributes.international_apps,
@@ -168,8 +181,17 @@ pub async fn country_squad_action(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let current_path = format!("/{}/countries/{}", route_params.lang, route_params.country_slug);
-    let cl: Vec<(&str, &str)> = country.leagues.leagues.iter().filter(|l| !l.friendly).map(|l| (l.name.as_str(), l.slug.as_str())).collect();
+    let current_path = format!(
+        "/{}/countries/{}",
+        route_params.lang, route_params.country_slug
+    );
+    let cl: Vec<(&str, &str)> = country
+        .leagues
+        .leagues
+        .iter()
+        .filter(|l| !l.friendly)
+        .map(|l| (l.name.as_str(), l.slug.as_str()))
+        .collect();
 
     Ok(CountrySquadTemplate {
         css_version: CSS_VERSION,
@@ -183,7 +205,13 @@ pub async fn country_squad_action(
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {
-            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: &country.name, country_slug: &route_params.country_slug };
+            let mp = views::MenuParams {
+                i18n: &i18n,
+                lang: &route_params.lang,
+                current_path: &current_path,
+                country_name: &country.name,
+                country_slug: &route_params.country_slug,
+            };
             views::country_menu(&mp, &cl)
         },
         lang: route_params.lang,
@@ -202,7 +230,11 @@ fn get_current_ability_stars(player: &core::Player) -> u8 {
     (5.0f32 * ((player.player_attributes.current_ability as f32) / 200.0)).round() as u8
 }
 
-fn get_potential_ability_stars_by_staff(player: &core::Player, staff_judging: u8, staff_id: u32) -> u8 {
+fn get_potential_ability_stars_by_staff(
+    player: &core::Player,
+    staff_judging: u8,
+    staff_id: u32,
+) -> u8 {
     let raw_stars = 5.0 * (player.player_attributes.potential_ability as f32 / 200.0);
     let accuracy = (staff_judging as f32 / 20.0).clamp(0.0, 1.0);
     let noise_scale = (1.0 - accuracy) * 1.5;

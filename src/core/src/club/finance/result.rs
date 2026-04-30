@@ -1,7 +1,7 @@
+use crate::ReputationLevel;
 use crate::club::finance::balance::DistressLevel;
 use crate::club::{ClubSponsorshipContract, SponsorPerformance, SponsorRenewalContext};
 use crate::simulator::SimulatorData;
-use crate::ReputationLevel;
 use log::debug;
 
 pub struct ClubFinanceResult {
@@ -99,15 +99,17 @@ impl ClubFinanceResult {
                 })
                 .unwrap_or(SponsorPerformance::MidTable);
 
-            let renewal_ctx =
-                SponsorRenewalContext::new(reputation, market_strength, performance);
+            let renewal_ctx = SponsorRenewalContext::new(reputation, market_strength, performance);
             let club = match data.club_mut(self.club_id) {
                 Some(c) => c,
                 None => return,
             };
             for _ in 0..self.expired_sponsorships {
                 if let Some(contract) = renewal_ctx.generate(date) {
-                    club.finance.sponsorship.sponsorship_contracts.push(contract);
+                    club.finance
+                        .sponsorship
+                        .sponsorship_contracts
+                        .push(contract);
                 }
             }
 

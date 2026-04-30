@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -55,26 +55,27 @@ impl StateProcessingHandler for MidfielderShootingState {
         // the forward Shooting pattern + the pass-reason convention).
         // Falls back to distance bucket only when the transition came
         // from a path that didn't tag.
-        let reason = ctx.player.pending_shot_reason
-            .unwrap_or_else(|| {
-                if distance_to_goal <= 30.0 {
-                    "MID_SHOOTING_CLOSE"
-                } else if distance_to_goal <= 60.0 {
-                    "MID_SHOOTING_MEDIUM"
-                } else {
-                    "MID_SHOOTING_LONG"
-                }
-            });
+        let reason = ctx.player.pending_shot_reason.unwrap_or_else(|| {
+            if distance_to_goal <= 30.0 {
+                "MID_SHOOTING_CLOSE"
+            } else if distance_to_goal <= 60.0 {
+                "MID_SHOOTING_MEDIUM"
+            } else {
+                "MID_SHOOTING_LONG"
+            }
+        });
 
-        Some(StateChangeResult::with_midfielder_state_and_event(MidfielderState::Standing, Event::PlayerEvent(PlayerEvent::Shoot(
-            ShootingEventContext::new()
-                .with_player_id(ctx.player.id)
-                .with_target(ctx.player().shooting_direction())
-                .with_reason(reason)
-                .build(ctx)
-        ))))
+        Some(StateChangeResult::with_midfielder_state_and_event(
+            MidfielderState::Standing,
+            Event::PlayerEvent(PlayerEvent::Shoot(
+                ShootingEventContext::new()
+                    .with_player_id(ctx.player.id)
+                    .with_target(ctx.player().shooting_direction())
+                    .with_reason(reason)
+                    .build(ctx),
+            )),
+        ))
     }
-
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Midfielder remains stationary while taking the shot

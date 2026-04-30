@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -34,11 +34,10 @@ impl StateProcessingHandler for ForwardFinishingState {
                     .with_player_id(ctx.player.id)
                     .with_target(shooting_direction)
                     .with_reason("FWD_FINISHING")
-                    .build(ctx)
+                    .build(ctx),
             )),
         ))
     }
-
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

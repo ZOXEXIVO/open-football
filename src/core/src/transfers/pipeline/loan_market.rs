@@ -2,12 +2,12 @@ use chrono::NaiveDate;
 use log::debug;
 
 use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::ScoutingRegion;
 use crate::transfers::market::{TransferListing, TransferListingStatus, TransferListingType};
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::{LoanOutStatus, TransferRequest, TransferRequestStatus};
 use crate::transfers::window::PlayerValuationCalculator;
-use crate::transfers::ScoutingRegion;
 use crate::utils::FormattingUtils;
 use crate::{
     ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
@@ -112,19 +112,24 @@ impl PipelineProcessor {
 
             // Determine if club should scan — philosophy overrides reputation defaults.
             // LoanFocused clubs always scan; SignToCompete clubs almost never loan.
-            let should_scan = has_critical_shortage || match &club.philosophy {
-                ClubPhilosophy::LoanFocused => true,
-                ClubPhilosophy::SignToCompete => {
-                    // Only loan as emergency cover in January
-                    is_january && club.finance.balance.balance < 0
-                }
-                _ => match rep_level {
-                    ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur => true,
-                    ReputationLevel::National => is_january || club.finance.balance.balance < 0,
-                    ReputationLevel::Continental => is_january && club.finance.balance.balance < 0,
-                    ReputationLevel::Elite => false,
-                },
-            };
+            let should_scan = has_critical_shortage
+                || match &club.philosophy {
+                    ClubPhilosophy::LoanFocused => true,
+                    ClubPhilosophy::SignToCompete => {
+                        // Only loan as emergency cover in January
+                        is_january && club.finance.balance.balance < 0
+                    }
+                    _ => match rep_level {
+                        ReputationLevel::Regional
+                        | ReputationLevel::Local
+                        | ReputationLevel::Amateur => true,
+                        ReputationLevel::National => is_january || club.finance.balance.balance < 0,
+                        ReputationLevel::Continental => {
+                            is_january && club.finance.balance.balance < 0
+                        }
+                        ReputationLevel::Elite => false,
+                    },
+                };
 
             if !should_scan {
                 continue;
@@ -182,8 +187,12 @@ impl PipelineProcessor {
                 (PlayerFieldPositionGroup::Defender, 8),
                 (PlayerFieldPositionGroup::Midfielder, 8),
                 (PlayerFieldPositionGroup::Forward, 6),
-            ].iter().map(|&(group, max)| {
-                let players_at_pos: Vec<u8> = team.players.iter()
+            ]
+            .iter()
+            .map(|&(group, max)| {
+                let players_at_pos: Vec<u8> = team
+                    .players
+                    .iter()
                     .filter(|p| p.position().position_group() == group)
                     .map(|p| p.player_attributes.current_ability)
                     .collect();
@@ -193,7 +202,8 @@ impl PipelineProcessor {
                     max,
                     best_ability: players_at_pos.iter().copied().max().unwrap_or(0),
                 }
-            }).collect();
+            })
+            .collect();
 
             let should_skip_loan = |group: PlayerFieldPositionGroup, loan_ability: u8| -> bool {
                 if let Some(depth) = position_depth.iter().find(|d| d.group == group) {
@@ -260,7 +270,10 @@ impl PipelineProcessor {
                     })
                     .max_by_key(|l| l.ability)
                 {
-                    let reason = format!("Loan signing — {}", Self::transfer_need_reason_text(&request.reason));
+                    let reason = format!(
+                        "Loan signing — {}",
+                        Self::transfer_need_reason_text(&request.reason)
+                    );
                     actions.push(LoanScanAction {
                         club_id: club.id,
                         player_id: best.player_id,
@@ -358,7 +371,8 @@ impl PipelineProcessor {
             let mut clauses = Vec::new();
 
             // Add appearance fee clause for high-reputation selling clubs
-            let selling_rep_level = Self::get_club_reputation_level(country, action.selling_club_id);
+            let selling_rep_level =
+                Self::get_club_reputation_level(country, action.selling_club_id);
             match selling_rep_level {
                 ReputationLevel::Elite => {
                     clauses.push(TransferClause::AppearanceFee(
@@ -404,7 +418,11 @@ impl PipelineProcessor {
                 p_ambition,
             ) {
                 // Resolve player and club names
-                let (p_name, sc_name) = Self::resolve_player_and_club_name(country, action.player_id, action.selling_club_id);
+                let (p_name, sc_name) = Self::resolve_player_and_club_name(
+                    country,
+                    action.player_id,
+                    action.selling_club_id,
+                );
 
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                     negotiation.is_loan = true;
@@ -439,10 +457,7 @@ impl PipelineProcessor {
 
         // The scanning country's own region — used to block loans from
         // clearly more prestigious regions (Paraguay can't loan from England).
-        let club_region = ScoutingRegion::from_country(
-            country.continent_id,
-            &country.code,
-        );
+        let club_region = ScoutingRegion::from_country(country.continent_id, &country.code);
         let club_region_prestige = club_region.league_prestige();
 
         // Collect loan-listed foreign players
@@ -455,10 +470,7 @@ impl PipelineProcessor {
                 if !p.is_loan_listed || p.country_reputation > country_rep {
                     return false;
                 }
-                let player_region = ScoutingRegion::from_country(
-                    p.continent_id,
-                    &p.country_code,
-                );
+                let player_region = ScoutingRegion::from_country(p.continent_id, &p.country_code);
                 // Block cross-region loans where the player's home region is
                 // significantly more prestigious. Real players don't loan down
                 // into a clearly smaller football ecosystem for a bit-part role.
@@ -497,9 +509,7 @@ impl PipelineProcessor {
             // Local/Amateur don't have the scouting reach for foreign markets.
             let should_scan_foreign = match rep_level {
                 ReputationLevel::Elite => false,
-                ReputationLevel::Continental => {
-                    is_january && club.finance.balance.balance < 0
-                }
+                ReputationLevel::Continental => is_january && club.finance.balance.balance < 0,
                 ReputationLevel::National | ReputationLevel::Regional => true,
                 _ => false, // Local/Amateur
             };
@@ -604,12 +614,8 @@ impl PipelineProcessor {
                     })
                     .max_by_key(|p| p.skill_ability)
                 {
-                    let loan_fee = FormattingUtils::round_fee(
-                        best.estimated_value * 0.1 * 0.8,
-                    );
-                    let reason = format!(
-                        "Loan signing",
-                    );
+                    let loan_fee = FormattingUtils::round_fee(best.estimated_value * 0.1 * 0.8);
+                    let reason = format!("Loan signing",);
                     actions.push(ForeignLoanAction {
                         club_id: club.id,
                         player: PlayerSummary {
@@ -742,12 +748,7 @@ impl PipelineProcessor {
                         continue;
                     }
 
-                    let team_id = club
-                        .teams
-                        .teams
-                        .first()
-                        .map(|t| t.id)
-                        .unwrap_or(0);
+                    let team_id = club.teams.teams.first().map(|t| t.id).unwrap_or(0);
 
                     let asking_price = if candidate.loan_fee > 0.0 {
                         CurrencyValue {
@@ -758,13 +759,14 @@ impl PipelineProcessor {
                         // Loan fee is ~10% of player value, not full value
                         let (seller_league_rep, seller_club_rep) =
                             PlayerValuationCalculator::seller_context(country, club);
-                        let full_value = PlayerValuationCalculator::calculate_value_with_price_level(
-                            player,
-                            date,
-                            price_level,
-                            seller_league_rep,
-                            seller_club_rep,
-                        );
+                        let full_value =
+                            PlayerValuationCalculator::calculate_value_with_price_level(
+                                player,
+                                date,
+                                price_level,
+                                seller_league_rep,
+                                seller_club_rep,
+                            );
                         CurrencyValue {
                             amount: FormattingUtils::round_fee(full_value.amount * 0.10),
                             currency: full_value.currency,
@@ -800,11 +802,8 @@ impl PipelineProcessor {
                 }
 
                 for team in &mut club.teams.teams {
-                    if let Some(player) = team
-                        .players
-                        .players
-                        .iter_mut()
-                        .find(|p| p.id == player_id)
+                    if let Some(player) =
+                        team.players.players.iter_mut().find(|p| p.id == player_id)
                     {
                         if !player.statuses.get().contains(&PlayerStatusType::Loa) {
                             player.statuses.add(date, PlayerStatusType::Loa);

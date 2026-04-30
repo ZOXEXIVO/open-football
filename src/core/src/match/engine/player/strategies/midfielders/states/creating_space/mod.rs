@@ -1,10 +1,10 @@
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
-use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
-};
 use crate::TacticalStyle;
+use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
+};
 use nalgebra::Vector3;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 120.0;
@@ -64,7 +64,6 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Use consistent target: scan every 15 ticks, hold direction otherwise
         let target_position = if ctx.in_state_time % 15 == 0 {
@@ -82,16 +81,14 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
         let movement_pattern = self.get_intelligent_movement_pattern(ctx);
 
         match movement_pattern {
-            MovementPattern::Direct => {
-                Some(
-                    SteeringBehavior::Arrive {
-                        target: target_position,
-                        slowing_distance: 15.0,
-                    }
-                        .calculate(ctx.player)
-                        .velocity,
-                )
-            }
+            MovementPattern::Direct => Some(
+                SteeringBehavior::Arrive {
+                    target: target_position,
+                    slowing_distance: 15.0,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            ),
             MovementPattern::Curved => {
                 let curved_target = self.add_intelligent_curve(ctx, target_position);
                 Some(
@@ -99,8 +96,8 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
                         target: curved_target,
                         slowing_distance: 20.0,
                     }
-                        .calculate(ctx.player)
-                        .velocity,
+                    .calculate(ctx.player)
+                    .velocity,
                 )
             }
             MovementPattern::CheckToReceive => {
@@ -110,8 +107,8 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
                         SteeringBehavior::Seek {
                             target: check_position,
                         }
-                            .calculate(ctx.player)
-                            .velocity,
+                        .calculate(ctx.player)
+                        .velocity,
                     )
                 } else {
                     Some(
@@ -119,8 +116,8 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
                             target: target_position,
                             slowing_distance: 15.0,
                         }
-                            .calculate(ctx.player)
-                            .velocity,
+                        .calculate(ctx.player)
+                        .velocity,
                     )
                 }
             }
@@ -131,8 +128,8 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
                         target: opposite_target,
                         slowing_distance: 15.0,
                     }
-                        .calculate(ctx.player)
-                        .velocity,
+                    .calculate(ctx.player)
+                    .velocity,
                 )
             }
         }
@@ -185,22 +182,26 @@ impl MidfielderCreatingSpaceState {
         let scan_center = Vector3::new(ball_pos.x, opposite_y, 0.0);
         let scan_radius = 150.0; // Covers the scan area
 
-        let nearby_opponents: Vec<_> = ctx.players().opponents().all()
+        let nearby_opponents: Vec<_> = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|o| (o.position - scan_center).magnitude() < scan_radius)
             .map(|o| (o.position, o.velocity(ctx)))
             .collect();
 
-        let nearby_teammates: Vec<_> = ctx.players().teammates().all()
-            .filter(|t| t.id != ctx.player.id && (t.position - scan_center).magnitude() < scan_radius)
+        let nearby_teammates: Vec<_> = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| {
+                t.id != ctx.player.id && (t.position - scan_center).magnitude() < scan_radius
+            })
             .map(|t| t.position)
             .collect();
 
         // Find the freest zone on that side
-        let mut best_position = Vector3::new(
-            ball_pos.x,
-            opposite_y,
-            0.0,
-        );
+        let mut best_position = Vector3::new(ball_pos.x, opposite_y, 0.0);
 
         let mut min_congestion = f32::MAX;
 
@@ -264,7 +265,11 @@ impl MidfielderCreatingSpaceState {
 
     /// Calculate dynamic congestion considering player movements
     #[allow(dead_code)]
-    fn calculate_dynamic_congestion(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
+    fn calculate_dynamic_congestion(
+        &self,
+        ctx: &StateProcessingContext,
+        position: Vector3<f32>,
+    ) -> f32 {
         let mut congestion = 0.0;
 
         // Check opponents
@@ -322,11 +327,17 @@ impl MidfielderCreatingSpaceState {
     }
 
     /// Calculate intelligent curve to lose markers
-    fn add_intelligent_curve(&self, ctx: &StateProcessingContext, target: Vector3<f32>) -> Vector3<f32> {
+    fn add_intelligent_curve(
+        &self,
+        ctx: &StateProcessingContext,
+        target: Vector3<f32>,
+    ) -> Vector3<f32> {
         let player_pos = ctx.player.position;
 
         // Find nearest opponent using pre-computed distances
-        if let Some((nearest_id, _)) = ctx.tick_context.grid
+        if let Some((nearest_id, _)) = ctx
+            .tick_context
+            .grid
             .opponents(ctx.player.id, 50.0)
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         {
@@ -386,7 +397,11 @@ impl MidfielderCreatingSpaceState {
 
     /// Calculate progression value for a position
     #[allow(dead_code)]
-    fn calculate_progression_value(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
+    fn calculate_progression_value(
+        &self,
+        ctx: &StateProcessingContext,
+        position: Vector3<f32>,
+    ) -> f32 {
         let goal_pos = ctx.player().opponent_goal_position();
         let current_to_goal = (ctx.player.position - goal_pos).magnitude();
         let test_to_goal = (position - goal_pos).magnitude();
@@ -400,18 +415,27 @@ impl MidfielderCreatingSpaceState {
 
     /// Calculate passing angle value for a position
     #[allow(dead_code)]
-    fn calculate_passing_angle_value(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
+    fn calculate_passing_angle_value(
+        &self,
+        ctx: &StateProcessingContext,
+        position: Vector3<f32>,
+    ) -> f32 {
         if let Some(ball_holder) = self.find_ball_holder(ctx) {
             // Check angle to ball holder
             let to_ball_holder = (ball_holder.position - position).normalize();
 
             // Count how many opponents are in the passing lane
-            let opponents_in_lane = ctx.players().opponents().all()
+            let opponents_in_lane = ctx
+                .players()
+                .opponents()
+                .all()
                 .filter(|opp| {
                     let to_opp = opp.position - position;
                     let projection = to_opp.dot(&to_ball_holder);
 
-                    if projection <= 0.0 || projection >= (ball_holder.position - position).magnitude() {
+                    if projection <= 0.0
+                        || projection >= (ball_holder.position - position).magnitude()
+                    {
                         return false;
                     }
 
@@ -433,7 +457,11 @@ impl MidfielderCreatingSpaceState {
     }
 
     /// Apply tactical adjustments based on formation
-    fn apply_tactical_position_adjustment(&self, ctx: &StateProcessingContext, mut position: Vector3<f32>) -> Vector3<f32> {
+    fn apply_tactical_position_adjustment(
+        &self,
+        ctx: &StateProcessingContext,
+        mut position: Vector3<f32>,
+    ) -> Vector3<f32> {
         // Get the appropriate tactics based on player's side
         let player_tactics = match ctx.player.side {
             Some(PlayerSide::Left) => &ctx.context.tactics.left,
@@ -476,7 +504,12 @@ impl MidfielderCreatingSpaceState {
 
     /// Make a third man run (beyond the immediate play)
     #[allow(dead_code)]
-    fn make_third_man_run(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
+    fn make_third_man_run(
+        &self,
+        ctx: &StateProcessingContext,
+        field_width: f32,
+        field_height: f32,
+    ) -> Vector3<f32> {
         // Identify potential passing sequence
         if let Some(ball_holder) = self.find_ball_holder(ctx) {
             // Find likely next pass recipient
@@ -504,7 +537,12 @@ impl MidfielderCreatingSpaceState {
 
     /// Create central overload
     #[allow(dead_code)]
-    fn create_central_overload(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
+    fn create_central_overload(
+        &self,
+        ctx: &StateProcessingContext,
+        field_width: f32,
+        field_height: f32,
+    ) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let field_center_y = field_height / 2.0;
 
@@ -521,7 +559,8 @@ impl MidfielderCreatingSpaceState {
             ball_pos.x + (attacking_direction * depth_offset),
             field_center_y + self.calculate_central_lane_offset(ctx),
             0.0,
-        ).clamp_to_field(field_width, field_height)
+        )
+        .clamp_to_field(field_width, field_height)
     }
 
     /// Check if has created quality space
@@ -529,13 +568,16 @@ impl MidfielderCreatingSpaceState {
         let space_radius = SPACE_CREATION_RADIUS;
 
         // No opponents in immediate vicinity (use pre-computed distances)
-        let opponents_nearby = ctx.tick_context.grid
-            .opponents(ctx.player.id, space_radius).count();
+        let opponents_nearby = ctx
+            .tick_context
+            .grid
+            .opponents(ctx.player.id, space_radius)
+            .count();
 
         // Good distance from ball
         let ball_distance = ctx.ball().distance();
-        let good_distance = ball_distance >= MIN_DISTANCE_FROM_BALL &&
-            ball_distance <= MAX_DISTANCE_FROM_BALL;
+        let good_distance =
+            ball_distance >= MIN_DISTANCE_FROM_BALL && ball_distance <= MAX_DISTANCE_FROM_BALL;
 
         // Clear passing lane
         let has_clear_lane = self.has_clear_receiving_lane(ctx);
@@ -543,8 +585,10 @@ impl MidfielderCreatingSpaceState {
         // Progressive position
         let is_progressive = self.is_progressive_position(ctx, ctx.player.position);
 
-        opponents_nearby == 0 && good_distance && has_clear_lane &&
-            (is_progressive || ctx.in_state_time > 40)
+        opponents_nearby == 0
+            && good_distance
+            && has_clear_lane
+            && (is_progressive || ctx.in_state_time > 40)
     }
 
     /// Check if ready to receive pass
@@ -578,9 +622,9 @@ impl MidfielderCreatingSpaceState {
     /// Check if space creation is valuable
     fn is_space_creation_valuable(&self, ctx: &StateProcessingContext) -> bool {
         // Team has ball and is building attack
-        ctx.team().is_control_ball() &&
-            ctx.ball().distance() < 150.0 &&
-            !self.too_many_players_creating_space(ctx)
+        ctx.team().is_control_ball()
+            && ctx.ball().distance() < 150.0
+            && !self.too_many_players_creating_space(ctx)
     }
 
     /// Helper methods
@@ -597,7 +641,11 @@ impl MidfielderCreatingSpaceState {
         }
     }
 
-    fn add_curve_to_path(&self, ctx: &StateProcessingContext, target: Vector3<f32>) -> Vector3<f32> {
+    fn add_curve_to_path(
+        &self,
+        ctx: &StateProcessingContext,
+        target: Vector3<f32>,
+    ) -> Vector3<f32> {
         let player_pos = ctx.player.position;
         let midpoint = (player_pos + target) * 0.5;
 
@@ -648,9 +696,15 @@ impl MidfielderCreatingSpaceState {
         // Calculate spread
         let positions: Vec<Vector3<f32>> = teammates.iter().map(|t| t.position).collect();
         let min_x = positions.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
-        let max_x = positions.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+        let max_x = positions
+            .iter()
+            .map(|p| p.x)
+            .fold(f32::NEG_INFINITY, f32::max);
         let min_y = positions.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-        let max_y = positions.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+        let max_y = positions
+            .iter()
+            .map(|p| p.y)
+            .fold(f32::NEG_INFINITY, f32::max);
 
         TeamShape {
             width: max_y - min_y,
@@ -662,7 +716,8 @@ impl MidfielderCreatingSpaceState {
     #[allow(dead_code)]
     fn analyze_opponent_shape(&self, ctx: &StateProcessingContext) -> OpponentShape {
         let opponents = ctx.players().opponents().all().collect::<Vec<_>>();
-        let defenders = opponents.iter()
+        let defenders = opponents
+            .iter()
             .filter(|o| o.tactical_positions.is_defender())
             .collect::<Vec<_>>();
 
@@ -670,9 +725,7 @@ impl MidfielderCreatingSpaceState {
             return OpponentShape::default();
         }
 
-        let def_line = defenders.iter()
-            .map(|d| d.position.x)
-            .sum::<f32>() / defenders.len() as f32;
+        let def_line = defenders.iter().map(|d| d.position.x).sum::<f32>() / defenders.len() as f32;
 
         let field_width = ctx.context.field_size.width as f32;
         let high_line = match ctx.player.side {
@@ -690,7 +743,9 @@ impl MidfielderCreatingSpaceState {
 
     #[allow(dead_code)]
     fn is_half_space_occupied(&self, ctx: &StateProcessingContext, y_position: f32) -> bool {
-        ctx.players().teammates().all()
+        ctx.players()
+            .teammates()
+            .all()
             .any(|t| (t.position.y - y_position).abs() < HALF_SPACE_WIDTH)
     }
 
@@ -712,7 +767,8 @@ impl MidfielderCreatingSpaceState {
         let field_height = ctx.context.field_size.height as f32;
 
         // Find gaps in coverage
-        let mut all_positions = defenders.iter()
+        let mut all_positions = defenders
+            .iter()
             .chain(midfielders.iter())
             .map(|p| p.position.y)
             .collect::<Vec<_>>();
@@ -735,7 +791,12 @@ impl MidfielderCreatingSpaceState {
     }
 
     #[allow(dead_code)]
-    fn calculate_progressive_position(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
+    fn calculate_progressive_position(
+        &self,
+        ctx: &StateProcessingContext,
+        field_width: f32,
+        field_height: f32,
+    ) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let attacking_direction = match ctx.player.side {
             Some(PlayerSide::Left) => 1.0,
@@ -747,7 +808,8 @@ impl MidfielderCreatingSpaceState {
             ball_pos.x + (attacking_direction * 40.0),
             ctx.player.position.y,
             0.0,
-        ).clamp_to_field(field_width, field_height)
+        )
+        .clamp_to_field(field_width, field_height)
     }
 
     #[allow(dead_code)]
@@ -761,15 +823,25 @@ impl MidfielderCreatingSpaceState {
     }
 
     #[allow(dead_code)]
-    fn calculate_position_congestion(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
+    fn calculate_position_congestion(
+        &self,
+        ctx: &StateProcessingContext,
+        position: Vector3<f32>,
+    ) -> f32 {
         let mut congestion = 0.0;
 
         // Weight opponents more than teammates
-        let opponents = ctx.players().opponents().all()
+        let opponents = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|o| (o.position - position).magnitude() < 30.0)
             .count();
 
-        let teammates = ctx.players().teammates().all()
+        let teammates = ctx
+            .players()
+            .teammates()
+            .all()
             .filter(|t| (t.position - position).magnitude() < 20.0)
             .count();
 
@@ -779,7 +851,11 @@ impl MidfielderCreatingSpaceState {
         congestion
     }
 
-    fn is_progressive_position(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> bool {
+    fn is_progressive_position(
+        &self,
+        ctx: &StateProcessingContext,
+        position: Vector3<f32>,
+    ) -> bool {
         let current_to_goal = ctx.ball().distance_to_opponent_goal();
         let test_to_goal = (position - ctx.player().opponent_goal_position()).magnitude();
 
@@ -804,12 +880,16 @@ impl MidfielderCreatingSpaceState {
         ball_holder: &MatchPlayerLite,
     ) -> Option<MatchPlayerLite> {
         // Simple prediction based on positioning
-        ctx.players().teammates().all()
+        ctx.players()
+            .teammates()
+            .all()
             .filter(|t| t.id != ball_holder.id && t.id != ctx.player.id)
             .min_by(|a, b| {
                 let dist_a = (a.position - ball_holder.position).magnitude();
                 let dist_b = (b.position - ball_holder.position).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+                dist_a
+                    .partial_cmp(&dist_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
     }
 
@@ -826,7 +906,10 @@ impl MidfielderCreatingSpaceState {
     #[allow(dead_code)]
     fn calculate_depth_variation(&self, ctx: &StateProcessingContext) -> f32 {
         // Vary depth based on other midfielders
-        let other_mids = ctx.players().teammates().all()
+        let other_mids = ctx
+            .players()
+            .teammates()
+            .all()
             .filter(|t| t.tactical_positions.is_midfielder() && t.id != ctx.player.id)
             .count();
 
@@ -854,7 +937,8 @@ impl MidfielderCreatingSpaceState {
             let distance = (ctx.player.position - ball_holder.position).magnitude();
 
             // Check for opponents in passing lane using pre-computed distances from ball holder
-            !ctx.tick_context.grid
+            !ctx.tick_context
+                .grid
                 .opponents(ball_holder.id, distance)
                 .any(|(opp_id, _)| {
                     let Some(opp) = ctx.context.players.by_id(opp_id) else {
@@ -879,12 +963,15 @@ impl MidfielderCreatingSpaceState {
 
     fn too_many_players_creating_space(&self, ctx: &StateProcessingContext) -> bool {
         // Avoid having too many players in space creation mode
-        let creating_space_count = ctx.players().teammates().all()
+        let creating_space_count = ctx
+            .players()
+            .teammates()
+            .all()
             .filter(|t| {
                 let distance = ctx.ball().distance();
-                distance > MIN_DISTANCE_FROM_BALL &&
-                    distance < MAX_DISTANCE_FROM_BALL &&
-                    !t.has_ball(ctx)
+                distance > MIN_DISTANCE_FROM_BALL
+                    && distance < MAX_DISTANCE_FROM_BALL
+                    && !t.has_ball(ctx)
             })
             .count();
 
@@ -894,7 +981,10 @@ impl MidfielderCreatingSpaceState {
     #[allow(dead_code)]
     fn is_opponent_compact_central(&self, ctx: &StateProcessingContext) -> bool {
         let field_height = ctx.context.field_size.height as f32;
-        let central_opponents = ctx.players().opponents().all()
+        let central_opponents = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|o| (o.position.y - field_height / 2.0).abs() < field_height * 0.3)
             .count();
 
@@ -908,8 +998,14 @@ impl MidfielderCreatingSpaceState {
             return false;
         }
 
-        let min_y = opponents.iter().map(|o| o.position.y).fold(f32::INFINITY, f32::min);
-        let max_y = opponents.iter().map(|o| o.position.y).fold(f32::NEG_INFINITY, f32::max);
+        let min_y = opponents
+            .iter()
+            .map(|o| o.position.y)
+            .fold(f32::INFINITY, f32::min);
+        let max_y = opponents
+            .iter()
+            .map(|o| o.position.y)
+            .fold(f32::NEG_INFINITY, f32::max);
 
         (max_y - min_y) < ctx.context.field_size.height as f32 * 0.5
     }

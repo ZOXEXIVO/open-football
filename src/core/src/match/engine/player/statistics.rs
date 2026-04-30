@@ -36,13 +36,15 @@ impl MatchPlayerStatistics {
     }
 
     pub fn goals_count(&self) -> u16 {
-        self.items.iter()
+        self.items
+            .iter()
             .filter(|i| i.stat_type == MatchStatisticType::Goal && !i.is_auto_goal)
             .count() as u16
     }
 
     pub fn assists_count(&self) -> u16 {
-        self.items.iter()
+        self.items
+            .iter()
             .filter(|i| i.stat_type == MatchStatisticType::Assist)
             .count() as u16
     }
@@ -88,13 +90,15 @@ impl MatchPlayerStatistics {
     }
 
     pub fn yellow_cards_count(&self) -> u16 {
-        self.items.iter()
+        self.items
+            .iter()
             .filter(|i| i.stat_type == MatchStatisticType::YellowCard)
             .count() as u16
     }
 
     pub fn red_cards_count(&self) -> u16 {
-        self.items.iter()
+        self.items
+            .iter()
             .filter(|i| i.stat_type == MatchStatisticType::RedCard)
             .count() as u16
     }

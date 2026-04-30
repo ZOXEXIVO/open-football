@@ -5,7 +5,7 @@ use crate::league::Season;
 use crate::shared::FullName;
 use crate::{
     MatchTacticType, PersonAttributes, PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition,
-    PlayerPositions, PlayerPositionType, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
+    PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
     Tactics,
 };
 use chrono::NaiveDate;
@@ -73,20 +73,18 @@ fn make_player_with_history(
     hist_stats.goals = 8;
     hist_stats.average_rating = 7.4;
 
-    let history = PlayerStatisticsHistory::from_items(vec![
-        PlayerStatisticsHistoryItem {
-            season: last_season,
-            team_name: "Test Club".to_string(),
-            team_slug: "test-club".to_string(),
-            team_reputation: 5_000,
-            league_name: "Test League".to_string(),
-            league_slug: "test-league".to_string(),
-            is_loan: false,
-            transfer_fee: None,
-            statistics: hist_stats,
-            seq_id: 0,
-        },
-    ]);
+    let history = PlayerStatisticsHistory::from_items(vec![PlayerStatisticsHistoryItem {
+        season: last_season,
+        team_name: "Test Club".to_string(),
+        team_slug: "test-club".to_string(),
+        team_reputation: 5_000,
+        league_name: "Test League".to_string(),
+        league_slug: "test-league".to_string(),
+        is_loan: false,
+        transfer_fee: None,
+        statistics: hist_stats,
+        seq_id: 0,
+    }]);
 
     PlayerBuilder::new()
         .id(id)
@@ -229,7 +227,10 @@ fn build_candidate_accepts_player_with_low_current_apps_but_strong_history() {
     let player = make_player_with_history(1, 1, 32, 130);
     let date = NaiveDate::from_ymd_opt(2026, 9, 4).unwrap();
     let c = NationalTeam::build_candidate(&player, 1, 1, 5_000, 700, date);
-    assert!(c.is_some(), "player with strong prev-season history must qualify");
+    assert!(
+        c.is_some(),
+        "player with strong prev-season history must qualify"
+    );
     let c = c.unwrap();
     assert_eq!(c.last_season_apps, 32);
     assert_eq!(c.played, 1);
@@ -249,16 +250,32 @@ fn select_balanced_squad_respects_positional_quotas() {
     // Build a healthy candidate pool.
     let mut candidates: Vec<CallUpCandidate> = Vec::new();
     for i in 0..5 {
-        candidates.push(make_candidate(100 + i, 140, PlayerFieldPositionGroup::Goalkeeper));
+        candidates.push(make_candidate(
+            100 + i,
+            140,
+            PlayerFieldPositionGroup::Goalkeeper,
+        ));
     }
     for i in 0..10 {
-        candidates.push(make_candidate(200 + i, 145, PlayerFieldPositionGroup::Defender));
+        candidates.push(make_candidate(
+            200 + i,
+            145,
+            PlayerFieldPositionGroup::Defender,
+        ));
     }
     for i in 0..10 {
-        candidates.push(make_candidate(300 + i, 150, PlayerFieldPositionGroup::Midfielder));
+        candidates.push(make_candidate(
+            300 + i,
+            150,
+            PlayerFieldPositionGroup::Midfielder,
+        ));
     }
     for i in 0..10 {
-        candidates.push(make_candidate(400 + i, 150, PlayerFieldPositionGroup::Forward));
+        candidates.push(make_candidate(
+            400 + i,
+            150,
+            PlayerFieldPositionGroup::Forward,
+        ));
     }
 
     let tactics = Tactics::new(MatchTacticType::T442);
@@ -282,16 +299,32 @@ fn select_balanced_squad_respects_positional_quotas() {
 fn select_balanced_squad_assigns_reasons_to_every_pick() {
     let mut candidates: Vec<CallUpCandidate> = Vec::new();
     for i in 0..4 {
-        candidates.push(make_candidate(100 + i, 140, PlayerFieldPositionGroup::Goalkeeper));
+        candidates.push(make_candidate(
+            100 + i,
+            140,
+            PlayerFieldPositionGroup::Goalkeeper,
+        ));
     }
     for i in 0..10 {
-        candidates.push(make_candidate(200 + i, 145, PlayerFieldPositionGroup::Defender));
+        candidates.push(make_candidate(
+            200 + i,
+            145,
+            PlayerFieldPositionGroup::Defender,
+        ));
     }
     for i in 0..10 {
-        candidates.push(make_candidate(300 + i, 150, PlayerFieldPositionGroup::Midfielder));
+        candidates.push(make_candidate(
+            300 + i,
+            150,
+            PlayerFieldPositionGroup::Midfielder,
+        ));
     }
     for i in 0..10 {
-        candidates.push(make_candidate(400 + i, 150, PlayerFieldPositionGroup::Forward));
+        candidates.push(make_candidate(
+            400 + i,
+            150,
+            PlayerFieldPositionGroup::Forward,
+        ));
     }
 
     let tactics = Tactics::new(MatchTacticType::T442);
@@ -314,7 +347,11 @@ fn select_balanced_squad_assigns_reasons_to_every_pick() {
     .collect();
 
     for (_, primary, _) in &selected {
-        assert!(known_reasons.contains(primary), "primary reason {:?} not in expected set", primary);
+        assert!(
+            known_reasons.contains(primary),
+            "primary reason {:?} not in expected set",
+            primary
+        );
     }
 }
 
@@ -335,23 +372,42 @@ fn call_up_squad_clears_generated_squad_on_subsequent_call() {
     // First call-up: no real candidates → entirely synthetic depth.
     let date = NaiveDate::from_ymd_opt(2026, 9, 4).unwrap();
     nt.call_up_squad(Vec::new(), date, 1, &[(2, "Other".to_string())]);
-    assert!(!nt.generated_squad.is_empty(), "first call-up should have generated synthetic players");
+    assert!(
+        !nt.generated_squad.is_empty(),
+        "first call-up should have generated synthetic players"
+    );
     let initial_synthetic_count = nt.generated_squad.len();
 
     // Second call-up with enough real candidates — the synthetic
     // pool must be cleared, not accumulated.
     let mut candidates: Vec<CallUpCandidate> = Vec::new();
     for i in 0..3 {
-        candidates.push(make_candidate(100 + i, 150, PlayerFieldPositionGroup::Goalkeeper));
+        candidates.push(make_candidate(
+            100 + i,
+            150,
+            PlayerFieldPositionGroup::Goalkeeper,
+        ));
     }
     for i in 0..8 {
-        candidates.push(make_candidate(200 + i, 150, PlayerFieldPositionGroup::Defender));
+        candidates.push(make_candidate(
+            200 + i,
+            150,
+            PlayerFieldPositionGroup::Defender,
+        ));
     }
     for i in 0..8 {
-        candidates.push(make_candidate(300 + i, 150, PlayerFieldPositionGroup::Midfielder));
+        candidates.push(make_candidate(
+            300 + i,
+            150,
+            PlayerFieldPositionGroup::Midfielder,
+        ));
     }
     for i in 0..6 {
-        candidates.push(make_candidate(400 + i, 150, PlayerFieldPositionGroup::Forward));
+        candidates.push(make_candidate(
+            400 + i,
+            150,
+            PlayerFieldPositionGroup::Forward,
+        ));
     }
 
     let next_break = NaiveDate::from_ymd_opt(2026, 10, 9).unwrap();
@@ -399,7 +455,9 @@ fn call_up_squad_preserves_completed_fixtures_when_reselecting() {
     nt.call_up_squad(Vec::new(), date, 1, &[(2, "Other".to_string())]);
 
     assert!(
-        nt.schedule.iter().any(|f| f.result.is_some() && f.opponent_country_name == "Old Opp"),
+        nt.schedule
+            .iter()
+            .any(|f| f.result.is_some() && f.opponent_country_name == "Old Opp"),
         "previous completed fixture must be preserved across a re-call-up"
     );
 }
@@ -437,16 +495,32 @@ fn weak_country_still_gets_squad_but_no_friendlies() {
 
     let mut candidates: Vec<CallUpCandidate> = Vec::new();
     for i in 0..3 {
-        candidates.push(make_candidate(100 + i, 100, PlayerFieldPositionGroup::Goalkeeper));
+        candidates.push(make_candidate(
+            100 + i,
+            100,
+            PlayerFieldPositionGroup::Goalkeeper,
+        ));
     }
     for i in 0..8 {
-        candidates.push(make_candidate(200 + i, 110, PlayerFieldPositionGroup::Defender));
+        candidates.push(make_candidate(
+            200 + i,
+            110,
+            PlayerFieldPositionGroup::Defender,
+        ));
     }
     for i in 0..8 {
-        candidates.push(make_candidate(300 + i, 110, PlayerFieldPositionGroup::Midfielder));
+        candidates.push(make_candidate(
+            300 + i,
+            110,
+            PlayerFieldPositionGroup::Midfielder,
+        ));
     }
     for i in 0..6 {
-        candidates.push(make_candidate(400 + i, 110, PlayerFieldPositionGroup::Forward));
+        candidates.push(make_candidate(
+            400 + i,
+            110,
+            PlayerFieldPositionGroup::Forward,
+        ));
     }
 
     let date = NaiveDate::from_ymd_opt(2026, 9, 4).unwrap();
@@ -539,9 +613,19 @@ fn stale_pending_friendlies_are_dropped_on_recall() {
     let date = NaiveDate::from_ymd_opt(2026, 9, 4).unwrap();
     nt.call_up_squad(Vec::new(), date, 1, &[(2, "Other".to_string())]);
 
-    let names: Vec<_> = nt.schedule.iter().map(|f| f.opponent_country_name.as_str()).collect();
-    assert!(names.contains(&"Hist"), "completed past fixture must be kept");
-    assert!(!names.contains(&"Stale"), "pending past fixture must be dropped");
+    let names: Vec<_> = nt
+        .schedule
+        .iter()
+        .map(|f| f.opponent_country_name.as_str())
+        .collect();
+    assert!(
+        names.contains(&"Hist"),
+        "completed past fixture must be kept"
+    );
+    assert!(
+        !names.contains(&"Stale"),
+        "pending past fixture must be dropped"
+    );
     assert!(
         !names.contains(&"OldPending"),
         "pending fixture in current break window must be dropped"
@@ -574,13 +658,14 @@ fn squad_picks_returns_real_then_synthetic_with_synthetic_depth_reason() {
 
     // Force-generate one synthetic player using the existing helper.
     let synth_date = NaiveDate::from_ymd_opt(2026, 9, 4).unwrap();
-    nt.generated_squad.push(NationalTeam::generate_synthetic_player(
-        1,
-        synth_date,
-        PlayerPositionType::Goalkeeper,
-        120,
-        0,
-    ));
+    nt.generated_squad
+        .push(NationalTeam::generate_synthetic_player(
+            1,
+            synth_date,
+            PlayerPositionType::Goalkeeper,
+            120,
+            0,
+        ));
 
     let picks = nt.squad_picks();
     assert_eq!(picks.len(), 2);

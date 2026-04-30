@@ -1,8 +1,11 @@
 use crate::r#match::events::Event;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -87,7 +90,11 @@ impl StateProcessingHandler for MidfielderPassingState {
 
         // If no good passing option after waiting, try something else
         // Under heavy pressure, bail out faster to dribble away
-        let bail_time = if self.is_under_heavy_pressure(ctx) { 10 } else { 20 };
+        let bail_time = if self.is_under_heavy_pressure(ctx) {
+            10
+        } else {
+            20
+        };
         if ctx.in_state_time > bail_time {
             let goal_dist = ctx.ball().distance_to_opponent_goal();
             // Shoot bailout ONLY when we're in a real shooting spot
@@ -128,15 +135,16 @@ impl StateProcessingHandler for MidfielderPassingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // If under heavy pressure, shield the ball and create space
         if self.is_under_heavy_pressure(ctx) {
             // Move away from nearest opponent to create passing space
             if let Some(nearest_opponent) = ctx.players().opponents().nearby(15.0).next() {
-                let away_from_opponent = (ctx.player.position - nearest_opponent.position).normalize();
+                let away_from_opponent =
+                    (ctx.player.position - nearest_opponent.position).normalize();
                 // Shield ball by moving perpendicular to goal direction
-                let to_goal = (ctx.player().opponent_goal_position() - ctx.player.position).normalize();
+                let to_goal =
+                    (ctx.player().opponent_goal_position() - ctx.player.position).normalize();
                 let perpendicular = Vector3::new(-to_goal.y, to_goal.x, 0.0);
                 let escape_direction = (away_from_opponent * 0.7 + perpendicular * 0.3).normalize();
                 return Some(escape_direction * 2.5 + ctx.player().separation_velocity());
@@ -151,8 +159,9 @@ impl StateProcessingHandler for MidfielderPassingState {
                         target: self.calculate_better_passing_position(ctx, &nearest_teammate),
                         slowing_distance: 30.0,
                     }
-                        .calculate(ctx.player)
-                        .velocity + ctx.player().separation_velocity(),
+                    .calculate(ctx.player)
+                    .velocity
+                        + ctx.player().separation_velocity(),
                 );
             }
         }
@@ -185,22 +194,27 @@ impl MidfielderPassingState {
         let teammates = ctx.players().teammates();
 
         // Fused filter + max_by — no intermediate Vec allocation.
-        teammates.all()
+        teammates
+            .all()
             .filter(|teammate| {
                 let velocity = ctx.tick_context.positions.players.velocity(teammate.id);
                 let is_moving_forward = velocity.magnitude() > 1.0;
-                let is_attacking_player = teammate.tactical_positions.is_forward() ||
-                    teammate.tactical_positions.is_midfielder();
+                let is_attacking_player = teammate.tactical_positions.is_forward()
+                    || teammate.tactical_positions.is_midfielder();
                 let distance = (teammate.position - ctx.player.position).magnitude();
                 let would_break_lines = self.would_pass_break_defensive_lines(ctx, teammate);
 
-                distance < vision_range && is_moving_forward &&
-                    is_attacking_player && would_break_lines
+                distance < vision_range
+                    && is_moving_forward
+                    && is_attacking_player
+                    && would_break_lines
             })
             .max_by(|a, b| {
                 let a_value = self.calculate_breakthrough_value(ctx, a);
                 let b_value = self.calculate_breakthrough_value(ctx, b);
-                a_value.partial_cmp(&b_value).unwrap_or(std::cmp::Ordering::Equal)
+                a_value
+                    .partial_cmp(&b_value)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
     }
 
@@ -253,7 +267,10 @@ impl MidfielderPassingState {
         let pass_distance = (teammate_pos - player_pos).magnitude();
 
         // Count only — no need to materialise a Vec of player refs.
-        let opponents_between = ctx.players().opponents().all()
+        let opponents_between = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|opponent| {
                 let to_opponent = opponent.position - player_pos;
                 let projection_distance = to_opponent.dot(&pass_direction);
@@ -302,7 +319,11 @@ impl MidfielderPassingState {
 
     /// Check for clear passing lanes with improved logic
     #[allow(dead_code)]
-    fn has_clear_passing_lane(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+    fn has_clear_passing_lane(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> bool {
         let player_position = ctx.player.position;
         let teammate_position = teammate.position;
         let passing_direction = (teammate_position - player_position).normalize();
@@ -315,7 +336,10 @@ impl MidfielderPassingState {
         let skill_factor = 0.6 + (pass_skill * 0.2) + (vision_skill * 0.2);
         let lane_width = base_lane_width * skill_factor;
 
-        let intercepting_opponents = ctx.players().opponents().all()
+        let intercepting_opponents = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|opponent| {
                 let to_opponent = opponent.position - player_position;
                 let projection_distance = to_opponent.dot(&passing_direction);
@@ -347,7 +371,11 @@ impl MidfielderPassingState {
         let mut marker_count = 0;
         let mut single_marker_id = 0u32;
         let mut single_marker_dist = 0.0f32;
-        for (opp_id, dist) in ctx.tick_context.grid.opponents(teammate.id, MARKING_DISTANCE) {
+        for (opp_id, dist) in ctx
+            .tick_context
+            .grid
+            .opponents(teammate.id, MARKING_DISTANCE)
+        {
             marker_count += 1;
             single_marker_id = opp_id;
             single_marker_dist = dist;
@@ -369,7 +397,11 @@ impl MidfielderPassingState {
 
     /// Check if teammate is in good position
     #[allow(dead_code)]
-    fn is_in_good_position(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+    fn is_in_good_position(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> bool {
         let is_backward_pass = match ctx.player.side {
             Some(PlayerSide::Left) => teammate.position.x < ctx.player.position.x,
             Some(PlayerSide::Right) => teammate.position.x > ctx.player.position.x,
@@ -388,15 +420,17 @@ impl MidfielderPassingState {
             return under_pressure || has_good_vision;
         }
 
-        let teammate_will_be_pressured = ctx.tick_context.grid
-            .opponents(teammate.id, 15.0)
-            .any(|(opp_id, _dist)| {
-                let opp_pos = ctx.tick_context.positions.players.position(opp_id);
-                let opponent_velocity = ctx.tick_context.positions.players.velocity(opp_id);
-                let future_opponent_pos = opp_pos + opponent_velocity * 10.0;
-                let future_distance = (future_opponent_pos - teammate.position).magnitude();
-                future_distance < 5.0
-            });
+        let teammate_will_be_pressured =
+            ctx.tick_context
+                .grid
+                .opponents(teammate.id, 15.0)
+                .any(|(opp_id, _dist)| {
+                    let opp_pos = ctx.tick_context.positions.players.position(opp_id);
+                    let opponent_velocity = ctx.tick_context.positions.players.velocity(opp_id);
+                    let future_opponent_pos = opp_pos + opponent_velocity * 10.0;
+                    let future_distance = (future_opponent_pos - teammate.position).magnitude();
+                    future_distance < 5.0
+                });
 
         advances_toward_goal && !teammate_will_be_pressured
     }
@@ -497,9 +531,9 @@ impl MidfielderPassingState {
 
     /// Check if should adjust position
     fn should_adjust_position(&self, ctx: &StateProcessingContext) -> bool {
-        self.find_best_pass_option(ctx).is_none() &&
-            self.find_breakthrough_pass_option(ctx).is_none() &&
-            !self.is_under_heavy_pressure(ctx)
+        self.find_best_pass_option(ctx).is_none()
+            && self.find_breakthrough_pass_option(ctx).is_none()
+            && !self.is_under_heavy_pressure(ctx)
     }
 
     /// Calculate better position for passing

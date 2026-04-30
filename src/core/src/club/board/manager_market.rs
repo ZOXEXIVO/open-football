@@ -171,7 +171,13 @@ pub fn target_salary_for_candidate(staff: &Staff, club_rep: u16, today: NaiveDat
     let skill_mult = 0.6 + skill; // 0.6..1.6
 
     let age = DateUtils::age(staff.birth_date, today) as u32;
-    let exp_mult = if age >= 50 { 1.20 } else if age >= 40 { 1.10 } else { 1.0 };
+    let exp_mult = if age >= 50 {
+        1.20
+    } else if age >= 40 {
+        1.10
+    } else {
+        1.0
+    };
 
     ((base as f32) * skill_mult * exp_mult) as u32
 }
@@ -272,10 +278,7 @@ pub fn refresh_shortlists(data: &mut SimulatorData) {
 /// owned staff member ready to be assigned to the team's roster, or
 /// `None` if the shortlist is empty / the candidate has already been
 /// signed by someone else (race during a daily tick).
-pub fn take_top_free_agent(
-    board: &mut ClubBoard,
-    pool: &mut Vec<Staff>,
-) -> Option<(Staff, u32)> {
+pub fn take_top_free_agent(board: &mut ClubBoard, pool: &mut Vec<Staff>) -> Option<(Staff, u32)> {
     while let Some(candidate) = board.manager_shortlist.first().cloned() {
         // Drop this entry up-front — even if we fail to find the staff
         // (signed elsewhere already), the entry was stale either way.
@@ -319,9 +322,7 @@ pub fn build_manager_contract(
     today: NaiveDate,
 ) -> crate::club::staff::contract::StaffClubContract {
     use crate::club::staff::contract::{StaffClubContract, StaffStatus};
-    let expires = today
-        .with_year(today.year() + 3)
-        .unwrap_or(today);
+    let expires = today.with_year(today.year() + 3).unwrap_or(today);
     StaffClubContract::new(salary, expires, StaffPosition::Manager, StaffStatus::Active)
 }
 
@@ -336,11 +337,7 @@ pub fn build_manager_contract(
 /// small clubs whose pool offerings are slim. The cosmetic "external
 /// hire = boost the caretaker's attributes" hack from the previous
 /// implementation is gone; a real signed coach now does that job.
-pub fn execute_appointment(
-    data: &mut SimulatorData,
-    club_id: u32,
-    today: NaiveDate,
-) {
+pub fn execute_appointment(data: &mut SimulatorData, club_id: u32, today: NaiveDate) {
     if club_id == 0 {
         return;
     }
@@ -357,8 +354,9 @@ pub fn execute_appointment(
         };
         club_name = club.name.clone();
         if let Some(main_team) = club.teams.main_mut() {
-            if let Some(caretaker) =
-                main_team.staffs.find_mut_by_position(StaffPosition::CaretakerManager)
+            if let Some(caretaker) = main_team
+                .staffs
+                .find_mut_by_position(StaffPosition::CaretakerManager)
             {
                 if let Some(c) = caretaker.contract.as_mut() {
                     c.position = StaffPosition::Coach;
@@ -423,10 +421,7 @@ pub fn execute_appointment(
             // on a 3-year deal at their existing salary. The board
             // takes the conservative option when no realistic free
             // agent stepped up during the search window.
-            if let Some(staff) = main_team
-                .staffs
-                .find_mut_by_position(StaffPosition::Coach)
-            {
+            if let Some(staff) = main_team.staffs.find_mut_by_position(StaffPosition::Coach) {
                 let salary = staff.contract.as_ref().map(|c| c.salary).unwrap_or(0);
                 let id = staff.id;
                 staff.contract = Some(build_manager_contract(salary, today));
@@ -510,10 +505,7 @@ fn compensation_multiplier(source_world_rep: u16) -> f32 {
 /// Probability the source club refuses to even talk. Reads source-club
 /// confidence and form: clubs whose manager is over-delivering protect
 /// their guy harder.
-fn source_refuses_outright(
-    source_confidence: i32,
-    source_overperforming: bool,
-) -> bool {
+fn source_refuses_outright(source_confidence: i32, source_overperforming: bool) -> bool {
     // Strong confidence + overperforming = ironclad refusal. Otherwise
     // they'll engage and try to extract compensation.
     source_confidence >= 80 && source_overperforming
@@ -556,9 +548,11 @@ pub fn enumerate_employed_candidates(
     for continent in &data.continents {
         for country in &continent.countries {
             for club in &country.clubs {
-                let main_team = match club.teams.iter().find(|t| {
-                    matches!(t.team_type, TeamType::Main)
-                }) {
+                let main_team = match club
+                    .teams
+                    .iter()
+                    .find(|t| matches!(t.team_type, TeamType::Main))
+                {
                     Some(t) => t,
                     None => continue,
                 };
@@ -586,15 +580,10 @@ pub fn enumerate_employed_candidates(
                 else {
                     continue;
                 };
-                let Some(score) = score_employed_candidate(manager, requesting_rep, today)
-                else {
+                let Some(score) = score_employed_candidate(manager, requesting_rep, today) else {
                     continue;
                 };
-                let target_salary = target_salary_for_candidate(
-                    manager,
-                    requesting_rep,
-                    today,
-                );
+                let target_salary = target_salary_for_candidate(manager, requesting_rep, today);
                 out.push(ManagerCandidate {
                     staff_id: manager.id,
                     fit_score: score,
@@ -669,7 +658,9 @@ pub fn initiate_approaches(data: &mut SimulatorData) {
                     matches!(c.source, CandidateSource::Employed { .. })
                         && !already_pursuing.contains(&c.staff_id)
                 });
-                let Some(pick) = pick else { continue; };
+                let Some(pick) = pick else {
+                    continue;
+                };
                 let CandidateSource::Employed { current_club_id } = pick.source else {
                     continue;
                 };
@@ -721,8 +712,7 @@ pub fn tick_approaches(data: &mut SimulatorData) {
     for i in indices {
         // Re-borrow immutably for read-only fields, then mutate after.
         let approach = data.pending_manager_approaches[i].clone();
-        let next: Option<ApproachState> =
-            advance_approach_state(data, &approach, today);
+        let next: Option<ApproachState> = advance_approach_state(data, &approach, today);
         if let Some(next_state) = next {
             data.pending_manager_approaches[i].state = next_state;
             data.pending_manager_approaches[i].last_action = today;
@@ -780,9 +770,11 @@ fn advance_approach_state(
                 let Some(src) = data.club(approach.source_club_id) else {
                     return Some(Rejected);
                 };
-                let Some(main) = src.teams.iter().find(|t| {
-                    matches!(t.team_type, TeamType::Main)
-                }) else {
+                let Some(main) = src
+                    .teams
+                    .iter()
+                    .find(|t| matches!(t.team_type, TeamType::Main))
+                else {
                     return Some(Rejected);
                 };
                 let Some(mgr) = main.staffs.find(approach.staff_id) else {
@@ -868,7 +860,10 @@ fn candidate_accepts_terms(data: &SimulatorData, approach: &ManagerApproach) -> 
     let Some(src) = data.club(approach.source_club_id) else {
         return false;
     };
-    let Some(main) = src.teams.iter().find(|t| matches!(t.team_type, TeamType::Main))
+    let Some(main) = src
+        .teams
+        .iter()
+        .find(|t| matches!(t.team_type, TeamType::Main))
     else {
         return false;
     };
@@ -881,12 +876,15 @@ fn candidate_accepts_terms(data: &SimulatorData, approach: &ManagerApproach) -> 
 
     let req_rep = data
         .club(approach.requesting_club_id)
-        .and_then(|c| c.teams.iter().find(|t| matches!(t.team_type, TeamType::Main)))
+        .and_then(|c| {
+            c.teams
+                .iter()
+                .find(|t| matches!(t.team_type, TeamType::Main))
+        })
         .map(|t| t.reputation.world)
         .unwrap_or(0);
 
-    let salary_uplift =
-        (approach.offered_salary as f32) >= (current_salary as f32) * 1.20;
+    let salary_uplift = (approach.offered_salary as f32) >= (current_salary as f32) * 1.20;
     let prestige_uplift = (req_rep as f32) >= (current_rep as f32) * 1.30;
 
     // Ambitious coaches accept smaller prestige gaps; loyal coaches
@@ -899,11 +897,7 @@ fn candidate_accepts_terms(data: &SimulatorData, approach: &ManagerApproach) -> 
 /// Move the staff member from source to requesting club, install them
 /// as the new manager, clear the requesting club's search state, and
 /// open a fresh manager search on the source club (cascade).
-fn finalize_approach(
-    data: &mut SimulatorData,
-    approach: &ManagerApproach,
-    today: NaiveDate,
-) {
+fn finalize_approach(data: &mut SimulatorData, approach: &ManagerApproach, today: NaiveDate) {
     // Step 1: take the staff out of the source club's main team.
     let mut staff: Option<Staff> = None;
     if let Some(src) = data.club_mut(approach.source_club_id) {
@@ -947,7 +941,8 @@ fn finalize_approach(
         // for them here, log so we'd notice if this ever fires.
         log::warn!(
             "Manager market: lost staff {} mid-finalize for club {}",
-            new_id, approach.requesting_club_id
+            new_id,
+            approach.requesting_club_id
         );
         return;
     }
@@ -981,8 +976,8 @@ fn finalize_approach(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::club::staff::contract::{StaffClubContract, StaffStatus};
     use crate::club::StaffStub;
+    use crate::club::staff::contract::{StaffClubContract, StaffStatus};
 
     fn coach(id: u32, age: u8, today: NaiveDate, skill: u8) -> Staff {
         let mut s = StaffStub::default();
@@ -1028,9 +1023,7 @@ mod tests {
     #[test]
     fn shortlist_returns_top_n_sorted() {
         let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
-        let pool: Vec<Staff> = (1..=10)
-            .map(|i| coach(i, 45, today, i as u8))
-            .collect();
+        let pool: Vec<Staff> = (1..=10).map(|i| coach(i, 45, today, i as u8)).collect();
 
         let shortlist = build_free_agent_shortlist(&pool, 6000, today);
         assert_eq!(shortlist.len(), MAX_SHORTLIST_LEN);

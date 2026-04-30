@@ -6,8 +6,8 @@
 //! a player with `TriesThroughBalls` will bias toward risky passes, one
 //! with `HugsLine` keeps a wider average x-position, etc.
 
+use crate::club::player::position::{PlayerFieldPositionGroup, PlayerPosition};
 use crate::club::player::skills::PlayerSkills;
-use crate::club::player::position::{PlayerPosition, PlayerFieldPositionGroup};
 use crate::utils::FloatUtils;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -134,11 +134,19 @@ pub fn generate_player_traits(
 ) -> Vec<PlayerTrait> {
     // Trait count scales with ability: avg 0.4 traits at CA 40, ~2 at CA 150, up to 4 at CA 190+.
     let trait_count = if current_ability < 50 {
-        if FloatUtils::random(0.0, 1.0) < 0.3 { 1 } else { 0 }
+        if FloatUtils::random(0.0, 1.0) < 0.3 {
+            1
+        } else {
+            0
+        }
     } else if current_ability < 90 {
         1
     } else if current_ability < 140 {
-        if FloatUtils::random(0.0, 1.0) < 0.4 { 2 } else { 1 }
+        if FloatUtils::random(0.0, 1.0) < 0.4 {
+            2
+        } else {
+            1
+        }
     } else if current_ability < 170 {
         2
     } else if current_ability < 190 {

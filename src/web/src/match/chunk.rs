@@ -1,9 +1,9 @@
-use crate::{ApiError, ApiResult, GameAppData};
 use crate::r#match::stores::MatchStore;
+use crate::{ApiError, ApiResult, GameAppData};
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -49,22 +49,18 @@ pub async fn match_chunk_action(
 
     let mut response = (StatusCode::OK, chunk_data).into_response();
 
-    response
-        .headers_mut()
-        .append(
-            "Content-Type",
-            "application/gzip"
-                .parse()
-                .map_err(|e| ApiError::InternalError(format!("Header parse error: {:?}", e)))?,
-        );
-    response
-        .headers_mut()
-        .append(
-            "Content-Encoding",
-            "gzip"
-                .parse()
-                .map_err(|e| ApiError::InternalError(format!("Header parse error: {:?}", e)))?,
-        );
+    response.headers_mut().append(
+        "Content-Type",
+        "application/gzip"
+            .parse()
+            .map_err(|e| ApiError::InternalError(format!("Header parse error: {:?}", e)))?,
+    );
+    response.headers_mut().append(
+        "Content-Encoding",
+        "gzip"
+            .parse()
+            .map_err(|e| ApiError::InternalError(format!("Header parse error: {:?}", e)))?,
+    );
 
     Ok(response)
 }
@@ -89,7 +85,9 @@ pub async fn match_metadata_action(
 
     let metadata = MatchMetadataResponse {
         chunk_count: metadata_json["chunk_count"].as_u64().unwrap_or(1) as usize,
-        chunk_duration_ms: metadata_json["chunk_duration_ms"].as_u64().unwrap_or(300_000),
+        chunk_duration_ms: metadata_json["chunk_duration_ms"]
+            .as_u64()
+            .unwrap_or(300_000),
         total_duration_ms: metadata_json["total_duration_ms"].as_u64().unwrap_or(0),
     };
 

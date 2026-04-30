@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -77,7 +77,10 @@ fn stage_label(stage: &CompetitionStage) -> &'static str {
 
 fn club_display(simulator_data: &core::SimulatorData, club_id: u32) -> (String, String) {
     if let Some(club) = simulator_data.club(club_id) {
-        let slug = club.teams.teams.first()
+        let slug = club
+            .teams
+            .teams
+            .first()
             .map(|t| t.slug.clone())
             .unwrap_or_default();
         (club.name.clone(), slug)
@@ -95,10 +98,14 @@ pub async fn champions_league_get_action(
     let simulator_data = guard.as_ref().unwrap();
 
     // Find European continent's CL data
-    let cl = simulator_data.continents.iter()
+    let cl = simulator_data
+        .continents
+        .iter()
         .find(|c| c.name == "Europe")
         .map(|c| &c.continental_competitions.champions_league)
-        .filter(|cl| !cl.groups.is_empty() || !matches!(cl.current_stage, CompetitionStage::NotStarted));
+        .filter(|cl| {
+            !cl.groups.is_empty() || !matches!(cl.current_stage, CompetitionStage::NotStarted)
+        });
 
     let mut groups = Vec::new();
     let mut knockout_ties = Vec::new();
@@ -110,20 +117,24 @@ pub async fn champions_league_get_action(
         // Build group DTOs
         for (idx, group) in cl.groups.iter().enumerate() {
             let letter = (b'A' + idx as u8) as char;
-            let rows = group.rows.iter().map(|row| {
-                let (name, slug) = club_display(simulator_data, row.team_id);
-                ClGroupRowDto {
-                    club_name: name,
-                    club_slug: slug,
-                    played: row.played,
-                    won: row.won,
-                    drawn: row.drawn,
-                    lost: row.lost,
-                    gf: row.gf,
-                    ga: row.ga,
-                    points: row.points,
-                }
-            }).collect();
+            let rows = group
+                .rows
+                .iter()
+                .map(|row| {
+                    let (name, slug) = club_display(simulator_data, row.team_id);
+                    ClGroupRowDto {
+                        club_name: name,
+                        club_slug: slug,
+                        played: row.played,
+                        won: row.won,
+                        drawn: row.drawn,
+                        lost: row.lost,
+                        gf: row.gf,
+                        ga: row.ga,
+                        points: row.points,
+                    }
+                })
+                .collect();
 
             groups.push(ClGroupDto {
                 name: format!("Group {}", letter),

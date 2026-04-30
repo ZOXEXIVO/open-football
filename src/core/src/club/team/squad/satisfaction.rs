@@ -38,22 +38,26 @@ fn performance_satisfaction(players: &[Player]) -> f32 {
         return 0.5;
     }
 
-    let avg_rating: f32 =
-        experienced.iter().map(|p| p.statistics.average_rating).sum::<f32>()
-            / experienced.len() as f32;
+    let avg_rating: f32 = experienced
+        .iter()
+        .map(|p| p.statistics.average_rating)
+        .sum::<f32>()
+        / experienced.len() as f32;
 
     // Map rating 5.5–7.5 onto 0.0–1.0
     ((avg_rating - 5.5) / 2.0).clamp(0.0, 1.0)
 }
 
 /// Penalises large gaps between best and worst perceived quality.
-fn quality_spread_satisfaction(
-    players: &[Player],
-    state: &CoachDecisionState,
-) -> f32 {
+fn quality_spread_satisfaction(players: &[Player], state: &CoachDecisionState) -> f32 {
     let qualities: Vec<f32> = players
         .iter()
-        .filter_map(|p| state.impressions.get(&p.id).map(|imp| imp.perceived_quality))
+        .filter_map(|p| {
+            state
+                .impressions
+                .get(&p.id)
+                .map(|imp| imp.perceived_quality)
+        })
         .collect();
 
     if qualities.len() < 2 {
@@ -76,7 +80,10 @@ fn position_coverage_satisfaction(players: &[Player]) -> f32 {
         .collect();
 
     let count = |group: PlayerFieldPositionGroup| -> usize {
-        available.iter().filter(|p| p.position().position_group() == group).count()
+        available
+            .iter()
+            .filter(|p| p.position().position_group() == group)
+            .count()
     };
 
     let covered = count(PlayerFieldPositionGroup::Goalkeeper) >= 1

@@ -1,5 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
@@ -34,11 +34,10 @@ impl StateProcessingHandler for DefenderShootingState {
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().shooting_direction())
                     .with_reason("DEF_SHOOTING")
-                    .build(ctx)
+                    .build(ctx),
             )),
         ))
     }
-
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

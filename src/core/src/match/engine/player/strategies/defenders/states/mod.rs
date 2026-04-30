@@ -1,4 +1,5 @@
 pub mod clearing;
+pub mod common;
 pub mod covering;
 pub mod guarding;
 pub mod heading;
@@ -18,7 +19,6 @@ pub mod tackling;
 pub mod takeball;
 pub mod tracking_back;
 pub mod walking;
-pub mod common;
 
 pub use clearing::*;
 pub use covering::*;

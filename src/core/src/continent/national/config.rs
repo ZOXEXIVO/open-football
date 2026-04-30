@@ -108,8 +108,7 @@ impl ScheduleConfig {
             .enumerate()
             .filter_map(|(idx, sd)| {
                 let year = start_year + sd.year_offset;
-                NaiveDate::from_ymd_opt(year, sd.month, sd.day)
-                    .map(|date| ((idx + 1) as u8, date))
+                NaiveDate::from_ymd_opt(year, sd.month, sd.day).map(|date| ((idx + 1) as u8, date))
             })
             .collect()
     }

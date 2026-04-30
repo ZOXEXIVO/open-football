@@ -1,5 +1,5 @@
-use crate::club::team::behaviour::TeamBehaviourResult;
 use crate::club::PlayerCollectionResult;
+use crate::club::team::behaviour::TeamBehaviourResult;
 use crate::simulator::SimulatorData;
 use crate::{StaffCollectionResult, TeamTrainingResult};
 

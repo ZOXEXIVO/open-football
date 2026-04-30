@@ -1,5 +1,8 @@
 use crate::club::player::training::result::PlayerTrainingResult;
-use crate::{MentalGains, Person, PhysicalGains, Player, Staff, TechnicalGains, TrainingEffects, TrainingIntensity, TrainingSession, TrainingType};
+use crate::{
+    MentalGains, Person, PhysicalGains, Player, Staff, TechnicalGains, TrainingEffects,
+    TrainingIntensity, TrainingSession, TrainingType,
+};
 use chrono::NaiveDateTime;
 
 #[derive(Debug, Clone)]
@@ -81,8 +84,10 @@ impl PlayerTraining {
         //   * Rehab / LightRecovery → small readiness rebuild
         match session.session_type {
             TrainingType::Endurance => {
-                effects.physical_gains.stamina = 0.05 * coach_quality * player_receptiveness * age_factor;
-                effects.physical_gains.natural_fitness = 0.03 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.stamina =
+                    0.05 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.natural_fitness =
+                    0.03 * coach_quality * player_receptiveness * age_factor;
                 effects.fatigue_change = 100.0 * intensity_multiplier; // Real cost — endurance is hard
                 effects.injury_risk = 0.002 * intensity_multiplier;
                 effects.physical_load_units = 30.0 * intensity_multiplier;
@@ -90,8 +95,10 @@ impl PlayerTraining {
                 effects.readiness_change = 0.4;
             }
             TrainingType::Strength => {
-                effects.physical_gains.strength = 0.04 * coach_quality * player_receptiveness * age_factor;
-                effects.physical_gains.jumping = 0.02 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.strength =
+                    0.04 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.jumping =
+                    0.02 * coach_quality * player_receptiveness * age_factor;
                 effects.fatigue_change = 100.0 * intensity_multiplier;
                 effects.injury_risk = 0.003 * intensity_multiplier;
                 effects.physical_load_units = 22.0 * intensity_multiplier;
@@ -99,8 +106,10 @@ impl PlayerTraining {
                 effects.readiness_change = 0.3;
             }
             TrainingType::Speed => {
-                effects.physical_gains.pace = 0.03 * coach_quality * player_receptiveness * age_factor;
-                effects.physical_gains.agility = 0.04 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.pace =
+                    0.03 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.agility =
+                    0.04 * coach_quality * player_receptiveness * age_factor;
                 effects.fatigue_change = 150.0 * intensity_multiplier;
                 effects.injury_risk = 0.004 * intensity_multiplier;
                 effects.physical_load_units = 32.0 * intensity_multiplier;
@@ -291,9 +300,12 @@ impl PlayerTraining {
 
         // Apply professionalism bonus to gains
         let professionalism_bonus = player.attributes.professionalism / 20.0;
-        effects.physical_gains = Self::apply_bonus_to_physical(effects.physical_gains, professionalism_bonus);
-        effects.technical_gains = Self::apply_bonus_to_technical(effects.technical_gains, professionalism_bonus);
-        effects.mental_gains = Self::apply_bonus_to_mental(effects.mental_gains, professionalism_bonus);
+        effects.physical_gains =
+            Self::apply_bonus_to_physical(effects.physical_gains, professionalism_bonus);
+        effects.technical_gains =
+            Self::apply_bonus_to_technical(effects.technical_gains, professionalism_bonus);
+        effects.mental_gains =
+            Self::apply_bonus_to_mental(effects.mental_gains, professionalism_bonus);
 
         // Apply potential development factor to all skill gains
         effects.physical_gains = Self::scale_physical(effects.physical_gains, potential_factor);
@@ -313,7 +325,8 @@ impl PlayerTraining {
         // Effort component: professionalism + work_rate + determination
         let effort_score = (player.attributes.professionalism
             + player.skills.mental.work_rate
-            + player.skills.mental.determination) / 3.0;
+            + player.skills.mental.determination)
+            / 3.0;
 
         // Execution randomness: even good players have bad days
         let execution_roll = rand::random::<f32>() * 4.0 - 2.0; // -2 to +2
@@ -321,8 +334,8 @@ impl PlayerTraining {
         // Coach synergy: good coach-player fit produces better sessions
         let synergy = coach_quality * player_receptiveness;
 
-        let session_performance = (gain_score + effort_score * 0.5 + synergy * 2.0 + execution_roll)
-            .clamp(1.0, 20.0);
+        let session_performance =
+            (gain_score + effort_score * 0.5 + synergy * 2.0 + execution_roll).clamp(1.0, 20.0);
 
         let mut result = PlayerTrainingResult::new(player.id, effects);
         result.session_performance = session_performance;
@@ -363,7 +376,6 @@ impl PlayerTraining {
         gains
     }
 
-
     fn calculate_coach_effectiveness(coach: &Staff, training_type: &TrainingType) -> f32 {
         let base_effectiveness = match training_type {
             TrainingType::Endurance | TrainingType::Strength | TrainingType::Speed => {
@@ -380,10 +392,11 @@ impl PlayerTraining {
             }
             _ => {
                 // Average of all coaching attributes
-                (coach.staff_attributes.coaching.attacking +
-                    coach.staff_attributes.coaching.defending +
-                    coach.staff_attributes.coaching.tactical +
-                    coach.staff_attributes.coaching.technical) as f32 / 80.0
+                (coach.staff_attributes.coaching.attacking
+                    + coach.staff_attributes.coaching.defending
+                    + coach.staff_attributes.coaching.tactical
+                    + coach.staff_attributes.coaching.technical) as f32
+                    / 80.0
             }
         };
 
@@ -393,14 +406,22 @@ impl PlayerTraining {
         (base_effectiveness * 0.7 + determination_factor * 0.3).min(1.0)
     }
 
-    fn calculate_player_receptiveness(player: &Player, coach: &Staff, sim_date: chrono::NaiveDate) -> f32 {
+    fn calculate_player_receptiveness(
+        player: &Player,
+        coach: &Staff,
+        sim_date: chrono::NaiveDate,
+    ) -> f32 {
         // Base receptiveness from player attributes
         let base = (player.attributes.professionalism + player.attributes.ambition) / 40.0;
 
         // Relationship with coach affects receptiveness
         let relationship_bonus = if coach.relations.is_favorite_player(player.id) {
             0.2
-        } else if coach.relations.get_player(player.id).map_or(false, |r| r.level < -50.0) {
+        } else if coach
+            .relations
+            .get_player(player.id)
+            .map_or(false, |r| r.level < -50.0)
+        {
             -0.2
         } else {
             0.0
@@ -427,14 +448,14 @@ impl PlayerTraining {
 
     fn calculate_age_training_factor(age: u8) -> f32 {
         match age {
-            16..=18 => 1.5,  // Youth develop quickly
+            16..=18 => 1.5, // Youth develop quickly
             19..=21 => 1.3,
             22..=24 => 1.1,
             25..=27 => 1.0,
             28..=30 => 0.8,
             31..=33 => 0.5,
             34..=36 => 0.3,
-            _ => 0.1,         // Very old players barely improve
+            _ => 0.1, // Very old players barely improve
         }
     }
 
@@ -540,7 +561,10 @@ mod training_load_tests {
             .attributes(person)
             .skills(skills)
             .positions(PlayerPositions {
-                positions: vec![PlayerPosition { position: pos, level: 18 }],
+                positions: vec![PlayerPosition {
+                    position: pos,
+                    level: 18,
+                }],
             })
             .player_attributes(attrs)
             .build()

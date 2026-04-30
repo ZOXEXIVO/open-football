@@ -36,9 +36,19 @@ impl QualifyingGroup {
     }
 
     /// Update standings after a match result
-    pub fn update_standings(&mut self, home_country_id: u32, away_country_id: u32, home_score: u8, away_score: u8) {
+    pub fn update_standings(
+        &mut self,
+        home_country_id: u32,
+        away_country_id: u32,
+        home_score: u8,
+        away_score: u8,
+    ) {
         // Update home team
-        if let Some(home) = self.standings.iter_mut().find(|s| s.country_id == home_country_id) {
+        if let Some(home) = self
+            .standings
+            .iter_mut()
+            .find(|s| s.country_id == home_country_id)
+        {
             home.played += 1;
             home.goals_for += home_score as u16;
             home.goals_against += away_score as u16;
@@ -54,7 +64,11 @@ impl QualifyingGroup {
         }
 
         // Update away team
-        if let Some(away) = self.standings.iter_mut().find(|s| s.country_id == away_country_id) {
+        if let Some(away) = self
+            .standings
+            .iter_mut()
+            .find(|s| s.country_id == away_country_id)
+        {
             away.played += 1;
             away.goals_for += away_score as u16;
             away.goals_against += home_score as u16;
@@ -71,7 +85,8 @@ impl QualifyingGroup {
 
         // Sort standings: points desc, goal difference desc, goals for desc
         self.standings.sort_by(|a, b| {
-            b.points.cmp(&a.points)
+            b.points
+                .cmp(&a.points)
                 .then_with(|| b.goal_difference().cmp(&a.goal_difference()))
                 .then_with(|| b.goals_for.cmp(&a.goals_for))
         });
@@ -166,7 +181,9 @@ impl KnockoutBracket {
         self.fixtures
             .iter()
             .filter_map(|f| {
-                f.result.as_ref().map(|r| r.winner(f.home_country_id, f.away_country_id))
+                f.result
+                    .as_ref()
+                    .map(|r| r.winner(f.home_country_id, f.away_country_id))
             })
             .collect()
     }

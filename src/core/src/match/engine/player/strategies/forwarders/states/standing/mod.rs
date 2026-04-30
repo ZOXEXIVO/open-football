@@ -1,6 +1,9 @@
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::{
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
+};
 use nalgebra::Vector3;
 
 const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
@@ -23,9 +26,7 @@ impl StateProcessingHandler for ForwardStandingState {
             // Point-blank (≤24u / ~12m) — shoot regardless of build-up;
             // a defender closing or keeper right there means it's now or
             // never. Still honours cooldowns.
-            if distance_to_goal <= 24.0
-                && can_shoot
-                && ctx.player().shooting().in_shooting_range()
+            if distance_to_goal <= 24.0 && can_shoot && ctx.player().shooting().in_shooting_range()
             {
                 return Some(
                     StateChangeResult::with_forward_state(ForwardState::Shooting)
@@ -82,9 +83,7 @@ impl StateProcessingHandler for ForwardStandingState {
                 ))
             } else {
                 // Transition to Running to approach goal
-                Some(StateChangeResult::with_forward_state(
-                    ForwardState::Running,
-                ))
+                Some(StateChangeResult::with_forward_state(ForwardState::Running))
             }
         } else {
             // If notified by ball system, always respond (only 1 per team gets notified)
@@ -126,7 +125,6 @@ impl StateProcessingHandler for ForwardStandingState {
         }
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Check if player should follow waypoints even when standing
         if ctx.player.should_follow_waypoints(ctx) {
@@ -140,7 +138,8 @@ impl StateProcessingHandler for ForwardStandingState {
                         path_offset: 3.0,
                     }
                     .calculate(ctx.player)
-                    .velocity * 0.5, // Slower speed when standing
+                    .velocity
+                        * 0.5, // Slower speed when standing
                 );
             }
         }
@@ -207,5 +206,4 @@ impl ForwardStandingState {
             false
         }
     }
-
 }

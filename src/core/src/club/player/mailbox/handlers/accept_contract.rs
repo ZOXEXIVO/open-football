@@ -93,7 +93,11 @@ fn build_bonuses(p: &PlayerContractProposal) -> Vec<ContractBonus> {
             ContractBonusType::LoyaltyBonus,
         ));
     }
-    push_optional(&mut bonuses, p.appearance_fee, ContractBonusType::AppearanceFee);
+    push_optional(
+        &mut bonuses,
+        p.appearance_fee,
+        ContractBonusType::AppearanceFee,
+    );
     push_optional(
         &mut bonuses,
         p.unused_sub_fee,
@@ -105,7 +109,11 @@ fn build_bonuses(p: &PlayerContractProposal) -> Vec<ContractBonus> {
         p.clean_sheet_bonus,
         ContractBonusType::CleanSheetFee,
     );
-    push_optional(&mut bonuses, p.promotion_bonus, ContractBonusType::PromotionFee);
+    push_optional(
+        &mut bonuses,
+        p.promotion_bonus,
+        ContractBonusType::PromotionFee,
+    );
     push_optional(
         &mut bonuses,
         p.avoid_relegation_bonus,
@@ -260,21 +268,28 @@ mod tests {
         // avoid_relegation + international_cap = 8 (clean_sheet=0 skipped)
         assert_eq!(bonuses.len(), 8, "got {bonuses:?}");
         let _ = kinds; // discriminant equality is hard; len + present checks below
-        assert!(bonuses
-            .iter()
-            .any(|b| matches!(b.bonus_type, ContractBonusType::SigningBonus) && b.value == 30_000));
-        assert!(bonuses.iter().any(|b| matches!(
-            b.bonus_type,
-            ContractBonusType::AppearanceFee
-        )));
-        assert!(bonuses.iter().any(|b| matches!(
-            b.bonus_type,
-            ContractBonusType::PromotionFee
-        )));
+        assert!(
+            bonuses
+                .iter()
+                .any(|b| matches!(b.bonus_type, ContractBonusType::SigningBonus)
+                    && b.value == 30_000)
+        );
+        assert!(
+            bonuses
+                .iter()
+                .any(|b| matches!(b.bonus_type, ContractBonusType::AppearanceFee))
+        );
+        assert!(
+            bonuses
+                .iter()
+                .any(|b| matches!(b.bonus_type, ContractBonusType::PromotionFee))
+        );
         // clean_sheet_bonus value=0 must NOT install
-        assert!(!bonuses
-            .iter()
-            .any(|b| matches!(b.bonus_type, ContractBonusType::CleanSheetFee)));
+        assert!(
+            !bonuses
+                .iter()
+                .any(|b| matches!(b.bonus_type, ContractBonusType::CleanSheetFee))
+        );
     }
 
     #[test]
@@ -286,18 +301,26 @@ mod tests {
         // optional_extension + appearance_extension + wage_after_apps +
         // wage_after_caps + match_highest_earner = 11
         assert_eq!(clauses.len(), 11, "got {clauses:?}");
-        assert!(clauses
-            .iter()
-            .any(|c| matches!(c.bonus_type, ContractClauseType::MinimumFeeRelease)));
-        assert!(clauses
-            .iter()
-            .any(|c| matches!(c.bonus_type, ContractClauseType::RelegationFeeRelease)));
-        assert!(clauses
-            .iter()
-            .any(|c| matches!(c.bonus_type, ContractClauseType::NonPromotionRelease)));
-        assert!(clauses
-            .iter()
-            .any(|c| matches!(c.bonus_type, ContractClauseType::MatchHighestEarner)));
+        assert!(
+            clauses
+                .iter()
+                .any(|c| matches!(c.bonus_type, ContractClauseType::MinimumFeeRelease))
+        );
+        assert!(
+            clauses
+                .iter()
+                .any(|c| matches!(c.bonus_type, ContractClauseType::RelegationFeeRelease))
+        );
+        assert!(
+            clauses
+                .iter()
+                .any(|c| matches!(c.bonus_type, ContractClauseType::NonPromotionRelease))
+        );
+        assert!(
+            clauses
+                .iter()
+                .any(|c| matches!(c.bonus_type, ContractClauseType::MatchHighestEarner))
+        );
     }
 
     #[test]

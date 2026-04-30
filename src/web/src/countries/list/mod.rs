@@ -1,12 +1,12 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::MenuSection;
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::http::header::HOST;
 use axum::http::HeaderMap;
+use axum::http::header::HOST;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 

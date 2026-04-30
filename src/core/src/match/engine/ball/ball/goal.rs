@@ -34,7 +34,7 @@ impl Ball {
                 let is_auto_goal = match player.side {
                     Some(PlayerSide::Left) => goal_side == GoalSide::Home,
                     Some(PlayerSide::Right) => goal_side == GoalSide::Away,
-                    _ => false
+                    _ => false,
                 };
 
                 // Require a recent shot or a live shot-target. Without
@@ -67,30 +67,34 @@ impl Ball {
                 // touched the ball (deflection/failed save), credit the goal to the
                 // previous owner (the attacker who actually shot) instead.
                 // A genuine own goal requires the defender to have had meaningful possession.
-                let (final_scorer, final_is_auto_goal) = if is_auto_goal
-                    && self.ownership_duration < 30
-                {
-                    // Check if previous_owner is from the opposing team (the attacker)
-                    let attacker = if self.current_owner == Some(goalscorer) {
-                        self.previous_owner
-                    } else {
-                        // goalscorer came from previous_owner, check recent_passers
-                        self.recent_passers.iter().rev()
-                            .find(|&&id| id != goalscorer)
-                            .copied()
-                    };
+                let (final_scorer, final_is_auto_goal) =
+                    if is_auto_goal && self.ownership_duration < 30 {
+                        // Check if previous_owner is from the opposing team (the attacker)
+                        let attacker = if self.current_owner == Some(goalscorer) {
+                            self.previous_owner
+                        } else {
+                            // goalscorer came from previous_owner, check recent_passers
+                            self.recent_passers
+                                .iter()
+                                .rev()
+                                .find(|&&id| id != goalscorer)
+                                .copied()
+                        };
 
-                    if let Some(attacker_id) = attacker {
-                        if let Some(attacker_player) = context.players.by_id(attacker_id) {
-                            // Verify attacker is from the other team
-                            let attacker_would_score = match attacker_player.side {
-                                Some(PlayerSide::Left) => goal_side != GoalSide::Home,
-                                Some(PlayerSide::Right) => goal_side != GoalSide::Away,
-                                _ => false,
-                            };
-                            if attacker_would_score {
-                                // Credit the attacker — this was a deflection, not a real own goal
-                                (attacker_id, false)
+                        if let Some(attacker_id) = attacker {
+                            if let Some(attacker_player) = context.players.by_id(attacker_id) {
+                                // Verify attacker is from the other team
+                                let attacker_would_score = match attacker_player.side {
+                                    Some(PlayerSide::Left) => goal_side != GoalSide::Home,
+                                    Some(PlayerSide::Right) => goal_side != GoalSide::Away,
+                                    _ => false,
+                                };
+                                if attacker_would_score {
+                                    // Credit the attacker — this was a deflection, not a real own goal
+                                    (attacker_id, false)
+                                } else {
+                                    (goalscorer, true)
+                                }
                             } else {
                                 (goalscorer, true)
                             }
@@ -98,11 +102,8 @@ impl Ball {
                             (goalscorer, true)
                         }
                     } else {
-                        (goalscorer, true)
-                    }
-                } else {
-                    (goalscorer, is_auto_goal)
-                };
+                        (goalscorer, is_auto_goal)
+                    };
 
                 // Find assist provider: most recent passer who isn't the goalscorer
                 let assist_player_id = if !final_is_auto_goal {
@@ -161,12 +162,11 @@ impl Ball {
 
         // Find the goalkeeper on the defending side
         if let Some(gk) = players.iter().find(|p| {
-            p.side == Some(defending_side)
-                && p.tactical_position.current_position.is_goalkeeper()
+            p.side == Some(defending_side) && p.tactical_position.current_position.is_goalkeeper()
         }) {
             // Place ball at the 6-yard area in front of the goal
             let goal_kick_x = match over_side {
-                GoalSide::Home => 50.0,  // ~6 yards from left goal line
+                GoalSide::Home => 50.0, // ~6 yards from left goal line
                 GoalSide::Away => self.field_width - 50.0,
             };
 
@@ -308,8 +308,7 @@ impl Ball {
 
         // Goal kick: give ball to defending goalkeeper
         if let Some(gk) = players.iter().find(|p| {
-            p.side == Some(defending_side)
-                && p.tactical_position.current_position.is_goalkeeper()
+            p.side == Some(defending_side) && p.tactical_position.current_position.is_goalkeeper()
         }) {
             let gk_id = gk.id;
             let goal_kick_x = match side {

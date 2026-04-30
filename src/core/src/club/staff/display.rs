@@ -44,7 +44,9 @@ fn pct_u8(val: u8) -> String {
 
 impl Staff {
     pub fn as_llm(&self) -> String {
-        let position = self.contract.as_ref()
+        let position = self
+            .contract
+            .as_ref()
             .map(|c| format!("{:?}", c.position))
             .unwrap_or_else(|| "Free".to_string());
 

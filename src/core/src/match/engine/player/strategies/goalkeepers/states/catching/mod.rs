@@ -2,7 +2,10 @@ use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{
+    ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
+};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -38,9 +41,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
         let ball_distance = ctx.ball().distance();
         if ball_speed > 2.0 && !ctx.ball().is_towards_player_with_angle(0.6) {
-            if ctx.tick_context.ball.cached_shot_target.is_some()
-                && ball_distance < 25.0
-            {
+            if ctx.tick_context.ball.cached_shot_target.is_some() && ball_distance < 25.0 {
                 return Some(StateChangeResult::with_goalkeeper_state_and_event(
                     GoalkeeperState::Standing,
                     Event::PlayerEvent(PlayerEvent::ParriedBall(ctx.player.id)),
@@ -67,7 +68,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
-            ))
+            ));
         }
 
         if ctx.in_state_time > 30 {
@@ -78,7 +79,6 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let agility = ctx.player.skills.physical.agility / 20.0;
@@ -227,8 +227,10 @@ impl GoalkeeperCatchingState {
         }
 
         // Base catch skill (weighted toward handling and reflexes)
-        let base_skill = scaled_handling * 0.35 + scaled_reflexes * 0.30 +
-                          scaled_positioning * 0.20 + scaled_agility * 0.15;
+        let base_skill = scaled_handling * 0.35
+            + scaled_reflexes * 0.30
+            + scaled_positioning * 0.20
+            + scaled_agility * 0.15;
 
         let ball_height = ctx.tick_context.positions.ball.position.z;
 

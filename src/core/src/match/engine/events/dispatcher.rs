@@ -15,9 +15,7 @@ impl EventCollection {
     /// Create empty collection without heap allocation.
     /// Use `with_capacity` only for the reusable per-tick collection.
     pub fn new() -> Self {
-        EventCollection {
-            events: Vec::new(),
-        }
+        EventCollection { events: Vec::new() }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
@@ -84,7 +82,13 @@ impl EventDispatcher {
         match_data: &mut ResultMatchPositionData,
         process_remaining_events: bool,
     ) {
-        Self::dispatch_iter(events.drain(), field, context, match_data, process_remaining_events);
+        Self::dispatch_iter(
+            events.drain(),
+            field,
+            context,
+            match_data,
+            process_remaining_events,
+        );
     }
 
     fn dispatch_iter(
@@ -101,9 +105,11 @@ impl EventDispatcher {
                 Event::BallEvent(ball_event) => {
                     if context.logging_enabled {
                         match ball_event {
-                            BallEvent::TakeMe(_) => {},
+                            BallEvent::TakeMe(_) => {}
                             _ => match_data.add_match_event(
-                                context.total_match_time, "ball", format!("{:?}", ball_event)
+                                context.total_match_time,
+                                "ball",
+                                format!("{:?}", ball_event),
                             ),
                         }
                     }
@@ -118,9 +124,11 @@ impl EventDispatcher {
                 Event::PlayerEvent(player_event) => {
                     if context.logging_enabled {
                         match &player_event {
-                            PlayerEvent::TakeBall(_) => {},
+                            PlayerEvent::TakeBall(_) => {}
                             _ => match_data.add_match_event(
-                                context.total_match_time, "player", format!("{:?}", player_event)
+                                context.total_match_time,
+                                "player",
+                                format!("{:?}", player_event),
                             ),
                         }
                     }
@@ -136,7 +144,13 @@ impl EventDispatcher {
         }
 
         if process_remaining_events && !remaining_events.is_empty() {
-            Self::dispatch_iter(remaining_events.into_iter(), field, context, match_data, false)
+            Self::dispatch_iter(
+                remaining_events.into_iter(),
+                field,
+                context,
+                match_data,
+                false,
+            )
         }
     }
 }

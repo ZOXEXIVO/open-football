@@ -121,7 +121,9 @@ const RETENTION_DAYS: i64 = 365;
 
 impl ManagerInteractionLog {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// Append one interaction; trims to keep the buffer bounded.
@@ -200,7 +202,11 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
     }
 
-    fn entry(topic: InteractionTopic, date: NaiveDate, cooldown_until: NaiveDate) -> ManagerInteraction {
+    fn entry(
+        topic: InteractionTopic,
+        date: NaiveDate,
+        cooldown_until: NaiveDate,
+    ) -> ManagerInteraction {
         ManagerInteraction {
             date,
             staff_id: 1,

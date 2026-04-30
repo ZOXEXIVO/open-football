@@ -1,5 +1,5 @@
-use crate::i18n::{I18nManager, DEFAULT_LANGUAGE};
-use axum::http::{header, StatusCode};
+use crate::i18n::{DEFAULT_LANGUAGE, I18nManager};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Redirect};
 
 use rust_embed::RustEmbed;
@@ -45,7 +45,10 @@ pub async fn default_handler(uri: axum::http::Uri) -> axum::response::Response {
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, mime.to_string()),
-                (header::CACHE_CONTROL, cache_control_for(path_str).to_string()),
+                (
+                    header::CACHE_CONTROL,
+                    cache_control_for(path_str).to_string(),
+                ),
             ],
             content.data,
         )

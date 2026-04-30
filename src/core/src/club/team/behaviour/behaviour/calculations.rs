@@ -114,7 +114,10 @@ impl TeamBehaviour {
         }
     }
 
-    pub(super) fn calculate_injury_sympathy(_injured_player: &Player, other_player: &Player) -> f32 {
+    pub(super) fn calculate_injury_sympathy(
+        _injured_player: &Player,
+        other_player: &Player,
+    ) -> f32 {
         let empathy = other_player.attributes.sportsmanship / 20.0;
         let team_spirit = other_player.skills.mental.teamwork / 20.0;
 
@@ -159,8 +162,7 @@ impl TeamBehaviour {
         }
 
         // Performance satisfaction
-        let goals_ratio =
-            player.statistics.goals as f32 / player.statistics.played.max(1) as f32;
+        let goals_ratio = player.statistics.goals as f32 / player.statistics.played.max(1) as f32;
         if player.position().is_forward() && goals_ratio > 0.5 {
             happiness += 0.2;
         } else if !player.position().is_forward() && goals_ratio > 0.3 {
@@ -190,8 +192,7 @@ impl TeamBehaviour {
         let competition_base = 0.3 - (ability_diff / 100.0);
 
         // Ambition increases competition
-        let ambition_factor =
-            (player_a.attributes.ambition + player_b.attributes.ambition) / 40.0;
+        let ambition_factor = (player_a.attributes.ambition + player_b.attributes.ambition) / 40.0;
 
         // Reputation amplifies competition: both high-rep players fight harder for spots
         let rep_a =
@@ -304,8 +305,7 @@ impl TeamBehaviour {
 
             if perf_a > perf_b {
                 // Higher performer: professional players give credit, ambitious ones resent
-                let sportsmanship_a =
-                    (player_a.attributes.sportsmanship / 20.0).clamp(0.0, 1.0);
+                let sportsmanship_a = (player_a.attributes.sportsmanship / 20.0).clamp(0.0, 1.0);
                 FloatUtils::random(-0.1, 0.05) * (1.0 + sportsmanship_a * 0.3) * rep_scale
             } else {
                 FloatUtils::random(-0.12, 0.08) * rep_scale
@@ -319,8 +319,7 @@ impl TeamBehaviour {
         // High controversy players clash with professional players
         let controversy_clash = if player_a.attributes.controversy > 15.0
             && player_b.attributes.professionalism > 15.0
-            || player_b.attributes.controversy > 15.0
-                && player_a.attributes.professionalism > 15.0
+            || player_b.attributes.controversy > 15.0 && player_a.attributes.professionalism > 15.0
         {
             -0.25
         } else {
@@ -359,7 +358,11 @@ impl TeamBehaviour {
             0.0
         };
 
-        controversy_clash + temperament_clash + behavior_clash + positive_traits + sportsmanship_bond
+        controversy_clash
+            + temperament_clash
+            + behavior_clash
+            + positive_traits
+            + sportsmanship_bond
     }
 
     pub(super) fn calculate_leadership_influence(leader: &Player, player: &Player) -> f32 {

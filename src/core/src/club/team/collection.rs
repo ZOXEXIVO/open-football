@@ -1,6 +1,8 @@
 use crate::ai::PendingAiRequest;
 use crate::club::staff::perception::{CoachDecisionState, date_to_week};
-use crate::club::team::squad::{ContractRenewalManager, SquadComposition, SquadManager, TransferListManager};
+use crate::club::team::squad::{
+    ContractRenewalManager, SquadComposition, SquadManager, TransferListManager,
+};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
 use crate::{HappinessEventType, Team, TeamResult, TeamType};
@@ -77,12 +79,16 @@ impl TeamCollection {
 
     /// Mutable variant of `main`.
     pub fn main_mut(&mut self) -> Option<&mut Team> {
-        self.teams.iter_mut().find(|t| t.team_type == TeamType::Main)
+        self.teams
+            .iter_mut()
+            .find(|t| t.team_type == TeamType::Main)
     }
 
     /// Array index of the main team, if any.
     pub fn main_index(&self) -> Option<usize> {
-        self.teams.iter().position(|t| t.team_type == TeamType::Main)
+        self.teams
+            .iter()
+            .position(|t| t.team_type == TeamType::Main)
     }
 
     /// Borrow the first team matching a specific TeamType.
@@ -125,7 +131,9 @@ impl TeamCollection {
 
     /// Mutable variant of `find_team_with_player`.
     pub fn find_team_with_player_mut(&mut self, player_id: u32) -> Option<&mut Team> {
-        self.teams.iter_mut().find(|t| t.players.contains(player_id))
+        self.teams
+            .iter_mut()
+            .find(|t| t.players.contains(player_id))
     }
 
     /// Index of the first reserve-tier team: prefers B-team, then
@@ -152,9 +160,7 @@ impl TeamCollection {
         let coach_id = head_coach.id;
 
         let previous_coach_id = self.coach_state.as_ref().map(|state| state.coach_id);
-        let needs_rebuild = previous_coach_id
-            .map(|pid| pid != coach_id)
-            .unwrap_or(true);
+        let needs_rebuild = previous_coach_id.map(|pid| pid != coach_id).unwrap_or(true);
 
         if needs_rebuild {
             self.coach_state = Some(CoachDecisionState::new(head_coach, date));
@@ -244,7 +250,11 @@ impl TeamCollection {
         // Squad composition (priority 0 — handles promotions, demotions, and swaps)
         {
             let (query, format) = SquadComposition::prepare_request(
-                &self.teams, main_idx, reserve_idx, youth_idx, date,
+                &self.teams,
+                main_idx,
+                reserve_idx,
+                youth_idx,
+                date,
             );
             requests.push(PendingAiRequest {
                 club_id,
@@ -254,8 +264,13 @@ impl TeamCollection {
                 handler: Box::new(move |response, data| {
                     let club = data.club_mut(club_id).unwrap();
                     SquadComposition::execute_response(
-                        response, &mut club.teams.teams, &mut club.teams.coach_state,
-                        main_idx, reserve_idx, youth_idx, date,
+                        response,
+                        &mut club.teams.teams,
+                        &mut club.teams.coach_state,
+                        main_idx,
+                        reserve_idx,
+                        youth_idx,
+                        date,
                     );
                 }),
             });
@@ -263,9 +278,7 @@ impl TeamCollection {
 
         // Transfer listing (priority 1)
         {
-            let (query, format) = TransferListManager::prepare_request(
-                &self.teams, main_idx, date,
-            );
+            let (query, format) = TransferListManager::prepare_request(&self.teams, main_idx, date);
             requests.push(PendingAiRequest {
                 club_id,
                 priority: 1,
@@ -274,7 +287,10 @@ impl TeamCollection {
                 handler: Box::new(move |response, data| {
                     let club = data.club_mut(club_id).unwrap();
                     TransferListManager::execute_response(
-                        response, &mut club.teams.teams, main_idx, date,
+                        response,
+                        &mut club.teams.teams,
+                        main_idx,
+                        date,
                     );
                 }),
             });
@@ -344,9 +360,19 @@ impl TeamCollection {
     // ─── Helper functions ────────────────────────────────────────────
 
     fn find_reserve_team_index(&self) -> Option<usize> {
-        self.teams.iter().position(|t| t.team_type == TeamType::B)
-            .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::Second))
-            .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::Reserve))
+        self.teams
+            .iter()
+            .position(|t| t.team_type == TeamType::B)
+            .or_else(|| {
+                self.teams
+                    .iter()
+                    .position(|t| t.team_type == TeamType::Second)
+            })
+            .or_else(|| {
+                self.teams
+                    .iter()
+                    .position(|t| t.team_type == TeamType::Reserve)
+            })
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U23))
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U21))
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U20))
@@ -355,7 +381,9 @@ impl TeamCollection {
     }
 
     fn find_youth_team_index(&self) -> Option<usize> {
-        self.teams.iter().position(|t| t.team_type == TeamType::U18)
+        self.teams
+            .iter()
+            .position(|t| t.team_type == TeamType::U18)
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U19))
     }
 }

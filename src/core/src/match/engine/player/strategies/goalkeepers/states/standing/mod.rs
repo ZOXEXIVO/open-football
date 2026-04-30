@@ -1,8 +1,9 @@
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions,
+    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
+    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    VectorExtensions,
 };
 use nalgebra::Vector3;
 
@@ -98,7 +99,10 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         }
 
         // Check for loose ball in dangerous area
-        if !ctx.ball().is_owned() && ball_on_own_side && ball_distance < 40.0 * (1.0 + command_of_area * 0.3) {
+        if !ctx.ball().is_owned()
+            && ball_on_own_side
+            && ball_distance < 40.0 * (1.0 + command_of_area * 0.3)
+        {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ComingOut,
             ));
@@ -136,7 +140,6 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Calculate optimal position based on ball and goal
         let optimal_position = self.calculate_optimal_position(ctx);
@@ -151,7 +154,8 @@ impl StateProcessingHandler for GoalkeeperStandingState {
                     slowing_distance: 3.0,
                 }
                 .calculate(ctx.player)
-                .velocity * 0.7,
+                .velocity
+                    * 0.7,
             )
         } else if distance_to_optimal < 15.0 {
             // Repositioning needed — move with purpose
@@ -161,7 +165,8 @@ impl StateProcessingHandler for GoalkeeperStandingState {
                     slowing_distance: 6.0,
                 }
                 .calculate(ctx.player)
-                .velocity * 1.0,
+                .velocity
+                    * 1.0,
             )
         } else {
             // Urgently out of position — sprint
@@ -171,7 +176,8 @@ impl StateProcessingHandler for GoalkeeperStandingState {
                     slowing_distance: 10.0,
                 }
                 .calculate(ctx.player)
-                .velocity * 1.3,
+                .velocity
+                    * 1.3,
             )
         }
     }
@@ -197,7 +203,11 @@ impl GoalkeeperStandingState {
     }
 
     /// Determine if goalkeeper should rush out for the ball
-    fn should_rush_out_for_ball(&self, ctx: &StateProcessingContext, opponent: &MatchPlayerLite) -> bool {
+    fn should_rush_out_for_ball(
+        &self,
+        ctx: &StateProcessingContext,
+        opponent: &MatchPlayerLite,
+    ) -> bool {
         let ball_position = ctx.tick_context.positions.ball.position;
         let keeper_position = ctx.player.position;
         let opponent_position = opponent.position;
@@ -282,7 +292,12 @@ impl GoalkeeperStandingState {
             optimal_distance_from_goal = 12.0 + command_of_area * 8.0;
 
             let mut new_position = goal_center;
-            new_position.x += optimal_distance_from_goal * (if ctx.player.side == Some(PlayerSide::Left) { 1.0 } else { -1.0 });
+            new_position.x += optimal_distance_from_goal
+                * (if ctx.player.side == Some(PlayerSide::Left) {
+                    1.0
+                } else {
+                    -1.0
+                });
 
             self.clamp_to_penalty_area(ctx, new_position)
         }

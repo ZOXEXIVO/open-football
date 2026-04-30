@@ -35,8 +35,12 @@ impl Ball {
 
         // CRITICAL: Global velocity sanity check - prevent cosmic-speed balls
         // Check for NaN or infinity and reset to zero
-        if self.velocity.x.is_nan() || self.velocity.y.is_nan() || self.velocity.z.is_nan()
-            || self.velocity.x.is_infinite() || self.velocity.y.is_infinite() || self.velocity.z.is_infinite()
+        if self.velocity.x.is_nan()
+            || self.velocity.y.is_nan()
+            || self.velocity.z.is_nan()
+            || self.velocity.x.is_infinite()
+            || self.velocity.y.is_infinite()
+            || self.velocity.z.is_infinite()
         {
             self.velocity = Vector3::zeros();
             return;
@@ -57,7 +61,8 @@ impl Ball {
 
             if is_on_ground {
                 // GROUND PHYSICS: Rolling friction proportional to velocity (smooth deceleration)
-                let horizontal_speed_sq = self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y;
+                let horizontal_speed_sq =
+                    self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y;
 
                 if horizontal_speed_sq > STOPPING_THRESHOLD * STOPPING_THRESHOLD {
                     // Apply friction as a multiplier for smooth exponential decay
@@ -97,7 +102,8 @@ impl Ball {
             self.velocity = self.velocity * 0.8; // Smooth final decay
 
             // Only fully stop when truly negligible
-            if self.velocity.norm_squared() < 0.0001 { // 0.01^2
+            if self.velocity.norm_squared() < 0.0001 {
+                // 0.01^2
                 self.velocity = Vector3::zeros();
                 self.position.z = 0.0;
             }
@@ -127,7 +133,8 @@ impl Ball {
         // Maximum distance owner can be from ball - must match deadlock claim distances
         // This allows deadlock resolution while preventing truly absurd teleports
         const MAX_OWNER_TELEPORT_DISTANCE: f32 = 15.0;
-        const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 = MAX_OWNER_TELEPORT_DISTANCE * MAX_OWNER_TELEPORT_DISTANCE;
+        const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 =
+            MAX_OWNER_TELEPORT_DISTANCE * MAX_OWNER_TELEPORT_DISTANCE;
 
         // Ball moves toward owner at this speed (units/tick) instead of teleporting
         const BALL_TRACK_SPEED: f32 = 1.5;

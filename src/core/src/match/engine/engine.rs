@@ -1,17 +1,20 @@
-use crate::r#match::engine::events::dispatcher::EventCollection;
-use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
+use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::PlayerSide;
-use crate::r#match::engine::rating::calculate_match_rating;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::context::SubstitutionRecord;
+use crate::r#match::engine::events::dispatcher::EventCollection;
+use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
+use crate::r#match::engine::rating::calculate_match_rating;
 use crate::r#match::engine::substitutions::process_substitutions;
-#[cfg(feature = "match-logs")]
-use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::result::ResultMatchPositionData;
-use crate::r#match::PlayerMatchEndStats;
-use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Score, StateManager, SubstitutionInfo};
+use crate::r#match::{
+    GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Score,
+    StateManager, SubstitutionInfo,
+};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics};
 use rand::RngExt;
 use std::collections::HashMap;
@@ -33,7 +36,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         FootballEngine {}
     }
 
-    pub fn play(left_squad: MatchSquad, right_squad: MatchSquad, match_recordings: bool, is_friendly: bool, is_knockout: bool) -> MatchResultRaw {
+    pub fn play(
+        left_squad: MatchSquad,
+        right_squad: MatchSquad,
+        match_recordings: bool,
+        is_friendly: bool,
+        is_knockout: bool,
+    ) -> MatchResultRaw {
         let score = Score::new(left_squad.team_id, right_squad.team_id);
 
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
@@ -74,7 +83,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             };
 
             StateManager::handle_state_finish(&mut context, &mut field, play_state_result);
-
         }
 
         Self::build_result(field, context, match_position_data)
@@ -108,9 +116,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Copy substitution records to result
         for sub_record in &context.substitutions {
             if sub_record.team_id == result.left_team_players.team_id {
-                result.left_team_players.mark_substitute_used(sub_record.player_in_id);
+                result
+                    .left_team_players
+                    .mark_substitute_used(sub_record.player_in_id);
             } else {
-                result.right_team_players.mark_substitute_used(sub_record.player_in_id);
+                result
+                    .right_team_players
+                    .mark_substitute_used(sub_record.player_in_id);
             }
 
             result.substitutions.push(SubstitutionInfo {
@@ -161,16 +173,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 yellow_cards,
                 red_cards,
             };
-            stats.match_rating = calculate_match_rating(
-                &stats, player_team_goals, opponent_goals,
-            );
+            stats.match_rating = calculate_match_rating(&stats, player_team_goals, opponent_goals);
 
             result.player_stats.insert(player.id, stats);
         }
 
         // Include stats from substituted-out players
         for (player_id, mut stats) in context.substituted_out_stats.drain(..) {
-            let team_id = context.substitutions.iter()
+            let team_id = context
+                .substitutions
+                .iter()
                 .find(|s| s.player_out_id == player_id)
                 .map(|s| s.team_id);
 
@@ -180,9 +192,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 (away_goals, home_goals)
             };
 
-            stats.match_rating = calculate_match_rating(
-                &stats, player_team_goals, opponent_goals,
-            );
+            stats.match_rating = calculate_match_rating(&stats, player_team_goals, opponent_goals);
 
             result.player_stats.insert(player_id, stats);
         }
@@ -254,12 +264,26 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         impl TeamAgg {
             fn new() -> Self {
                 Self {
-                    fwd_finishing: 0.0, fwd_technique: 0.0, fwd_composure: 0.0, fwd_count: 0,
-                    def_marking: 0.0, def_tackling: 0.0, def_positioning: 0.0, def_count: 0,
-                    gk_handling: 0.0, gk_reflexes: 0.0, gk_agility: 0.0, gk_count: 0,
-                    total_shots: 0, total_on_target: 0,
-                    passes_attempted: 0, passes_completed: 0,
-                    tackles: 0, interceptions: 0, saves: 0, fouls: 0,
+                    fwd_finishing: 0.0,
+                    fwd_technique: 0.0,
+                    fwd_composure: 0.0,
+                    fwd_count: 0,
+                    def_marking: 0.0,
+                    def_tackling: 0.0,
+                    def_positioning: 0.0,
+                    def_count: 0,
+                    gk_handling: 0.0,
+                    gk_reflexes: 0.0,
+                    gk_agility: 0.0,
+                    gk_count: 0,
+                    total_shots: 0,
+                    total_on_target: 0,
+                    passes_attempted: 0,
+                    passes_completed: 0,
+                    tackles: 0,
+                    interceptions: 0,
+                    saves: 0,
+                    fouls: 0,
                     xg_total: 0.0,
                 }
             }
@@ -271,7 +295,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Skill profile aggregation runs over the current XI only — sub-out
         // players' skills aren't retained on the field after they leave.
         for player in players {
-            let agg = if player.team_id == home_team_id { &mut home_agg } else { &mut away_agg };
+            let agg = if player.team_id == home_team_id {
+                &mut home_agg
+            } else {
+                &mut away_agg
+            };
             match player.tactical_position.current_position.position_group() {
                 PlayerFieldPositionGroup::Forward => {
                     agg.fwd_finishing += player.skills.technical.finishing;
@@ -301,14 +329,26 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // hat-trick scorer was substituted off and their stats fell out
         // of the field.players iteration.
         let team_for = |player_id: u32| -> Option<u32> {
-            players.iter().find(|p| p.id == player_id).map(|p| p.team_id)
-                .or_else(|| substitutions.iter()
-                    .find(|s| s.player_out_id == player_id)
-                    .map(|s| s.team_id))
+            players
+                .iter()
+                .find(|p| p.id == player_id)
+                .map(|p| p.team_id)
+                .or_else(|| {
+                    substitutions
+                        .iter()
+                        .find(|s| s.player_out_id == player_id)
+                        .map(|s| s.team_id)
+                })
         };
         for (player_id, stats) in result.player_stats.iter() {
-            let Some(team_id) = team_for(*player_id) else { continue };
-            let agg = if team_id == home_team_id { &mut home_agg } else { &mut away_agg };
+            let Some(team_id) = team_for(*player_id) else {
+                continue;
+            };
+            let agg = if team_id == home_team_id {
+                &mut home_agg
+            } else {
+                &mut away_agg
+            };
             agg.total_shots += stats.shots_total;
             agg.total_on_target += stats.shots_on_target;
             agg.passes_attempted += stats.passes_attempted as u32;
@@ -340,15 +380,25 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let is_home_scorer = scorer_team == Some(home_team_id);
             if g.is_auto_goal {
                 // Own goal — credited to opponent team
-                if is_home_scorer { away_own += 1; } else { home_own += 1; }
+                if is_home_scorer {
+                    away_own += 1;
+                } else {
+                    home_own += 1;
+                }
                 continue;
             }
             // Non-auto goal. Did this scorer take ANY shot in the match?
-            let took_shot = result.player_stats.get(&g.player_id)
+            let took_shot = result
+                .player_stats
+                .get(&g.player_id)
                 .map(|s| s.shots_total > 0)
                 .unwrap_or(false);
             if !took_shot {
-                if is_home_scorer { home_nonshot += 1; } else { away_nonshot += 1; }
+                if is_home_scorer {
+                    home_nonshot += 1;
+                } else {
+                    away_nonshot += 1;
+                }
             }
         }
 
@@ -356,13 +406,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let home_possession = home_agg.passes_attempted as f32 / total_passes * 100.0;
         let away_possession = away_agg.passes_attempted as f32 / total_passes * 100.0;
 
-        let fmt_team = |tag: &str, team_id: u32, goals: u8, agg: &TeamAgg, own_against: u16, nonshot: u16, possession: f32| {
+        let fmt_team = |tag: &str,
+                        team_id: u32,
+                        goals: u8,
+                        agg: &TeamAgg,
+                        own_against: u16,
+                        nonshot: u16,
+                        possession: f32| {
             let fc = agg.fwd_count.max(1) as f32;
             let dc = agg.def_count.max(1) as f32;
             let gc = agg.gk_count.max(1) as f32;
             let pass_acc = if agg.passes_attempted > 0 {
                 agg.passes_completed as f32 / agg.passes_attempted as f32 * 100.0
-            } else { 0.0 };
+            } else {
+                0.0
+            };
             // xG overperformance: goals above what the shot quality
             // predicted. Real football: |diff| rarely exceeds xG by more
             // than ~1.5. Big positive means clinical finishing or a
@@ -373,24 +431,46 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // marker of blind shooting during desperation mode.
             let shots_per_xg = if agg.xg_total > 0.01 {
                 agg.total_shots as f32 / agg.xg_total
-            } else { 0.0 };
+            } else {
+                0.0
+            };
             format!(
                 "{} team={} gls={} (own-ag={} non-shot={}) shots={} ot={} xG={:.2} (Δ{:+.2}, s/xG={:.0}) | poss={:.0}% pass={}/{} ({:.0}%) tck={} int={} sv={} fl={} | FWD fin={:.1} tec={:.1} com={:.1} | DEF mrk={:.1} tck={:.1} pos={:.1} | GK hnd={:.1} ref={:.1} agi={:.1}",
-                tag, team_id, goals, own_against, nonshot,
-                agg.total_shots, agg.total_on_target,
-                agg.xg_total, xg_delta, shots_per_xg,
+                tag,
+                team_id,
+                goals,
+                own_against,
+                nonshot,
+                agg.total_shots,
+                agg.total_on_target,
+                agg.xg_total,
+                xg_delta,
+                shots_per_xg,
                 possession,
-                agg.passes_completed, agg.passes_attempted, pass_acc,
-                agg.tackles, agg.interceptions, agg.saves, agg.fouls,
-                agg.fwd_finishing / fc, agg.fwd_technique / fc, agg.fwd_composure / fc,
-                agg.def_marking / dc, agg.def_tackling / dc, agg.def_positioning / dc,
-                agg.gk_handling / gc, agg.gk_reflexes / gc, agg.gk_agility / gc,
+                agg.passes_completed,
+                agg.passes_attempted,
+                pass_acc,
+                agg.tackles,
+                agg.interceptions,
+                agg.saves,
+                agg.fouls,
+                agg.fwd_finishing / fc,
+                agg.fwd_technique / fc,
+                agg.fwd_composure / fc,
+                agg.def_marking / dc,
+                agg.def_tackling / dc,
+                agg.def_positioning / dc,
+                agg.gk_handling / gc,
+                agg.gk_reflexes / gc,
+                agg.gk_agility / gc,
             )
         };
 
         crate::match_log_info!(
             "BLOWOUT {}-{} (total {}g)",
-            home_goals, away_goals, home_goals + away_goals
+            home_goals,
+            away_goals,
+            home_goals + away_goals
         );
         // Notation:
         //   own-ag   own goals (our player into our own net)
@@ -402,8 +482,30 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         //   poss     share of total pass attempts (possession proxy)
         //   pass     completed / attempted (acc %)
         //   tck/int/sv/fl  tackles / interceptions / saves / fouls
-        crate::match_log_info!("  {}", fmt_team("HOME", home_team_id, home_goals, &home_agg, home_own, home_nonshot, home_possession));
-        crate::match_log_info!("  {}", fmt_team("AWAY", away_team_id, away_goals, &away_agg, away_own, away_nonshot, away_possession));
+        crate::match_log_info!(
+            "  {}",
+            fmt_team(
+                "HOME",
+                home_team_id,
+                home_goals,
+                &home_agg,
+                home_own,
+                home_nonshot,
+                home_possession
+            )
+        );
+        crate::match_log_info!(
+            "  {}",
+            fmt_team(
+                "AWAY",
+                away_team_id,
+                away_goals,
+                &away_agg,
+                away_own,
+                away_nonshot,
+                away_possession
+            )
+        );
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -512,21 +614,28 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // stale and the `match` branches misbehave for losing teams.
         let match_progress = (context.total_match_time as f32 / MATCH_TIME_MS as f32).min(1.0);
 
-        let (home_condition_sum, home_count, away_condition_sum, away_count) =
-            field.players.iter().fold(
-                (0.0f32, 0u32, 0.0f32, 0u32),
-                |(hc, hn, ac, an), player| {
-                    let cond = player.player_attributes.condition as f32 / 10000.0;
-                    if player.team_id == context.field_home_team_id {
-                        (hc + cond, hn + 1, ac, an)
-                    } else {
-                        (hc, hn, ac + cond, an + 1)
-                    }
-                },
-            );
+        let (home_condition_sum, home_count, away_condition_sum, away_count) = field
+            .players
+            .iter()
+            .fold((0.0f32, 0u32, 0.0f32, 0u32), |(hc, hn, ac, an), player| {
+                let cond = player.player_attributes.condition as f32 / 10000.0;
+                if player.team_id == context.field_home_team_id {
+                    (hc + cond, hn + 1, ac, an)
+                } else {
+                    (hc, hn, ac + cond, an + 1)
+                }
+            });
 
-        let home_avg_condition = if home_count > 0 { home_condition_sum / home_count as f32 } else { 0.5 };
-        let away_avg_condition = if away_count > 0 { away_condition_sum / away_count as f32 } else { 0.5 };
+        let home_avg_condition = if home_count > 0 {
+            home_condition_sum / home_count as f32
+        } else {
+            0.5
+        };
+        let away_avg_condition = if away_count > 0 {
+            away_condition_sum / away_count as f32
+        } else {
+            0.5
+        };
 
         context.coach_home.evaluate(
             home_goals - away_goals,
@@ -548,11 +657,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// players; mutates the `tactical_home` / `tactical_away` fields on
     /// `MatchContext`. `tick_interval` is how many ticks elapsed since
     /// the last refresh — rolling counters scale with it.
-    fn refresh_tactical_states(
-        field: &MatchField,
-        context: &mut MatchContext,
-        tick_interval: u32,
-    ) {
+    fn refresh_tactical_states(field: &MatchField, context: &mut MatchContext, tick_interval: u32) {
         use crate::r#match::CoachInstruction;
         let home_high_press = matches!(
             context.coach_home.instruction,
@@ -563,19 +668,28 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             CoachInstruction::PushForward | CoachInstruction::AllOutAttack
         );
 
-        let (home_sum, home_count, away_sum, away_count) = field.players.iter().fold(
-            (0u32, 0u32, 0u32, 0u32),
-            |(hs, hc, as_, ac), p| {
-                let ca = p.player_attributes.current_ability as u32;
-                if p.team_id == context.field_home_team_id {
-                    (hs + ca, hc + 1, as_, ac)
-                } else {
-                    (hs, hc, as_ + ca, ac + 1)
-                }
-            },
-        );
-        let home_avg = if home_count > 0 { (home_sum / home_count) as u16 } else { 0 };
-        let away_avg = if away_count > 0 { (away_sum / away_count) as u16 } else { 0 };
+        let (home_sum, home_count, away_sum, away_count) =
+            field
+                .players
+                .iter()
+                .fold((0u32, 0u32, 0u32, 0u32), |(hs, hc, as_, ac), p| {
+                    let ca = p.player_attributes.current_ability as u32;
+                    if p.team_id == context.field_home_team_id {
+                        (hs + ca, hc + 1, as_, ac)
+                    } else {
+                        (hs, hc, as_ + ca, ac + 1)
+                    }
+                });
+        let home_avg = if home_count > 0 {
+            (home_sum / home_count) as u16
+        } else {
+            0
+        };
+        let away_avg = if away_count > 0 {
+            (away_sum / away_count) as u16
+        } else {
+            0
+        };
 
         let home_goals = context.score.home_team.get() as i16;
         let away_goals = context.score.away_team.get() as i16;
@@ -834,8 +948,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 .map(|p| {
                     let t = &p.skills.technical;
                     let m = &p.skills.mental;
-                    let score =
-                        t.penalty_taking * 0.45 + t.finishing * 0.25 + t.technique * 0.15 + m.composure * 0.15;
+                    let score = t.penalty_taking * 0.45
+                        + t.finishing * 0.25
+                        + t.technique * 0.15
+                        + m.composure * 0.15;
                     (p.id, score)
                 })
                 .collect();
@@ -890,8 +1006,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 let t = &p.skills.technical;
                 let m = &p.skills.mental;
                 let pressure = p.attributes.pressure;
-                ((t.penalty_taking * 0.40 + t.finishing * 0.20 + t.technique * 0.10
-                    + m.composure * 0.20 + pressure * 0.10)
+                ((t.penalty_taking * 0.40
+                    + t.finishing * 0.20
+                    + t.technique * 0.10
+                    + m.composure * 0.20
+                    + pressure * 0.10)
                     / 20.0)
                     .clamp(0.05, 1.0)
             } else {
@@ -905,8 +1024,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     if let Some(p) = fld.players.iter().find(|p| p.id == gk_id) {
                         let g = &p.skills.goalkeeping;
                         let m = &p.skills.mental;
-                        ((g.handling * 0.20 + g.one_on_ones * 0.30 + g.reflexes * 0.30
-                            + m.concentration * 0.10 + m.composure * 0.10)
+                        ((g.handling * 0.20
+                            + g.one_on_ones * 0.30
+                            + g.reflexes * 0.30
+                            + m.concentration * 0.10
+                            + m.composure * 0.10)
                             / 20.0)
                             .clamp(0.05, 1.0)
                     } else {
@@ -957,14 +1079,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Home kick.
             if let Some(id) = next_home_taker(&mut home_idx) {
                 let scored = take_kick(id, away_keeper);
-                context.penalty_shootout_kicks.push(crate::r#match::PenaltyShootoutKick {
-                    team_id: home_id,
-                    taker_id: id,
-                    goalkeeper_id: away_keeper,
-                    round: round + 1,
-                    scored,
-                    sudden_death: false,
-                });
+                context
+                    .penalty_shootout_kicks
+                    .push(crate::r#match::PenaltyShootoutKick {
+                        team_id: home_id,
+                        taker_id: id,
+                        goalkeeper_id: away_keeper,
+                        round: round + 1,
+                        scored,
+                        sudden_death: false,
+                    });
                 if scored {
                     home_score += 1;
                 }
@@ -979,14 +1103,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Away kick.
             if let Some(id) = next_away_taker(&mut away_idx) {
                 let scored = take_kick(id, home_keeper);
-                context.penalty_shootout_kicks.push(crate::r#match::PenaltyShootoutKick {
-                    team_id: away_id,
-                    taker_id: id,
-                    goalkeeper_id: home_keeper,
-                    round: round + 1,
-                    scored,
-                    sudden_death: false,
-                });
+                context
+                    .penalty_shootout_kicks
+                    .push(crate::r#match::PenaltyShootoutKick {
+                        team_id: away_id,
+                        taker_id: id,
+                        goalkeeper_id: home_keeper,
+                        round: round + 1,
+                        scored,
+                        sudden_death: false,
+                    });
                 if scored {
                     away_score += 1;
                 }
@@ -1013,26 +1139,30 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let away_taker = a.unwrap();
             let round = 5 + sudden_rounds;
             let home_scored = take_kick(home_taker, away_keeper);
-            context.penalty_shootout_kicks.push(crate::r#match::PenaltyShootoutKick {
-                team_id: home_id,
-                taker_id: home_taker,
-                goalkeeper_id: away_keeper,
-                round,
-                scored: home_scored,
-                sudden_death: true,
-            });
+            context
+                .penalty_shootout_kicks
+                .push(crate::r#match::PenaltyShootoutKick {
+                    team_id: home_id,
+                    taker_id: home_taker,
+                    goalkeeper_id: away_keeper,
+                    round,
+                    scored: home_scored,
+                    sudden_death: true,
+                });
             if home_scored {
                 home_score += 1;
             }
             let away_scored = take_kick(away_taker, home_keeper);
-            context.penalty_shootout_kicks.push(crate::r#match::PenaltyShootoutKick {
-                team_id: away_id,
-                taker_id: away_taker,
-                goalkeeper_id: home_keeper,
-                round,
-                scored: away_scored,
-                sudden_death: true,
-            });
+            context
+                .penalty_shootout_kicks
+                .push(crate::r#match::PenaltyShootoutKick {
+                    team_id: away_id,
+                    taker_id: away_taker,
+                    goalkeeper_id: home_keeper,
+                    round,
+                    scored: away_scored,
+                    sudden_death: true,
+                });
             if away_scored {
                 away_score += 1;
             }
@@ -1129,7 +1259,9 @@ impl MatchPlayerCollection {
         let mut players = HashMap::new();
         let mut entries = Vec::with_capacity(44);
 
-        let add = |p: &MatchPlayer, map: &mut HashMap<u32, MatchPlayer>, entries: &mut Vec<PlayerEntry>| {
+        let add = |p: &MatchPlayer,
+                   map: &mut HashMap<u32, MatchPlayer>,
+                   entries: &mut Vec<PlayerEntry>| {
             entries.push(PlayerEntry {
                 id: p.id,
                 team_id: p.team_id,
@@ -1138,14 +1270,22 @@ impl MatchPlayerCollection {
             map.insert(p.id, p.clone());
         };
 
-        for p in &home_squad.main_squad { add(p, &mut players, &mut entries); }
-        for p in &away_squad.main_squad { add(p, &mut players, &mut entries); }
+        for p in &home_squad.main_squad {
+            add(p, &mut players, &mut entries);
+        }
+        for p in &away_squad.main_squad {
+            add(p, &mut players, &mut entries);
+        }
 
         let add_lookup_only = |p: &MatchPlayer, map: &mut HashMap<u32, MatchPlayer>| {
             map.insert(p.id, p.clone());
         };
-        for p in &home_squad.substitutes { add_lookup_only(p, &mut players); }
-        for p in &away_squad.substitutes { add_lookup_only(p, &mut players); }
+        for p in &home_squad.substitutes {
+            add_lookup_only(p, &mut players);
+        }
+        for p in &away_squad.substitutes {
+            add_lookup_only(p, &mut players);
+        }
 
         MatchPlayerCollection { players, entries }
     }
@@ -1170,7 +1310,11 @@ impl MatchPlayerCollection {
             entry.position = pos;
             entry.team_id = team_id;
         } else {
-            self.entries.push(PlayerEntry { id: player_id, team_id, position: pos });
+            self.entries.push(PlayerEntry {
+                id: player_id,
+                team_id,
+                position: pos,
+            });
         }
         self.players.insert(player_id, player);
     }

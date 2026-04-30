@@ -84,6 +84,41 @@
 
     <section class="fm-panel fm-pt-section">
         <div class="fm-panel-head">
+            <h3>{{ i18n.t("scout_monitoring") }}</h3>
+            <span class="fm-panel-count">{{ monitoring.len() }}</span>
+        </div>
+        {% if monitoring.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("no_scout_monitoring") }}</div>
+        {% else %}
+        <table class="fm-squad fm-pt-table">
+            <thead>
+                <tr>
+                    <th class="pt-club">{{ i18n.t("club") }}</th>
+                    <th class="pt-scout">{{ i18n.t("scout") }}</th>
+                    <th class="pt-mstatus">{{ i18n.t("status") }}</th>
+                    <th class="pt-conf">{{ i18n.t("confidence") }}</th>
+                    <th class="pt-watched">{{ i18n.t("watched") }}</th>
+                    <th class="pt-date">{{ i18n.t("last_observed") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in monitoring %}
+                <tr>
+                    <td class="pt-club">{% if !row.club_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ row.club_slug }}">{{ row.club_name }}</a>{% else %}{{ row.club_name }}{% endif %}</td>
+                    <td class="pt-scout">{% if row.scout_id != 0 %}<a href="/{{ lang }}/staff/{{ row.scout_id }}">{{ row.scout_name }}</a>{% else %}{{ row.scout_name }}{% endif %}</td>
+                    <td class="pt-mstatus"><span class="fm-pt-badge{% if row.status_key == "monitoring_status_negotiating" %} fm-pt-badge-agreed{% else if row.status_key == "monitoring_status_shortlisted" %} fm-pt-badge-listed{% else if row.status_key == "monitoring_status_report_ready" %} fm-pt-badge-listed{% else if row.status_key == "monitoring_status_rejected" %} fm-pt-badge-request{% else if row.status_key == "monitoring_status_signed" %} fm-pt-badge-agreed{% else if row.status_key == "monitoring_status_lost" %} fm-pt-badge-none{% else %} fm-pt-badge-interest{% endif %}">{{ i18n.t(&row.status_key) }}</span></td>
+                    <td class="pt-conf">{{ row.confidence_pct }}%</td>
+                    <td class="pt-watched">{{ row.times_watched }}{% if row.matches_watched > 0 %} / {{ row.matches_watched }}m{% endif %}</td>
+                    <td class="pt-date">{{ row.last_observed }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+
+    <section class="fm-panel fm-pt-section">
+        <div class="fm-panel-head">
             <h3>{{ i18n.t("active_negotiations") }}</h3>
             <span class="fm-panel-count">{{ negotiations.len() }}</span>
         </div>

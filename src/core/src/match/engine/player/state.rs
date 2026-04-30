@@ -1,3 +1,4 @@
+use crate::PlayerFieldPositionGroup;
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::EventCollection;
@@ -5,7 +6,6 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
-use crate::PlayerFieldPositionGroup;
 
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -99,14 +99,13 @@ impl PlayerMatchState {
                     }
                     _ => GoalkeeperSpeedContext::Casual,
                 };
-                player.skills.goalkeeper_max_speed(
-                    player.player_attributes.condition,
-                    speed_context,
-                )
+                player
+                    .skills
+                    .goalkeeper_max_speed(player.player_attributes.condition, speed_context)
             } else {
-                player.skills.max_speed_with_condition(
-                    player.player_attributes.condition,
-                )
+                player
+                    .skills
+                    .max_speed_with_condition(player.player_attributes.condition)
             };
 
             // Ball-carrier speed penalty. Real football: carrying the
@@ -134,10 +133,12 @@ impl PlayerMatchState {
             // → the recording → the viewer renders nothing. Catch it
             // here at the single integration point so no state has to
             // remember to self-sanitize. Non-finite → zero this tick.
-            let finite = velocity.x.is_finite()
-                && velocity.y.is_finite()
-                && velocity.z.is_finite();
-            let velocity = if finite { velocity } else { nalgebra::Vector3::zeros() };
+            let finite = velocity.x.is_finite() && velocity.y.is_finite() && velocity.z.is_finite();
+            let velocity = if finite {
+                velocity
+            } else {
+                nalgebra::Vector3::zeros()
+            };
 
             let velocity_sq = velocity.norm_squared();
             let max_speed_sq = max_speed * max_speed;

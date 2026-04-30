@@ -1,8 +1,8 @@
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{GoalDetail, MatchContext, MatchField, MatchPlayer, PlayerSide, ShotTarget};
-use crate::PlayerFieldPositionGroup;
 use log::debug;
 use nalgebra::Vector3;
 use rand::{Rng, RngExt};
@@ -44,7 +44,8 @@ impl PassSkills {
         let fitness_factor = (player.player_attributes.fitness as f32 / 10000.0).clamp(0.5, 1.0);
         let jadedness_penalty = (player.player_attributes.jadedness as f32 / 10000.0) * 0.3;
 
-        let condition_factor = (condition_percentage * fitness_factor - jadedness_penalty).clamp(0.5, 1.0);
+        let condition_factor =
+            (condition_percentage * fitness_factor - jadedness_penalty).clamp(0.5, 1.0);
 
         Self {
             passing,
@@ -130,7 +131,7 @@ pub enum PlayerEvent {
     ParriedBall(u32),
     /// Foul committed by (fouler_id, severity). Dispatcher decides cards.
     CommitFoul(u32, FoulSeverity),
-    Offside(u32, Vector3<f32>),  // (offside_player_id, position_for_free_kick)
+    Offside(u32, Vector3<f32>), // (offside_player_id, position_for_free_kick)
     RequestHeading(u32, Vector3<f32>),
     RequestShot(u32, Vector3<f32>),
     RequestBallReceive(u32),
@@ -150,10 +151,10 @@ impl PlayerEventDispatcher {
 
         if context.logging_enabled {
             match event {
-                PlayerEvent::TakeBall(_) | PlayerEvent::ClaimBall(_) => {},
-                _ => debug!("Player event: {:?}, tick = {}", event, context.time.time)
+                PlayerEvent::TakeBall(_) | PlayerEvent::ClaimBall(_) => {}
+                _ => debug!("Player event: {:?}, tick = {}", event, context.time.time),
             }
-        }       
+        }
 
         match event {
             PlayerEvent::Goal(player_id, is_auto_goal) => {
@@ -174,23 +175,35 @@ impl PlayerEventDispatcher {
             }
             PlayerEvent::PassTo(pass_event_model) => {
                 // Check offside before executing the pass
-                let is_gk = field.players.iter()
+                let is_gk = field
+                    .players
+                    .iter()
                     .find(|p| p.id == pass_event_model.from_player_id)
-                    .map(|p| p.tactical_position.current_position.position_group() == PlayerFieldPositionGroup::Goalkeeper)
+                    .map(|p| {
+                        p.tactical_position.current_position.position_group()
+                            == PlayerFieldPositionGroup::Goalkeeper
+                    })
                     .unwrap_or(false);
 
-                if !is_gk && Self::is_receiver_offside(
-                    pass_event_model.to_player_id,
-                    pass_event_model.from_player_id,
-                    field,
-                ) {
-                    let receiver_pos = field.players.iter()
+                if !is_gk
+                    && Self::is_receiver_offside(
+                        pass_event_model.to_player_id,
+                        pass_event_model.from_player_id,
+                        field,
+                    )
+                {
+                    let receiver_pos = field
+                        .players
+                        .iter()
                         .find(|p| p.id == pass_event_model.to_player_id)
                         .map(|p| p.position)
                         .unwrap_or(field.ball.position);
 
                     if context.logging_enabled {
-                        debug!("Offside detected: player {} at position {:?}", pass_event_model.to_player_id, receiver_pos);
+                        debug!(
+                            "Offside detected: player {} at position {:?}",
+                            pass_event_model.to_player_id, receiver_pos
+                        );
                     }
 
                     Self::handle_offside_event(pass_event_model.to_player_id, receiver_pos, field);
@@ -252,18 +265,22 @@ impl PlayerEventDispatcher {
                         } else {
                             0.0
                         };
-                        let pos_tag = match player.tactical_position.current_position.position_group() {
-                            PlayerFieldPositionGroup::Goalkeeper => "GK",
-                            PlayerFieldPositionGroup::Defender => "DEF",
-                            PlayerFieldPositionGroup::Midfielder => "MID",
-                            PlayerFieldPositionGroup::Forward => "FWD",
-                        };
+                        let pos_tag =
+                            match player.tactical_position.current_position.position_group() {
+                                PlayerFieldPositionGroup::Goalkeeper => "GK",
+                                PlayerFieldPositionGroup::Defender => "DEF",
+                                PlayerFieldPositionGroup::Midfielder => "MID",
+                                PlayerFieldPositionGroup::Forward => "FWD",
+                            };
                         crate::match_log_info!(
                             "SHOT team={} pos={} player={} state={} reason={} dist={:.1} tick={}",
-                            team_id, pos_tag,
+                            team_id,
+                            pos_tag,
                             shoot_event_model.from_player_id,
                             player.state,
-                            shoot_event_model.reason, goal_dist, tick
+                            shoot_event_model.reason,
+                            goal_dist,
+                            tick
                         );
                     }
                     context.coach_for_team_mut(team_id).record_shot(tick);
@@ -303,11 +320,18 @@ impl PlayerEventDispatcher {
         remaining_events
     }
 
-    fn handle_goal_event(player_id: u32, is_auto_goal: bool, field: &mut MatchField, context: &mut MatchContext) {
+    fn handle_goal_event(
+        player_id: u32,
+        is_auto_goal: bool,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
         let scorer_team_id = field.get_player(player_id).map(|p| p.team_id);
         let player = field.get_player_mut(player_id).unwrap();
 
-        player.statistics.add_goal(context.total_match_time, is_auto_goal);
+        player
+            .statistics
+            .add_goal(context.total_match_time, is_auto_goal);
 
         // Goal stands → credit on-target to the real scorer. Own goals
         // aren't counted as an on-target shot for the defender that
@@ -327,9 +351,7 @@ impl PlayerEventDispatcher {
                     .iter()
                     .find(|p| {
                         p.team_id != scoring_team
-                            && p.tactical_position
-                                .current_position
-                                .position_group()
+                            && p.tactical_position.current_position.position_group()
                                 == PlayerFieldPositionGroup::Goalkeeper
                     })
                     .map(|p| p.id);
@@ -364,7 +386,7 @@ impl PlayerEventDispatcher {
             player_id,
             stat_type: MatchStatisticType::Assist,
             time: context.total_match_time,
-            is_auto_goal: false
+            is_auto_goal: false,
         });
 
         player.statistics.add_assist(context.total_match_time);
@@ -416,7 +438,8 @@ impl PlayerEventDispatcher {
 
         // Calculate ideal target position — lead the pass toward receiver's movement
         let receiver_pos = event_model.pass_target;
-        let receiver_velocity = field.get_player(event_model.to_player_id)
+        let receiver_velocity = field
+            .get_player(event_model.to_player_id)
             .map(|p| p.velocity)
             .unwrap_or(Vector3::zeros());
 
@@ -547,15 +570,13 @@ impl PlayerEventDispatcher {
         let power_consistency = 1.0 + (skills.technique * skills.stamina * 0.1);
         let power_variation_range = (1.0 - overall_quality) * 0.35;
         let power_variation = rng.random_range(
-            power_consistency - power_variation_range..power_consistency + power_variation_range
+            power_consistency - power_variation_range..power_consistency + power_variation_range,
         );
         let adjusted_force = event_model.pass_force * power_variation;
 
         // Calculate horizontal velocity to reach target
-        let horizontal_velocity = Self::calculate_horizontal_velocity(
-            &actual_pass_vector,
-            adjusted_force,
-        );
+        let horizontal_velocity =
+            Self::calculate_horizontal_velocity(&actual_pass_vector, adjusted_force);
 
         // Determine trajectory type based on context, not just distance
         let passer = field.get_player_mut(event_model.from_player_id).unwrap();
@@ -616,16 +637,16 @@ impl PlayerEventDispatcher {
         const MAX_PASS_VELOCITY: f32 = 3.2;
 
         // Check for NaN or infinity
-        if final_velocity.x.is_nan() || final_velocity.y.is_nan() || final_velocity.z.is_nan()
-            || final_velocity.x.is_infinite() || final_velocity.y.is_infinite() || final_velocity.z.is_infinite()
+        if final_velocity.x.is_nan()
+            || final_velocity.y.is_nan()
+            || final_velocity.z.is_nan()
+            || final_velocity.x.is_infinite()
+            || final_velocity.y.is_infinite()
+            || final_velocity.z.is_infinite()
         {
             // Fallback to a safe default velocity
             let safe_direction = actual_pass_vector.normalize();
-            final_velocity = Vector3::new(
-                safe_direction.x * 1.5,
-                safe_direction.y * 1.5,
-                0.3
-            );
+            final_velocity = Vector3::new(safe_direction.x * 1.5, safe_direction.y * 1.5, 0.3);
         }
 
         // Clamp velocity magnitude to maximum
@@ -668,8 +689,11 @@ impl PlayerEventDispatcher {
         ball_pass_vector: &Vector3<f32>,
         pass_force: f32,
     ) -> Vector3<f32> {
-        let horizontal_direction = Vector3::new(ball_pass_vector.x, ball_pass_vector.y, 0.0).normalize();
-        let distance = (ball_pass_vector.x * ball_pass_vector.x + ball_pass_vector.y * ball_pass_vector.y).sqrt();
+        let horizontal_direction =
+            Vector3::new(ball_pass_vector.x, ball_pass_vector.y, 0.0).normalize();
+        let distance = (ball_pass_vector.x * ball_pass_vector.x
+            + ball_pass_vector.y * ball_pass_vector.y)
+            .sqrt();
 
         // Calculate velocity needed to reach target accounting for friction and air drag
         // With ground friction factor 0.985/tick, total roll distance = v0 / 0.015
@@ -731,9 +755,9 @@ impl PlayerEventDispatcher {
         };
 
         // Distance categories — calibrated for 840-unit field (1 unit ≈ 0.5m)
-        let is_short = horizontal_distance <= 30.0;       // ~15m — quick one-touch
-        let is_medium = horizontal_distance > 30.0 && horizontal_distance <= 60.0;  // 15-30m
-        let is_long = horizontal_distance > 60.0 && horizontal_distance <= 120.0;   // 30-60m
+        let is_short = horizontal_distance <= 30.0; // ~15m — quick one-touch
+        let is_medium = horizontal_distance > 30.0 && horizontal_distance <= 60.0; // 15-30m
+        let is_long = horizontal_distance > 60.0 && horizontal_distance <= 120.0; // 30-60m
         // > 120 units = very long (60m+)
 
         // Passes should be lofted based on BOTH obstacles AND distance.
@@ -784,16 +808,16 @@ impl PlayerEventDispatcher {
                 if many_obstacles {
                     // Multiple obstacles - higher arc needed
                     if skill_influenced_random < 0.70 {
-                        TrajectoryType::HighArc     // 70% high cross
+                        TrajectoryType::HighArc // 70% high cross
                     } else {
-                        TrajectoryType::MediumArc   // 30% medium cross
+                        TrajectoryType::MediumArc // 30% medium cross
                     }
                 } else {
                     // One obstacle - medium/high arc to clear it
                     if skill_influenced_random < 0.70 {
-                        TrajectoryType::MediumArc   // 70% medium cross
+                        TrajectoryType::MediumArc // 70% medium cross
                     } else {
-                        TrajectoryType::HighArc     // 30% high cross
+                        TrajectoryType::HighArc // 30% high cross
                     }
                 }
             } else if is_long {
@@ -801,16 +825,16 @@ impl PlayerEventDispatcher {
                 if many_obstacles || has_good_crossing {
                     // Multiple obstacles or good crosser - high arc
                     if skill_influenced_random < 0.75 {
-                        TrajectoryType::HighArc     // 75% high cross
+                        TrajectoryType::HighArc // 75% high cross
                     } else {
-                        TrajectoryType::MediumArc   // 25% medium cross
+                        TrajectoryType::MediumArc // 25% medium cross
                     }
                 } else {
                     // One obstacle - medium/high arc mix
                     if skill_influenced_random < 0.60 {
-                        TrajectoryType::MediumArc   // 60% medium cross
+                        TrajectoryType::MediumArc // 60% medium cross
                     } else {
-                        TrajectoryType::HighArc     // 40% high cross
+                        TrajectoryType::HighArc // 40% high cross
                     }
                 }
             } else {
@@ -819,16 +843,16 @@ impl PlayerEventDispatcher {
                 if long_pass_ability > 0.7 {
                     // Elite crosser - controlled high arc
                     if skill_influenced_random < 0.80 {
-                        TrajectoryType::HighArc     // 80% high cross
+                        TrajectoryType::HighArc // 80% high cross
                     } else {
-                        TrajectoryType::MediumArc   // 20% medium cross
+                        TrajectoryType::MediumArc // 20% medium cross
                     }
                 } else {
                     // Average crosser - mostly high arc
                     if skill_influenced_random < 0.70 {
-                        TrajectoryType::HighArc     // 70% high cross
+                        TrajectoryType::HighArc // 70% high cross
                     } else {
-                        TrajectoryType::MediumArc   // 30% medium cross
+                        TrajectoryType::MediumArc // 30% medium cross
                     }
                 }
             }
@@ -875,7 +899,7 @@ impl PlayerEventDispatcher {
             })
             .count()
     }
-    
+
     /// Calculate z-velocity to reach target with chosen trajectory type
     /// Ground passes stay on the ground, aerial passes use physics
     fn calculate_trajectory_to_target(
@@ -941,7 +965,8 @@ impl PlayerEventDispatcher {
                 let ideal_z = 0.8 * GRAVITY * flight_time;
 
                 // Requires good long passing ability
-                let execution_quality = (skills.overall_quality() + skills.long_shots + skills.crossing) / 3.0;
+                let execution_quality =
+                    (skills.overall_quality() + skills.long_shots + skills.crossing) / 3.0;
                 let error_range = (1.0 - execution_quality) * 0.18;
                 let error = rng.random_range(1.0 - error_range..1.0 + error_range);
 
@@ -951,8 +976,9 @@ impl PlayerEventDispatcher {
             // Chip - very high arc over short distance (height ~3-6m)
             TrajectoryType::Chip => {
                 // Chips are based on technique, not distance
-                let chip_ability = (skills.technique * 0.5 + skills.flair * 0.3 + skills.passing * 0.2)
-                    * skills.condition_factor;
+                let chip_ability =
+                    (skills.technique * 0.5 + skills.flair * 0.3 + skills.passing * 0.2)
+                        * skills.condition_factor;
 
                 // Base height for chip regardless of distance
                 let base_chip_height = 2.5 + (chip_ability * 2.0); // 2.5 to 4.5 m/s
@@ -968,7 +994,8 @@ impl PlayerEventDispatcher {
 
     fn calculate_max_z_velocity(horizontal_distance: f32, skills: &PassSkills) -> f32 {
         // Combine vision and long_shots for long pass capability
-        let long_pass_ability = (skills.vision * 0.6 + skills.long_shots * 0.4) * skills.condition_factor;
+        let long_pass_ability =
+            (skills.vision * 0.6 + skills.long_shots * 0.4) * skills.condition_factor;
 
         if horizontal_distance <= 20.0 {
             // Short passes - mostly ground, slight lift allowed
@@ -1004,13 +1031,17 @@ impl PlayerEventDispatcher {
             Some(p) => p.team_id,
             None => return,
         };
-        let previous_team = field.ball.previous_owner
+        let previous_team = field
+            .ball
+            .previous_owner
             .and_then(|pid| field.players.iter().find(|p| p.id == pid))
             .map(|p| p.team_id);
         let switched = previous_team.map_or(true, |pt| pt != claimant_team);
         if switched {
             let tick = context.current_tick();
-            context.coach_for_team_mut(claimant_team).record_possession_gain(tick);
+            context
+                .coach_for_team_mut(claimant_team)
+                .record_possession_gain(tick);
         }
     }
 
@@ -1054,7 +1085,11 @@ impl PlayerEventDispatcher {
 
             // Different player trying to claim - this is a tackle/interception
             // Reject if current owner hasn't held ball long enough (prevents ping-pong)
-            let min_duration = if field.ball.contested_claim_count > 3 { 60 } else { 25 };
+            let min_duration = if field.ball.contested_claim_count > 3 {
+                60
+            } else {
+                25
+            };
             if field.ball.ownership_duration < min_duration {
                 return;
             }
@@ -1089,10 +1124,14 @@ impl PlayerEventDispatcher {
         // legitimate same-team receptions. The dedicated passer flag
         // persists through the real pass window (~150 ticks).
         if let Some(passer_id) = field.ball.pending_pass_passer {
-            let same_team = field.players.iter()
+            let same_team = field
+                .players
+                .iter()
                 .find(|p| p.id == player_id)
                 .and_then(|claimant| {
-                    field.players.iter()
+                    field
+                        .players
+                        .iter()
                         .find(|p| p.id == passer_id)
                         .map(|passer| claimant.team_id == passer.team_id)
                 })
@@ -1194,8 +1233,9 @@ impl PlayerEventDispatcher {
 
         // Calculate distance to goal
         let ball_to_goal_vector = goal_center - field.ball.position;
-        let horizontal_distance = (ball_to_goal_vector.x * ball_to_goal_vector.x +
-                                   ball_to_goal_vector.y * ball_to_goal_vector.y).sqrt();
+        let horizontal_distance = (ball_to_goal_vector.x * ball_to_goal_vector.x
+            + ball_to_goal_vector.y * ball_to_goal_vector.y)
+            .sqrt();
 
         // Safety check: if ball is already at/very near the goal, just give it a gentle push
         if horizontal_distance < MIN_SHOT_DISTANCE {
@@ -1296,7 +1336,13 @@ impl PlayerEventDispatcher {
         // Cut to 30× and tightened mins so accuracy → on-target rate
         // tracks more linearly toward the real ~33%.
         let base_position_error = 30.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let min_error = if horizontal_distance < 30.0 { 2.0 } else if horizontal_distance < 60.0 { 4.0 } else { 8.0 };
+        let min_error = if horizontal_distance < 30.0 {
+            2.0
+        } else if horizontal_distance < 60.0 {
+            4.0
+        } else {
+            8.0
+        };
         let max_y_error = base_position_error.clamp(min_error, 60.0);
 
         // Add random error to y-coordinate
@@ -1343,7 +1389,7 @@ impl PlayerEventDispatcher {
         let max_miss_distance = GOAL_WIDTH * 3.0;
         let clamped_y_target = actual_y_target.clamp(
             goal_left_post - max_miss_distance,
-            goal_right_post + max_miss_distance
+            goal_right_post + max_miss_distance,
         );
 
         // Calculate final shot direction
@@ -1351,7 +1397,8 @@ impl PlayerEventDispatcher {
         let shot_vector = actual_target - field.ball.position;
 
         // Calculate skill-based power multiplier (better players shoot harder)
-        let power_skill_factor = (finishing_skill * 0.5) + (technique_skill * 0.3) + (long_shot_skill * 0.2);
+        let power_skill_factor =
+            (finishing_skill * 0.5) + (technique_skill * 0.3) + (long_shot_skill * 0.2);
         let power_multiplier = 0.95 + (power_skill_factor * 0.35); // Range: 0.95 to 1.30
 
         // Calculate horizontal velocity with skill-based power
@@ -1427,24 +1474,21 @@ impl PlayerEventDispatcher {
         };
 
         // Calculate final velocity
-        let mut final_velocity = Vector3::new(
-            horizontal_velocity.x,
-            horizontal_velocity.y,
-            z_velocity
-        );
+        let mut final_velocity =
+            Vector3::new(horizontal_velocity.x, horizontal_velocity.y, z_velocity);
 
         // CRITICAL: Validate and clamp velocity to prevent cosmic-speed shots
         // Check for NaN or infinity
-        if final_velocity.x.is_nan() || final_velocity.y.is_nan() || final_velocity.z.is_nan()
-            || final_velocity.x.is_infinite() || final_velocity.y.is_infinite() || final_velocity.z.is_infinite()
+        if final_velocity.x.is_nan()
+            || final_velocity.y.is_nan()
+            || final_velocity.z.is_nan()
+            || final_velocity.x.is_infinite()
+            || final_velocity.y.is_infinite()
+            || final_velocity.z.is_infinite()
         {
             // Fallback to a safe default velocity toward the goal
             let safe_direction = (goal_center - field.ball.position).normalize();
-            final_velocity = Vector3::new(
-                safe_direction.x * 5.0,
-                safe_direction.y * 5.0,
-                1.0
-            );
+            final_velocity = Vector3::new(safe_direction.x * 5.0, safe_direction.y * 5.0, 1.0);
         }
 
         // Clamp velocity magnitude to maximum realistic shot speed
@@ -1489,7 +1533,9 @@ impl PlayerEventDispatcher {
                 let target_mult = if on_target { 1.0 } else { 0.15 };
                 (distance_factor * skill_mult * target_mult).clamp(0.0, 0.90)
             };
-            shooter.memory.record_shot(shoot_event_model.tick, on_target);
+            shooter
+                .memory
+                .record_shot(shoot_event_model.tick, on_target);
             shooter.memory.record_shot_xg(shoot_event_model.tick, xg);
         }
 
@@ -1533,8 +1579,7 @@ impl PlayerEventDispatcher {
                 let goal_line_y = field.ball.position.y + final_velocity.y * ticks_to_goal;
                 // Arc approximation: z under gravity (~0.157 u/tick² from
                 // update_velocity's 9.81 * 0.016 scaling).
-                let goal_line_z = (field.ball.position.z
-                    + final_velocity.z * ticks_to_goal
+                let goal_line_z = (field.ball.position.z + final_velocity.z * ticks_to_goal
                     - 0.5 * 0.157 * ticks_to_goal * ticks_to_goal)
                     .max(0.0);
                 field.ball.cached_shot_target = Some(ShotTarget {
@@ -1581,9 +1626,18 @@ impl PlayerEventDispatcher {
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField) {
         // Detect saves: ball was moving and came from an opponent
         let ball_was_moving = field.ball.velocity.norm_squared() > 0.25;
-        let last_owner_team = field.ball.previous_owner
-            .and_then(|prev_id| field.players.iter().find(|p| p.id == prev_id).map(|p| p.team_id));
-        let gk_team = field.players.iter().find(|p| p.id == player_id).map(|p| p.team_id);
+        let last_owner_team = field.ball.previous_owner.and_then(|prev_id| {
+            field
+                .players
+                .iter()
+                .find(|p| p.id == prev_id)
+                .map(|p| p.team_id)
+        });
+        let gk_team = field
+            .players
+            .iter()
+            .find(|p| p.id == player_id)
+            .map(|p| p.team_id);
 
         // Save credit requires both: the ball was moving from an opponent
         // AND the catch resolves a real shot (cached_shot_target set).
@@ -1701,14 +1755,16 @@ impl PlayerEventDispatcher {
             let sportsmanship = player.attributes.sportsmanship / 20.0;
 
             // Persistent fouler escalation — 3+ fouls = next one much more likely booked.
-            let persistent = if player.fouls_committed >= 3 { 0.15 } else { 0.0 };
+            let persistent = if player.fouls_committed >= 3 {
+                0.15
+            } else {
+                0.0
+            };
 
             // High-aggression, low-composure, low-teamwork = "dirty" player.
             // Layer personality on top: dirtiness pushes cards up, sportsmanship
             // pulls them down, low temperament punishes you under pressure.
-            let aggressor_factor = (aggression * 0.40
-                - composure * 0.12
-                - teamwork * 0.08
+            let aggressor_factor = (aggression * 0.40 - composure * 0.12 - teamwork * 0.08
                 + dirtiness * 0.18
                 + (1.0 - temperament) * 0.10
                 - sportsmanship * 0.10)
@@ -1770,9 +1826,7 @@ impl PlayerEventDispatcher {
 
             // Capture team id before we stash the player off-pitch so we
             // can reshape teammates afterwards.
-            let team_id = field
-                .get_player_mut(fouler_id)
-                .map(|p| p.team_id);
+            let team_id = field.get_player_mut(fouler_id).map(|p| p.team_id);
 
             if let Some(player) = field.get_player_mut(fouler_id) {
                 player.velocity = Vector3::zeros();
@@ -1811,11 +1865,7 @@ impl PlayerEventDispatcher {
     ///   1) in the opponent's half,
     ///   2) ahead of the ball, and
     ///   3) beyond the second-to-last opponent (including goalkeeper).
-    fn is_receiver_offside(
-        receiver_id: u32,
-        passer_id: u32,
-        field: &MatchField,
-    ) -> bool {
+    fn is_receiver_offside(receiver_id: u32, passer_id: u32, field: &MatchField) -> bool {
         let receiver = match field.players.iter().find(|p| p.id == receiver_id) {
             Some(p) => p,
             None => return false,
@@ -1852,7 +1902,9 @@ impl PlayerEventDispatcher {
                 // Collect all opponents (Right side players)
                 // Right side's own goal is at x = field_width
                 // Sort DESCENDING so [0] = closest to their goal (GK), [1] = second-to-last
-                let mut opponent_xs: Vec<f32> = field.players.iter()
+                let mut opponent_xs: Vec<f32> = field
+                    .players
+                    .iter()
                     .filter(|p| p.side == Some(PlayerSide::Right))
                     .map(|p| p.position.x)
                     .collect();
@@ -1879,7 +1931,9 @@ impl PlayerEventDispatcher {
                 // Collect all opponents (Left side players)
                 // Left side's own goal is at x = 0
                 // Sort ASCENDING so [0] = closest to their goal (GK), [1] = second-to-last
-                let mut opponent_xs: Vec<f32> = field.players.iter()
+                let mut opponent_xs: Vec<f32> = field
+                    .players
+                    .iter()
                     .filter(|p| p.side == Some(PlayerSide::Left))
                     .map(|p| p.position.x)
                     .collect();
@@ -1897,24 +1951,34 @@ impl PlayerEventDispatcher {
     }
 
     /// Handle an offside event: stop the ball, award a free kick to the nearest opponent.
-    fn handle_offside_event(offside_player_id: u32, position: Vector3<f32>, field: &mut MatchField) {
+    fn handle_offside_event(
+        offside_player_id: u32,
+        position: Vector3<f32>,
+        field: &mut MatchField,
+    ) {
         // Increment offside stat on the player
         if let Some(player) = field.players.iter_mut().find(|p| p.id == offside_player_id) {
             player.statistics.offsides += 1;
         }
 
         // Determine the offside player's side to find opponents
-        let offside_side = field.players.iter()
+        let offside_side = field
+            .players
+            .iter()
             .find(|p| p.id == offside_player_id)
             .and_then(|p| p.side);
 
         // Find nearest opponent to the offside position to award free kick
-        let nearest_opponent_id = field.players.iter()
+        let nearest_opponent_id = field
+            .players
+            .iter()
             .filter(|p| p.side != offside_side && p.side.is_some())
             .min_by(|a, b| {
                 let dist_a = (a.position - position).norm();
                 let dist_b = (b.position - position).norm();
-                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+                dist_a
+                    .partial_cmp(&dist_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|p| p.id);
 
@@ -1951,10 +2015,7 @@ impl PlayerEventDispatcher {
         // self`; we only need a read here and want to keep the borrow
         // immutable so the caller can re-borrow `field` mutably afterward.
         let clearer = field.players.iter().find(|p| p.id == clearer_id)?;
-        if clearer
-            .tactical_position
-            .current_position
-            .position_group()
+        if clearer.tactical_position.current_position.position_group()
             == PlayerFieldPositionGroup::Goalkeeper
         {
             Some(clearer_id)
@@ -1973,8 +2034,7 @@ impl PlayerEventDispatcher {
         if let Some(gk_id) = gk_save_id {
             // Capture shooter BEFORE we mutate the field — the previous
             // owner is the player whose shot the GK is now clearing.
-            let shooter_id = field.ball.previous_owner
-                .filter(|&sid| sid != gk_id);
+            let shooter_id = field.ball.previous_owner.filter(|&sid| sid != gk_id);
             if let Some(gk) = field.get_player_mut(gk_id) {
                 gk.statistics.saves += 1;
                 gk.statistics.shots_faced += 1;

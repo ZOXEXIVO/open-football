@@ -1,5 +1,5 @@
-use crate::r#match::MatchPlayer;
 use crate::Tactics;
+use crate::r#match::MatchPlayer;
 
 #[derive(Debug, Clone)]
 pub struct MatchSquad {

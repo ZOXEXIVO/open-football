@@ -113,27 +113,37 @@ impl PlayerSkills {
 
         // Core goalkeeping: handling, reflexes, one-on-ones, aerial reach,
         // command of area, communication, rushing out, punching
-        let key_gk = (gk.handling + gk.reflexes + gk.one_on_ones + gk.aerial_reach
-            + gk.command_of_area + gk.communication + gk.rushing_out + gk.punching) / 8.0;
+        let key_gk = (gk.handling
+            + gk.reflexes
+            + gk.one_on_ones
+            + gk.aerial_reach
+            + gk.command_of_area
+            + gk.communication
+            + gk.rushing_out
+            + gk.punching)
+            / 8.0;
 
         // Key mental: positioning, concentration, anticipation, composure, decisions
         let key_mental = (self.mental.positioning
             + self.mental.concentration
             + self.mental.anticipation
             + self.mental.composure
-            + self.mental.decisions) / 5.0;
+            + self.mental.decisions)
+            / 5.0;
 
         // Key physical: agility, jumping, strength, acceleration
         let key_physical = (self.physical.agility
             + self.physical.jumping
             + self.physical.strength
-            + self.physical.acceleration) / 4.0;
+            + self.physical.acceleration)
+            / 4.0;
 
         // Key technical: kicking, first touch, passing (modern GK distribution)
         let key_technical = (gk.kicking + gk.first_touch + gk.passing + gk.throwing) / 4.0;
 
         // GK ability: goalkeeping-dominant
-        let weighted = key_gk * 0.40 + key_mental * 0.25 + key_physical * 0.20 + key_technical * 0.15;
+        let weighted =
+            key_gk * 0.40 + key_mental * 0.25 + key_physical * 0.20 + key_technical * 0.15;
         Self::skill_to_ability(weighted)
     }
 
@@ -163,9 +173,7 @@ impl PlayerSkills {
         let agility_factor = (self.physical.agility as f32 - 1.0) / 19.0;
 
         // Weighted skill blend (pace dominant)
-        let skill_blend = 0.7 * pace_factor
-            + 0.2 * acceleration_factor
-            + 0.1 * agility_factor;
+        let skill_blend = 0.7 * pace_factor + 0.2 * acceleration_factor + 0.1 * agility_factor;
 
         let min_speed = 0.36;
         let max_speed = 0.63;
@@ -207,7 +215,11 @@ impl PlayerSkills {
     ///   Active:    0.85–1.5× → typical GK chase speed
     ///   Positioning: 0.75–1.0× → tracking play, reading the game
     ///   Casual:    0.65× → idle/recovery
-    pub fn goalkeeper_max_speed(&self, condition: i16, speed_context: GoalkeeperSpeedContext) -> f32 {
+    pub fn goalkeeper_max_speed(
+        &self,
+        condition: i16,
+        speed_context: GoalkeeperSpeedContext,
+    ) -> f32 {
         let base = self.max_speed_with_condition(condition);
 
         let agility = self.physical.agility / 20.0;

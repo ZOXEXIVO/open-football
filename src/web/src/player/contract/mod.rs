@@ -1,14 +1,17 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
-use crate::common::slug::{resolve_player_page, PlayerPage};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use core::utils::FormattingUtils;
-use core::{ContractBonusType, ContractClauseType, ContractType, Player, PlayerSquadStatus, PlayerStatusType, SimulatorData};
+use core::{
+    ContractBonusType, ContractClauseType, ContractType, Player, PlayerSquadStatus,
+    PlayerStatusType, SimulatorData,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -102,7 +105,11 @@ pub async fn player_contract_action(
         &route_params.lang,
         "/contract",
     )? {
-        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Found {
+            player,
+            team,
+            canonical_slug,
+        } => (player, team, canonical_slug),
         PlayerPage::Redirect(r) => return Ok(r),
     };
 
@@ -111,12 +118,23 @@ pub async fn player_contract_action(
     } else {
         (Vec::new(), Vec::new())
     };
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
+    let league_refs: Vec<(&str, &str)> = country_leagues
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
 
-    let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
+    let title = format!(
+        "{} {}",
+        player.full_name.display_first_name(),
+        player.full_name.display_last_name()
+    );
 
-    let (contract, bonuses, clauses) = build_contract_detail(player, team_opt, simulator_data, now, &i18n);
+    let (contract, bonuses, clauses) =
+        build_contract_detail(player, team_opt, simulator_data, now, &i18n);
     let loan_contract = build_loan_detail(player, simulator_data, &i18n);
 
     Ok(PlayerContractTemplate {
@@ -132,15 +150,41 @@ pub async fn player_contract_action(
                 i18n.t("free_agent").to_string()
             }
         }),
-        sub_title_link: team_opt.map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug)).unwrap_or_default(),
+        sub_title_link: team_opt
+            .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
+            .unwrap_or_default(),
         sub_title_country_code: String::new(),
-        header_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.background.clone())).unwrap_or_else(|| "#808080".to_string()),
-        foreground_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.foreground.clone())).unwrap_or_else(|| "#ffffff".to_string()),
+        header_color: team_opt
+            .and_then(|t| {
+                simulator_data
+                    .club(t.club_id)
+                    .map(|c| c.colors.background.clone())
+            })
+            .unwrap_or_else(|| "#808080".to_string()),
+        foreground_color: team_opt
+            .and_then(|t| {
+                simulator_data
+                    .club(t.club_id)
+                    .map(|c| c.colors.foreground.clone())
+            })
+            .unwrap_or_else(|| "#ffffff".to_string()),
         menu_sections: if let Some(team) = team_opt {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
             let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
-            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-            views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main)
+            let mp = views::MenuParams {
+                i18n: &i18n,
+                lang: &route_params.lang,
+                current_path: &current_path,
+                country_name: cn,
+                country_slug: cs,
+            };
+            views::team_menu(
+                &mp,
+                &neighbor_refs,
+                &team.slug,
+                &league_refs,
+                team.team_type == core::TeamType::Main,
+            )
         } else {
             Vec::new()
         },
@@ -159,7 +203,8 @@ pub async fn player_contract_action(
         loan_contract,
         bonuses,
         clauses,
-    }.into_response())
+    }
+    .into_response())
 }
 
 fn build_contract_detail(
@@ -177,7 +222,10 @@ fn build_contract_detail(
     let (club_name, club_slug) = team_opt
         .and_then(|t| data.club(t.club_id))
         .map(|club| {
-            let slug = club.teams.teams.first()
+            let slug = club
+                .teams
+                .teams
+                .first()
                 .map(|t| t.slug.clone())
                 .unwrap_or_default();
             (club.name.clone(), slug)
@@ -206,9 +254,15 @@ fn build_contract_detail(
 
     let transfer_status = if contract.is_transfer_listed {
         match &contract.transfer_status {
-            Some(core::PlayerTransferStatus::TransferListed) => i18n.t("player_status_listed").to_string(),
-            Some(core::PlayerTransferStatus::LoadListed) => i18n.t("player_status_loan_listed").to_string(),
-            Some(core::PlayerTransferStatus::TransferAndLoadListed) => i18n.t("transfer_and_loan_listed").to_string(),
+            Some(core::PlayerTransferStatus::TransferListed) => {
+                i18n.t("player_status_listed").to_string()
+            }
+            Some(core::PlayerTransferStatus::LoadListed) => {
+                i18n.t("player_status_loan_listed").to_string()
+            }
+            Some(core::PlayerTransferStatus::TransferAndLoadListed) => {
+                i18n.t("transfer_and_loan_listed").to_string()
+            }
             None => i18n.t("player_status_listed").to_string(),
         }
     } else {
@@ -220,7 +274,13 @@ fn build_contract_detail(
         let years = days_remaining / 365;
         let months = (days_remaining % 365) / 30;
         if months > 0 {
-            format!("{} {} {} {}", years, i18n.t("unit_yr"), months, i18n.t("unit_mo"))
+            format!(
+                "{} {} {} {}",
+                years,
+                i18n.t("unit_yr"),
+                months,
+                i18n.t("unit_mo")
+            )
         } else {
             format!("{} {}", years, i18n.t("unit_yr"))
         }
@@ -232,8 +292,10 @@ fn build_contract_detail(
         i18n.t("expired").to_string()
     };
 
-    let bonuses: Vec<BonusDto> = contract.bonuses.iter().map(|b| {
-        BonusDto {
+    let bonuses: Vec<BonusDto> = contract
+        .bonuses
+        .iter()
+        .map(|b| BonusDto {
             bonus_type: match b.bonus_type {
                 ContractBonusType::AppearanceFee => i18n.t("bonus_appearance_fee"),
                 ContractBonusType::GoalFee => i18n.t("bonus_goal"),
@@ -246,38 +308,66 @@ fn build_contract_detail(
                 ContractBonusType::UnusedSubstitutionFee => i18n.t("bonus_unused_sub"),
                 ContractBonusType::SigningBonus => i18n.t("bonus_signing"),
                 ContractBonusType::LoyaltyBonus => i18n.t("bonus_loyalty"),
-            }.to_string(),
+            }
+            .to_string(),
             value: FormattingUtils::format_money(b.value as f64),
-        }
-    }).collect();
+        })
+        .collect();
 
-    let clauses: Vec<ClauseDto> = contract.clauses.iter().map(|c| {
-        ClauseDto {
+    let clauses: Vec<ClauseDto> = contract
+        .clauses
+        .iter()
+        .map(|c| ClauseDto {
             clause_type: match c.bonus_type {
                 ContractClauseType::MinimumFeeRelease => i18n.t("clause_min_fee_release"),
                 ContractClauseType::RelegationFeeRelease => i18n.t("clause_relegation_release"),
                 ContractClauseType::NonPromotionRelease => i18n.t("clause_non_promotion_release"),
                 ContractClauseType::YearlyWageRise => i18n.t("clause_yearly_wage_rise"),
-                ContractClauseType::PromotionWageIncrease => i18n.t("clause_promotion_wage_increase"),
-                ContractClauseType::RelegationWageDecrease => i18n.t("clause_relegation_wage_decrease"),
+                ContractClauseType::PromotionWageIncrease => {
+                    i18n.t("clause_promotion_wage_increase")
+                }
+                ContractClauseType::RelegationWageDecrease => {
+                    i18n.t("clause_relegation_wage_decrease")
+                }
                 ContractClauseType::StaffJobRelease => i18n.t("clause_staff_job_release"),
                 ContractClauseType::SellOnFee => i18n.t("clause_sell_on_fee"),
                 ContractClauseType::SellOnFeeProfit => i18n.t("clause_sell_on_fee_profit"),
-                ContractClauseType::SeasonalLandmarkGoalBonus => i18n.t("clause_landmark_goal_bonus"),
-                ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason => i18n.t("clause_1yr_extension_games"),
+                ContractClauseType::SeasonalLandmarkGoalBonus => {
+                    i18n.t("clause_landmark_goal_bonus")
+                }
+                ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason => {
+                    i18n.t("clause_1yr_extension_games")
+                }
                 ContractClauseType::MatchHighestEarner => i18n.t("clause_match_highest_earner"),
-                ContractClauseType::WageAfterReachingClubCareerLeagueGames => i18n.t("clause_wage_club_games"),
-                ContractClauseType::TopDivisionPromotionWageRise => i18n.t("clause_top_div_promotion_rise"),
-                ContractClauseType::TopDivisionRelegationWageDrop => i18n.t("clause_top_div_relegation_drop"),
-                ContractClauseType::MinimumFeeReleaseToForeignClubs => i18n.t("clause_min_fee_foreign"),
-                ContractClauseType::MinimumFeeReleaseToHigherDivisionClubs => i18n.t("clause_min_fee_higher_div"),
-                ContractClauseType::MinimumFeeReleaseToDomesticClubs => i18n.t("clause_min_fee_domestic"),
-                ContractClauseType::WageAfterReachingInternationalCaps => i18n.t("clause_wage_intl_caps"),
-                ContractClauseType::OptionalContractExtensionByClub => i18n.t("clause_optional_extension"),
-            }.to_string(),
+                ContractClauseType::WageAfterReachingClubCareerLeagueGames => {
+                    i18n.t("clause_wage_club_games")
+                }
+                ContractClauseType::TopDivisionPromotionWageRise => {
+                    i18n.t("clause_top_div_promotion_rise")
+                }
+                ContractClauseType::TopDivisionRelegationWageDrop => {
+                    i18n.t("clause_top_div_relegation_drop")
+                }
+                ContractClauseType::MinimumFeeReleaseToForeignClubs => {
+                    i18n.t("clause_min_fee_foreign")
+                }
+                ContractClauseType::MinimumFeeReleaseToHigherDivisionClubs => {
+                    i18n.t("clause_min_fee_higher_div")
+                }
+                ContractClauseType::MinimumFeeReleaseToDomesticClubs => {
+                    i18n.t("clause_min_fee_domestic")
+                }
+                ContractClauseType::WageAfterReachingInternationalCaps => {
+                    i18n.t("clause_wage_intl_caps")
+                }
+                ContractClauseType::OptionalContractExtensionByClub => {
+                    i18n.t("clause_optional_extension")
+                }
+            }
+            .to_string(),
             value: format_clause_value(&c.bonus_type, c.value),
-        }
-    }).collect();
+        })
+        .collect();
 
     let detail = ContractDetailDto {
         club_name,
@@ -287,7 +377,10 @@ fn build_contract_detail(
         shirt_number: contract.shirt_number,
         salary: FormattingUtils::format_money(contract.salary as f64 / 52.0),
         salary_annual: FormattingUtils::format_money(contract.salary as f64),
-        started: contract.started.map(|d| d.format("%d.%m.%Y").to_string()).unwrap_or_else(|| "-".to_string()),
+        started: contract
+            .started
+            .map(|d| d.format("%d.%m.%Y").to_string())
+            .unwrap_or_else(|| "-".to_string()),
         expiration: contract.expiration.format("%d.%m.%Y").to_string(),
         years_remaining,
         is_transfer_listed: contract.is_transfer_listed,
@@ -300,18 +393,30 @@ fn build_contract_detail(
 fn build_loan_detail(player: &Player, data: &SimulatorData, i18n: &I18n) -> Option<LoanDetailDto> {
     let loan = player.contract_loan.as_ref()?;
 
-    let (from_name, from_slug) = loan.loan_from_club_id
+    let (from_name, from_slug) = loan
+        .loan_from_club_id
         .and_then(|id| data.club(id))
         .map(|club| {
-            let slug = club.teams.teams.first().map(|t| t.slug.clone()).unwrap_or_default();
+            let slug = club
+                .teams
+                .teams
+                .first()
+                .map(|t| t.slug.clone())
+                .unwrap_or_default();
             (club.name.clone(), slug)
         })
         .unwrap_or_default();
 
-    let (to_name, to_slug) = loan.loan_to_club_id
+    let (to_name, to_slug) = loan
+        .loan_to_club_id
         .and_then(|id| data.club(id))
         .map(|club| {
-            let slug = club.teams.teams.first().map(|t| t.slug.clone()).unwrap_or_default();
+            let slug = club
+                .teams
+                .teams
+                .first()
+                .map(|t| t.slug.clone())
+                .unwrap_or_default();
             (club.name.clone(), slug)
         })
         .unwrap_or_default();
@@ -360,7 +465,10 @@ fn get_neighbor_teams(
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
         .map(|country| {
-            country.leagues.leagues.iter()
+            country
+                .leagues
+                .leagues
+                .iter()
                 .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
@@ -370,6 +478,9 @@ fn get_neighbor_teams(
 
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }

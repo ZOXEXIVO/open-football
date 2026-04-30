@@ -1,29 +1,29 @@
+use crate::GameAppData;
 use crate::ai::ai_routes;
 use crate::champions_league::champions_league_routes;
+use crate::common::default_handler::default_handler;
 use crate::conference_league::conference_league_routes;
 use crate::countries::country_routes;
 use crate::date::current_date_routes;
 use crate::europa_league::europa_league_routes;
-use crate::national_competitions::national_competitions_routes;
 use crate::face::face_routes;
 use crate::game::game_routes;
-use crate::i18n::{detect_language, SUPPORTED_LANG_CODES};
+use crate::i18n::{SUPPORTED_LANG_CODES, detect_language};
 use crate::leagues::league_routes;
-use crate::player::player_routes;
 use crate::r#match::routes::match_routes;
+use crate::national_competitions::national_competitions_routes;
+use crate::player::player_routes;
 use crate::search::search_routes;
 use crate::staff::staff_routes;
 use crate::teams::team_routes;
 use crate::watchlist::watchlist_routes;
-use crate::GameAppData;
+use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::header::ACCEPT_LANGUAGE;
 use axum::http::HeaderMap;
+use axum::http::header::ACCEPT_LANGUAGE;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
-use axum::Router;
-use crate::common::default_handler::default_handler;
 
 async fn root_redirect(headers: HeaderMap) -> impl IntoResponse {
     let accept_language = headers
@@ -37,8 +37,10 @@ async fn root_redirect(headers: HeaderMap) -> impl IntoResponse {
 async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
-    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-        <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+    let mut xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+        <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
+    );
 
     // Language root pages — monthly
     for lang in SUPPORTED_LANG_CODES {

@@ -112,17 +112,11 @@ impl<'p> MovementOperationsImpl<'p> {
         let goal_direction = to_goal.normalize();
 
         // Check if direct path is clear
-        if !self
-            .ctx
-            .players()
-            .opponents()
-            .nearby(30.0)
-            .any(|opp| {
-                let to_opp = opp.position - player_pos;
-                let dot = to_opp.normalize().dot(&goal_direction);
-                dot > 0.8 && to_opp.magnitude() < 40.0
-            })
-        {
+        if !self.ctx.players().opponents().nearby(30.0).any(|opp| {
+            let to_opp = opp.position - player_pos;
+            let dot = to_opp.normalize().dot(&goal_direction);
+            dot > 0.8 && to_opp.magnitude() < 40.0
+        }) {
             return Some(player_pos + goal_direction * 50.0);
         }
 
@@ -206,10 +200,18 @@ impl<'p> MovementOperationsImpl<'p> {
 
         // Single count using pre-computed distances (teammates + opponents)
         let player_id = self.ctx.player.id;
-        let total_nearby = self.ctx.tick_context.grid
-            .teammates(player_id, 0.0, 15.0).count()
-            + self.ctx.tick_context.grid
-            .opponents(player_id, 15.0).count();
+        let total_nearby = self
+            .ctx
+            .tick_context
+            .grid
+            .teammates(player_id, 0.0, 15.0)
+            .count()
+            + self
+                .ctx
+                .tick_context
+                .grid
+                .opponents(player_id, 15.0)
+                .count();
 
         // If 2 or more players nearby (congestion)
         total_nearby >= 2
@@ -223,10 +225,18 @@ impl<'p> MovementOperationsImpl<'p> {
 
         // Single count using pre-computed distances (teammates + opponents)
         let player_id = self.ctx.player.id;
-        let total_nearby = self.ctx.tick_context.grid
-            .teammates(player_id, 0.0, CONGESTION_RADIUS).count()
-            + self.ctx.tick_context.grid
-            .opponents(player_id, CONGESTION_RADIUS).count();
+        let total_nearby = self
+            .ctx
+            .tick_context
+            .grid
+            .teammates(player_id, 0.0, CONGESTION_RADIUS)
+            .count()
+            + self
+                .ctx
+                .tick_context
+                .grid
+                .opponents(player_id, CONGESTION_RADIUS)
+                .count();
 
         // If 6 or more players clustered together
         total_nearby >= CONGESTION_THRESHOLD

@@ -1,10 +1,10 @@
+use super::Club;
 use crate::{
     ContractType, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerStatusType,
     Team, TeamType,
 };
 use chrono::{Datelike, NaiveDate};
 use log::debug;
-use super::Club;
 
 /// Minimum players a youth/reserve team should keep to remain functional.
 const MIN_YOUTH_SQUAD: usize = 11;
@@ -175,7 +175,15 @@ impl Club {
                 .players
                 .iter()
                 .filter(|p| p.position().position_group() == *group)
-                .map(|p| (p.id, p.player_attributes.current_ability, p.age(date), p.is_on_loan(), p.is_force_match_selection))
+                .map(|p| {
+                    (
+                        p.id,
+                        p.player_attributes.current_ability,
+                        p.age(date),
+                        p.is_on_loan(),
+                        p.is_force_match_selection,
+                    )
+                })
                 .collect();
             ranked.sort_by(|a, b| b.1.cmp(&a.1));
             for (player_id, _, age, is_loan_in, is_locked) in ranked.into_iter().skip(*depth) {
@@ -240,7 +248,11 @@ impl Club {
             // unless the player is overage or a positional-surplus
             // demotion (both must leave regardless — backfill will
             // restore the size from youth).
-            let min_for_source = if m.from == main_idx { MIN_MAIN_SQUAD } else { MIN_YOUTH_SQUAD };
+            let min_for_source = if m.from == main_idx {
+                MIN_MAIN_SQUAD
+            } else {
+                MIN_YOUTH_SQUAD
+            };
             if m.reason != "overage for current team"
                 && m.reason != "surplus at position"
                 && source_size.saturating_sub(already_taken) <= min_for_source
@@ -260,7 +272,8 @@ impl Club {
                     player.on_youth_breakthrough(date);
                 }
 
-                debug!("squad rebalance: {} (CA={}, age={}) {} → {} ({})",
+                debug!(
+                    "squad rebalance: {} (CA={}, age={}) {} → {} ({})",
                     player.full_name,
                     player.player_attributes.current_ability,
                     player.age(date),
@@ -305,12 +318,17 @@ impl Club {
             candidates.truncate(deficit);
 
             for (team_idx, player_id, _) in candidates {
-                if let Some(mut player) = self.teams.teams[team_idx].players.take_player(&player_id) {
+                if let Some(mut player) = self.teams.teams[team_idx].players.take_player(&player_id)
+                {
                     upgrade_contract_if_youth(&mut player, date, &self.teams.teams[main_idx]);
                     player.on_youth_breakthrough(date);
-                    debug!("backfill to main: {} (CA={}, age={}) from {}",
-                        player.full_name, player.player_attributes.current_ability,
-                        player.age(date), self.teams.teams[team_idx].name);
+                    debug!(
+                        "backfill to main: {} (CA={}, age={}) from {}",
+                        player.full_name,
+                        player.player_attributes.current_ability,
+                        player.age(date),
+                        self.teams.teams[team_idx].name
+                    );
                     self.teams.teams[main_idx].players.add(player);
                 }
             }
@@ -381,7 +399,9 @@ impl Club {
             None => return,
         };
 
-        let reserve_idx = self.teams.index_of_type(TeamType::Reserve)
+        let reserve_idx = self
+            .teams
+            .index_of_type(TeamType::Reserve)
             .or_else(|| self.teams.index_of_type(TeamType::B))
             .or_else(|| self.teams.index_of_type(TeamType::Second));
 
@@ -393,15 +413,19 @@ impl Club {
         // Find main team players with no contract (returned from loan).
         // Force-selected players stay on main even if their contract slot
         // is empty — the manager has pinned them in.
-        let to_move: Vec<u32> = self.teams.teams[main_idx].players.iter()
+        let to_move: Vec<u32> = self.teams.teams[main_idx]
+            .players
+            .iter()
             .filter(|p| p.contract.is_none() && !p.is_force_match_selection)
             .map(|p| p.id)
             .collect();
 
         for player_id in to_move {
             if let Some(player) = self.teams.teams[main_idx].players.take_player(&player_id) {
-                debug!("loan return -> reserve: {} moved to {}",
-                    player.full_name, self.teams.teams[reserve_idx].name);
+                debug!(
+                    "loan return -> reserve: {} moved to {}",
+                    player.full_name, self.teams.teams[reserve_idx].name
+                );
                 self.teams.teams[reserve_idx].players.add(player);
             }
         }
@@ -484,19 +508,16 @@ impl Club {
 }
 
 /// Upgrade a youth contract to a full contract when a player is promoted to the main team.
-fn upgrade_contract_if_youth(
-    player: &mut Player,
-    date: NaiveDate,
-    main_team: &Team,
-) {
-    let is_youth = player.contract.as_ref()
+fn upgrade_contract_if_youth(player: &mut Player, date: NaiveDate, main_team: &Team) {
+    let is_youth = player
+        .contract
+        .as_ref()
         .map(|c| c.contract_type == ContractType::Youth)
         .unwrap_or(false);
 
     if is_youth {
-        let expiration = NaiveDate::from_ymd_opt(
-            date.year() + 3, date.month(), date.day().min(28),
-        ).unwrap_or(date);
+        let expiration = NaiveDate::from_ymd_opt(date.year() + 3, date.month(), date.day().min(28))
+            .unwrap_or(date);
         let club_rep = main_team.reputation.world;
         let salary = super::graduation_salary(player.player_attributes.current_ability, club_rep);
         player.contract = Some(PlayerClubContract::new(salary, expiration));

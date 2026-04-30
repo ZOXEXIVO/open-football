@@ -1,5 +1,5 @@
-use crate::r#match::{MatchPlayerLite, StateProcessingContext};
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::{MatchPlayerLite, StateProcessingContext};
 
 pub struct PlayerOpponentsOperationsImpl<'b> {
     ctx: &'b StateProcessingContext<'b>,
@@ -78,8 +78,7 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
             .entries
             .iter()
             .filter(move |entry| {
-                entry.team_id != team_id
-                    && entry.position.position_group() == position_group
+                entry.team_id != team_id && entry.position.position_group() == position_group
             })
             .map(|entry| MatchPlayerLite {
                 id: entry.id,

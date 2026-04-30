@@ -39,9 +39,12 @@ impl<'p> PressureOperationsImpl<'p> {
     pub fn is_teammate_marked(&self, teammate: &MatchPlayerLite, marking_distance: f32) -> bool {
         // Use pre-computed distances: opponents of teammate = our players near them,
         // but we need opponents near teammate, so from teammate's POV our team are opponents
-        self.ctx.tick_context.grid
+        self.ctx
+            .tick_context
+            .grid
             .opponents(teammate.id, marking_distance)
-            .count() >= 1
+            .count()
+            >= 1
     }
 
     /// Check if a teammate is heavily marked (multiple opponents or very close marking)
@@ -78,10 +81,19 @@ impl<'p> PressureOperationsImpl<'p> {
         let mut close: f32 = 0.0;
         let mut medium: f32 = 0.0;
         let mut far: f32 = 0.0;
-        for (_id, dist) in self.ctx.tick_context.grid.opponents(self.ctx.player.id, 30.0) {
+        for (_id, dist) in self
+            .ctx
+            .tick_context
+            .grid
+            .opponents(self.ctx.player.id, 30.0)
+        {
             far += 1.0;
-            if dist <= 20.0 { medium += 1.0; }
-            if dist <= 10.0 { close += 1.0; }
+            if dist <= 20.0 {
+                medium += 1.0;
+            }
+            if dist <= 10.0 {
+                close += 1.0;
+            }
         }
 
         // Weight closer opponents more heavily

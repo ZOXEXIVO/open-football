@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -109,63 +109,82 @@ pub async fn national_competitions_get_action(
             }
 
             // Build qualifying groups
-            let groups: Vec<GroupDto> = comp.qualifying_groups.iter().enumerate().map(|(idx, group)| {
-                let letter = (b'A' + idx as u8) as char;
-                let rows = group.standings.iter().map(|standing| {
-                    let (name, slug) = country_display(simulator_data, standing.country_id);
-                    GroupRowDto {
-                        country_name: name,
-                        country_slug: slug,
-                        played: standing.played,
-                        won: standing.won,
-                        drawn: standing.drawn,
-                        lost: standing.lost,
-                        gf: standing.goals_for as u8,
-                        ga: standing.goals_against as u8,
-                        points: standing.points,
-                    }
-                }).collect();
+            let groups: Vec<GroupDto> = comp
+                .qualifying_groups
+                .iter()
+                .enumerate()
+                .map(|(idx, group)| {
+                    let letter = (b'A' + idx as u8) as char;
+                    let rows = group
+                        .standings
+                        .iter()
+                        .map(|standing| {
+                            let (name, slug) = country_display(simulator_data, standing.country_id);
+                            GroupRowDto {
+                                country_name: name,
+                                country_slug: slug,
+                                played: standing.played,
+                                won: standing.won,
+                                drawn: standing.drawn,
+                                lost: standing.lost,
+                                gf: standing.goals_for as u8,
+                                ga: standing.goals_against as u8,
+                                points: standing.points,
+                            }
+                        })
+                        .collect();
 
-                GroupDto {
-                    name: format!("Group {}", letter),
-                    rows,
-                }
-            }).collect();
+                    GroupDto {
+                        name: format!("Group {}", letter),
+                        rows,
+                    }
+                })
+                .collect();
 
             // Build knockout brackets
-            let knockout: Vec<KnockoutDto> = comp.knockout.iter().map(|bracket| {
-                let round_name = match &bracket.round {
-                    core::continent::national::KnockoutRound::RoundOf16 => "Round of 16",
-                    core::continent::national::KnockoutRound::QuarterFinals => "Quarter-Finals",
-                    core::continent::national::KnockoutRound::SemiFinals => "Semi-Finals",
-                    core::continent::national::KnockoutRound::ThirdPlace => "Third Place",
-                    core::continent::national::KnockoutRound::Final => "Final",
-                };
+            let knockout: Vec<KnockoutDto> = comp
+                .knockout
+                .iter()
+                .map(|bracket| {
+                    let round_name = match &bracket.round {
+                        core::continent::national::KnockoutRound::RoundOf16 => "Round of 16",
+                        core::continent::national::KnockoutRound::QuarterFinals => "Quarter-Finals",
+                        core::continent::national::KnockoutRound::SemiFinals => "Semi-Finals",
+                        core::continent::national::KnockoutRound::ThirdPlace => "Third Place",
+                        core::continent::national::KnockoutRound::Final => "Final",
+                    };
 
-                let fixtures = bracket.fixtures.iter().map(|fix| {
-                    let (home_name, home_slug) = country_display(simulator_data, fix.home_country_id);
-                    let (away_name, away_slug) = country_display(simulator_data, fix.away_country_id);
-                    let winner_name = fix.result.as_ref().map(|r| {
-                        let winner_id = r.winner(fix.home_country_id, fix.away_country_id);
-                        country_display(simulator_data, winner_id).0
-                    });
+                    let fixtures = bracket
+                        .fixtures
+                        .iter()
+                        .map(|fix| {
+                            let (home_name, home_slug) =
+                                country_display(simulator_data, fix.home_country_id);
+                            let (away_name, away_slug) =
+                                country_display(simulator_data, fix.away_country_id);
+                            let winner_name = fix.result.as_ref().map(|r| {
+                                let winner_id = r.winner(fix.home_country_id, fix.away_country_id);
+                                country_display(simulator_data, winner_id).0
+                            });
 
-                    KnockoutFixtureDto {
-                        home_name,
-                        home_slug,
-                        away_name,
-                        away_slug,
-                        home_score: fix.result.as_ref().map(|r| r.home_score),
-                        away_score: fix.result.as_ref().map(|r| r.away_score),
-                        winner_name,
+                            KnockoutFixtureDto {
+                                home_name,
+                                home_slug,
+                                away_name,
+                                away_slug,
+                                home_score: fix.result.as_ref().map(|r| r.home_score),
+                                away_score: fix.result.as_ref().map(|r| r.away_score),
+                                winner_name,
+                            }
+                        })
+                        .collect();
+
+                    KnockoutDto {
+                        round_name: round_name.to_string(),
+                        fixtures,
                     }
-                }).collect();
-
-                KnockoutDto {
-                    round_name: round_name.to_string(),
-                    fixtures,
-                }
-            }).collect();
+                })
+                .collect();
 
             competitions.push(CompetitionDto {
                 name: format!("{} {}", comp.config.name, comp.cycle_year),

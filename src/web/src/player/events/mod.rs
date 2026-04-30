@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
-use crate::common::slug::{resolve_player_page, PlayerPage};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -17,17 +17,29 @@ fn get_neighbor_teams(
     data: &SimulatorData,
     i18n: &I18n,
 ) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
-    let club = data.club(club_id)
+    let club = data
+        .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
     let teams = views::neighbor_teams(club, i18n);
-    let mut country_leagues: Vec<(u32, String, String)> = data.country_by_club(club_id)
-        .map(|country| country.leagues.leagues.iter().filter(|l| !l.friendly)
-            .map(|l| (l.id, l.name.clone(), l.slug.clone())).collect())
+    let mut country_leagues: Vec<(u32, String, String)> = data
+        .country_by_club(club_id)
+        .map(|country| {
+            country
+                .leagues
+                .leagues
+                .iter()
+                .filter(|l| !l.friendly)
+                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
+                .collect()
+        })
         .unwrap_or_default();
     country_leagues.sort_by_key(|(id, _, _)| *id);
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }
 
@@ -94,7 +106,11 @@ pub async fn player_events_action(
         &route_params.lang,
         "/events",
     )? {
-        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Found {
+            player,
+            team,
+            canonical_slug,
+        } => (player, team, canonical_slug),
         PlayerPage::Redirect(r) => return Ok(r),
     };
 
@@ -126,15 +142,13 @@ pub async fn player_events_action(
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
-        sub_title: team_opt
-            .map(|t| t.name.clone())
-            .unwrap_or_else(|| {
-                if player.is_retired() {
-                    i18n.t("retired").to_string()
-                } else {
-                    i18n.t("free_agent").to_string()
-                }
-            }),
+        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| {
+            if player.is_retired() {
+                i18n.t("retired").to_string()
+            } else {
+                i18n.t("free_agent").to_string()
+            }
+        }),
         sub_title_link: team_opt
             .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
             .unwrap_or_default(),
@@ -185,7 +199,8 @@ pub async fn player_events_action(
         is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         events,
-    }.into_response())
+    }
+    .into_response())
 }
 
 /// Big events: rare, career-visible moments. The threshold is "would a
@@ -369,7 +384,9 @@ fn is_partner_required(event_type: &HappinessEventType) -> bool {
 /// longer be located (retired and aged out, or never existed); the event
 /// is then filtered out so we don't show a dangling link.
 fn resolve_partner(data: &SimulatorData, partner_id: u32) -> Option<(String, String)> {
-    let p = data.player(partner_id).or_else(|| data.retired_player(partner_id))?;
+    let p = data
+        .player(partner_id)
+        .or_else(|| data.retired_player(partner_id))?;
     let display = format!(
         "{} {}",
         p.full_name.display_first_name(),

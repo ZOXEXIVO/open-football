@@ -435,12 +435,16 @@ mod tests {
             TransferListingType::Transfer,
         ));
 
-        assert!(market
-            .start_negotiation(10, 2, offer(2, 850_000.0), d(2026, 7, 1), 0.5, 0.6, 24, 0.5)
-            .is_some());
-        assert!(market
-            .start_negotiation(10, 2, offer(2, 900_000.0), d(2026, 7, 2), 0.5, 0.6, 24, 0.5)
-            .is_none());
+        assert!(
+            market
+                .start_negotiation(10, 2, offer(2, 850_000.0), d(2026, 7, 1), 0.5, 0.6, 24, 0.5)
+                .is_some()
+        );
+        assert!(
+            market
+                .start_negotiation(10, 2, offer(2, 900_000.0), d(2026, 7, 2), 0.5, 0.6, 24, 0.5)
+                .is_none()
+        );
     }
 
     #[test]

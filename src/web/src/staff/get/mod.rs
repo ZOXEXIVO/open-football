@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -159,9 +159,15 @@ pub async fn staff_get_action(
         .iter()
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let league_refs: Vec<(&str, &str)> = country_leagues
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
 
-    let title = format!("{} {}", staff.full_name.first_name, staff.full_name.last_name);
+    let title = format!(
+        "{} {}",
+        staff.full_name.first_name, staff.full_name.last_name
+    );
 
     let staff_vm = StaffViewModel {
         id: staff.id,
@@ -232,8 +238,20 @@ pub async fn staff_get_action(
         menu_sections: {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
             let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
-            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-            views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main)
+            let mp = views::MenuParams {
+                i18n: &i18n,
+                lang: &route_params.lang,
+                current_path: &current_path,
+                country_name: cn,
+                country_slug: cs,
+            };
+            views::team_menu(
+                &mp,
+                &neighbor_refs,
+                &team.slug,
+                &league_refs,
+                team.team_type == core::TeamType::Main,
+            )
         },
         i18n,
         lang: route_params.lang.clone(),
@@ -255,7 +273,10 @@ fn get_neighbor_teams(
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
         .map(|country| {
-            country.leagues.leagues.iter()
+            country
+                .leagues
+                .leagues
+                .iter()
                 .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
@@ -265,6 +286,9 @@ fn get_neighbor_teams(
 
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }

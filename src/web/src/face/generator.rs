@@ -12,7 +12,11 @@ pub struct SkinDist {
 
 impl Default for SkinDist {
     fn default() -> Self {
-        SkinDist { white: 50, black: 20, _metis: 30 }
+        SkinDist {
+            white: 50,
+            black: 20,
+            _metis: 30,
+        }
     }
 }
 
@@ -56,7 +60,9 @@ impl FaceRng {
         s = (s ^ (s >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
         s = (s ^ (s >> 27)).wrapping_mul(0x94D049BB133111EB);
         s ^= s >> 31;
-        if s == 0 { s = 1; }
+        if s == 0 {
+            s = 1;
+        }
         FaceRng { state: s }
     }
 
@@ -86,20 +92,17 @@ impl FaceRng {
 // ── Color palettes ──────────────────────────────────────────
 
 const SKIN: [&str; 12] = [
-    "#F5E0CB", "#EACFB0", "#DDBF98", "#CDA97A",
-    "#C09368", "#A87D58", "#926845", "#7D5535",
+    "#F5E0CB", "#EACFB0", "#DDBF98", "#CDA97A", "#C09368", "#A87D58", "#926845", "#7D5535",
     "#694530", "#503322", "#3D2518", "#2E1B11",
 ];
 
 const HAIR: [&str; 10] = [
-    "#0E0E0E", "#1C150C", "#2F1F11", "#4D3A2B",
-    "#6A5038", "#7E644A", "#96795A", "#B0946C",
+    "#0E0E0E", "#1C150C", "#2F1F11", "#4D3A2B", "#6A5038", "#7E644A", "#96795A", "#B0946C",
     "#C4A882", "#6B2010",
 ];
 
 const EYES: [&str; 8] = [
-    "#33251A", "#4A3828", "#5C4E3A", "#384F62",
-    "#3D5844", "#4E6356", "#686D72", "#3F5A72",
+    "#33251A", "#4A3828", "#5C4E3A", "#384F62", "#3D5844", "#4E6356", "#686D72", "#3F5A72",
 ];
 
 // ── Color math ──────────────────────────────────────────────
@@ -167,35 +170,77 @@ struct FaceShape {
 fn face_shape(variant: usize, fw: f32) -> FaceShape {
     // cheek_w <= temple_w always — face tapers smoothly from forehead down
     match variant {
-        0 => FaceShape { // Oval
-            head_top: 14.5, temple_w: 21.5 + fw * 0.7, cheek_w: 19.8 + fw * 0.65,
-            cheek_y: 49.0, jaw_w: 17.2 + fw * 0.8, jaw_y: 70.0,
-            chin_w: 7.8 + fw * 0.35, chin_y: 82.0, chin_round: 3.0,
+        0 => FaceShape {
+            // Oval
+            head_top: 14.5,
+            temple_w: 21.5 + fw * 0.7,
+            cheek_w: 19.8 + fw * 0.65,
+            cheek_y: 49.0,
+            jaw_w: 17.2 + fw * 0.8,
+            jaw_y: 70.0,
+            chin_w: 7.8 + fw * 0.35,
+            chin_y: 82.0,
+            chin_round: 3.0,
         },
-        1 => FaceShape { // Square
-            head_top: 14.5, temple_w: 22.0 + fw * 0.75, cheek_w: 20.5 + fw * 0.7,
-            cheek_y: 48.0, jaw_w: 20.0 + fw * 0.9, jaw_y: 71.0,
-            chin_w: 11.5 + fw * 0.45, chin_y: 81.5, chin_round: 1.8,
+        1 => FaceShape {
+            // Square
+            head_top: 14.5,
+            temple_w: 22.0 + fw * 0.75,
+            cheek_w: 20.5 + fw * 0.7,
+            cheek_y: 48.0,
+            jaw_w: 20.0 + fw * 0.9,
+            jaw_y: 71.0,
+            chin_w: 11.5 + fw * 0.45,
+            chin_y: 81.5,
+            chin_round: 1.8,
         },
-        2 => FaceShape { // Round
-            head_top: 14.0, temple_w: 22.0 + fw * 0.75, cheek_w: 20.8 + fw * 0.75,
-            cheek_y: 50.0, jaw_w: 18.8 + fw * 0.85, jaw_y: 71.0,
-            chin_w: 9.8 + fw * 0.4, chin_y: 82.0, chin_round: 3.8,
+        2 => FaceShape {
+            // Round
+            head_top: 14.0,
+            temple_w: 22.0 + fw * 0.75,
+            cheek_w: 20.8 + fw * 0.75,
+            cheek_y: 50.0,
+            jaw_w: 18.8 + fw * 0.85,
+            jaw_y: 71.0,
+            chin_w: 9.8 + fw * 0.4,
+            chin_y: 82.0,
+            chin_round: 3.8,
         },
-        3 => FaceShape { // Heart
-            head_top: 14.0, temple_w: 22.0 + fw * 0.7, cheek_w: 19.6 + fw * 0.6,
-            cheek_y: 48.0, jaw_w: 16.3 + fw * 0.55, jaw_y: 71.0,
-            chin_w: 7.2 + fw * 0.25, chin_y: 82.5, chin_round: 2.4,
+        3 => FaceShape {
+            // Heart
+            head_top: 14.0,
+            temple_w: 22.0 + fw * 0.7,
+            cheek_w: 19.6 + fw * 0.6,
+            cheek_y: 48.0,
+            jaw_w: 16.3 + fw * 0.55,
+            jaw_y: 71.0,
+            chin_w: 7.2 + fw * 0.25,
+            chin_y: 82.5,
+            chin_round: 2.4,
         },
-        4 => FaceShape { // Oblong
-            head_top: 12.5, temple_w: 20.5 + fw * 0.65, cheek_w: 19.3 + fw * 0.65,
-            cheek_y: 48.0, jaw_w: 17.8 + fw * 0.75, jaw_y: 72.0,
-            chin_w: 8.0 + fw * 0.3, chin_y: 84.0, chin_round: 2.2,
+        4 => FaceShape {
+            // Oblong
+            head_top: 12.5,
+            temple_w: 20.5 + fw * 0.65,
+            cheek_w: 19.3 + fw * 0.65,
+            cheek_y: 48.0,
+            jaw_w: 17.8 + fw * 0.75,
+            jaw_y: 72.0,
+            chin_w: 8.0 + fw * 0.3,
+            chin_y: 84.0,
+            chin_round: 2.2,
         },
-        _ => FaceShape { // Diamond
-            head_top: 13.5, temple_w: 20.8 + fw * 0.65, cheek_w: 20.2 + fw * 0.65,
-            cheek_y: 48.0, jaw_w: 16.4 + fw * 0.55, jaw_y: 71.5,
-            chin_w: 7.4 + fw * 0.25, chin_y: 83.0, chin_round: 2.0,
+        _ => FaceShape {
+            // Diamond
+            head_top: 13.5,
+            temple_w: 20.8 + fw * 0.65,
+            cheek_w: 20.2 + fw * 0.65,
+            cheek_y: 48.0,
+            jaw_w: 16.4 + fw * 0.55,
+            jaw_y: 71.5,
+            chin_w: 7.4 + fw * 0.25,
+            chin_y: 83.0,
+            chin_round: 2.0,
         },
     }
 }
@@ -235,11 +280,11 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
 
     // Facial hair by age
     let (bc, mc): (u8, u8) = match age {
-        0..=19  => (0, 0),
+        0..=19 => (0, 0),
         20..=24 => (18, 10),
         25..=29 => (40, 30),
         30..=34 => (55, 42),
-        _       => (65, 50),
+        _ => (65, 50),
     };
     let beard = bc > 0 && r.chance(bc);
     let mstache = mc > 0 && r.chance(mc);
@@ -252,11 +297,11 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
 
     // Face width by age
     let fw: f32 = match age {
-        0..=19  => r.frange(-1.1, 0.1),
+        0..=19 => r.frange(-1.1, 0.1),
         20..=24 => r.frange(-0.5, 0.8),
         25..=29 => r.frange(0.0, 1.6),
         30..=34 => r.frange(0.8, 2.4),
-        _       => r.frange(1.3, 3.0),
+        _ => r.frange(1.3, 3.0),
     };
 
     let fs = face_shape(face_var, fw);
@@ -340,7 +385,9 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     ));
 
     // ── Background ──────────────────────────────────────────
-    s.push_str(&format!(r#"<rect width="200" height="250" fill="{bg_color}"/>"#));
+    s.push_str(&format!(
+        r#"<rect width="200" height="250" fill="{bg_color}"/>"#
+    ));
 
     // ── Jersey / shoulders ──────────────────────────────────
     s.push_str(&format!(
@@ -360,12 +407,20 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     let neck_w = 18.0 + fw;
     s.push_str(&format!(
         r#"<path d="M{} 197 Q100 192 {} 197 L{} 210 L{} 210Z" fill="{}"/>"#,
-        cx - neck_w, cx + neck_w, cx + neck_w + 3.0, cx - neck_w - 3.0, skin_mid
+        cx - neck_w,
+        cx + neck_w,
+        cx + neck_w + 3.0,
+        cx - neck_w - 3.0,
+        skin_mid
     ));
     // Neck shadow
     s.push_str(&format!(
         r#"<path d="M{} 197 Q100 194 {} 197 L{} 204 Q100 201 {} 204Z" fill="{}" opacity="0.15"/>"#,
-        cx - neck_w, cx + neck_w, cx + neck_w, cx - neck_w, skin_dk2
+        cx - neck_w,
+        cx + neck_w,
+        cx + neck_w,
+        cx - neck_w,
+        skin_dk2
     ));
     // Adam's apple hint
     s.push_str(&format!(
@@ -395,7 +450,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         // Earlobe
         s.push_str(&format!(
             r#"<ellipse cx="{}" cy="{}" rx="2.5" ry="3.0" fill="{skin_mid}" opacity="0.68"/>"#,
-            if ex < cx { ex + 1.0 } else { ex - 1.0 }, ear_y + 10.0
+            if ex < cx { ex + 1.0 } else { ex - 1.0 },
+            ear_y + 10.0
         ));
     }
 
@@ -430,12 +486,16 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
             Q{} {} {jl} {jy}
             C{mid_l} {mid_y} {hl} {} {hl} {cy_cheek}Z
         " fill="url(#sg)"/>"#,
-        ht + 22.0, hl + 14.0,
-        hr - 14.0, ht + 22.0,
+        ht + 22.0,
+        hl + 14.0,
+        hr - 14.0,
+        ht + 22.0,
         jy - 10.0,
-        jr - cr_val, jy + cr_val,
+        jr - cr_val,
+        jy + cr_val,
         chy + cr_val,
-        jl + cr_val, jy + cr_val,
+        jl + cr_val,
+        jy + cr_val,
         jy - 10.0,
     ));
 
@@ -490,7 +550,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     // Forehead highlight (top-left light source)
     s.push_str(&format!(
         r#"<ellipse cx="{}" cy="{}" rx="22" ry="14" fill="url(#fh)"/>"#,
-        cx - 2.0, ht + 30.0
+        cx - 2.0,
+        ht + 30.0
     ));
 
     // Cheekbone highlights — gives structure to the face
@@ -498,7 +559,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     for (chx, rx_off) in [(cx - 25.0, 0.0f32), (cx + 23.0, 1.0)] {
         s.push_str(&format!(
             r#"<ellipse cx="{chx}" cy="{}" rx="{}" ry="5" fill="{cheek_hi}" opacity="0.14"/>"#,
-            cy_cheek + 1.0, 9.0 + rx_off
+            cy_cheek + 1.0,
+            9.0 + rx_off
         ));
     }
 
@@ -506,11 +568,13 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     let blush = blend(skin, "#C07868", 0.10);
     s.push_str(&format!(
         r#"<ellipse cx="{}" cy="{}" rx="13" ry="9" fill="{blush}" opacity="0.08"/>"#,
-        cx - 27.0, cy_cheek + 12.0
+        cx - 27.0,
+        cy_cheek + 12.0
     ));
     s.push_str(&format!(
         r#"<ellipse cx="{}" cy="{}" rx="11" ry="7" fill="{blush}" opacity="0.06"/>"#,
-        cx + 25.0, cy_cheek + 11.0
+        cx + 25.0,
+        cy_cheek + 11.0
     ));
 
     // Temple shadows — stronger for depth
@@ -589,11 +653,11 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
 
         // Proportional eyes — smaller iris/pupil ratio for realism
         let (erx, ery, iris_r, pupil_r): (f32, f32, f32, f32) = match eye_st {
-            0 => (7.8, 3.0, 2.9, 1.2),    // narrow
-            1 => (7.4, 2.7, 2.7, 1.1),    // small
-            2 => (8.2, 3.4, 3.0, 1.2),    // open
-            3 => (7.2, 2.8, 2.7, 1.1),    // squinting
-            _ => (8.0, 3.1, 2.9, 1.2),    // medium
+            0 => (7.8, 3.0, 2.9, 1.2), // narrow
+            1 => (7.4, 2.7, 2.7, 1.1), // small
+            2 => (8.2, 3.4, 3.0, 1.2), // open
+            3 => (7.2, 2.8, 2.7, 1.1), // squinting
+            _ => (8.0, 3.1, 2.9, 1.2), // medium
         };
 
         let lid_col = shade(skin, 0.72);
@@ -648,7 +712,9 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
             // Iris — lighter arc detail
             s.push_str(&format!(
                 r#"<circle cx="{}" cy="{}" r="{}" fill="{iris_hi}" opacity="0.20"/>"#,
-                ex - 0.4 * side, ey - 0.6, iris_r * 0.40
+                ex - 0.4 * side,
+                ey - 0.6,
+                iris_r * 0.40
             ));
             // Pupil
             s.push_str(&format!(
@@ -657,12 +723,14 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
             // Catchlight — smaller, softer
             s.push_str(&format!(
                 r#"<circle cx="{}" cy="{}" r="0.45" fill="white" opacity="0.28"/>"#,
-                ex - 1.0 * side, ey - 1.3
+                ex - 1.0 * side,
+                ey - 1.3
             ));
             // Secondary catchlight — very faint
             s.push_str(&format!(
                 r#"<circle cx="{}" cy="{}" r="0.25" fill="white" opacity="0.12"/>"#,
-                ex + 0.8 * side, ey + 0.5
+                ex + 0.8 * side,
+                ey + 0.5
             ));
 
             s.push_str("</g>");
@@ -686,7 +754,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
             let tear = blend(skin, "#A85B50", 0.22);
             s.push_str(&format!(
                 r#"<circle cx="{}" cy="{}" r="0.85" fill="{tear}" opacity="0.28"/>"#,
-                if *side < 0.0 { er - 0.4 } else { el + 0.4 }, ey + 0.2
+                if *side < 0.0 { er - 0.4 } else { el + 0.4 },
+                ey + 0.2
             ));
             s.push_str(&format!(
                 r#"<path d="M{} {} l{} {}" stroke="{lash_col}" stroke-width="0.45" fill="none" opacity="0.34" stroke-linecap="round"/>"#,
@@ -717,12 +786,12 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         let brow_col = shade(hair, 0.90);
 
         let (bw, bt, arch): (f32, f32, f32) = match brow_st {
-            0 => (2.7, 0.0, 1.8),    // straight
-            1 => (2.6, -0.4, 3.2),   // arched
-            2 => (3.3, 0.5, 1.4),    // flat thick
-            3 => (2.6, -0.2, 2.7),   // medium arch
-            4 => (3.7, 0.0, 2.2),    // bushy
-            _ => (2.4, -0.2, 3.0),   // high arch
+            0 => (2.7, 0.0, 1.8),  // straight
+            1 => (2.6, -0.4, 3.2), // arched
+            2 => (3.3, 0.5, 1.4),  // flat thick
+            3 => (2.6, -0.2, 2.7), // medium arch
+            4 => (3.7, 0.0, 2.2),  // bushy
+            _ => (2.4, -0.2, 3.0), // high arch
         };
 
         s.push_str(&format!(
@@ -759,12 +828,12 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         let nhi = shade(skin, 1.08);
 
         let (bw, tw, th, nostril_w): (f32, f32, f32, f32) = match nose_st {
-            0 => (1.1, 7.8, 3.8, 2.6),   // small straight
-            1 => (1.3, 11.5, 5.2, 3.8),  // wide
-            2 => (1.2, 9.4, 4.4, 3.1),   // medium
-            3 => (1.0, 7.2, 4.8, 2.4),   // narrow
-            4 => (1.2, 10.4, 4.8, 3.3),  // aquiline
-            _ => (1.1, 8.7, 4.0, 2.8),   // compact
+            0 => (1.1, 7.8, 3.8, 2.6),  // small straight
+            1 => (1.3, 11.5, 5.2, 3.8), // wide
+            2 => (1.2, 9.4, 4.4, 3.1),  // medium
+            3 => (1.0, 7.2, 4.8, 2.4),  // narrow
+            4 => (1.2, 10.4, 4.8, 3.3), // aquiline
+            _ => (1.1, 8.7, 4.0, 2.8),  // compact
         };
 
         // Bridge — curved lines on both sides from brow to tip
@@ -793,25 +862,39 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         // Nose tip — softer, less prominent
         s.push_str(&format!(
             r#"<ellipse cx="{cx}" cy="{ny}" rx="{}" ry="{}" fill="{nt}" opacity="0.10"/>"#,
-            tw * 0.75, th * 0.75
+            tw * 0.75,
+            th * 0.75
         ));
         // Tip highlight — off-center for realism
         s.push_str(&format!(
             r#"<ellipse cx="{}" cy="{}" rx="2.0" ry="1.4" fill="{nhi}" opacity="0.10"/>"#,
-            cx + 0.6, ny - 1.0
+            cx + 0.6,
+            ny - 1.0
         ));
         // Nostrils — teardrop-shaped, not circles
         let nl = cx - tw * 0.45;
         let nr = cx + tw * 0.45;
         s.push_str(&format!(
             r#"<path d="M{nl} {} Q{} {} {} {} Q{} {} {nl} {}Z" fill="{ns}" opacity="0.30"/>"#,
-            ny + 1.0, nl - nostril_w, ny + 1.5, nl - nostril_w * 0.6, ny + 3.0,
-            nl + nostril_w * 0.3, ny + 3.2, ny + 1.0
+            ny + 1.0,
+            nl - nostril_w,
+            ny + 1.5,
+            nl - nostril_w * 0.6,
+            ny + 3.0,
+            nl + nostril_w * 0.3,
+            ny + 3.2,
+            ny + 1.0
         ));
         s.push_str(&format!(
             r#"<path d="M{nr} {} Q{} {} {} {} Q{} {} {nr} {}Z" fill="{ns}" opacity="0.30"/>"#,
-            ny + 1.0, nr + nostril_w, ny + 1.5, nr + nostril_w * 0.6, ny + 3.0,
-            nr - nostril_w * 0.3, ny + 3.2, ny + 1.0
+            ny + 1.0,
+            nr + nostril_w,
+            ny + 1.5,
+            nr + nostril_w * 0.6,
+            ny + 3.0,
+            nr - nostril_w * 0.3,
+            ny + 3.2,
+            ny + 1.0
         ));
         // Nose wing shadows (alar creases)
         for (gx, dir) in [(nl - nostril_w - 0.5, -1.0f32), (nr + nostril_w + 0.5, 1.0)] {
@@ -823,7 +906,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         // Bottom of nose shadow
         s.push_str(&format!(
             r#"<ellipse cx="{cx}" cy="{}" rx="{}" ry="2.0" fill="{ns}" opacity="0.12"/>"#,
-            ny + 4.0, tw * 0.7
+            ny + 4.0,
+            tw * 0.7
         ));
     }
 
@@ -836,11 +920,11 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         let sep = shade(skin, 0.42);
 
         let (mw, upper_h, lower_h): (f32, f32, f32) = match mouth_st {
-            0 => (12.5, 2.0, 2.8),    // medium
-            1 => (15.0, 1.8, 3.2),    // wide
-            2 => (10.8, 2.2, 2.5),    // small
-            3 => (13.4, 2.6, 3.4),    // full
-            _ => (11.8, 1.6, 2.4),    // thin
+            0 => (12.5, 2.0, 2.8), // medium
+            1 => (15.0, 1.8, 3.2), // wide
+            2 => (10.8, 2.2, 2.5), // small
+            3 => (13.4, 2.6, 3.4), // full
+            _ => (11.8, 1.6, 2.4), // thin
         };
 
         let ml = cx - mw;
@@ -903,19 +987,22 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     if beard {
         let bd = shade(hair, 0.85);
         match beard_v {
-            0 => { // Light stubble
+            0 => {
+                // Light stubble
                 s.push_str(&format!(
                     r#"<path d="M{} 155 Q{} 190 {cx} 201 Q{} 190 {} 155 Q{cx} 182 {} 155Z" fill="{bd}" opacity="0.13"/>"#,
                     cx - 36.0, cx - 32.0, cx + 32.0, cx + 36.0, cx - 36.0
                 ));
             }
-            1 => { // Short beard
+            1 => {
+                // Short beard
                 s.push_str(&format!(
                     r#"<path d="M{} 150 Q{} 192 {cx} 202 Q{} 192 {} 150 Q{cx} 182 {} 150Z" fill="{bd}" opacity="0.25"/>"#,
                     cx - 40.0, cx - 36.0, cx + 36.0, cx + 40.0, cx - 40.0
                 ));
             }
-            2 => { // Full beard
+            2 => {
+                // Full beard
                 s.push_str(&format!(
                     r#"<path d="M{} 140 Q{} 196 {cx} 210 Q{} 196 {} 140 Q{cx} 186 {} 140Z" fill="{bd}" opacity="0.40"/>"#,
                     cx - 44.0, cx - 40.0, cx + 40.0, cx + 44.0, cx - 44.0
@@ -925,13 +1012,15 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                     cx - 30.0, cx - 26.0, cx + 26.0, cx + 30.0, shade(hair, 1.15)
                 ));
             }
-            3 => { // Goatee
+            3 => {
+                // Goatee
                 s.push_str(&format!(
                     r#"<path d="M{} 157 Q{} 194 {cx} 206 Q{} 194 {} 157 Q{cx} 178 {} 157Z" fill="{bd}" opacity="0.30"/>"#,
                     cx - 16.0, cx - 14.0, cx + 14.0, cx + 16.0, cx - 16.0
                 ));
             }
-            _ => { // Chinstrap
+            _ => {
+                // Chinstrap
                 s.push_str(&format!(
                     r#"<path d="M{} 150 Q{} 188 {cx} 198 Q{} 188 {} 150 Q{cx} 175 {} 150Z" fill="{bd}" opacity="0.18"/>"#,
                     cx - 42.0, cx - 38.0, cx + 38.0, cx + 42.0, cx - 42.0
@@ -963,25 +1052,29 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     if mstache {
         let mc_col = shade(hair, 0.88);
         match mst_v {
-            0 => { // Pencil
+            0 => {
+                // Pencil
                 s.push_str(&format!(
                     r#"<path d="M{} 161 Q{cx} 159 {} 161" stroke="{mc_col}" stroke-width="1.4" fill="none"/>"#,
                     cx - 13.0, cx + 13.0
                 ));
             }
-            1 => { // Full
+            1 => {
+                // Full
                 s.push_str(&format!(
                     r#"<path d="M{} 160 Q{} 156 {cx} 160 Q{} 156 {} 160 Q{} 164 {cx} 163 Q{} 164 {} 160Z" fill="{mc_col}" opacity="0.42"/>"#,
                     cx - 15.0, cx - 8.0, cx + 8.0, cx + 15.0, cx + 11.0, cx - 11.0, cx - 15.0
                 ));
             }
-            2 => { // Handlebar
+            2 => {
+                // Handlebar
                 s.push_str(&format!(
                     r#"<path d="M{} 158 Q{cx} 155 {} 158 L{} 163 Q{cx} 161 {} 163Z" fill="{mc_col}" opacity="0.38"/>"#,
                     cx - 18.0, cx + 18.0, cx + 16.0, cx - 16.0
                 ));
             }
-            _ => { // Chevron
+            _ => {
+                // Chevron
                 s.push_str(&format!(
                     r#"<path d="M{} 159 Q{cx} 155 {} 159 Q{cx} 164 {} 159Z" fill="{mc_col}" opacity="0.35"/>"#,
                     cx - 14.0, cx + 14.0, cx - 14.0
@@ -1002,7 +1095,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
         let hair_inner_top = ht + 6.0;
 
         match hair_st {
-            0 => { // Short crop — tight to skull with visible scalp gradient
+            0 => {
+                // Short crop — tight to skull with visible scalp gradient
                 s.push_str(&format!(
                     r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}"/>"#,
                     cy_cheek - 14.0, ht + 18.0, hl + 14.0, hair_inner_top, hair_inner_top,
@@ -1013,10 +1107,12 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 // Volume highlight
                 s.push_str(&format!(
                     r#"<ellipse cx="{}" cy="{}" rx="18" ry="8" fill="{hl_c}" opacity="0.08"/>"#,
-                    cx - 4.0, hair_outer_top + 4.0
+                    cx - 4.0,
+                    hair_outer_top + 4.0
                 ));
             }
-            1 => { // Side part — clean with natural volume
+            1 => {
+                // Side part — clean with natural volume
                 s.push_str(&format!(
                     r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}"/>"#,
                     cy_cheek - 10.0, ht + 18.0, hl + 12.0, hair_inner_top, hair_inner_top,
@@ -1032,10 +1128,12 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 // Volume highlight on the swept side
                 s.push_str(&format!(
                     r#"<ellipse cx="{}" cy="{}" rx="14" ry="6" fill="{hl_c}" opacity="0.07"/>"#,
-                    cx + 6.0, hair_outer_top + 2.0
+                    cx + 6.0,
+                    hair_outer_top + 2.0
                 ));
             }
-            2 => { // Medium textured — natural volume with soft edge
+            2 => {
+                // Medium textured — natural volume with soft edge
                 let hair_ext = 3.0;
                 s.push_str(&format!(
                     r#"<path d="M{} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {} {} L{} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {} {}Z" fill="{hair}"/>"#,
@@ -1050,7 +1148,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                     hl + 12.0, hair_outer_top - 6.0, hair_outer_top - 14.0, hr - 12.0, hair_outer_top - 6.0
                 ));
             }
-            3 => { // Buzz cut — very short, scalp shows through
+            3 => {
+                // Buzz cut — very short, scalp shows through
                 s.push_str(&format!(
                     r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}" opacity="0.45"/>"#,
                     cy_cheek - 18.0, ht + 22.0, hl + 14.0, hair_inner_top, hair_inner_top,
@@ -1061,10 +1160,12 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 // Scalp sheen
                 s.push_str(&format!(
                     r#"<ellipse cx="{}" cy="{}" rx="20" ry="10" fill="{skin_hi}" opacity="0.06"/>"#,
-                    cx + 2.0, hair_outer_top + 10.0
+                    cx + 2.0,
+                    hair_outer_top + 10.0
                 ));
             }
-            4 => { // Swept back — slicked with volume
+            4 => {
+                // Swept back — slicked with volume
                 s.push_str(&format!(
                     r#"<path d="M{} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {} {} L{} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {} {}Z" fill="{hair}"/>"#,
                     hl - 4.0, cy_cheek - 10.0, ht + 14.0, hl + 10.0, hair_inner_top - 6.0, hair_inner_top - 6.0,
@@ -1078,7 +1179,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                     hl + 10.0, hair_outer_top - 8.0, hair_outer_top - 20.0, hr - 10.0, hair_outer_top - 8.0
                 ));
             }
-            5 => { // Afro — rounded volume
+            5 => {
+                // Afro — rounded volume
                 let afro_r = 60.0 + fw * 2.0;
                 s.push_str(&format!(
                     r#"<path d="
@@ -1088,11 +1190,28 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                         L{hr} {} C{hr} {} {} {} {cx} {}
                         C{} {} {hl} {} {hl} {}Z
                     " fill="{hair}"/>"#,
-                    cx - afro_r, cy_cheek - 4.0,
-                    cx - afro_r, ht - 14.0, cx - afro_r * 0.6, ht - 30.0, ht - 30.0,
-                    cx + afro_r * 0.6, ht - 30.0, cx + afro_r, ht - 14.0, cx + afro_r, cy_cheek - 4.0,
-                    cy_cheek - 14.0, ht + 18.0, hr - 14.0, hair_inner_top, hair_inner_top,
-                    hl + 14.0, hair_inner_top, ht + 18.0, cy_cheek - 14.0,
+                    cx - afro_r,
+                    cy_cheek - 4.0,
+                    cx - afro_r,
+                    ht - 14.0,
+                    cx - afro_r * 0.6,
+                    ht - 30.0,
+                    ht - 30.0,
+                    cx + afro_r * 0.6,
+                    ht - 30.0,
+                    cx + afro_r,
+                    ht - 14.0,
+                    cx + afro_r,
+                    cy_cheek - 4.0,
+                    cy_cheek - 14.0,
+                    ht + 18.0,
+                    hr - 14.0,
+                    hair_inner_top,
+                    hair_inner_top,
+                    hl + 14.0,
+                    hair_inner_top,
+                    ht + 18.0,
+                    cy_cheek - 14.0,
                 ));
                 // Afro texture — subtle volume rings
                 for dy in [-22.0f32, -12.0, -2.0] {
@@ -1104,10 +1223,13 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 // Afro highlight
                 s.push_str(&format!(
                     r#"<ellipse cx="{}" cy="{}" rx="{}" ry="14" fill="{hl_c}" opacity="0.06"/>"#,
-                    cx - 8.0, ht - 12.0, afro_r * 0.35
+                    cx - 8.0,
+                    ht - 12.0,
+                    afro_r * 0.35
                 ));
             }
-            6 => { // Bald — clean head with realistic sheen
+            6 => {
+                // Bald — clean head with realistic sheen
                 // Subtle hairline shadow
                 s.push_str(&format!(
                     r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {}" stroke="{hd}" stroke-width="0.5" fill="none" opacity="0.08"/>"#,
@@ -1117,14 +1239,17 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 // Head sheen — realistic light reflection
                 s.push_str(&format!(
                     r#"<ellipse cx="{}" cy="{}" rx="24" ry="14" fill="{skin_hi}" opacity="0.12"/>"#,
-                    cx + 3.0, ht + 16.0
+                    cx + 3.0,
+                    ht + 16.0
                 ));
                 s.push_str(&format!(
                     r#"<ellipse cx="{}" cy="{}" rx="12" ry="8" fill="{skin_hi}" opacity="0.06"/>"#,
-                    cx + 6.0, ht + 12.0
+                    cx + 6.0,
+                    ht + 12.0
                 ));
             }
-            7 => { // Curly top — defined curls without cartoon bubbles
+            7 => {
+                // Curly top — defined curls without cartoon bubbles
                 s.push_str(&format!(
                     r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}"/>"#,
                     cy_cheek - 10.0, ht + 14.0, hl + 10.0, hair_inner_top - 4.0, hair_inner_top - 4.0,
@@ -1146,10 +1271,12 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                 // Volume highlight
                 s.push_str(&format!(
                     r#"<ellipse cx="{}" cy="{}" rx="16" ry="6" fill="{hl_c}" opacity="0.07"/>"#,
-                    cx - 2.0, hair_outer_top - 8.0
+                    cx - 2.0,
+                    hair_outer_top - 8.0
                 ));
             }
-            8 => { // Long / flowing — past ears
+            8 => {
+                // Long / flowing — past ears
                 s.push_str(&format!(
                     r#"<path d="M{} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {} {} L{} {} Q{} {} {} {} L{hl} {} Q{} {} {} {}Z" fill="{hair}"/>"#,
                     hl - 6.0, cy_cheek + 14.0, ht + 14.0, hl + 8.0, hair_inner_top - 10.0, hair_inner_top - 10.0,
@@ -1170,7 +1297,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                     ));
                 }
             }
-            9 => { // Fade / undercut — short sides, longer top
+            9 => {
+                // Fade / undercut — short sides, longer top
                 // Top volume
                 s.push_str(&format!(
                     r#"<path d="M{} {} C{} {} {} {} {cx} {} C{} {} {} {} {} {} L{} {} C{} {} {} {} {cx} {} C{} {} {} {} {} {}Z" fill="{hair}"/>"#,
@@ -1200,7 +1328,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                     cy_cheek - 6.0, hr - 6.0, cy_cheek - 18.0
                 ));
             }
-            10 => { // Mohawk — narrow strip, clean faded sides
+            10 => {
+                // Mohawk — narrow strip, clean faded sides
                 // Central strip
                 s.push_str(&format!(
                     r#"<path d="M{} {} C{} {} {} {} {cx} {} C{} {} {} {} {} {} L{} {} C{} {} {} {} {cx} {} C{} {} {} {} {} {}Z" fill="{hair}"/>"#,
@@ -1221,7 +1350,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
                     cx + 14.0, cy_cheek - 22.0, cy_cheek + 4.0
                 ));
             }
-            _ => { // Cornrows / tight braids
+            _ => {
+                // Cornrows / tight braids
                 s.push_str(&format!(
                     r#"<path d="M{hl} {} C{hl} {} {} {} {cx} {} C{} {} {hr} {} {hr} {} L{hr} {} C{hr} {} {} {} {cx} {} C{} {} {hl} {} {hl} {}Z" fill="{hair}"/>"#,
                     cy_cheek - 10.0, ht + 14.0, hl + 10.0, hair_inner_top - 4.0, hair_inner_top - 4.0,

@@ -1,7 +1,6 @@
 use crate::r#match::engine::player::strategies::common::{
-    ActivityIntensityConfig, ConditionProcessor,
-    GOALKEEPER_LOW_CONDITION_THRESHOLD, GOALKEEPER_JADEDNESS_INTERVAL,
-    GOALKEEPER_JADEDNESS_INCREMENT,
+    ActivityIntensityConfig, ConditionProcessor, GOALKEEPER_JADEDNESS_INCREMENT,
+    GOALKEEPER_JADEDNESS_INTERVAL, GOALKEEPER_LOW_CONDITION_THRESHOLD,
 };
 
 /// Goalkeeper-specific activity intensity configuration

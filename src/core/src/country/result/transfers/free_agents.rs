@@ -1,5 +1,5 @@
 use super::config::TransferConfig;
-use super::types::{can_club_accept_player, TransferActivitySummary};
+use super::types::{TransferActivitySummary, can_club_accept_player};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::simulator::SimulatorData;
@@ -565,7 +565,11 @@ pub(crate) fn execute_global_free_agent_signing(
     _config: &TransferConfig,
 ) -> bool {
     // Pre-check 1: is the player still in the global pool?
-    let player_idx = match data.free_agents.iter().position(|p| p.id == signing.player_id) {
+    let player_idx = match data
+        .free_agents
+        .iter()
+        .position(|p| p.id == signing.player_id)
+    {
         Some(i) => i,
         None => return false,
     };
@@ -573,14 +577,11 @@ pub(crate) fn execute_global_free_agent_signing(
     // Pre-check 2: buying club exists, has a team to place into, and can
     // still accept a player. Capture the destination snapshot now while
     // we hold the read borrow; we'll need it after we mutate the pool.
-    let snapshot = match snapshot_buying_club(
-        data,
-        signing.buying_country_id,
-        signing.buying_club_id,
-    ) {
-        Some(s) => s,
-        None => return false,
-    };
+    let snapshot =
+        match snapshot_buying_club(data, signing.buying_country_id, signing.buying_club_id) {
+            Some(s) => s,
+            None => return false,
+        };
 
     // All pre-checks passed — take the player out of the pool.
     let mut player = data.free_agents.swap_remove(player_idx);

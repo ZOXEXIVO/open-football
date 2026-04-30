@@ -17,8 +17,7 @@ impl PlayerValueCalculator {
         let status_factor = determine_status_factor(player);
         let squad_role_factor = determine_squad_role_factor(player);
         let contract_factor = determine_contract_factor(player, now);
-        let performance_factor =
-            determine_performance_factor(player, league_reputation);
+        let performance_factor = determine_performance_factor(player, league_reputation);
         let recent_form_factor = determine_recent_form_factor(player);
         let career_factor = determine_career_consistency_factor(player);
         let reputation_factor = determine_reputation_factor(player);
@@ -60,17 +59,26 @@ fn round_market_value(value: f64) -> f64 {
 
 /// Base value from current_ability using a steep exponential curve.
 ///
+/// Cap deliberately sized so the *base* of a CA 119 prime player lands
+/// near 10M, not 23M. The previous 175M cap was calibrated against the
+/// raw curve in isolation; once the multiplicative chain (reputation +
+/// position + age + contract + intl_apps) kicked in, mid-tier players
+/// were leaving the formula at ~3× their realistic transfer-market
+/// value. Base now anchors a CA 200 / skill-15 player at ~92M before
+/// context premiums, which still reaches the €150–200M band that elite
+/// players command after reputation, league, and club factors apply.
+///
 /// Value tiers (approximate, before other factors):
-///   ability 20  → ~10K
-///   ability 40  → ~75K
-///   ability 60  → ~350K
-///   ability 80  → ~1.5M
-///   ability 100 → ~5M
-///   ability 120 → ~15M
-///   ability 140 → ~35M
-///   ability 160 → ~65M
-///   ability 180 → ~110M
-///   ability 200 → ~175M
+///   ability 20  → ~5K
+///   ability 40  → ~35K
+///   ability 60  → ~160K
+///   ability 80  → ~700K
+///   ability 100 → ~2.4M
+///   ability 120 → ~7M
+///   ability 140 → ~16M
+///   ability 160 → ~35M
+///   ability 180 → ~57M
+///   ability 200 → ~92M
 fn determine_base_value(player: &Player) -> f64 {
     let ability = player.player_attributes.current_ability as f64;
 
@@ -85,7 +93,7 @@ fn determine_base_value(player: &Player) -> f64 {
     let skill_avg = (technical + mental + physical) / 3.0;
     let skill_factor = 0.85 + (skill_avg / 20.0) * 0.3; // 0.85 to 1.15
 
-    175_000_000.0 * curve * skill_factor
+    80_000_000.0 * curve * skill_factor
 }
 
 /// Age factor: peak value at 25-28, premium for young players, steep decline 30+
@@ -102,7 +110,7 @@ fn determine_age_factor(player: &Player, date: NaiveDate) -> f64 {
         22 => 0.90,
         23 => 0.95,
         24 => 1.0,
-        25..=28 => 1.05,  // Peak years
+        25..=28 => 1.05, // Peak years
         29 => 0.90,
         30 => 0.72,
         31 => 0.55,
@@ -142,16 +150,18 @@ fn determine_potential_factor(player: &Player, date: NaiveDate) -> f64 {
     let gap_factor = 1.0 + (gap / 200.0) * age_bonus * 0.4;
 
     // Wonderkid premium: amplifies value for the rare ≤21yo with very
-    // high absolute PA. Compensates for the steep age_factor curve so
-    // realistic CA-110 / PA-180 17yos don't end up priced at <2M.
+    // high absolute PA. Age-weights were strengthened when the base-value
+    // cap was lowered from 175M to 80M; without this rebalance, elite
+    // young prospects (CA 110 / PA 180) would slip below the realistic
+    // 10–25M wonderkid band that market-leading clubs pay.
     let wonderkid_factor = if age <= 21 && potential >= 150.0 {
         let pa_excess = (potential - 150.0).min(50.0); // 0..50
         let age_weight = match age {
-            0..=17 => 3.0,
-            18 => 2.5,
-            19 => 2.0,
-            20 => 1.4,
-            21 => 1.0,
+            0..=17 => 5.0,
+            18 => 4.5,
+            19 => 3.5,
+            20 => 2.2,
+            21 => 1.5,
             _ => 0.0,
         };
         1.0 + (pa_excess / 50.0) * age_weight
@@ -199,14 +209,14 @@ fn determine_contract_factor(player: &Player, date: NaiveDate) -> f64 {
     let years_remaining = days_remaining as f64 / 365.0;
 
     match years_remaining {
-        y if y <= 0.0 => 0.1,   // Expired
-        y if y < 0.5 => 0.3,    // Less than 6 months
-        y if y < 1.0 => 0.5,    // Less than 1 year
-        y if y < 1.5 => 0.7,    // 1-1.5 years
-        y if y < 2.0 => 0.85,   // 1.5-2 years
-        y if y < 3.0 => 1.0,    // 2-3 years
-        y if y < 4.0 => 1.05,   // 3-4 years
-        _ => 1.1,               // 4+ years
+        y if y <= 0.0 => 0.1, // Expired
+        y if y < 0.5 => 0.3,  // Less than 6 months
+        y if y < 1.0 => 0.5,  // Less than 1 year
+        y if y < 1.5 => 0.7,  // 1-1.5 years
+        y if y < 2.0 => 0.85, // 1.5-2 years
+        y if y < 3.0 => 1.0,  // 2-3 years
+        y if y < 4.0 => 1.05, // 3-4 years
+        _ => 1.1,             // 4+ years
     }
 }
 
@@ -274,22 +284,24 @@ fn determine_performance_factor(player: &Player, league_reputation: u16) -> f64 
         factor *= 0.65; // Very poor
     }
 
-    // International experience
+    // International experience. Intentionally lighter than reputation —
+    // these signals overlap (a heavily-capped player accumulates
+    // reputation), so stacking a 1.20× cap-count premium on top of a
+    // 1.20× reputation premium double-counted the same prestige.
     let intl_apps = player.player_attributes.international_apps;
     if intl_apps > 50 {
-        factor *= 1.2;
+        factor *= 1.10;
     } else if intl_apps > 20 {
-        factor *= 1.1;
+        factor *= 1.06;
     } else if intl_apps > 5 {
-        factor *= 1.05;
+        factor *= 1.03;
     }
 
     // League-aware scaling: deviations from neutral (1.0) get more
     // weight in stronger leagues, less in weaker ones. A goal in Serie A
     // is a stronger market signal than the same number in a semi-pro
     // division. Half-weight floor when no league context is provided.
-    let league_weight =
-        0.5 + 0.5 * (league_reputation as f64 / 10_000.0).clamp(0.0, 1.0);
+    let league_weight = 0.5 + 0.5 * (league_reputation as f64 / 10_000.0).clamp(0.0, 1.0);
     1.0 + (factor - 1.0) * league_weight
 }
 
@@ -351,7 +363,8 @@ fn determine_career_consistency_factor(player: &Player) -> f64 {
     let history = &player.statistics_history.items;
 
     // Need meaningful history to judge
-    let rated_seasons: Vec<_> = history.iter()
+    let rated_seasons: Vec<_> = history
+        .iter()
         .filter(|h| h.statistics.played >= 10 && h.statistics.average_rating > 0.0)
         .collect();
 
@@ -359,10 +372,15 @@ fn determine_career_consistency_factor(player: &Player) -> f64 {
         return 1.0; // Not enough data
     }
 
-    let total_games: u32 = rated_seasons.iter().map(|h| h.statistics.played as u32).sum();
-    let weighted_rating: f64 = rated_seasons.iter()
+    let total_games: u32 = rated_seasons
+        .iter()
+        .map(|h| h.statistics.played as u32)
+        .sum();
+    let weighted_rating: f64 = rated_seasons
+        .iter()
         .map(|h| h.statistics.average_rating as f64 * h.statistics.played as f64)
-        .sum::<f64>() / total_games as f64;
+        .sum::<f64>()
+        / total_games as f64;
 
     // Career average rating impact:
     //   7.5+ → 1.10 (proven elite performer)
@@ -383,19 +401,29 @@ fn determine_career_consistency_factor(player: &Player) -> f64 {
     }
 }
 
-/// Player reputation adds premium for well-known players
+/// Player reputation premium — smooth curve in 0.95..1.20.
+///
+/// Replaces the previous step function (1.0 / 1.05 / 1.15 / 1.30) which
+/// flattened anyone above rep 2000 to the same 1.30× ceiling. That cliff
+/// priced a Russian-league striker (rep ~5300) the same as a global
+/// superstar (rep 9500+) and was the largest single inflator alongside
+/// the base-value cap.
+///
+/// Examples:
+///   rep    200 → 0.951
+///   rep   1000 → 0.958
+///   rep   2000 → 0.978
+///   rep   5000 → 1.040
+///   rep   7500 → 1.116
+///   rep  10000 → 1.200
 fn determine_reputation_factor(player: &Player) -> f64 {
-    let rep = player.player_attributes.current_reputation as f64;
-
-    if rep > 2000.0 {
-        1.3
-    } else if rep > 1000.0 {
-        1.15
-    } else if rep > 500.0 {
-        1.05
-    } else {
-        1.0
-    }
+    let rep = (player.player_attributes.current_reputation as f64).max(0.0);
+    let normalized = (rep / 10_000.0).clamp(0.0, 1.0);
+    // 1.5-power curve keeps small clubs near-neutral while stretching
+    // the upper tier — a 9000-rep player still gets a clear premium over
+    // a 5000-rep one without the discontinuity at 2000.
+    let factor = 0.95 + 0.25 * normalized.powf(1.5);
+    factor.clamp(0.95, 1.20)
 }
 
 /// League and club reputation factor.
@@ -451,7 +479,11 @@ fn determine_position_factor(player: &Player) -> f64 {
     let base = if player.position().is_goalkeeper() {
         0.7 // Goalkeepers typically valued less
     } else if player.position().is_forward() {
-        1.15 // Strikers command premium
+        // Modest striker premium — strikers also accrue reputation from
+        // goals, which already feeds `determine_reputation_factor`. The
+        // old 1.15× compounded with the rep ceiling and pushed mid-tier
+        // forwards well above their realistic transfer band.
+        1.05
     } else {
         1.0
     };
@@ -459,18 +491,24 @@ fn determine_position_factor(player: &Player) -> f64 {
     // Versatility bonus: players with multiple qualified positions are more valuable.
     // Formation-slot variants (DCL/DCR for DC, MCL/MCR for MC) don't count.
     let positions = player.positions.positions();
-    let unique_base_positions = positions.iter().filter(|p| !matches!(p,
-        PlayerPositionType::DefenderCenterLeft |
-        PlayerPositionType::DefenderCenterRight |
-        PlayerPositionType::MidfielderCenterLeft |
-        PlayerPositionType::MidfielderCenterRight
-    )).count();
+    let unique_base_positions = positions
+        .iter()
+        .filter(|p| {
+            !matches!(
+                p,
+                PlayerPositionType::DefenderCenterLeft
+                    | PlayerPositionType::DefenderCenterRight
+                    | PlayerPositionType::MidfielderCenterLeft
+                    | PlayerPositionType::MidfielderCenterRight
+            )
+        })
+        .count();
 
     let versatility_bonus = match unique_base_positions {
         0..=1 => 1.0,
-        2 => 1.05,  // +5% for two real positions
-        3 => 1.10,  // +10% for three
-        _ => 1.15,  // +15% for four or more
+        2 => 1.05, // +5% for two real positions
+        3 => 1.10, // +10% for three
+        _ => 1.15, // +15% for four or more
     };
 
     base * versatility_bonus
@@ -483,23 +521,26 @@ mod tests {
 
     #[test]
     fn base_value_low_ability_is_cheap() {
-        // ability 40 with avg skill ~5: base_value ~259K
-        // After age/contract factors this becomes ~100-200K final value
+        // ability 40 with avg skill ~5: base_value ~118K with the
+        // 80M cap. After age/contract factors this becomes <100K final.
         let normalized: f64 = 40.0 / 200.0;
         let curve = normalized.powi(4);
         let skill_factor = 0.85 + (5.0 / 20.0) * 0.3;
-        let value = 175_000_000.0 * curve * skill_factor;
-        assert!(value < 300_000.0, "ability 40 base_value = {}", value);
+        let value = 80_000_000.0 * curve * skill_factor;
+        assert!(value < 200_000.0, "ability 40 base_value = {}", value);
     }
 
     #[test]
     fn base_value_high_ability_is_expensive() {
-        // ability 160 with avg skill ~15 should be tens of millions
+        // ability 160 with avg skill ~15 should still be tens of
+        // millions before context multipliers (35M base + ~1.7×
+        // elite-context multipliers ≈ 60M, comfortably in the 50–80M
+        // band a CA 160 player commands at a top club).
         let normalized: f64 = 160.0 / 200.0;
         let curve = normalized.powi(4);
         let skill_factor = 0.85 + (15.0 / 20.0) * 0.3;
-        let value = 175_000_000.0 * curve * skill_factor;
-        assert!(value > 50_000_000.0, "ability 160 base_value = {}", value);
+        let value = 80_000_000.0 * curve * skill_factor;
+        assert!(value > 30_000_000.0, "ability 160 base_value = {}", value);
     }
 
     #[test]
@@ -522,8 +563,8 @@ mod tests {
         age: u8,
         position: PlayerPositionType,
     ) -> Player {
-        use crate::club::player::generators::PlayerGenerator;
         use crate::PeopleNameGeneratorData;
+        use crate::club::player::generators::PlayerGenerator;
 
         let names = PeopleNameGeneratorData {
             first_names: vec!["T".to_string()],
@@ -532,8 +573,7 @@ mod tests {
         };
         let mut player = PlayerGenerator::generate(1, now, position, 100, &names);
 
-        let bd = NaiveDate::from_ymd_opt(now.year() - age as i32, 6, 15)
-            .unwrap_or(now);
+        let bd = NaiveDate::from_ymd_opt(now.year() - age as i32, 6, 15).unwrap_or(now);
         player.birth_date = bd;
 
         player.player_attributes.current_ability = ca;
@@ -544,8 +584,7 @@ mod tests {
         player.player_attributes.international_apps = 0;
 
         if let Some(c) = player.contract.as_mut() {
-            c.expiration = NaiveDate::from_ymd_opt(now.year() + 3, now.month(), 1)
-                .unwrap();
+            c.expiration = NaiveDate::from_ymd_opt(now.year() + 3, now.month(), 1).unwrap();
             c.squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
         }
 
@@ -593,10 +632,8 @@ mod tests {
         let player = make_valuation_player(now, 120, 130, 25, PlayerPositionType::MidfielderCenter);
 
         let neutral = PlayerValueCalculator::calculate(&player, now, 1.0, 0, 0);
-        let with_low_context =
-            PlayerValueCalculator::calculate(&player, now, 1.0, 2500, 2500);
-        let with_high_context =
-            PlayerValueCalculator::calculate(&player, now, 1.0, 9500, 9500);
+        let with_low_context = PlayerValueCalculator::calculate(&player, now, 1.0, 2500, 2500);
+        let with_high_context = PlayerValueCalculator::calculate(&player, now, 1.0, 9500, 9500);
 
         assert!(
             with_low_context < neutral * 0.5,
@@ -620,20 +657,13 @@ mod tests {
         // are set.
         use crate::transfers::window::PlayerValuationCalculator as Vp;
         let now = d(2025);
-        let mut player = make_valuation_player(
-            now, 130, 135, 26, PlayerPositionType::MidfielderCenter,
-        );
+        let mut player =
+            make_valuation_player(now, 130, 135, 26, PlayerPositionType::MidfielderCenter);
 
-        let baseline = Vp::calculate_value_with_price_level(
-            &player, now, 1.0, 7000, 7000,
-        )
-        .amount;
+        let baseline = Vp::calculate_value_with_price_level(&player, now, 1.0, 7000, 7000).amount;
 
         player.statuses.add(now, PlayerStatusType::Lst);
-        let listed = Vp::calculate_value_with_price_level(
-            &player, now, 1.0, 7000, 7000,
-        )
-        .amount;
+        let listed = Vp::calculate_value_with_price_level(&player, now, 1.0, 7000, 7000).amount;
         assert!(
             listed < baseline,
             "listed player value {} should be below baseline {}",
@@ -642,10 +672,7 @@ mod tests {
         );
 
         player.statuses.add(now, PlayerStatusType::Req);
-        let requested = Vp::calculate_value_with_price_level(
-            &player, now, 1.0, 7000, 7000,
-        )
-        .amount;
+        let requested = Vp::calculate_value_with_price_level(&player, now, 1.0, 7000, 7000).amount;
         assert!(
             requested < listed,
             "transfer-requested + listed value {} should fall further below {}",
@@ -660,8 +687,10 @@ mod tests {
         // other MainBackupPlayer. The key player must command a
         // measurable premium — squad role is genuine seller leverage.
         let now = d(2025);
-        let mut key = make_valuation_player(now, 130, 135, 27, PlayerPositionType::MidfielderCenter);
-        let mut backup = make_valuation_player(now, 130, 135, 27, PlayerPositionType::MidfielderCenter);
+        let mut key =
+            make_valuation_player(now, 130, 135, 27, PlayerPositionType::MidfielderCenter);
+        let mut backup =
+            make_valuation_player(now, 130, 135, 27, PlayerPositionType::MidfielderCenter);
 
         if let Some(c) = key.contract.as_mut() {
             c.squad_status = PlayerSquadStatus::KeyPlayer;
@@ -687,18 +716,47 @@ mod tests {
     fn elite_wonderkid_is_not_undervalued_by_age_factor() {
         // 18yo with PA 180, CA 110 at a top club: the old age_factor
         // (0.40) without a wonderkid premium left this player priced
-        // like a journeyman. With the new potential factor, value
-        // should reach realistic wonderkid territory.
+        // like a journeyman. With the strengthened wonderkid weights
+        // compensating for the 80M base cap, value should still reach
+        // realistic wonderkid territory.
         let now = d(2025);
-        let player = make_valuation_player(
-            now, 110, 180, 18, PlayerPositionType::MidfielderCenter,
-        );
+        let player = make_valuation_player(now, 110, 180, 18, PlayerPositionType::MidfielderCenter);
 
         let value = PlayerValueCalculator::calculate(&player, now, 1.0, 9000, 9000);
 
         assert!(
-            value >= 15_000_000.0,
+            value >= 12_000_000.0,
             "elite wonderkid value {} too low — age factor should not flatten high-PA youth",
+            value
+        );
+    }
+
+    /// Regression: the live game was reporting CA 119 / PA 125 prime-age
+    /// strikers at top-tier domestic clubs (Spartak Moscow / Russian PL,
+    /// rep ~6500/7600) at €20M+ — roughly 3× their real-world
+    /// transfer-market value (Levi Garcia, transfermarkt €7.5m). The
+    /// recalibration combines a base-cap reduction (175M→80M), a smooth
+    /// reputation curve (0.95..1.20 instead of a 1.30 cliff), and a
+    /// reduced ST premium so this archetype lands in the 6–10M band.
+    #[test]
+    fn prime_striker_in_strong_league_no_apps_is_not_inflated() {
+        let now = d(2026);
+        let mut player = make_valuation_player(now, 119, 125, 28, PlayerPositionType::Striker);
+        player.player_attributes.current_reputation = 5369;
+        player.player_attributes.world_reputation = 2594;
+        player.player_attributes.home_reputation = 5953;
+        player.player_attributes.international_apps = 60; // top intl tier
+
+        let value = PlayerValueCalculator::calculate(&player, now, 1.0, 6500, 7600);
+
+        assert!(
+            value <= 12_000_000.0,
+            "prime ST CA119 in strong-league context valued at {} — should land in 6–10M band",
+            value
+        );
+        assert!(
+            value >= 4_000_000.0,
+            "prime ST CA119 in strong-league context valued at {} — too low, formula over-corrected",
             value
         );
     }
@@ -711,8 +769,7 @@ mod tests {
         // alone — league_club_factor is held constant by passing the
         // same blended `club_reputation` in both calls.
         let now = d(2025);
-        let mut player =
-            make_valuation_player(now, 120, 125, 27, PlayerPositionType::Striker);
+        let mut player = make_valuation_player(now, 120, 125, 27, PlayerPositionType::Striker);
         // 30 goals / 30 games with a strong rating — exactly the
         // scenario that should price up in a strong league.
         player.statistics.played = 30;
@@ -748,8 +805,12 @@ mod tests {
         };
 
         assert!(with_status(KeyPlayer, &mut p) > with_status(FirstTeamRegular, &mut p));
-        assert!(with_status(FirstTeamRegular, &mut p) > with_status(FirstTeamSquadRotation, &mut p));
-        assert!(with_status(FirstTeamSquadRotation, &mut p) > with_status(MainBackupPlayer, &mut p));
+        assert!(
+            with_status(FirstTeamRegular, &mut p) > with_status(FirstTeamSquadRotation, &mut p)
+        );
+        assert!(
+            with_status(FirstTeamSquadRotation, &mut p) > with_status(MainBackupPlayer, &mut p)
+        );
         assert!(with_status(MainBackupPlayer, &mut p) > with_status(NotNeeded, &mut p));
     }
 }

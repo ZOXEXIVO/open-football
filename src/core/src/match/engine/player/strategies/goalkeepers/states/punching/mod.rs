@@ -45,7 +45,6 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
         }
     }
 
-
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Remain stationary while punching
         Some(Vector3::new(0.0, 0.0, 0.0))

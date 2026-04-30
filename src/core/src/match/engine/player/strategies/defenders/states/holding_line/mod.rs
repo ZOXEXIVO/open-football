@@ -1,11 +1,14 @@
 use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::strategies::players::DefensiveRole;
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler,
+};
 
-const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 35.0;  // Tighter line — less room for attackers
+const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 35.0; // Tighter line — less room for attackers
 const BALL_PROXIMITY_THRESHOLD: f32 = 150.0; // React to ball from further out
 const MARKING_DISTANCE_THRESHOLD: f32 = 50.0; // Pick up attackers from further away
 const PRESSING_DISTANCE_THRESHOLD: f32 = 60.0; // Step out to press ball carrier earlier
@@ -141,7 +144,11 @@ impl StateProcessingHandler for DefenderHoldingLineState {
 
         // Guard unmarked attackers in our zone who are trying to get open
         if ctx.ball().on_own_side() {
-            if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE_THRESHOLD * 2.0) {
+            if let Some(unmarked) = ctx
+                .player()
+                .defensive()
+                .find_unmarked_opponent(MARKING_DISTANCE_THRESHOLD * 2.0)
+            {
                 let dist = unmarked.distance(ctx);
                 if dist < 60.0 {
                     return Some(StateChangeResult::with_defender_state(
@@ -179,7 +186,7 @@ impl StateProcessingHandler for DefenderHoldingLineState {
 
         if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
             return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting
+                DefenderState::Intercepting,
             ));
         }
 
@@ -199,7 +206,6 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         // pressing later, reintroduce as a team-level flag (Phase 2).
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let current_position = ctx.player.position;
@@ -245,7 +251,11 @@ impl StateProcessingHandler for DefenderHoldingLineState {
 impl DefenderHoldingLineState {
     /// Calculate zonal defensive position - creates natural staggered formation
     /// Each defender positions based on their assigned opponent or zone
-    fn calculate_zonal_position(&self, ctx: &StateProcessingContext, ball_position: Vector3<f32>) -> Vector3<f32> {
+    fn calculate_zonal_position(
+        &self,
+        ctx: &StateProcessingContext,
+        ball_position: Vector3<f32>,
+    ) -> Vector3<f32> {
         let tactical_position = ctx.player.start_position;
         let current_position = ctx.player.position;
         let own_goal = ctx.ball().direction_to_own_goal();
@@ -257,7 +267,10 @@ impl DefenderHoldingLineState {
 
         // Find the nearest opponent in this defender's zone
         let zone_half_width = 50.0;
-        let nearest_opponent_in_zone = ctx.players().opponents().nearby(100.0)
+        let nearest_opponent_in_zone = ctx
+            .players()
+            .opponents()
+            .nearby(100.0)
             .filter(|opp| {
                 let lateral_dist = (opp.position.y - tactical_position.y).abs();
                 lateral_dist < zone_half_width
@@ -318,11 +331,18 @@ impl DefenderHoldingLineState {
     /// Calculates the defensive line position based on team tactics and defender positions.
     /// Uses tactical defensive line height to bias the position forward or deep.
     fn calculate_defensive_line_position(&self, ctx: &StateProcessingContext) -> f32 {
-        let (sum_x, count) = ctx.players().teammates().defenders()
+        let (sum_x, count) = ctx
+            .players()
+            .teammates()
+            .defenders()
             .map(|p| p.position.x)
             .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 
-        let avg_x = if count > 0 { sum_x / count as f32 } else { ctx.player.position.x };
+        let avg_x = if count > 0 {
+            sum_x / count as f32
+        } else {
+            ctx.player.position.x
+        };
 
         // Apply tactical bias: high line pushes defenders forward, deep block pulls them back
         let line_height = ctx.team().tactics().defensive_line_height();
@@ -367,11 +387,12 @@ impl DefenderHoldingLineState {
                 }
 
                 let defender_x = ctx.player.position.x;
-                let is_ahead_or_close = if own_goal_position.x < ctx.context.field_size.width as f32 / 2.0 {
-                    opp.position.x < defender_x + 30.0
-                } else {
-                    opp.position.x > defender_x - 30.0
-                };
+                let is_ahead_or_close =
+                    if own_goal_position.x < ctx.context.field_size.width as f32 / 2.0 {
+                        opp.position.x < defender_x + 30.0
+                    } else {
+                        opp.position.x > defender_x - 30.0
+                    };
 
                 alignment >= DANGEROUS_RUN_ANGLE && is_ahead_or_close
             })
@@ -381,5 +402,4 @@ impl DefenderHoldingLineState {
                 dist_a.partial_cmp(&dist_b).unwrap()
             })
     }
-
 }

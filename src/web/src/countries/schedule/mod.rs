@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -71,10 +71,7 @@ pub async fn country_schedule_action(
         .slug_indexes
         .get_country_by_slug(&route_params.country_slug)
         .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Country '{}' not found",
-                route_params.country_slug
-            ))
+            ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug))
         })?;
 
     let country: &Country = simulator_data
@@ -156,7 +153,13 @@ pub async fn country_schedule_action(
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {
-            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: &country.name, country_slug: &route_params.country_slug };
+            let mp = views::MenuParams {
+                i18n: &i18n,
+                lang: &route_params.lang,
+                current_path: &current_path,
+                country_name: &country.name,
+                country_slug: &route_params.country_slug,
+            };
             views::country_menu(&mp, &cl)
         },
         lang: route_params.lang,

@@ -20,9 +20,7 @@ pub struct CountryPricing {
 
 impl Default for CountryPricing {
     fn default() -> Self {
-        CountryPricing {
-            price_level: 1.0,
-        }
+        CountryPricing { price_level: 1.0 }
     }
 }
 
@@ -35,6 +33,10 @@ pub struct SkinColorDistribution {
 
 impl Default for SkinColorDistribution {
     fn default() -> Self {
-        SkinColorDistribution { white: 50, black: 20, metis: 30 }
+        SkinColorDistribution {
+            white: 50,
+            black: 20,
+            metis: 30,
+        }
     }
 }

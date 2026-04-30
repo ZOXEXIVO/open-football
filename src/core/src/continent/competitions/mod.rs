@@ -1,14 +1,14 @@
-mod types;
 mod champions_league;
-mod europa_league;
 mod conference_league;
+mod europa_league;
 mod super_cup;
+mod types;
 
-pub use types::*;
 pub use champions_league::*;
-pub use europa_league::*;
 pub use conference_league::*;
+pub use europa_league::*;
 pub use super_cup::*;
+pub use types::*;
 
 #[derive(Debug, Clone)]
 pub struct ContinentalCompetitions {

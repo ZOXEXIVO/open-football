@@ -4,11 +4,11 @@
 //! play isn't disturbed.
 
 use super::Ball;
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
-use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
 impl Ball {
@@ -84,7 +84,8 @@ impl Ball {
             let concentration = player.skills.mental.concentration;
 
             // Base chance: average of key defensive skills (0-20 scale → 0-1)
-            let skill_factor = (tackling + anticipation + positioning + concentration) / (4.0 * 20.0);
+            let skill_factor =
+                (tackling + anticipation + positioning + concentration) / (4.0 * 20.0);
 
             // Proximity factor: closer = higher chance (1.0 at 0m, 0.3 at max radius)
             let dist = dist_sq.sqrt();
@@ -200,7 +201,7 @@ impl Ball {
         // (2-3 blocks per team per match from ~13 shots); we were
         // below that with the tight window.
         const BLOCK_LOOKAHEAD: f32 = 40.0; // was 30u
-        const BLOCK_CORRIDOR: f32 = 7.0;   // was 4u — body + stretched leg
+        const BLOCK_CORRIDOR: f32 = 7.0; // was 4u — body + stretched leg
 
         let mut best_blocker: Option<u32> = None;
         let mut best_chance: f32 = 0.0;
@@ -229,8 +230,8 @@ impl Ball {
                 continue;
             }
             // Perpendicular distance to the line.
-            let perp = (dx - projection * shot_dir_x).powi(2)
-                + (dy - projection * shot_dir_y).powi(2);
+            let perp =
+                (dx - projection * shot_dir_x).powi(2) + (dy - projection * shot_dir_y).powi(2);
             let perp_dist = perp.sqrt();
             if perp_dist > BLOCK_CORRIDOR {
                 continue;
@@ -366,7 +367,10 @@ impl Ball {
         // window: we check within ~2 ticks of arrival.
         let (goal_x, goal_y) = match shot_target.defending_side {
             PlayerSide::Left => (context.goal_positions.left.x, context.goal_positions.left.y),
-            PlayerSide::Right => (context.goal_positions.right.x, context.goal_positions.right.y),
+            PlayerSide::Right => (
+                context.goal_positions.right.x,
+                context.goal_positions.right.y,
+            ),
         };
 
         // Reject balls that have already crossed the goal line. Using

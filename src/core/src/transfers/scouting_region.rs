@@ -59,8 +59,8 @@ impl ScoutingRegion {
             // North Africa
             "ma" | "eg" | "tn" | "dz" | "ly" => ScoutingRegion::NorthAfrica,
             // West Africa
-            "ng" | "gh" | "ci" | "cm" | "sn" | "ml" | "gm" | "gw" | "sl" | "bf" | "tg"
-            | "bj" | "ne" | "lr" | "cv" | "mr" | "gq" | "ga" | "cg" | "cf" | "td" | "st" => {
+            "ng" | "gh" | "ci" | "cm" | "sn" | "ml" | "gm" | "gw" | "sl" | "bf" | "tg" | "bj"
+            | "ne" | "lr" | "cv" | "mr" | "gq" | "ga" | "cg" | "cf" | "td" | "st" => {
                 ScoutingRegion::WestAfrica
             }
             // East & South Africa
@@ -71,16 +71,12 @@ impl ScoutingRegion {
     fn classify_european_country(code: &str) -> ScoutingRegion {
         match code {
             // Western Europe (the big 5 + neighbors)
-            "gb" | "fr" | "de" | "es" | "it" | "nl" | "be" | "pt" | "at" | "ch" | "lu"
-            | "li" | "mc" | "ie" | "sc" | "gi" | "sm" | "ad" | "mt" => {
-                ScoutingRegion::WesternEurope
-            }
+            "gb" | "fr" | "de" | "es" | "it" | "nl" | "be" | "pt" | "at" | "ch" | "lu" | "li"
+            | "mc" | "ie" | "sc" | "gi" | "sm" | "ad" | "mt" => ScoutingRegion::WesternEurope,
             // Scandinavia
             "se" | "no" | "dk" | "fi" | "is" | "fo" => ScoutingRegion::Scandinavia,
             // Turkey/Caucasus/Middle-East-adjacent Europe
-            "tr" | "il" | "cy" | "ge" | "am" | "az" | "kz" => {
-                ScoutingRegion::MiddleEastEurope
-            }
+            "tr" | "il" | "cy" | "ge" | "am" | "az" | "kz" => ScoutingRegion::MiddleEastEurope,
             // Eastern Europe (everything else)
             _ => ScoutingRegion::EasternEurope,
         }
@@ -98,8 +94,9 @@ impl ScoutingRegion {
             // East Asia
             "jp" | "kr" | "cn" | "kp" | "tw" | "hk" | "mo" | "mn" => ScoutingRegion::EastAsia,
             // Middle East
-            "sa" | "ae" | "qa" | "ir" | "iq" | "kw" | "bh" | "om" | "jo" | "lb" | "ye"
-            | "ps" => ScoutingRegion::MiddleEast,
+            "sa" | "ae" | "qa" | "ir" | "iq" | "kw" | "bh" | "om" | "jo" | "lb" | "ye" | "ps" => {
+                ScoutingRegion::MiddleEast
+            }
             // South Asia
             "in" | "pk" | "bd" | "lk" | "np" | "mv" | "bt" | "af" => ScoutingRegion::SouthAsia,
             // Southeast Asia

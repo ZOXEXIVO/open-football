@@ -120,12 +120,8 @@ pub struct NationalTeamMatchResult {
 
 /// Break windows matching League::is_international_break:
 /// Sep 4-12, Oct 9-17, Nov 13-21, Mar 20-28
-pub(super) const BREAK_WINDOWS: [(u32, u32, u32); 4] = [
-    (9, 4, 12),
-    (10, 9, 17),
-    (11, 13, 21),
-    (3, 20, 28),
-];
+pub(super) const BREAK_WINDOWS: [(u32, u32, u32); 4] =
+    [(9, 4, 12), (10, 9, 17), (11, 13, 21), (3, 20, 28)];
 
 /// Tournament window: June-July for World Cup / Euro finals
 pub(super) const TOURNAMENT_WINDOW: (u32, u32, u32, u32) = (6, 10, 7, 15);

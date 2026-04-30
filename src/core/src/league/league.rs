@@ -1,8 +1,7 @@
 use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{
-    LeagueDynamics, LeagueMilestones, LeagueRegulations,
-    LeagueResult, LeagueStatistics, LeagueTable, LeagueTableRow,
-    MatchStorage, Schedule, ScheduleItem,
+    LeagueDynamics, LeagueMilestones, LeagueRegulations, LeagueResult, LeagueStatistics,
+    LeagueTable, LeagueTableRow, MatchStorage, Schedule, ScheduleItem,
 };
 use crate::{Club, Team};
 use chrono::{Datelike, NaiveDate};
@@ -96,7 +95,10 @@ impl League {
         let league_name = self.name.clone();
         let current_date = ctx.simulation.date.date();
 
-        debug!("⚽ Simulating league: {} (Reputation: {})", league_name, self.reputation);
+        debug!(
+            "⚽ Simulating league: {} (Reputation: {})",
+            league_name, self.reputation
+        );
 
         self.prepare_matchday(&ctx, clubs);
 
@@ -109,11 +111,16 @@ impl League {
 
         let mut schedule_result = self.schedule.simulate(
             &self.settings,
-            ctx.with_league(self.id, String::from(&self.slug), &league_teams, self.reputation),
+            ctx.with_league(
+                self.id,
+                String::from(&self.slug),
+                &league_teams,
+                self.reputation,
+            ),
         );
 
-        let new_season_started = schedule_result.generated
-            && self.table.rows.iter().any(|r| r.played > 0);
+        let new_season_started =
+            schedule_result.generated && self.table.rows.iter().any(|r| r.played > 0);
 
         if schedule_result.generated {
             self.table = LeagueTable::new(&league_teams);
@@ -163,7 +170,12 @@ pub struct DayMonthPeriod {
 
 impl DayMonthPeriod {
     pub fn new(from_day: u8, from_month: u8, to_day: u8, to_month: u8) -> Self {
-        DayMonthPeriod { from_day, from_month, to_day, to_month }
+        DayMonthPeriod {
+            from_day,
+            from_month,
+            to_day,
+            to_month,
+        }
     }
 }
 
@@ -199,7 +211,8 @@ impl Schedule {
     pub fn get_matches_in_next_days(&self, from_date: NaiveDate, days: i64) -> Vec<&ScheduleItem> {
         let end_date = from_date + chrono::Duration::days(days);
 
-        self.tours.iter()
+        self.tours
+            .iter()
             .flat_map(|t| &t.items)
             .filter(|item| {
                 let item_date = item.date.date();
@@ -208,17 +221,23 @@ impl Schedule {
             .collect()
     }
 
-    pub fn get_matches_for_team_in_days(&self, team_id: u32, from_date: NaiveDate, days: i64) -> Vec<&ScheduleItem> {
+    pub fn get_matches_for_team_in_days(
+        &self,
+        team_id: u32,
+        from_date: NaiveDate,
+        days: i64,
+    ) -> Vec<&ScheduleItem> {
         let end_date = from_date + chrono::Duration::days(days);
 
-        self.tours.iter()
+        self.tours
+            .iter()
             .flat_map(|t| &t.items)
             .filter(|item| {
                 let item_date = item.date.date();
-                (item.home_team_id == team_id || item.away_team_id == team_id) &&
-                    item_date >= from_date &&
-                    item_date <= end_date &&
-                    item.result.is_none()
+                (item.home_team_id == team_id || item.away_team_id == team_id)
+                    && item_date >= from_date
+                    && item_date <= end_date
+                    && item.result.is_none()
             })
             .collect()
     }

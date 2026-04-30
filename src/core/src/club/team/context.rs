@@ -12,11 +12,19 @@ pub struct TeamContext {
 
 impl TeamContext {
     pub fn new(id: u32) -> Self {
-        TeamContext { id, reputation: 0.0, formation: None }
+        TeamContext {
+            id,
+            reputation: 0.0,
+            formation: None,
+        }
     }
 
     pub fn with_reputation(id: u32, reputation: f32) -> Self {
-        TeamContext { id, reputation, formation: None }
+        TeamContext {
+            id,
+            reputation,
+            formation: None,
+        }
     }
 
     pub fn with_formation(mut self, formation: [PlayerPositionType; 11]) -> Self {

@@ -1,36 +1,34 @@
 use crate::r#match::forwarders::states::{
-    ForwardAssistingState, ForwardCreatingSpaceState, ForwardCrossingState,
-    ForwardCrossReceivingState, ForwardDribblingState, ForwardFinishingState,
-    ForwardHeadingState, ForwardInterceptingState,
-    ForwardPassingState, ForwardPressingState,
-    ForwardRestingState, ForwardReturningState, ForwardRunningInBehindState,
-    ForwardRunningState, ForwardShootingState, ForwardStandingState, ForwardTacklingState,
-    ForwardTakeBallState, ForwardWalkingState,
+    ForwardAssistingState, ForwardCreatingSpaceState, ForwardCrossReceivingState,
+    ForwardCrossingState, ForwardDribblingState, ForwardFinishingState, ForwardHeadingState,
+    ForwardInterceptingState, ForwardPassingState, ForwardPressingState, ForwardRestingState,
+    ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState, ForwardShootingState,
+    ForwardStandingState, ForwardTacklingState, ForwardTakeBallState, ForwardWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ForwardState {
-    Standing,            // Standing still
-    Walking,             // Walking at low intensity to reposition or conserve energy
-    Passing,             // Passing the ball
-    Dribbling,           // Dribbling the ball past opponents
-    Shooting,            // Taking a shot on goal
-    Heading,             // Heading the ball, often during crosses or set pieces
-    RunningInBehind,     // Making a run behind the defense to receive a pass
-    Running,             // Running in the direction of the ball
-    Pressing,            // Pressing defenders to force a mistake or regain possession
-    Finishing,           // Attempting to score from a close range
-    CreatingSpace,       // Creating space for teammates by pulling defenders away
-    CrossReceiving,      // Positioning to receive a cross
-    Crossing,            // Delivering a cross from a wide position
-    Tackling,            // Tackling the ball
-    Assisting,           // Providing an assist by passing or crossing to a teammate
-    TakeBall,            // Take the ball,
-    Intercepting,        // Intercepting the ball,
-    Returning,           // Returning the ball
-    Resting,             // Recovering stamina when fatigued
+    Standing,        // Standing still
+    Walking,         // Walking at low intensity to reposition or conserve energy
+    Passing,         // Passing the ball
+    Dribbling,       // Dribbling the ball past opponents
+    Shooting,        // Taking a shot on goal
+    Heading,         // Heading the ball, often during crosses or set pieces
+    RunningInBehind, // Making a run behind the defense to receive a pass
+    Running,         // Running in the direction of the ball
+    Pressing,        // Pressing defenders to force a mistake or regain possession
+    Finishing,       // Attempting to score from a close range
+    CreatingSpace,   // Creating space for teammates by pulling defenders away
+    CrossReceiving,  // Positioning to receive a cross
+    Crossing,        // Delivering a cross from a wide position
+    Tackling,        // Tackling the ball
+    Assisting,       // Providing an assist by passing or crossing to a teammate
+    TakeBall,        // Take the ball,
+    Intercepting,    // Intercepting the ball,
+    Returning,       // Returning the ball
+    Resting,         // Recovering stamina when fatigued
 }
 
 pub struct ForwardStrategies {}

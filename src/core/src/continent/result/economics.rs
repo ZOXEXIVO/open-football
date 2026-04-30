@@ -1,10 +1,14 @@
 use super::ContinentResult;
 use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
-use log::{debug};
+use log::debug;
 
 impl ContinentResult {
-    pub(crate) fn update_economic_zone(&self, data: &mut SimulatorData, _country_results: &[CountryResult]) {
+    pub(crate) fn update_economic_zone(
+        &self,
+        data: &mut SimulatorData,
+        _country_results: &[CountryResult],
+    ) {
         debug!("💰 Updating continental economic zone");
 
         let continent_id = self.get_continent_id();
@@ -21,13 +25,19 @@ impl ContinentResult {
                 }
             }
 
-            continent.economic_zone.update_indicators(total_revenue, total_expenses);
+            continent
+                .economic_zone
+                .update_indicators(total_revenue, total_expenses);
 
             // Update TV rights distribution
-            continent.economic_zone.recalculate_tv_rights(&continent.continental_rankings);
+            continent
+                .economic_zone
+                .recalculate_tv_rights(&continent.continental_rankings);
 
             // Update sponsorship market
-            continent.economic_zone.update_sponsorship_market(&continent.continental_rankings);
+            continent
+                .economic_zone
+                .update_sponsorship_market(&continent.continental_rankings);
         }
     }
 }

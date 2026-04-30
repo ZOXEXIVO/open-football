@@ -1,8 +1,8 @@
+use super::LeagueResult;
 use crate::r#match::FieldSquad;
 use crate::r#match::MatchResultRaw;
 use crate::simulator::SimulatorData;
 use std::collections::HashMap;
-use super::LeagueResult;
 
 impl LeagueResult {
     pub(super) fn apply_post_match_physical_effects(

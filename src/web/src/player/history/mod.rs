@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
-use crate::common::slug::{resolve_player_page, PlayerPage};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -86,18 +86,17 @@ fn find_team_location(simulator_data: &SimulatorData, team_slug: &str) -> Option
             for club in &country.clubs {
                 for t in &club.teams.teams {
                     if t.slug == team_slug {
-                        let league = t.league_id
-                            .and_then(|lid| {
-                                country.leagues.leagues.iter().find(|l| l.id == lid)
-                            })
+                        let league = t
+                            .league_id
+                            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                             .or_else(|| {
-                                country.leagues.leagues.iter().find(|l| {
-                                    l.table.rows.iter().any(|row| row.team_id == t.id)
-                                })
+                                country
+                                    .leagues
+                                    .leagues
+                                    .iter()
+                                    .find(|l| l.table.rows.iter().any(|row| row.team_id == t.id))
                             })
-                            .or_else(|| {
-                                country.leagues.leagues.first()
-                            });
+                            .or_else(|| country.leagues.leagues.first());
 
                         let (league_name, league_slug) = league
                             .map(|l| (l.name.clone(), l.slug.clone()))
@@ -135,7 +134,11 @@ pub async fn player_history_action(
         &route_params.lang,
         "/history",
     )? {
-        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Found {
+            player,
+            team,
+            canonical_slug,
+        } => (player, team, canonical_slug),
         PlayerPage::Redirect(r) => return Ok(r),
     };
 
@@ -146,10 +149,20 @@ pub async fn player_history_action(
     } else {
         (Vec::new(), Vec::new())
     };
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
+    let league_refs: Vec<(&str, &str)> = country_leagues
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
 
-    let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
+    let title = format!(
+        "{} {}",
+        player.full_name.display_first_name(),
+        player.full_name.display_last_name()
+    );
 
     // Pass live stats so the active entry gets current player.statistics
     let live_stats = if team_opt.is_some() {
@@ -160,7 +173,8 @@ pub async fn player_history_action(
     let view = player.statistics_history.view_items(live_stats);
     let career_totals = core::PlayerStatisticsHistory::career_totals(&view);
 
-    let mut location_cache: std::collections::HashMap<String, TeamLocationInfo> = std::collections::HashMap::new();
+    let mut location_cache: std::collections::HashMap<String, TeamLocationInfo> =
+        std::collections::HashMap::new();
 
     let items: Vec<PlayerHistorySeasonItem> = view
         .into_iter()
@@ -201,7 +215,9 @@ pub async fn player_history_action(
                     goals: item.statistics.goals,
                     assists: item.statistics.assists,
                     player_of_the_match: item.statistics.player_of_the_match,
-                    average_rating: core::PlayerStatistics::format_rating(item.statistics.average_rating),
+                    average_rating: core::PlayerStatistics::format_rating(
+                        item.statistics.average_rating,
+                    ),
                     conceded: item.statistics.conceded,
                     clean_sheets: item.statistics.clean_sheets,
                 },
@@ -257,7 +273,8 @@ pub async fn player_history_action(
             is_unhappy: false,
             is_force_match_selection: player.is_force_match_selection,
             is_on_watchlist: simulator_data.watchlist.contains(&player.id),
-        }.into_response())
+        }
+        .into_response())
     } else {
         let team = team_opt.unwrap();
 
@@ -270,13 +287,31 @@ pub async fn player_history_action(
             sub_title: team.name.clone(),
             sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
             sub_title_country_code: String::new(),
-            header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
-            foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
+            header_color: simulator_data
+                .club(team.club_id)
+                .map(|c| c.colors.background.clone())
+                .unwrap_or_default(),
+            foreground_color: simulator_data
+                .club(team.club_id)
+                .map(|c| c.colors.foreground.clone())
+                .unwrap_or_default(),
             menu_sections: {
                 let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
                 let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
-                let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-                views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main)
+                let mp = views::MenuParams {
+                    i18n: &i18n,
+                    lang: &route_params.lang,
+                    current_path: &current_path,
+                    country_name: cn,
+                    country_slug: cs,
+                };
+                views::team_menu(
+                    &mp,
+                    &neighbor_refs,
+                    &team.slug,
+                    &league_refs,
+                    team.team_type == core::TeamType::Main,
+                )
             },
             i18n,
             lang: route_params.lang.clone(),
@@ -292,7 +327,8 @@ pub async fn player_history_action(
             is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
             is_force_match_selection: player.is_force_match_selection,
             is_on_watchlist: simulator_data.watchlist.contains(&player.id),
-        }.into_response())
+        }
+        .into_response())
     }
 }
 
@@ -310,7 +346,10 @@ fn get_neighbor_teams(
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
         .map(|country| {
-            country.leagues.leagues.iter()
+            country
+                .leagues
+                .leagues
+                .iter()
                 .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
@@ -320,6 +359,9 @@ fn get_neighbor_teams(
 
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }

@@ -17,13 +17,17 @@ impl WaypointManager {
             loop_path: true,
         }
     }
-    
+
     pub fn reset(&mut self) {
         self.current_index = 0;
         self.path_completed = false;
     }
 
-    pub fn update(&mut self, player_position: &Vector3<f32>, waypoints: &[Vector3<f32>]) -> Option<Vector3<f32>> {
+    pub fn update(
+        &mut self,
+        player_position: &Vector3<f32>,
+        waypoints: &[Vector3<f32>],
+    ) -> Option<Vector3<f32>> {
         if waypoints.is_empty() || self.path_completed {
             return None;
         }
@@ -60,7 +64,11 @@ impl WaypointManager {
         }
     }
 
-    fn find_nearest_waypoint_ahead(&self, player_position: &Vector3<f32>, waypoints: &[Vector3<f32>]) -> Option<usize> {
+    fn find_nearest_waypoint_ahead(
+        &self,
+        player_position: &Vector3<f32>,
+        waypoints: &[Vector3<f32>],
+    ) -> Option<usize> {
         if waypoints.is_empty() {
             return None;
         }

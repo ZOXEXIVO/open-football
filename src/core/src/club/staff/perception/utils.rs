@@ -23,9 +23,7 @@ pub fn seeded_decision(probability: f32, seed: u32) -> bool {
     if probability <= 0.0 {
         return false;
     }
-    let hash = seed
-        .wrapping_mul(2654435761)
-        .wrapping_add(0xdeadbeef);
+    let hash = seed.wrapping_mul(2654435761).wrapping_add(0xdeadbeef);
     let hash = hash ^ (hash >> 16);
     let hash = hash.wrapping_mul(0x45d9f3b);
     let hash = hash ^ (hash >> 16);

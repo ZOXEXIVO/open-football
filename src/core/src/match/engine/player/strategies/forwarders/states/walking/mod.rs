@@ -1,10 +1,10 @@
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::IntegerUtils;
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
-use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -24,12 +24,10 @@ impl StateProcessingHandler for ForwardWalkingState {
         if ctx.ball().is_owned() {
             if ctx.team().is_control_ball() {
                 return Some(StateChangeResult::with_forward_state(
-                    ForwardState::CreatingSpace
+                    ForwardState::CreatingSpace,
                 ));
             } else {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Running
-                ));
+                return Some(StateChangeResult::with_forward_state(ForwardState::Running));
             }
         }
 
@@ -45,8 +43,7 @@ impl StateProcessingHandler for ForwardWalkingState {
         None
     }
 
-
-    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>>  {
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if ctx.player.should_follow_waypoints(ctx) {
             let waypoints = ctx.player.get_waypoints_as_vectors();
 

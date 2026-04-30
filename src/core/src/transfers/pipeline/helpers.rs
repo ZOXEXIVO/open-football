@@ -448,7 +448,9 @@ impl PipelineProcessor {
     /// with raw skill averages prevents the CA-vs-skill drift the
     /// audit flagged.
     pub(crate) fn position_evaluation_ability(player: &Player) -> u8 {
-        player.skills.calculate_ability_for_position(player.position())
+        player
+            .skills
+            .calculate_ability_for_position(player.position())
     }
 
     /// Linear-interpolated lookup of base baseline CA from a continuous
@@ -534,20 +536,14 @@ impl PipelineProcessor {
     /// different baseline from a top-of-Continental club, instead of
     /// snapping to the same enum bucket. Position offsets are applied
     /// uniformly via [`group_baseline_offset`].
-    pub(crate) fn tier_starter_ca_score(
-        score: f32,
-        group: PlayerFieldPositionGroup,
-    ) -> u8 {
+    pub(crate) fn tier_starter_ca_score(score: f32, group: PlayerFieldPositionGroup) -> u8 {
         let base = Self::baseline_anchor_curve(score);
         let offset = Self::group_baseline_offset(group);
         (base.round() as i16 + offset).clamp(20, 200) as u8
     }
 
     /// Continuous-score counterpart of [`tier_target_ceiling`].
-    pub(crate) fn tier_target_ceiling_score(
-        score: f32,
-        group: PlayerFieldPositionGroup,
-    ) -> u8 {
+    pub(crate) fn tier_target_ceiling_score(score: f32, group: PlayerFieldPositionGroup) -> u8 {
         let baseline = Self::tier_starter_ca_score(score, group);
         let headroom = Self::headroom_anchor_curve(score).round() as i16;
         (baseline as i16 + headroom).clamp(20, 200) as u8
@@ -562,7 +558,6 @@ impl PipelineProcessor {
         let raw = 4.0 + (1.0 - s) * 11.0; // 4 at top, 15 at the bottom
         raw.round() as i16
     }
-
 }
 
 #[cfg(test)]
@@ -629,7 +624,14 @@ mod tier_helper_tests {
             for group in GROUPS {
                 let b = baseline(tier, group);
                 let c = ceiling(tier, group);
-                assert!(c >= b, "ceiling {} below baseline {} for {:?}/{:?}", c, b, tier, group);
+                assert!(
+                    c >= b,
+                    "ceiling {} below baseline {} for {:?}/{:?}",
+                    c,
+                    b,
+                    tier,
+                    group
+                );
             }
         }
     }
@@ -639,13 +641,22 @@ mod tier_helper_tests {
         // Elite-tier scouts must be allowed to recommend genuine
         // world-class players (180+); Continental at minimum top-bracket
         // (~155+). Calibration regression guard.
-        let elite_fwd_ceiling =
-            ceiling(&ReputationLevel::Elite, PlayerFieldPositionGroup::Forward);
-        assert!(elite_fwd_ceiling >= 180, "elite forward ceiling = {}", elite_fwd_ceiling);
+        let elite_fwd_ceiling = ceiling(&ReputationLevel::Elite, PlayerFieldPositionGroup::Forward);
+        assert!(
+            elite_fwd_ceiling >= 180,
+            "elite forward ceiling = {}",
+            elite_fwd_ceiling
+        );
 
-        let cont_fwd_ceiling =
-            ceiling(&ReputationLevel::Continental, PlayerFieldPositionGroup::Forward);
-        assert!(cont_fwd_ceiling >= 155, "continental forward ceiling = {}", cont_fwd_ceiling);
+        let cont_fwd_ceiling = ceiling(
+            &ReputationLevel::Continental,
+            PlayerFieldPositionGroup::Forward,
+        );
+        assert!(
+            cont_fwd_ceiling >= 155,
+            "continental forward ceiling = {}",
+            cont_fwd_ceiling
+        );
     }
 
     #[test]
@@ -653,12 +664,18 @@ mod tier_helper_tests {
         // Local / Amateur clubs should never reach top-class players
         // through the tier window — ensures the listed-star sweep won't
         // route Mbappé to a Sunday-league suitor.
-        let local_ceiling =
-            ceiling(&ReputationLevel::Local, PlayerFieldPositionGroup::Forward);
-        let amateur_ceiling =
-            ceiling(&ReputationLevel::Amateur, PlayerFieldPositionGroup::Forward);
-        assert!(local_ceiling < 100, "local forward ceiling = {}", local_ceiling);
-        assert!(amateur_ceiling < 80, "amateur forward ceiling = {}", amateur_ceiling);
+        let local_ceiling = ceiling(&ReputationLevel::Local, PlayerFieldPositionGroup::Forward);
+        let amateur_ceiling = ceiling(&ReputationLevel::Amateur, PlayerFieldPositionGroup::Forward);
+        assert!(
+            local_ceiling < 100,
+            "local forward ceiling = {}",
+            local_ceiling
+        );
+        assert!(
+            amateur_ceiling < 80,
+            "amateur forward ceiling = {}",
+            amateur_ceiling
+        );
     }
 
     #[test]
@@ -666,7 +683,13 @@ mod tier_helper_tests {
         for tier in &TIERS {
             let gk = baseline(tier, PlayerFieldPositionGroup::Goalkeeper);
             let mid = baseline(tier, PlayerFieldPositionGroup::Midfielder);
-            assert!(gk < mid, "GK baseline {} not below MID baseline {} at {:?}", gk, mid, tier);
+            assert!(
+                gk < mid,
+                "GK baseline {} not below MID baseline {} at {:?}",
+                gk,
+                mid,
+                tier
+            );
         }
     }
 
@@ -689,7 +712,12 @@ mod tier_helper_tests {
         }
         let elite = PipelineProcessor::tier_quality_tolerance_score(0.95);
         let amateur = PipelineProcessor::tier_quality_tolerance_score(0.05);
-        assert!(amateur > elite, "amateur {} should exceed elite {}", amateur, elite);
+        assert!(
+            amateur > elite,
+            "amateur {} should exceed elite {}",
+            amateur,
+            elite
+        );
     }
 
     #[test]
@@ -707,10 +735,8 @@ mod tier_helper_tests {
         for (tier, expected_mid_baseline) in &cases {
             let s = level_midpoint_score(tier);
             // Midfielder offset is 0 — direct calibration check.
-            let baseline = PipelineProcessor::tier_starter_ca_score(
-                s,
-                PlayerFieldPositionGroup::Midfielder,
-            );
+            let baseline =
+                PipelineProcessor::tier_starter_ca_score(s, PlayerFieldPositionGroup::Midfielder);
             assert_eq!(
                 baseline as i16, *expected_mid_baseline,
                 "midpoint baseline for {:?}: expected {}, got {}",
@@ -729,7 +755,10 @@ mod tier_helper_tests {
                 assert!(
                     cur >= prev,
                     "score baseline not monotonic at {}/{:?}: {} < {}",
-                    s, group, cur, prev
+                    s,
+                    group,
+                    cur,
+                    prev
                 );
                 prev = cur;
             }
@@ -754,13 +783,8 @@ mod tier_helper_tests {
             nicknames: Vec::new(),
         };
         let bd = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let player = PlayerGenerator::generate(
-            1,
-            bd,
-            PlayerPositionType::MidfielderCenter,
-            150,
-            &names,
-        );
+        let player =
+            PlayerGenerator::generate(1, bd, PlayerPositionType::MidfielderCenter, 150, &names);
         let direct = player
             .skills
             .calculate_ability_for_position(player.position());
@@ -778,22 +802,27 @@ mod tier_helper_tests {
         // for QualityUpgrade. Calibration regression guard for the
         // Spartak-style scenario.
         let cont_score = level_midpoint_score(&ReputationLevel::Continental);
-        let baseline =
-            PipelineProcessor::tier_starter_ca_score(cont_score, PlayerFieldPositionGroup::Goalkeeper);
+        let baseline = PipelineProcessor::tier_starter_ca_score(
+            cont_score,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         let tolerance = PipelineProcessor::tier_quality_tolerance_score(cont_score);
         let threshold = baseline as i16 - tolerance;
 
         assert!(
             (110_i16) < threshold,
             "weak GK (CA=110) must be below upgrade threshold {} for Continental tier (baseline={}, tolerance={})",
-            threshold, baseline, tolerance
+            threshold,
+            baseline,
+            tolerance
         );
 
         // Symmetrically, a tier-fit GK at baseline must NOT trigger.
         assert!(
             (baseline as i16) >= threshold,
             "at-tier GK (CA={}) must clear threshold {}",
-            baseline, threshold
+            baseline,
+            threshold
         );
     }
 
@@ -808,7 +837,9 @@ mod tier_helper_tests {
                 assert!(
                     c < 110,
                     "{:?} {:?} ceiling {} would let CA-160 stars through the gate",
-                    tier, group, c
+                    tier,
+                    group,
+                    c
                 );
             }
         }
@@ -824,16 +855,15 @@ mod tier_helper_tests {
             cont_score,
             PlayerFieldPositionGroup::Forward,
         );
-        let baseline_fwd = PipelineProcessor::tier_starter_ca_score(
-            cont_score,
-            PlayerFieldPositionGroup::Forward,
-        );
+        let baseline_fwd =
+            PipelineProcessor::tier_starter_ca_score(cont_score, PlayerFieldPositionGroup::Forward);
         let floor_fwd = baseline_fwd.saturating_sub(20);
 
         assert!(
             130 >= floor_fwd && 130 <= ceiling_fwd,
             "Continental window [{}..={}] must contain CA 130",
-            floor_fwd, ceiling_fwd
+            floor_fwd,
+            ceiling_fwd
         );
         assert!(
             175 > ceiling_fwd,
@@ -865,18 +895,15 @@ mod tier_helper_tests {
         // the same baseline — that's the whole point of the score
         // path. Tests the continuous calibration is genuinely
         // differentiating, not silently snapping to enum buckets.
-        let mid_cont = PipelineProcessor::tier_starter_ca_score(
-            0.68,
-            PlayerFieldPositionGroup::Midfielder,
-        );
-        let top_cont = PipelineProcessor::tier_starter_ca_score(
-            0.79,
-            PlayerFieldPositionGroup::Midfielder,
-        );
+        let mid_cont =
+            PipelineProcessor::tier_starter_ca_score(0.68, PlayerFieldPositionGroup::Midfielder);
+        let top_cont =
+            PipelineProcessor::tier_starter_ca_score(0.79, PlayerFieldPositionGroup::Midfielder);
         assert!(
             top_cont > mid_cont,
             "top-of-Continental baseline ({}) must exceed mid-Continental ({})",
-            top_cont, mid_cont
+            top_cont,
+            mid_cont
         );
     }
 }
@@ -884,7 +911,7 @@ mod tier_helper_tests {
 #[cfg(test)]
 mod group_need_tests {
     use crate::transfers::pipeline::evaluation::{
-        compute_group_needs, group_depth_requirement, GroupNeed, NeedKind,
+        GroupNeed, NeedKind, compute_group_needs, group_depth_requirement,
     };
     use crate::transfers::pipeline::processor::SquadPlayerInfo;
     use crate::{MatchTacticType, PlayerFieldPositionGroup, PlayerPositionType, TACTICS_POSITIONS};
@@ -898,11 +925,7 @@ mod group_need_tests {
         positions
     }
 
-    fn squad_player(
-        id: u32,
-        primary: PlayerPositionType,
-        ca: u8,
-    ) -> SquadPlayerInfo {
+    fn squad_player(id: u32, primary: PlayerPositionType, ca: u8) -> SquadPlayerInfo {
         let mut levels: HashMap<PlayerPositionType, u8> = HashMap::new();
         levels.insert(primary, 20);
         SquadPlayerInfo {
@@ -981,10 +1004,26 @@ mod group_need_tests {
             squad.push(squad_player(10 + i as u32, *pos, 132));
         }
         // Add a couple of bench outfielders so depth checks pass
-        squad.push(squad_player(50, PlayerPositionType::DefenderCenterLeft, 120));
-        squad.push(squad_player(51, PlayerPositionType::DefenderCenterRight, 120));
-        squad.push(squad_player(52, PlayerPositionType::MidfielderCenterLeft, 120));
-        squad.push(squad_player(53, PlayerPositionType::MidfielderCenterRight, 120));
+        squad.push(squad_player(
+            50,
+            PlayerPositionType::DefenderCenterLeft,
+            120,
+        ));
+        squad.push(squad_player(
+            51,
+            PlayerPositionType::DefenderCenterRight,
+            120,
+        ));
+        squad.push(squad_player(
+            52,
+            PlayerPositionType::MidfielderCenterLeft,
+            120,
+        ));
+        squad.push(squad_player(
+            53,
+            PlayerPositionType::MidfielderCenterRight,
+            120,
+        ));
         squad.push(squad_player(54, PlayerPositionType::ForwardLeft, 118));
 
         let coverage = coverage_from_squad(&squad, formation);
@@ -1000,7 +1039,12 @@ mod group_need_tests {
             .iter()
             .filter(|n| n.group == PlayerFieldPositionGroup::Goalkeeper)
             .collect();
-        assert_eq!(gk_needs.len(), 1, "expected exactly one GK need, got {:?}", needs);
+        assert_eq!(
+            gk_needs.len(),
+            1,
+            "expected exactly one GK need, got {:?}",
+            needs
+        );
         assert_eq!(
             gk_needs[0].kind,
             NeedKind::QualityUpgrade,
@@ -1081,10 +1125,26 @@ mod group_need_tests {
             squad.push(squad_player(10 + i as u32, *pos, 138));
         }
         // Bench depth so depth-cover doesn't fire
-        squad.push(squad_player(40, PlayerPositionType::DefenderCenterLeft, 130));
-        squad.push(squad_player(41, PlayerPositionType::DefenderCenterRight, 130));
-        squad.push(squad_player(42, PlayerPositionType::MidfielderCenterLeft, 130));
-        squad.push(squad_player(43, PlayerPositionType::MidfielderCenterRight, 130));
+        squad.push(squad_player(
+            40,
+            PlayerPositionType::DefenderCenterLeft,
+            130,
+        ));
+        squad.push(squad_player(
+            41,
+            PlayerPositionType::DefenderCenterRight,
+            130,
+        ));
+        squad.push(squad_player(
+            42,
+            PlayerPositionType::MidfielderCenterLeft,
+            130,
+        ));
+        squad.push(squad_player(
+            43,
+            PlayerPositionType::MidfielderCenterRight,
+            130,
+        ));
         squad.push(squad_player(44, PlayerPositionType::ForwardLeft, 128));
 
         let coverage = coverage_from_squad(&squad, formation);
@@ -1105,11 +1165,11 @@ mod group_need_tests {
 
     #[test]
     fn sweep_realistic_continental_acceptance_and_realism_gates() {
-        use crate::transfers::pipeline::recommendations::{
-            evaluate_listed_target, BuyerContext, ListedRejectReason, ListedTargetVerdict,
-            ListedTargetView,
-        };
         use crate::PlayerFieldPositionGroup;
+        use crate::transfers::pipeline::recommendations::{
+            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
+            evaluate_listed_target,
+        };
 
         // Continental club — Spartak-like context.
         let buyer = |open_request: bool, weak_group: bool| BuyerContext {
@@ -1162,16 +1222,19 @@ mod group_need_tests {
         marginal.ability = 132;
         let buyer_no_need = buyer(false, false); // best=130
         let v3 = evaluate_listed_target(&marginal, &buyer_no_need);
-        assert_eq!(v3, ListedTargetVerdict::Reject(ListedRejectReason::NotAnUpgrade));
+        assert_eq!(
+            v3,
+            ListedTargetVerdict::Reject(ListedRejectReason::NotAnUpgrade)
+        );
     }
 
     #[test]
     fn sweep_rejects_unaffordable_fee() {
-        use crate::transfers::pipeline::recommendations::{
-            evaluate_listed_target, BuyerContext, ListedRejectReason, ListedTargetVerdict,
-            ListedTargetView,
-        };
         use crate::PlayerFieldPositionGroup;
+        use crate::transfers::pipeline::recommendations::{
+            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
+            evaluate_listed_target,
+        };
 
         let small_buyer = BuyerContext {
             buyer_rep_score: 0.40,
@@ -1210,11 +1273,11 @@ mod group_need_tests {
 
     #[test]
     fn sweep_rejects_unaffordable_wage_when_headroom_is_exhausted() {
-        use crate::transfers::pipeline::recommendations::{
-            evaluate_listed_target, BuyerContext, ListedRejectReason, ListedTargetVerdict,
-            ListedTargetView,
-        };
         use crate::PlayerFieldPositionGroup;
+        use crate::transfers::pipeline::recommendations::{
+            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
+            evaluate_listed_target,
+        };
 
         // Wage budget barely above current spend → almost no headroom.
         // Even an at-tier player at this club would exceed the wage cap.
@@ -1255,11 +1318,11 @@ mod group_need_tests {
 
     #[test]
     fn sweep_rejects_world_class_target_for_local_club() {
-        use crate::transfers::pipeline::recommendations::{
-            evaluate_listed_target, BuyerContext, ListedRejectReason, ListedTargetVerdict,
-            ListedTargetView,
-        };
         use crate::PlayerFieldPositionGroup;
+        use crate::transfers::pipeline::recommendations::{
+            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
+            evaluate_listed_target,
+        };
 
         let local_buyer = BuyerContext {
             buyer_rep_score: 0.20,
@@ -1294,8 +1357,7 @@ mod group_need_tests {
         // Tier window or reputation gap blocks well before scoring.
         match v {
             ListedTargetVerdict::Reject(
-                ListedRejectReason::OutOfTierWindow
-                | ListedRejectReason::ReputationGapTooLarge,
+                ListedRejectReason::OutOfTierWindow | ListedRejectReason::ReputationGapTooLarge,
             ) => {}
             other => panic!("expected window / rep-gap reject, got {:?}", other),
         }
@@ -1303,11 +1365,11 @@ mod group_need_tests {
 
     #[test]
     fn sweep_rejects_when_no_need_and_no_request() {
-        use crate::transfers::pipeline::recommendations::{
-            evaluate_listed_target, BuyerContext, ListedRejectReason, ListedTargetVerdict,
-            ListedTargetView,
-        };
         use crate::PlayerFieldPositionGroup;
+        use crate::transfers::pipeline::recommendations::{
+            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
+            evaluate_listed_target,
+        };
 
         // Continental club, perfectly fine in this group, no aging
         // starter, no open request — sweep must NOT add filler.
@@ -1351,11 +1413,11 @@ mod group_need_tests {
 
     #[test]
     fn sweep_rejects_player_without_listing_status() {
-        use crate::transfers::pipeline::recommendations::{
-            evaluate_listed_target, BuyerContext, ListedRejectReason, ListedTargetVerdict,
-            ListedTargetView,
-        };
         use crate::PlayerFieldPositionGroup;
+        use crate::transfers::pipeline::recommendations::{
+            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
+            evaluate_listed_target,
+        };
 
         let buyer = BuyerContext {
             buyer_rep_score: 0.72,

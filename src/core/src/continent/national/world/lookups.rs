@@ -7,8 +7,8 @@
 //! variants walk every continent so a Brazilian squad picked from
 //! Spanish clubs can still resolve Brazil's reputation correctly.
 
-use crate::continent::Continent;
 use crate::Country;
+use crate::continent::Continent;
 
 pub fn world_country_reputation(continents: &[Continent], country_id: u32) -> u16 {
     continents
@@ -37,10 +37,7 @@ pub fn world_country_name(continents: &[Continent], country_id: u32) -> String {
         .unwrap_or_default()
 }
 
-pub(crate) fn country_lookup(
-    continents: &[Continent],
-    country_id: u32,
-) -> Option<&Country> {
+pub(crate) fn country_lookup(continents: &[Continent], country_id: u32) -> Option<&Country> {
     continents
         .iter()
         .flat_map(|c| c.countries.iter())

@@ -2,8 +2,8 @@
 //! These are the only public entry points the rest of the simulator
 //! uses to ask "is today a break day?" / "are we mid-tournament?".
 
-use super::types::{BREAK_WINDOWS, TOURNAMENT_WINDOW};
 use super::NationalTeam;
+use super::types::{BREAK_WINDOWS, TOURNAMENT_WINDOW};
 use chrono::{Datelike, NaiveDate};
 
 impl NationalTeam {

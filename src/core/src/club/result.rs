@@ -3,11 +3,11 @@ use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::{BoardResult, ClubFinanceResult};
 use crate::simulator::SimulatorData;
 use crate::transfers::CompletedTransfer;
+use crate::utils::DateUtils;
 use crate::{
     Player, PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerResult,
     PlayerSquadStatus, PlayerStatusType, SimulationResult, StaffStatus, TeamResult,
 };
-use crate::utils::DateUtils;
 
 enum UnresolvedSalaryDecision {
     TransferList,
@@ -60,8 +60,15 @@ impl ClubResult {
         }
     }
 
-    fn process_player_contract_interaction(result: &PlayerResult, data: &mut SimulatorData, club_id: u32) {
-        let is_on_loan = data.player(result.player_id).map(|p| p.is_on_loan()).unwrap_or(false);
+    fn process_player_contract_interaction(
+        result: &PlayerResult,
+        data: &mut SimulatorData,
+        club_id: u32,
+    ) {
+        let is_on_loan = data
+            .player(result.player_id)
+            .map(|p| p.is_on_loan())
+            .unwrap_or(false);
 
         // Contract rejected — club decides: keep trying, transfer list, or release
         // Loaned players can't be transfer-listed remotely by the parent club
@@ -108,17 +115,17 @@ impl ClubResult {
                 .decision_history
                 .items
                 .iter()
-                .filter(|d| {
-                    d.decision == OFFERED_LABEL
-                        && (today - d.date).num_days() < 365
-                })
+                .filter(|d| d.decision == OFFERED_LABEL && (today - d.date).num_days() < 365)
                 .count();
             if attempts >= MAX_ATTEMPTS_PER_YEAR {
                 return;
             }
         }
 
-        if result.contract.no_contract || result.contract.want_improve_contract || result.contract.want_extend_contract {
+        if result.contract.no_contract
+            || result.contract.want_improve_contract
+            || result.contract.want_extend_contract
+        {
             // For loaned players, only handle parent contract extensions
             // Salary improvements are between the player and borrowing club — not relevant here
             if is_on_loan && !result.contract.want_extend_contract {
@@ -127,7 +134,8 @@ impl ClubResult {
 
             // Resolve which club handles the contract: parent club for loaned players
             let contract_club_id = if is_on_loan {
-                match data.player(result.player_id)
+                match data
+                    .player(result.player_id)
                     .and_then(|p| p.contract_loan.as_ref())
                     .and_then(|c| c.loan_from_club_id)
                 {
@@ -142,17 +150,30 @@ impl ClubResult {
             // Uses the parent club's context for loaned players. Also pull
             // club + league reputation so the reactive offer can run through
             // the same ContractValuation as the proactive renewal pass.
-            let (negotiation_skill, judging_ability, wage_budget, current_wage_bill,
-                club_rep_score, league_reputation) = data.club(contract_club_id)
+            let (
+                negotiation_skill,
+                judging_ability,
+                wage_budget,
+                current_wage_bill,
+                club_rep_score,
+                league_reputation,
+            ) = data
+                .club(contract_club_id)
                 .map(|club| {
                     let main_team = club.teams.teams.first();
                     let (neg, judge) = main_team
                         .map(|team| {
-                            let staff = team.staffs.responsibility.contract_renewal.handle_first_team_contracts
+                            let staff = team
+                                .staffs
+                                .responsibility
+                                .contract_renewal
+                                .handle_first_team_contracts
                                 .and_then(|id| team.staffs.find(id));
                             match staff {
                                 Some(s) => {
-                                    let is_active = s.contract.as_ref()
+                                    let is_active = s
+                                        .contract
+                                        .as_ref()
                                         .map(|c| matches!(c.status, StaffStatus::Active))
                                         .unwrap_or(false);
                                     if is_active {
@@ -169,15 +190,18 @@ impl ClubResult {
                         })
                         .unwrap_or((5, 5));
 
-                    let wb = club.board.season_targets.as_ref()
+                    let wb = club
+                        .board
+                        .season_targets
+                        .as_ref()
                         .map(|t| t.wage_budget as u32)
                         .unwrap_or(0);
 
-                    let total_wages: u32 = club.teams.iter()
-                        .map(|t| t.get_annual_salary())
-                        .sum();
+                    let total_wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
 
-                    let club_rep = main_team.map(|t| t.reputation.overall_score()).unwrap_or(0.5);
+                    let club_rep = main_team
+                        .map(|t| t.reputation.overall_score())
+                        .unwrap_or(0.5);
                     let league_id = main_team.and_then(|t| t.league_id);
                     let league_rep = league_id
                         .and_then(|lid| data.league(lid))
@@ -202,7 +226,9 @@ impl ClubResult {
             // the same model used by the proactive renewal pass and salary
             // happiness — otherwise the three systems disagree about what a
             // fair wage looks like and chase each other in circles.
-            let squad_status = player.contract.as_ref()
+            let squad_status = player
+                .contract
+                .as_ref()
                 .map(|c| c.squad_status.clone())
                 .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
             let is_not_needed = matches!(squad_status, PlayerSquadStatus::NotNeeded);
@@ -213,11 +239,16 @@ impl ClubResult {
                 return;
             }
 
-            let months_remaining = player.contract.as_ref()
+            let months_remaining = player
+                .contract
+                .as_ref()
                 .map(|c| ((c.expiration - data.date.date()).num_days() / 30).max(0) as i32)
                 .unwrap_or(0);
             let has_market_interest = player.statuses.get().iter().any(|s| {
-                matches!(s, PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid)
+                matches!(
+                    s,
+                    PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
+                )
             });
 
             let valuation_ctx = ValuationContext {
@@ -262,20 +293,24 @@ impl ClubResult {
             // Wage budget enforcement: don't offer salary that would bust the budget
             // The new salary replaces the current one, so check the net increase
             let salary_increase = offered_salary.saturating_sub(current_salary);
-            let final_salary = if wage_budget > 0 && current_wage_bill + salary_increase > wage_budget {
-                // Over budget: cap the offer to what the budget allows
-                let remaining = wage_budget.saturating_sub(current_wage_bill);
-                let capped_salary = current_salary + remaining;
-                // If we can't even match current salary, decide what to do with the player
-                // Loaned players can't be transfer-listed remotely
-                if capped_salary <= current_salary && result.contract.want_improve_contract && !is_on_loan {
-                    Self::handle_unresolved_salary(result.player_id, data, club_id);
-                    return;
-                }
-                capped_salary.max(current_salary)
-            } else {
-                offered_salary
-            };
+            let final_salary =
+                if wage_budget > 0 && current_wage_bill + salary_increase > wage_budget {
+                    // Over budget: cap the offer to what the budget allows
+                    let remaining = wage_budget.saturating_sub(current_wage_bill);
+                    let capped_salary = current_salary + remaining;
+                    // If we can't even match current salary, decide what to do with the player
+                    // Loaned players can't be transfer-listed remotely
+                    if capped_salary <= current_salary
+                        && result.contract.want_improve_contract
+                        && !is_on_loan
+                    {
+                        Self::handle_unresolved_salary(result.player_id, data, club_id);
+                        return;
+                    }
+                    capped_salary.max(current_salary)
+                } else {
+                    offered_salary
+                };
 
             let years = negotiate_contract_years(player, age, negotiation_skill);
 
@@ -305,9 +340,14 @@ impl ClubResult {
             reactive_proposal.valuation_expected_wage = Some(valuation.expected_wage);
             reactive_proposal.valuation_min_acceptable = Some(valuation.min_acceptable);
 
-            Self::deliver_message(data, club_id, result.player_id, PlayerMessage {
-                message_type: PlayerMessageType::ContractProposal(reactive_proposal),
-            });
+            Self::deliver_message(
+                data,
+                club_id,
+                result.player_id,
+                PlayerMessage {
+                    message_type: PlayerMessageType::ContractProposal(reactive_proposal),
+                },
+            );
 
             // Record the offer so the cooldown + attempt cap at the top
             // of this function can see it next tick. Without this the
@@ -341,11 +381,7 @@ impl ClubResult {
         /// - Ambition: ambitious players push for longer deals (higher commitment)
         /// - Other club interest (Wnt/Enq/Bid statuses): gives player leverage for longer deals
         /// - Staff negotiation skill: better negotiator → result closer to club's preference
-        fn negotiate_contract_years(
-            player: &Player,
-            age: u8,
-            negotiation_skill: u8,
-        ) -> u8 {
+        fn negotiate_contract_years(player: &Player, age: u8, negotiation_skill: u8) -> u8 {
             let ability = player.player_attributes.current_ability;
             let reputation = player.player_attributes.current_reputation;
             let loyalty = player.attributes.loyalty;
@@ -390,7 +426,10 @@ impl ClubResult {
 
             // Other club interest gives player leverage → pushes for longer commitment
             let has_interest = player.statuses.get().iter().any(|s| {
-                matches!(s, PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid)
+                matches!(
+                    s,
+                    PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
+                )
             });
             if has_interest {
                 player_years += 1.0;
@@ -454,7 +493,8 @@ impl ClubResult {
 
         // Gather decision info from immutable access
         let decision = {
-            let squad_avg = data.club(club_id)
+            let squad_avg = data
+                .club(club_id)
                 .and_then(|club| club.teams.teams.first())
                 .map(|team| team.players.current_ability_avg() as i16)
                 .unwrap_or(0);
@@ -466,7 +506,9 @@ impl ClubResult {
 
             // Already listed — don't re-process
             let statuses = player.statuses.get();
-            if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Frt) {
+            if statuses.contains(&PlayerStatusType::Lst)
+                || statuses.contains(&PlayerStatusType::Frt)
+            {
                 return;
             }
 
@@ -479,9 +521,15 @@ impl ClubResult {
             let ability = player.player_attributes.current_ability as i16;
             let age = DateUtils::age(player.birth_date, date);
             let loyalty = player.attributes.loyalty;
-            let is_key = player.contract.as_ref()
-                .map(|c| matches!(c.squad_status,
-                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular))
+            let is_key = player
+                .contract
+                .as_ref()
+                .map(|c| {
+                    matches!(
+                        c.squad_status,
+                        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                    )
+                })
                 .unwrap_or(false);
 
             // Key players and first-team regulars: club keeps trying — don't list them
@@ -535,7 +583,12 @@ impl ClubResult {
         }
     }
 
-    fn deliver_message(data: &mut SimulatorData, club_id: u32, player_id: u32, message: PlayerMessage) {
+    fn deliver_message(
+        data: &mut SimulatorData,
+        club_id: u32,
+        player_id: u32,
+        message: PlayerMessage,
+    ) {
         let club = match data.club_mut(club_id) {
             Some(c) => c,
             None => return,

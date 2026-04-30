@@ -17,10 +17,10 @@
 //!
 //! Both build a [`PackageInputs`] which feeds [`expected_annual_value`].
 
+use crate::PlayerSquadStatus;
 use crate::club::player::contract::contract::{ContractBonusType, PlayerClubContract};
 use crate::club::player::mailbox::PlayerContractProposal;
 use crate::club::player::player::Player;
-use crate::PlayerSquadStatus;
 
 /// Frequency-of-occurrence weights tuned for a typical season. Used to
 /// translate per-event bonus values (paid per appearance / per goal /
@@ -137,16 +137,13 @@ pub fn package_inputs_from_proposal(
         international_cap_bonus: proposal.international_cap_bonus.unwrap_or(0),
         release_clause: proposal.release_clause.unwrap_or(0),
         release_clause_attractive: ambition >= 13.0,
-        squad_status: proposal
-            .squad_status_promise
-            .clone()
-            .unwrap_or_else(|| {
-                player
-                    .contract
-                    .as_ref()
-                    .map(|c| c.squad_status.clone())
-                    .unwrap_or(PlayerSquadStatus::FirstTeamRegular)
-            }),
+        squad_status: proposal.squad_status_promise.clone().unwrap_or_else(|| {
+            player
+                .contract
+                .as_ref()
+                .map(|c| c.squad_status.clone())
+                .unwrap_or(PlayerSquadStatus::FirstTeamRegular)
+        }),
         is_forward: pos.is_forward(),
         is_midfielder: pos.is_midfielder(),
         is_defender: pos.is_defender(),
@@ -205,8 +202,9 @@ pub fn expected_annual_value(p: &PackageInputs) -> u32 {
     let apps_per_season = match p.squad_status {
         PlayerSquadStatus::KeyPlayer => weights::APPS_PER_SEASON_KEY_PLAYER,
         PlayerSquadStatus::FirstTeamRegular => weights::APPS_PER_SEASON_REGULAR,
-        PlayerSquadStatus::FirstTeamSquadRotation
-        | PlayerSquadStatus::HotProspectForTheFuture => weights::APPS_PER_SEASON_ROTATION,
+        PlayerSquadStatus::FirstTeamSquadRotation | PlayerSquadStatus::HotProspectForTheFuture => {
+            weights::APPS_PER_SEASON_ROTATION
+        }
         PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::DecentYoungster => {
             weights::APPS_PER_SEASON_BACKUP
         }
@@ -214,7 +212,8 @@ pub fn expected_annual_value(p: &PackageInputs) -> u32 {
     };
 
     let appearance_value = (p.appearance_fee as u64 * apps_per_season as u64) as u32;
-    let unused_sub_value = (p.unused_sub_fee as u64 * weights::UNUSED_SUB_APPEARANCES as u64) as u32;
+    let unused_sub_value =
+        (p.unused_sub_fee as u64 * weights::UNUSED_SUB_APPEARANCES as u64) as u32;
 
     let expected_goals = if p.is_forward {
         weights::GOALS_FORWARD
@@ -237,12 +236,11 @@ pub fn expected_annual_value(p: &PackageInputs) -> u32 {
     let clean_sheet_value = (p.clean_sheet_bonus as u64 * expected_cs as u64) as u32;
 
     // Probability-weighted seasonal bonuses.
-    let promotion_value =
-        ((p.promotion_bonus as f32) * weights::PROMOTION_PROBABILITY) as u32;
+    let promotion_value = ((p.promotion_bonus as f32) * weights::PROMOTION_PROBABILITY) as u32;
     let avoid_rel_value =
         ((p.avoid_relegation_bonus as f32) * weights::AVOID_RELEGATION_PROBABILITY) as u32;
-    let intl_value = (p.international_cap_bonus as u64
-        * weights::INTL_CAPS_PER_SEASON as u64) as u32;
+    let intl_value =
+        (p.international_cap_bonus as u64 * weights::INTL_CAPS_PER_SEASON as u64) as u32;
 
     // Release-clause "option value" — only counted for ambitious /
     // high-leverage players, capped at 5% of the clause threshold (this

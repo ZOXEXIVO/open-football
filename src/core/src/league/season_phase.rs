@@ -80,10 +80,7 @@ impl SeasonPhase {
 
     /// True during the actual competitive run of fixtures.
     pub fn is_competitive(self) -> bool {
-        matches!(
-            self,
-            Self::EarlySeason | Self::MidSeason | Self::RunIn
-        )
+        matches!(self, Self::EarlySeason | Self::MidSeason | Self::RunIn)
     }
 
     /// True during phases where the club is not playing competitive matches.
@@ -102,32 +99,62 @@ mod tests {
 
     #[test]
     fn summer_is_post_season() {
-        assert_eq!(SeasonPhase::from_date(d(2025, 6, 15)), SeasonPhase::PostSeason);
-        assert_eq!(SeasonPhase::from_date(d(2025, 7, 5)), SeasonPhase::PostSeason);
+        assert_eq!(
+            SeasonPhase::from_date(d(2025, 6, 15)),
+            SeasonPhase::PostSeason
+        );
+        assert_eq!(
+            SeasonPhase::from_date(d(2025, 7, 5)),
+            SeasonPhase::PostSeason
+        );
     }
 
     #[test]
     fn late_july_is_pre_season() {
-        assert_eq!(SeasonPhase::from_date(d(2025, 7, 20)), SeasonPhase::PreSeason);
-        assert_eq!(SeasonPhase::from_date(d(2025, 8, 10)), SeasonPhase::PreSeason);
+        assert_eq!(
+            SeasonPhase::from_date(d(2025, 7, 20)),
+            SeasonPhase::PreSeason
+        );
+        assert_eq!(
+            SeasonPhase::from_date(d(2025, 8, 10)),
+            SeasonPhase::PreSeason
+        );
     }
 
     #[test]
     fn mid_august_opens_early_season() {
-        assert_eq!(SeasonPhase::from_date(d(2025, 8, 20)), SeasonPhase::EarlySeason);
-        assert_eq!(SeasonPhase::from_date(d(2025, 10, 31)), SeasonPhase::EarlySeason);
+        assert_eq!(
+            SeasonPhase::from_date(d(2025, 8, 20)),
+            SeasonPhase::EarlySeason
+        );
+        assert_eq!(
+            SeasonPhase::from_date(d(2025, 10, 31)),
+            SeasonPhase::EarlySeason
+        );
     }
 
     #[test]
     fn late_december_is_winter_break() {
-        assert_eq!(SeasonPhase::from_date(d(2025, 12, 25)), SeasonPhase::WinterBreak);
-        assert_eq!(SeasonPhase::from_date(d(2026, 1, 3)), SeasonPhase::WinterBreak);
+        assert_eq!(
+            SeasonPhase::from_date(d(2025, 12, 25)),
+            SeasonPhase::WinterBreak
+        );
+        assert_eq!(
+            SeasonPhase::from_date(d(2026, 1, 3)),
+            SeasonPhase::WinterBreak
+        );
     }
 
     #[test]
     fn january_7_onward_is_mid_season() {
-        assert_eq!(SeasonPhase::from_date(d(2026, 1, 10)), SeasonPhase::MidSeason);
-        assert_eq!(SeasonPhase::from_date(d(2026, 3, 15)), SeasonPhase::MidSeason);
+        assert_eq!(
+            SeasonPhase::from_date(d(2026, 1, 10)),
+            SeasonPhase::MidSeason
+        );
+        assert_eq!(
+            SeasonPhase::from_date(d(2026, 3, 15)),
+            SeasonPhase::MidSeason
+        );
     }
 
     #[test]

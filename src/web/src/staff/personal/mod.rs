@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -37,6 +37,26 @@ pub struct StaffPersonalTemplate {
     pub staff_info: StaffInfoDto,
     pub performance: PerformanceDto,
     pub recent_events: Vec<StaffRecentEventDto>,
+    /// Players this scout is currently monitoring. Empty for non-scout
+    /// roles (the template renders nothing in that case).
+    pub monitoring: Vec<StaffMonitoringDto>,
+}
+
+pub struct StaffMonitoringDto {
+    pub player_id: u32,
+    pub player_name: String,
+    pub target_club_name: String,
+    pub target_team_slug: String,
+    pub status_key: String,
+    pub last_observed: String,
+    pub confidence_pct: u8,
+    pub times_watched: u16,
+    pub matches_watched: u16,
+    pub assessed_ability: u8,
+    pub assessed_potential: u8,
+    /// i18n key for the latest meeting vote. Empty if the scout
+    /// hasn't been to a meeting on this player yet.
+    pub latest_vote_key: String,
 }
 
 pub struct PersonalityDto {
@@ -133,6 +153,7 @@ pub async fn staff_personal_action(
     let staff_info = get_staff_info(staff, &i18n);
     let performance = get_performance(staff);
     let recent_events = get_recent_events(staff, &i18n);
+    let monitoring = get_monitoring(staff, simulator_data);
 
     Ok(StaffPersonalTemplate {
         css_version: CSS_VERSION,
@@ -158,8 +179,20 @@ pub async fn staff_personal_action(
         menu_sections: {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
             let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
-            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-            views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main)
+            let mp = views::MenuParams {
+                i18n: &i18n,
+                lang: &route_params.lang,
+                current_path: &current_path,
+                country_name: cn,
+                country_slug: cs,
+            };
+            views::team_menu(
+                &mp,
+                &neighbor_refs,
+                &team.slug,
+                &league_refs,
+                team.team_type == core::TeamType::Main,
+            )
         },
         i18n,
         lang: route_params.lang.clone(),
@@ -168,7 +201,44 @@ pub async fn staff_personal_action(
         staff_info,
         performance,
         recent_events,
+        monitoring,
     })
+}
+
+fn get_monitoring(staff: &Staff, data: &SimulatorData) -> Vec<StaffMonitoringDto> {
+    // Only meaningful for scouting roles. Non-scouts render an empty
+    // list in the template (which the template hides).
+    let is_scouting_role = staff
+        .contract
+        .as_ref()
+        .map(|c| c.position.is_scouting())
+        .unwrap_or(false);
+    if !is_scouting_role {
+        return Vec::new();
+    }
+    data.staff_monitoring_workload(staff.id)
+        .into_iter()
+        .map(|row| StaffMonitoringDto {
+            player_id: row.player_id,
+            player_name: row.player_name,
+            target_club_name: row.target_club_name,
+            target_team_slug: row.target_team_slug,
+            status_key: format!("monitoring_status_{}", row.status),
+            last_observed: row
+                .last_observed
+                .map(|d| d.format("%d.%m.%Y").to_string())
+                .unwrap_or_default(),
+            confidence_pct: (row.confidence * 100.0).round().clamp(0.0, 100.0) as u8,
+            times_watched: row.times_watched,
+            matches_watched: row.matches_watched,
+            assessed_ability: row.assessed_ability,
+            assessed_potential: row.assessed_potential,
+            latest_vote_key: row
+                .latest_vote
+                .map(|v| format!("scout_vote_{}", v))
+                .unwrap_or_default(),
+        })
+        .collect()
 }
 
 fn get_personality(staff: &Staff) -> PersonalityDto {
@@ -278,7 +348,7 @@ fn get_staff_info(staff: &Staff, i18n: &I18n) -> StaffInfoDto {
         CoachingStyle::Transformational => i18n.t("style_transformational"),
         CoachingStyle::Tactical => i18n.t("style_tactical"),
     }
-        .to_string();
+    .to_string();
 
     let license = match staff.license {
         StaffLicenseType::ContinentalPro => i18n.t("license_continental_pro"),
@@ -289,7 +359,7 @@ fn get_staff_info(staff: &Staff, i18n: &I18n) -> StaffInfoDto {
         StaffLicenseType::NationalB => i18n.t("license_national_b"),
         StaffLicenseType::NationalC => i18n.t("license_national_c"),
     }
-        .to_string();
+    .to_string();
 
     let fatigue = staff.fatigue.round().clamp(0.0, 100.0) as u8;
     let job_satisfaction = staff.job_satisfaction.round().clamp(0.0, 100.0) as u8;
@@ -368,6 +438,10 @@ fn get_recent_events(staff: &Staff, i18n: &I18n) -> Vec<StaffRecentEventDto> {
                 StaffEventType::Birthday => ("staff_event_birthday", true),
                 StaffEventType::HighFatigue => ("staff_event_high_fatigue", false),
                 StaffEventType::ContractNegotiation => ("staff_event_contract_negotiation", false),
+                StaffEventType::RecruitmentMeeting => ("staff_event_recruitment_meeting", true),
+                StaffEventType::TargetRecommended => ("staff_event_target_recommended", true),
+                StaffEventType::TargetRejected => ("staff_event_target_rejected", false),
+                StaffEventType::BoardPresentation => ("staff_event_board_presentation", true),
             };
             StaffRecentEventDto {
                 description: i18n.t(key).to_string(),

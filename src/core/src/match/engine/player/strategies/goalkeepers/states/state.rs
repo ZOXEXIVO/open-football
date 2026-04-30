@@ -1,4 +1,12 @@
-use crate::r#match::goalkeepers::states::{GoalkeeperCatchingState, GoalkeeperClearingState, GoalkeeperComingOutState, GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperHoldingState, GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPassingState, GoalkeeperPickingUpState, GoalkeeperPreparingForSaveState, GoalkeeperPunchingState, GoalkeeperRestingState, GoalkeeperReturningGoalState, GoalkeeperRunningState, GoalkeeperShootingState, GoalkeeperStandingState, GoalkeeperTacklingState, GoalkeeperTakeBallState, GoalkeeperThrowingState, GoalkeeperWalkingState};
+use crate::r#match::goalkeepers::states::{
+    GoalkeeperCatchingState, GoalkeeperClearingState, GoalkeeperComingOutState,
+    GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperHoldingState,
+    GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPassingState,
+    GoalkeeperPickingUpState, GoalkeeperPreparingForSaveState, GoalkeeperPunchingState,
+    GoalkeeperRestingState, GoalkeeperReturningGoalState, GoalkeeperRunningState,
+    GoalkeeperShootingState, GoalkeeperStandingState, GoalkeeperTacklingState,
+    GoalkeeperTakeBallState, GoalkeeperThrowingState, GoalkeeperWalkingState,
+};
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
@@ -48,7 +56,9 @@ impl GoalkeeperStrategies {
                 state_processor.process(GoalkeeperPunchingState::default())
             }
             GoalkeeperState::Kicking => state_processor.process(GoalkeeperKickingState::default()),
-            GoalkeeperState::Clearing => state_processor.process(GoalkeeperClearingState::default()),
+            GoalkeeperState::Clearing => {
+                state_processor.process(GoalkeeperClearingState::default())
+            }
             GoalkeeperState::HoldingBall => {
                 state_processor.process(GoalkeeperHoldingState::default())
             }
@@ -81,7 +91,7 @@ impl GoalkeeperStrategies {
             GoalkeeperState::TakeBall => {
                 state_processor.process(GoalkeeperTakeBallState::default())
             }
-            GoalkeeperState::Running => { state_processor.process(GoalkeeperRunningState::default())}
+            GoalkeeperState::Running => state_processor.process(GoalkeeperRunningState::default()),
         }
     }
 }

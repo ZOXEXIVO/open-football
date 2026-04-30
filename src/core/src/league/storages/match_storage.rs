@@ -65,8 +65,7 @@ impl MatchStorage {
     /// in the number of evicted dates; cheap to call on season boundaries.
     pub fn trim(&mut self, today: NaiveDate) {
         let cutoff = today - chrono::Duration::days(self.retention_days);
-        let evict_dates: Vec<NaiveDate> =
-            self.by_date.range(..cutoff).map(|(d, _)| *d).collect();
+        let evict_dates: Vec<NaiveDate> = self.by_date.range(..cutoff).map(|(d, _)| *d).collect();
         for date in evict_dates {
             if let Some(ids) = self.by_date.remove(&date) {
                 for id in ids {
@@ -146,8 +145,8 @@ mod tests {
     #[test]
     fn trim_uses_retention_window() {
         let mut s = MatchStorage::new().with_retention_days(60);
-        s.push(mk("m1"), day(2024, 1, 1));   // 74 days before 2024-03-15
-        s.push(mk("m2"), day(2024, 3, 1));   // 14 days before 2024-03-15
+        s.push(mk("m1"), day(2024, 1, 1)); // 74 days before 2024-03-15
+        s.push(mk("m2"), day(2024, 3, 1)); // 14 days before 2024-03-15
         s.trim(day(2024, 3, 15));
         assert!(s.get("m1").is_none());
         assert!(s.get("m2").is_some());

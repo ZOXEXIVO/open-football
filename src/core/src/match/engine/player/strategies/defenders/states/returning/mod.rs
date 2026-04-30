@@ -1,8 +1,8 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior, MATCH_TIME_MS,
+    ConditionContext, MATCH_TIME_MS, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -37,15 +37,14 @@ impl StateProcessingHandler for DefenderReturningState {
                 DefenderState::Standing,
             ));
         }
-        
+
         if ctx.team().is_control_ball() {
             if ctx.player().distance_from_start_position() < 5.0 {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Standing,
                 ));
             }
-        }
-        else {
+        } else {
             if ctx.ball().distance() < 100.0 {
                 if ctx.players().opponents().with_ball().next().is_some() {
                     return Some(StateChangeResult::with_defender_state(
@@ -60,7 +59,7 @@ impl StateProcessingHandler for DefenderReturningState {
 
             if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
                 return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Intercepting
+                    DefenderState::Intercepting,
                 ));
             }
 
@@ -76,7 +75,6 @@ impl StateProcessingHandler for DefenderReturningState {
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(

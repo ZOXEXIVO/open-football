@@ -14,11 +14,8 @@ impl League {
         let current_date = ctx.simulation.date.date();
         let day_of_week = current_date.weekday();
 
-        self.dynamics.update_attendance_predictions(
-            &self.table,
-            day_of_week,
-            current_date.month(),
-        );
+        self.dynamics
+            .update_attendance_predictions(&self.table, day_of_week, current_date.month());
 
         for club in clubs {
             for team in &club.teams.teams {
@@ -32,10 +29,15 @@ impl League {
     }
 
     fn check_fixture_congestion(&self, team: &Team, current_date: NaiveDate) {
-        let upcoming_matches = self.schedule.get_matches_for_team_in_days(team.id, current_date, 7);
+        let upcoming_matches = self
+            .schedule
+            .get_matches_for_team_in_days(team.id, current_date, 7);
         if upcoming_matches.len() > 2 {
-            debug!("⚠️ Fixture congestion for team {}: {} matches in 7 days",
-                   team.name, upcoming_matches.len());
+            debug!(
+                "⚠️ Fixture congestion for team {}: {} matches in 7 days",
+                team.name,
+                upcoming_matches.len()
+            );
         }
     }
 
@@ -56,11 +58,19 @@ impl League {
                 // would otherwise be high-importance.
                 let home_upcoming = self
                     .schedule
-                    .get_matches_for_team_in_days(scheduled_match.home_team_id, today + chrono::Duration::days(1), 5)
+                    .get_matches_for_team_in_days(
+                        scheduled_match.home_team_id,
+                        today + chrono::Duration::days(1),
+                        5,
+                    )
                     .len() as u8;
                 let away_upcoming = self
                     .schedule
-                    .get_matches_for_team_in_days(scheduled_match.away_team_id, today + chrono::Duration::days(1), 5)
+                    .get_matches_for_team_in_days(
+                        scheduled_match.away_team_id,
+                        today + chrono::Duration::days(1),
+                        5,
+                    )
                     .len() as u8;
                 Self::build_match(
                     scheduled_match,
@@ -127,7 +137,12 @@ impl League {
         let base_importance = if friendly {
             0.1
         } else {
-            Self::calculate_match_importance(table, home_team, away_team, ctx.simulation.date.date())
+            Self::calculate_match_importance(
+                table,
+                home_team,
+                away_team,
+                ctx.simulation.date.date(),
+            )
         };
         // Fixture congestion tilt: if a team has another competitive
         // fixture within the next 5 days, dampen this match's importance
@@ -135,9 +150,13 @@ impl League {
         // per team individually — both teams may be congested, neither
         // may be. Pre-computed by the caller from the schedule.
         let congestion_dampen = |ups: u8| -> f32 {
-            if ups >= 2 { 0.55 }
-            else if ups == 1 { 0.80 }
-            else { 1.0 }
+            if ups >= 2 {
+                0.55
+            } else if ups == 1 {
+                0.80
+            } else {
+                1.0
+            }
         };
         let home_importance = base_importance * congestion_dampen(upcoming_fixtures.0);
         let away_importance = base_importance * congestion_dampen(upcoming_fixtures.1);
@@ -177,14 +196,32 @@ impl League {
         let selection_ctx = home_ctx;
 
         let (mut home_squad, mut away_squad) = if friendly {
-            let mut home_supplements = Self::collect_supplementary_players(clubs, home_team.club_id, home_team.id, friendly);
-            let mut away_supplements = Self::collect_supplementary_players(clubs, away_team.club_id, away_team.id, friendly);
+            let mut home_supplements = Self::collect_supplementary_players(
+                clubs,
+                home_team.club_id,
+                home_team.id,
+                friendly,
+            );
+            let mut away_supplements = Self::collect_supplementary_players(
+                clubs,
+                away_team.club_id,
+                away_team.id,
+                friendly,
+            );
 
             let home_overage = Self::collect_overage_development_players(
-                clubs, home_team.club_id, home_team.id, &home_team.team_type, ctx.simulation.date.date(),
+                clubs,
+                home_team.club_id,
+                home_team.id,
+                &home_team.team_type,
+                ctx.simulation.date.date(),
             );
             let away_overage = Self::collect_overage_development_players(
-                clubs, away_team.club_id, away_team.id, &away_team.team_type, ctx.simulation.date.date(),
+                clubs,
+                away_team.club_id,
+                away_team.id,
+                &away_team.team_type,
+                ctx.simulation.date.date(),
             );
             home_supplements.extend(home_overage);
             away_supplements.extend(away_overage);
@@ -196,8 +233,20 @@ impl League {
         } else {
             let home_is_main = home_team.team_type == TeamType::Main;
             let away_is_main = away_team.team_type == TeamType::Main;
-            let home_reserves = Self::collect_reserve_players(clubs, home_team.club_id, home_team.id, friendly, home_is_main);
-            let away_reserves = Self::collect_reserve_players(clubs, away_team.club_id, away_team.id, friendly, away_is_main);
+            let home_reserves = Self::collect_reserve_players(
+                clubs,
+                home_team.club_id,
+                home_team.id,
+                friendly,
+                home_is_main,
+            );
+            let away_reserves = Self::collect_reserve_players(
+                clubs,
+                away_team.club_id,
+                away_team.id,
+                friendly,
+                away_is_main,
+            );
             (
                 home_team.get_enhanced_match_squad(&home_reserves, &selection_ctx),
                 away_team.get_enhanced_match_squad(&away_reserves, &away_ctx),
@@ -249,7 +298,14 @@ impl League {
             .iter()
             .filter(|t| {
                 t.id != team_id
-                    && matches!(t.team_type, TeamType::B | TeamType::Second | TeamType::Reserve | TeamType::U21 | TeamType::U23)
+                    && matches!(
+                        t.team_type,
+                        TeamType::B
+                            | TeamType::Second
+                            | TeamType::Reserve
+                            | TeamType::U21
+                            | TeamType::U23
+                    )
             })
             .flat_map(|t| t.players.iter())
             .filter(|p| Self::is_player_available(p, is_friendly))
@@ -305,7 +361,8 @@ impl League {
             return Vec::new();
         };
 
-        let mut candidates: Vec<&Player> = club.teams
+        let mut candidates: Vec<&Player> = club
+            .teams
             .teams
             .iter()
             .filter(|t| {
@@ -321,7 +378,8 @@ impl League {
             .collect();
 
         candidates.sort_by(|a, b| {
-            b.player_attributes.days_since_last_match
+            b.player_attributes
+                .days_since_last_match
                 .cmp(&a.player_attributes.days_since_last_match)
         });
 
@@ -345,8 +403,16 @@ impl League {
             return 0.5;
         }
 
-        let home_row = table.rows.iter().enumerate().find(|(_, r)| r.team_id == home_team.id);
-        let away_row = table.rows.iter().enumerate().find(|(_, r)| r.team_id == away_team.id);
+        let home_row = table
+            .rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.team_id == home_team.id);
+        let away_row = table
+            .rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.team_id == away_team.id);
 
         let (home_pos, home_played, home_points) = home_row
             .map(|(i, r)| (i + 1, r.played as f32, r.points as i32))
@@ -354,21 +420,29 @@ impl League {
 
         let away_pos = away_row.map(|(i, _)| i + 1).unwrap_or(total_teams / 2);
 
-        let total_matches = if total_teams > 1 { ((total_teams - 1) * 2) as f32 } else { 1.0 };
+        let total_matches = if total_teams > 1 {
+            ((total_teams - 1) * 2) as f32
+        } else {
+            1.0
+        };
         let season_progress = (home_played / total_matches).clamp(0.0, 1.0);
         let remaining_matches = (total_matches - home_played).max(0.0) as i32;
 
         // Points gap to key positions
         let top3_points = table.rows.get(2).map(|r| r.points as i32).unwrap_or(0);
         let relegation_pos = total_teams.saturating_sub(3);
-        let relegation_points = table.rows.get(relegation_pos).map(|r| r.points as i32).unwrap_or(0);
+        let relegation_points = table
+            .rows
+            .get(relegation_pos)
+            .map(|r| r.points as i32)
+            .unwrap_or(0);
         // Can the team still catch top 3? (3 pts per remaining match)
         let max_reachable = home_points + remaining_matches * 3;
         let can_reach_top3 = max_reachable >= top3_points;
 
         // Is the team safe from relegation? (gap too large to close)
-        let is_safe = home_points > relegation_points + remaining_matches * 3
-            || home_pos <= total_teams / 2;
+        let is_safe =
+            home_points > relegation_points + remaining_matches * 3 || home_pos <= total_teams / 2;
         let is_in_danger = home_points <= relegation_points + 3 && home_pos > total_teams / 2;
 
         // ── Determine importance ──
@@ -453,7 +527,11 @@ impl League {
         _current_date: NaiveDate,
         dynamics: &LeagueDynamics,
     ) -> f32 {
-        let position = table.rows.iter().position(|r| r.team_id == team.id).unwrap_or(0);
+        let position = table
+            .rows
+            .iter()
+            .position(|r| r.team_id == team.id)
+            .unwrap_or(0);
         let total_teams = table.rows.len();
 
         let mut pressure: f32 = 0.5;
@@ -479,7 +557,9 @@ impl League {
         momentum: f32,
         pressure: f32,
     ) {
-        debug!("Team {} - Momentum: {:.2}, Pressure: {:.2}",
-               squad.team_name, momentum, pressure);
+        debug!(
+            "Team {} - Momentum: {:.2}, Pressure: {:.2}",
+            squad.team_name, momentum, pressure
+        );
     }
 }

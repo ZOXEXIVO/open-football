@@ -3,6 +3,8 @@ mod helpers;
 mod loan_market;
 mod negotiations;
 mod recommendations;
+pub(crate) mod recruitment;
+mod recruitment_meeting;
 mod scouting;
 pub(crate) mod scouting_config;
 mod shortlists;
@@ -13,6 +15,12 @@ use chrono::NaiveDate;
 // Re-export PipelineProcessor and PlayerSummary for external use
 pub use self::processor::PipelineProcessor;
 pub use self::processor::PlayerSummary;
+// Recruitment department types — meetings, votes, monitoring rows.
+pub use self::recruitment::{
+    BoardRecruitmentDossier, RecruitmentDecision, RecruitmentDecisionType, RecruitmentMeeting,
+    ScoutMonitoringSource, ScoutMonitoringStatus, ScoutPlayerMonitoring, ScoutVote,
+    ScoutVoteChoice, ScoutVoteReason,
+};
 
 mod processor {
     use crate::{PlayerFieldPositionGroup, PlayerPositionType};
@@ -660,6 +668,22 @@ pub struct ClubTransferPlan {
 
     /// Persistent knowledge gathered from scouting and match exposure.
     pub known_players: Vec<KnownPlayerMemory>,
+
+    /// Persistent scout-by-player monitoring rows. Survives window
+    /// resets when active — only signed/lost/rejected entries are
+    /// archived. Drives the "who's watching whom" UI surfaces and the
+    /// recruitment meeting agenda.
+    pub scout_monitoring: Vec<recruitment::ScoutPlayerMonitoring>,
+
+    /// Recruitment-meeting history. Capped at
+    /// `RecruitmentMeeting::HISTORY_CAP` per club; older entries are
+    /// dropped on archive so memory stays bounded.
+    pub recruitment_meetings: Vec<recruitment::RecruitmentMeeting>,
+
+    /// Monotonic id allocator for `ScoutPlayerMonitoring`.
+    pub next_monitoring_id: u32,
+    /// Monotonic id allocator for `RecruitmentMeeting`.
+    pub next_meeting_id: u32,
 }
 
 /// A scouting report preserved past its originating assignment, used to
@@ -694,6 +718,10 @@ impl ClubTransferPlan {
             rejected_players: Vec::new(),
             shadow_reports: Vec::new(),
             known_players: Vec::new(),
+            scout_monitoring: Vec::new(),
+            recruitment_meetings: Vec::new(),
+            next_monitoring_id: 1,
+            next_meeting_id: 1,
         }
     }
 
@@ -766,6 +794,112 @@ impl ClubTransferPlan {
         self.reserved = 0.0;
         self.initialized = false;
         self.last_evaluation_date = None;
+
+        // Long-term monitoring survives window transitions — scouts don't
+        // forget the players they've been tracking. We do unlink any
+        // expired transfer-request / assignment ids (they're about to
+        // be cleared) and archive entries whose pursuit is over.
+        self.archive_completed_monitoring();
+        for monitoring in &mut self.scout_monitoring {
+            monitoring.origin_assignment_id = None;
+            monitoring.transfer_request_id = None;
+            // Demote ReportReady → Active so the new window's meeting
+            // re-evaluates the player against fresh requests rather than
+            // rubber-stamping a stale dossier.
+            if matches!(
+                monitoring.status,
+                recruitment::ScoutMonitoringStatus::ReportReady
+            ) {
+                monitoring.status = recruitment::ScoutMonitoringStatus::Active;
+            }
+            // PromotedToShortlist / Negotiating without follow-through:
+            // window closed, so drop them back to Active for the next pass.
+            if matches!(
+                monitoring.status,
+                recruitment::ScoutMonitoringStatus::PromotedToShortlist
+                    | recruitment::ScoutMonitoringStatus::Negotiating
+            ) {
+                monitoring.status = recruitment::ScoutMonitoringStatus::Active;
+            }
+        }
+    }
+
+    /// Archive monitoring rows that have run their course (Signed,
+    /// Lost, Rejected) into the shadow / known-player memories where
+    /// applicable, then remove them from the active list. Keeps the
+    /// active vec from growing unbounded across windows.
+    pub fn archive_completed_monitoring(&mut self) {
+        self.scout_monitoring.retain(|m| {
+            !matches!(
+                m.status,
+                recruitment::ScoutMonitoringStatus::Signed
+                    | recruitment::ScoutMonitoringStatus::Lost
+                    | recruitment::ScoutMonitoringStatus::Rejected
+            )
+        });
+    }
+
+    pub fn next_monitoring_id(&mut self) -> u32 {
+        let id = self.next_monitoring_id;
+        self.next_monitoring_id += 1;
+        id
+    }
+
+    pub fn next_meeting_id(&mut self) -> u32 {
+        let id = self.next_meeting_id;
+        self.next_meeting_id += 1;
+        id
+    }
+
+    /// Append a meeting and trim the history to `RecruitmentMeeting::HISTORY_CAP`.
+    pub fn push_recruitment_meeting(&mut self, meeting: recruitment::RecruitmentMeeting) {
+        self.recruitment_meetings.push(meeting);
+        if self.recruitment_meetings.len() > recruitment::RecruitmentMeeting::HISTORY_CAP {
+            let drop_count =
+                self.recruitment_meetings.len() - recruitment::RecruitmentMeeting::HISTORY_CAP;
+            self.recruitment_meetings.drain(0..drop_count);
+        }
+    }
+
+    /// Find an active monitoring row for `(scout_staff_id, player_id)`.
+    /// "Active" here means anything `is_active_interest()` reports true
+    /// for — finished rows are skipped so a re-observation creates a
+    /// fresh dossier rather than reusing a stale signed/rejected file.
+    pub fn find_monitoring_mut(
+        &mut self,
+        scout_staff_id: u32,
+        player_id: u32,
+    ) -> Option<&mut recruitment::ScoutPlayerMonitoring> {
+        self.scout_monitoring.iter_mut().find(|m| {
+            m.scout_staff_id == scout_staff_id && m.player_id == player_id && m.is_active_interest()
+        })
+    }
+
+    /// All active monitoring rows for a given player across the club.
+    /// Used by accessors and the recruitment meeting agenda.
+    pub fn monitorings_for_player(
+        &self,
+        player_id: u32,
+    ) -> Vec<&recruitment::ScoutPlayerMonitoring> {
+        self.scout_monitoring
+            .iter()
+            .filter(|m| m.player_id == player_id && m.is_active_interest())
+            .collect()
+    }
+
+    /// Update the status of every monitoring row for a player at this
+    /// club. Used when the recruitment meeting promotes/rejects, and
+    /// when a negotiation resolves.
+    pub fn set_monitoring_status_for_player(
+        &mut self,
+        player_id: u32,
+        status: recruitment::ScoutMonitoringStatus,
+    ) {
+        for m in self.scout_monitoring.iter_mut() {
+            if m.player_id == player_id && m.is_active_interest() {
+                m.status = status;
+            }
+        }
     }
 
     /// Move the current window's scouting reports into the persistent shadow
@@ -948,6 +1082,124 @@ impl ClubTransferPlan {
 impl Default for ClubTransferPlan {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod monitoring_lifecycle_tests {
+    use super::*;
+    use crate::transfers::pipeline::recruitment::{ScoutMonitoringSource, ScoutMonitoringStatus};
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn add_monitoring(
+        plan: &mut ClubTransferPlan,
+        scout_id: u32,
+        player_id: u32,
+        status: ScoutMonitoringStatus,
+    ) {
+        let id = plan.next_monitoring_id();
+        let mut row = recruitment::ScoutPlayerMonitoring::new(
+            id,
+            scout_id,
+            player_id,
+            ScoutMonitoringSource::TransferRequest,
+            d(2026, 6, 1),
+        );
+        row.status = status;
+        row.confidence = 0.8;
+        row.times_watched = 4;
+        row.current_assessed_ability = 130;
+        row.current_assessed_potential = 140;
+        plan.scout_monitoring.push(row);
+    }
+
+    #[test]
+    fn reset_for_window_preserves_active_monitoring() {
+        let mut plan = ClubTransferPlan::new();
+        plan.last_evaluation_date = Some(d(2026, 6, 1));
+        add_monitoring(&mut plan, 1, 99, ScoutMonitoringStatus::Active);
+        add_monitoring(&mut plan, 2, 100, ScoutMonitoringStatus::ReportReady);
+
+        plan.reset_for_window();
+
+        assert_eq!(
+            plan.scout_monitoring.len(),
+            2,
+            "active monitoring rows must survive a window reset"
+        );
+        // ReportReady demoted back to Active so the next meeting re-evaluates.
+        for m in &plan.scout_monitoring {
+            assert!(matches!(m.status, ScoutMonitoringStatus::Active));
+            assert!(
+                m.transfer_request_id.is_none(),
+                "request linkage must be cleared on window reset"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_for_window_archives_signed_lost_rejected_rows() {
+        let mut plan = ClubTransferPlan::new();
+        plan.last_evaluation_date = Some(d(2026, 6, 1));
+        add_monitoring(&mut plan, 1, 99, ScoutMonitoringStatus::Signed);
+        add_monitoring(&mut plan, 2, 100, ScoutMonitoringStatus::Lost);
+        add_monitoring(&mut plan, 3, 101, ScoutMonitoringStatus::Rejected);
+        add_monitoring(&mut plan, 4, 102, ScoutMonitoringStatus::Active);
+
+        plan.reset_for_window();
+
+        // Only the active row survives; the others get archived.
+        assert_eq!(plan.scout_monitoring.len(), 1);
+        assert_eq!(plan.scout_monitoring[0].player_id, 102);
+    }
+
+    #[test]
+    fn meeting_history_capped_to_constant() {
+        let mut plan = ClubTransferPlan::new();
+        for i in 0..(recruitment::RecruitmentMeeting::HISTORY_CAP + 5) {
+            let id = plan.next_meeting_id();
+            plan.push_recruitment_meeting(recruitment::RecruitmentMeeting::new(
+                id,
+                d(2026, 6, 1) + chrono::Duration::days(i as i64 * 7),
+            ));
+        }
+        assert_eq!(
+            plan.recruitment_meetings.len(),
+            recruitment::RecruitmentMeeting::HISTORY_CAP
+        );
+        // Newest meeting should be at the end.
+        let last = plan.recruitment_meetings.last().unwrap();
+        assert!(last.id >= recruitment::RecruitmentMeeting::HISTORY_CAP as u32);
+    }
+
+    #[test]
+    fn set_monitoring_status_for_player_only_updates_active_rows() {
+        let mut plan = ClubTransferPlan::new();
+        add_monitoring(&mut plan, 1, 99, ScoutMonitoringStatus::Active);
+        add_monitoring(&mut plan, 2, 99, ScoutMonitoringStatus::Signed);
+
+        plan.set_monitoring_status_for_player(99, ScoutMonitoringStatus::PromotedToShortlist);
+
+        // Active row got promoted; the already-signed row is left alone
+        // (signed monitoring is a closed historical record).
+        let active_row = plan
+            .scout_monitoring
+            .iter()
+            .find(|m| m.scout_staff_id == 1)
+            .unwrap();
+        assert!(matches!(
+            active_row.status,
+            ScoutMonitoringStatus::PromotedToShortlist
+        ));
+        let signed_row = plan
+            .scout_monitoring
+            .iter()
+            .find(|m| m.scout_staff_id == 2)
+            .unwrap();
+        assert!(matches!(signed_row.status, ScoutMonitoringStatus::Signed));
     }
 }
 

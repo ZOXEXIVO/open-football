@@ -5,9 +5,7 @@
 use super::TeamBehaviour;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
-use crate::{
-    HappinessEventType, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
-};
+use crate::{HappinessEventType, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus};
 use chrono::Datelike;
 use std::collections::HashMap;
 
@@ -122,9 +120,15 @@ impl TeamBehaviour {
         }
 
         for player in players.players.iter_mut() {
-            let Some(loan) = player.contract_loan.as_mut() else { continue };
-            let Some(min_apps) = loan.loan_min_appearances else { continue };
-            let Some(loan_start) = loan.started else { continue };
+            let Some(loan) = player.contract_loan.as_mut() else {
+                continue;
+            };
+            let Some(min_apps) = loan.loan_min_appearances else {
+                continue;
+            };
+            let Some(loan_start) = loan.started else {
+                continue;
+            };
             let loan_end = loan.expiration;
 
             let total_days = (loan_end - loan_start).num_days().max(1) as f32;
@@ -180,8 +184,7 @@ impl TeamBehaviour {
                     return None;
                 }
                 // Risk score: big when controversial + hot-tempered + unsporting
-                let risk = controversy + (20.0 - temperament) * 0.6
-                    + (20.0 - sportsmanship) * 0.4;
+                let risk = controversy + (20.0 - temperament) * 0.6 + (20.0 - sportsmanship) * 0.4;
                 if risk < 35.0 {
                     return None;
                 }
@@ -276,7 +279,9 @@ impl TeamBehaviour {
             if p.is_on_loan() {
                 continue;
             }
-            let Some(contract) = p.contract.as_ref() else { continue };
+            let Some(contract) = p.contract.as_ref() else {
+                continue;
+            };
             if contract.salary == 0 {
                 continue;
             }
@@ -296,7 +301,9 @@ impl TeamBehaviour {
             if player.is_on_loan() {
                 continue;
             }
-            let Some(contract) = player.contract.as_ref() else { continue };
+            let Some(contract) = player.contract.as_ref() else {
+                continue;
+            };
             if contract.salary == 0 {
                 continue;
             }

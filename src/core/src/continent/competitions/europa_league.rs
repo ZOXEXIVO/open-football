@@ -1,7 +1,10 @@
-use super::{CompetitionStage, CompetitionTier, ContinentalMatch, ContinentalMatchResult, GroupTable, KnockoutTie, EUROPA_LEAGUE_ID};
+use super::{
+    CompetitionStage, CompetitionTier, ContinentalMatch, ContinentalMatchResult, EUROPA_LEAGUE_ID,
+    GroupTable, KnockoutTie,
+};
+use crate::Club;
 use crate::continent::ContinentalRankings;
 use crate::r#match::{Match, MatchResult, SelectionContext};
-use crate::Club;
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use std::collections::HashMap;
@@ -39,7 +42,12 @@ impl EuropaLeague {
     }
 
     /// Conduct draw: seed clubs into groups of 4, generate fixtures.
-    pub fn conduct_draw(&mut self, clubs: &[u32], _rankings: &ContinentalRankings, date: NaiveDate) {
+    pub fn conduct_draw(
+        &mut self,
+        clubs: &[u32],
+        _rankings: &ContinentalRankings,
+        date: NaiveDate,
+    ) {
         if clubs.len() < 8 {
             debug!("Europa League: not enough clubs ({}) for draw", clubs.len());
             return;
@@ -76,7 +84,9 @@ impl EuropaLeague {
 
         for group in &self.groups {
             let teams: Vec<u32> = group.rows.iter().map(|r| r.team_id).collect();
-            if teams.len() < 4 { continue; }
+            if teams.len() < 4 {
+                continue;
+            }
 
             let fixtures = [
                 (0, 1, 2, 3, 0),
@@ -126,7 +136,8 @@ impl EuropaLeague {
         let num_ties = winners.len().min(runners_up.len());
         for i in 0..num_ties {
             let r_idx = (i + 1) % runners_up.len();
-            self.knockout_round.push(KnockoutTie::new(winners[i], runners_up[r_idx]));
+            self.knockout_round
+                .push(KnockoutTie::new(winners[i], runners_up[r_idx]));
         }
 
         // Schedule R16 matches (Thursdays)
@@ -179,7 +190,8 @@ impl EuropaLeague {
         clubs: &HashMap<u32, &Club>,
         date: NaiveDate,
     ) -> Vec<MatchResult> {
-        let todays_matches: Vec<ContinentalMatch> = self.matches
+        let todays_matches: Vec<ContinentalMatch> = self
+            .matches
             .iter()
             .filter(|m| m.date == date)
             .cloned()
@@ -212,8 +224,12 @@ impl EuropaLeague {
                 let home_squad = home_team.get_enhanced_match_squad(&home_force, &selection_ctx);
                 let away_squad = away_team.get_enhanced_match_squad(&away_force, &selection_ctx);
 
-                let match_id = format!("el_{}_{}_{}",
-                    date.format("%Y%m%d"), cm.home_team, cm.away_team);
+                let match_id = format!(
+                    "el_{}_{}_{}",
+                    date.format("%Y%m%d"),
+                    cm.home_team,
+                    cm.away_team
+                );
 
                 Some(Match::make(
                     match_id,
@@ -236,9 +252,9 @@ impl EuropaLeague {
         for (cm, result) in todays_matches.iter().zip(results.iter()) {
             let home_goals = result.score.home_team.get();
             let away_goals = result.score.away_team.get();
-            if let Some(m) = self.matches.iter_mut().find(|m|
+            if let Some(m) = self.matches.iter_mut().find(|m| {
                 m.date == cm.date && m.home_team == cm.home_team && m.away_team == cm.away_team
-            ) {
+            }) {
                 m.match_id = result.id.clone();
                 m.result = Some((home_goals, away_goals));
             }
@@ -259,7 +275,8 @@ impl EuropaLeague {
                         }
                     }
                 }
-                CompetitionStage::RoundOf16 | CompetitionStage::QuarterFinals
+                CompetitionStage::RoundOf16
+                | CompetitionStage::QuarterFinals
                 | CompetitionStage::SemiFinals => {
                     for tie in &mut self.knockout_round {
                         if tie.home_team == cm.home_team && tie.away_team == cm.away_team {
@@ -283,7 +300,10 @@ impl EuropaLeague {
         }
 
         let group_stage_complete = matches!(self.current_stage, CompetitionStage::GroupStage)
-            && self.groups.iter().all(|g| g.rows.iter().all(|r| r.played >= 6));
+            && self
+                .groups
+                .iter()
+                .all(|g| g.rows.iter().all(|r| r.played >= 6));
 
         if group_stage_complete {
             info!("Europa League group stage complete -- generating R16 draw");
@@ -300,15 +320,16 @@ impl EuropaLeague {
     ) -> Vec<ContinentalMatchResult> {
         let match_results = self.play_matches(clubs, date);
 
-        match_results.iter().map(|r| {
-            ContinentalMatchResult {
+        match_results
+            .iter()
+            .map(|r| ContinentalMatchResult {
                 home_team: r.home_team_id,
                 away_team: r.away_team_id,
                 home_score: r.score.home_team.get(),
                 away_score: r.score.away_team.get(),
                 competition: CompetitionTier::EuropaLeague,
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     pub fn get_club_points(&self, club_id: u32) -> f32 {

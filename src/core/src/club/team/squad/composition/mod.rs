@@ -3,7 +3,7 @@ use crate::{Team, TeamType};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use super::{execute_moves, record_moves, record_player_decisions, MIN_FIRST_TEAM_SQUAD};
+use super::{MIN_FIRST_TEAM_SQUAD, execute_moves, record_moves, record_player_decisions};
 
 // ─── AI prompt data types ──────────────────────────────────────────
 
@@ -80,8 +80,12 @@ impl SquadComposition {
         youth_idx: Option<usize>,
     ) -> Vec<(usize, &'static str)> {
         let mut v = vec![(main_idx, "Main Team")];
-        if let Some(idx) = reserve_idx { v.push((idx, "Reserve Team")); }
-        if let Some(idx) = youth_idx { v.push((idx, "Youth Team")); }
+        if let Some(idx) = reserve_idx {
+            v.push((idx, "Reserve Team"));
+        }
+        if let Some(idx) = youth_idx {
+            v.push((idx, "Youth Team"));
+        }
         v
     }
 
@@ -172,7 +176,10 @@ impl SquadComposition {
                 for d in &player.decision_history.items {
                     moves.push_str(&format!(
                         "id={},from_team={},reason={},date={}\n",
-                        player.id, idx, d.decision, d.date.format("%Y-%m-%d")
+                        player.id,
+                        idx,
+                        d.decision,
+                        d.date.format("%Y-%m-%d")
                     ));
                 }
             }
@@ -217,8 +224,13 @@ impl SquadComposition {
 
             execute_moves(teams, m.from_team_index, m.to_team_index, &[m.player_id]);
             record_player_decisions(
-                teams, m.from_team_index, m.to_team_index,
-                &[m.player_id], date, &coach_name, &m.reason,
+                teams,
+                m.from_team_index,
+                m.to_team_index,
+                &[m.player_id],
+                date,
+                &coach_name,
+                &m.reason,
             );
 
             let move_type = if m.to_team_index == main_idx {
@@ -238,7 +250,8 @@ impl SquadComposition {
     }
 
     fn is_valid_move(teams: &[Team], valid_indices: &[usize], m: &AiSquadMove) -> bool {
-        if !valid_indices.contains(&m.from_team_index) || !valid_indices.contains(&m.to_team_index) {
+        if !valid_indices.contains(&m.from_team_index) || !valid_indices.contains(&m.to_team_index)
+        {
             return false;
         }
         if m.from_team_index == m.to_team_index {

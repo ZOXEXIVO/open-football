@@ -32,7 +32,6 @@ impl StateProcessingHandler for GoalkeeperClearingState {
         None
     }
 
-
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Stand still while preparing to clear
         Some(Vector3::new(0.0, 0.0, 0.0))
@@ -74,12 +73,13 @@ impl GoalkeeperClearingState {
 
         // Direction always upfield — away from own goal, toward opponent half.
         let target_x = match ctx.player.side {
-            Some(PlayerSide::Left) => halfway_x,   // home kicks toward x = halfway
-            Some(PlayerSide::Right) => halfway_x,  // away kicks toward x = halfway (same spot)
+            Some(PlayerSide::Left) => halfway_x, // home kicks toward x = halfway
+            Some(PlayerSide::Right) => halfway_x, // away kicks toward x = halfway (same spot)
             None => halfway_x,
         };
 
-        let horizontal_to_target = Vector3::new(target_x - keeper_pos.x, target_y - keeper_pos.y, 0.0);
+        let horizontal_to_target =
+            Vector3::new(target_x - keeper_pos.x, target_y - keeper_pos.y, 0.0);
         let horizontal_dist = horizontal_to_target.norm().max(0.1);
         let horizontal_dir = horizontal_to_target / horizontal_dist;
 
@@ -92,11 +92,7 @@ impl GoalkeeperClearingState {
         // touch higher.
         let z_velocity = 4.5 + kicking_power * 1.0; // 4.5 - 5.5 u/tick
 
-        let ball_velocity = Vector3::new(
-            horizontal_velocity.x,
-            horizontal_velocity.y,
-            z_velocity,
-        );
+        let ball_velocity = Vector3::new(horizontal_velocity.x, horizontal_velocity.y, z_velocity);
 
         Some(Event::PlayerEvent(PlayerEvent::ClearBall(ball_velocity)))
     }

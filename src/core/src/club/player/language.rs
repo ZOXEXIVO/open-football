@@ -110,20 +110,18 @@ impl Language {
             "tr" => vec![Language::Turkish],
             "il" => vec![Language::Hebrew],
             "ir" => vec![Language::Persian],
-            "sa" | "ae" | "qa" | "kw" | "bh" | "om" | "jo" | "lb" | "iq" | "ye"
-            | "eg" | "dz" | "ma" | "tn" | "ly" | "sd" | "ps" | "mr" => vec![Language::Arabic],
+            "sa" | "ae" | "qa" | "kw" | "bh" | "om" | "jo" | "lb" | "iq" | "ye" | "eg" | "dz"
+            | "ma" | "tn" | "ly" | "sd" | "ps" | "mr" => vec![Language::Arabic],
 
             // South America
             "br" => vec![Language::Portuguese],
-            "ar" | "co" | "cl" | "uy" | "py" | "pe" | "ec" | "bo" | "ve"
-            | "mx" | "sv" | "gt" | "hn" | "ni" | "cr" | "pa" | "cu"
-            | "do" | "pr" => vec![Language::Spanish],
+            "ar" | "co" | "cl" | "uy" | "py" | "pe" | "ec" | "bo" | "ve" | "mx" | "sv" | "gt"
+            | "hn" | "ni" | "cr" | "pa" | "cu" | "do" | "pr" => vec![Language::Spanish],
             "gy" | "sr" | "gf" => vec![Language::English],
 
             // North America & Caribbean
-            "us" | "ca" | "jm" | "tt" | "bb" | "bs" | "bz"
-            | "ag" | "dm" | "gd" | "kn" | "lc" | "vc" | "ky"
-            | "bm" | "vi" | "ai" | "ms" | "vg" | "tc" => vec![Language::English],
+            "us" | "ca" | "jm" | "tt" | "bb" | "bs" | "bz" | "ag" | "dm" | "gd" | "kn" | "lc"
+            | "vc" | "ky" | "bm" | "vi" | "ai" | "ms" | "vg" | "tc" => vec![Language::English],
             "ht" | "gp" | "mq" | "mf" => vec![Language::French],
             "aw" => vec![Language::Dutch],
 
@@ -144,19 +142,19 @@ impl Language {
             "af" => vec![Language::Persian],
 
             // Oceania
-            "au" | "nz" | "fj" | "pg" | "sb" | "vu" | "ws" | "to" | "ck"
-            | "as" | "gu" | "fm" | "ki" | "tv" | "mp" => vec![Language::English],
+            "au" | "nz" | "fj" | "pg" | "sb" | "vu" | "ws" | "to" | "ck" | "as" | "gu" | "fm"
+            | "ki" | "tv" | "mp" => vec![Language::English],
             "nc" | "wf" => vec![Language::French],
 
             // Africa — English-speaking
-            "ng" | "gh" | "ke" | "tz" | "ug" | "za" | "zw" | "zm" | "bw"
-            | "mw" | "sl" | "lr" | "gm" | "mu" | "sz" | "ls"
-            | "na" | "rw" => vec![Language::English],
+            "ng" | "gh" | "ke" | "tz" | "ug" | "za" | "zw" | "zm" | "bw" | "mw" | "sl" | "lr"
+            | "gm" | "mu" | "sz" | "ls" | "na" | "rw" => vec![Language::English],
 
             // Africa — French-speaking
-            "ci" | "cm" | "sn" | "ml" | "bf" | "ne" | "td" | "cf" | "cg"
-            | "ga" | "bj" | "tg" | "gw" | "gq" | "dj" | "bi" | "mg"
-            | "km" | "yt" | "re" | "st" => vec![Language::French],
+            "ci" | "cm" | "sn" | "ml" | "bf" | "ne" | "td" | "cf" | "cg" | "ga" | "bj" | "tg"
+            | "gw" | "gq" | "dj" | "bi" | "mg" | "km" | "yt" | "re" | "st" => {
+                vec![Language::French]
+            }
 
             // Africa — Portuguese-speaking
             "ao" | "mz" | "cv" => vec![Language::Portuguese],
@@ -169,7 +167,6 @@ impl Language {
 
             // Africa — South Africa also has Afrikaans
             // (za already mapped to English above)
-
             _ => vec![Language::English], // fallback
         }
     }
@@ -400,8 +397,8 @@ pub fn weekly_language_progress(
         1.0
     };
 
-    let weekly_gain = base_rate * adapt_factor * prof_factor * age_factor
-        * star_factor * progress_factor;
+    let weekly_gain =
+        base_rate * adapt_factor * prof_factor * age_factor * star_factor * progress_factor;
 
     // Convert to integer progress, minimum 0
     let gain = weekly_gain.round().max(0.0) as u8;

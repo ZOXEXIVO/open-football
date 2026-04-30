@@ -6,8 +6,8 @@ pub use types::*;
 
 use crate::league::LeagueTableResult;
 use crate::r#match::MatchResult;
-use crate::simulator::SimulatorData;
 use crate::r#match::TeamScore;
+use crate::simulator::SimulatorData;
 use crate::{MatchHistoryItem, SimulationResult};
 
 pub struct LeagueResult {
@@ -61,10 +61,9 @@ impl LeagueResult {
 
         // Update league schedule (skip for friendlies without a league)
         if let Some(league) = data.league_mut(result.league_id) {
-            league.schedule.update_match_result(
-                &result.id,
-                &result.score,
-            );
+            league
+                .schedule
+                .update_match_result(&result.id, &result.score);
         }
 
         let home_team_id = result.score.home_team.team_id;
@@ -73,16 +72,15 @@ impl LeagueResult {
         // rather than a hardcoded `* 2`. Friendlies don't draw paying
         // crowds for the model, so they're skipped.
         if !result.friendly {
-            let home_club_id = data
-                .team(home_team_id)
-                .map(|t| t.club_id);
+            let home_club_id = data.team(home_team_id).map(|t| t.club_id);
             if let Some(club_id) = home_club_id {
                 if let Some(home_club) = data.club_mut(club_id) {
                     home_club.finance.record_home_match();
                 }
             }
         }
-        let home_team = data.team_mut(home_team_id)
+        let home_team = data
+            .team_mut(home_team_id)
             .expect(&format!("home team not found: {}", home_team_id));
         home_team.match_history.add(MatchHistoryItem::new(
             now,
@@ -94,7 +92,8 @@ impl LeagueResult {
         ));
 
         let away_team_id = result.score.away_team.team_id;
-        let away_team = data.team_mut(away_team_id)
+        let away_team = data
+            .team_mut(away_team_id)
             .expect(&format!("away team not found: {}", away_team_id));
         away_team.match_history.add(MatchHistoryItem::new(
             now,

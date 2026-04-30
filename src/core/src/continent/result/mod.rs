@@ -1,17 +1,17 @@
-mod types;
-mod rankings;
+mod awards;
 mod competitions;
 mod economics;
+mod rankings;
 mod regulations;
-mod awards;
+mod types;
 
 pub use types::*;
 
+use crate::SimulationResult;
 use crate::country::CountryResult;
 use crate::r#match::MatchResult;
 use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
-use crate::SimulationResult;
 
 pub struct ContinentResult {
     pub continent_id: u32,
@@ -28,7 +28,11 @@ pub struct ContinentResult {
 }
 
 impl ContinentResult {
-    pub fn new(continent_id: u32, countries: Vec<CountryResult>, national_match_results: Vec<MatchResult>) -> Self {
+    pub fn new(
+        continent_id: u32,
+        countries: Vec<CountryResult>,
+        national_match_results: Vec<MatchResult>,
+    ) -> Self {
         ContinentResult {
             continent_id,
             countries,

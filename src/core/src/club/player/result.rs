@@ -7,9 +7,7 @@ pub struct PlayerCollectionResult {
 
 impl PlayerCollectionResult {
     pub fn new(players: Vec<PlayerResult>) -> Self {
-        PlayerCollectionResult {
-            players,
-        }
+        PlayerCollectionResult { players }
     }
 
     pub fn process(&self, data: &mut SimulatorData) {

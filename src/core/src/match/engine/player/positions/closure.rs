@@ -143,7 +143,11 @@ impl PlayerDistanceClosure {
             None => return MAX_DISTANCE,
         };
 
-        unsafe { *self.dist_matrix.get_unchecked(slot_a * MAX_PLAYERS + slot_b) }
+        unsafe {
+            *self
+                .dist_matrix
+                .get_unchecked(slot_a * MAX_PLAYERS + slot_b)
+        }
     }
 
     pub fn teammates<'t>(
@@ -177,9 +181,7 @@ impl PlayerDistanceClosure {
                 let base = s * MAX_NEIGHBORS;
                 self.per_player_data[base..base + len].iter()
             })
-            .filter(move |(_, same_team, dist)| {
-                !*same_team && *dist <= distance
-            })
+            .filter(move |(_, same_team, dist)| !*same_team && *dist <= distance)
             .map(|(id, _, dist)| (*id, *dist))
     }
 }

@@ -2,13 +2,13 @@
 
 pub mod behaviours;
 pub mod context;
+pub mod events;
 pub mod memory;
 pub mod player;
+pub mod positions;
 pub mod state;
 pub mod statistics;
 pub mod strategies;
-pub mod positions;
-pub mod events;
 mod waypoints;
 
 pub use behaviours::*;
@@ -17,15 +17,14 @@ use itertools::Itertools;
 pub use player::*;
 
 // Re-export positions items except conflicting ones
-pub use positions::{closure, objects};
 pub use positions::ball as position_ball;
 pub use positions::players as position_players;
+pub use positions::{closure, objects};
 
 // Re-export strategies items except conflicting ones
 pub use strategies::{
-    BallOperationsImpl, decision, passing, team,
-    common_states, defender_states, processor,
-    defenders, forwarders, goalkeepers, midfielders,
+    BallOperationsImpl, common_states, decision, defender_states, defenders, forwarders,
+    goalkeepers, midfielders, passing, processor, team,
 };
 // Note: strategies re-exports players and ball from common, which conflicts with positions
 // We'll use the position_ prefixed versions as the primary ones

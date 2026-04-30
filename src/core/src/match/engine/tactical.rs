@@ -158,7 +158,9 @@ fn compute_phase(
     const TRANSITION_WINDOW_TICKS: u32 = 50; // ~5 sim seconds
 
     if in_possession {
-        if ticks_since_turnover < TRANSITION_WINDOW_TICKS && possession_ticks < TRANSITION_WINDOW_TICKS {
+        if ticks_since_turnover < TRANSITION_WINDOW_TICKS
+            && possession_ticks < TRANSITION_WINDOW_TICKS
+        {
             return GamePhase::AttackingTransition;
         }
         return match ball_zone {
@@ -326,10 +328,16 @@ pub fn update_tactical_states(
 
     let minute = (match_time_ms as f32) / 60_000.0;
     home.game_management_intensity = compute_game_management_intensity(
-        home_score_diff, minute, home_avg_ability, away_avg_ability,
+        home_score_diff,
+        minute,
+        home_avg_ability,
+        away_avg_ability,
     );
     away.game_management_intensity = compute_game_management_intensity(
-        -home_score_diff, minute, away_avg_ability, home_avg_ability,
+        -home_score_diff,
+        minute,
+        away_avg_ability,
+        home_avg_ability,
     );
 }
 
@@ -353,7 +361,10 @@ mod tests {
     fn weaker_side_protecting_late_lead_parks_the_bus() {
         let strong_even = compute_game_management_intensity(1, 85.0, 150, 150);
         let weak_late = compute_game_management_intensity(1, 85.0, 110, 150);
-        assert!(weak_late > strong_even, "weak_late={weak_late} strong_even={strong_even}");
+        assert!(
+            weak_late > strong_even,
+            "weak_late={weak_late} strong_even={strong_even}"
+        );
         assert!(weak_late > 0.5, "got {weak_late}");
     }
 

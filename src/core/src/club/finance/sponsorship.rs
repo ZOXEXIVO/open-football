@@ -1,5 +1,5 @@
-use crate::utils::FloatUtils;
 use crate::ReputationLevel;
+use crate::utils::FloatUtils;
 use chrono::{Datelike, NaiveDate};
 
 #[derive(Debug, Clone)]
@@ -37,11 +37,7 @@ impl ClubSponsorship {
     /// Drop expired contracts and replace each one with a freshly negotiated
     /// deal sized by the club's reputation, market and recent performance.
     /// Returns `(expired_count, renewed_count)` for telemetry.
-    pub fn renew_expired(
-        &mut self,
-        date: NaiveDate,
-        ctx: &SponsorRenewalContext,
-    ) -> (u32, u32) {
+    pub fn renew_expired(&mut self, date: NaiveDate, ctx: &SponsorRenewalContext) -> (u32, u32) {
         let expired = self.drop_expired(date);
         let mut renewed = 0u32;
         for _ in 0..expired {

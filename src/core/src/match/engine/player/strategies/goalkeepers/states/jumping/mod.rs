@@ -1,7 +1,9 @@
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+};
 use nalgebra::Vector3;
 
 const JUMP_DURATION: u64 = 25; // Duration of jump animation in ticks (faster reaction)
@@ -19,29 +21,28 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
             // After jump, transition to appropriate state
             if ctx.player.has_ball(ctx) {
                 return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::HoldingBall
+                    GoalkeeperState::HoldingBall,
                 ));
             } else {
                 return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Standing
+                    GoalkeeperState::Standing,
                 ));
             }
         }
 
         // During jump, check if we can catch the ball
         if self.can_catch_ball(ctx) {
-            let mut result = StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Catching
-            );
+            let mut result = StateChangeResult::with_goalkeeper_state(GoalkeeperState::Catching);
 
             // Add catch attempt event
-            result.events.add_player_event(PlayerEvent::RequestBallReceive(ctx.player.id));
+            result
+                .events
+                .add_player_event(PlayerEvent::RequestBallReceive(ctx.player.id));
             return Some(result);
         }
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Calculate base jump vector
@@ -58,11 +59,13 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         let vertical_component = self.calculate_vertical_motion(ctx);
 
         // Combine all motion components
-        let combined_velocity = jump_vector + diving_vector + Vector3::new(0.0, 0.0, vertical_component);
+        let combined_velocity =
+            jump_vector + diving_vector + Vector3::new(0.0, 0.0, vertical_component);
 
         // Explosive scaling — jumping/diving must be very fast
-        let attribute_scaling = (ctx.player.skills.physical.jumping as f32 +
-            ctx.player.skills.physical.agility as f32) / 25.0; // was /40.0 — 60% faster
+        let attribute_scaling = (ctx.player.skills.physical.jumping as f32
+            + ctx.player.skills.physical.agility as f32)
+            / 25.0; // was /40.0 — 60% faster
 
         Some(combined_velocity * attribute_scaling)
     }
@@ -106,8 +109,8 @@ impl GoalkeeperJumpingState {
         let speed_penalty = (ball_speed / 5.0).min(0.3) * (1.0 - reflexes * 0.5);
 
         // Elite: 0.20 + 0.95*0.75 = 0.91, mediocre: 0.20 + 0.47*0.75 = 0.55
-        let catch_probability = (0.20 + skill_blend * 0.75 - distance_penalty - speed_penalty)
-            .clamp(0.10, 0.95);
+        let catch_probability =
+            (0.20 + skill_blend * 0.75 - distance_penalty - speed_penalty).clamp(0.10, 0.95);
 
         rand::random::<f32>() < catch_probability
     }

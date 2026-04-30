@@ -13,9 +13,9 @@
 
 use super::scaling;
 use super::types::{MatchOutcome, MatchParticipation};
+use crate::HappinessEventType;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
-use crate::HappinessEventType;
 
 impl Player {
     /// Update the rolling starter ratio on a competitive match and emit the
@@ -46,17 +46,14 @@ impl Player {
         if self.happiness.appearances_tracked < MIN_APPS {
             return;
         }
-        if !self.happiness.is_established_starter
-            && self.happiness.starter_ratio >= STARTER_FLOOR
-        {
+        if !self.happiness.is_established_starter && self.happiness.starter_ratio >= STARTER_FLOOR {
             let mag = self.won_starting_place_magnitude();
             // 90-day cooldown so a brief slump and recovery don't ping-pong
             // the event once per fortnight.
-            if self.happiness.add_event_with_cooldown(
-                HappinessEventType::WonStartingPlace,
-                mag,
-                90,
-            ) {
+            if self
+                .happiness
+                .add_event_with_cooldown(HappinessEventType::WonStartingPlace, mag, 90)
+            {
                 self.happiness.is_established_starter = true;
             }
         } else if self.happiness.is_established_starter
@@ -215,11 +212,7 @@ impl Player {
     /// the choice so emit sites just say `event` and we look up the right
     /// blend. Returns a multiplier near 1.0 by design — magnitudes stay
     /// in the catalog band.
-    pub(super) fn team_event_personality_factor(
-        &self,
-        event: &HappinessEventType,
-        age: u8,
-    ) -> f32 {
+    pub(super) fn team_event_personality_factor(&self, event: &HappinessEventType, age: u8) -> f32 {
         use HappinessEventType::*;
         let a = self.attributes.ambition;
         let l = self.attributes.loyalty;
@@ -237,8 +230,10 @@ impl Player {
             // Relegation hurts ambitious players the most.
             Relegated => scaling::ambition_amplifier(a),
             // Late-season fear — ambition hurts, professionalism dampens.
-            RelegationFear => scaling::ambition_amplifier(a)
-                * scaling::criticism_dampener(self.attributes.professionalism),
+            RelegationFear => {
+                scaling::ambition_amplifier(a)
+                    * scaling::criticism_dampener(self.attributes.professionalism)
+            }
             // Continental qualification — pure ambition lift.
             QualifiedForEurope => scaling::ambition_amplifier(a),
             _ => 1.0,

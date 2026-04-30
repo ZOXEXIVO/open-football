@@ -18,11 +18,13 @@
 //! The pass runs weekly alongside training. It iterates the main team,
 //! builds pairings, and applies gentle nudges to the mentee.
 
+use crate::PlayerFieldPositionGroup;
 use crate::club::person::Person;
 use crate::club::player::language::Language;
 use crate::club::player::traits::PlayerTrait;
-use crate::club::{ChangeType, HappinessEventType, MentorshipType, Player, PlayerStatusType, RelationshipChange};
-use crate::PlayerFieldPositionGroup;
+use crate::club::{
+    ChangeType, HappinessEventType, MentorshipType, Player, PlayerStatusType, RelationshipChange,
+};
 use chrono::NaiveDate;
 
 /// Compatibility threshold below which a candidate mentor/mentee pair is
@@ -54,10 +56,20 @@ fn mentor_score(player: &Player, now: NaiveDate) -> f32 {
     let base = prof * 0.3 + leadership * 0.35 + determination * 0.2 + influence * 0.15;
 
     // Age premium — 32+ are wiser.
-    let age_bonus = if age >= 32 { 2.0 } else if age >= 30 { 1.0 } else { 0.0 };
+    let age_bonus = if age >= 32 {
+        2.0
+    } else if age >= 30 {
+        1.0
+    } else {
+        0.0
+    };
 
     // One-club-player trait is a signature mentor trait.
-    let trait_bonus = if player.traits.contains(&PlayerTrait::OneClubPlayer) { 1.5 } else { 0.0 };
+    let trait_bonus = if player.traits.contains(&PlayerTrait::OneClubPlayer) {
+        1.5
+    } else {
+        0.0
+    };
 
     base + age_bonus + trait_bonus
 }
@@ -71,8 +83,7 @@ fn mentee_need(player: &Player, now: NaiveDate) -> f32 {
     }
     let personality = &player.attributes;
     // Players with weak personality benefit the most from mentoring.
-    let personality_gap =
-        20.0 - ((personality.professionalism + personality.ambition) / 2.0);
+    let personality_gap = 20.0 - ((personality.professionalism + personality.ambition) / 2.0);
     let age_factor = (22 - age) as f32; // younger = more need
     let low_caps = if player.player_attributes.international_apps == 0 {
         1.0
@@ -207,8 +218,7 @@ pub fn process_mentorship(
             if mentor_group != mentee_group {
                 continue;
             }
-            let compat =
-                pair_compatibility(&players[*mentor_idx], &players[*mentee_idx], date);
+            let compat = pair_compatibility(&players[*mentor_idx], &players[*mentee_idx], date);
             if compat < MIN_COMPATIBILITY {
                 continue;
             }
@@ -236,8 +246,7 @@ pub fn process_mentorship(
         .iter()
         .map(|(_, t_idx, _)| players[*t_idx].id)
         .collect();
-    let pair_compatibilities: Vec<f32> =
-        pairings.iter().map(|(_, _, c)| *c).collect();
+    let pair_compatibilities: Vec<f32> = pairings.iter().map(|(_, _, c)| *c).collect();
 
     for (i, (mentor_idx, mentee_idx, compat)) in pairings.iter().enumerate() {
         // Read mentor attributes (immutable).
@@ -254,8 +263,7 @@ pub fn process_mentorship(
         // Bad-mentor rule: low professionalism / high controversy mentors
         // can sour the mentee instead of guiding them. 20% deterministic
         // weekly chance of negative influence.
-        let bad_mentor =
-            mentor_prof < 8.0 || mentor_controversy > 16.0;
+        let bad_mentor = mentor_prof < 8.0 || mentor_controversy > 16.0;
         let bad_roll = bad_mentor_roll(mentor_ids[i], mentee_ids[i], date) < 0.20;
 
         // Step size scales with compatibility tier.
@@ -328,7 +336,9 @@ pub fn process_mentorship(
     // handled below via `set_mentorship`, which already mirrors the bond
     // and influence on the mentor's side.
     for (mentor_idx, _, _) in &pairings {
-        players[*mentor_idx].statuses.add(date, PlayerStatusType::Lrn);
+        players[*mentor_idx]
+            .statuses
+            .add(date, PlayerStatusType::Lrn);
     }
     let _ = pair_compatibilities; // kept for diagnostics; enforced as cap above.
 
@@ -380,7 +390,8 @@ fn nudge_personality_step(
     };
 
     let cur = &mut mentee.attributes;
-    cur.professionalism = (cur.professionalism + drift(cur.professionalism, mentor_prof)).clamp(0.0, 20.0);
+    cur.professionalism =
+        (cur.professionalism + drift(cur.professionalism, mentor_prof)).clamp(0.0, 20.0);
     cur.ambition = (cur.ambition + drift(cur.ambition, mentor_amb)).clamp(0.0, 20.0);
 
     let det_now = mentee.skills.mental.determination;

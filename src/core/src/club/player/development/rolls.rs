@@ -15,7 +15,9 @@ pub struct ThreadRolls;
 
 impl RollSource for ThreadRolls {
     #[inline]
-    fn roll_unit(&mut self) -> f32 { rand::random::<f32>() }
+    fn roll_unit(&mut self) -> f32 {
+        rand::random::<f32>()
+    }
 }
 
 /// Roll source that returns the same value on every call. Useful when
@@ -26,5 +28,7 @@ pub struct FixedRolls(pub f32);
 
 impl RollSource for FixedRolls {
     #[inline]
-    fn roll_unit(&mut self) -> f32 { self.0 }
+    fn roll_unit(&mut self) -> f32 {
+        self.0
+    }
 }

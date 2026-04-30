@@ -246,7 +246,12 @@ impl InjuryType {
     }
 
     /// Pick a random training injury (weighted towards minor/moderate muscle injuries)
-    pub fn random_training_injury(age: u8, condition_pct: u32, natural_fitness: f32, injury_proneness: u8) -> InjuryType {
+    pub fn random_training_injury(
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> InjuryType {
         let roll: f32 = rand::random::<f32>();
 
         let severity_modifier = (age as f32 - 25.0).max(0.0) * 0.01
@@ -394,19 +399,34 @@ mod tests {
         assert_eq!(InjuryType::Cramp.severity(), InjurySeverity::Minor);
         assert_eq!(InjuryType::Bruise.severity(), InjurySeverity::Minor);
         assert_eq!(InjuryType::DeadLeg.severity(), InjurySeverity::Minor);
-        assert_eq!(InjuryType::MinorConcussion.severity(), InjurySeverity::Minor);
-        assert_eq!(InjuryType::HamstringStrain.severity(), InjurySeverity::Moderate);
+        assert_eq!(
+            InjuryType::MinorConcussion.severity(),
+            InjurySeverity::Minor
+        );
+        assert_eq!(
+            InjuryType::HamstringStrain.severity(),
+            InjurySeverity::Moderate
+        );
         assert_eq!(InjuryType::CalfStrain.severity(), InjurySeverity::Moderate);
-        assert_eq!(InjuryType::HipFlexorStrain.severity(), InjurySeverity::Moderate);
+        assert_eq!(
+            InjuryType::HipFlexorStrain.severity(),
+            InjurySeverity::Moderate
+        );
         assert_eq!(InjuryType::QuadStrain.severity(), InjurySeverity::Moderate);
         assert_eq!(InjuryType::BackSpasm.severity(), InjurySeverity::Moderate);
         assert_eq!(InjuryType::TornMeniscus.severity(), InjurySeverity::Severe);
         assert_eq!(InjuryType::MCLSprain.severity(), InjurySeverity::Severe);
-        assert_eq!(InjuryType::StressFracture.severity(), InjurySeverity::Severe);
+        assert_eq!(
+            InjuryType::StressFracture.severity(),
+            InjurySeverity::Severe
+        );
         assert_eq!(InjuryType::HerniatedDisc.severity(), InjurySeverity::Severe);
         assert_eq!(InjuryType::ACLTear.severity(), InjurySeverity::Critical);
         assert_eq!(InjuryType::BrokenLeg.severity(), InjurySeverity::Critical);
-        assert_eq!(InjuryType::AchillesRupture.severity(), InjurySeverity::Critical);
+        assert_eq!(
+            InjuryType::AchillesRupture.severity(),
+            InjurySeverity::Critical
+        );
         assert_eq!(InjuryType::PCLTear.severity(), InjurySeverity::Critical);
     }
 
@@ -441,11 +461,19 @@ mod tests {
         }
         for _ in 0..100 {
             let days = InjuryType::HamstringStrain.recovery_days();
-            assert!(days >= 5 && days <= 10, "Moderate recovery {} not in 5-10", days);
+            assert!(
+                days >= 5 && days <= 10,
+                "Moderate recovery {} not in 5-10",
+                days
+            );
         }
         for _ in 0..100 {
             let days = InjuryType::ACLTear.recovery_days();
-            assert!(days >= 14 && days <= 21, "Critical recovery {} not in 14-21", days);
+            assert!(
+                days >= 14 && days <= 21,
+                "Critical recovery {} not in 14-21",
+                days
+            );
         }
     }
 

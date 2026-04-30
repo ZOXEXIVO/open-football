@@ -1,6 +1,5 @@
 use crate::r#match::{
-    PlayerOpponentsOperationsImpl, PlayerTeammatesOperationsImpl,
-    StateProcessingContext,
+    PlayerOpponentsOperationsImpl, PlayerTeammatesOperationsImpl, StateProcessingContext,
 };
 
 pub struct PlayersOperationsImpl<'p> {

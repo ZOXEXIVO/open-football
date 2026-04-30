@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -82,11 +82,20 @@ pub async fn team_schedule_get_action(
 
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
-    let schedule = league.map(|l| l.schedule.get_matches_for_team(team.id)).unwrap_or_default();
+    let schedule = league
+        .map(|l| l.schedule.get_matches_for_team(team.id))
+        .unwrap_or_default();
 
-    let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let (neighbor_teams, country_leagues) =
+        get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
+    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
+    let league_refs: Vec<(&str, &str)> = country_leagues
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
 
     // League matches
     let mut items: Vec<(chrono::NaiveDateTime, TeamScheduleItem)> = schedule
@@ -97,39 +106,45 @@ pub async fn team_schedule_get_action(
             let home_team_data = simulator_data.team_data(schedule.home_team_id).unwrap();
             let away_team_data = simulator_data.team_data(schedule.away_team_id).unwrap();
 
-            (schedule.date, TeamScheduleItem {
-                date: schedule.date.format("%d.%m.%Y").to_string(),
-                time: schedule.date.format("%H:%M").to_string(),
-                opponent_slug: if is_home {
-                    away_team_data.slug.clone()
-                } else {
-                    home_team_data.slug.clone()
+            (
+                schedule.date,
+                TeamScheduleItem {
+                    date: schedule.date.format("%d.%m.%Y").to_string(),
+                    time: schedule.date.format("%H:%M").to_string(),
+                    opponent_slug: if is_home {
+                        away_team_data.slug.clone()
+                    } else {
+                        home_team_data.slug.clone()
+                    },
+                    opponent_name: if is_home {
+                        away_team_data.name.clone()
+                    } else {
+                        home_team_data.name.clone()
+                    },
+                    is_home,
+                    competition_name: league.map(|l| l.name.clone()).unwrap_or_default(),
+                    result: schedule.result.as_ref().map(|res| TeamScheduleItemResult {
+                        match_id: schedule.id.clone(),
+                        home_goals: res.home_team.get(),
+                        away_goals: res.away_team.get(),
+                    }),
                 },
-                opponent_name: if is_home {
-                    away_team_data.name.clone()
-                } else {
-                    home_team_data.name.clone()
-                },
-                is_home,
-                competition_name: league.map(|l| l.name.clone()).unwrap_or_default(),
-                result: schedule.result.as_ref().map(|res| TeamScheduleItemResult {
-                    match_id: schedule.id.clone(),
-                    home_goals: res.home_team.get(),
-                    away_goals: res.away_team.get(),
-                }),
-            })
+            )
         })
         .collect();
 
     // Continental competition matches (Champions League, Europa League, Conference League)
     let continental_matches = simulator_data.continental_matches_for_club(team.club_id);
-    for (comp_name, home_club_id, away_club_id, date, match_id, match_result) in continental_matches {
+    for (comp_name, home_club_id, away_club_id, date, match_id, match_result) in continental_matches
+    {
         let is_home = home_club_id == team.club_id;
         let opponent_club_id = if is_home { away_club_id } else { home_club_id };
 
-        let (opponent_name, opponent_slug) = simulator_data.club(opponent_club_id)
+        let (opponent_name, opponent_slug) = simulator_data
+            .club(opponent_club_id)
             .and_then(|club| {
-                club.teams.main_team_id()
+                club.teams
+                    .main_team_id()
                     .and_then(|tid| simulator_data.team(tid))
                     .map(|t| (t.name.clone(), t.slug.clone()))
             })
@@ -137,19 +152,22 @@ pub async fn team_schedule_get_action(
 
         let datetime = date.and_hms_opt(20, 0, 0).unwrap();
 
-        items.push((datetime, TeamScheduleItem {
-            date: date.format("%d.%m.%Y").to_string(),
-            time: "20:00".to_string(),
-            opponent_slug,
-            opponent_name,
-            is_home,
-            competition_name: comp_name.to_string(),
-            result: match_result.map(|(home_goals, away_goals)| TeamScheduleItemResult {
-                match_id: match_id.to_string(),
-                home_goals,
-                away_goals,
-            }),
-        }));
+        items.push((
+            datetime,
+            TeamScheduleItem {
+                date: date.format("%d.%m.%Y").to_string(),
+                time: "20:00".to_string(),
+                opponent_slug,
+                opponent_name,
+                is_home,
+                competition_name: comp_name.to_string(),
+                result: match_result.map(|(home_goals, away_goals)| TeamScheduleItemResult {
+                    match_id: match_id.to_string(),
+                    home_goals,
+                    away_goals,
+                }),
+            },
+        ));
     }
 
     // Sort all matches by date
@@ -158,10 +176,24 @@ pub async fn team_schedule_get_action(
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
     let current_path = format!("/{}/teams/{}/schedule", &route_params.lang, &team.slug);
-    let menu_params = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main);
+    let menu_params = views::MenuParams {
+        i18n: &i18n,
+        lang: &route_params.lang,
+        current_path: &current_path,
+        country_name: cn,
+        country_slug: cs,
+    };
+    let menu_sections = views::team_menu(
+        &menu_params,
+        &neighbor_refs,
+        &team.slug,
+        &league_refs,
+        team.team_type == core::TeamType::Main,
+    );
     let title = team.name.clone();
-    let league_title = league.map(|l| views::league_display_name(l, &i18n, simulator_data)).unwrap_or_default();
+    let league_title = league
+        .map(|l| views::league_display_name(l, &i18n, simulator_data))
+        .unwrap_or_default();
 
     Ok(TeamScheduleTemplate {
         css_version: CSS_VERSION,
@@ -172,15 +204,24 @@ pub async fn team_schedule_get_action(
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: league_title,
-        sub_title_link: league.map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug)).unwrap_or_default(),
+        sub_title_link: league
+            .map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug))
+            .unwrap_or_default(),
         sub_title_country_code: String::new(),
-        header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
-        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
+        header_color: simulator_data
+            .club(team.club_id)
+            .map(|c| c.colors.background.clone())
+            .unwrap_or_default(),
+        foreground_color: simulator_data
+            .club(team.club_id)
+            .map(|c| c.colors.foreground.clone())
+            .unwrap_or_default(),
         menu_sections,
         team_slug: team.slug.clone(),
         active_tab: "schedule",
         show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
+        show_academy_tab: team.team_type == core::TeamType::Main
+            || team.team_type == core::TeamType::U18,
         items,
     })
 }
@@ -199,7 +240,10 @@ fn get_neighbor_teams(
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
         .map(|country| {
-            country.leagues.leagues.iter()
+            country
+                .leagues
+                .leagues
+                .iter()
                 .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
@@ -209,6 +253,9 @@ fn get_neighbor_teams(
 
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }

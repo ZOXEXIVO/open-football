@@ -1,14 +1,14 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::utils::DateUtils;
 use core::PlayerPositionType;
 use core::SimulatorData;
+use core::utils::DateUtils;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -92,11 +92,9 @@ pub async fn team_academy_action(
     let league = team.league_id.and_then(|id| simulator_data.league(id));
     let now = simulator_data.date.date();
 
-    let club = simulator_data
-        .club(team.club_id)
-        .ok_or_else(|| {
-            ApiError::InternalError(format!("Club with ID {} not found", team.club_id))
-        })?;
+    let club = simulator_data.club(team.club_id).ok_or_else(|| {
+        ApiError::InternalError(format!("Club with ID {} not found", team.club_id))
+    })?;
 
     // Get academy players directly from club academy
     let mut players: Vec<AcademyPlayer> = club
@@ -144,11 +142,25 @@ pub async fn team_academy_action(
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
     let current_path = format!("/{}/teams/{}/academy", &route_params.lang, &team.slug);
-    let menu_params = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main);
+    let menu_params = views::MenuParams {
+        i18n: &i18n,
+        lang: &route_params.lang,
+        current_path: &current_path,
+        country_name: cn,
+        country_slug: cs,
+    };
+    let menu_sections = views::team_menu(
+        &menu_params,
+        &neighbor_refs,
+        &team.slug,
+        &league_refs,
+        team.team_type == core::TeamType::Main,
+    );
 
     let title = team.name.clone();
-    let league_title = league.map(|l| views::league_display_name(l, &i18n, simulator_data)).unwrap_or_default();
+    let league_title = league
+        .map(|l| views::league_display_name(l, &i18n, simulator_data))
+        .unwrap_or_default();
 
     Ok(TeamAcademyTemplate {
         css_version: CSS_VERSION,

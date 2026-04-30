@@ -1,28 +1,36 @@
-use crate::r#match::midfielders::states::{MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState, MidfielderDistanceShootingState, MidfielderDistributingState, MidfielderDribblingState, MidfielderGuardingState, MidfielderInterceptingState, MidfielderPassingState, MidfielderPressingState, MidfielderRestingState, MidfielderReturningState, MidfielderRunningState, MidfielderShootingState, MidfielderStandingState, MidfielderSwitchingPlayState, MidfielderTacklingState, MidfielderTakeBallState, MidfielderWalkingState};
+use crate::r#match::midfielders::states::{
+    MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState,
+    MidfielderDistanceShootingState, MidfielderDistributingState, MidfielderDribblingState,
+    MidfielderGuardingState, MidfielderInterceptingState, MidfielderPassingState,
+    MidfielderPressingState, MidfielderRestingState, MidfielderReturningState,
+    MidfielderRunningState, MidfielderShootingState, MidfielderStandingState,
+    MidfielderSwitchingPlayState, MidfielderTacklingState, MidfielderTakeBallState,
+    MidfielderWalkingState,
+};
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MidfielderState {
-    Standing,          // Standing still
-    Distributing,      // Distributing the ball to teammates
-    Dribbling,         // Dribbling the ball
-    AttackSupporting,  // Supporting the attack, moving forward
-    SwitchingPlay,     // Switching the play to the other side of the field
-    Crossing,          // Delivering a cross into the box
-    Passing,           // Executing a  pass
-    Running,           // Running in the direction of the ball
-    DistanceShooting,  // Taking a shot from a long distance
-    Pressing,          // Pressing the opponent to regain possession
-    Tackling,          // Tackling to win the ball
-    Returning,         // Returning the ball,
-    Resting,           // Resting
-    Walking,           // Walking
-    TakeBall,          // Take the ball,
-    Shooting,          // Shooting,
-    Intercepting,      // Intercepting the ball,
-    CreatingSpace,     // Creating space for teammates
-    Guarding,          // Guarding an attacker — denying space and preventing them from getting open
+    Standing,         // Standing still
+    Distributing,     // Distributing the ball to teammates
+    Dribbling,        // Dribbling the ball
+    AttackSupporting, // Supporting the attack, moving forward
+    SwitchingPlay,    // Switching the play to the other side of the field
+    Crossing,         // Delivering a cross into the box
+    Passing,          // Executing a  pass
+    Running,          // Running in the direction of the ball
+    DistanceShooting, // Taking a shot from a long distance
+    Pressing,         // Pressing the opponent to regain possession
+    Tackling,         // Tackling to win the ball
+    Returning,        // Returning the ball,
+    Resting,          // Resting
+    Walking,          // Walking
+    TakeBall,         // Take the ball,
+    Shooting,         // Shooting,
+    Intercepting,     // Intercepting the ball,
+    CreatingSpace,    // Creating space for teammates
+    Guarding,         // Guarding an attacker — denying space and preventing them from getting open
 }
 
 pub struct MidfielderStrategies {}
@@ -61,9 +69,7 @@ impl MidfielderStrategies {
             MidfielderState::Returning => {
                 state_processor.process(MidfielderReturningState::default())
             }
-            MidfielderState::Resting => {
-                state_processor.process(MidfielderRestingState::default())
-            }
+            MidfielderState::Resting => state_processor.process(MidfielderRestingState::default()),
             MidfielderState::Walking => state_processor.process(MidfielderWalkingState::default()),
             MidfielderState::Running => state_processor.process(MidfielderRunningState::default()),
             MidfielderState::TakeBall => {
@@ -77,13 +83,13 @@ impl MidfielderStrategies {
             }
             MidfielderState::Intercepting => {
                 state_processor.process(MidfielderInterceptingState::default())
-            },
+            }
             MidfielderState::CreatingSpace => {
                 state_processor.process(MidfielderCreatingSpaceState::default())
-            },
+            }
             MidfielderState::Guarding => {
                 state_processor.process(MidfielderGuardingState::default())
-            },
+            }
         }
     }
 }

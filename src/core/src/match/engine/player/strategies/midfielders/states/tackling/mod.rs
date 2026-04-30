@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -82,14 +82,16 @@ impl StateProcessingHandler for MidfielderTacklingState {
             let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
                 #[cfg(feature = "match-logs")]
-                crate::tackle_stats::MID_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::tackle_stats::MID_ATTEMPTS
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let (tackle_success, committed_foul, foul_severity) =
                     self.attempt_tackle(ctx, &opponent);
                 if tackle_success {
                     // Double-check ball is not in flight before claiming.
                     if !ctx.ball().is_in_flight() {
                         #[cfg(feature = "match-logs")]
-                        crate::tackle_stats::MID_SUCCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        crate::tackle_stats::MID_SUCCESSES
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let mut result = StateChangeResult::with_midfielder_state_and_event(
                             MidfielderState::Standing,
                             Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
@@ -100,19 +102,15 @@ impl StateProcessingHandler for MidfielderTacklingState {
                 } else if committed_foul {
                     let mut result = StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::CommitFoul(
-                            ctx.player.id,
-                            foul_severity,
-                        )),
+                        Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, foul_severity)),
                     );
                     result.start_tackle_cooldown = true;
                     return Some(result);
                 } else {
                     // Missed tackle, no foul — still cooldown so we don't
                     // re-attempt next tick
-                    let mut result = StateChangeResult::with_midfielder_state(
-                        MidfielderState::Pressing,
-                    );
+                    let mut result =
+                        StateChangeResult::with_midfielder_state(MidfielderState::Pressing);
                     result.start_tackle_cooldown = true;
                     return Some(result);
                 }
@@ -128,7 +126,6 @@ impl StateProcessingHandler for MidfielderTacklingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
         let pace = ctx.player.skills.physical.acceleration / 20.0;
@@ -141,7 +138,8 @@ impl StateProcessingHandler for MidfielderTacklingState {
                 target_velocity: ctx.tick_context.positions.ball.velocity,
             }
             .calculate(ctx.player)
-            .velocity * speed_boost
+            .velocity
+                * speed_boost
                 + ctx.player().separation_velocity() * 0.2,
         )
     }
@@ -184,10 +182,7 @@ impl MidfielderTacklingState {
         // Skill-driven foul rate — see defender tackling for the rationale.
         // Same curve, applied to midfielders because they also tackle
         // frequently during pressing.
-        let base_foul = 0.02
-            + aggression * 0.10
-            - composure * 0.05
-            - tackling_skill * 0.03;
+        let base_foul = 0.02 + aggression * 0.10 - composure * 0.05 - tackling_skill * 0.03;
         let base_foul = base_foul.max(0.005);
 
         let foul_chance = if tackle_success {

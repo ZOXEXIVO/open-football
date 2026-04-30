@@ -49,11 +49,7 @@ pub struct TransferListManager;
 
 impl TransferListManager {
     /// Build AI prompt without calling AI (read-only teams).
-    pub fn prepare_request(
-        teams: &[Team],
-        main_idx: usize,
-        date: NaiveDate,
-    ) -> (String, String) {
+    pub fn prepare_request(teams: &[Team], main_idx: usize, date: NaiveDate) -> (String, String) {
         let team_indices = Self::collect_team_indices(teams);
         let query = Self::build_prompt(teams, main_idx, &team_indices, date);
         let format = Self::response_format();
@@ -61,12 +57,7 @@ impl TransferListManager {
     }
 
     /// Apply raw AI response string to mutable teams.
-    pub fn execute_response(
-        response: &str,
-        teams: &mut [Team],
-        main_idx: usize,
-        date: NaiveDate,
-    ) {
+    pub fn execute_response(response: &str, teams: &mut [Team], main_idx: usize, date: NaiveDate) {
         let advice: AiTransferListAdvice = match serde_json::from_str(response) {
             Ok(a) => a,
             Err(_) => return,
@@ -180,7 +171,9 @@ impl TransferListManager {
             .map(|&(idx, label)| {
                 format!(
                     "team_index={}, type={}, players={}",
-                    idx, label, teams[idx].players.players.len()
+                    idx,
+                    label,
+                    teams[idx].players.players.len()
                 )
             })
             .collect::<Vec<_>>()
@@ -261,7 +254,9 @@ impl TransferListManager {
         let loan_ids: Vec<u32> = advice.loan_list.iter().map(|d| d.player_id).collect();
 
         // Count non-listed first team players to enforce minimum squad size
-        let available_main = teams[main_idx].players.iter()
+        let available_main = teams[main_idx]
+            .players
+            .iter()
             .filter(|p| {
                 let s = p.statuses.get();
                 !s.contains(&PlayerStatusType::Lst) && !s.contains(&PlayerStatusType::Loa)
@@ -272,9 +267,37 @@ impl TransferListManager {
         // Collect all IDs being listed this tick to prevent contradictory delist
         let mut just_listed: Vec<u32> = Vec::new();
 
-        Self::execute_transfer_listings(teams, main_idx, team_indices, &advice.transfer_list, &loan_ids, &coach_name, date, &mut just_listed, &mut listing_budget);
-        Self::execute_loan_listings(teams, main_idx, team_indices, &advice.loan_list, &transfer_ids, &coach_name, date, &mut just_listed, &mut listing_budget);
-        Self::execute_delistings(teams, main_idx, team_indices, &advice.delist, &just_listed, &coach_name, date);
+        Self::execute_transfer_listings(
+            teams,
+            main_idx,
+            team_indices,
+            &advice.transfer_list,
+            &loan_ids,
+            &coach_name,
+            date,
+            &mut just_listed,
+            &mut listing_budget,
+        );
+        Self::execute_loan_listings(
+            teams,
+            main_idx,
+            team_indices,
+            &advice.loan_list,
+            &transfer_ids,
+            &coach_name,
+            date,
+            &mut just_listed,
+            &mut listing_budget,
+        );
+        Self::execute_delistings(
+            teams,
+            main_idx,
+            team_indices,
+            &advice.delist,
+            &just_listed,
+            &coach_name,
+            date,
+        );
     }
 
     fn execute_transfer_listings(
@@ -326,16 +349,26 @@ impl TransferListManager {
                 .map(|p| p.value(date, club_rep, club_rep))
                 .unwrap_or(0.0);
 
-            teams[main_idx]
-                .transfer_list
-                .add(TransferItem::new(
-                    decision.player_id,
-                    CurrencyValue::new(asking_price, Currency::Usd),
-                ));
+            teams[main_idx].transfer_list.add(TransferItem::new(
+                decision.player_id,
+                CurrencyValue::new(asking_price, Currency::Usd),
+            ));
 
-            set_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Lst, date);
-            record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
-                &format!("Transfer listed: {}", decision.reason));
+            set_player_status(
+                teams,
+                team_indices,
+                decision.player_id,
+                PlayerStatusType::Lst,
+                date,
+            );
+            record_listing_decision(
+                teams,
+                team_indices,
+                decision.player_id,
+                date,
+                coach_name,
+                &format!("Transfer listed: {}", decision.reason),
+            );
             just_listed.push(decision.player_id);
 
             if is_main_team_player {
@@ -366,7 +399,12 @@ impl TransferListManager {
             if is_on_loan(teams, team_indices, decision.player_id) {
                 continue;
             }
-            if has_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa) {
+            if has_status(
+                teams,
+                team_indices,
+                decision.player_id,
+                PlayerStatusType::Loa,
+            ) {
                 continue;
             }
 
@@ -382,9 +420,21 @@ impl TransferListManager {
                 continue;
             }
 
-            set_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa, date);
-            record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
-                &format!("Loan listed: {}", decision.reason));
+            set_player_status(
+                teams,
+                team_indices,
+                decision.player_id,
+                PlayerStatusType::Loa,
+                date,
+            );
+            record_listing_decision(
+                teams,
+                team_indices,
+                decision.player_id,
+                date,
+                coach_name,
+                &format!("Loan listed: {}", decision.reason),
+            );
             just_listed.push(decision.player_id);
 
             if is_main_team_player {
@@ -411,7 +461,12 @@ impl TransferListManager {
             }
 
             let was_transfer_listed = teams[main_idx].transfer_list.contains(decision.player_id);
-            let was_loan_listed = has_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa);
+            let was_loan_listed = has_status(
+                teams,
+                team_indices,
+                decision.player_id,
+                PlayerStatusType::Loa,
+            );
 
             if !was_transfer_listed && !was_loan_listed {
                 continue;
@@ -419,15 +474,31 @@ impl TransferListManager {
 
             if was_transfer_listed {
                 teams[main_idx].transfer_list.remove(decision.player_id);
-                remove_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Lst);
+                remove_player_status(
+                    teams,
+                    team_indices,
+                    decision.player_id,
+                    PlayerStatusType::Lst,
+                );
             }
 
             if was_loan_listed {
-                remove_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa);
+                remove_player_status(
+                    teams,
+                    team_indices,
+                    decision.player_id,
+                    PlayerStatusType::Loa,
+                );
             }
 
-            record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
-                &format!("Delisted: {}", decision.reason));
+            record_listing_decision(
+                teams,
+                team_indices,
+                decision.player_id,
+                date,
+                coach_name,
+                &format!("Delisted: {}", decision.reason),
+            );
         }
     }
 }
@@ -496,11 +567,7 @@ fn remove_player_status(
     }
 }
 
-fn is_on_loan(
-    teams: &[Team],
-    indices: &[(usize, &str)],
-    player_id: u32,
-) -> bool {
+fn is_on_loan(teams: &[Team], indices: &[(usize, &str)], player_id: u32) -> bool {
     for &(idx, _) in indices {
         if let Some(p) = teams[idx].players.find(player_id) {
             return p.is_on_loan();
@@ -509,11 +576,7 @@ fn is_on_loan(
     false
 }
 
-fn is_protected_from_listing(
-    teams: &[Team],
-    indices: &[(usize, &str)],
-    player_id: u32,
-) -> bool {
+fn is_protected_from_listing(teams: &[Team], indices: &[(usize, &str)], player_id: u32) -> bool {
     for &(idx, _) in indices {
         if let Some(p) = teams[idx].players.find(player_id) {
             // Manager-pinned players are absolutely protected — even an
@@ -522,9 +585,11 @@ fn is_protected_from_listing(
             if p.is_force_match_selection {
                 return true;
             }
-            let wants_out = p.statuses.get().iter().any(|s| {
-                matches!(s, PlayerStatusType::Req | PlayerStatusType::Unh)
-            });
+            let wants_out = p
+                .statuses
+                .get()
+                .iter()
+                .any(|s| matches!(s, PlayerStatusType::Req | PlayerStatusType::Unh));
             if wants_out {
                 return false;
             }
@@ -549,7 +614,12 @@ fn record_listing_decision(
     reason: &str,
 ) {
     for &(idx, _) in indices {
-        if let Some(p) = teams[idx].players.players.iter_mut().find(|p| p.id == player_id) {
+        if let Some(p) = teams[idx]
+            .players
+            .players
+            .iter_mut()
+            .find(|p| p.id == player_id)
+        {
             p.decision_history.add(
                 date,
                 "Transfer list".to_string(),

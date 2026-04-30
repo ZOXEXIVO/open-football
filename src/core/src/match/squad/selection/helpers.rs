@@ -1,5 +1,5 @@
-use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
 use crate::PlayerPreferredFoot;
+use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
 use crate::{Player, PlayerStatusType, TacticalStyle, Tactics};
 
 pub const DEFAULT_SQUAD_SIZE: usize = 11;

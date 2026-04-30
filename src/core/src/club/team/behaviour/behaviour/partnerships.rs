@@ -19,9 +19,7 @@
 //! the backup.
 
 use super::TeamBehaviour;
-use crate::club::team::behaviour::{
-    PlayerRelationshipChangeResult, TeamBehaviourResult,
-};
+use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{ChangeType, Player, PlayerCollection, PlayerPositionType, PlayerSquadStatus};
@@ -85,9 +83,7 @@ impl TeamBehaviour {
                     b.relations.get_player(a.id).map(|r| r.level).unwrap_or(0.0),
                 );
                 let cultural_only = matches!(role, PairRole::None_) && cultural_pair;
-                if cultural_only
-                    && !cultural_pair_needs_lift(a, b, date, rel_a, rel_b)
-                {
+                if cultural_only && !cultural_pair_needs_lift(a, b, date, rel_a, rel_b) {
                     continue;
                 }
 
@@ -145,7 +141,12 @@ fn classify_pair(a: PlayerPositionType, b: PlayerPositionType) -> PairRole {
 
     // Same broad group — narrow it down by sub-family.
     if group_a == group_b {
-        let cb_family = |p| matches!(p, DefenderCenter | DefenderCenterLeft | DefenderCenterRight | Sweeper);
+        let cb_family = |p| {
+            matches!(
+                p,
+                DefenderCenter | DefenderCenterLeft | DefenderCenterRight | Sweeper
+            )
+        };
         if cb_family(a) && cb_family(b) {
             return PairRole::Partnership;
         }
@@ -153,7 +154,12 @@ fn classify_pair(a: PlayerPositionType, b: PlayerPositionType) -> PairRole {
         if st_family(a) && st_family(b) {
             return PairRole::Partnership;
         }
-        let cm_family = |p| matches!(p, MidfielderCenter | MidfielderCenterLeft | MidfielderCenterRight);
+        let cm_family = |p| {
+            matches!(
+                p,
+                MidfielderCenter | MidfielderCenterLeft | MidfielderCenterRight
+            )
+        };
         if cm_family(a) && cm_family(b) {
             return PairRole::Partnership;
         }
@@ -167,7 +173,12 @@ fn classify_pair(a: PlayerPositionType, b: PlayerPositionType) -> PairRole {
     use crate::PlayerFieldPositionGroup;
 
     // GK + CB
-    let cb_family = |p| matches!(p, DefenderCenter | DefenderCenterLeft | DefenderCenterRight | Sweeper);
+    let cb_family = |p| {
+        matches!(
+            p,
+            DefenderCenter | DefenderCenterLeft | DefenderCenterRight | Sweeper
+        )
+    };
     if (group_a == PlayerFieldPositionGroup::Goalkeeper && cb_family(b))
         || (group_b == PlayerFieldPositionGroup::Goalkeeper && cb_family(a))
     {
@@ -187,20 +198,35 @@ fn classify_pair(a: PlayerPositionType, b: PlayerPositionType) -> PairRole {
     }
 
     // DM + CM
-    let cm_family = |p| matches!(p, MidfielderCenter | MidfielderCenterLeft | MidfielderCenterRight);
+    let cm_family = |p| {
+        matches!(
+            p,
+            MidfielderCenter | MidfielderCenterLeft | MidfielderCenterRight
+        )
+    };
     if (a == DefensiveMidfielder && cm_family(b)) || (b == DefensiveMidfielder && cm_family(a)) {
         return PairRole::Partnership;
     }
 
     // CM + AM
-    let am_family = |p| matches!(p, AttackingMidfielderCenter | AttackingMidfielderLeft | AttackingMidfielderRight);
+    let am_family = |p| {
+        matches!(
+            p,
+            AttackingMidfielderCenter | AttackingMidfielderLeft | AttackingMidfielderRight
+        )
+    };
     if (cm_family(a) && am_family(b)) || (cm_family(b) && am_family(a)) {
         return PairRole::Partnership;
     }
 
     // AM/Winger + Striker
     let striker_family = |p| matches!(p, Striker | ForwardCenter);
-    let attacking_winger = |p| matches!(p, ForwardLeft | ForwardRight | AttackingMidfielderLeft | AttackingMidfielderRight);
+    let attacking_winger = |p| {
+        matches!(
+            p,
+            ForwardLeft | ForwardRight | AttackingMidfielderLeft | AttackingMidfielderRight
+        )
+    };
     if (striker_family(a) && attacking_winger(b)) || (striker_family(b) && attacking_winger(a)) {
         return PairRole::Partnership;
     }
@@ -253,12 +279,11 @@ fn tactical_dependency(
         // double-count the same effect.
         let age_a = DateUtils::age(a.birth_date, date);
         let age_b = DateUtils::age(b.birth_date, date);
-        let (senior_age, junior_age, senior_leadership) =
-            if age_a > age_b {
-                (age_a, age_b, a.skills.mental.leadership)
-            } else {
-                (age_b, age_a, b.skills.mental.leadership)
-            };
+        let (senior_age, junior_age, senior_leadership) = if age_a > age_b {
+            (age_a, age_b, a.skills.mental.leadership)
+        } else {
+            (age_b, age_a, b.skills.mental.leadership)
+        };
         if senior_age >= 28 && junior_age <= 23 && senior_leadership >= 13.0 {
             score += 0.03;
         }
@@ -327,9 +352,7 @@ fn cultural_pair_needs_lift(
     // empty). The cohesion signal is shared across the player's
     // perceived clique; near-zero cohesion means they haven't bonded
     // with anyone yet.
-    if a.relations.inner_circle_cohesion() < 0.05
-        || b.relations.inner_circle_cohesion() < 0.05
-    {
+    if a.relations.inner_circle_cohesion() < 0.05 || b.relations.inner_circle_cohesion() < 0.05 {
         return true;
     }
 
@@ -547,7 +570,9 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::club::player::language::{Language, PlayerLanguage};
     use crate::shared::fullname::FullName;
-    use crate::{PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills};
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
+    };
     use chrono::NaiveDate;
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -592,7 +617,10 @@ mod tests {
             .attributes(pro_personality())
             .skills(standard_skills())
             .positions(PlayerPositions {
-                positions: vec![PlayerPosition { position: pos, level: 20 }],
+                positions: vec![PlayerPosition {
+                    position: pos,
+                    level: 20,
+                }],
             })
             .player_attributes(player_attrs)
             .build()
@@ -601,10 +629,7 @@ mod tests {
 
     #[test]
     fn classify_pair_recognises_same_position() {
-        let role = classify_pair(
-            PlayerPositionType::Striker,
-            PlayerPositionType::Striker,
-        );
+        let role = classify_pair(PlayerPositionType::Striker, PlayerPositionType::Striker);
         assert_eq!(role, PairRole::SamePosition);
     }
 

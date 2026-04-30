@@ -1,6 +1,6 @@
+use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::field::MatchField;
 use crate::r#match::{MatchContext, MatchPlayer};
-use crate::r#match::PlayerMatchEndStats;
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
 /// Process substitutions for both teams.
@@ -34,9 +34,15 @@ pub fn process_substitutions(
 
         // Determine match situation for this team
         let (own_goals, opp_goals) = if team_id == context.field_home_team_id {
-            (context.score.home_team.get() as i32, context.score.away_team.get() as i32)
+            (
+                context.score.home_team.get() as i32,
+                context.score.away_team.get() as i32,
+            )
         } else {
-            (context.score.away_team.get() as i32, context.score.home_team.get() as i32)
+            (
+                context.score.away_team.get() as i32,
+                context.score.home_team.get() as i32,
+            )
         };
         let goal_diff = own_goals - opp_goals;
         let match_minutes = context.total_match_time / 60_000;
@@ -52,7 +58,13 @@ pub fn process_substitutions(
             .filter(|p| p.team_id == team_id)
             .filter(|p| p.tactical_position.current_position != PlayerPositionType::Goalkeeper)
             .filter(|p| !p.is_force_match_selection)
-            .map(|p| (p.id, p.player_attributes.condition, p.tactical_position.current_position))
+            .map(|p| {
+                (
+                    p.id,
+                    p.player_attributes.condition,
+                    p.tactical_position.current_position,
+                )
+            })
             .collect();
 
         candidates.sort_by_key(|&(_, cond, _)| cond);
@@ -66,7 +78,13 @@ pub fn process_substitutions(
             .filter(|p| p.team_id == team_id)
             .filter(|p| p.tactical_position.current_position != PlayerPositionType::Goalkeeper)
             .filter(|p| p.player_attributes.condition < 2000)
-            .map(|p| (p.id, p.player_attributes.condition, p.tactical_position.current_position))
+            .map(|p| {
+                (
+                    p.id,
+                    p.player_attributes.condition,
+                    p.tactical_position.current_position,
+                )
+            })
             .collect();
 
         critical_candidates.sort_by_key(|&(_, cond, _)| cond);
@@ -150,9 +168,7 @@ pub fn process_substitutions(
                 .substitutes
                 .iter()
                 .filter(|p| p.team_id == team_id)
-                .filter(|p| {
-                    p.tactical_position.current_position.position_group() == need_group
-                })
+                .filter(|p| p.tactical_position.current_position.position_group() == need_group)
                 .max_by_key(|p| p.player_attributes.current_ability)
                 .map(|p| p.id);
 
@@ -181,8 +197,17 @@ pub fn process_substitutions(
                 .substitutes
                 .iter()
                 .filter(|p| p.team_id == team_id)
-                .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
-                .map(|p| (p.id, p.player_attributes.current_ability, p.tactical_position.current_position.position_group()))
+                .filter(|p| {
+                    p.tactical_position.current_position.position_group()
+                        != PlayerFieldPositionGroup::Goalkeeper
+                })
+                .map(|p| {
+                    (
+                        p.id,
+                        p.player_attributes.current_ability,
+                        p.tactical_position.current_position.position_group(),
+                    )
+                })
                 .collect();
 
             // Sort by ability descending — best bench players get chances first
@@ -211,10 +236,19 @@ pub fn process_substitutions(
                         pg == *sub_group
                             || matches!(
                                 (pg, sub_group),
-                                (PlayerFieldPositionGroup::Defender, PlayerFieldPositionGroup::Midfielder)
-                                | (PlayerFieldPositionGroup::Midfielder, PlayerFieldPositionGroup::Defender)
-                                | (PlayerFieldPositionGroup::Midfielder, PlayerFieldPositionGroup::Forward)
-                                | (PlayerFieldPositionGroup::Forward, PlayerFieldPositionGroup::Midfielder)
+                                (
+                                    PlayerFieldPositionGroup::Defender,
+                                    PlayerFieldPositionGroup::Midfielder
+                                ) | (
+                                    PlayerFieldPositionGroup::Midfielder,
+                                    PlayerFieldPositionGroup::Defender
+                                ) | (
+                                    PlayerFieldPositionGroup::Midfielder,
+                                    PlayerFieldPositionGroup::Forward
+                                ) | (
+                                    PlayerFieldPositionGroup::Forward,
+                                    PlayerFieldPositionGroup::Midfielder
+                                )
                             )
                     })
                     .map(|(id, cond, _)| (*id, *cond))
@@ -249,9 +283,7 @@ fn roll_in_match_injuries(field: &mut MatchField, context: &mut MatchContext) {
     for player in field.players.iter() {
         // Skip subs (they're not on the pitch) and goalkeepers (rarely
         // forced off for non-contact injury mid-match).
-        if player.tactical_position.current_position
-            == crate::PlayerPositionType::Goalkeeper
-        {
+        if player.tactical_position.current_position == crate::PlayerPositionType::Goalkeeper {
             continue;
         }
         // Already destroyed condition — no extra work needed.
@@ -309,36 +341,49 @@ fn execute_substitution(
         let goals = player_out.statistics.goals_count();
         let assists = player_out.statistics.assists_count();
 
-        context.substituted_out_stats.push((player_out_id, PlayerMatchEndStats {
-            shots_on_target: player_out.memory.shots_on_target as u16,
-            shots_total: player_out.memory.shots_taken as u16,
-            passes_attempted: player_out.statistics.passes_attempted,
-            passes_completed: player_out.statistics.passes_completed,
-            tackles: player_out.statistics.tackles,
-            interceptions: player_out.statistics.interceptions,
-            saves: player_out.statistics.saves,
-            shots_faced: player_out.statistics.shots_faced,
-            goals,
-            assists,
-            match_rating: 0.0,
-            xg: player_out.memory.xg_total,
-            position_group: player_out.tactical_position.current_position.position_group(),
-            fouls: player_out.fouls_committed as u16,
-            yellow_cards: player_out.statistics.yellow_cards_count(),
-            red_cards: player_out.statistics.red_cards_count(),
-        }));
+        context.substituted_out_stats.push((
+            player_out_id,
+            PlayerMatchEndStats {
+                shots_on_target: player_out.memory.shots_on_target as u16,
+                shots_total: player_out.memory.shots_taken as u16,
+                passes_attempted: player_out.statistics.passes_attempted,
+                passes_completed: player_out.statistics.passes_completed,
+                tackles: player_out.statistics.tackles,
+                interceptions: player_out.statistics.interceptions,
+                saves: player_out.statistics.saves,
+                shots_faced: player_out.statistics.shots_faced,
+                goals,
+                assists,
+                match_rating: 0.0,
+                xg: player_out.memory.xg_total,
+                position_group: player_out
+                    .tactical_position
+                    .current_position
+                    .position_group(),
+                fouls: player_out.fouls_committed as u16,
+                yellow_cards: player_out.statistics.yellow_cards_count(),
+                red_cards: player_out.statistics.red_cards_count(),
+            },
+        ));
     }
 
     if !field.substitute_player(player_out_id, player_in_id) {
         return false;
     }
 
-    context.record_substitution(team_id, player_out_id, player_in_id, context.total_match_time);
+    context.record_substitution(
+        team_id,
+        player_out_id,
+        player_in_id,
+        context.total_match_time,
+    );
     context.record_stoppage_time(30_000);
     context.players.remove_player(player_out_id);
 
     if let Some(field_player) = field.get_player(player_in_id) {
-        context.players.update_player(player_in_id, field_player.clone());
+        context
+            .players
+            .update_player(player_in_id, field_player.clone());
     }
 
     let left_squad = field.left_side_players.as_mut();
@@ -385,7 +430,10 @@ fn find_best_substitute(
     // Fallback: best available outfield sub (never use GK as outfield replacement)
     team_subs
         .iter()
-        .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
+        .filter(|p| {
+            p.tactical_position.current_position.position_group()
+                != PlayerFieldPositionGroup::Goalkeeper
+        })
         .max_by_key(|p| p.player_attributes.current_ability)
         .map(|p| p.id)
 }

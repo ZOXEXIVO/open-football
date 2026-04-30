@@ -1,5 +1,5 @@
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -33,7 +33,6 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         // stalemates where nobody actually went for the ball.
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Pursuit predicts an interception point from our speed and the
@@ -74,7 +73,8 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         let separation_factor = if distance_to_ball < NO_SEPARATION_DISTANCE {
             0.0 // No separation at all — let the player reach the ball
         } else if distance_to_ball < BALL_CLAIM_DISTANCE {
-            let ratio = (distance_to_ball - NO_SEPARATION_DISTANCE) / (BALL_CLAIM_DISTANCE - NO_SEPARATION_DISTANCE);
+            let ratio = (distance_to_ball - NO_SEPARATION_DISTANCE)
+                / (BALL_CLAIM_DISTANCE - NO_SEPARATION_DISTANCE);
             ratio * 0.3 // Gentle ramp from 0 to 0.3
         } else {
             1.0
@@ -84,7 +84,10 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         let mut neighbor_count = 0;
 
         // Check all nearby players (teammates and opponents)
-        let all_players: Vec<_> = ctx.players().teammates().all()
+        let all_players: Vec<_> = ctx
+            .players()
+            .teammates()
+            .all()
             .chain(ctx.players().opponents().all())
             .filter(|p| p.id != ctx.player.id)
             .collect();
@@ -104,9 +107,10 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         if neighbor_count > 0 {
             // Average and scale the separation force
             separation_force = separation_force / (neighbor_count as f32);
-            let max_speed = ctx.player.skills.max_speed_with_condition(
-                ctx.player.player_attributes.condition,
-            );
+            let max_speed = ctx
+                .player
+                .skills
+                .max_speed_with_condition(ctx.player.player_attributes.condition);
 
             separation_force = separation_force * max_speed * SEPARATION_WEIGHT * separation_factor;
 

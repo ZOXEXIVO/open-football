@@ -86,7 +86,10 @@ mod tests {
     use chrono::NaiveDate;
 
     fn item(us: u8, them: u8) -> MatchHistoryItem {
-        let date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let date = NaiveDate::from_ymd_opt(2025, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
         let our = TeamScore::new_with_score(1, us);
         let their = TeamScore::new_with_score(2, them);
         MatchHistoryItem::new(date, 2, (our, their))
@@ -103,7 +106,9 @@ mod tests {
     fn counts_are_scoped_to_the_last_n_matches() {
         let mut h = MatchHistory::new();
         // Older matches (4 losses) shouldn't bleed into recent window
-        for _ in 0..4 { h.add(item(0, 2)); }
+        for _ in 0..4 {
+            h.add(item(0, 2));
+        }
         // Recent 3 matches: 2 wins, 1 draw
         h.add(item(2, 1));
         h.add(item(1, 1));

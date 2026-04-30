@@ -9,6 +9,11 @@ pub struct LeagueContext<'l> {
 
 impl<'l> LeagueContext<'l> {
     pub fn new(id: u32, slug: String, team_ids: &'l [u32], reputation: u16) -> Self {
-        LeagueContext { id, slug, team_ids, reputation }
+        LeagueContext {
+            id,
+            slug,
+            team_ids,
+            reputation,
+        }
     }
 }

@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
@@ -27,7 +27,9 @@ impl StateProcessingHandler for ForwardPassingState {
 
         // Very close to goal with clear shot — shoot instead of passing
         if distance_to_goal < 40.0 && ctx.player().has_clear_shot() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Shooting,
+            ));
         }
 
         // Brief scanning delay before executing pass (unless under pressure)
@@ -60,7 +62,9 @@ impl StateProcessingHandler for ForwardPassingState {
         if distance_to_goal < 200.0 {
             let very_close_defender = ctx.players().opponents().exists(8.0);
             return if very_close_defender && ctx.in_state_time >= 15 {
-                Some(StateChangeResult::with_forward_state(ForwardState::Dribbling))
+                Some(StateChangeResult::with_forward_state(
+                    ForwardState::Dribbling,
+                ))
             } else {
                 Some(StateChangeResult::with_forward_state(ForwardState::Running))
             };
@@ -85,7 +89,6 @@ impl StateProcessingHandler for ForwardPassingState {
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // If the player should adjust position to find better passing angles
@@ -147,12 +150,16 @@ impl ForwardPassingState {
                 .map(|teammate| {
                     let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
                     let congestion_penalty = self.calculate_congestion_penalty(ctx, &teammate);
-                    let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty * congestion_penalty;
+                    let score = self.evaluate_forward_pass(ctx, &teammate)
+                        * recency_penalty
+                        * congestion_penalty;
                     (teammate, score)
                 })
                 .filter(|(_, score)| *score >= MIN_FWD_PASS_SCORE)
                 .max_by(|(_, score_a), (_, score_b)| {
-                    score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal)
+                    score_a
+                        .partial_cmp(score_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|(teammate, _)| teammate);
 
@@ -165,10 +172,7 @@ impl ForwardPassingState {
         // Minimum distance 25 to prevent very short passes between close players
         let pass_options: Vec<MatchPlayerLite> = teammates
             .nearby_range(25.0, vision_range.max(vision_range_min))
-            .filter(|t| {
-                self.is_viable_pass_target(ctx, t)
-                    && !self.is_close_recent_passer(ctx, t)
-            })
+            .filter(|t| self.is_viable_pass_target(ctx, t) && !self.is_close_recent_passer(ctx, t))
             .collect();
 
         if pass_options.is_empty() {
@@ -181,7 +185,9 @@ impl ForwardPassingState {
             .map(|teammate| {
                 let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
                 let congestion_penalty = self.calculate_congestion_penalty(ctx, &teammate);
-                let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty * congestion_penalty;
+                let score = self.evaluate_forward_pass(ctx, &teammate)
+                    * recency_penalty
+                    * congestion_penalty;
                 (teammate, score)
             })
             .filter(|(_, score)| *score >= MIN_FWD_PASS_SCORE)
@@ -221,13 +227,13 @@ impl ForwardPassingState {
         // This prevents huge bonuses from overwhelming space considerations
         let receiver_space = base_score.factors.receiver_positioning;
         let space_multiplier = if receiver_space > 0.8 {
-            1.0  // Free player - full bonuses
+            1.0 // Free player - full bonuses
         } else if receiver_space > 0.5 {
-            0.6  // Some pressure - reduced bonuses
+            0.6 // Some pressure - reduced bonuses
         } else if receiver_space > 0.3 {
-            0.3  // Crowded - heavily reduced bonuses
+            0.3 // Crowded - heavily reduced bonuses
         } else {
-            0.1  // Very crowded - almost no bonuses
+            0.1 // Very crowded - almost no bonuses
         };
 
         // Goal distance factors - forwards prioritize passes that get closer to goal
@@ -237,7 +243,8 @@ impl ForwardPassingState {
 
         // Boost passes that advance toward goal, scaled by space
         if teammate_to_goal_dist < forward_to_goal_dist {
-            score += 20.0 * (1.0 - (teammate_to_goal_dist / forward_to_goal_dist)) * space_multiplier;
+            score +=
+                20.0 * (1.0 - (teammate_to_goal_dist / forward_to_goal_dist)) * space_multiplier;
         }
 
         // Boost for passes to other forwards, scaled by space
@@ -445,7 +452,11 @@ impl ForwardPassingState {
         let mut tight_markers = 0;
         let mut markers = 0;
 
-        for (_opp_id, dist) in ctx.tick_context.grid.opponents(teammate.id, MARKING_DISTANCE) {
+        for (_opp_id, dist) in ctx
+            .tick_context
+            .grid
+            .opponents(teammate.id, MARKING_DISTANCE)
+        {
             markers += 1;
             if dist <= TIGHT_MARKING_DISTANCE {
                 tight_markers += 1;
@@ -585,28 +596,28 @@ impl ForwardPassingState {
         ctx: &StateProcessingContext,
         teammate: &MatchPlayerLite,
     ) -> f32 {
-        let nearby_opponents = ctx
-            .tick_context
-            .grid
-            .opponents(teammate.id, 20.0)
-            .count();
+        let nearby_opponents = ctx.tick_context.grid.opponents(teammate.id, 20.0).count();
 
         let nearby_teammates = ctx
             .players()
             .teammates()
             .all()
-            .filter(|t| t.id != teammate.id && t.id != ctx.player.id && (t.position - teammate.position).magnitude() < 20.0)
+            .filter(|t| {
+                t.id != teammate.id
+                    && t.id != ctx.player.id
+                    && (t.position - teammate.position).magnitude() < 20.0
+            })
             .count();
 
         let total_nearby = nearby_opponents + nearby_teammates;
 
         match total_nearby {
-            0 => 1.5,   // Isolated - excellent target
-            1 => 1.2,   // One nearby - good
-            2 => 1.0,   // Normal
-            3 => 0.5,   // Getting crowded
-            4 => 0.25,  // Congested
-            _ => 0.1,   // Huddle - almost never pass here
+            0 => 1.5,  // Isolated - excellent target
+            1 => 1.2,  // One nearby - good
+            2 => 1.0,  // Normal
+            3 => 0.5,  // Getting crowded
+            4 => 0.25, // Congested
+            _ => 0.1,  // Huddle - almost never pass here
         }
     }
 

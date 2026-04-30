@@ -1,13 +1,13 @@
+use log::debug;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use log::{debug};
 
-use core::ai::{AiService, CompletedAiRequest, PendingAiRequest};
 use super::providers::AiProvider;
+use core::ai::{AiService, CompletedAiRequest, PendingAiRequest};
 
 pub struct AiProviderStats {
     pub request_count: AtomicU64,
@@ -71,11 +71,7 @@ impl AiProviderRegistry {
         }
     }
 
-    pub async fn add(
-        &self,
-        name: &str,
-        provider: Box<dyn AiProvider>,
-    ) -> u64 {
+    pub async fn add(&self, name: &str, provider: Box<dyn AiProvider>) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let entry = AiProviderEntry {
             id,
@@ -137,7 +133,10 @@ impl AiProviderRegistry {
 
     pub async fn total_completed_count(&self) -> u64 {
         let providers = self.providers.read().await;
-        providers.iter().map(|p| p.stats.completed_count.load(Ordering::Relaxed)).sum()
+        providers
+            .iter()
+            .map(|p| p.stats.completed_count.load(Ordering::Relaxed))
+            .sum()
     }
 
     pub async fn provider_count(&self) -> usize {
@@ -155,13 +154,19 @@ impl AiProviderRegistry {
             let result = match entry.provider.query(req.query, req.format).await {
                 Ok(r) => Some(r),
                 Err(e) => {
-                    debug!("AI provider '{}' (id={}) failed: {}", entry.name, entry.id, e);
+                    debug!(
+                        "AI provider '{}' (id={}) failed: {}",
+                        entry.name, entry.id, e
+                    );
                     entry.stats.error_count.fetch_add(1, Ordering::Relaxed);
                     None
                 }
             };
             let elapsed_ms = start.elapsed().as_millis() as u64;
-            entry.stats.total_duration_ms.fetch_add(elapsed_ms, Ordering::Relaxed);
+            entry
+                .stats
+                .total_duration_ms
+                .fetch_add(elapsed_ms, Ordering::Relaxed);
             entry.stats.completed_count.fetch_add(1, Ordering::Relaxed);
             result
         } else {
@@ -219,7 +224,10 @@ impl AiService for RegistryAiService {
             // Set request_count upfront so total is known immediately
             for (idx, batch) in per_provider.iter().enumerate() {
                 if let Some(entry) = providers.get(idx) {
-                    entry.stats.request_count.fetch_add(batch.len() as u64, Ordering::Relaxed);
+                    entry
+                        .stats
+                        .request_count
+                        .fetch_add(batch.len() as u64, Ordering::Relaxed);
                 }
             }
             drop(providers);

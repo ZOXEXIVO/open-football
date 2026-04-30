@@ -80,9 +80,11 @@ impl Player {
         }
 
         // Unhappy for extended period (Unh status > 30 days, default path)
-        let has_unh_long = self.statuses.statuses.iter().any(|s| {
-            s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 30
-        });
+        let has_unh_long = self
+            .statuses
+            .statuses
+            .iter()
+            .any(|s| s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 30);
         if has_unh_long {
             wants_transfer = true;
         }
@@ -91,9 +93,10 @@ impl Player {
         // is a permanent feature of the club, not a bad week. Fire a request
         // sooner — 14 days of Unh is enough once ambition_fit is badly red.
         if !recently_transferred && self.happiness.factors.ambition_fit <= -7.0 {
-            let has_unh_short = self.statuses.statuses.iter().any(|s| {
-                s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 14
-            });
+            let has_unh_short =
+                self.statuses.statuses.iter().any(|s| {
+                    s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 14
+                });
             if has_unh_short {
                 wants_transfer = true;
             }

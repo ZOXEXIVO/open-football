@@ -21,14 +21,22 @@ pub const SUPPORTED_LANG_CODES: &[&str] = &["en", "es", "fr", "de", "pt", "ru", 
 pub const DEFAULT_LANGUAGE: &str = "en";
 
 const MONTH_KEYS: &[&str] = &[
-    "month_jan", "month_feb", "month_mar", "month_apr",
-    "month_may", "month_jun", "month_jul", "month_aug",
-    "month_sep", "month_oct", "month_nov", "month_dec",
+    "month_jan",
+    "month_feb",
+    "month_mar",
+    "month_apr",
+    "month_may",
+    "month_jun",
+    "month_jul",
+    "month_aug",
+    "month_sep",
+    "month_oct",
+    "month_nov",
+    "month_dec",
 ];
 
 const DAY_KEYS: &[&str] = &[
-    "day_mon", "day_tue", "day_wed", "day_thu",
-    "day_fri", "day_sat", "day_sun",
+    "day_mon", "day_tue", "day_wed", "day_thu", "day_fri", "day_sat", "day_sun",
 ];
 
 pub struct I18nManager {
@@ -44,8 +52,8 @@ impl I18nManager {
 
         for &(lang, _, _) in SUPPORTED_LANGUAGES {
             let path = format!("i18n/{}.json", lang);
-            let data = Assets::get(&path)
-                .unwrap_or_else(|| panic!("Missing translation file: {}", path));
+            let data =
+                Assets::get(&path).unwrap_or_else(|| panic!("Missing translation file: {}", path));
             let json_str = std::str::from_utf8(&data.data)
                 .unwrap_or_else(|_| panic!("Invalid UTF-8 in {}", path));
             let map: HashMap<String, String> = serde_json::from_str(json_str)
@@ -80,10 +88,15 @@ impl I18nManager {
             DEFAULT_LANGUAGE
         };
 
-        let translations = self.translations.get(lang_key).cloned()
+        let translations = self
+            .translations
+            .get(lang_key)
+            .cloned()
             .unwrap_or_else(|| Arc::new(HashMap::new()));
         let fallback = if lang_key != DEFAULT_LANGUAGE {
-            self.translations.get(DEFAULT_LANGUAGE).cloned()
+            self.translations
+                .get(DEFAULT_LANGUAGE)
+                .cloned()
                 .unwrap_or_else(|| Arc::new(HashMap::new()))
         } else {
             translations.clone()
@@ -94,7 +107,8 @@ impl I18nManager {
         let day_key = DAY_KEYS[date.weekday().num_days_from_monday() as usize];
 
         let t = |key: &str| -> String {
-            translations.get(key)
+            translations
+                .get(key)
                 .or_else(|| fallback.get(key))
                 .cloned()
                 .unwrap_or_else(|| key.to_string())
@@ -103,10 +117,15 @@ impl I18nManager {
         let date_main = format!("{} {} {}", date.day(), t(month_key), date.year());
         let date_sub = t(day_key);
 
-        let country_names = self.country_names.get(lang_key).cloned()
+        let country_names = self
+            .country_names
+            .get(lang_key)
+            .cloned()
             .unwrap_or_else(|| Arc::new(HashMap::new()));
         let country_names_fallback = if lang_key != DEFAULT_LANGUAGE {
-            self.country_names.get(DEFAULT_LANGUAGE).cloned()
+            self.country_names
+                .get(DEFAULT_LANGUAGE)
+                .cloned()
                 .unwrap_or_else(|| Arc::new(HashMap::new()))
         } else {
             country_names.clone()
@@ -146,41 +165,47 @@ pub struct LangOption {
 
 impl I18n {
     pub fn t<'a>(&'a self, key: &'a str) -> &'a str {
-        self.translations.get(key)
+        self.translations
+            .get(key)
             .or_else(|| self.fallback.get(key))
             .map(|s| s.as_str())
             .unwrap_or(key)
     }
 
     pub fn country<'a>(&'a self, code: &'a str) -> &'a str {
-        self.country_names.get(code)
+        self.country_names
+            .get(code)
             .or_else(|| self.country_names_fallback.get(code))
             .map(|s| s.as_str())
             .unwrap_or(code)
     }
 
     pub fn country_en<'a>(&'a self, code: &'a str) -> &'a str {
-        self.country_names_fallback.get(code)
+        self.country_names_fallback
+            .get(code)
             .map(|s| s.as_str())
             .unwrap_or(code)
     }
 
     pub fn current_flag(&self) -> &'static str {
-        SUPPORTED_LANGUAGES.iter()
+        SUPPORTED_LANGUAGES
+            .iter()
             .find(|(code, _, _)| *code == self.lang)
             .map(|(_, flag, _)| *flag)
             .unwrap_or("us")
     }
 
     pub fn current_name(&self) -> &'static str {
-        SUPPORTED_LANGUAGES.iter()
+        SUPPORTED_LANGUAGES
+            .iter()
             .find(|(code, _, _)| *code == self.lang)
             .map(|(_, _, name)| *name)
             .unwrap_or("English")
     }
 
     pub fn languages(&self) -> Vec<LangOption> {
-        SUPPORTED_LANGUAGES.iter()
+        SUPPORTED_LANGUAGES
+            .iter()
             .map(|(code, flag, name)| LangOption { code, flag, name })
             .collect()
     }
@@ -202,12 +227,14 @@ pub fn detect_language(accept_language: &str) -> String {
         let quality = sections
             .find_map(|s| {
                 let s = s.trim();
-                s.strip_prefix("q=")
-                    .and_then(|v| v.parse::<f32>().ok())
+                s.strip_prefix("q=").and_then(|v| v.parse::<f32>().ok())
             })
             .unwrap_or(1.0);
 
-        if let Some(&code) = SUPPORTED_LANG_CODES.iter().find(|&&c| c.eq_ignore_ascii_case(lang_prefix)) {
+        if let Some(&code) = SUPPORTED_LANG_CODES
+            .iter()
+            .find(|&&c| c.eq_ignore_ascii_case(lang_prefix))
+        {
             candidates.push((code, quality));
         }
     }

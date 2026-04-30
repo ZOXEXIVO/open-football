@@ -1,6 +1,6 @@
+use crate::Player;
 use crate::league::Season;
 use crate::shared::CurrencyValue;
-use crate::Player;
 use chrono::NaiveDate;
 
 pub struct PlayerTransfer {

@@ -1,10 +1,12 @@
 pub mod attack_supporting;
 pub mod common;
+pub mod creating_space;
 pub mod crossing;
 pub mod distance_shooting;
 pub mod distributing;
 pub mod dribbling;
 pub mod guarding;
+pub mod intercepting;
 pub mod passing;
 pub mod pressing;
 pub mod resting;
@@ -17,8 +19,6 @@ pub mod switching_play;
 pub mod tackling;
 pub mod takeball;
 pub mod walking;
-pub mod intercepting;
-pub mod creating_space;
 
 pub use attack_supporting::*;
 pub use creating_space::*;
@@ -40,4 +40,3 @@ pub use switching_play::*;
 pub use tackling::*;
 pub use takeball::*;
 pub use walking::*;
-

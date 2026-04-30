@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -17,16 +17,12 @@ impl StateProcessingHandler for ForwardCrossingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Lost possession - transition out
         if !ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running,
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         // Not in a wide position - should pass instead
         if !self.is_in_wide_position(ctx) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Passing,
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
         // After windup time, deliver the cross
@@ -46,14 +42,11 @@ impl StateProcessingHandler for ForwardCrossingState {
             }
 
             // No target found — fall back to generic passing
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Passing,
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
         None
     }
-
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Stationary while preparing the cross

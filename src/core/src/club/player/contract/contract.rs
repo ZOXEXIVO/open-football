@@ -1,5 +1,5 @@
-pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
 use chrono::NaiveDateTime;
+pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContractType {
@@ -185,7 +185,13 @@ impl PlayerClubContract {
         }
     }
 
-    pub fn new_loan(salary: u32, expiration: NaiveDate, from_club_id: u32, from_team_id: u32, to_club_id: u32) -> Self {
+    pub fn new_loan(
+        salary: u32,
+        expiration: NaiveDate,
+        from_club_id: u32,
+        from_team_id: u32,
+        to_club_id: u32,
+    ) -> Self {
         PlayerClubContract {
             shirt_number: None,
             salary,
@@ -431,10 +437,10 @@ impl PlayerClubContract {
         // has a coherent anniversary; falls back to 365-day arithmetic
         // only on impossible dates (Feb 29 across a non-leap target year).
         let target_year = self.expiration.year() + years;
-        let new_exp = self
-            .expiration
-            .with_year(target_year)
-            .or_else(|| self.expiration.checked_add_signed(chrono::Duration::days(365 * years as i64)))?;
+        let new_exp = self.expiration.with_year(target_year).or_else(|| {
+            self.expiration
+                .checked_add_signed(chrono::Duration::days(365 * years as i64))
+        })?;
         self.expiration = new_exp;
         self.clauses.remove(pos);
         Some(self.expiration)
@@ -469,7 +475,10 @@ impl PlayerClubContract {
         let new_exp = self
             .expiration
             .with_year(self.expiration.year() + 1)
-            .or_else(|| self.expiration.checked_add_signed(chrono::Duration::days(365)))?;
+            .or_else(|| {
+                self.expiration
+                    .checked_add_signed(chrono::Duration::days(365))
+            })?;
         self.expiration = new_exp;
         self.clauses.remove(pos);
         Some(self.expiration)
@@ -683,9 +692,7 @@ impl ContractClause {
     /// set. (We never reinterpret `value` as both threshold and percentage
     /// any more — the brittle `* 100 + pct` encoding is gone.)
     pub fn resolved_percentage(&self, default_pct: u8) -> u8 {
-        self.percentage
-            .filter(|p| *p > 0)
-            .unwrap_or(default_pct)
+        self.percentage.filter(|p| *p > 0).unwrap_or(default_pct)
     }
 }
 
@@ -694,10 +701,7 @@ mod release_clause_tests {
     use super::*;
 
     fn base_contract() -> PlayerClubContract {
-        PlayerClubContract::new(
-            500_000,
-            NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
-        )
+        PlayerClubContract::new(500_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap())
     }
 
     #[test]
@@ -709,7 +713,10 @@ mod release_clause_tests {
     #[test]
     fn universal_clause_triggers_when_offer_meets_threshold() {
         let mut c = base_contract();
-        c.clauses.push(ContractClause::new(30_000_000, ContractClauseType::MinimumFeeRelease));
+        c.clauses.push(ContractClause::new(
+            30_000_000,
+            ContractClauseType::MinimumFeeRelease,
+        ));
         assert!(matches!(
             c.release_clause_triggered(30_000_000.0, false),
             Some(ContractClauseType::MinimumFeeRelease)
@@ -723,7 +730,10 @@ mod release_clause_tests {
     #[test]
     fn universal_clause_does_not_trigger_below_threshold() {
         let mut c = base_contract();
-        c.clauses.push(ContractClause::new(30_000_000, ContractClauseType::MinimumFeeRelease));
+        c.clauses.push(ContractClause::new(
+            30_000_000,
+            ContractClauseType::MinimumFeeRelease,
+        ));
         assert!(c.release_clause_triggered(29_999_999.0, false).is_none());
     }
 
@@ -762,7 +772,10 @@ mod release_clause_tests {
             50_000_000,
             ContractClauseType::MinimumFeeReleaseToDomesticClubs,
         ));
-        c.clauses.push(ContractClause::new(30_000_000, ContractClauseType::MinimumFeeRelease));
+        c.clauses.push(ContractClause::new(
+            30_000_000,
+            ContractClauseType::MinimumFeeRelease,
+        ));
         // Domestic bidder meeting the universal clause triggers it even when
         // domestic-only comes first in the list but its threshold is higher.
         assert!(matches!(
@@ -774,8 +787,14 @@ mod release_clause_tests {
     #[test]
     fn unhandled_clause_types_do_not_trigger() {
         let mut c = base_contract();
-        c.clauses.push(ContractClause::new(1_000_000, ContractClauseType::SellOnFee));
-        c.clauses.push(ContractClause::new(1_000_000, ContractClauseType::RelegationFeeRelease));
+        c.clauses.push(ContractClause::new(
+            1_000_000,
+            ContractClauseType::SellOnFee,
+        ));
+        c.clauses.push(ContractClause::new(
+            1_000_000,
+            ContractClauseType::RelegationFeeRelease,
+        ));
         assert!(c.release_clause_triggered(100_000_000.0, false).is_none());
     }
 }
@@ -785,10 +804,7 @@ mod clause_lifecycle_tests {
     use super::*;
 
     fn fresh(salary: u32) -> PlayerClubContract {
-        let mut c = PlayerClubContract::new(
-            salary,
-            NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
-        );
+        let mut c = PlayerClubContract::new(salary, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
         c.started = Some(NaiveDate::from_ymd_opt(2025, 7, 1).unwrap());
         c
     }
@@ -799,13 +815,15 @@ mod clause_lifecycle_tests {
         c.clauses
             .push(ContractClause::new(10, ContractClauseType::YearlyWageRise));
         // Same date as start — no rise (signing day).
-        assert!(c
-            .try_apply_yearly_wage_rise(NaiveDate::from_ymd_opt(2025, 7, 1).unwrap())
-            .is_none());
+        assert!(
+            c.try_apply_yearly_wage_rise(NaiveDate::from_ymd_opt(2025, 7, 1).unwrap())
+                .is_none()
+        );
         // Day after — no rise.
-        assert!(c
-            .try_apply_yearly_wage_rise(NaiveDate::from_ymd_opt(2025, 7, 2).unwrap())
-            .is_none());
+        assert!(
+            c.try_apply_yearly_wage_rise(NaiveDate::from_ymd_opt(2025, 7, 2).unwrap())
+                .is_none()
+        );
         // First anniversary — applies.
         let new_salary = c
             .try_apply_yearly_wage_rise(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
@@ -824,9 +842,10 @@ mod clause_lifecycle_tests {
     #[test]
     fn yearly_wage_rise_no_clause_returns_none() {
         let mut c = fresh(100_000);
-        assert!(c
-            .try_apply_yearly_wage_rise(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
-            .is_none());
+        assert!(
+            c.try_apply_yearly_wage_rise(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+                .is_none()
+        );
     }
 
     #[test]
@@ -1051,7 +1070,9 @@ mod clause_lifecycle_tests {
 
         assert!(is_inert_clause(&ContractClauseType::SellOnFee));
         assert!(is_inert_clause(&ContractClauseType::SellOnFeeProfit));
-        assert!(is_inert_clause(&ContractClauseType::SeasonalLandmarkGoalBonus));
+        assert!(is_inert_clause(
+            &ContractClauseType::SeasonalLandmarkGoalBonus
+        ));
         assert!(is_inert_clause(&ContractClauseType::StaffJobRelease));
         assert!(is_inert_clause(
             &ContractClauseType::MinimumFeeReleaseToHigherDivisionClubs

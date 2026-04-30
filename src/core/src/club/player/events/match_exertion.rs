@@ -55,7 +55,8 @@ impl Player {
         // a 90-min keeper sits around 40.
         let match_load = minutes * position_factor * depletion_factor * friendly_factor;
         let hi_load = match_load * hi_share;
-        self.load.record_match_load(match_load, hi_load, is_friendly);
+        self.load
+            .record_match_load(match_load, hi_load, is_friendly);
 
         // Debt: half from raw load, half from "running on fumes" tax.
         // A 90-min midfielder at 60% finish adds ~45 units; a 90-min
@@ -127,15 +128,13 @@ impl Player {
 
         let intensity = (match_load / 90.0).clamp(0.4, 2.0);
 
-        let chance = self.compute_injury_risk(
-            crate::club::player::condition::InjuryRiskInputs {
-                base_rate,
-                intensity,
-                in_recovery,
-                medical_multiplier: 1.0,
-                now,
-            },
-        );
+        let chance = self.compute_injury_risk(crate::club::player::condition::InjuryRiskInputs {
+            base_rate,
+            intensity,
+            in_recovery,
+            medical_multiplier: 1.0,
+            now,
+        });
 
         if rand::random::<f32>() < chance {
             let injury = InjuryType::random_match_injury(

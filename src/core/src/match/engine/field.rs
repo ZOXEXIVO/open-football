@@ -1,6 +1,9 @@
-use crate::r#match::ball::Ball;
-use crate::r#match::{FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, PlayerSide, PositionType, POSITION_POSITIONING};
 use crate::Tactics;
+use crate::r#match::ball::Ball;
+use crate::r#match::{
+    FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, POSITION_POSITIONING, PlayerSide,
+    PositionType,
+};
 use nalgebra::Vector3;
 
 pub struct MatchField {
@@ -61,7 +64,6 @@ impl MatchField {
 
             p.set_default_state();
         });
-
     }
 
     /// Compact the remaining players of `team_id` after a red card.
@@ -89,7 +91,11 @@ impl MatchField {
             return;
         }
         let avg_x = sum_x / count as f32;
-        let own_goal_x = if avg_x < field_width * 0.5 { 0.0 } else { field_width };
+        let own_goal_x = if avg_x < field_width * 0.5 {
+            0.0
+        } else {
+            field_width
+        };
 
         for p in self.players.iter_mut() {
             if p.team_id != team_id || p.is_sent_off {

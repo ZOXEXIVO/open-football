@@ -151,10 +151,9 @@ impl Club {
                 }
                 let gk = &staff.staff_attributes.goalkeeping;
                 // Average the 3 GK coaching attributes as a single coach score
-                let gk_avg = ((gk.shot_stopping as u16
-                    + gk.handling as u16
-                    + gk.distribution as u16)
-                    / 3) as u8;
+                let gk_avg =
+                    ((gk.shot_stopping as u16 + gk.handling as u16 + gk.distribution as u16) / 3)
+                        as u8;
                 if gk_avg > best_goalkeeping {
                     best_goalkeeping = gk_avg;
                 }
@@ -173,7 +172,8 @@ impl Club {
     }
 
     fn determine_philosophy(teams: &TeamCollection) -> ClubPhilosophy {
-        let rep_level = teams.main()
+        let rep_level = teams
+            .main()
             .map(|t| t.reputation.level())
             .unwrap_or(ReputationLevel::Amateur);
 
@@ -188,14 +188,16 @@ impl Club {
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ClubResult {
         let date = ctx.simulation.date.date();
 
-        let country_economic_factor = ctx.country.as_ref()
+        let country_economic_factor = ctx
+            .country
+            .as_ref()
             .map(|c| c.tv_revenue_multiplier)
             .unwrap_or(1.0);
-        let country_price_level = ctx.country.as_ref()
-            .map(|c| c.price_level)
-            .unwrap_or(1.0);
+        let country_price_level = ctx.country.as_ref().map(|c| c.price_level).unwrap_or(1.0);
         // League position from country-level context
-        let (league_pos, league_sz, total_matches) = ctx.club.as_ref()
+        let (league_pos, league_sz, total_matches) = ctx
+            .club
+            .as_ref()
             .map(|c| (c.league_position, c.league_size, c.total_league_matches))
             .unwrap_or((0, 0, 0));
 
@@ -319,7 +321,11 @@ impl Club {
         }
 
         // Season start: reset player states and graduate academy players
-        let season = ctx.country.as_ref().map(|c| c.season_dates).unwrap_or_default();
+        let season = ctx
+            .country
+            .as_ref()
+            .map(|c| c.season_dates)
+            .unwrap_or_default();
         if ctx.simulation.is_season_start(&season) {
             // Sync budgets from board targets to finance system
             if let Some(targets) = &self.board.season_targets {
@@ -342,19 +348,23 @@ impl Club {
         result
     }
 
-    fn build_board_context(&self, country_economic_factor: f32, country_price_level: f32) -> BoardContext {
+    fn build_board_context(
+        &self,
+        country_economic_factor: f32,
+        country_price_level: f32,
+    ) -> BoardContext {
         let main_team = self.teams.main();
 
         let main_squad_size = main_team.map(|t| t.players.len()).unwrap_or(0);
 
-        let reserve_squad_size: usize = self.teams.iter()
+        let reserve_squad_size: usize = self
+            .teams
+            .iter()
             .filter(|t| t.team_type != TeamType::Main)
             .map(|t| t.players.len())
             .sum();
 
-        let total_annual_wages: u32 = self.teams.iter()
-            .map(|t| t.get_annual_salary())
-            .sum();
+        let total_annual_wages: u32 = self.teams.iter().map(|t| t.get_annual_salary()).sum();
 
         let reputation_score = main_team
             .map(|t| t.reputation.overall_score())
@@ -374,7 +384,9 @@ impl Club {
             .map(|t| t.players.current_ability_avg())
             .unwrap_or(0);
 
-        let main_tactic = main_team.and_then(|t| t.tactics.as_ref()).map(|tac| tac.tactic_type);
+        let main_tactic = main_team
+            .and_then(|t| t.tactics.as_ref())
+            .map(|tac| tac.tactic_type);
 
         BoardContext {
             balance: self.finance.balance.balance,

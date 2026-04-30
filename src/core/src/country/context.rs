@@ -23,7 +23,9 @@ pub struct CountryContext {
 impl CountryContext {
     pub fn new(id: u32) -> Self {
         CountryContext {
-            id, code: String::new(), people_names: None,
+            id,
+            code: String::new(),
+            people_names: None,
             season_dates: SeasonDates::default(),
             tv_revenue_multiplier: 1.0,
             sponsorship_market_strength: 1.0,
@@ -35,7 +37,9 @@ impl CountryContext {
 
     pub fn with_people_names(id: u32, people_names: PeopleNameGeneratorData) -> Self {
         CountryContext {
-            id, code: String::new(), people_names: Some(people_names),
+            id,
+            code: String::new(),
+            people_names: Some(people_names),
             season_dates: SeasonDates::default(),
             tv_revenue_multiplier: 1.0,
             sponsorship_market_strength: 1.0,

@@ -1,5 +1,6 @@
 pub mod ai;
 mod champions_league;
+mod common;
 mod conference_league;
 mod countries;
 mod date;
@@ -9,26 +10,25 @@ mod face;
 mod game;
 pub mod i18n;
 mod leagues;
-mod national_competitions;
 mod r#match;
+mod national_competitions;
 mod player;
 mod routes;
 mod search;
+pub mod settings;
 mod staff;
 mod teams;
 mod views;
 mod watchlist;
-mod common;
-pub mod settings;
 
 pub use settings::Settings;
 
 pub use error::{ApiError, ApiResult};
 pub use i18n::{I18n, I18nManager};
 
+use crate::ai::registry::AiProviderRegistry;
 use crate::routes::ServerRoutes;
 use axum::response::IntoResponse;
-use crate::ai::registry::AiProviderRegistry;
 use core::SimulatorData;
 use database::DatabaseEntity;
 use log::{error, info};
@@ -58,8 +58,9 @@ impl FootballSimulatorServer {
                         (
                             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                             "Internal server error - handler panicked".to_string(),
-                        ).into_response()
-                    }))
+                        )
+                            .into_response()
+                    })),
             )
             .with_state(self.data.clone());
 

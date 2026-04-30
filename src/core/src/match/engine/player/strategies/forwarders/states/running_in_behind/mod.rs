@@ -1,6 +1,8 @@
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::{
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -28,8 +30,8 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
             if let Some(owner) = ctx.context.players.by_id(owner_id) {
                 if owner.team_id == ctx.player.team_id {
                     // Passer under heavy pressure — abort run, they can't deliver
-                    let opponents_near_passer = ctx.tick_context.grid
-                        .opponents(owner_id, 10.0).count();
+                    let opponents_near_passer =
+                        ctx.tick_context.grid.opponents(owner_id, 10.0).count();
                     if opponents_near_passer >= 3 {
                         return Some(StateChangeResult::with_forward_state(
                             ForwardState::CreatingSpace,
@@ -53,7 +55,6 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
         // keep running in behind as the single "beat the line" behaviour.
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Forward should sprint toward goal, behind the defensive line
@@ -140,7 +141,10 @@ impl ForwardRunningInBehindState {
         let to_goal = (goal_pos - player_pos).normalize();
 
         // Check for opponents blocking the path ahead (within 30 units, in forward direction)
-        let blockers = ctx.players().opponents().nearby(30.0)
+        let blockers = ctx
+            .players()
+            .opponents()
+            .nearby(30.0)
             .filter(|opp| {
                 let to_opp = (opp.position - player_pos).normalize();
                 to_opp.dot(&to_goal) > 0.3
@@ -178,5 +182,4 @@ impl ForwardRunningInBehindState {
         }
         true
     }
-
 }

@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::common::slug::player_history_slug;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
@@ -8,9 +8,9 @@ use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use chrono::Datelike;
+use core::SimulatorData;
 use core::transfers::TransferType;
 use core::utils::FormattingUtils;
-use core::SimulatorData;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -115,9 +115,16 @@ pub async fn team_transfers_action(
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
     let now = simulator_data.date.date();
-    let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let (neighbor_teams, country_leagues) =
+        get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
+    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
+    let league_refs: Vec<(&str, &str)> = country_leagues
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
 
     let club_id = team.club_id;
 
@@ -132,7 +139,9 @@ pub async fn team_transfers_action(
     let selected_season = query.season.unwrap_or(current_season_year);
 
     // Find earliest season that has any transfer involving this club (across all countries)
-    let min_season_year = simulator_data.continents.iter()
+    let min_season_year = simulator_data
+        .continents
+        .iter()
         .flat_map(|cont| cont.countries.iter())
         .flat_map(|c| c.transfer_market.transfer_history.iter())
         .filter(|t| t.from_club_id == club_id || t.to_club_id == club_id)
@@ -160,13 +169,14 @@ pub async fn team_transfers_action(
                 player_slug: player.slug(),
                 player_name: format!(
                     "{} {}",
-                    player.full_name.display_first_name(), player.full_name.display_last_name()
+                    player.full_name.display_first_name(),
+                    player.full_name.display_last_name()
                 ),
                 position: player.position().get_short_name().to_string(),
                 value: FormattingUtils::format_money(player.value(
                     now,
                     league.map(|l| l.reputation).unwrap_or(0),
-                    team.reputation.world,
+                    team.reputation.market_value_score(),
                 )),
             })
         })
@@ -181,28 +191,46 @@ pub async fn team_transfers_action(
     for continent in &simulator_data.continents {
         for c in &continent.countries {
             for t in &c.transfer_market.transfer_history {
-                if t.season_year != selected_season || matches!(t.transfer_type, TransferType::Loan(_)) {
+                if t.season_year != selected_season
+                    || matches!(t.transfer_type, TransferType::Loan(_))
+                {
                     continue;
                 }
                 if t.to_club_id == club_id {
                     let other_team_slug = find_team_slug(simulator_data, t.from_club_id);
                     incoming_transfers.push(TransferHistoryItem {
-                        player_slug: player_history_slug(simulator_data, t.player_id, &t.player_name),
+                        player_slug: player_history_slug(
+                            simulator_data,
+                            t.player_id,
+                            &t.player_name,
+                        ),
                         player_name: t.player_name.clone(),
                         other_team: t.from_team_name.clone(),
                         other_team_slug,
-                        fee: if t.fee.amount > 0.0 { FormattingUtils::format_money(t.fee.amount) } else { "Free".to_string() },
+                        fee: if t.fee.amount > 0.0 {
+                            FormattingUtils::format_money(t.fee.amount)
+                        } else {
+                            "Free".to_string()
+                        },
                         date: t.transfer_date.format("%d.%m.%Y").to_string(),
                     });
                 }
                 if t.from_club_id == club_id {
                     let other_team_slug = find_team_slug(simulator_data, t.to_club_id);
                     outgoing_transfers.push(TransferHistoryItem {
-                        player_slug: player_history_slug(simulator_data, t.player_id, &t.player_name),
+                        player_slug: player_history_slug(
+                            simulator_data,
+                            t.player_id,
+                            &t.player_name,
+                        ),
                         player_name: t.player_name.clone(),
                         other_team: t.to_team_name.clone(),
                         other_team_slug,
-                        fee: if t.fee.amount > 0.0 { FormattingUtils::format_money(t.fee.amount) } else { "Free".to_string() },
+                        fee: if t.fee.amount > 0.0 {
+                            FormattingUtils::format_money(t.fee.amount)
+                        } else {
+                            "Free".to_string()
+                        },
                         date: t.transfer_date.format("%d.%m.%Y").to_string(),
                     });
                 }
@@ -236,7 +264,8 @@ pub async fn team_transfers_action(
                 ),
                 other_team: from_team_name,
                 other_team_slug: from_team_slug,
-                date: p.last_transfer_date()
+                date: p
+                    .last_transfer_date()
                     .map(|d| d.format("%d.%m.%Y").to_string())
                     .unwrap_or_default(),
                 end_date: loan_contract.expiration.format("%d.%m.%Y").to_string(),
@@ -251,11 +280,15 @@ pub async fn team_transfers_action(
             for club in &country_iter.clubs {
                 for team_iter in &club.teams.teams {
                     for player in &team_iter.players.players {
-                        let is_loaned_from_us = player.contract_loan.as_ref().map(|c| {
-                            c.loan_from_club_id == Some(club_id)
-                        }).unwrap_or(false);
+                        let is_loaned_from_us = player
+                            .contract_loan
+                            .as_ref()
+                            .map(|c| c.loan_from_club_id == Some(club_id))
+                            .unwrap_or(false);
 
-                        if !is_loaned_from_us { continue; }
+                        if !is_loaned_from_us {
+                            continue;
+                        }
 
                         let contract = player.contract_loan.as_ref().unwrap();
                         outgoing_loans.push(LoanHistoryItem {
@@ -267,7 +300,8 @@ pub async fn team_transfers_action(
                             ),
                             other_team: team_iter.name.clone(),
                             other_team_slug: team_iter.slug.clone(),
-                            date: player.last_transfer_date()
+                            date: player
+                                .last_transfer_date()
                                 .map(|d| d.format("%d.%m.%Y").to_string())
                                 .unwrap_or_default(),
                             end_date: contract.expiration.format("%d.%m.%Y").to_string(),
@@ -280,10 +314,24 @@ pub async fn team_transfers_action(
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
     let current_path = format!("/{}/teams/{}/transfers", &route_params.lang, &team.slug);
-    let menu_params = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main);
+    let menu_params = views::MenuParams {
+        i18n: &i18n,
+        lang: &route_params.lang,
+        current_path: &current_path,
+        country_name: cn,
+        country_slug: cs,
+    };
+    let menu_sections = views::team_menu(
+        &menu_params,
+        &neighbor_refs,
+        &team.slug,
+        &league_refs,
+        team.team_type == core::TeamType::Main,
+    );
     let title = team.name.clone();
-    let league_title = league.map(|l| views::league_display_name(l, &i18n, simulator_data)).unwrap_or_default();
+    let league_title = league
+        .map(|l| views::league_display_name(l, &i18n, simulator_data))
+        .unwrap_or_default();
 
     Ok(TeamTransfersTemplate {
         css_version: CSS_VERSION,
@@ -294,15 +342,24 @@ pub async fn team_transfers_action(
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: league_title,
-        sub_title_link: league.map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug)).unwrap_or_default(),
+        sub_title_link: league
+            .map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug))
+            .unwrap_or_default(),
         sub_title_country_code: String::new(),
-        header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
-        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
+        header_color: simulator_data
+            .club(team.club_id)
+            .map(|c| c.colors.background.clone())
+            .unwrap_or_default(),
+        foreground_color: simulator_data
+            .club(team.club_id)
+            .map(|c| c.colors.foreground.clone())
+            .unwrap_or_default(),
         menu_sections,
         team_slug: team.slug.clone(),
         active_tab: "transfers",
         show_finances_tab: team.team_type.is_own_team(),
-        show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
+        show_academy_tab: team.team_type == core::TeamType::Main
+            || team.team_type == core::TeamType::U18,
         items,
         incoming_transfers,
         outgoing_transfers,
@@ -315,7 +372,12 @@ pub async fn team_transfers_action(
 /// Find the main team slug for a club across all countries.
 fn find_team_slug(data: &SimulatorData, club_id: u32) -> String {
     data.club(club_id)
-        .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == core::TeamType::Main))
+        .and_then(|c| {
+            c.teams
+                .teams
+                .iter()
+                .find(|t| t.team_type == core::TeamType::Main)
+        })
         .map(|t| t.slug.clone())
         .unwrap_or_default()
 }
@@ -334,7 +396,10 @@ fn get_neighbor_teams(
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
         .map(|country| {
-            country.leagues.leagues.iter()
+            country
+                .leagues
+                .leagues
+                .iter()
                 .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
@@ -344,6 +409,9 @@ fn get_neighbor_teams(
 
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }

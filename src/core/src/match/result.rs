@@ -1,6 +1,6 @@
 use nalgebra::Vector3;
-use serde::ser::{SerializeMap, SerializeSeq};
 use serde::Serialize;
+use serde::ser::{SerializeMap, SerializeSeq};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,9 +146,8 @@ impl Serialize for ResultMatchPositionData {
         S: serde::Serializer,
     {
         let has_states = self.track_events && !self.player_states.is_empty();
-        let field_count = 2
-            + if self.track_events { 2 } else { 0 }
-            + if has_states { 1 } else { 0 };
+        let field_count =
+            2 + if self.track_events { 2 } else { 0 } + if has_states { 1 } else { 0 };
         let mut map = serializer.serialize_map(Some(field_count))?;
 
         map.serialize_entry("ball", &self.ball)?;
@@ -237,7 +236,9 @@ impl ResultMatchPositionData {
         for item in positions {
             let cx = (item.position.x / cw).floor() as isize;
             let cy = (item.position.y / ch).floor() as isize;
-            if cx < 0 || cy < 0 { continue; }
+            if cx < 0 || cy < 0 {
+                continue;
+            }
             let cx = (cx as usize).min(cols - 1);
             let cy = (cy as usize).min(rows - 1);
             grid[cy * cols + cx] = grid[cy * cols + cx].saturating_add(1);
@@ -286,14 +287,17 @@ impl ResultMatchPositionData {
             };
 
             // Filter ball positions for this time window
-            chunk.ball = self.ball.iter()
+            chunk.ball = self
+                .ball
+                .iter()
                 .filter(|item| item.timestamp >= start_time && item.timestamp < end_time)
                 .cloned()
                 .collect();
 
             // Filter player positions for this time window
             for (player_id, positions) in &self.players {
-                let filtered_positions: Vec<ResultPositionDataItem> = positions.iter()
+                let filtered_positions: Vec<ResultPositionDataItem> = positions
+                    .iter()
                     .filter(|item| item.timestamp >= start_time && item.timestamp < end_time)
                     .cloned()
                     .collect();
@@ -305,12 +309,16 @@ impl ResultMatchPositionData {
 
             // Filter passes and events for this time window
             if self.track_events {
-                chunk.passes = self.passes.iter()
+                chunk.passes = self
+                    .passes
+                    .iter()
                     .filter(|pass| pass.timestamp >= start_time && pass.timestamp < end_time)
                     .cloned()
                     .collect();
 
-                chunk.events = self.events.iter()
+                chunk.events = self
+                    .events
+                    .iter()
                     .filter(|evt| evt.timestamp >= start_time && evt.timestamp < end_time)
                     .cloned()
                     .collect();
@@ -320,9 +328,8 @@ impl ResultMatchPositionData {
                     let mut chunk_states = Vec::new();
 
                     // Find the most recent state before this chunk starts (carry-over)
-                    if let Some(last_before) = states.iter()
-                        .rev()
-                        .find(|s| s.timestamp < start_time)
+                    if let Some(last_before) =
+                        states.iter().rev().find(|s| s.timestamp < start_time)
                     {
                         chunk_states.push(PlayerStateEntry {
                             timestamp: start_time,
@@ -331,7 +338,10 @@ impl ResultMatchPositionData {
                     }
 
                     // Add states within this chunk's window
-                    for s in states.iter().filter(|s| s.timestamp >= start_time && s.timestamp < end_time) {
+                    for s in states
+                        .iter()
+                        .filter(|s| s.timestamp >= start_time && s.timestamp < end_time)
+                    {
                         chunk_states.push(s.clone());
                     }
 
@@ -391,8 +401,10 @@ impl ResultMatchPositionData {
 
             player_data.push(ResultPositionDataItem::new(timestamp, position));
         } else {
-            self.players
-                .insert(player_id, vec![ResultPositionDataItem::new(timestamp, position)]);
+            self.players.insert(
+                player_id,
+                vec![ResultPositionDataItem::new(timestamp, position)],
+            );
         }
     }
 
@@ -430,7 +442,8 @@ impl ResultMatchPositionData {
             }
         }
 
-        self.ball.push(ResultPositionDataItem::new(timestamp, position));
+        self.ball
+            .push(ResultPositionDataItem::new(timestamp, position));
     }
 
     /// Get the maximum timestamp in the recorded data
@@ -445,7 +458,9 @@ impl ResultMatchPositionData {
         }
 
         // Binary search for the closest timestamp
-        let idx = self.ball.binary_search_by_key(&timestamp, |item| item.timestamp)
+        let idx = self
+            .ball
+            .binary_search_by_key(&timestamp, |item| item.timestamp)
             .unwrap_or_else(|idx| {
                 if idx == 0 {
                     0
@@ -475,7 +490,8 @@ impl ResultMatchPositionData {
         }
 
         // Binary search for the closest timestamp
-        let idx = player_data.binary_search_by_key(&timestamp, |item| item.timestamp)
+        let idx = player_data
+            .binary_search_by_key(&timestamp, |item| item.timestamp)
             .unwrap_or_else(|idx| {
                 if idx == 0 {
                     0
@@ -515,13 +531,20 @@ impl ResultMatchPositionData {
     /// Add a pass event (only if event tracking is enabled)
     pub fn add_pass_event(&mut self, timestamp: u64, from_player_id: u32, to_player_id: u32) {
         if self.track_events {
-            self.passes.push(PassEventData::new(timestamp, from_player_id, to_player_id));
+            self.passes
+                .push(PassEventData::new(timestamp, from_player_id, to_player_id));
         }
     }
 
     /// Record a player state change. Uses a cheap integer ID for fast dedup,
     /// only allocating the display String when the state actually changed.
-    pub fn add_player_state(&mut self, player_id: u32, timestamp: u64, state_id: u16, state: &impl std::fmt::Display) {
+    pub fn add_player_state(
+        &mut self,
+        player_id: u32,
+        timestamp: u64,
+        state_id: u16,
+        state: &impl std::fmt::Display,
+    ) {
         if !self.track_events {
             return;
         }
@@ -542,18 +565,22 @@ impl ResultMatchPositionData {
                 state: state_name,
             });
         } else {
-            self.player_states.insert(player_id, vec![PlayerStateEntry {
-                timestamp,
-                state: state_name,
-            }]);
+            self.player_states.insert(
+                player_id,
+                vec![PlayerStateEntry {
+                    timestamp,
+                    state: state_name,
+                }],
+            );
         }
     }
 
     /// Get the most recent pass event at or before a timestamp
     pub fn get_recent_pass_at(&self, timestamp: u64) -> Option<&PassEventData> {
         // Find most recent pass that occurred at or before this timestamp
-        self.passes.iter()
-            .rev()  // Search from most recent
+        self.passes
+            .iter()
+            .rev() // Search from most recent
             .find(|pass| pass.timestamp <= timestamp)
     }
 
@@ -562,7 +589,8 @@ impl ResultMatchPositionData {
         let start = timestamp.saturating_sub(window_ms);
         let end = timestamp + window_ms;
 
-        self.passes.iter()
+        self.passes
+            .iter()
             .filter(|pass| pass.timestamp >= start && pass.timestamp <= end)
             .collect()
     }

@@ -1,6 +1,8 @@
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
-use crate::{ClubFinanceResult, ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract};
+use crate::{
+    ClubFinanceResult, ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract,
+};
 use chrono::NaiveDate;
 use log::debug;
 
@@ -86,9 +88,8 @@ impl ClubFinances {
 
             self.start_new_month(club_name, ctx.simulation.date.date());
 
-            result.expired_sponsorships = self
-                .sponsorship
-                .remove_expired(ctx.simulation.date.date());
+            result.expired_sponsorships =
+                self.sponsorship.remove_expired(ctx.simulation.date.date());
         }
 
         result
@@ -96,9 +97,9 @@ impl ClubFinances {
 
     fn start_new_month(&mut self, club_name: &str, date: NaiveDate) {
         debug!(
-        "club: {}, finance: add history, date = {}, balance = {}, income={}, outcome={}",
-        club_name, date, self.balance.balance, self.balance.income, self.balance.outcome
-    );
+            "club: {}, finance: add history, date = {}, balance = {}, income={}, outcome={}",
+            club_name, date, self.balance.balance, self.balance.income, self.balance.outcome
+        );
 
         self.history.add(date, self.balance.clone());
         self.balance.clear();

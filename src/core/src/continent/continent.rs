@@ -1,15 +1,15 @@
+use crate::Country;
 use crate::context::GlobalContext;
-use crate::continent::national::{NationalCompetitionConfig, NationalTeamCompetitions};
 use crate::continent::ContinentResult;
+use crate::continent::national::{NationalCompetitionConfig, NationalTeamCompetitions};
 use crate::continent::{
     ContinentalCompetitions, ContinentalRankings, ContinentalRegulations, EconomicZone,
 };
 use crate::country::CountryResult;
 use crate::utils::Logging;
-use crate::Country;
 use log::debug;
-use rayon::prelude::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
+use rayon::prelude::IntoParallelRefMutIterator;
 
 #[derive(Clone)]
 pub struct Continent {
@@ -25,7 +25,12 @@ pub struct Continent {
 }
 
 impl Continent {
-    pub fn new(id: u32, name: String, countries: Vec<Country>, competition_configs: Vec<NationalCompetitionConfig>) -> Self {
+    pub fn new(
+        id: u32,
+        name: String,
+        countries: Vec<Country>,
+        competition_configs: Vec<NationalCompetitionConfig>,
+    ) -> Self {
         Continent {
             id,
             name,
@@ -67,7 +72,14 @@ impl Continent {
             .map(|country| {
                 let message = &format!("simulate country: {}", &country.name);
                 Logging::estimate_result(
-                    || country.simulate(ctx.with_country_and_names(country.id, country.code.clone(), country.generator_data.people_names.clone(), country.season_dates())),
+                    || {
+                        country.simulate(ctx.with_country_and_names(
+                            country.id,
+                            country.code.clone(),
+                            country.generator_data.people_names.clone(),
+                            country.season_dates(),
+                        ))
+                    },
                     message,
                 )
             })

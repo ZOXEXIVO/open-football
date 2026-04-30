@@ -9,14 +9,14 @@
 use chrono::{Duration, NaiveDate};
 
 use super::types::{LoanCompletion, TransferCompletion};
+use crate::club::PlayerClubContract;
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::contract::contract::{
-    is_inert_bonus, is_inert_clause, ContractBonus, ContractClause, ContractClauseType,
+    ContractBonus, ContractClause, ContractClauseType, is_inert_bonus, is_inert_clause,
 };
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::player::{Player, SellOnObligation};
-use crate::club::PlayerClubContract;
 use crate::{ContractBonusType, Person, PlayerHappiness, PlayerPlan, PlayerStatusType};
 
 impl Player {

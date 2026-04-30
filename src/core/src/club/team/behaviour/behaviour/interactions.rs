@@ -85,19 +85,27 @@ impl TeamBehaviour {
 
         for player in players.iter_mut() {
             // Integration events for recent transfers (first 90 days)
-            let is_recent = player.last_transfer_date
+            let is_recent = player
+                .last_transfer_date
                 .map(|d| (sim_date - d).num_days() < 90)
                 .unwrap_or(false);
 
             if is_recent {
                 // Count positive relationships with current teammates
-                let positive_count = teammate_ids.iter()
+                let positive_count = teammate_ids
+                    .iter()
                     .filter(|&&tid| tid != player.id)
-                    .filter(|&&tid| player.relations.get_player(tid)
-                        .map(|r| r.level > 20.0).unwrap_or(false))
+                    .filter(|&&tid| {
+                        player
+                            .relations
+                            .get_player(tid)
+                            .map(|r| r.level > 20.0)
+                            .unwrap_or(false)
+                    })
                     .count();
 
-                let has_any_relation = teammate_ids.iter()
+                let has_any_relation = teammate_ids
+                    .iter()
                     .any(|&tid| tid != player.id && player.relations.get_player(tid).is_some());
 
                 // ~10% weekly chance, biased by relationship count.
@@ -139,12 +147,11 @@ impl TeamBehaviour {
                 continue;
             }
 
-            let goals_per_game =
-                player.statistics.goals as f32 / player.statistics.played as f32;
+            let goals_per_game = player.statistics.goals as f32 / player.statistics.played as f32;
 
             if goals_per_game > 0.25 {
-                let rep_factor = (player.player_attributes.current_reputation as f32 / 10000.0)
-                    .clamp(0.1, 1.0);
+                let rep_factor =
+                    (player.player_attributes.current_reputation as f32 / 10000.0).clamp(0.1, 1.0);
                 // Scale down for minor-update frequency (~every 2 days vs weekly full update)
                 let popularity_boost = (0.03 + 0.04 * rep_factor) * 0.25;
 

@@ -111,11 +111,8 @@ impl SquadSelector {
         ctx: &SelectionContext,
     ) -> PlayerSelectionResult {
         let is_main_team = team.team_type == TeamType::Main;
-        let engine = ScoringEngine::from_staff_for_team(
-            staff,
-            ctx.philosophy.clone(),
-            is_main_team,
-        );
+        let engine =
+            ScoringEngine::from_staff_for_team(staff, ctx.philosophy.clone(), is_main_team);
         let policy = SelectionPolicy::from_context(ctx);
 
         // Force-selection is a Main-team pin: a flagged player is committed
@@ -359,7 +356,9 @@ impl SquadSelector {
             if available.len() < DEFAULT_SQUAD_SIZE {
                 debug!(
                     "Rotation selection for team {}: only {} available after borrowing ({} reserves offered)",
-                    team.name, available.len(), reserve_players.len()
+                    team.name,
+                    available.len(),
+                    reserve_players.len()
                 );
             }
         }

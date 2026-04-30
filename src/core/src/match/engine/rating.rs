@@ -1,5 +1,5 @@
-use crate::r#match::PlayerMatchEndStats;
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::PlayerMatchEndStats;
 
 /// Calculate a match rating (1.0 - 10.0, base 6.0) from in-match statistics.
 ///
@@ -219,7 +219,19 @@ mod tests {
     }
 
     fn make_gk(saves: u16, shots_faced: u16) -> PlayerMatchEndStats {
-        let mut s = make_stats(0, 0, 20, 15, 0, 0, 0, 0, saves, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let mut s = make_stats(
+            0,
+            0,
+            20,
+            15,
+            0,
+            0,
+            0,
+            0,
+            saves,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         s.shots_faced = shots_faced;
         s
     }
@@ -227,14 +239,38 @@ mod tests {
     #[test]
     fn base_rating_is_six() {
         // Forward with no events, 1-1 draw → pure base rating of 6.0
-        let stats = make_stats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, PlayerFieldPositionGroup::Forward);
+        let stats = make_stats(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Forward,
+        );
         let rating = calculate_match_rating(&stats, 1, 1);
         assert!((rating - 6.0).abs() < f32::EPSILON);
     }
 
     #[test]
     fn goals_add_up_to_cap() {
-        let stats = make_stats(5, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, PlayerFieldPositionGroup::Forward);
+        let stats = make_stats(
+            5,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Forward,
+        );
         let rating = calculate_match_rating(&stats, 5, 0);
         // goals capped at +3.0, plus win bonus +0.3, clean sheet not applicable for forward
         assert!(rating >= 9.0);
@@ -242,8 +278,32 @@ mod tests {
 
     #[test]
     fn goalkeeper_saves_matter() {
-        let quiet_gk = make_stats(0, 0, 15, 12, 0, 0, 0, 0, 1, 0.0, PlayerFieldPositionGroup::Goalkeeper);
-        let busy_gk = make_stats(0, 0, 15, 12, 0, 0, 0, 0, 8, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let quiet_gk = make_stats(
+            0,
+            0,
+            15,
+            12,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
+        let busy_gk = make_stats(
+            0,
+            0,
+            15,
+            12,
+            0,
+            0,
+            0,
+            0,
+            8,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
 
         let quiet_rating = calculate_match_rating(&quiet_gk, 1, 0);
         let busy_rating = calculate_match_rating(&busy_gk, 1, 0);
@@ -254,8 +314,32 @@ mod tests {
 
     #[test]
     fn interceptions_boost_defender_rating() {
-        let passive = make_stats(0, 0, 20, 16, 0, 0, 0, 0, 0, 0.0, PlayerFieldPositionGroup::Defender);
-        let active = make_stats(0, 0, 20, 16, 0, 0, 3, 4, 0, 0.0, PlayerFieldPositionGroup::Defender);
+        let passive = make_stats(
+            0,
+            0,
+            20,
+            16,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        let active = make_stats(
+            0,
+            0,
+            20,
+            16,
+            0,
+            0,
+            3,
+            4,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
 
         let passive_rating = calculate_match_rating(&passive, 1, 1);
         let active_rating = calculate_match_rating(&active, 1, 1);
@@ -267,13 +351,37 @@ mod tests {
     #[test]
     fn rating_clamped_to_range() {
         // Worst case
-        let bad = make_stats(0, 0, 20, 5, 0, 5, 0, 0, 0, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let bad = make_stats(
+            0,
+            0,
+            20,
+            5,
+            0,
+            5,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         let rating = calculate_match_rating(&bad, 0, 5);
         assert!(rating >= 1.0);
         assert!(rating <= 10.0);
 
         // Best case
-        let great = make_stats(5, 3, 60, 57, 5, 5, 5, 5, 10, 1.0, PlayerFieldPositionGroup::Goalkeeper);
+        let great = make_stats(
+            5,
+            3,
+            60,
+            57,
+            5,
+            5,
+            5,
+            5,
+            10,
+            1.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         let rating = calculate_match_rating(&great, 5, 0);
         assert!(rating >= 1.0);
         assert!(rating <= 10.0);
@@ -282,9 +390,33 @@ mod tests {
     #[test]
     fn clinical_finisher_bonus() {
         // Player with 2 goals from 0.8 xG (clinical)
-        let clinical = make_stats(2, 0, 20, 15, 2, 3, 0, 0, 0, 0.8, PlayerFieldPositionGroup::Forward);
+        let clinical = make_stats(
+            2,
+            0,
+            20,
+            15,
+            2,
+            3,
+            0,
+            0,
+            0,
+            0.8,
+            PlayerFieldPositionGroup::Forward,
+        );
         // Player with 2 goals from 2.0 xG (expected)
-        let expected = make_stats(2, 0, 20, 15, 2, 3, 0, 0, 0, 2.0, PlayerFieldPositionGroup::Forward);
+        let expected = make_stats(
+            2,
+            0,
+            20,
+            15,
+            2,
+            3,
+            0,
+            0,
+            0,
+            2.0,
+            PlayerFieldPositionGroup::Forward,
+        );
 
         let clinical_rating = calculate_match_rating(&clinical, 2, 0);
         let expected_rating = calculate_match_rating(&expected, 2, 0);
@@ -297,7 +429,19 @@ mod tests {
         // Regression: flat conceded penalty let a GK with 7 goals
         // against post ~8.0 (save bonuses outweighed the penalty).
         // A 7-goal shipping has to stay in the "disaster" band.
-        let gk = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let gk = make_stats(
+            0,
+            0,
+            20,
+            15,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         let rating = calculate_match_rating(&gk, 0, 7);
         assert!(rating < 4.0, "GK conceding 7 rated {} — too high", rating);
     }
@@ -308,10 +452,25 @@ mod tests {
         // 3 conceded near 4.0 (matches a player who should be dropped).
         // Conceding 3 is a bad day, not a disaster — should land in
         // the 5.0-6.2 band: around or just below average.
-        let gk = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let gk = make_stats(
+            0,
+            0,
+            20,
+            15,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         let rating = calculate_match_rating(&gk, 0, 3);
-        assert!(rating >= 5.0 && rating <= 6.2,
-            "GK conceding 3 rated {} — should be around 6", rating);
+        assert!(
+            rating >= 5.0 && rating <= 6.2,
+            "GK conceding 3 rated {} — should be around 6",
+            rating
+        );
     }
 
     #[test]
@@ -319,19 +478,53 @@ mod tests {
         // A GK who keeps a clean sheet should be in the 7+ band,
         // busy ones in the 8+ band. Clean sheets are the headline
         // keeper achievement and the rating needs to reflect that.
-        let quiet = make_stats(0, 0, 15, 12, 0, 0, 0, 0, 1, 0.0, PlayerFieldPositionGroup::Goalkeeper);
-        let busy = make_stats(0, 0, 15, 12, 0, 0, 0, 0, 6, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let quiet = make_stats(
+            0,
+            0,
+            15,
+            12,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
+        let busy = make_stats(
+            0,
+            0,
+            15,
+            12,
+            0,
+            0,
+            0,
+            0,
+            6,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         let quiet_rating = calculate_match_rating(&quiet, 1, 0);
         let busy_rating = calculate_match_rating(&busy, 1, 0);
         // Real match-rating reference: a quiet shutout lands above
         // average (6.7+); a busy shutout reaches the 7.5+ band. Going
         // higher inflates GK season averages past world-class levels.
-        assert!(quiet_rating >= 6.7,
-            "Quiet CS rated {} — should be above 6.7", quiet_rating);
-        assert!(busy_rating >= 7.5,
-            "Busy CS (6 saves, clean sheet) rated {} — should reach 7.5+", busy_rating);
-        assert!(busy_rating > quiet_rating + 0.5,
-            "Busy CS ({}) should clearly outrate quiet CS ({})", busy_rating, quiet_rating);
+        assert!(
+            quiet_rating >= 6.7,
+            "Quiet CS rated {} — should be above 6.7",
+            quiet_rating
+        );
+        assert!(
+            busy_rating >= 7.5,
+            "Busy CS (6 saves, clean sheet) rated {} — should reach 7.5+",
+            busy_rating
+        );
+        assert!(
+            busy_rating > quiet_rating + 0.5,
+            "Busy CS ({}) should clearly outrate quiet CS ({})",
+            busy_rating,
+            quiet_rating
+        );
     }
 
     #[test]
@@ -340,21 +533,64 @@ mod tests {
         // GK at 4-5. Real football: a keeper who made some saves but
         // let in a couple should be around 6 — not "bad", just "had a
         // normal match where their team lost 2-0".
-        let gk = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let gk = make_stats(
+            0,
+            0,
+            20,
+            15,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         let rating = calculate_match_rating(&gk, 0, 2);
-        assert!(rating >= 5.5 && rating <= 6.5,
-            "GK conceding 2 rated {} — should be around 6", rating);
+        assert!(
+            rating >= 5.5 && rating <= 6.5,
+            "GK conceding 2 rated {} — should be around 6",
+            rating
+        );
     }
 
     #[test]
     fn conceded_penalty_scales_with_goals() {
         // One-goal GK should outrate a six-goal GK.
-        let one = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
-        let six = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let one = make_stats(
+            0,
+            0,
+            20,
+            15,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
+        let six = make_stats(
+            0,
+            0,
+            20,
+            15,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         let one_rating = calculate_match_rating(&one, 0, 1);
         let six_rating = calculate_match_rating(&six, 0, 6);
-        assert!(one_rating - six_rating > 1.5,
-            "1-goal GK ({}) vs 6-goal GK ({}) — delta too small", one_rating, six_rating);
+        assert!(
+            one_rating - six_rating > 1.5,
+            "1-goal GK ({}) vs 6-goal GK ({}) — delta too small",
+            one_rating,
+            six_rating
+        );
     }
 
     #[test]
@@ -363,10 +599,25 @@ mod tests {
         // 1.0 floor, so save bonuses couldn't distinguish "awful + no
         // effort" from "awful but made saves". Keep the rating low
         // but not pinned to the absolute minimum.
-        let gk = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let gk = make_stats(
+            0,
+            0,
+            20,
+            15,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0.0,
+            PlayerFieldPositionGroup::Goalkeeper,
+        );
         let rating = calculate_match_rating(&gk, 0, 10);
-        assert!(rating >= 1.5 && rating <= 3.0,
-            "GK conceding 10 with 3 saves rated {} — should sit in the 1.5-3.0 disaster band, not the 1.0 floor", rating);
+        assert!(
+            rating >= 1.5 && rating <= 3.0,
+            "GK conceding 10 with 3 saves rated {} — should sit in the 1.5-3.0 disaster band, not the 1.0 floor",
+            rating
+        );
     }
 
     #[test]
@@ -403,7 +654,11 @@ mod tests {
         // even with 1 save credited. Should fall below 6.0.
         let gk = make_gk(1, 5);
         let rating = calculate_match_rating(&gk, 0, 4);
-        assert!(rating < 6.0, "Low-save% GK rated {} — should be < 6.0", rating);
+        assert!(
+            rating < 6.0,
+            "Low-save% GK rated {} — should be < 6.0",
+            rating
+        );
     }
 
     #[test]
@@ -441,9 +696,33 @@ mod tests {
     #[test]
     fn high_volume_passing_bonus() {
         // Few passes, good accuracy
-        let few = make_stats(0, 0, 15, 14, 0, 0, 0, 0, 0, 0.0, PlayerFieldPositionGroup::Midfielder);
+        let few = make_stats(
+            0,
+            0,
+            15,
+            14,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
         // Many passes, good accuracy
-        let many = make_stats(0, 0, 55, 50, 0, 0, 0, 0, 0, 0.0, PlayerFieldPositionGroup::Midfielder);
+        let many = make_stats(
+            0,
+            0,
+            55,
+            50,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
 
         let few_rating = calculate_match_rating(&few, 1, 1);
         let many_rating = calculate_match_rating(&many, 1, 1);

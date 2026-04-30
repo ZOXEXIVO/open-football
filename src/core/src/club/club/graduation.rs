@@ -1,10 +1,10 @@
+use super::Club;
 use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::{PlayerStatusType, TeamType};
 use chrono::NaiveDate;
 use log::debug;
-use super::Club;
 
 impl Club {
     /// Pre-season reset: restore player conditions and clear lingering statuses.
@@ -13,7 +13,8 @@ impl Club {
         for team in &mut self.teams.teams {
             for player in &mut team.players.players {
                 // Restore condition to pre-season fitness level (85%)
-                if player.player_attributes.condition < 8500 && !player.player_attributes.is_injured {
+                if player.player_attributes.condition < 8500 && !player.player_attributes.is_injured
+                {
                     player.player_attributes.condition = 8500;
                 }
 
@@ -39,11 +40,16 @@ impl Club {
     /// Move overage youth players to main team.
     /// Aged-out academy players disappear.
     /// Returns completed transfer records for graduated players.
-    pub(super) fn process_academy_graduations(&mut self, date: NaiveDate, country_code: &str) -> Vec<CompletedTransfer> {
+    pub(super) fn process_academy_graduations(
+        &mut self,
+        date: NaiveDate,
+        country_code: &str,
+    ) -> Vec<CompletedTransfer> {
         let mut transfers = Vec::new();
 
         // Find the lowest youth team to graduate into (U18 → U19 → U20 → U21 → U23)
-        let youth_idx = TeamType::YOUTH_PROGRESSION.iter()
+        let youth_idx = TeamType::YOUTH_PROGRESSION
+            .iter()
             .find_map(|tt| self.teams.index_of_type(*tt));
 
         // Graduate best academy players BEFORE releasing aged-out ones,
@@ -55,15 +61,23 @@ impl Club {
             let to_graduate = space.max(8).min(12);
 
             // Main team name for contract registration
-            let main_team_name = self.teams.main()
+            let main_team_name = self
+                .teams
+                .main()
                 .map(|t| t.name.clone())
                 .unwrap_or_else(|| self.name.clone());
 
             let youth_team_type = self.teams.teams[idx].team_type;
             let graduated = self.academy.graduate_to_youth(date, to_graduate);
             if !graduated.is_empty() {
-                debug!("academy {}: {} players graduated (contract: {}, assigned: {:?}, was {})",
-                    self.name, graduated.len(), main_team_name, youth_team_type, youth_count);
+                debug!(
+                    "academy {}: {} players graduated (contract: {}, assigned: {:?}, was {})",
+                    self.name,
+                    graduated.len(),
+                    main_team_name,
+                    youth_team_type,
+                    youth_count
+                );
                 for mut player in graduated {
                     // Assign native languages based on player's nationality
                     if player.languages.is_empty() {
@@ -73,18 +87,21 @@ impl Club {
                             .collect();
                     }
 
-                    transfers.push(CompletedTransfer::new(
-                        player.id,
-                        player.full_name.to_string(),
-                        0,
-                        0,
-                        "Academy".to_string(),
-                        self.id,
-                        main_team_name.clone(),
-                        date,
-                        CurrencyValue::new(0.0, Currency::Usd),
-                        TransferType::Free,
-                    ).with_reason("Academy graduation — youth contract signed".to_string()));
+                    transfers.push(
+                        CompletedTransfer::new(
+                            player.id,
+                            player.full_name.to_string(),
+                            0,
+                            0,
+                            "Academy".to_string(),
+                            self.id,
+                            main_team_name.clone(),
+                            date,
+                            CurrencyValue::new(0.0, Currency::Usd),
+                            TransferType::Free,
+                        )
+                        .with_reason("Academy graduation — youth contract signed".to_string()),
+                    );
                     self.teams.teams[idx].players.add(player);
                 }
             }
@@ -93,7 +110,10 @@ impl Club {
         // Release aged-out academy players (18+) that were NOT graduated
         let released = self.academy.release_aged_out(date);
         if released > 0 {
-            debug!("academy {}: {} aged-out players released", self.name, released);
+            debug!(
+                "academy {}: {} aged-out players released",
+                self.name, released
+            );
         }
 
         // Rebalance: overage moves, talent promotions, backfill

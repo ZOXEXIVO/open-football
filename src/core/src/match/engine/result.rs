@@ -1,7 +1,7 @@
-﻿use crate::league::LeagueMatch;
+﻿use crate::PlayerFieldPositionGroup;
+use crate::league::LeagueMatch;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{MatchSquad, ResultMatchPositionData};
-use crate::PlayerFieldPositionGroup;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 

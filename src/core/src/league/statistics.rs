@@ -1,6 +1,6 @@
-use crate::r#match::MatchResult;
-use crate::league::LeagueTable;
 use crate::Club;
+use crate::league::LeagueTable;
+use crate::r#match::MatchResult;
 use log::debug;
 use std::collections::HashMap;
 
@@ -48,7 +48,7 @@ impl LeagueStatistics {
                     result.score.home_team.team_id,
                     result.score.away_team.team_id,
                     home_goals,
-                    away_goals
+                    away_goals,
                 ));
             }
         } else {
@@ -56,7 +56,7 @@ impl LeagueStatistics {
                 result.score.home_team.team_id,
                 result.score.away_team.team_id,
                 home_goals,
-                away_goals
+                away_goals,
             ));
         }
 
@@ -65,17 +65,29 @@ impl LeagueStatistics {
             if let Some((_, _, current_biggest)) = self.biggest_win {
                 if goal_diff > current_biggest {
                     let (winner, loser) = if home_goals > away_goals {
-                        (result.score.home_team.team_id, result.score.away_team.team_id)
+                        (
+                            result.score.home_team.team_id,
+                            result.score.away_team.team_id,
+                        )
                     } else {
-                        (result.score.away_team.team_id, result.score.home_team.team_id)
+                        (
+                            result.score.away_team.team_id,
+                            result.score.home_team.team_id,
+                        )
                     };
                     self.biggest_win = Some((winner, loser, goal_diff));
                 }
             } else {
                 let (winner, loser) = if home_goals > away_goals {
-                    (result.score.home_team.team_id, result.score.away_team.team_id)
+                    (
+                        result.score.home_team.team_id,
+                        result.score.away_team.team_id,
+                    )
                 } else {
-                    (result.score.away_team.team_id, result.score.home_team.team_id)
+                    (
+                        result.score.away_team.team_id,
+                        result.score.home_team.team_id,
+                    )
                 };
                 self.biggest_win = Some((winner, loser, goal_diff));
             }
@@ -103,11 +115,13 @@ impl LeagueStatistics {
             }
         }
 
-        self.top_scorer = scorer_stats.iter()
+        self.top_scorer = scorer_stats
+            .iter()
             .max_by_key(|(_, goals)| *goals)
             .map(|(id, goals)| (*id, *goals));
 
-        self.top_assists = assist_stats.iter()
+        self.top_assists = assist_stats
+            .iter()
             .max_by_key(|(_, assists)| *assists)
             .map(|(id, assists)| (*id, *assists));
     }
@@ -118,15 +132,18 @@ impl LeagueStatistics {
             return;
         }
 
-        let mean_points = table.rows.iter().map(|r| r.points as f32).sum::<f32>()
-            / table.rows.len() as f32;
+        let mean_points =
+            table.rows.iter().map(|r| r.points as f32).sum::<f32>() / table.rows.len() as f32;
 
-        let variance = table.rows.iter()
+        let variance = table
+            .rows
+            .iter()
             .map(|r| {
                 let diff = r.points as f32 - mean_points;
                 diff * diff
             })
-            .sum::<f32>() / table.rows.len() as f32;
+            .sum::<f32>()
+            / table.rows.len() as f32;
 
         let std_dev = variance.sqrt();
         self.competitive_balance_index = 1.0 / (1.0 + std_dev / 10.0);
@@ -136,9 +153,14 @@ impl LeagueStatistics {
         debug!("📊 Season Statistics Archived:");
         debug!("  Total Goals: {}", self.total_goals);
         debug!("  Total Matches: {}", self.total_matches);
-        debug!("  Goals per Match: {:.2}",
-              self.total_goals as f32 / self.total_matches.max(1) as f32);
-        debug!("  Competitive Balance: {:.2}", self.competitive_balance_index);
+        debug!(
+            "  Goals per Match: {:.2}",
+            self.total_goals as f32 / self.total_matches.max(1) as f32
+        );
+        debug!(
+            "  Competitive Balance: {:.2}",
+            self.competitive_balance_index
+        );
 
         if let Some((player_id, goals)) = self.top_scorer {
             debug!("  Top Scorer: Player {} with {} goals", player_id, goals);

@@ -673,8 +673,7 @@ impl PassEvaluatorConfig {
             success_probability > self.risk_tolerant_min_success
                 && risk_level < self.risk_tolerant_max_risk
         } else {
-            success_probability > self.default_min_success
-                && risk_level < self.default_max_risk
+            success_probability > self.default_min_success && risk_level < self.default_max_risk
         }
     }
 
@@ -757,7 +756,8 @@ mod tests {
     fn outside_window_returns_one() {
         let c = AdaptationConfig::default();
         assert_eq!(c.settlement_multiplier(None, false, 10.0, false), 1.0);
-        let beyond = c.settlement_multiplier(Some(c.settlement_window_days + 1), false, 10.0, false);
+        let beyond =
+            c.settlement_multiplier(Some(c.settlement_window_days + 1), false, 10.0, false);
         assert_eq!(beyond, 1.0);
     }
 
@@ -773,8 +773,14 @@ mod tests {
     #[test]
     fn promise_horizon_branches() {
         let c = AdaptationConfig::default();
-        assert_eq!(c.promise_horizon_days(true, 0.0), c.loan_promise_horizon_days);
-        assert_eq!(c.promise_horizon_days(false, 10_000_000.0), c.permanent_promise_horizon_days);
+        assert_eq!(
+            c.promise_horizon_days(true, 0.0),
+            c.loan_promise_horizon_days
+        );
+        assert_eq!(
+            c.promise_horizon_days(false, 10_000_000.0),
+            c.permanent_promise_horizon_days
+        );
         assert_eq!(c.promise_horizon_days(false, 100_000.0), 0);
     }
 
@@ -818,12 +824,24 @@ mod tests {
         let cat = MoraleEventCatalog::default();
         // Sanity checks against the documented defaults — protects against
         // accidental shifts in the catalog that would change game balance.
-        assert_eq!(cat.magnitude(crate::HappinessEventType::PlayerOfTheMatch), 4.0);
+        assert_eq!(
+            cat.magnitude(crate::HappinessEventType::PlayerOfTheMatch),
+            4.0
+        );
         assert_eq!(cat.magnitude(crate::HappinessEventType::MatchDropped), -1.5);
-        assert_eq!(cat.magnitude(crate::HappinessEventType::ContractRenewal), 5.0);
-        assert_eq!(cat.magnitude(crate::HappinessEventType::ContractTerminated), -3.0);
+        assert_eq!(
+            cat.magnitude(crate::HappinessEventType::ContractRenewal),
+            5.0
+        );
+        assert_eq!(
+            cat.magnitude(crate::HappinessEventType::ContractTerminated),
+            -3.0
+        );
         assert_eq!(cat.magnitude(crate::HappinessEventType::PromiseKept), 4.0);
-        assert_eq!(cat.magnitude(crate::HappinessEventType::PromiseBroken), -6.0);
+        assert_eq!(
+            cat.magnitude(crate::HappinessEventType::PromiseBroken),
+            -6.0
+        );
     }
 
     #[test]

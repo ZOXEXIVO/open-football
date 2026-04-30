@@ -1,6 +1,6 @@
 use async_compression::tokio::write::GzipEncoder;
 use core::r#match::{MatchResult, ResultMatchPositionData};
-use log::{debug};
+use log::debug;
 use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -28,7 +28,11 @@ impl MatchStore {
         result
     }
 
-    pub async fn get_chunk(league_slug: &str, match_id: &str, chunk_number: usize) -> Option<Vec<u8>> {
+    pub async fn get_chunk(
+        league_slug: &str,
+        match_id: &str,
+        chunk_number: usize,
+    ) -> Option<Vec<u8>> {
         let chunk_file = PathBuf::from(MATCH_DIRECTORY)
             .join(league_slug)
             .join(format!("{}_chunk_{}.json.gz", match_id, chunk_number));
@@ -42,9 +46,10 @@ impl MatchStore {
         };
 
         let mut result = Vec::new();
-        file.read_to_end(&mut result)
-            .await
-            .expect(&format!("failed to read chunk {} for match {}", chunk_number, match_id));
+        file.read_to_end(&mut result).await.expect(&format!(
+            "failed to read chunk {} for match {}",
+            chunk_number, match_id
+        ));
 
         Some(result)
     }
@@ -67,8 +72,8 @@ impl MatchStore {
             .await
             .expect(&format!("failed to read metadata for match {}", match_id));
 
-        let metadata: serde_json::Value = serde_json::from_str(&contents)
-            .expect("failed to parse metadata");
+        let metadata: serde_json::Value =
+            serde_json::from_str(&contents).expect("failed to parse metadata");
 
         Some(metadata)
     }
@@ -76,7 +81,7 @@ impl MatchStore {
     pub async fn store(result: MatchResult) {
         let out_dir = PathBuf::from(MATCH_DIRECTORY).join(&result.league_slug);
 
-        if let Ok(_) = tokio::fs::create_dir_all(&out_dir).await{}
+        if let Ok(_) = tokio::fs::create_dir_all(&out_dir).await {}
 
         let out_file = out_dir.join(format!("{}.json.gz", result.id));
 
@@ -132,9 +137,13 @@ impl MatchStore {
                 .truncate(true)
                 .open(&chunk_file)
                 .await
-                .expect(&format!("failed to create chunk file {}", chunk_file.display()));
+                .expect(&format!(
+                    "failed to create chunk file {}",
+                    chunk_file.display()
+                ));
 
-            let mut compressed_file = GzipEncoder::with_quality(file, async_compression::Level::Best);
+            let mut compressed_file =
+                GzipEncoder::with_quality(file, async_compression::Level::Best);
 
             let chunk_data = serde_json::to_vec(&chunk).expect("failed to serialize chunk");
 
@@ -162,8 +171,14 @@ impl MatchStore {
             "total_duration_ms": data.max_timestamp()
         });
 
-        tokio::fs::write(&metadata_file, serde_json::to_string_pretty(&metadata).unwrap())
-            .await
-            .expect(&format!("failed to write metadata file {}", metadata_file.display()));
+        tokio::fs::write(
+            &metadata_file,
+            serde_json::to_string_pretty(&metadata).unwrap(),
+        )
+        .await
+        .expect(&format!(
+            "failed to write metadata file {}",
+            metadata_file.display()
+        ));
     }
 }

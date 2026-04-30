@@ -39,10 +39,12 @@ impl Ball {
         if self.stall_anchor_tick == STALL_TICKS {
             #[cfg(feature = "match-logs")]
             {
-                let owner_str = self.current_owner
+                let owner_str = self
+                    .current_owner
                     .map(|id| format!("Some({})", id))
                     .unwrap_or_else(|| "None".to_string());
-                let owner_state = self.current_owner
+                let owner_state = self
+                    .current_owner
                     .and_then(|id| players.iter().find(|p| p.id == id))
                     .map(|p| format!("{:?}", p.state))
                     .unwrap_or_else(|| "-".to_string());
@@ -64,7 +66,8 @@ impl Ball {
             // escaped the 12-unit radius. Solution: kick harder AND
             // set `in_flight_state` so normal ownership checks are
             // suppressed long enough for the ball to actually leave.
-            let owner_side = self.current_owner
+            let owner_side = self
+                .current_owner
                 .and_then(|id| players.iter().find(|p| p.id == id))
                 .and_then(|p| p.side);
             let push_x: f32 = match owner_side {
@@ -107,8 +110,10 @@ impl Ball {
                 "\n  id={} team={} pos=({:.1}, {:.1}) vel=({:.2}, {:.2}) state={} tactical={:?}",
                 p.id,
                 p.team_id,
-                p.position.x, p.position.y,
-                p.velocity.x, p.velocity.y,
+                p.position.x,
+                p.position.y,
+                p.velocity.x,
+                p.velocity.y,
                 p.state,
                 p.tactical_position.current_position,
             ));

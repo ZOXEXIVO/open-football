@@ -251,59 +251,309 @@ impl SkillId {
 /// Static metadata table indexed in the same order as `SkillId::ALL`.
 pub const SKILL_REGISTRY: [SkillMetadata; 50] = [
     // ── Technical ─────────────────────────────────────────────
-    SkillMetadata { id: SkillId::Corners,       category: SkillCategory::Technical,   display_name: "Corners",        field_name: "corners" },
-    SkillMetadata { id: SkillId::Crossing,      category: SkillCategory::Technical,   display_name: "Crossing",       field_name: "crossing" },
-    SkillMetadata { id: SkillId::Dribbling,     category: SkillCategory::Technical,   display_name: "Dribbling",      field_name: "dribbling" },
-    SkillMetadata { id: SkillId::Finishing,     category: SkillCategory::Technical,   display_name: "Finishing",      field_name: "finishing" },
-    SkillMetadata { id: SkillId::FirstTouch,    category: SkillCategory::Technical,   display_name: "First Touch",    field_name: "first_touch" },
-    SkillMetadata { id: SkillId::FreeKicks,     category: SkillCategory::Technical,   display_name: "Free Kicks",     field_name: "free_kicks" },
-    SkillMetadata { id: SkillId::Heading,       category: SkillCategory::Technical,   display_name: "Heading",        field_name: "heading" },
-    SkillMetadata { id: SkillId::LongShots,     category: SkillCategory::Technical,   display_name: "Long Shots",     field_name: "long_shots" },
-    SkillMetadata { id: SkillId::LongThrows,    category: SkillCategory::Technical,   display_name: "Long Throws",    field_name: "long_throws" },
-    SkillMetadata { id: SkillId::Marking,       category: SkillCategory::Technical,   display_name: "Marking",        field_name: "marking" },
-    SkillMetadata { id: SkillId::Passing,       category: SkillCategory::Technical,   display_name: "Passing",        field_name: "passing" },
-    SkillMetadata { id: SkillId::PenaltyTaking, category: SkillCategory::Technical,   display_name: "Penalty Taking", field_name: "penalty_taking" },
-    SkillMetadata { id: SkillId::Tackling,      category: SkillCategory::Technical,   display_name: "Tackling",       field_name: "tackling" },
-    SkillMetadata { id: SkillId::Technique,     category: SkillCategory::Technical,   display_name: "Technique",      field_name: "technique" },
+    SkillMetadata {
+        id: SkillId::Corners,
+        category: SkillCategory::Technical,
+        display_name: "Corners",
+        field_name: "corners",
+    },
+    SkillMetadata {
+        id: SkillId::Crossing,
+        category: SkillCategory::Technical,
+        display_name: "Crossing",
+        field_name: "crossing",
+    },
+    SkillMetadata {
+        id: SkillId::Dribbling,
+        category: SkillCategory::Technical,
+        display_name: "Dribbling",
+        field_name: "dribbling",
+    },
+    SkillMetadata {
+        id: SkillId::Finishing,
+        category: SkillCategory::Technical,
+        display_name: "Finishing",
+        field_name: "finishing",
+    },
+    SkillMetadata {
+        id: SkillId::FirstTouch,
+        category: SkillCategory::Technical,
+        display_name: "First Touch",
+        field_name: "first_touch",
+    },
+    SkillMetadata {
+        id: SkillId::FreeKicks,
+        category: SkillCategory::Technical,
+        display_name: "Free Kicks",
+        field_name: "free_kicks",
+    },
+    SkillMetadata {
+        id: SkillId::Heading,
+        category: SkillCategory::Technical,
+        display_name: "Heading",
+        field_name: "heading",
+    },
+    SkillMetadata {
+        id: SkillId::LongShots,
+        category: SkillCategory::Technical,
+        display_name: "Long Shots",
+        field_name: "long_shots",
+    },
+    SkillMetadata {
+        id: SkillId::LongThrows,
+        category: SkillCategory::Technical,
+        display_name: "Long Throws",
+        field_name: "long_throws",
+    },
+    SkillMetadata {
+        id: SkillId::Marking,
+        category: SkillCategory::Technical,
+        display_name: "Marking",
+        field_name: "marking",
+    },
+    SkillMetadata {
+        id: SkillId::Passing,
+        category: SkillCategory::Technical,
+        display_name: "Passing",
+        field_name: "passing",
+    },
+    SkillMetadata {
+        id: SkillId::PenaltyTaking,
+        category: SkillCategory::Technical,
+        display_name: "Penalty Taking",
+        field_name: "penalty_taking",
+    },
+    SkillMetadata {
+        id: SkillId::Tackling,
+        category: SkillCategory::Technical,
+        display_name: "Tackling",
+        field_name: "tackling",
+    },
+    SkillMetadata {
+        id: SkillId::Technique,
+        category: SkillCategory::Technical,
+        display_name: "Technique",
+        field_name: "technique",
+    },
     // ── Mental ────────────────────────────────────────────────
-    SkillMetadata { id: SkillId::Aggression,    category: SkillCategory::Mental,      display_name: "Aggression",     field_name: "aggression" },
-    SkillMetadata { id: SkillId::Anticipation,  category: SkillCategory::Mental,      display_name: "Anticipation",   field_name: "anticipation" },
-    SkillMetadata { id: SkillId::Bravery,       category: SkillCategory::Mental,      display_name: "Bravery",        field_name: "bravery" },
-    SkillMetadata { id: SkillId::Composure,     category: SkillCategory::Mental,      display_name: "Composure",      field_name: "composure" },
-    SkillMetadata { id: SkillId::Concentration, category: SkillCategory::Mental,      display_name: "Concentration",  field_name: "concentration" },
-    SkillMetadata { id: SkillId::Decisions,     category: SkillCategory::Mental,      display_name: "Decisions",      field_name: "decisions" },
-    SkillMetadata { id: SkillId::Determination, category: SkillCategory::Mental,      display_name: "Determination",  field_name: "determination" },
-    SkillMetadata { id: SkillId::Flair,         category: SkillCategory::Mental,      display_name: "Flair",          field_name: "flair" },
-    SkillMetadata { id: SkillId::Leadership,    category: SkillCategory::Mental,      display_name: "Leadership",     field_name: "leadership" },
-    SkillMetadata { id: SkillId::OffTheBall,    category: SkillCategory::Mental,      display_name: "Off the Ball",   field_name: "off_the_ball" },
-    SkillMetadata { id: SkillId::Positioning,   category: SkillCategory::Mental,      display_name: "Positioning",    field_name: "positioning" },
-    SkillMetadata { id: SkillId::Teamwork,      category: SkillCategory::Mental,      display_name: "Teamwork",       field_name: "teamwork" },
-    SkillMetadata { id: SkillId::Vision,        category: SkillCategory::Mental,      display_name: "Vision",         field_name: "vision" },
-    SkillMetadata { id: SkillId::WorkRate,      category: SkillCategory::Mental,      display_name: "Work Rate",      field_name: "work_rate" },
+    SkillMetadata {
+        id: SkillId::Aggression,
+        category: SkillCategory::Mental,
+        display_name: "Aggression",
+        field_name: "aggression",
+    },
+    SkillMetadata {
+        id: SkillId::Anticipation,
+        category: SkillCategory::Mental,
+        display_name: "Anticipation",
+        field_name: "anticipation",
+    },
+    SkillMetadata {
+        id: SkillId::Bravery,
+        category: SkillCategory::Mental,
+        display_name: "Bravery",
+        field_name: "bravery",
+    },
+    SkillMetadata {
+        id: SkillId::Composure,
+        category: SkillCategory::Mental,
+        display_name: "Composure",
+        field_name: "composure",
+    },
+    SkillMetadata {
+        id: SkillId::Concentration,
+        category: SkillCategory::Mental,
+        display_name: "Concentration",
+        field_name: "concentration",
+    },
+    SkillMetadata {
+        id: SkillId::Decisions,
+        category: SkillCategory::Mental,
+        display_name: "Decisions",
+        field_name: "decisions",
+    },
+    SkillMetadata {
+        id: SkillId::Determination,
+        category: SkillCategory::Mental,
+        display_name: "Determination",
+        field_name: "determination",
+    },
+    SkillMetadata {
+        id: SkillId::Flair,
+        category: SkillCategory::Mental,
+        display_name: "Flair",
+        field_name: "flair",
+    },
+    SkillMetadata {
+        id: SkillId::Leadership,
+        category: SkillCategory::Mental,
+        display_name: "Leadership",
+        field_name: "leadership",
+    },
+    SkillMetadata {
+        id: SkillId::OffTheBall,
+        category: SkillCategory::Mental,
+        display_name: "Off the Ball",
+        field_name: "off_the_ball",
+    },
+    SkillMetadata {
+        id: SkillId::Positioning,
+        category: SkillCategory::Mental,
+        display_name: "Positioning",
+        field_name: "positioning",
+    },
+    SkillMetadata {
+        id: SkillId::Teamwork,
+        category: SkillCategory::Mental,
+        display_name: "Teamwork",
+        field_name: "teamwork",
+    },
+    SkillMetadata {
+        id: SkillId::Vision,
+        category: SkillCategory::Mental,
+        display_name: "Vision",
+        field_name: "vision",
+    },
+    SkillMetadata {
+        id: SkillId::WorkRate,
+        category: SkillCategory::Mental,
+        display_name: "Work Rate",
+        field_name: "work_rate",
+    },
     // ── Physical ──────────────────────────────────────────────
-    SkillMetadata { id: SkillId::Acceleration,    category: SkillCategory::Physical, display_name: "Acceleration",     field_name: "acceleration" },
-    SkillMetadata { id: SkillId::Agility,         category: SkillCategory::Physical, display_name: "Agility",          field_name: "agility" },
-    SkillMetadata { id: SkillId::Balance,         category: SkillCategory::Physical, display_name: "Balance",          field_name: "balance" },
-    SkillMetadata { id: SkillId::Jumping,         category: SkillCategory::Physical, display_name: "Jumping",          field_name: "jumping" },
-    SkillMetadata { id: SkillId::NaturalFitness,  category: SkillCategory::Physical, display_name: "Natural Fitness",  field_name: "natural_fitness" },
-    SkillMetadata { id: SkillId::Pace,            category: SkillCategory::Physical, display_name: "Pace",             field_name: "pace" },
-    SkillMetadata { id: SkillId::Stamina,         category: SkillCategory::Physical, display_name: "Stamina",          field_name: "stamina" },
-    SkillMetadata { id: SkillId::Strength,        category: SkillCategory::Physical, display_name: "Strength",         field_name: "strength" },
-    SkillMetadata { id: SkillId::MatchReadiness,  category: SkillCategory::Physical, display_name: "Match Readiness",  field_name: "match_readiness" },
+    SkillMetadata {
+        id: SkillId::Acceleration,
+        category: SkillCategory::Physical,
+        display_name: "Acceleration",
+        field_name: "acceleration",
+    },
+    SkillMetadata {
+        id: SkillId::Agility,
+        category: SkillCategory::Physical,
+        display_name: "Agility",
+        field_name: "agility",
+    },
+    SkillMetadata {
+        id: SkillId::Balance,
+        category: SkillCategory::Physical,
+        display_name: "Balance",
+        field_name: "balance",
+    },
+    SkillMetadata {
+        id: SkillId::Jumping,
+        category: SkillCategory::Physical,
+        display_name: "Jumping",
+        field_name: "jumping",
+    },
+    SkillMetadata {
+        id: SkillId::NaturalFitness,
+        category: SkillCategory::Physical,
+        display_name: "Natural Fitness",
+        field_name: "natural_fitness",
+    },
+    SkillMetadata {
+        id: SkillId::Pace,
+        category: SkillCategory::Physical,
+        display_name: "Pace",
+        field_name: "pace",
+    },
+    SkillMetadata {
+        id: SkillId::Stamina,
+        category: SkillCategory::Physical,
+        display_name: "Stamina",
+        field_name: "stamina",
+    },
+    SkillMetadata {
+        id: SkillId::Strength,
+        category: SkillCategory::Physical,
+        display_name: "Strength",
+        field_name: "strength",
+    },
+    SkillMetadata {
+        id: SkillId::MatchReadiness,
+        category: SkillCategory::Physical,
+        display_name: "Match Readiness",
+        field_name: "match_readiness",
+    },
     // ── Goalkeeping ───────────────────────────────────────────
-    SkillMetadata { id: SkillId::GkAerialReach,    category: SkillCategory::Goalkeeping, display_name: "Aerial Reach",    field_name: "gk_aerial_reach" },
-    SkillMetadata { id: SkillId::GkCommandOfArea,  category: SkillCategory::Goalkeeping, display_name: "Command of Area", field_name: "gk_command_of_area" },
-    SkillMetadata { id: SkillId::GkCommunication,  category: SkillCategory::Goalkeeping, display_name: "Communication",   field_name: "gk_communication" },
-    SkillMetadata { id: SkillId::GkEccentricity,   category: SkillCategory::Goalkeeping, display_name: "Eccentricity",    field_name: "gk_eccentricity" },
-    SkillMetadata { id: SkillId::GkFirstTouch,     category: SkillCategory::Goalkeeping, display_name: "First Touch (GK)", field_name: "gk_first_touch" },
-    SkillMetadata { id: SkillId::GkHandling,       category: SkillCategory::Goalkeeping, display_name: "Handling",        field_name: "gk_handling" },
-    SkillMetadata { id: SkillId::GkKicking,        category: SkillCategory::Goalkeeping, display_name: "Kicking",         field_name: "gk_kicking" },
-    SkillMetadata { id: SkillId::GkOneOnOnes,      category: SkillCategory::Goalkeeping, display_name: "One on Ones",     field_name: "gk_one_on_ones" },
-    SkillMetadata { id: SkillId::GkPassing,        category: SkillCategory::Goalkeeping, display_name: "Passing (GK)",    field_name: "gk_passing" },
-    SkillMetadata { id: SkillId::GkPunching,       category: SkillCategory::Goalkeeping, display_name: "Punching",        field_name: "gk_punching" },
-    SkillMetadata { id: SkillId::GkReflexes,       category: SkillCategory::Goalkeeping, display_name: "Reflexes",        field_name: "gk_reflexes" },
-    SkillMetadata { id: SkillId::GkRushingOut,     category: SkillCategory::Goalkeeping, display_name: "Rushing Out",     field_name: "gk_rushing_out" },
-    SkillMetadata { id: SkillId::GkThrowing,       category: SkillCategory::Goalkeeping, display_name: "Throwing",        field_name: "gk_throwing" },
+    SkillMetadata {
+        id: SkillId::GkAerialReach,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Aerial Reach",
+        field_name: "gk_aerial_reach",
+    },
+    SkillMetadata {
+        id: SkillId::GkCommandOfArea,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Command of Area",
+        field_name: "gk_command_of_area",
+    },
+    SkillMetadata {
+        id: SkillId::GkCommunication,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Communication",
+        field_name: "gk_communication",
+    },
+    SkillMetadata {
+        id: SkillId::GkEccentricity,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Eccentricity",
+        field_name: "gk_eccentricity",
+    },
+    SkillMetadata {
+        id: SkillId::GkFirstTouch,
+        category: SkillCategory::Goalkeeping,
+        display_name: "First Touch (GK)",
+        field_name: "gk_first_touch",
+    },
+    SkillMetadata {
+        id: SkillId::GkHandling,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Handling",
+        field_name: "gk_handling",
+    },
+    SkillMetadata {
+        id: SkillId::GkKicking,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Kicking",
+        field_name: "gk_kicking",
+    },
+    SkillMetadata {
+        id: SkillId::GkOneOnOnes,
+        category: SkillCategory::Goalkeeping,
+        display_name: "One on Ones",
+        field_name: "gk_one_on_ones",
+    },
+    SkillMetadata {
+        id: SkillId::GkPassing,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Passing (GK)",
+        field_name: "gk_passing",
+    },
+    SkillMetadata {
+        id: SkillId::GkPunching,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Punching",
+        field_name: "gk_punching",
+    },
+    SkillMetadata {
+        id: SkillId::GkReflexes,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Reflexes",
+        field_name: "gk_reflexes",
+    },
+    SkillMetadata {
+        id: SkillId::GkRushingOut,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Rushing Out",
+        field_name: "gk_rushing_out",
+    },
+    SkillMetadata {
+        id: SkillId::GkThrowing,
+        category: SkillCategory::Goalkeeping,
+        display_name: "Throwing",
+        field_name: "gk_throwing",
+    },
 ];
 
 impl PlayerSkills {
@@ -506,42 +756,105 @@ pub fn has_risk_tolerant_passing_trait(traits: &[PlayerTrait]) -> bool {
 }
 
 // Reusable requirement constants — kept short so the registry below stays readable.
-const REQ_LONG_SHOTS_12:    &[SkillRequirement] = &[SkillRequirement { skill: SkillId::LongShots,   min: 12.0 }];
-const REQ_FINISHING_12:     &[SkillRequirement] = &[SkillRequirement { skill: SkillId::Finishing,   min: 12.0 }];
-const REQ_FINISH_LONG_11:   &[SkillRequirement] = &[
-    SkillRequirement { skill: SkillId::Finishing, min: 11.0 },
-    SkillRequirement { skill: SkillId::LongShots, min: 11.0 },
+const REQ_LONG_SHOTS_12: &[SkillRequirement] = &[SkillRequirement {
+    skill: SkillId::LongShots,
+    min: 12.0,
+}];
+const REQ_FINISHING_12: &[SkillRequirement] = &[SkillRequirement {
+    skill: SkillId::Finishing,
+    min: 12.0,
+}];
+const REQ_FINISH_LONG_11: &[SkillRequirement] = &[
+    SkillRequirement {
+        skill: SkillId::Finishing,
+        min: 11.0,
+    },
+    SkillRequirement {
+        skill: SkillId::LongShots,
+        min: 11.0,
+    },
 ];
-const REQ_TECHNIQUE_12:     &[SkillRequirement] = &[SkillRequirement { skill: SkillId::Technique,   min: 12.0 }];
+const REQ_TECHNIQUE_12: &[SkillRequirement] = &[SkillRequirement {
+    skill: SkillId::Technique,
+    min: 12.0,
+}];
 const REQ_TECH_13_CROSS_11: &[SkillRequirement] = &[
-    SkillRequirement { skill: SkillId::Technique, min: 13.0 },
-    SkillRequirement { skill: SkillId::Crossing,  min: 11.0 },
+    SkillRequirement {
+        skill: SkillId::Technique,
+        min: 13.0,
+    },
+    SkillRequirement {
+        skill: SkillId::Crossing,
+        min: 11.0,
+    },
 ];
-const REQ_PASS_VIS_13:      &[SkillRequirement] = &[
-    SkillRequirement { skill: SkillId::Passing, min: 13.0 },
-    SkillRequirement { skill: SkillId::Vision,  min: 13.0 },
+const REQ_PASS_VIS_13: &[SkillRequirement] = &[
+    SkillRequirement {
+        skill: SkillId::Passing,
+        min: 13.0,
+    },
+    SkillRequirement {
+        skill: SkillId::Vision,
+        min: 13.0,
+    },
 ];
-const REQ_PASS_VIS_14:      &[SkillRequirement] = &[
-    SkillRequirement { skill: SkillId::Passing, min: 14.0 },
-    SkillRequirement { skill: SkillId::Vision,  min: 14.0 },
+const REQ_PASS_VIS_14: &[SkillRequirement] = &[
+    SkillRequirement {
+        skill: SkillId::Passing,
+        min: 14.0,
+    },
+    SkillRequirement {
+        skill: SkillId::Vision,
+        min: 14.0,
+    },
 ];
-const REQ_PASSING_12:       &[SkillRequirement] = &[SkillRequirement { skill: SkillId::Passing,    min: 12.0 }];
-const REQ_DRIB_12_TECH_11:  &[SkillRequirement] = &[
-    SkillRequirement { skill: SkillId::Dribbling, min: 12.0 },
-    SkillRequirement { skill: SkillId::Technique, min: 11.0 },
+const REQ_PASSING_12: &[SkillRequirement] = &[SkillRequirement {
+    skill: SkillId::Passing,
+    min: 12.0,
+}];
+const REQ_DRIB_12_TECH_11: &[SkillRequirement] = &[
+    SkillRequirement {
+        skill: SkillId::Dribbling,
+        min: 12.0,
+    },
+    SkillRequirement {
+        skill: SkillId::Technique,
+        min: 11.0,
+    },
 ];
-const REQ_TECH_14_DRIB_13:  &[SkillRequirement] = &[
-    SkillRequirement { skill: SkillId::Technique, min: 14.0 },
-    SkillRequirement { skill: SkillId::Dribbling, min: 13.0 },
+const REQ_TECH_14_DRIB_13: &[SkillRequirement] = &[
+    SkillRequirement {
+        skill: SkillId::Technique,
+        min: 14.0,
+    },
+    SkillRequirement {
+        skill: SkillId::Dribbling,
+        min: 13.0,
+    },
 ];
-const REQ_TACKLING_11:      &[SkillRequirement] = &[SkillRequirement { skill: SkillId::Tackling, min: 11.0 }];
-const REQ_POS_12_TACK_11:   &[SkillRequirement] = &[
-    SkillRequirement { skill: SkillId::Positioning, min: 12.0 },
-    SkillRequirement { skill: SkillId::Tackling,    min: 11.0 },
+const REQ_TACKLING_11: &[SkillRequirement] = &[SkillRequirement {
+    skill: SkillId::Tackling,
+    min: 11.0,
+}];
+const REQ_POS_12_TACK_11: &[SkillRequirement] = &[
+    SkillRequirement {
+        skill: SkillId::Positioning,
+        min: 12.0,
+    },
+    SkillRequirement {
+        skill: SkillId::Tackling,
+        min: 11.0,
+    },
 ];
-const REQ_POS_CONC_12:      &[SkillRequirement] = &[
-    SkillRequirement { skill: SkillId::Positioning,   min: 12.0 },
-    SkillRequirement { skill: SkillId::Concentration, min: 12.0 },
+const REQ_POS_CONC_12: &[SkillRequirement] = &[
+    SkillRequirement {
+        skill: SkillId::Positioning,
+        min: 12.0,
+    },
+    SkillRequirement {
+        skill: SkillId::Concentration,
+        min: 12.0,
+    },
 ];
 
 /// Static trait metadata table. One entry per `PlayerTrait` variant —
@@ -551,34 +864,261 @@ const REQ_POS_CONC_12:      &[SkillRequirement] = &[
 /// `skill_requirements` field. Empty `&[]` means the trait has no
 /// skill gate.
 pub const TRAIT_REGISTRY: &[TraitMetadata] = &[
-    TraitMetadata { trait_id: PlayerTrait::CutsInsideFromBothWings,         category: TraitCategory::AttackingMovement, display_name: "Cuts inside from both wings",         primary_skill: Some(SkillId::Dribbling),    skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::HugsLine] },
-    TraitMetadata { trait_id: PlayerTrait::HugsLine,                        category: TraitCategory::AttackingMovement, display_name: "Hugs line",                            primary_skill: Some(SkillId::Crossing),     skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::CutsInsideFromBothWings] },
-    TraitMetadata { trait_id: PlayerTrait::RunsWithBallOften,               category: TraitCategory::AttackingMovement, display_name: "Runs with ball often",                 primary_skill: Some(SkillId::Dribbling),    skill_requirements: REQ_DRIB_12_TECH_11, risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::RunsWithBallRarely] },
-    TraitMetadata { trait_id: PlayerTrait::RunsWithBallRarely,              category: TraitCategory::AttackingMovement, display_name: "Runs with ball rarely",                primary_skill: None,                        skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::RunsWithBallOften, PlayerTrait::KnocksBallPast] },
-    TraitMetadata { trait_id: PlayerTrait::GetsIntoOppositionArea,          category: TraitCategory::AttackingMovement, display_name: "Gets into opposition area",            primary_skill: Some(SkillId::OffTheBall),   skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::StaysBack] },
-    TraitMetadata { trait_id: PlayerTrait::ArrivesLateInOppositionArea,     category: TraitCategory::AttackingMovement, display_name: "Arrives late in opposition area",      primary_skill: Some(SkillId::OffTheBall),   skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::StaysBack] },
-    TraitMetadata { trait_id: PlayerTrait::StaysBack,                       category: TraitCategory::AttackingMovement, display_name: "Stays back at all times",              primary_skill: None,                        skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::GetsIntoOppositionArea, PlayerTrait::ArrivesLateInOppositionArea] },
-    TraitMetadata { trait_id: PlayerTrait::TriesThroughBalls,               category: TraitCategory::Passing,           display_name: "Tries killer balls often",             primary_skill: Some(SkillId::Passing),      skill_requirements: REQ_PASS_VIS_13,    risk_tolerant_passer: true,  conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::LikesToSwitchPlay,               category: TraitCategory::Passing,           display_name: "Likes to switch play",                 primary_skill: Some(SkillId::Vision),       skill_requirements: REQ_PASSING_12,     risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::PlaysShortPasses] },
-    TraitMetadata { trait_id: PlayerTrait::LooksForPassRatherThanAttemptShot, category: TraitCategory::Passing,         display_name: "Looks for pass rather than shot",      primary_skill: Some(SkillId::Decisions),    skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::ShootsFromDistance] },
-    TraitMetadata { trait_id: PlayerTrait::PlaysShortPasses,                category: TraitCategory::Passing,           display_name: "Plays short passes",                   primary_skill: Some(SkillId::Passing),      skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::PlaysLongPasses, PlayerTrait::LikesToSwitchPlay] },
-    TraitMetadata { trait_id: PlayerTrait::PlaysLongPasses,                 category: TraitCategory::Passing,           display_name: "Plays long passes",                    primary_skill: Some(SkillId::Passing),      skill_requirements: REQ_PASSING_12,     risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::PlaysShortPasses] },
-    TraitMetadata { trait_id: PlayerTrait::ShootsFromDistance,              category: TraitCategory::Shooting,          display_name: "Shoots from distance",                 primary_skill: Some(SkillId::LongShots),    skill_requirements: REQ_LONG_SHOTS_12,  risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::LooksForPassRatherThanAttemptShot] },
-    TraitMetadata { trait_id: PlayerTrait::PlacesShots,                     category: TraitCategory::Shooting,          display_name: "Places shots",                         primary_skill: Some(SkillId::Finishing),    skill_requirements: REQ_FINISHING_12,   risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::PowersShots] },
-    TraitMetadata { trait_id: PlayerTrait::PowersShots,                     category: TraitCategory::Shooting,          display_name: "Powers shots",                         primary_skill: Some(SkillId::Finishing),    skill_requirements: REQ_FINISH_LONG_11, risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::PlacesShots] },
-    TraitMetadata { trait_id: PlayerTrait::TriesLobs,                       category: TraitCategory::Shooting,          display_name: "Tries lobs",                           primary_skill: Some(SkillId::Technique),    skill_requirements: REQ_TECHNIQUE_12,   risk_tolerant_passer: false, conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::CurlsBall,                       category: TraitCategory::SetPiece,          display_name: "Curls ball",                           primary_skill: Some(SkillId::Technique),    skill_requirements: REQ_TECH_13_CROSS_11, risk_tolerant_passer: false, conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::KnocksBallPast,                  category: TraitCategory::AttackingMovement, display_name: "Knocks ball past opponent",            primary_skill: Some(SkillId::Pace),         skill_requirements: REQ_DRIB_12_TECH_11, risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::RunsWithBallRarely] },
-    TraitMetadata { trait_id: PlayerTrait::KillerBallOften,                 category: TraitCategory::Passing,           display_name: "Plays killer balls",                   primary_skill: Some(SkillId::Vision),       skill_requirements: REQ_PASS_VIS_13,    risk_tolerant_passer: true,  conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::DivesIntoTackles,                category: TraitCategory::Defensive,         display_name: "Dives into tackles",                   primary_skill: Some(SkillId::Tackling),     skill_requirements: REQ_TACKLING_11,    risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::StaysOnFeet] },
-    TraitMetadata { trait_id: PlayerTrait::StaysOnFeet,                     category: TraitCategory::Defensive,         display_name: "Stays on feet",                        primary_skill: Some(SkillId::Positioning),  skill_requirements: REQ_POS_12_TACK_11, risk_tolerant_passer: false, conflicts_with: &[PlayerTrait::DivesIntoTackles] },
-    TraitMetadata { trait_id: PlayerTrait::MarkTightly,                     category: TraitCategory::Defensive,         display_name: "Marks opponent tightly",               primary_skill: Some(SkillId::Marking),      skill_requirements: REQ_POS_CONC_12,    risk_tolerant_passer: false, conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::Playmaker,                       category: TraitCategory::Personality,       display_name: "Dictates tempo",                       primary_skill: Some(SkillId::Vision),       skill_requirements: REQ_PASS_VIS_14,    risk_tolerant_passer: true,  conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::Argues,                          category: TraitCategory::Personality,       display_name: "Argues with officials",                primary_skill: None,                        skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::WindsUpOpponents,                category: TraitCategory::Personality,       display_name: "Winds up opponents",                   primary_skill: None,                        skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::TriesTricks,                     category: TraitCategory::TechnicalFlair,    display_name: "Tries tricks",                         primary_skill: Some(SkillId::Technique),    skill_requirements: REQ_TECH_14_DRIB_13, risk_tolerant_passer: false, conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::BackheelsRegularly,              category: TraitCategory::TechnicalFlair,    display_name: "Tries backheels",                      primary_skill: Some(SkillId::Flair),        skill_requirements: REQ_TECH_14_DRIB_13, risk_tolerant_passer: false, conflicts_with: &[] },
-    TraitMetadata { trait_id: PlayerTrait::OneClubPlayer,                   category: TraitCategory::Personality,       display_name: "One club player",                      primary_skill: None,                        skill_requirements: &[],                risk_tolerant_passer: false, conflicts_with: &[] },
+    TraitMetadata {
+        trait_id: PlayerTrait::CutsInsideFromBothWings,
+        category: TraitCategory::AttackingMovement,
+        display_name: "Cuts inside from both wings",
+        primary_skill: Some(SkillId::Dribbling),
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::HugsLine],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::HugsLine,
+        category: TraitCategory::AttackingMovement,
+        display_name: "Hugs line",
+        primary_skill: Some(SkillId::Crossing),
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::CutsInsideFromBothWings],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::RunsWithBallOften,
+        category: TraitCategory::AttackingMovement,
+        display_name: "Runs with ball often",
+        primary_skill: Some(SkillId::Dribbling),
+        skill_requirements: REQ_DRIB_12_TECH_11,
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::RunsWithBallRarely],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::RunsWithBallRarely,
+        category: TraitCategory::AttackingMovement,
+        display_name: "Runs with ball rarely",
+        primary_skill: None,
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::RunsWithBallOften, PlayerTrait::KnocksBallPast],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::GetsIntoOppositionArea,
+        category: TraitCategory::AttackingMovement,
+        display_name: "Gets into opposition area",
+        primary_skill: Some(SkillId::OffTheBall),
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::StaysBack],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::ArrivesLateInOppositionArea,
+        category: TraitCategory::AttackingMovement,
+        display_name: "Arrives late in opposition area",
+        primary_skill: Some(SkillId::OffTheBall),
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::StaysBack],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::StaysBack,
+        category: TraitCategory::AttackingMovement,
+        display_name: "Stays back at all times",
+        primary_skill: None,
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[
+            PlayerTrait::GetsIntoOppositionArea,
+            PlayerTrait::ArrivesLateInOppositionArea,
+        ],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::TriesThroughBalls,
+        category: TraitCategory::Passing,
+        display_name: "Tries killer balls often",
+        primary_skill: Some(SkillId::Passing),
+        skill_requirements: REQ_PASS_VIS_13,
+        risk_tolerant_passer: true,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::LikesToSwitchPlay,
+        category: TraitCategory::Passing,
+        display_name: "Likes to switch play",
+        primary_skill: Some(SkillId::Vision),
+        skill_requirements: REQ_PASSING_12,
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::PlaysShortPasses],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::LooksForPassRatherThanAttemptShot,
+        category: TraitCategory::Passing,
+        display_name: "Looks for pass rather than shot",
+        primary_skill: Some(SkillId::Decisions),
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::ShootsFromDistance],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::PlaysShortPasses,
+        category: TraitCategory::Passing,
+        display_name: "Plays short passes",
+        primary_skill: Some(SkillId::Passing),
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::PlaysLongPasses, PlayerTrait::LikesToSwitchPlay],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::PlaysLongPasses,
+        category: TraitCategory::Passing,
+        display_name: "Plays long passes",
+        primary_skill: Some(SkillId::Passing),
+        skill_requirements: REQ_PASSING_12,
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::PlaysShortPasses],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::ShootsFromDistance,
+        category: TraitCategory::Shooting,
+        display_name: "Shoots from distance",
+        primary_skill: Some(SkillId::LongShots),
+        skill_requirements: REQ_LONG_SHOTS_12,
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::LooksForPassRatherThanAttemptShot],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::PlacesShots,
+        category: TraitCategory::Shooting,
+        display_name: "Places shots",
+        primary_skill: Some(SkillId::Finishing),
+        skill_requirements: REQ_FINISHING_12,
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::PowersShots],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::PowersShots,
+        category: TraitCategory::Shooting,
+        display_name: "Powers shots",
+        primary_skill: Some(SkillId::Finishing),
+        skill_requirements: REQ_FINISH_LONG_11,
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::PlacesShots],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::TriesLobs,
+        category: TraitCategory::Shooting,
+        display_name: "Tries lobs",
+        primary_skill: Some(SkillId::Technique),
+        skill_requirements: REQ_TECHNIQUE_12,
+        risk_tolerant_passer: false,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::CurlsBall,
+        category: TraitCategory::SetPiece,
+        display_name: "Curls ball",
+        primary_skill: Some(SkillId::Technique),
+        skill_requirements: REQ_TECH_13_CROSS_11,
+        risk_tolerant_passer: false,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::KnocksBallPast,
+        category: TraitCategory::AttackingMovement,
+        display_name: "Knocks ball past opponent",
+        primary_skill: Some(SkillId::Pace),
+        skill_requirements: REQ_DRIB_12_TECH_11,
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::RunsWithBallRarely],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::KillerBallOften,
+        category: TraitCategory::Passing,
+        display_name: "Plays killer balls",
+        primary_skill: Some(SkillId::Vision),
+        skill_requirements: REQ_PASS_VIS_13,
+        risk_tolerant_passer: true,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::DivesIntoTackles,
+        category: TraitCategory::Defensive,
+        display_name: "Dives into tackles",
+        primary_skill: Some(SkillId::Tackling),
+        skill_requirements: REQ_TACKLING_11,
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::StaysOnFeet],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::StaysOnFeet,
+        category: TraitCategory::Defensive,
+        display_name: "Stays on feet",
+        primary_skill: Some(SkillId::Positioning),
+        skill_requirements: REQ_POS_12_TACK_11,
+        risk_tolerant_passer: false,
+        conflicts_with: &[PlayerTrait::DivesIntoTackles],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::MarkTightly,
+        category: TraitCategory::Defensive,
+        display_name: "Marks opponent tightly",
+        primary_skill: Some(SkillId::Marking),
+        skill_requirements: REQ_POS_CONC_12,
+        risk_tolerant_passer: false,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::Playmaker,
+        category: TraitCategory::Personality,
+        display_name: "Dictates tempo",
+        primary_skill: Some(SkillId::Vision),
+        skill_requirements: REQ_PASS_VIS_14,
+        risk_tolerant_passer: true,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::Argues,
+        category: TraitCategory::Personality,
+        display_name: "Argues with officials",
+        primary_skill: None,
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::WindsUpOpponents,
+        category: TraitCategory::Personality,
+        display_name: "Winds up opponents",
+        primary_skill: None,
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::TriesTricks,
+        category: TraitCategory::TechnicalFlair,
+        display_name: "Tries tricks",
+        primary_skill: Some(SkillId::Technique),
+        skill_requirements: REQ_TECH_14_DRIB_13,
+        risk_tolerant_passer: false,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::BackheelsRegularly,
+        category: TraitCategory::TechnicalFlair,
+        display_name: "Tries backheels",
+        primary_skill: Some(SkillId::Flair),
+        skill_requirements: REQ_TECH_14_DRIB_13,
+        risk_tolerant_passer: false,
+        conflicts_with: &[],
+    },
+    TraitMetadata {
+        trait_id: PlayerTrait::OneClubPlayer,
+        category: TraitCategory::Personality,
+        display_name: "One club player",
+        primary_skill: None,
+        skill_requirements: &[],
+        risk_tolerant_passer: false,
+        conflicts_with: &[],
+    },
 ];
 
 #[cfg(test)]
@@ -589,23 +1129,62 @@ mod tests {
     fn skills_with_known_values() -> PlayerSkills {
         let mut s = PlayerSkills::default();
         s.technical = Technical {
-            corners: 1.0, crossing: 2.0, dribbling: 3.0, finishing: 4.0, first_touch: 5.0,
-            free_kicks: 6.0, heading: 7.0, long_shots: 8.0, long_throws: 9.0, marking: 10.0,
-            passing: 11.0, penalty_taking: 12.0, tackling: 13.0, technique: 14.0,
+            corners: 1.0,
+            crossing: 2.0,
+            dribbling: 3.0,
+            finishing: 4.0,
+            first_touch: 5.0,
+            free_kicks: 6.0,
+            heading: 7.0,
+            long_shots: 8.0,
+            long_throws: 9.0,
+            marking: 10.0,
+            passing: 11.0,
+            penalty_taking: 12.0,
+            tackling: 13.0,
+            technique: 14.0,
         };
         s.mental = Mental {
-            aggression: 15.0, anticipation: 16.0, bravery: 17.0, composure: 18.0, concentration: 19.0,
-            decisions: 20.0, determination: 21.0, flair: 22.0, leadership: 23.0, off_the_ball: 24.0,
-            positioning: 25.0, teamwork: 26.0, vision: 27.0, work_rate: 28.0,
+            aggression: 15.0,
+            anticipation: 16.0,
+            bravery: 17.0,
+            composure: 18.0,
+            concentration: 19.0,
+            decisions: 20.0,
+            determination: 21.0,
+            flair: 22.0,
+            leadership: 23.0,
+            off_the_ball: 24.0,
+            positioning: 25.0,
+            teamwork: 26.0,
+            vision: 27.0,
+            work_rate: 28.0,
         };
         s.physical = Physical {
-            acceleration: 29.0, agility: 30.0, balance: 31.0, jumping: 32.0, natural_fitness: 33.0,
-            pace: 34.0, stamina: 35.0, strength: 36.0, match_readiness: 37.0,
+            acceleration: 29.0,
+            agility: 30.0,
+            balance: 31.0,
+            jumping: 32.0,
+            natural_fitness: 33.0,
+            pace: 34.0,
+            stamina: 35.0,
+            strength: 36.0,
+            match_readiness: 37.0,
         };
         s.goalkeeping = Goalkeeping {
-            aerial_reach: 38.0, command_of_area: 39.0, communication: 40.0, eccentricity: 41.0,
-            first_touch: 42.0, handling: 43.0, kicking: 44.0, one_on_ones: 45.0, passing: 46.0,
-            punching: 47.0, reflexes: 48.0, rushing_out: 49.0, throwing: 50.0,
+            aerial_reach: 38.0,
+            command_of_area: 39.0,
+            communication: 40.0,
+            eccentricity: 41.0,
+            first_touch: 42.0,
+            handling: 43.0,
+            kicking: 44.0,
+            one_on_ones: 45.0,
+            passing: 46.0,
+            punching: 47.0,
+            reflexes: 48.0,
+            rushing_out: 49.0,
+            throwing: 50.0,
         };
         s
     }
@@ -723,27 +1302,62 @@ mod tests {
             // Overwrite every field to the requested constant. Easier
             // than enumerating each field — `iter_all` confirms shape.
             s.technical = crate::club::player::skills::Technical {
-                corners: value, crossing: value, dribbling: value, finishing: value,
-                first_touch: value, free_kicks: value, heading: value, long_shots: value,
-                long_throws: value, marking: value, passing: value, penalty_taking: value,
-                tackling: value, technique: value,
+                corners: value,
+                crossing: value,
+                dribbling: value,
+                finishing: value,
+                first_touch: value,
+                free_kicks: value,
+                heading: value,
+                long_shots: value,
+                long_throws: value,
+                marking: value,
+                passing: value,
+                penalty_taking: value,
+                tackling: value,
+                technique: value,
             };
             s.mental = crate::club::player::skills::Mental {
-                aggression: value, anticipation: value, bravery: value, composure: value,
-                concentration: value, decisions: value, determination: value, flair: value,
-                leadership: value, off_the_ball: value, positioning: value, teamwork: value,
-                vision: value, work_rate: value,
+                aggression: value,
+                anticipation: value,
+                bravery: value,
+                composure: value,
+                concentration: value,
+                decisions: value,
+                determination: value,
+                flair: value,
+                leadership: value,
+                off_the_ball: value,
+                positioning: value,
+                teamwork: value,
+                vision: value,
+                work_rate: value,
             };
             s.physical = crate::club::player::skills::Physical {
-                acceleration: value, agility: value, balance: value, jumping: value,
-                natural_fitness: value, pace: value, stamina: value, strength: value,
+                acceleration: value,
+                agility: value,
+                balance: value,
+                jumping: value,
+                natural_fitness: value,
+                pace: value,
+                stamina: value,
+                strength: value,
                 match_readiness: value,
             };
             s.goalkeeping = crate::club::player::skills::Goalkeeping {
-                aerial_reach: value, command_of_area: value, communication: value,
-                eccentricity: value, first_touch: value, handling: value, kicking: value,
-                one_on_ones: value, passing: value, punching: value, reflexes: value,
-                rushing_out: value, throwing: value,
+                aerial_reach: value,
+                command_of_area: value,
+                communication: value,
+                eccentricity: value,
+                first_touch: value,
+                handling: value,
+                kicking: value,
+                one_on_ones: value,
+                passing: value,
+                punching: value,
+                reflexes: value,
+                rushing_out: value,
+                throwing: value,
             };
             s
         }
@@ -752,33 +1366,35 @@ mod tests {
         // For traits with no requirement, both rows must be `true`.
         let cases: &[(PlayerTrait, f32, f32)] = &[
             (PlayerTrait::ShootsFromDistance, 11.99, 12.0),
-            (PlayerTrait::PlacesShots,        11.99, 12.0),
-            (PlayerTrait::PowersShots,        10.99, 11.0),
-            (PlayerTrait::TriesLobs,          11.99, 12.0),
-            (PlayerTrait::CurlsBall,          12.99, 13.0),
-            (PlayerTrait::TriesThroughBalls,  12.99, 13.0),
-            (PlayerTrait::KillerBallOften,    12.99, 13.0),
-            (PlayerTrait::Playmaker,          13.99, 14.0),
-            (PlayerTrait::LikesToSwitchPlay,  11.99, 12.0),
-            (PlayerTrait::PlaysLongPasses,    11.99, 12.0),
-            (PlayerTrait::RunsWithBallOften,  11.99, 12.0),
-            (PlayerTrait::KnocksBallPast,     11.99, 12.0),
-            (PlayerTrait::TriesTricks,        13.99, 14.0),
+            (PlayerTrait::PlacesShots, 11.99, 12.0),
+            (PlayerTrait::PowersShots, 10.99, 11.0),
+            (PlayerTrait::TriesLobs, 11.99, 12.0),
+            (PlayerTrait::CurlsBall, 12.99, 13.0),
+            (PlayerTrait::TriesThroughBalls, 12.99, 13.0),
+            (PlayerTrait::KillerBallOften, 12.99, 13.0),
+            (PlayerTrait::Playmaker, 13.99, 14.0),
+            (PlayerTrait::LikesToSwitchPlay, 11.99, 12.0),
+            (PlayerTrait::PlaysLongPasses, 11.99, 12.0),
+            (PlayerTrait::RunsWithBallOften, 11.99, 12.0),
+            (PlayerTrait::KnocksBallPast, 11.99, 12.0),
+            (PlayerTrait::TriesTricks, 13.99, 14.0),
             (PlayerTrait::BackheelsRegularly, 13.99, 14.0),
-            (PlayerTrait::DivesIntoTackles,   10.99, 11.0),
-            (PlayerTrait::StaysOnFeet,        11.99, 12.0),
-            (PlayerTrait::MarkTightly,        11.99, 12.0),
+            (PlayerTrait::DivesIntoTackles, 10.99, 11.0),
+            (PlayerTrait::StaysOnFeet, 11.99, 12.0),
+            (PlayerTrait::MarkTightly, 11.99, 12.0),
         ];
         for (tr, below, at) in cases {
             assert!(
                 !tr.skills_support(&skills_at(*below)),
                 "{:?} should reject skills < threshold (value={})",
-                tr, below
+                tr,
+                below
             );
             assert!(
                 tr.skills_support(&skills_at(*at)),
                 "{:?} should accept skills >= threshold (value={})",
-                tr, at
+                tr,
+                at
             );
         }
 

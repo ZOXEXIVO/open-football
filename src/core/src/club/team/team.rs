@@ -2,12 +2,10 @@ use crate::club::relations::ChemistryContext;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::builder::TeamBuilder;
 use crate::club::team::mentorship::process_mentorship;
+use crate::club::team::reputation::{Achievement, CompetitionType, MatchOutcome, MatchResultInfo};
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
 use crate::utils::DateUtils;
-use crate::club::team::reputation::{
-    Achievement, CompetitionType, MatchOutcome, MatchResultInfo,
-};
 use crate::{
     HappinessEventType, MatchHistory, MatchTacticType, Player, PlayerCollection,
     PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, StaffCollection, Tactics,
@@ -75,11 +73,7 @@ impl Team {
         if ctx.simulation.is_week_beginning() {
             let week_date = ctx.simulation.date.date();
             let hoy_wwy = self.staffs.best_youth_development_wwy(10);
-            let _pairings = process_mentorship(
-                &mut self.players.players,
-                week_date,
-                hoy_wwy,
-            );
+            let _pairings = process_mentorship(&mut self.players.players, week_date, hoy_wwy);
 
             // Weekly social decay. Without this, every relationship and
             // rapport entry that ever fired stays at its peak forever —
@@ -112,11 +106,7 @@ impl Team {
             // so the selection logic leaves them out. Beyond FM: this is an
             // explicit, visible mechanism instead of an opaque "rest" hint.
             let best_sports_sci = self.staffs.best_sports_science();
-            apply_preventive_rest(
-                &mut self.players.players,
-                best_sports_sci,
-                week_date,
-            );
+            apply_preventive_rest(&mut self.players.players, best_sports_sci, week_date);
         }
 
         // Pick (or keep) the team tactic before simulating players so the
@@ -172,10 +162,7 @@ impl Team {
             let ca = player.player_attributes.current_ability;
             let age = DateUtils::age(player.birth_date, date);
             if let Some(ref mut contract) = player.contract {
-                let group_cas = by_group
-                    .get(&group)
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[]);
+                let group_cas = by_group.get(&group).map(|v| v.as_slice()).unwrap_or(&[]);
                 contract.squad_status = PlayerSquadStatus::calculate(ca, age, group_cas);
             }
         }
@@ -209,7 +196,9 @@ impl Team {
             .iter()
             .filter(|p| p.skills.mental.leadership >= 8.0)
             .filter_map(|p| {
-                let Some(contract) = p.contract.as_ref() else { return None };
+                let Some(contract) = p.contract.as_ref() else {
+                    return None;
+                };
                 let tenure_years = contract
                     .started
                     .map(|s| (now_year - s.year()).max(0) as f32)
@@ -293,14 +282,12 @@ impl Team {
         let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
         let base = cfg.catalog.captaincy_awarded;
         // Leadership + loyalty drive how much a player wanted this.
-        let leadership_lift =
-            (p.skills.mental.leadership.clamp(0.0, 20.0) / 20.0) * 0.30;
+        let leadership_lift = (p.skills.mental.leadership.clamp(0.0, 20.0) / 20.0) * 0.30;
         let loyalty_lift = (p.attributes.loyalty.clamp(0.0, 20.0) / 20.0) * 0.20;
         // Reputation amplifier — a star getting the armband at a marquee
         // club feels it carry more weight (pressure plus prestige).
-        let rep_lift = (p.player_attributes.current_reputation as f32 / 10_000.0)
-            .clamp(0.0, 1.0)
-            * 0.20;
+        let rep_lift =
+            (p.player_attributes.current_reputation as f32 / 10_000.0).clamp(0.0, 1.0) * 0.20;
         let mul = (1.0 + leadership_lift + loyalty_lift + rep_lift).clamp(0.7, 1.6);
         base * mul
     }
@@ -312,10 +299,9 @@ impl Team {
     fn captaincy_removed_magnitude(p: &Player) -> f32 {
         let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
         let base = cfg.catalog.captaincy_removed;
-        let rep_amp =
-            crate::club::player::events::scaling::reputation_amplifier(
-                p.player_attributes.current_reputation,
-            );
+        let rep_amp = crate::club::player::events::scaling::reputation_amplifier(
+            p.player_attributes.current_reputation,
+        );
         let provoke_amp = crate::club::player::events::scaling::criticism_amplifier(
             p.attributes.controversy,
             p.attributes.temperament,
@@ -475,11 +461,7 @@ fn build_chemistry_context(team: &Team, today: chrono::NaiveDate) -> ChemistryCo
 /// Thresholds are tuned so that with neutral (0.35-ish) sports science the
 /// function flags no one, and with elite (0.85+) it flags the worst
 /// offenders before they hit the danger zone.
-fn apply_preventive_rest(
-    players: &mut [Player],
-    best_sports_sci: u8,
-    date: chrono::NaiveDate,
-) {
+fn apply_preventive_rest(players: &mut [Player], best_sports_sci: u8, date: chrono::NaiveDate) {
     if best_sports_sci < 12 {
         // Basic medical teams can't preempt — the manager finds out when
         // the player is actually injured.
@@ -659,8 +641,8 @@ mod payroll_tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
     };
     use chrono::NaiveTime;
 
@@ -965,9 +947,13 @@ mod captaincy_tests {
         // Each player should have at most one `CaptaincyAwarded` event
         // — the cooldown absorbs the second handover.
         for player in team.players.players.iter() {
-            let awarded =
-                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded);
-            assert!(awarded <= 1, "expected ≤1 award, got {} for player {}", awarded, player.id);
+            let awarded = captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded);
+            assert!(
+                awarded <= 1,
+                "expected ≤1 award, got {} for player {}",
+                awarded,
+                player.id
+            );
         }
     }
 
@@ -1010,6 +996,11 @@ mod captaincy_tests {
         }
         let star = run(9_000);
         let anon = run(500);
-        assert!(star < anon, "star {} should be more negative than anon {}", star, anon);
+        assert!(
+            star < anon,
+            "star {} should be more negative than anon {}",
+            star,
+            anon
+        );
     }
 }

@@ -1,9 +1,9 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -125,7 +125,10 @@ impl StateProcessingHandler for DefenderCoveringState {
         if ball_ops.on_own_side() {
             // Stay active in covering if opponents are in the area
             // Check both ball carrier AND unmarked attackers making runs
-            let ball_carrier_nearby = ctx.players().opponents().with_ball()
+            let ball_carrier_nearby = ctx
+                .players()
+                .opponents()
+                .with_ball()
                 .next()
                 .map(|opp| opp.distance(ctx) < 150.0)
                 .unwrap_or(false);
@@ -152,8 +155,17 @@ impl StateProcessingHandler for DefenderCoveringState {
         // No live ball-carrier (would've been handled by the role block
         // above). Generic fallback: if unmarked attackers are within
         // marking range, pick them up.
-        if ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE).is_some()
-            || ctx.players().opponents().nearby(MARKING_DISTANCE).next().is_some()
+        if ctx
+            .player()
+            .defensive()
+            .find_unmarked_opponent(MARKING_DISTANCE)
+            .is_some()
+            || ctx
+                .players()
+                .opponents()
+                .nearby(MARKING_DISTANCE)
+                .next()
+                .is_some()
         {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Marking,
@@ -161,7 +173,11 @@ impl StateProcessingHandler for DefenderCoveringState {
         }
 
         // Guard unmarked attackers who are trying to find space
-        if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE * 3.0) {
+        if let Some(unmarked) = ctx
+            .player()
+            .defensive()
+            .find_unmarked_opponent(MARKING_DISTANCE * 3.0)
+        {
             if !unmarked.has_ball(ctx) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Guarding,
@@ -177,7 +193,6 @@ impl StateProcessingHandler for DefenderCoveringState {
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Cover role: sit right behind the primary presser on the line
@@ -204,7 +219,9 @@ impl StateProcessingHandler for DefenderCoveringState {
                 let direction = to_target.normalize();
                 let speed = ctx.player.skills.physical.pace * 0.9;
                 let urgency = (distance / 20.0).clamp(0.7, 1.4);
-                return Some(direction * speed * urgency + ctx.player().separation_velocity() * 0.2);
+                return Some(
+                    direction * speed * urgency + ctx.player().separation_velocity() * 0.2,
+                );
             }
         }
 
@@ -247,7 +264,9 @@ impl DefenderCoveringState {
     }
 
     fn is_last_defender(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().teammates().defenders()
+        ctx.players()
+            .teammates()
+            .defenders()
             .all(|d| d.position.x >= ctx.player.position.x)
     }
 
@@ -272,7 +291,8 @@ impl DefenderCoveringState {
 
         // Calculate base covering position with better distance scaling
         let covering_distance = (ball_position - own_goal).magnitude() * 0.35;
-        let covering_position = ball_position + ball_to_goal * covering_distance.min(field_width * 0.3);
+        let covering_position =
+            ball_position + ball_to_goal * covering_distance.min(field_width * 0.3);
 
         // Apply exponential moving average for position smoothing
         const SMOOTHING_FACTOR: f32 = 0.15; // Adjust this value (0.0 to 1.0) to control smoothing
@@ -285,12 +305,8 @@ impl DefenderCoveringState {
         let target_position = if let Some(danger_pos) = dangerous_space {
             // Prioritize covering dangerous space
             Vector3::new(
-                danger_pos.x * 0.5 +
-                    covering_position.x * 0.3 +
-                    player_position.x * 0.2,
-                danger_pos.y * 0.5 +
-                    covering_position.y * 0.3 +
-                    player_position.y * 0.2,
+                danger_pos.x * 0.5 + covering_position.x * 0.3 + player_position.x * 0.2,
+                danger_pos.y * 0.5 + covering_position.y * 0.3 + player_position.y * 0.2,
                 0.0,
             )
         } else {
@@ -298,10 +314,8 @@ impl DefenderCoveringState {
             Vector3::new(
                 covering_position.x * 0.5 +
                     middle_third_center.x * 0.3 + // Reduced from 0.4
-                    player_position.x * 0.2,      // Increased from 0.1
-                covering_position.y * 0.5 +
-                    middle_third_center.y * 0.3 +
-                    player_position.y * 0.2,
+                    player_position.x * 0.2, // Increased from 0.1
+                covering_position.y * 0.5 + middle_third_center.y * 0.3 + player_position.y * 0.2,
                 0.0,
             )
         };
@@ -312,7 +326,8 @@ impl DefenderCoveringState {
         // Ensure the position stays within reasonable bounds
         let max_distance_from_center = field_width * 0.35;
         let position_relative_to_center = smoothed_position - middle_third_center;
-        let capped_position = if position_relative_to_center.magnitude() > max_distance_from_center {
+        let capped_position = if position_relative_to_center.magnitude() > max_distance_from_center
+        {
             middle_third_center + position_relative_to_center.normalize() * max_distance_from_center
         } else {
             smoothed_position
@@ -320,8 +335,12 @@ impl DefenderCoveringState {
 
         // Final boundary check
         Vector3::new(
-            capped_position.x.clamp(field_width * 0.1, field_width * 0.7),  // Prevent getting too close to either goal
-            capped_position.y.clamp(field_height * 0.1, field_height * 0.9), // Keep away from sidelines
+            capped_position
+                .x
+                .clamp(field_width * 0.1, field_width * 0.7), // Prevent getting too close to either goal
+            capped_position
+                .y
+                .clamp(field_height * 0.1, field_height * 0.9), // Keep away from sidelines
             0.0,
         )
     }
@@ -329,7 +348,13 @@ impl DefenderCoveringState {
     /// Check if there are dangerous threats nearby that require immediate attention
     fn has_dangerous_threat_nearby(&self, ctx: &StateProcessingContext) -> bool {
         // Check for immediate threats within marking distance
-        if ctx.players().opponents().nearby(MARKING_DISTANCE).next().is_some() {
+        if ctx
+            .players()
+            .opponents()
+            .nearby(MARKING_DISTANCE)
+            .next()
+            .is_some()
+        {
             return true;
         }
 

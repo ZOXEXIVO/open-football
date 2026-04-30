@@ -1,13 +1,13 @@
+use crate::IntegerUtils;
 use crate::r#match::events::Event;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
-use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -33,9 +33,17 @@ pub mod shot_gate_stats {
     pub static FIRED: AtomicU64 = AtomicU64::new(0);
 
     pub fn reset() {
-        for c in [&HAS_BALL_IN_RANGE, &PASSED_CAN_SHOOT, &PASSED_SETTLED,
-                  &PASSED_NOT_POSSESSION, &PASSED_NOT_DEFER, &PASSED_MAX_DIST,
-                  &PASSED_CLEAR_SHOT, &PASSED_WILLINGNESS, &FIRED] {
+        for c in [
+            &HAS_BALL_IN_RANGE,
+            &PASSED_CAN_SHOOT,
+            &PASSED_SETTLED,
+            &PASSED_NOT_POSSESSION,
+            &PASSED_NOT_DEFER,
+            &PASSED_MAX_DIST,
+            &PASSED_CLEAR_SHOT,
+            &PASSED_WILLINGNESS,
+            &FIRED,
+        ] {
             c.store(0, Ordering::Relaxed);
         }
     }
@@ -84,9 +92,20 @@ pub mod tackle_stats {
     pub static GK_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 
     pub fn reset() {
-        for c in [&DEF_ENTRIES, &MID_ENTRIES, &FWD_ENTRIES, &GK_ENTRIES,
-                  &DEF_ATTEMPTS, &MID_ATTEMPTS, &FWD_ATTEMPTS, &GK_ATTEMPTS,
-                  &DEF_SUCCESSES, &MID_SUCCESSES, &FWD_SUCCESSES, &GK_SUCCESSES] {
+        for c in [
+            &DEF_ENTRIES,
+            &MID_ENTRIES,
+            &FWD_ENTRIES,
+            &GK_ENTRIES,
+            &DEF_ATTEMPTS,
+            &MID_ATTEMPTS,
+            &FWD_ATTEMPTS,
+            &GK_ATTEMPTS,
+            &DEF_SUCCESSES,
+            &MID_SUCCESSES,
+            &FWD_SUCCESSES,
+            &GK_SUCCESSES,
+        ] {
             c.store(0, Ordering::Relaxed);
         }
     }
@@ -148,9 +167,7 @@ impl StateProcessingHandler for ForwardRunningState {
         // legitimately be running UP (making a diagonal, chasing a
         // through ball, tracking the game's flow) and that's when they
         // most often drift offside.
-        if !ctx.player.has_ball(ctx)
-            && ctx.player().defensive().is_stranded_offside()
-        {
+        if !ctx.player.has_ball(ctx) && ctx.player().defensive().is_stranded_offside() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Returning,
             ));
@@ -225,21 +242,37 @@ impl StateProcessingHandler for ForwardRunningState {
                 let player_pos = ctx.player.position;
                 let goal_pos = ctx.player().opponent_goal_position();
                 let to_goal = (goal_pos - player_pos).normalize();
-                let safe_outlet = ctx.players().teammates().nearby(180.0)
+                let safe_outlet = ctx
+                    .players()
+                    .teammates()
+                    .nearby(180.0)
                     .filter(|t| {
-                        if t.id == ctx.player.id { return false; }
+                        if t.id == ctx.player.id {
+                            return false;
+                        }
                         let dist = (t.position - player_pos).magnitude();
-                        if dist < 25.0 || dist > 180.0 { return false; }
+                        if dist < 25.0 || dist > 180.0 {
+                            return false;
+                        }
                         let to_t = (t.position - player_pos).normalize();
                         let fwd = to_t.dot(&to_goal);
-                        if fwd >= 0.3 { return false; }
-                        let opp_near = ctx.tick_context.grid
-                            .opponents(t.id, 12.0).count();
+                        if fwd >= 0.3 {
+                            return false;
+                        }
+                        let opp_near = ctx.tick_context.grid.opponents(t.id, 12.0).count();
                         opp_near < 2 && ctx.player().has_clear_pass(t.id)
                     })
                     .max_by(|a, b| {
-                        let sa = if a.tactical_positions.is_midfielder() { 10.0 } else { 0.0 };
-                        let sb = if b.tactical_positions.is_midfielder() { 10.0 } else { 0.0 };
+                        let sa = if a.tactical_positions.is_midfielder() {
+                            10.0
+                        } else {
+                            0.0
+                        };
+                        let sb = if b.tactical_positions.is_midfielder() {
+                            10.0
+                        } else {
+                            0.0
+                        };
                         sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
                     });
                 if let Some(target) = safe_outlet {
@@ -278,9 +311,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
                 // Cooldown active — rebound scenario, don't chase the
                 // keeper. Lay the ball off via a pass instead.
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Passing,
-                ));
+                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
             // can_shoot CONTENTION SKIP. If we're in shooting range but
@@ -294,9 +325,7 @@ impl StateProcessingHandler for ForwardRunningState {
             // stalled at can_shoot=false while the forward held the ball,
             // which is exactly the dead time that produces 0-0 matches.
             if !can_shoot {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Passing,
-                ));
+                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
             // Build-up gate: forwards can't fire within 300ms of gaining
@@ -364,7 +393,8 @@ impl StateProcessingHandler for ForwardRunningState {
             // possessions). The willingness gate was dropping 41% of
             // qualified opportunities, the largest remaining post-gate
             // shot-suppressor. Average player now fires ~0.80/tick.
-            let base_willingness = (fin_factor * 0.40 + comp_factor * 0.10 + 0.45).clamp(0.70, 0.95);
+            let base_willingness =
+                (fin_factor * 0.40 + comp_factor * 0.10 + 0.45).clamp(0.70, 0.95);
 
             // GAME-MANAGEMENT SHOT SUPPRESSION. When the team is protecting
             // a score (lead, late, underdog clinging to a draw) the coach
@@ -422,11 +452,14 @@ impl StateProcessingHandler for ForwardRunningState {
                             if !defer_to_teammate {
                                 shot_gate_stats::PASSED_NOT_DEFER.fetch_add(1, Ordering::Relaxed);
                                 if distance_to_goal <= max_shot_distance {
-                                    shot_gate_stats::PASSED_MAX_DIST.fetch_add(1, Ordering::Relaxed);
+                                    shot_gate_stats::PASSED_MAX_DIST
+                                        .fetch_add(1, Ordering::Relaxed);
                                     if ctx.player().has_clear_shot() {
-                                        shot_gate_stats::PASSED_CLEAR_SHOT.fetch_add(1, Ordering::Relaxed);
+                                        shot_gate_stats::PASSED_CLEAR_SHOT
+                                            .fetch_add(1, Ordering::Relaxed);
                                         if shot_triggered {
-                                            shot_gate_stats::PASSED_WILLINGNESS.fetch_add(1, Ordering::Relaxed);
+                                            shot_gate_stats::PASSED_WILLINGNESS
+                                                .fetch_add(1, Ordering::Relaxed);
                                         }
                                     }
                                 }
@@ -483,9 +516,7 @@ impl StateProcessingHandler for ForwardRunningState {
             if shot_condition_met {
                 let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
                 if under_pressure {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Passing,
-                    ));
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                 }
                 // Open field, hesitation this tick — return None to stay
                 // in Running; re-evaluate next tick.
@@ -510,17 +541,13 @@ impl StateProcessingHandler for ForwardRunningState {
                 );
             }
             if box_shot_condition {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Passing,
-                ));
+                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
             // If we deferred to a better-positioned teammate, route
             // through Passing — the pass state will pick them as target.
             if defer_to_teammate && has_settled {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Passing,
-                ));
+                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
             // Priority 0.8: Open path to goal — KEEP RUNNING, don't pass or dribble
@@ -535,8 +562,8 @@ impl StateProcessingHandler for ForwardRunningState {
                 let composure = ctx.player.skills.mental.composure / 20.0;
                 let determination = ctx.player.skills.mental.determination / 20.0;
                 let pace = ctx.player.skills.physical.pace / 20.0;
-                let carry_quality = dribbling * 0.35 + composure * 0.25
-                    + determination * 0.2 + pace * 0.2;
+                let carry_quality =
+                    dribbling * 0.35 + composure * 0.25 + determination * 0.2 + pace * 0.2;
                 if carry_quality > 0.55 {
                     return None;
                 }
@@ -545,7 +572,8 @@ impl StateProcessingHandler for ForwardRunningState {
             // ONE-TWO COMBINATION: After just receiving ball, check if passer ran into space
             if ctx.ball().has_stable_possession() {
                 let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-                if ownership_ticks >= 2 && ownership_ticks <= 10
+                if ownership_ticks >= 2
+                    && ownership_ticks <= 10
                     && distance_to_goal > POINT_BLANK_DISTANCE
                 {
                     if let Some(return_target) = self.find_one_two_return(ctx) {
@@ -569,7 +597,8 @@ impl StateProcessingHandler for ForwardRunningState {
             if ctx.ball().has_stable_possession()
                 && distance_to_goal > CLOSE_RANGE_DISTANCE
                 && ctx.tick_context.ball.ownership_duration > 30
-                && !self.has_open_space_ahead(ctx)  // Don't lay off if can run forward
+                && !self.has_open_space_ahead(ctx)
+            // Don't lay off if can run forward
             {
                 if let Some(layoff_target) = self.find_hold_up_layoff(ctx) {
                     return Some(StateChangeResult::with_forward_state_and_event(
@@ -589,7 +618,9 @@ impl StateProcessingHandler for ForwardRunningState {
             if distance_to_goal > SHOOTING_ZONE_DISTANCE
                 && ctx.tick_context.ball.ownership_duration > 15
             {
-                if ctx.player().movement().is_congested_near_boundary() || ctx.player().movement().is_congested() {
+                if ctx.player().movement().is_congested_near_boundary()
+                    || ctx.player().movement().is_congested()
+                {
                     if let Some(_) = ctx.players().teammates().all().next() {
                         return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                     }
@@ -673,7 +704,9 @@ impl StateProcessingHandler for ForwardRunningState {
             // Loose-ball claim lives in the dispatcher.
 
             // Also respond to ball system notifications
-            if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
+            if ctx.ball().should_take_ball_immediately()
+                && ctx.team().is_best_player_to_chase_ball()
+            {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::TakeBall,
                 ));
@@ -685,9 +718,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 && ctx.ball().distance() < 40.0
                 && ctx.ball().distance_to_opponent_goal() < 200.0
             {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Heading,
-                ));
+                return Some(StateChangeResult::with_forward_state(ForwardState::Heading));
             }
 
             // Priority 0.7: Cross incoming — position to receive
@@ -751,9 +782,7 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // Consider fatigue and state duration
             if self.needs_recovery(ctx) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Resting,
-                ));
+                return Some(StateChangeResult::with_forward_state(ForwardState::Resting));
             }
 
             // Prevent getting stuck in running state
@@ -763,16 +792,13 @@ impl StateProcessingHandler for ForwardRunningState {
                         ForwardState::CreatingSpace,
                     ))
                 } else {
-                    Some(StateChangeResult::with_forward_state(
-                        ForwardState::Walking,
-                    ))
+                    Some(StateChangeResult::with_forward_state(ForwardState::Walking))
                 };
             }
         }
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Fatigue-aware velocity calculation
@@ -789,8 +815,8 @@ impl StateProcessingHandler for ForwardRunningState {
                         current_waypoint: ctx.player.waypoint_manager.current_index,
                         path_offset: IntegerUtils::random(1, 10) as f32,
                     }
-                        .calculate(ctx.player)
-                        .velocity
+                    .calculate(ctx.player)
+                    .velocity
                         * fatigue_factor,
                 );
             }
@@ -817,11 +843,17 @@ impl StateProcessingHandler for ForwardRunningState {
             // trouble AND I'm reachable, move to a support spot 20u
             // from them on the side opposite the nearest defender.
             if ctx.team().is_control_ball() && ball_distance < 80.0 && ball_distance > 6.0 {
-                if let Some(carrier) = ctx.players().teammates().all()
+                if let Some(carrier) = ctx
+                    .players()
+                    .teammates()
+                    .all()
                     .find(|t| ctx.ball().owner_id() == Some(t.id))
                 {
                     // Is the carrier being pressured?
-                    let nearest_opp_to_carrier = ctx.players().opponents().all()
+                    let nearest_opp_to_carrier = ctx
+                        .players()
+                        .opponents()
+                        .all()
                         .map(|opp| (opp.position, (opp.position - carrier.position).magnitude()))
                         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
                     if let Some((opp_pos, opp_dist)) = nearest_opp_to_carrier {
@@ -833,10 +865,11 @@ impl StateProcessingHandler for ForwardRunningState {
                             let support_offset = -carrier_to_opp * 22.0;
                             // Bias slightly toward goal so the support
                             // pass is progressive, not purely lateral.
-                            let to_goal = (ctx.player().opponent_goal_position() - carrier.position).normalize();
-                            let support_target = carrier.position
-                                + support_offset * 0.7
-                                + to_goal * 10.0;
+                            let to_goal = (ctx.player().opponent_goal_position()
+                                - carrier.position)
+                                .normalize();
+                            let support_target =
+                                carrier.position + support_offset * 0.7 + to_goal * 10.0;
                             let clamped = Vector3::new(
                                 support_target.x.clamp(30.0, field_width - 30.0),
                                 support_target.y.clamp(40.0, field_height - 40.0),
@@ -923,9 +956,8 @@ impl StateProcessingHandler for ForwardRunningState {
             let slot_weight = if is_wide { 0.4 } else { 0.5 };
             let ball_weight = proximity * (1.0 - slot_weight);
             let start_weight = (1.0 - slot_weight - ball_weight).max(0.0);
-            let target_y = slot_y * slot_weight
-                + qball_y * ball_weight
-                + start_pos.y * start_weight;
+            let target_y =
+                slot_y * slot_weight + qball_y * ball_weight + start_pos.y * start_weight;
 
             let target = Vector3::new(
                 target_x.clamp(30.0, field_width - 30.0),
@@ -1009,7 +1041,10 @@ impl ForwardRunningState {
         let to_goal = (goal_pos - player_pos).normalize();
 
         // Check for opponents blocking the path ahead (within 25 units, roughly toward goal)
-        let blockers = ctx.players().opponents().nearby(25.0)
+        let blockers = ctx
+            .players()
+            .opponents()
+            .nearby(25.0)
             .filter(|opp| {
                 let to_opp = (opp.position - player_pos).normalize();
                 to_opp.dot(&to_goal) > 0.4
@@ -1115,8 +1150,9 @@ impl ForwardRunningState {
         // Static or slow-moving ball nearby - only if nearest teammate
         if ball_distance < 30.0 && ball_speed < 2.0 {
             let ball_pos = ctx.tick_context.positions.ball.position;
-            let closer_teammate = ctx.players().teammates().all()
-                .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < ball_distance - 5.0);
+            let closer_teammate = ctx.players().teammates().all().any(|t| {
+                t.id != ctx.player.id && (t.position - ball_pos).magnitude() < ball_distance - 5.0
+            });
             if !closer_teammate {
                 return true;
             }
@@ -1160,14 +1196,21 @@ impl ForwardRunningState {
         // pressed at half the field's length, producing 9.8 forward
         // tackles per match (real ~1-2) and pulling forwards out of
         // attacking position whenever the opposition won the ball.
-        let effective_press_distance = 60.0 * stamina_level * (0.5 + work_rate) * (0.5 + intensity * 0.5);
+        let effective_press_distance =
+            60.0 * stamina_level * (0.5 + work_rate) * (0.5 + intensity * 0.5);
 
         // Check tactical instruction (high press vs low block)
         let high_press = ctx.team().tactics().is_high_pressing();
 
         // PRESSING TRAP: Opponent defender receiving ball facing own goal — press aggressively
         if ball_distance < effective_press_distance * 1.5 {
-            if let Some(opponent) = ctx.players().opponents().nearby(effective_press_distance * 1.5).with_ball(ctx).next() {
+            if let Some(opponent) = ctx
+                .players()
+                .opponents()
+                .nearby(effective_press_distance * 1.5)
+                .with_ball(ctx)
+                .next()
+            {
                 let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
                 let goal_pos = ctx.player().opponent_goal_position();
                 let opp_goal = ctx.tick_context.positions.ball.position * 2.0 - goal_pos; // Approximate own goal
@@ -1182,7 +1225,9 @@ impl ForwardRunningState {
 
                 // WIDE ISOLATION: Opponent near touchline — trap them
                 let field_height = ctx.context.field_size.height as f32;
-                if opponent.position.y < field_height * 0.1 || opponent.position.y > field_height * 0.9 {
+                if opponent.position.y < field_height * 0.1
+                    || opponent.position.y > field_height * 0.9
+                {
                     return true;
                 }
 
@@ -1226,12 +1271,13 @@ impl ForwardRunningState {
                         // distance to the ball doesn't matter, what
                         // matters is whether we're bunched.
                         let me_pos = ctx.player.position;
-                        let bunched = ctx.players().teammates().all()
-                            .any(|t| {
-                                if t.id == ctx.player.id { return false; }
-                                let d_sq = (t.position - me_pos).norm_squared();
-                                d_sq < 22.0 * 22.0 // < ~2.5m
-                            });
+                        let bunched = ctx.players().teammates().all().any(|t| {
+                            if t.id == ctx.player.id {
+                                return false;
+                            }
+                            let d_sq = (t.position - me_pos).norm_squared();
+                            d_sq < 22.0 * 22.0 // < ~2.5m
+                        });
                         if bunched {
                             return true;
                         }
@@ -1267,7 +1313,10 @@ impl ForwardRunningState {
         let goal_pos = ctx.player().opponent_goal_position();
         let to_goal = (goal_pos - ball_pos).normalize();
 
-        let opponents_ahead = ctx.players().opponents().all()
+        let opponents_ahead = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|opp| {
                 let to_opp = opp.position - ball_pos;
                 to_opp.normalize().dot(&to_goal) > 0.3
@@ -1411,16 +1460,16 @@ impl ForwardRunningState {
                 target: target_position,
                 slowing_distance: 20.0,
             }
-                .calculate(ctx.player)
-                .velocity
+            .calculate(ctx.player)
+            .velocity
         } else {
             // Default to moving toward goal
             SteeringBehavior::Arrive {
                 target: ctx.player().opponent_goal_position(),
                 slowing_distance: 100.0,
             }
-                .calculate(ctx.player)
-                .velocity
+            .calculate(ctx.player)
+            .velocity
         }
     }
 
@@ -1576,24 +1625,20 @@ impl ForwardRunningState {
             return false;
         }
 
-        ctx.players()
-            .teammates()
-            .nearby(200.0)
-            .any(|teammate| {
-                let teammate_distance =
-                    (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-                // Teammate must be significantly closer (at least 35% closer).
-                // Boundary tightened to 0.65 + `<=` so a teammate exactly
-                // 40% closer (e.g. 24u when we're at 40u) still counts
-                // as a better option — previously the strict < at 0.6
-                // missed that exact boundary case.
-                let is_much_closer = teammate_distance <= own_distance * 0.65;
-                let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
-                let not_heavily_marked = ctx.tick_context.grid
-                    .opponents(teammate.id, 8.0).count() < 2;
+        ctx.players().teammates().nearby(200.0).any(|teammate| {
+            let teammate_distance =
+                (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+            // Teammate must be significantly closer (at least 35% closer).
+            // Boundary tightened to 0.65 + `<=` so a teammate exactly
+            // 40% closer (e.g. 24u when we're at 40u) still counts
+            // as a better option — previously the strict < at 0.6
+            // missed that exact boundary case.
+            let is_much_closer = teammate_distance <= own_distance * 0.65;
+            let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
+            let not_heavily_marked = ctx.tick_context.grid.opponents(teammate.id, 8.0).count() < 2;
 
-                is_much_closer && has_clear_pass && not_heavily_marked
-            })
+            is_much_closer && has_clear_pass && not_heavily_marked
+        })
     }
 
     /// Check if any teammate is in a significantly better scoring position
@@ -1638,7 +1683,8 @@ impl ForwardRunningState {
             // Teammate must be much closer to goal
             let teammate_distance =
                 (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-            let is_much_closer = teammate_distance < current_distance * TEAMMATE_ADVANTAGE_STRICT_RATIO;
+            let is_much_closer =
+                teammate_distance < current_distance * TEAMMATE_ADVANTAGE_STRICT_RATIO;
             let not_heavily_marked = !self.is_teammate_heavily_marked(ctx, teammate);
             let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
 
@@ -1661,8 +1707,7 @@ impl ForwardRunningState {
             let in_attacking_position = teammate_distance < current_distance * 1.1;
 
             // Check if teammate is in free space (use pre-computed distances)
-            let in_free_space = ctx.tick_context.grid
-                .opponents(teammate.id, 12.0).count() < 2;
+            let in_free_space = ctx.tick_context.grid.opponents(teammate.id, 12.0).count() < 2;
 
             // Check if teammate is making a forward run
             let teammate_velocity = ctx.tick_context.positions.players.velocity(teammate.id);
@@ -1685,8 +1730,7 @@ impl ForwardRunningState {
     ) -> bool {
         teammates.iter().any(|teammate| {
             let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
-            let has_space = ctx.tick_context.grid
-                .opponents(teammate.id, 10.0).count() < 2;
+            let has_space = ctx.tick_context.grid.opponents(teammate.id, 10.0).count() < 2;
 
             // Prefer forward passes (side-aware)
             let is_forward_pass = match ctx.player.side {
@@ -1756,7 +1800,10 @@ impl ForwardRunningState {
         let player_pos = ctx.player.position;
         let to_goal = (goal_pos - player_pos).normalize();
 
-        let opponents_blocking = ctx.players().opponents().nearby(25.0)
+        let opponents_blocking = ctx
+            .players()
+            .opponents()
+            .nearby(25.0)
             .filter(|opp| {
                 let to_opp = (opp.position - player_pos).normalize();
                 to_opp.dot(&to_goal) > 0.5 && (opp.position - player_pos).magnitude() < 20.0
@@ -1879,7 +1926,10 @@ impl ForwardRunningState {
             return None;
         }
 
-        let passer_lite = ctx.players().teammates().all()
+        let passer_lite = ctx
+            .players()
+            .teammates()
+            .all()
             .find(|t| t.id == passer_id)?;
 
         let player_pos = ctx.player.position;
@@ -1894,8 +1944,7 @@ impl ForwardRunningState {
         }
 
         // Passer must be in open space (no opponents within 50 units)
-        let opponents_near_passer = ctx.tick_context.grid
-            .opponents(passer_id, 50.0).count();
+        let opponents_near_passer = ctx.tick_context.grid.opponents(passer_id, 50.0).count();
         if opponents_near_passer >= 1 {
             return None;
         }
@@ -1921,7 +1970,10 @@ impl ForwardRunningState {
 
         // Need opponents actively blocking the forward path (ahead of us, toward goal)
         let to_goal = (goal_pos - player_pos).normalize();
-        let opponents_ahead = ctx.players().opponents().nearby(25.0)
+        let opponents_ahead = ctx
+            .players()
+            .opponents()
+            .nearby(25.0)
             .filter(|opp| {
                 let to_opp = (opp.position - player_pos).normalize();
                 to_opp.dot(&to_goal) > 0.3 // Opponent is roughly between us and goal
@@ -1935,7 +1987,9 @@ impl ForwardRunningState {
         // and in space — this is the classic target man layoff
         let our_goal_dist = (goal_pos - player_pos).magnitude();
 
-        ctx.players().teammates().nearby(150.0)
+        ctx.players()
+            .teammates()
+            .nearby(150.0)
             .filter(|t| {
                 let t_dist = (t.position - player_pos).magnitude();
                 // Reject very close teammates to prevent short group passes
@@ -1946,11 +2000,10 @@ impl ForwardRunningState {
                 // Teammate must be further from opponent goal (behind us)
                 let is_behind = t_goal_dist > our_goal_dist * 1.1;
                 // Teammate must be in space
-                let in_space = ctx.tick_context.grid
-                    .opponents(t.id, 10.0).count() < 2;
+                let in_space = ctx.tick_context.grid.opponents(t.id, 10.0).count() < 2;
                 // Prefer midfielders who can carry forward
-                let is_midfielder_or_attacker = t.tactical_positions.is_midfielder()
-                    || t.tactical_positions.is_forward();
+                let is_midfielder_or_attacker =
+                    t.tactical_positions.is_midfielder() || t.tactical_positions.is_forward();
                 // Clear passing lane
                 let clear_pass = ctx.player().has_clear_pass(t.id);
                 // Reject recent passers to prevent cycling
@@ -1968,17 +2021,27 @@ impl ForwardRunningState {
 
     /// DRAW AND RELEASE: Detect an opponent committing to a tackle and find
     /// a teammate in the space they're vacating
-    fn find_draw_and_release_pass<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
+    fn find_draw_and_release_pass<'a>(
+        &self,
+        ctx: &StateProcessingContext<'a>,
+    ) -> Option<MatchPlayerLite> {
         let player_pos = ctx.player.position;
 
         // Find closest approaching opponent (within 15-35 units, closing in)
-        let approaching_opponent = ctx.players().opponents().nearby(35.0)
+        let approaching_opponent = ctx
+            .players()
+            .opponents()
+            .nearby(35.0)
             .filter(|opp| {
                 let dist = (opp.position - player_pos).magnitude();
-                if dist < 15.0 || dist > 35.0 { return false; }
+                if dist < 15.0 || dist > 35.0 {
+                    return false;
+                }
 
                 let opp_velocity = ctx.tick_context.positions.players.velocity(opp.id);
-                if opp_velocity.magnitude() < 1.0 { return false; }
+                if opp_velocity.magnitude() < 1.0 {
+                    return false;
+                }
 
                 let to_us = (player_pos - opp.position).normalize();
                 let opp_dir = opp_velocity.normalize();
@@ -1991,11 +2054,17 @@ impl ForwardRunningState {
             })?;
 
         // Space the opponent is vacating
-        let opp_velocity = ctx.tick_context.positions.players.velocity(approaching_opponent.id);
+        let opp_velocity = ctx
+            .tick_context
+            .positions
+            .players
+            .velocity(approaching_opponent.id);
         let vacated_zone = approaching_opponent.position - opp_velocity.normalize() * 30.0;
 
         // Find teammate near vacated space (at least 25 units away to avoid short group passes)
-        ctx.players().teammates().nearby(200.0)
+        ctx.players()
+            .teammates()
+            .nearby(200.0)
             .filter(|t| {
                 let t_dist = (t.position - player_pos).magnitude();
                 let t_dist_to_vacated = (t.position - vacated_zone).magnitude();
@@ -2003,8 +2072,7 @@ impl ForwardRunningState {
                     && t_dist_to_vacated < 60.0
                     && ctx.player().has_clear_pass(t.id)
                     && ctx.ball().passer_recency_penalty(t.id) > 0.3
-                    && ctx.tick_context.grid
-                        .opponents(t.id, 10.0).count() < 2
+                    && ctx.tick_context.grid.opponents(t.id, 10.0).count() < 2
             })
             .min_by(|a, b| {
                 let da = (a.position - vacated_zone).magnitude();
@@ -2032,10 +2100,12 @@ impl ForwardRunningState {
 
         // Count all nearby players (teammates + opponents) within 15 units using pre-computed distances
         let player_id = ctx.player.id;
-        let total_nearby = ctx.tick_context.grid
-            .teammates(player_id, 0.0, 15.0).count()
-            + ctx.tick_context.grid
-            .opponents(player_id, 15.0).count();
+        let total_nearby = ctx
+            .tick_context
+            .grid
+            .teammates(player_id, 0.0, 15.0)
+            .count()
+            + ctx.tick_context.grid.opponents(player_id, 15.0).count();
 
         // If 3 or more players nearby (congestion), need to clear
         total_nearby >= 3

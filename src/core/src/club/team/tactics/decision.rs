@@ -11,7 +11,9 @@ impl TacticalDecisionEngine {
         let mut decisions = TacticalDecisionResult::new();
 
         // 1. Formation Analysis
-        if let Some(optimal_formation) = TacticalSquadAnalyzer::suggest_optimal_formation(team, head_coach) {
+        if let Some(optimal_formation) =
+            TacticalSquadAnalyzer::suggest_optimal_formation(team, head_coach)
+        {
             let current_formation = team.tactics.as_ref().map(|t| t.tactic_type);
 
             if current_formation != Some(optimal_formation) {
@@ -35,10 +37,7 @@ impl TacticalDecisionEngine {
     }
 
     /// Analyze the quality of squad selection
-    fn analyze_squad_selection(
-        squad_result: &PlayerSelectionResult,
-        team: &Team,
-    ) -> SquadAnalysis {
+    fn analyze_squad_selection(squad_result: &PlayerSelectionResult, team: &Team) -> SquadAnalysis {
         let tactics = team.tactics();
         let mut analysis = SquadAnalysis::new();
 
@@ -49,17 +48,14 @@ impl TacticalDecisionEngine {
         for match_player in &squad_result.main_squad {
             let players = team.players.players();
 
-            let player = players
-                .iter()
-                .find(|p| p.id == match_player.id)
-                .unwrap();
+            let player = players.iter().find(|p| p.id == match_player.id).unwrap();
 
             let position = match_player.tactical_position.current_position;
             let rating = SquadSelector::calculate_player_rating_for_position(
                 player,
                 team.staffs.head_coach(),
                 position,
-                &tactics
+                &tactics,
             );
 
             total_rating += rating;
@@ -86,10 +82,7 @@ impl TacticalDecisionEngine {
     }
 
     /// Calculate the quality of substitutes
-    fn calculate_bench_quality(
-        substitutes: &[MatchPlayer],
-        team: &Team,
-    ) -> f32 {
+    fn calculate_bench_quality(substitutes: &[MatchPlayer], team: &Team) -> f32 {
         if substitutes.is_empty() {
             return 0.0;
         }
@@ -97,9 +90,10 @@ impl TacticalDecisionEngine {
         let mut total_quality = 0.0;
         for sub in substitutes {
             if let Some(player) = team.players.players().iter().find(|p| p.id == sub.id) {
-                let quality = (player.skills.technical.average() +
-                    player.skills.mental.average() +
-                    player.skills.physical.average()) / 3.0;
+                let quality = (player.skills.technical.average()
+                    + player.skills.mental.average()
+                    + player.skills.physical.average())
+                    / 3.0;
                 total_quality += quality;
             }
         }
@@ -108,7 +102,10 @@ impl TacticalDecisionEngine {
     }
 
     /// Generate tactical recommendations for the team
-    fn generate_tactical_recommendations(team: &Team, staff: &Staff) -> Vec<TacticalRecommendation> {
+    fn generate_tactical_recommendations(
+        team: &Team,
+        staff: &Staff,
+    ) -> Vec<TacticalRecommendation> {
         let mut recommendations = Vec::new();
 
         // Check if coach tactical knowledge matches formation complexity
@@ -128,7 +125,9 @@ impl TacticalDecisionEngine {
         }
 
         // Check for player-position mismatches
-        let available_players: Vec<&Player> = team.players.players()
+        let available_players: Vec<&Player> = team
+            .players
+            .players()
             .iter()
             .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
             .map(|p| *p)

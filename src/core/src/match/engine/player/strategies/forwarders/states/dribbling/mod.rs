@@ -1,8 +1,8 @@
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -35,9 +35,7 @@ impl StateProcessingHandler for ForwardDribblingState {
         }
 
         // PRIORITY 1: In shooting range with a clear lane — shoot.
-        if can_shoot
-            && ctx.player().shooting().in_shooting_range()
-            && ctx.player().has_clear_shot()
+        if can_shoot && ctx.player().shooting().in_shooting_range() && ctx.player().has_clear_shot()
         {
             return Some(
                 StateChangeResult::with_forward_state(ForwardState::Shooting)
@@ -46,10 +44,7 @@ impl StateProcessingHandler for ForwardDribblingState {
         }
 
         // PRIORITY 1b: Range-based fallback with lane check.
-        if can_shoot
-            && ctx.player().should_attempt_shot()
-            && ctx.player().has_clear_shot()
-        {
+        if can_shoot && ctx.player().should_attempt_shot() && ctx.player().has_clear_shot() {
             return Some(
                 StateChangeResult::with_forward_state(ForwardState::Shooting)
                     .with_shot_reason("FWD_DRIB_RANGE"),
@@ -83,12 +78,8 @@ impl StateProcessingHandler for ForwardDribblingState {
         // opponent within 10u AND we've been dribbling long enough to
         // commit to the decision (≥15 ticks). The old `has_space_to_dribble`
         // (15u threshold) fired too eagerly against a single chaser.
-        if ctx.in_state_time >= 15
-            && ctx.players().opponents().nearby(10.0).next().is_some()
-        {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Passing,
-            ));
+        if ctx.in_state_time >= 15 && ctx.players().opponents().nearby(10.0).next().is_some() {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
         // Cross from wide position in attacking third
@@ -101,15 +92,14 @@ impl StateProcessingHandler for ForwardDribblingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
                 target: ctx.player().opponent_goal_position(),
                 slowing_distance: 150.0,
             }
-                .calculate(ctx.player)
-                .velocity,
+            .calculate(ctx.player)
+            .velocity,
         )
     }
 

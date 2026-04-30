@@ -1,8 +1,8 @@
-use crate::competitions::global::GlobalCompetitionFixture;
-use crate::continent::national::world as national_world;
-use crate::continent::Continent;
-use crate::r#match::MatchSquad;
 use crate::SimulatorData;
+use crate::competitions::global::GlobalCompetitionFixture;
+use crate::continent::Continent;
+use crate::continent::national::world as national_world;
+use crate::r#match::MatchSquad;
 
 pub struct GlobalCompetitionSimulator;
 
@@ -47,14 +47,11 @@ impl GlobalCompetitionSimulator {
             let home_score = score.home_team.get();
             let away_score = score.away_team.get();
 
-            let penalty_winner = Self::penalty_winner(&data.continents, fixture, home_score, away_score);
+            let penalty_winner =
+                Self::penalty_winner(&data.continents, fixture, home_score, away_score);
 
-            data.global_competitions.record_result(
-                fixture,
-                home_score,
-                away_score,
-                penalty_winner,
-            );
+            data.global_competitions
+                .record_result(fixture, home_score, away_score, penalty_winner);
 
             let (label, full_name) = data
                 .global_competitions

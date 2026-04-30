@@ -160,9 +160,7 @@ impl PlayerValuationCalculator {
     /// or its league isn't registered.
     pub fn seller_context(country: &Country, club: &Club) -> (u16, u16) {
         let main = club.teams.main();
-        let club_rep = main
-            .map(|t| t.reputation.market_value_score())
-            .unwrap_or(0);
+        let club_rep = main.map(|t| t.reputation.market_value_score()).unwrap_or(0);
         let league_rep = main
             .and_then(|t| t.league_id)
             .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))

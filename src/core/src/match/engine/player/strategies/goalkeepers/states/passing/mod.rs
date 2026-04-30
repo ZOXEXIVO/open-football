@@ -1,9 +1,12 @@
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{PlayerEvent, PassingEventContext};
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
-use crate::PlayerFieldPositionGroup;
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler,
+};
 use nalgebra::Vector3;
 use rand::RngExt;
 
@@ -59,7 +62,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                                 .with_to_player_id(teammate.id)
                                 .with_pass_force(2.5) // Gentle pass
                                 .with_reason("GK_PASSING_SHORT")
-                                .build(ctx)
+                                .build(ctx),
                         )),
                     ));
                 }
@@ -74,7 +77,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                                 .with_to_player_id(teammate.id)
                                 .with_pass_force(4.5) // Medium power
                                 .with_reason("GK_PASSING_MEDIUM")
-                                .build(ctx)
+                                .build(ctx),
                         )),
                     ));
                 }
@@ -97,7 +100,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                                 .with_to_player_id(teammate.id)
                                 .with_pass_force(3.5) // Throw power
                                 .with_reason("GK_PASSING_THROW")
-                                .build(ctx)
+                                .build(ctx),
                         )),
                     ));
                 }
@@ -115,7 +118,6 @@ impl StateProcessingHandler for GoalkeeperPassingState {
         None
     }
 
-
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
@@ -130,7 +132,11 @@ impl GoalkeeperPassingState {
     /// Decide which type of distribution to use based on pressure and situation
     fn decide_distribution_type(&self, ctx: &StateProcessingContext) -> GoalkeeperDistributionType {
         // Check for immediate pressure
-        let opponents_nearby = ctx.players().opponents().nearby(UNDER_PRESSURE_DISTANCE).count();
+        let opponents_nearby = ctx
+            .players()
+            .opponents()
+            .nearby(UNDER_PRESSURE_DISTANCE)
+            .count();
         let under_heavy_pressure = opponents_nearby >= 2;
         let under_pressure = opponents_nearby >= 1;
 
@@ -206,7 +212,8 @@ impl GoalkeeperPassingState {
             );
 
             // Check if teammate is under pressure
-            let opponents_near_teammate = ctx.tick_context.grid.opponents(teammate.id, 10.0).count();
+            let opponents_near_teammate =
+                ctx.tick_context.grid.opponents(teammate.id, 10.0).count();
             let is_safe = opponents_near_teammate == 0;
 
             // Check if teammate is in good position (not marked)
@@ -371,7 +378,9 @@ impl GoalkeeperPassingState {
                 1.0 + kicking_power * 0.5
             };
 
-            let score = space_factor * distance_factor * (forward_progress / ctx.context.field_size.width as f32);
+            let score = space_factor
+                * distance_factor
+                * (forward_progress / ctx.context.field_size.width as f32);
 
             if score > best_score {
                 best_score = score;
@@ -389,7 +398,7 @@ impl GoalkeeperPassingState {
                     .with_to_player_id(target.id)
                     .with_pass_force(kick_force)
                     .with_reason("GK_PASSING_LONG_KICK")
-                    .build(ctx)
+                    .build(ctx),
             )))
         } else {
             // No good target - will need to clear from a different state

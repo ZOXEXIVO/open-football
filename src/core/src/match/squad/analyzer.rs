@@ -43,7 +43,10 @@ impl TacticalSquadAnalyzer {
                     }
                     pos if pos.is_defender() => {
                         composition.defender_quality.push(quality);
-                        if matches!(pos, PlayerPositionType::DefenderLeft | PlayerPositionType::DefenderRight) {
+                        if matches!(
+                            pos,
+                            PlayerPositionType::DefenderLeft | PlayerPositionType::DefenderRight
+                        ) {
                             composition.fullback_quality += quality;
                         }
                     }
@@ -52,9 +55,12 @@ impl TacticalSquadAnalyzer {
                         if matches!(pos, PlayerPositionType::DefensiveMidfielder) {
                             composition.defensive_mid_quality += quality;
                         }
-                        if matches!(pos, PlayerPositionType::AttackingMidfielderCenter |
-                                        PlayerPositionType::AttackingMidfielderLeft |
-                                        PlayerPositionType::AttackingMidfielderRight) {
+                        if matches!(
+                            pos,
+                            PlayerPositionType::AttackingMidfielderCenter
+                                | PlayerPositionType::AttackingMidfielderLeft
+                                | PlayerPositionType::AttackingMidfielderRight
+                        ) {
                             composition.attacking_mid_quality += quality;
                         }
                     }
@@ -66,10 +72,26 @@ impl TacticalSquadAnalyzer {
             }
 
             // Analyze specific attributes
-            composition.pace_merchants += if player.skills.physical.pace > 15.0 { 1 } else { 0 };
-            composition.technical_players += if player.skills.technical.technique > 15.0 { 1 } else { 0 };
-            composition.physical_players += if player.skills.physical.strength > 15.0 { 1 } else { 0 };
-            composition.creative_players += if player.skills.mental.vision > 15.0 { 1 } else { 0 };
+            composition.pace_merchants += if player.skills.physical.pace > 15.0 {
+                1
+            } else {
+                0
+            };
+            composition.technical_players += if player.skills.technical.technique > 15.0 {
+                1
+            } else {
+                0
+            };
+            composition.physical_players += if player.skills.physical.strength > 15.0 {
+                1
+            } else {
+                0
+            };
+            composition.creative_players += if player.skills.mental.vision > 15.0 {
+                1
+            } else {
+                0
+            };
         }
 
         composition.finalize_analysis();
@@ -165,15 +187,27 @@ impl TacticalSquadAnalyzer {
             }
             MatchTacticType::T4231 | MatchTacticType::T352 => {
                 // Moderate complexity
-                if coach_prefs.tactical_knowledge >= 12 { 1.2 } else { 0.8 }
+                if coach_prefs.tactical_knowledge >= 12 {
+                    1.2
+                } else {
+                    0.8
+                }
             }
             MatchTacticType::T343 | MatchTacticType::T4312 => {
                 // High complexity
-                if coach_prefs.tactical_knowledge >= 15 { 1.5 } else { 0.6 }
+                if coach_prefs.tactical_knowledge >= 15 {
+                    1.5
+                } else {
+                    0.6
+                }
             }
             _ => {
                 // Very complex formations
-                if coach_prefs.tactical_knowledge >= 18 { 2.0 } else { 0.4 }
+                if coach_prefs.tactical_knowledge >= 18 {
+                    2.0
+                } else {
+                    0.4
+                }
             }
         };
 
@@ -188,7 +222,8 @@ impl TacticalSquadAnalyzer {
         }
 
         // Attacking/Defending preference
-        let attack_def_ratio = coach_prefs.attacking_preference as f32 / coach_prefs.defending_preference as f32;
+        let attack_def_ratio =
+            coach_prefs.attacking_preference as f32 / coach_prefs.defending_preference as f32;
 
         if attack_def_ratio > 1.2 {
             // Attacking coach
@@ -264,16 +299,28 @@ impl SquadComposition {
     }
 
     fn finalize_analysis(&mut self) {
-        self.avg_gk_quality = self.goalkeeper_quality.iter().sum::<f32>() / self.goalkeeper_quality.len().max(1) as f32;
-        self.avg_def_quality = self.defender_quality.iter().sum::<f32>() / self.defender_quality.len().max(1) as f32;
-        self.avg_mid_quality = self.midfielder_quality.iter().sum::<f32>() / self.midfielder_quality.len().max(1) as f32;
-        self.avg_fwd_quality = self.forward_quality.iter().sum::<f32>() / self.forward_quality.len().max(1) as f32;
+        self.avg_gk_quality = self.goalkeeper_quality.iter().sum::<f32>()
+            / self.goalkeeper_quality.len().max(1) as f32;
+        self.avg_def_quality =
+            self.defender_quality.iter().sum::<f32>() / self.defender_quality.len().max(1) as f32;
+        self.avg_mid_quality = self.midfielder_quality.iter().sum::<f32>()
+            / self.midfielder_quality.len().max(1) as f32;
+        self.avg_fwd_quality =
+            self.forward_quality.iter().sum::<f32>() / self.forward_quality.len().max(1) as f32;
     }
 
-    pub fn average_goalkeeper_quality(&self) -> f32 { self.avg_gk_quality }
-    pub fn average_defender_quality(&self) -> f32 { self.avg_def_quality }
-    pub fn average_midfielder_quality(&self) -> f32 { self.avg_mid_quality }
-    pub fn average_forward_quality(&self) -> f32 { self.avg_fwd_quality }
+    pub fn average_goalkeeper_quality(&self) -> f32 {
+        self.avg_gk_quality
+    }
+    pub fn average_defender_quality(&self) -> f32 {
+        self.avg_def_quality
+    }
+    pub fn average_midfielder_quality(&self) -> f32 {
+        self.avg_mid_quality
+    }
+    pub fn average_forward_quality(&self) -> f32 {
+        self.avg_fwd_quality
+    }
 
     /// Get a representative set of top players for formation fitness calculation
     fn get_top_players(&self) -> Vec<&Player> {
@@ -318,9 +365,11 @@ impl EnhancedTacticsSelector {
         // Adjust based on team morale
         tactics = Self::adjust_for_morale(tactics, team_morale);
 
-        info!("Selected tactics: {} ({})",
-              tactics.formation_description(),
-              tactics.tactic_type.display_name());
+        info!(
+            "Selected tactics: {} ({})",
+            tactics.formation_description(),
+            tactics.tactic_type.display_name()
+        );
 
         tactics
     }
@@ -334,11 +383,12 @@ impl EnhancedTacticsSelector {
             return None;
         }
 
-        let losses = recent_results.iter()
+        let losses = recent_results
+            .iter()
             .take(5) // Last 5 games
             .filter(|result| {
-                result.score.home_team.get() < result.score.away_team.get() ||
-                    result.score.away_team.get() < result.score.home_team.get()
+                result.score.home_team.get() < result.score.away_team.get()
+                    || result.score.away_team.get() < result.score.home_team.get()
             })
             .count();
 

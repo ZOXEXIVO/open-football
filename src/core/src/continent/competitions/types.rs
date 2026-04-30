@@ -66,10 +66,19 @@ pub struct GroupRow {
 impl GroupTable {
     pub fn new(teams: &[u32]) -> Self {
         GroupTable {
-            rows: teams.iter().map(|&id| GroupRow {
-                team_id: id, played: 0, won: 0, drawn: 0, lost: 0,
-                gf: 0, ga: 0, points: 0,
-            }).collect(),
+            rows: teams
+                .iter()
+                .map(|&id| GroupRow {
+                    team_id: id,
+                    played: 0,
+                    won: 0,
+                    drawn: 0,
+                    lost: 0,
+                    gf: 0,
+                    ga: 0,
+                    points: 0,
+                })
+                .collect(),
         }
     }
 
@@ -92,21 +101,37 @@ impl GroupTable {
         self.sort();
     }
 
-    fn record(&mut self, team_id: u32, gf: u8, ga: u8, pts: u8, won: bool, drawn: bool, lost: bool) {
+    fn record(
+        &mut self,
+        team_id: u32,
+        gf: u8,
+        ga: u8,
+        pts: u8,
+        won: bool,
+        drawn: bool,
+        lost: bool,
+    ) {
         if let Some(row) = self.rows.iter_mut().find(|r| r.team_id == team_id) {
             row.played += 1;
             row.gf += gf;
             row.ga += ga;
             row.points += pts;
-            if won { row.won += 1; }
-            if drawn { row.drawn += 1; }
-            if lost { row.lost += 1; }
+            if won {
+                row.won += 1;
+            }
+            if drawn {
+                row.drawn += 1;
+            }
+            if lost {
+                row.lost += 1;
+            }
         }
     }
 
     fn sort(&mut self) {
         self.rows.sort_by(|a, b| {
-            b.points.cmp(&a.points)
+            b.points
+                .cmp(&a.points)
                 .then_with(|| (b.gf as i16 - b.ga as i16).cmp(&(a.gf as i16 - a.ga as i16)))
                 .then_with(|| b.gf.cmp(&a.gf))
         });
@@ -129,7 +154,13 @@ pub struct KnockoutTie {
 
 impl KnockoutTie {
     pub fn new(home: u32, away: u32) -> Self {
-        KnockoutTie { home_team: home, away_team: away, leg1_score: None, leg2_score: None, winner: None }
+        KnockoutTie {
+            home_team: home,
+            away_team: away,
+            leg1_score: None,
+            leg2_score: None,
+            winner: None,
+        }
     }
 
     pub fn record_leg1(&mut self, home_goals: u8, away_goals: u8) {
@@ -146,7 +177,11 @@ impl KnockoutTie {
             } else if agg_away > agg_home {
                 self.away_team
             } else {
-                if h2 > a1 { self.away_team } else { self.home_team }
+                if h2 > a1 {
+                    self.away_team
+                } else {
+                    self.home_team
+                }
             });
         }
     }

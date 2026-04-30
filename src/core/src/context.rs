@@ -1,12 +1,12 @@
 pub use chrono::prelude::*;
 
+use crate::PeopleNameGeneratorData;
+use crate::TeamContext;
 use crate::ai::Ai;
 use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, StaffContext};
 use crate::continent::ContinentContext;
 use crate::country::{CountryContext, SeasonDates};
 use crate::league::LeagueContext;
-use crate::PeopleNameGeneratorData;
-use crate::TeamContext;
 
 #[derive(Clone)]
 pub struct GlobalContext<'gc> {
@@ -53,15 +53,36 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
-    pub fn with_country_and_names(&self, country_id: u32, country_code: String, people_names: PeopleNameGeneratorData, season_dates: SeasonDates) -> Self {
+    pub fn with_country_and_names(
+        &self,
+        country_id: u32,
+        country_code: String,
+        people_names: PeopleNameGeneratorData,
+        season_dates: SeasonDates,
+    ) -> Self {
         let mut ctx = GlobalContext::clone(self);
-        ctx.country = Some(CountryContext::with_people_names(country_id, people_names).with_code(country_code).with_season_dates(season_dates));
+        ctx.country = Some(
+            CountryContext::with_people_names(country_id, people_names)
+                .with_code(country_code)
+                .with_season_dates(season_dates),
+        );
         ctx
     }
 
-    pub fn with_league(&self, league_id: u32, league_slug: String, team_ids: &'gc [u32], reputation: u16) -> Self {
+    pub fn with_league(
+        &self,
+        league_id: u32,
+        league_slug: String,
+        team_ids: &'gc [u32],
+        reputation: u16,
+    ) -> Self {
         let mut ctx = GlobalContext::clone(self);
-        ctx.league = Some(LeagueContext::new(league_id, league_slug, team_ids, reputation));
+        ctx.league = Some(LeagueContext::new(
+            league_id,
+            league_slug,
+            team_ids,
+            reputation,
+        ));
         ctx
     }
 
@@ -115,47 +136,74 @@ impl<'gc> GlobalContext<'gc> {
 
     /// Get training facility quality from club context (0.0-1.0)
     pub fn club_facilities_training(&self) -> f32 {
-        self.club.as_ref().map(|c| c.training_facility_quality).unwrap_or(0.35)
+        self.club
+            .as_ref()
+            .map(|c| c.training_facility_quality)
+            .unwrap_or(0.35)
     }
 
     /// Get youth facility quality from club context (0.0-1.0)
     pub fn club_facilities_youth(&self) -> f32 {
-        self.club.as_ref().map(|c| c.youth_facility_quality).unwrap_or(0.35)
+        self.club
+            .as_ref()
+            .map(|c| c.youth_facility_quality)
+            .unwrap_or(0.35)
     }
 
     /// Get academy quality from club context (0.0-1.0)
     pub fn club_academy_quality(&self) -> f32 {
-        self.club.as_ref().map(|c| c.academy_quality).unwrap_or(0.35)
+        self.club
+            .as_ref()
+            .map(|c| c.academy_quality)
+            .unwrap_or(0.35)
     }
 
     /// Get youth recruitment quality from club context (0.0-1.0)
     pub fn club_recruitment_quality(&self) -> f32 {
-        self.club.as_ref().map(|c| c.recruitment_quality).unwrap_or(0.35)
+        self.club
+            .as_ref()
+            .map(|c| c.recruitment_quality)
+            .unwrap_or(0.35)
     }
 
     /// Best physiotherapy score on the club's medical staff (0.0-1.0).
     pub fn club_medical_quality(&self) -> f32 {
-        self.club.as_ref().map(|c| c.medical_quality).unwrap_or(0.35)
+        self.club
+            .as_ref()
+            .map(|c| c.medical_quality)
+            .unwrap_or(0.35)
     }
 
     /// Best sports_science score on the club's medical staff (0.0-1.0).
     pub fn club_sports_science_quality(&self) -> f32 {
-        self.club.as_ref().map(|c| c.sports_science_quality).unwrap_or(0.35)
+        self.club
+            .as_ref()
+            .map(|c| c.sports_science_quality)
+            .unwrap_or(0.35)
     }
 
     /// Best working_with_youngsters score on the club's coaching staff (0.0-1.0).
     pub fn club_youth_coaching_quality(&self) -> f32 {
-        self.club.as_ref().map(|c| c.youth_coaching_quality).unwrap_or(0.35)
+        self.club
+            .as_ref()
+            .map(|c| c.youth_coaching_quality)
+            .unwrap_or(0.35)
     }
 
     /// Main team's blended reputation (0..10000) from club context.
     pub fn club_main_reputation(&self) -> u16 {
-        self.club.as_ref().map(|c| c.main_team_reputation).unwrap_or(0)
+        self.club
+            .as_ref()
+            .map(|c| c.main_team_reputation)
+            .unwrap_or(0)
     }
 
     /// Main team's world reputation (0..10000) from club context.
     pub fn club_main_world_reputation(&self) -> u16 {
-        self.club.as_ref().map(|c| c.main_team_world_reputation).unwrap_or(0)
+        self.club
+            .as_ref()
+            .map(|c| c.main_team_world_reputation)
+            .unwrap_or(0)
     }
 
     /// Main team's league reputation (0..10000).
@@ -165,13 +213,19 @@ impl<'gc> GlobalContext<'gc> {
 
     /// Country football-ecosystem reputation (0..10000).
     pub fn club_country_reputation(&self) -> u16 {
-        self.club.as_ref().map(|c| c.country_reputation).unwrap_or(0)
+        self.club
+            .as_ref()
+            .map(|c| c.country_reputation)
+            .unwrap_or(0)
     }
 
     /// Academy pathway reputation (0..100) — internal prestige of the youth
     /// pipeline, separate from the club's outward-facing reputation.
     pub fn club_pathway_reputation(&self) -> u8 {
-        self.club.as_ref().map(|c| c.pathway_reputation).unwrap_or(50)
+        self.club
+            .as_ref()
+            .map(|c| c.pathway_reputation)
+            .unwrap_or(50)
     }
 }
 

@@ -72,9 +72,8 @@ impl PlayerMemory {
 
     pub fn push_intention(&mut self, kind: IntentionKind, tick: u64) {
         // Remove existing intention of same kind
-        self.intentions.retain(|i| {
-            std::mem::discriminant(&i.kind) != std::mem::discriminant(&kind)
-        });
+        self.intentions
+            .retain(|i| std::mem::discriminant(&i.kind) != std::mem::discriminant(&kind));
 
         if self.intentions.len() >= MAX_INTENTIONS {
             self.intentions.remove(0);
@@ -91,9 +90,9 @@ impl PlayerMemory {
     }
 
     pub fn has_intention(&self, kind: &IntentionKind) -> bool {
-        self.intentions.iter().any(|i| {
-            std::mem::discriminant(&i.kind) == std::mem::discriminant(kind)
-        })
+        self.intentions
+            .iter()
+            .any(|i| std::mem::discriminant(&i.kind) == std::mem::discriminant(kind))
     }
 
     pub fn record_event(&mut self, event: MemoryEventType) {

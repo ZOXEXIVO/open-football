@@ -1,6 +1,9 @@
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::{
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
+};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -15,20 +18,21 @@ impl StateProcessingHandler for ForwardAssistingState {
             ));
         }
 
-        if !ctx.team().is_control_ball(){
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running,
-            ));
+        if !ctx.team().is_control_ball() {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.9) {
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Intercepting
+                ForwardState::Intercepting,
             ));
         }
 
         // Check if the player is on the opponent's side of the field
-        if ctx.team().is_control_ball() && !ctx.player().on_own_side() && ctx.players().opponents().exists(100.0){
+        if ctx.team().is_control_ball()
+            && !ctx.player().on_own_side()
+            && ctx.players().opponents().exists(100.0)
+        {
             // If not on the opponent's side, focus on creating space and moving forward
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::CreatingSpace,
@@ -69,7 +73,6 @@ impl StateProcessingHandler for ForwardAssistingState {
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
@@ -123,11 +126,11 @@ impl ForwardAssistingState {
             }
 
             // Check if teammate has space (not heavily marked)
-            let close_defenders = ctx.tick_context.grid
-                .opponents(teammate.id, 10.0).count();
+            let close_defenders = ctx.tick_context.grid.opponents(teammate.id, 10.0).count();
 
             // Good if close to goal with some space or is another forward
-            distance_to_goal < 350.0 && (close_defenders < 2 || teammate.tactical_positions.is_forward())
+            distance_to_goal < 350.0
+                && (close_defenders < 2 || teammate.tactical_positions.is_forward())
         } else {
             false
         }
@@ -139,7 +142,6 @@ impl ForwardAssistingState {
     }
 
     fn should_create_space(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.player.skills.mental.off_the_ball > 15.0
-            && ctx.players().teammates().exists(100.0)
+        ctx.player.skills.mental.off_the_ball > 15.0 && ctx.players().teammates().exists(100.0)
     }
 }

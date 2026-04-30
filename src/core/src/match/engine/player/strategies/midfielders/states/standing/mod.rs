@@ -1,5 +1,5 @@
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -16,9 +16,7 @@ impl StateProcessingHandler for MidfielderStandingState {
         // can drift beyond the opposing defensive line. If our team
         // doesn't have the ball, drop back to Returning or any pass
         // upfield will catch us offside.
-        if !ctx.player.has_ball(ctx)
-            && ctx.player().defensive().is_stranded_offside()
-        {
+        if !ctx.player.has_ball(ctx) && ctx.player().defensive().is_stranded_offside() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Returning,
             ));
@@ -37,8 +35,7 @@ impl StateProcessingHandler for MidfielderStandingState {
             } else {
                 None
             };
-        }
-        else {
+        } else {
             // Loose-ball claim lives in the dispatcher.
 
             if ctx.team().is_control_ball() {
@@ -52,8 +49,7 @@ impl StateProcessingHandler for MidfielderStandingState {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Running,
                 ));
-            }
-            else {
+            } else {
                 // Only press/tackle if an OPPONENT has the ball AND we're the best chaser
                 if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
                     if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD
@@ -94,7 +90,8 @@ impl StateProcessingHandler for MidfielderStandingState {
                 // our way).
                 if !ctx.ball().is_owned()
                     && ctx.ball().distance() < 250.0
-                    && ctx.ball().is_towards_player_with_angle(0.8) {
+                    && ctx.ball().is_towards_player_with_angle(0.8)
+                {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Intercepting,
                     ));
@@ -136,7 +133,6 @@ impl StateProcessingHandler for MidfielderStandingState {
 
         None
     }
-
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Standing = completely still. No separation, no drift.

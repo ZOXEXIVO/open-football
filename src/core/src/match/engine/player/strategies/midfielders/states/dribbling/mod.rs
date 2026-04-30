@@ -1,5 +1,5 @@
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -23,9 +23,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // shooting-range band (which scales with skill up to ~80u).
         // Previously this was the dominant midfielder shot path.
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        if ctx.player().shooting().in_shooting_range()
-            && ctx.player().has_clear_shot()
-        {
+        if ctx.player().shooting().in_shooting_range() && ctx.player().has_clear_shot() {
             return Some(
                 StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                     .with_shot_reason("MID_DRIB_IN_RANGE"),
@@ -91,7 +89,6 @@ impl StateProcessingHandler for MidfielderDribblingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if !ctx.player.has_ball(ctx) {
             let ball_pos = ctx.tick_context.positions.ball.position;
@@ -111,12 +108,11 @@ impl StateProcessingHandler for MidfielderDribblingState {
         let base_speed = 3.5 * (0.5 * dribble_skill + 0.3 * pace + 0.2 * agility);
 
         // Find nearest opponent to dribble around
-        let nearest_opponent = ctx.players().opponents().nearby(30.0)
-            .min_by(|a, b| {
-                let da = (a.position - player_pos).magnitude();
-                let db = (b.position - player_pos).magnitude();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            });
+        let nearest_opponent = ctx.players().opponents().nearby(30.0).min_by(|a, b| {
+            let da = (a.position - player_pos).magnitude();
+            let db = (b.position - player_pos).magnitude();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let direction = if let Some(opponent) = nearest_opponent {
             let opp_dist = (opponent.position - player_pos).magnitude();

@@ -11,9 +11,9 @@
 //! free agent. Aging, retirement, and reputation decay run via
 //! `tick_free_agent_staff_pool`.
 
+use crate::Staff;
 use crate::club::staff::contract::StaffPosition;
 use crate::utils::DateUtils;
-use crate::Staff;
 use chrono::NaiveDate;
 use log::debug;
 
@@ -79,7 +79,10 @@ pub fn tick_free_agent_staff_pool(pool: &mut Vec<Staff>, today: NaiveDate) {
         let age = DateUtils::age(staff.birth_date, today);
 
         if age >= COACH_RETIREMENT_AGE {
-            debug!("Free-agent pool: retired staff id {} at age {}", staff.id, age);
+            debug!(
+                "Free-agent pool: retired staff id {} at age {}",
+                staff.id, age
+            );
             return false;
         }
 
@@ -96,8 +99,7 @@ pub fn tick_free_agent_staff_pool(pool: &mut Vec<Staff>, today: NaiveDate) {
             }
         }
 
-        staff.job_satisfaction =
-            (staff.job_satisfaction - JOB_SATISFACTION_DAILY_DECAY).max(0.0);
+        staff.job_satisfaction = (staff.job_satisfaction - JOB_SATISFACTION_DAILY_DECAY).max(0.0);
 
         true
     });
@@ -111,10 +113,7 @@ pub fn tick_free_agent_staff_pool(pool: &mut Vec<Staff>, today: NaiveDate) {
 /// Returns the number of staff moved this tick. Cheap when nothing
 /// expires (the common case): just a contract-date comparison per
 /// staff member.
-pub fn harvest_expired_staff(
-    data: &mut crate::SimulatorData,
-    today: NaiveDate,
-) -> usize {
+pub fn harvest_expired_staff(data: &mut crate::SimulatorData, today: NaiveDate) -> usize {
     let mut harvested: Vec<Staff> = Vec::new();
 
     for continent in &mut data.continents {
@@ -126,7 +125,9 @@ pub fn harvest_expired_staff(
                         .staffs
                         .iter()
                         .filter(|s| {
-                            let Some(c) = &s.contract else { return false; };
+                            let Some(c) = &s.contract else {
+                                return false;
+                            };
                             // Skip manager-seat handling — the board owns it.
                             if matches!(
                                 c.position,
@@ -159,8 +160,8 @@ pub fn harvest_expired_staff(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::club::staff::contract::{StaffClubContract, StaffStatus};
     use crate::club::StaffStub;
+    use crate::club::staff::contract::{StaffClubContract, StaffStatus};
     use chrono::{Datelike, NaiveDate};
 
     fn make_staff(id: u32, age: u8, today: NaiveDate) -> Staff {

@@ -1,8 +1,8 @@
+use crate::PlayerFieldPositionGroup;
 use crate::club::player::behaviour_config::PassEvaluatorConfig;
 use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, PlayerSide, StateProcessingContext};
-use crate::PlayerFieldPositionGroup;
 
 /// Comprehensive pass evaluation result
 #[derive(Debug, Clone)]
@@ -81,8 +81,11 @@ impl PassEvaluator {
         // registry (`risk_tolerant_passer` field) — adding a new such
         // trait no longer requires touching this evaluator.
         let risk_tolerant = has_risk_tolerant_passing_trait(&passer.traits);
-        let is_recommended = PassEvaluatorConfig::default()
-            .is_recommended(success_probability, risk_level, risk_tolerant);
+        let is_recommended = PassEvaluatorConfig::default().is_recommended(
+            success_probability,
+            risk_level,
+            risk_tolerant,
+        );
 
         PassEvaluation {
             success_probability,
@@ -141,7 +144,9 @@ impl PassEvaluator {
             }
         } else {
             // Extreme long passes (300m+) - goalkeeper clearances, desperate plays
-            let skill_factor = (vision_skill / 20.0 * 0.5) + (technique_skill / 20.0 * 0.35) + (passing_skill / 20.0 * 0.15);
+            let skill_factor = (vision_skill / 20.0 * 0.5)
+                + (technique_skill / 20.0 * 0.35)
+                + (passing_skill / 20.0 * 0.15);
 
             if skill_factor > 0.8 {
                 0.35
@@ -174,10 +179,7 @@ impl PassEvaluator {
     }
 
     /// Calculate pressure on the passer from opponents
-    fn calculate_pressure_factor(
-        ctx: &StateProcessingContext,
-        passer: &MatchPlayer,
-    ) -> f32 {
+    fn calculate_pressure_factor(ctx: &StateProcessingContext, passer: &MatchPlayer) -> f32 {
         let pressure_radius = PassEvaluatorConfig::default().pressure_radius;
 
         // Compute closest distance and count without allocation
@@ -206,7 +208,8 @@ impl PassEvaluator {
         let decision_factor = passer.skills.mental.decisions / 20.0;
 
         let base_pressure = distance_pressure * number_pressure;
-        let pressure_with_mentals = base_pressure + (1.0 - base_pressure) * composure_factor * decision_factor;
+        let pressure_with_mentals =
+            base_pressure + (1.0 - base_pressure) * composure_factor * decision_factor;
 
         pressure_with_mentals.clamp(0.3, 1.0)
     }
@@ -270,11 +273,18 @@ impl PassEvaluator {
         let off_ball_factor = skills.mental.off_the_ball / 20.0;
         let positioning_factor = skills.mental.positioning / 20.0;
 
-        (space_factor * movement_factor * (0.7 + off_ball_factor * 0.15 + positioning_factor * 0.15)).clamp(0.1, 1.0)
+        (space_factor
+            * movement_factor
+            * (0.7 + off_ball_factor * 0.15 + positioning_factor * 0.15))
+            .clamp(0.1, 1.0)
     }
 
     /// Calculate passer's ability to execute this pass
-    fn calculate_passer_ability(_ctx: &StateProcessingContext, passer: &MatchPlayer, distance: f32) -> f32 {
+    fn calculate_passer_ability(
+        _ctx: &StateProcessingContext,
+        passer: &MatchPlayer,
+        distance: f32,
+    ) -> f32 {
         let passing_skill = passer.skills.technical.passing / 20.0;
         let technique_skill = passer.skills.technical.technique / 20.0;
         let vision_skill = passer.skills.mental.vision / 20.0;
@@ -283,10 +293,9 @@ impl PassEvaluator {
         // For long passes, passing skill matters more
         let short_pass_weight = 1.0 - (distance / 100.0).min(1.0);
 
-        let ability =
-            passing_skill * (0.5 + short_pass_weight * 0.2) +
-                technique_skill * (0.3 + short_pass_weight * 0.2) +
-                vision_skill * 0.2;
+        let ability = passing_skill * (0.5 + short_pass_weight * 0.2)
+            + technique_skill * (0.3 + short_pass_weight * 0.2)
+            + vision_skill * 0.2;
 
         // Condition affects ability
         let condition_factor = passer.player_attributes.condition as f32 / 10000.0;
@@ -313,10 +322,7 @@ impl PassEvaluator {
     }
 
     /// Calculate tactical value of the pass
-    fn calculate_tactical_value(
-        ctx: &StateProcessingContext,
-        receiver: &MatchPlayerLite,
-    ) -> f32 {
+    fn calculate_tactical_value(ctx: &StateProcessingContext, receiver: &MatchPlayerLite) -> f32 {
         let ball_position = ctx.tick_context.positions.ball.position;
         let receiver_position = receiver.position;
         let passer_position = ctx.player.position;
@@ -325,24 +331,30 @@ impl PassEvaluator {
 
         // Determine which direction is forward based on player side
         let forward_direction_multiplier = match ctx.player.side {
-            Some(PlayerSide::Left) => 1.0,  // Left team attacks right (positive X)
+            Some(PlayerSide::Left) => 1.0, // Left team attacks right (positive X)
             Some(PlayerSide::Right) => -1.0, // Right team attacks left (negative X)
             None => 1.0,
         };
 
         // Calculate actual forward progress (positive = forward, negative = backward)
         let field_width = ctx.context.field_size.width as f32;
-        let forward_progress = ((receiver_position.x - ball_position.x) * forward_direction_multiplier) / field_width;
+        let forward_progress =
+            ((receiver_position.x - ball_position.x) * forward_direction_multiplier) / field_width;
 
         // Strong penalty for backward passes, strong reward for forward
         // Defenders get extra penalty for backward passes since they're already deep
-        let is_defender = ctx.player.tactical_position.current_position.position_group()
+        let is_defender = ctx
+            .player
+            .tactical_position
+            .current_position
+            .position_group()
             == PlayerFieldPositionGroup::Defender;
 
         // Penalize pure sideways passes that don't progress the ball
         // But exempt wide switches — lateral passes that spread the play are valuable
         let lateral_change = (receiver_position.y - passer_position.y).abs();
-        let forward_change = ((receiver_position.x - passer_position.x) * forward_direction_multiplier).abs();
+        let forward_change =
+            ((receiver_position.x - passer_position.x) * forward_direction_multiplier).abs();
         let sideways_penalty = if forward_change < 10.0 && lateral_change > 20.0 {
             if lateral_change > field_height * 0.25 {
                 // Wide switch — this is good, no penalty
@@ -408,8 +420,10 @@ impl PassEvaluator {
         let passer_distance_from_center = (passer_position.y - field_center_y).abs();
 
         // How wide is the receiver? (0.0 = center, 1.0 = touchline)
-        let receiver_width_ratio = (receiver_distance_from_center / (field_height / 2.0)).clamp(0.0, 1.0);
-        let passer_width_ratio = (passer_distance_from_center / (field_height / 2.0)).clamp(0.0, 1.0);
+        let receiver_width_ratio =
+            (receiver_distance_from_center / (field_height / 2.0)).clamp(0.0, 1.0);
+        let passer_width_ratio =
+            (passer_distance_from_center / (field_height / 2.0)).clamp(0.0, 1.0);
 
         // Width bonus - reward passes to wide areas
         // Extra bonus if passer is central and receiver is wide (spreading play)
@@ -420,7 +434,11 @@ impl PassEvaluator {
         };
 
         // Midfielder-specific width incentive — midfielders should distribute wide
-        let is_midfielder = ctx.player.tactical_position.current_position.position_group()
+        let is_midfielder = ctx
+            .player
+            .tactical_position
+            .current_position
+            .position_group()
             == PlayerFieldPositionGroup::Midfielder;
         let midfielder_width_bonus = if is_midfielder && receiver_width_ratio > 0.4 {
             0.15 // Midfielders get extra reward for wide distribution
@@ -457,12 +475,27 @@ impl PassEvaluator {
 
         // === OVERLOADED SIDE PENALTY ===
         // Penalize passes that keep ball on already crowded side
-        let ball_side = if ball_position.y > field_center_y { 1.0 } else { -1.0 };
-        let receiver_side = if receiver_position.y > field_center_y { 1.0 } else { -1.0 };
+        let ball_side = if ball_position.y > field_center_y {
+            1.0
+        } else {
+            -1.0
+        };
+        let receiver_side = if receiver_position.y > field_center_y {
+            1.0
+        } else {
+            -1.0
+        };
 
-        let teammates_on_ball_side = ctx.players().teammates().all()
+        let teammates_on_ball_side = ctx
+            .players()
+            .teammates()
+            .all()
             .filter(|t| {
-                let t_side = if t.position.y > field_center_y { 1.0 } else { -1.0 };
+                let t_side = if t.position.y > field_center_y {
+                    1.0
+                } else {
+                    -1.0
+                };
                 t_side == ball_side
             })
             .count();
@@ -503,15 +536,14 @@ impl PassEvaluator {
         };
 
         // Weighted combination - includes width and switching bonuses
-        let mut tactical_value =
-            forward_value * 0.32 +         // Forward progression (reduced to make room for width)
+        let mut tactical_value = forward_value * 0.32 +         // Forward progression (reduced to make room for width)
             distance_value * 0.10 +        // Pass distance quality
             position_value * 0.08 +        // Receiver's tactical position (forwards > defenders)
             long_pass_bonus * 0.05 +       // Long passes
             width_bonus * 0.22 +           // Reward wide passes (major boost)
             switch_play_bonus * 0.22 +     // Reward switching play (major boost)
             overload_penalty +             // Penalize crowded side
-            sideways_penalty;              // Penalize pure sideways passes
+            sideways_penalty; // Penalize pure sideways passes
 
         // PPM biases. Players with killer-ball / playmaker traits love the
         // forward pass and should see it as more valuable even when risky.
@@ -548,8 +580,7 @@ impl PassEvaluator {
     fn calculate_success_probability(factors: &PassFactors) -> f32 {
         // Weighted combination of all factors
         // Receiver positioning is the dominant factor — free players are far better targets
-        let probability =
-            factors.distance_factor * 0.10 +
+        let probability = factors.distance_factor * 0.10 +
                 factors.angle_factor * 0.08 +
                 factors.pressure_factor * 0.08 +
                 factors.receiver_positioning * 0.40 +  // Dominant: free receivers are far better
@@ -564,8 +595,7 @@ impl PassEvaluator {
     fn calculate_risk_level(factors: &PassFactors) -> f32 {
         // Risk is inverse of safety factors
         // Poor receiver positioning (crowded by opponents) is now a major risk
-        let risk =
-            (1.0 - factors.distance_factor) * 0.20 +
+        let risk = (1.0 - factors.distance_factor) * 0.20 +
                 (1.0 - factors.pressure_factor) * 0.20 +
                 (1.0 - factors.receiver_positioning) * 0.40 +  // Increased from 0.20
                 (1.0 - factors.receiver_ability) * 0.20;
@@ -590,7 +620,10 @@ impl PassEvaluator {
         let min_intercept_projection = 20.0_f32.min(pass_distance * 0.25);
 
         // Check for opponents who could intercept the pass
-        let intercepting_opponents = ctx.players().opponents().all()
+        let intercepting_opponents = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|opponent| {
                 let to_opponent = opponent.position - passer.position;
                 let projection_distance = to_opponent.dot(&pass_direction);
@@ -621,7 +654,7 @@ impl PassEvaluator {
 
         // Convert count to risk factor — aggressive penalties to prevent suicidal passes
         if intercepting_opponents == 0 {
-            0.0  // No risk
+            0.0 // No risk
         } else if intercepting_opponents == 1 {
             0.55 // Significant risk — one opponent in the lane
         } else if intercepting_opponents == 2 {
@@ -681,29 +714,27 @@ impl PassEvaluator {
             // CONGESTION PENALTY: Heavily penalize passing into crowded areas.
             // Opponents near the receiver are weighted more heavily than teammates,
             // and close opponents are weighted much more than distant ones.
-            let nearby_teammates_count = ctx.tick_context.grid
+            let nearby_teammates_count = ctx
+                .tick_context
+                .grid
                 .teammates(teammate.id, 0.0, 50.0)
                 .count();
-            let close_opponents_count = ctx.tick_context.grid
-                .opponents(teammate.id, 30.0)
-                .count();
-            let medium_opponents_count = ctx.tick_context.grid
-                .opponents(teammate.id, 60.0)
-                .count() - close_opponents_count;
+            let close_opponents_count = ctx.tick_context.grid.opponents(teammate.id, 30.0).count();
+            let medium_opponents_count =
+                ctx.tick_context.grid.opponents(teammate.id, 60.0).count() - close_opponents_count;
 
             // Close opponents count triple — passing into tight marking is very risky
-            let weighted_nearby = nearby_teammates_count
-                + close_opponents_count * 3
-                + medium_opponents_count;
+            let weighted_nearby =
+                nearby_teammates_count + close_opponents_count * 3 + medium_opponents_count;
 
             let congestion_penalty = match weighted_nearby {
-                0 => 1.8,   // Completely isolated — excellent target
-                1 => 1.3,   // One nearby player — good
-                2 => 0.9,   // Normal
-                3 => 0.4,   // Getting crowded — discouraged
-                4 => 0.15,  // Congested — strongly discouraged
-                5 => 0.06,  // Huddle — almost never pass here
-                _ => 0.02,  // Extremely congested — effectively blocked
+                0 => 1.8,  // Completely isolated — excellent target
+                1 => 1.3,  // One nearby player — good
+                2 => 0.9,  // Normal
+                3 => 0.4,  // Getting crowded — discouraged
+                4 => 0.15, // Congested — strongly discouraged
+                5 => 0.06, // Huddle — almost never pass here
+                _ => 0.02, // Extremely congested — effectively blocked
             };
 
             let evaluation = Self::evaluate_pass(ctx, ctx.player, &teammate);
@@ -799,18 +830,10 @@ impl PassEvaluator {
                 // Playmakers prefer through balls but not unrealistic long passes
                 if pass_distance > 300.0 {
                     // Extreme passes - very risky even for elite
-                    if vision_skill > 0.85 {
-                        1.1
-                    } else {
-                        0.6
-                    }
+                    if vision_skill > 0.85 { 1.1 } else { 0.6 }
                 } else if pass_distance > 200.0 {
                     // Ultra-long switches - risky
-                    if vision_skill > 0.75 {
-                        1.15
-                    } else {
-                        0.8
-                    }
+                    if vision_skill > 0.75 { 1.15 } else { 0.8 }
                 } else if pass_distance > 100.0 {
                     1.2 // Long passes - moderate bonus
                 } else if pass_distance > 80.0 {
@@ -827,7 +850,8 @@ impl PassEvaluator {
                     Some(PlayerSide::Right) => -1.0,
                     None => 1.0,
                 };
-                let forward_progress = (teammate.position.x - ctx.player.position.x) * forward_direction_multiplier;
+                let forward_progress =
+                    (teammate.position.x - ctx.player.position.x) * forward_direction_multiplier;
                 if forward_progress > 0.0 {
                     1.4
                 } else {
@@ -869,16 +893,19 @@ impl PassEvaluator {
                     Some(PlayerSide::Right) => -1.0,
                     None => 1.0,
                 };
-                let is_backward_pass = ((teammate.position.x - ctx.player.position.x) * forward_direction_multiplier) < 0.0;
+                let is_backward_pass = ((teammate.position.x - ctx.player.position.x)
+                    * forward_direction_multiplier)
+                    < 0.0;
 
                 // Check if player is in attacking third
                 let field_width = ctx.context.field_size.width as f32;
-                let player_field_position = (ctx.player.position.x * forward_direction_multiplier) / field_width;
+                let player_field_position =
+                    (ctx.player.position.x * forward_direction_multiplier) / field_width;
                 let in_attacking_third = player_field_position > 0.66;
 
                 if in_attacking_third && is_backward_pass {
                     // In attacking third, passing backward to GK is NEVER acceptable
-                    0.00001  // Virtually zero
+                    0.00001 // Virtually zero
                 } else if is_backward_pass {
                     // Backward pass to GK in middle/defensive third - still very bad
                     0.0001
@@ -890,7 +917,7 @@ impl PassEvaluator {
                     0.0005
                 }
             } else {
-                1.0  // No penalty for non-GK
+                1.0 // No penalty for non-GK
             };
 
             // Calculate final score with personality-based weighting
@@ -898,34 +925,77 @@ impl PassEvaluator {
                 // Under heavy pressure - personality affects decision
                 if is_conservative {
                     // Conservative: safety is paramount
-                    (evaluation.success_probability * 2.0 + positioning_bonus) * interception_penalty * space_quality * optimal_distance_bonus * goalkeeper_penalty
+                    (evaluation.success_probability * 2.0 + positioning_bonus)
+                        * interception_penalty
+                        * space_quality
+                        * optimal_distance_bonus
+                        * goalkeeper_penalty
                 } else if is_direct {
                     // Direct: still look for forward options
-                    (evaluation.expected_value * 1.5 + positioning_bonus * 0.3) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
+                    (evaluation.expected_value * 1.5 + positioning_bonus * 0.3)
+                        * interception_penalty
+                        * space_quality
+                        * distance_preference
+                        * optimal_distance_bonus
+                        * goalkeeper_penalty
                 } else {
                     // Others: prioritize safety AND space
-                    (evaluation.success_probability + positioning_bonus) * interception_penalty * space_quality * 1.3 * optimal_distance_bonus * goalkeeper_penalty
+                    (evaluation.success_probability + positioning_bonus)
+                        * interception_penalty
+                        * space_quality
+                        * 1.3
+                        * optimal_distance_bonus
+                        * goalkeeper_penalty
                 }
             } else {
                 // Normal situation - personality-based preferences apply
                 if is_playmaker {
                     // Playmakers prioritize tactical value and vision
-                    (evaluation.expected_value * 1.3 + positioning_bonus * 0.4) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
+                    (evaluation.expected_value * 1.3 + positioning_bonus * 0.4)
+                        * interception_penalty
+                        * space_quality
+                        * distance_preference
+                        * optimal_distance_bonus
+                        * goalkeeper_penalty
                 } else if is_direct {
                     // Direct players maximize attack
-                    (evaluation.expected_value * 1.4 + evaluation.factors.tactical_value * 0.5) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
+                    (evaluation.expected_value * 1.4 + evaluation.factors.tactical_value * 0.5)
+                        * interception_penalty
+                        * space_quality
+                        * distance_preference
+                        * optimal_distance_bonus
+                        * goalkeeper_penalty
                 } else if is_team_player {
                     // Team players maximize receiver's situation
-                    (evaluation.success_probability + positioning_bonus * 0.8) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
+                    (evaluation.success_probability + positioning_bonus * 0.8)
+                        * interception_penalty
+                        * space_quality
+                        * distance_preference
+                        * optimal_distance_bonus
+                        * goalkeeper_penalty
                 } else if is_conservative {
                     // Conservative: success probability is key
-                    (evaluation.success_probability * 1.5 + positioning_bonus * 0.3) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
+                    (evaluation.success_probability * 1.5 + positioning_bonus * 0.3)
+                        * interception_penalty
+                        * space_quality
+                        * distance_preference
+                        * optimal_distance_bonus
+                        * goalkeeper_penalty
                 } else if is_pragmatic {
                     // Pragmatic: balanced approach
-                    (evaluation.expected_value * 1.2 + positioning_bonus * 0.5) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
+                    (evaluation.expected_value * 1.2 + positioning_bonus * 0.5)
+                        * interception_penalty
+                        * space_quality
+                        * distance_preference
+                        * optimal_distance_bonus
+                        * goalkeeper_penalty
                 } else {
                     // Standard scoring
-                    (evaluation.expected_value + positioning_bonus * 0.5) * interception_penalty * space_quality * optimal_distance_bonus * goalkeeper_penalty
+                    (evaluation.expected_value + positioning_bonus * 0.5)
+                        * interception_penalty
+                        * space_quality
+                        * optimal_distance_bonus
+                        * goalkeeper_penalty
                 }
             };
 
@@ -950,32 +1020,39 @@ impl PassEvaluator {
             } else if is_goalkeeper {
                 // Goalkeeper passes should be extremely rare
                 // Only accept under extreme pressure AND if highly safe AND not in attacking third
-                let player_field_position = (ctx.player.position.x * match ctx.player.side {
-                    Some(PlayerSide::Left) => 1.0,
-                    Some(PlayerSide::Right) => -1.0,
-                    None => 1.0,
-                }) / ctx.context.field_size.width as f32;
+                let player_field_position = (ctx.player.position.x
+                    * match ctx.player.side {
+                        Some(PlayerSide::Left) => 1.0,
+                        Some(PlayerSide::Right) => -1.0,
+                        None => 1.0,
+                    })
+                    / ctx.context.field_size.width as f32;
                 let in_defensive_third = player_field_position < 0.33;
 
-                evaluation.factors.pressure_factor < 0.2 &&
-                evaluation.success_probability > 0.85 &&
-                in_defensive_third  // Only allow GK passes from defensive third
+                evaluation.factors.pressure_factor < 0.2
+                    && evaluation.success_probability > 0.85
+                    && in_defensive_third // Only allow GK passes from defensive third
             } else if is_conservative {
-                evaluation.success_probability > 0.60 && evaluation.factors.receiver_positioning > 0.55
+                evaluation.success_probability > 0.60
+                    && evaluation.factors.receiver_positioning > 0.55
             } else if is_direct {
                 evaluation.success_probability > 0.40 && evaluation.factors.tactical_value > 0.35
             } else if is_playmaker {
-                evaluation.success_probability > 0.45 || (evaluation.factors.tactical_value > 0.60 && pass_distance > 50.0)
+                evaluation.success_probability > 0.45
+                    || (evaluation.factors.tactical_value > 0.60 && pass_distance > 50.0)
             } else {
                 // Standard - more willing to pass
-                evaluation.is_recommended || (evaluation.factors.receiver_positioning > 0.5 && evaluation.success_probability > 0.42)
+                evaluation.is_recommended
+                    || (evaluation.factors.receiver_positioning > 0.5
+                        && evaluation.success_probability > 0.42)
             };
 
             // Game-management bias: a team protecting a lead (especially
             // late, or as the weaker side) prefers sideways / backward
             // balls over risky forward ones — real "hold the score"
             // football.
-            let gm_intensity = ctx.context
+            let gm_intensity = ctx
+                .context
                 .tactical_for_team(ctx.player.team_id)
                 .game_management_intensity;
             let gm_modifier = if gm_intensity > 0.05 {
@@ -984,8 +1061,8 @@ impl PassEvaluator {
                     Some(PlayerSide::Right) => -1.0,
                     None => 1.0,
                 };
-                let forward_progress = (teammate.position.x - ctx.player.position.x)
-                    * forward_direction_multiplier;
+                let forward_progress =
+                    (teammate.position.x - ctx.player.position.x) * forward_direction_multiplier;
                 if forward_progress > 5.0 {
                     (1.0 - gm_intensity * 0.45).max(0.3)
                 } else {

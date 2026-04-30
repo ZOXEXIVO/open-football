@@ -36,7 +36,10 @@ fn build_player(pos: PlayerPositionType, person: PersonAttributes) -> Player {
         .attributes(person)
         .skills(PlayerSkills::default())
         .positions(PlayerPositions {
-            positions: vec![PlayerPosition { position: pos, level: 20 }],
+            positions: vec![PlayerPosition {
+                position: pos,
+                level: 20,
+            }],
         })
         .player_attributes(attrs)
         .build()
@@ -114,7 +117,17 @@ fn count_events(p: &Player, kind: &HappinessEventType) -> usize {
 fn decisive_goal_fires_on_one_goal_win_with_contribution() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(7.0, 1, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 7.0, false, false, false, false, 1, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DecisiveGoal), 1);
 }
@@ -123,7 +136,17 @@ fn decisive_goal_fires_on_one_goal_win_with_contribution() {
 fn decisive_goal_silent_for_two_goal_win() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(7.0, 1, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 7.0, false, false, false, false, 3, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        3,
+        1,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DecisiveGoal), 0);
 }
@@ -132,7 +155,17 @@ fn decisive_goal_silent_for_two_goal_win() {
 fn decisive_goal_silent_in_friendly() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(7.0, 1, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 7.0, true, false, false, false, 1, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        7.0,
+        true,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DecisiveGoal), 0);
 }
@@ -143,7 +176,17 @@ fn decisive_goal_silent_in_friendly() {
 fn fan_praise_fires_for_excellent_rating() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(8.2, 0, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 8.2, false, false, false, false, 0, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        8.2,
+        false,
+        false,
+        false,
+        false,
+        0,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::FanPraise), 1);
 }
@@ -153,7 +196,17 @@ fn media_praise_requires_higher_bar_than_fan_praise() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     // Rating = 8.0 — fan praise fires, media praise does not.
     let s = stats(8.0, 0, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 8.0, false, false, false, false, 0, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        8.0,
+        false,
+        false,
+        false,
+        false,
+        0,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::FanPraise), 1);
     assert_eq!(count_events(&p, &HappinessEventType::MediaPraise), 0);
@@ -163,7 +216,17 @@ fn media_praise_requires_higher_bar_than_fan_praise() {
 fn media_praise_fires_at_8_3_rating() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(8.4, 0, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 8.4, false, false, false, false, 0, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        8.4,
+        false,
+        false,
+        false,
+        false,
+        0,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::MediaPraise), 1);
 }
@@ -172,7 +235,17 @@ fn media_praise_fires_at_8_3_rating() {
 fn fan_praise_cooldown_prevents_double_fire() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(8.2, 0, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 8.2, false, false, false, false, 0, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        8.2,
+        false,
+        false,
+        false,
+        false,
+        0,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::FanPraise), 1);
@@ -184,7 +257,17 @@ fn fan_praise_cooldown_prevents_double_fire() {
 fn fan_criticism_fires_on_low_rating() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(5.2, 0, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 5.2, false, false, false, false, 0, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        5.2,
+        false,
+        false,
+        false,
+        false,
+        0,
+        1,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::FanCriticism), 1);
 }
@@ -194,7 +277,17 @@ fn fan_criticism_fires_on_red_card() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     // Rating still ok but a red card is enough.
     let s = stats(6.5, 0, 0, 1, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 6.5, false, false, false, false, 0, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        6.5,
+        false,
+        false,
+        false,
+        false,
+        0,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::FanCriticism), 1);
 }
@@ -203,7 +296,17 @@ fn fan_criticism_fires_on_red_card() {
 fn fan_criticism_silent_for_solid_performance() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(6.8, 0, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 6.8, false, false, false, false, 1, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        6.8,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::FanCriticism), 0);
 }
@@ -223,7 +326,17 @@ fn fan_criticism_dampened_by_professionalism() {
     let mut low = build_player(PlayerPositionType::Striker, low_pro);
 
     let s = stats(5.2, 0, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 5.2, false, false, false, false, 0, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        5.2,
+        false,
+        false,
+        false,
+        false,
+        0,
+        1,
+        MatchParticipation::Starter,
+    );
     high.on_match_played(&o);
     low.on_match_played(&o);
 
@@ -242,7 +355,12 @@ fn fan_criticism_dampened_by_professionalism() {
         .unwrap()
         .magnitude;
     // Both negative; "less negative" = closer to zero.
-    assert!(high_mag > low_mag, "high pro {} should soften vs low pro {}", high_mag, low_mag);
+    assert!(
+        high_mag > low_mag,
+        "high pro {} should soften vs low pro {}",
+        high_mag,
+        low_mag
+    );
 }
 
 // ── Clean-sheet pride extension ─────────────────────────────
@@ -254,7 +372,17 @@ fn clean_sheet_pride_fires_for_defender() {
         PersonAttributes::default(),
     );
     let s = stats(7.0, 0, 0, 0, PlayerFieldPositionGroup::Defender);
-    let o = outcome(&s, 7.0, false, false, false, false, 1, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::CleanSheetPride), 1);
 }
@@ -263,7 +391,17 @@ fn clean_sheet_pride_fires_for_defender() {
 fn clean_sheet_pride_silent_for_forward() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(7.0, 0, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 7.0, false, false, false, false, 1, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::CleanSheetPride), 0);
 }
@@ -281,7 +419,17 @@ fn ordinary_derby_winner_gets_derby_win_not_hero() {
         PersonAttributes::default(),
     );
     let s = stats(6.8, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
-    let o = outcome(&s, 6.8, false, false, false, true, 2, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        6.8,
+        false,
+        false,
+        false,
+        true,
+        2,
+        1,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyHero), 0);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyWin), 1);
@@ -291,7 +439,17 @@ fn ordinary_derby_winner_gets_derby_win_not_hero() {
 fn derby_scorer_gets_derby_hero() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     let s = stats(7.0, 1, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 7.0, false, false, false, true, 2, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        true,
+        2,
+        1,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyHero), 1);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyWin), 0);
@@ -304,7 +462,17 @@ fn derby_assister_gets_derby_hero() {
         PersonAttributes::default(),
     );
     let s = stats(7.0, 0, 1, 0, PlayerFieldPositionGroup::Midfielder);
-    let o = outcome(&s, 7.0, false, false, false, true, 2, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        true,
+        2,
+        1,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyHero), 1);
 }
@@ -317,7 +485,17 @@ fn derby_high_rated_outfielder_gets_derby_hero() {
     );
     // 7.6 rating with no goal/assist still earns hero status.
     let s = stats(7.6, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
-    let o = outcome(&s, 7.6, false, false, false, true, 2, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        7.6,
+        false,
+        false,
+        false,
+        true,
+        2,
+        1,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyHero), 1);
 }
@@ -331,7 +509,17 @@ fn derby_defender_clean_sheet_high_rating_gets_hero() {
         PersonAttributes::default(),
     );
     let s = stats(7.3, 0, 0, 0, PlayerFieldPositionGroup::Defender);
-    let o = outcome(&s, 7.3, false, false, false, true, 1, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        7.3,
+        false,
+        false,
+        false,
+        true,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyHero), 1);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyWin), 0);
@@ -346,7 +534,17 @@ fn derby_defender_clean_sheet_modest_rating_gets_win_only() {
         PersonAttributes::default(),
     );
     let s = stats(6.8, 0, 0, 0, PlayerFieldPositionGroup::Defender);
-    let o = outcome(&s, 6.8, false, false, false, true, 1, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        6.8,
+        false,
+        false,
+        false,
+        true,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyHero), 0);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyWin), 1);
@@ -359,7 +557,17 @@ fn derby_loser_gets_derby_defeat() {
         PersonAttributes::default(),
     );
     let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
-    let o = outcome(&s, 6.5, false, false, false, true, 0, 1, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        6.5,
+        false,
+        false,
+        false,
+        true,
+        0,
+        1,
+        MatchParticipation::Starter,
+    );
     p.on_match_played(&o);
     assert_eq!(count_events(&p, &HappinessEventType::DerbyDefeat), 1);
 }
@@ -378,9 +586,29 @@ fn derby_loser_poor_performer_takes_bigger_hit() {
         PersonAttributes::default(),
     );
     let s_solid = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
-    let o_solid = outcome(&s_solid, 6.5, false, false, false, true, 0, 1, MatchParticipation::Starter);
+    let o_solid = outcome(
+        &s_solid,
+        6.5,
+        false,
+        false,
+        false,
+        true,
+        0,
+        1,
+        MatchParticipation::Starter,
+    );
     let s_poor = stats(5.0, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
-    let o_poor = outcome(&s_poor, 5.0, false, false, false, true, 0, 1, MatchParticipation::Starter);
+    let o_poor = outcome(
+        &s_poor,
+        5.0,
+        false,
+        false,
+        false,
+        true,
+        0,
+        1,
+        MatchParticipation::Starter,
+    );
     solid.on_match_played(&o_solid);
     poor.on_match_played(&o_poor);
     let m_solid = solid
@@ -398,7 +626,12 @@ fn derby_loser_poor_performer_takes_bigger_hit() {
         .unwrap()
         .magnitude;
     // More negative = bigger hit. Poor performer should be more negative.
-    assert!(m_poor < m_solid, "poor {} should be more negative than solid {}", m_poor, m_solid);
+    assert!(
+        m_poor < m_solid,
+        "poor {} should be more negative than solid {}",
+        m_poor,
+        m_solid
+    );
 }
 
 #[test]
@@ -412,10 +645,30 @@ fn derby_loser_red_card_amplifies_defeat() {
         PersonAttributes::default(),
     );
     let s_clean = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
-    let o_clean = outcome(&s_clean, 6.5, false, false, false, true, 0, 1, MatchParticipation::Starter);
+    let o_clean = outcome(
+        &s_clean,
+        6.5,
+        false,
+        false,
+        false,
+        true,
+        0,
+        1,
+        MatchParticipation::Starter,
+    );
     // Red card with otherwise-acceptable rating — extra still applies.
     let s_red = stats(6.5, 0, 0, 1, PlayerFieldPositionGroup::Midfielder);
-    let o_red = outcome(&s_red, 6.5, false, false, false, true, 0, 1, MatchParticipation::Starter);
+    let o_red = outcome(
+        &s_red,
+        6.5,
+        false,
+        false,
+        false,
+        true,
+        0,
+        1,
+        MatchParticipation::Starter,
+    );
     clean.on_match_played(&o_clean);
     sent_off.on_match_played(&o_red);
     let m_clean = clean
@@ -432,7 +685,12 @@ fn derby_loser_red_card_amplifies_defeat() {
         .find(|e| e.event_type == HappinessEventType::DerbyDefeat)
         .unwrap()
         .magnitude;
-    assert!(m_red < m_clean, "red-card {} should be more negative than clean {}", m_red, m_clean);
+    assert!(
+        m_red < m_clean,
+        "red-card {} should be more negative than clean {}",
+        m_red,
+        m_clean
+    );
 }
 
 // ── Team-season events ───────────────────────────────────────
@@ -483,23 +741,12 @@ fn season_event_prestige_scales_magnitude() {
     // Continental trophy (prestige 1.5) should land bigger than a
     // domestic-league title (prestige 1.0).
     let mut domestic = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut continental =
-        build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut continental = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     domestic.statistics.played = 30;
     continental.statistics.played = 30;
     let date = d(2032, 5, 30);
-    domestic.on_team_season_event_with_prestige(
-        HappinessEventType::TrophyWon,
-        365,
-        1.0,
-        date,
-    );
-    continental.on_team_season_event_with_prestige(
-        HappinessEventType::TrophyWon,
-        365,
-        1.5,
-        date,
-    );
+    domestic.on_team_season_event_with_prestige(HappinessEventType::TrophyWon, 365, 1.0, date);
+    continental.on_team_season_event_with_prestige(HappinessEventType::TrophyWon, 365, 1.5, date);
     let dm = domestic
         .happiness
         .recent_events
@@ -514,15 +761,17 @@ fn season_event_prestige_scales_magnitude() {
         .find(|e| e.event_type == HappinessEventType::TrophyWon)
         .unwrap()
         .magnitude;
-    assert!(cm > dm, "continental prestige {} should exceed domestic {}", cm, dm);
+    assert!(
+        cm > dm,
+        "continental prestige {} should exceed domestic {}",
+        cm,
+        dm
+    );
 }
 
 fn build_player_with_status(status: crate::PlayerSquadStatus) -> Player {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut contract = crate::PlayerClubContract::new(
-        10_000,
-        d(2035, 6, 30),
-    );
+    let mut contract = crate::PlayerClubContract::new(10_000, d(2035, 6, 30));
     contract.squad_status = status;
     p.contract = Some(contract);
     p.statistics.played = 30;
@@ -532,8 +781,7 @@ fn build_player_with_status(status: crate::PlayerSquadStatus) -> Player {
 #[test]
 fn key_player_takes_bigger_relegation_hit_than_rotation() {
     let mut key = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
-    let mut rotation =
-        build_player_with_status(crate::PlayerSquadStatus::FirstTeamSquadRotation);
+    let mut rotation = build_player_with_status(crate::PlayerSquadStatus::FirstTeamSquadRotation);
     let date = d(2032, 5, 30);
     key.on_team_season_event(HappinessEventType::Relegated, 365, date);
     rotation.on_team_season_event(HappinessEventType::Relegated, 365, date);
@@ -552,14 +800,18 @@ fn key_player_takes_bigger_relegation_hit_than_rotation() {
         .unwrap()
         .magnitude;
     // More negative = bigger hit. KeyPlayer should land more negatively.
-    assert!(m_key < m_rot, "KeyPlayer {} should be more negative than rotation {}", m_key, m_rot);
+    assert!(
+        m_key < m_rot,
+        "KeyPlayer {} should be more negative than rotation {}",
+        m_key,
+        m_rot
+    );
 }
 
 #[test]
 fn fringe_not_needed_softens_relegation_hit() {
     let mut not_needed = build_player_with_status(crate::PlayerSquadStatus::NotNeeded);
-    let mut regular =
-        build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
+    let mut regular = build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
     let date = d(2032, 5, 30);
     not_needed.on_team_season_event(HappinessEventType::Relegated, 365, date);
     regular.on_team_season_event(HappinessEventType::Relegated, 365, date);
@@ -578,7 +830,12 @@ fn fringe_not_needed_softens_relegation_hit() {
         .unwrap()
         .magnitude;
     // Less negative = softer hit. NotNeeded should be closer to zero.
-    assert!(m_not > m_reg, "NotNeeded {} should be less negative than Regular {}", m_not, m_reg);
+    assert!(
+        m_not > m_reg,
+        "NotNeeded {} should be less negative than Regular {}",
+        m_not,
+        m_reg
+    );
 }
 
 #[test]
@@ -586,12 +843,8 @@ fn cup_final_defeat_emits_negative_with_prestige() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     p.statistics.played = 30;
     let date = d(2032, 5, 30);
-    let recorded = p.on_team_season_event_with_prestige(
-        HappinessEventType::CupFinalDefeat,
-        365,
-        1.4,
-        date,
-    );
+    let recorded =
+        p.on_team_season_event_with_prestige(HappinessEventType::CupFinalDefeat, 365, 1.4, date);
     assert!(recorded);
     let mag = p
         .happiness
@@ -657,7 +910,12 @@ fn ambitious_player_hurts_more_on_relegation() {
         .unwrap()
         .magnitude;
     // More negative = bigger hit. Ambition makes Relegated worse.
-    assert!(amb < con, "ambitious {} should be more negative than content {}", amb, con);
+    assert!(
+        amb < con,
+        "ambitious {} should be more negative than content {}",
+        amb,
+        con
+    );
 }
 
 // ── Role transitions ─────────────────────────────────────────
@@ -670,7 +928,10 @@ fn run_match(p: &mut Player, participation: MatchParticipation) {
 
 #[test]
 fn won_starting_place_fires_after_run_of_starts() {
-    let mut p = build_player(PlayerPositionType::MidfielderCenter, PersonAttributes::default());
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
     for _ in 0..6 {
         run_match(&mut p, MatchParticipation::Starter);
     }
@@ -686,7 +947,10 @@ fn won_starting_place_fires_after_run_of_starts() {
 
 #[test]
 fn lost_starting_place_fires_after_drop() {
-    let mut p = build_player(PlayerPositionType::MidfielderCenter, PersonAttributes::default());
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
     // Establish first.
     for _ in 0..6 {
         run_match(&mut p, MatchParticipation::Starter);
@@ -723,20 +987,42 @@ fn run_match_with_status(
 fn key_player_lost_starting_place_hit_exceeds_rotation() {
     // Establish both as starters, then sustain bench runs to flip the
     // role state. Key player should land a more negative LostStartingPlace.
-    let mut key = build_player(PlayerPositionType::MidfielderCenter, PersonAttributes::default());
+    let mut key = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
     for _ in 0..6 {
-        run_match_with_status(&mut key, MatchParticipation::Starter, crate::PlayerSquadStatus::KeyPlayer);
+        run_match_with_status(
+            &mut key,
+            MatchParticipation::Starter,
+            crate::PlayerSquadStatus::KeyPlayer,
+        );
     }
     for _ in 0..10 {
-        run_match_with_status(&mut key, MatchParticipation::Substitute, crate::PlayerSquadStatus::KeyPlayer);
+        run_match_with_status(
+            &mut key,
+            MatchParticipation::Substitute,
+            crate::PlayerSquadStatus::KeyPlayer,
+        );
     }
 
-    let mut rot = build_player(PlayerPositionType::MidfielderCenter, PersonAttributes::default());
+    let mut rot = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
     for _ in 0..6 {
-        run_match_with_status(&mut rot, MatchParticipation::Starter, crate::PlayerSquadStatus::FirstTeamSquadRotation);
+        run_match_with_status(
+            &mut rot,
+            MatchParticipation::Starter,
+            crate::PlayerSquadStatus::FirstTeamSquadRotation,
+        );
     }
     for _ in 0..10 {
-        run_match_with_status(&mut rot, MatchParticipation::Substitute, crate::PlayerSquadStatus::FirstTeamSquadRotation);
+        run_match_with_status(
+            &mut rot,
+            MatchParticipation::Substitute,
+            crate::PlayerSquadStatus::FirstTeamSquadRotation,
+        );
     }
 
     let m_key = key
@@ -754,12 +1040,20 @@ fn key_player_lost_starting_place_hit_exceeds_rotation() {
         .unwrap()
         .magnitude;
     // More negative = bigger hit.
-    assert!(m_key < m_rot, "KeyPlayer {} should be more negative than rotation {}", m_key, m_rot);
+    assert!(
+        m_key < m_rot,
+        "KeyPlayer {} should be more negative than rotation {}",
+        m_key,
+        m_rot
+    );
 }
 
 #[test]
 fn prospect_won_starting_place_hit_exceeds_senior() {
-    let mut prospect = build_player(PlayerPositionType::MidfielderCenter, PersonAttributes::default());
+    let mut prospect = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
     for _ in 0..6 {
         run_match_with_status(
             &mut prospect,
@@ -768,7 +1062,10 @@ fn prospect_won_starting_place_hit_exceeds_senior() {
         );
     }
 
-    let mut senior = build_player(PlayerPositionType::MidfielderCenter, PersonAttributes::default());
+    let mut senior = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
     for _ in 0..6 {
         run_match_with_status(
             &mut senior,
@@ -791,7 +1088,12 @@ fn prospect_won_starting_place_hit_exceeds_senior() {
         .find(|e| e.event_type == HappinessEventType::WonStartingPlace)
         .unwrap()
         .magnitude;
-    assert!(m_p > m_s, "prospect {} should exceed established senior {}", m_p, m_s);
+    assert!(
+        m_p > m_s,
+        "prospect {} should exceed established senior {}",
+        m_p,
+        m_s
+    );
 }
 
 #[test]
@@ -807,12 +1109,28 @@ fn high_professionalism_softens_lost_starting_place() {
     let mut hi = build_player(PlayerPositionType::MidfielderCenter, high_pro);
     let mut lo = build_player(PlayerPositionType::MidfielderCenter, low_pro);
     for _ in 0..6 {
-        run_match_with_status(&mut hi, MatchParticipation::Starter, crate::PlayerSquadStatus::FirstTeamRegular);
-        run_match_with_status(&mut lo, MatchParticipation::Starter, crate::PlayerSquadStatus::FirstTeamRegular);
+        run_match_with_status(
+            &mut hi,
+            MatchParticipation::Starter,
+            crate::PlayerSquadStatus::FirstTeamRegular,
+        );
+        run_match_with_status(
+            &mut lo,
+            MatchParticipation::Starter,
+            crate::PlayerSquadStatus::FirstTeamRegular,
+        );
     }
     for _ in 0..10 {
-        run_match_with_status(&mut hi, MatchParticipation::Substitute, crate::PlayerSquadStatus::FirstTeamRegular);
-        run_match_with_status(&mut lo, MatchParticipation::Substitute, crate::PlayerSquadStatus::FirstTeamRegular);
+        run_match_with_status(
+            &mut hi,
+            MatchParticipation::Substitute,
+            crate::PlayerSquadStatus::FirstTeamRegular,
+        );
+        run_match_with_status(
+            &mut lo,
+            MatchParticipation::Substitute,
+            crate::PlayerSquadStatus::FirstTeamRegular,
+        );
     }
     let m_hi = hi
         .happiness
@@ -829,12 +1147,20 @@ fn high_professionalism_softens_lost_starting_place() {
         .unwrap()
         .magnitude;
     // Less negative = softer.
-    assert!(m_hi > m_lo, "high pro {} should soften vs low pro {}", m_hi, m_lo);
+    assert!(
+        m_hi > m_lo,
+        "high pro {} should soften vs low pro {}",
+        m_hi,
+        m_lo
+    );
 }
 
 #[test]
 fn role_transition_silent_below_min_appearances() {
-    let mut p = build_player(PlayerPositionType::MidfielderCenter, PersonAttributes::default());
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
     // Only 3 starts — below the 5-game minimum tracked window.
     for _ in 0..3 {
         run_match(&mut p, MatchParticipation::Starter);
@@ -971,7 +1297,10 @@ fn transfer_bid_rejected_favorite_fires_at_lateral_rep() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     p.attributes.ambition = 8.0; // not pushing for a move
     p.on_transfer_bid_rejected(0.50, 0.50, true);
-    assert_eq!(count_events(&p, &HappinessEventType::TransferBidRejected), 1);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::TransferBidRejected),
+        1
+    );
 }
 
 #[test]
@@ -997,7 +1326,12 @@ fn transfer_bid_rejected_favorite_amplifies_magnitude() {
         .unwrap()
         .magnitude;
     // More negative = bigger hit. Favorite-club rejection should land harder.
-    assert!(m_fav < m_anon, "favorite {} should be more negative than anon {}", m_fav, m_anon);
+    assert!(
+        m_fav < m_anon,
+        "favorite {} should be more negative than anon {}",
+        m_fav,
+        m_anon
+    );
 }
 
 #[test]
@@ -1061,7 +1395,12 @@ fn dream_move_favorite_club_amplifies_magnitude() {
         .unwrap()
         .magnitude;
     // More negative = bigger hit. Favorite-club collapse hurts more.
-    assert!(f < s, "favorite {} should be more negative than step_up {}", f, s);
+    assert!(
+        f < s,
+        "favorite {} should be more negative than step_up {}",
+        f,
+        s
+    );
 }
 
 // ── Social events ────────────────────────────────────────────
@@ -1100,7 +1439,12 @@ fn close_friend_sold_stronger_with_compatriot() {
         .find(|e| e.event_type == HappinessEventType::CloseFriendSold)
         .unwrap()
         .magnitude;
-    assert!(c < f, "compatriot version {} should be more negative than foreign {}", c, f);
+    assert!(
+        c < f,
+        "compatriot version {} should be more negative than foreign {}",
+        c,
+        f
+    );
 }
 
 #[test]
@@ -1175,7 +1519,12 @@ fn compatriot_joined_amplified_when_no_local_language() {
         .find(|e| e.event_type == HappinessEventType::CompatriotJoined)
         .unwrap()
         .magnitude;
-    assert!(i > s, "language-isolated boost {} should exceed settled {}", i, s);
+    assert!(
+        i > s,
+        "language-isolated boost {} should exceed settled {}",
+        i,
+        s
+    );
 }
 
 // ── End-to-end event-stream audit ────────────────────────────
@@ -1241,8 +1590,24 @@ fn drive_season(p: &mut Player) {
         (8.2, 1, 1, 0, true, true, false, 3, 0),
     ];
     for &(rating, goals, assists, reds, is_cup, is_motm, is_derby, gf, ga) in pattern {
-        let s = stats(rating, goals, assists, reds, PlayerFieldPositionGroup::Forward);
-        let o = outcome(&s, rating, false, is_cup, is_motm, is_derby, gf, ga, MatchParticipation::Starter);
+        let s = stats(
+            rating,
+            goals,
+            assists,
+            reds,
+            PlayerFieldPositionGroup::Forward,
+        );
+        let o = outcome(
+            &s,
+            rating,
+            false,
+            is_cup,
+            is_motm,
+            is_derby,
+            gf,
+            ga,
+            MatchParticipation::Starter,
+        );
         p.on_match_played(&o);
     }
 }
@@ -1269,11 +1634,11 @@ fn season_long_event_stream_stays_within_sane_bounds() {
     // by its emit-site cooldown — these caps are the safety net for
     // anything that slips through.
     let assertions: &[(HappinessEventType, u32)] = &[
-        (HappinessEventType::FanPraise, 4),       // 21d cooldown × 44 matches
+        (HappinessEventType::FanPraise, 4), // 21d cooldown × 44 matches
         (HappinessEventType::FanCriticism, 4),
-        (HappinessEventType::MediaPraise, 3),     // 30d cooldown
-        (HappinessEventType::DecisiveGoal, 4),    // 14d cooldown
-        (HappinessEventType::DerbyHero, 2),       // 2 derbies in pattern
+        (HappinessEventType::MediaPraise, 3),  // 30d cooldown
+        (HappinessEventType::DecisiveGoal, 4), // 14d cooldown
+        (HappinessEventType::DerbyHero, 2),    // 2 derbies in pattern
         (HappinessEventType::DerbyDefeat, 2),
         (HappinessEventType::WonStartingPlace, 1),
         (HappinessEventType::FirstClubGoal, 1),
@@ -1327,9 +1692,13 @@ fn season_long_no_event_repeats_within_30_days_for_cooldown_gated_types() {
         .iter()
         .filter(|e| e.event_type == HappinessEventType::DerbyWin)
         .count();
-    assert_eq!(derby_hero + derby_win, 2,
+    assert_eq!(
+        derby_hero + derby_win,
+        2,
         "expected exactly 2 derby outcomes (hero or win), got hero={} win={}",
-        derby_hero, derby_win);
+        derby_hero,
+        derby_win
+    );
 }
 
 #[test]
@@ -1340,7 +1709,17 @@ fn fan_praise_amplified_by_reputation() {
     anon.player_attributes.current_reputation = 0;
 
     let s = stats(8.2, 0, 0, 0, PlayerFieldPositionGroup::Forward);
-    let o = outcome(&s, 8.2, false, false, false, false, 0, 0, MatchParticipation::Starter);
+    let o = outcome(
+        &s,
+        8.2,
+        false,
+        false,
+        false,
+        false,
+        0,
+        0,
+        MatchParticipation::Starter,
+    );
     famous.on_match_played(&o);
     anon.on_match_played(&o);
 
@@ -1510,5 +1889,10 @@ fn returning_from_injury_player_carries_elevated_match_risk() {
     };
     let h = healthy.compute_injury_risk(inputs_h);
     let r = returning.compute_injury_risk(inputs_r);
-    assert!(r > h * 2.0, "returning {} should be much higher than healthy {}", r, h);
+    assert!(
+        r > h * 2.0,
+        "returning {} should be much higher than healthy {}",
+        r,
+        h
+    );
 }

@@ -1,6 +1,4 @@
-use crate::r#match::{
-    MatchField, MatchObjectsPositions, ShotTarget, SpatialGrid, Space
-};
+use crate::r#match::{MatchField, MatchObjectsPositions, ShotTarget, Space, SpatialGrid};
 
 pub struct GameTickContext {
     pub positions: MatchObjectsPositions,
@@ -81,7 +79,13 @@ impl BallMetadata {
         self.ownership_duration = field.ball.ownership_duration;
 
         self.notified_len = field.ball.take_ball_notified_players.len().min(4) as u8;
-        for (i, &id) in field.ball.take_ball_notified_players.iter().take(4).enumerate() {
+        for (i, &id) in field
+            .ball
+            .take_ball_notified_players
+            .iter()
+            .take(4)
+            .enumerate()
+        {
             self.notified_buf[i] = id;
         }
 

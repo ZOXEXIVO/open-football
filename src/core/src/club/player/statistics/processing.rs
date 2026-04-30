@@ -1,7 +1,7 @@
-use chrono::{Datelike, NaiveDate};
+use crate::TeamInfo;
 use crate::club::player::player::Player;
 use crate::league::Season;
-use crate::TeamInfo;
+use chrono::{Datelike, NaiveDate};
 
 impl Player {
     /// Record a permanent transfer (called by transfer execution).
@@ -10,7 +10,8 @@ impl Player {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.cup_statistics = Default::default();
-        self.statistics_history.record_transfer(stats, from, to, fee, date);
+        self.statistics_history
+            .record_transfer(stats, from, to, fee, date);
         self.last_transfer_date = Some(date);
     }
 
@@ -20,7 +21,8 @@ impl Player {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.cup_statistics = Default::default();
-        self.statistics_history.record_loan(stats, from, to, loan_fee, date);
+        self.statistics_history
+            .record_loan(stats, from, to, loan_fee, date);
         self.last_transfer_date = Some(date);
     }
 
@@ -28,7 +30,8 @@ impl Player {
     /// Merges remaining stats into the loan entry, sets transfer date.
     pub fn on_loan_return(&mut self, borrowing: &TeamInfo, parent: &TeamInfo, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
-        self.statistics_history.record_loan_return(stats, borrowing, parent, date);
+        self.statistics_history
+            .record_loan_return(stats, borrowing, parent, date);
         self.last_transfer_date = Some(date);
     }
 
@@ -40,7 +43,11 @@ impl Player {
         self.friendly_statistics = Default::default();
         self.cup_statistics = Default::default();
         self.statistics_history.record_season_end(
-            season, stats, team, is_loan, self.last_transfer_date,
+            season,
+            stats,
+            team,
+            is_loan,
+            self.last_transfer_date,
         );
         // Preserve last_transfer_date across seasons — clearing it destroyed
         // the settling-in protection that prevents clubs from immediately
@@ -146,17 +153,13 @@ impl Player {
 
     /// Record a cancel-loan from the web UI.
     /// Snapshots borrowing club stats, cleans stale entries, creates parent placeholder.
-    pub fn on_cancel_loan(
-        &mut self,
-        borrowing: &TeamInfo,
-        parent: &TeamInfo,
-        date: NaiveDate,
-    ) {
+    pub fn on_cancel_loan(&mut self, borrowing: &TeamInfo, parent: &TeamInfo, date: NaiveDate) {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.cup_statistics = Default::default();
-        self.statistics_history.record_cancel_loan(stats, borrowing, parent, is_loan, date);
+        self.statistics_history
+            .record_cancel_loan(stats, borrowing, parent, is_loan, date);
         self.last_transfer_date = Some(date);
     }
 
@@ -173,7 +176,8 @@ impl Player {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.cup_statistics = Default::default();
-        self.statistics_history.record_departure_transfer(stats, from, to, fee, is_loan, date);
+        self.statistics_history
+            .record_departure_transfer(stats, from, to, fee, is_loan, date);
         self.last_transfer_date = Some(date);
         self.is_force_match_selection = false;
     }
@@ -203,7 +207,8 @@ impl Player {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.cup_statistics = Default::default();
-        self.statistics_history.record_free_agent_signing(stats, to, date);
+        self.statistics_history
+            .record_free_agent_signing(stats, to, date);
         self.last_transfer_date = Some(date);
         self.is_force_match_selection = false;
     }
@@ -221,7 +226,8 @@ impl Player {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.cup_statistics = Default::default();
-        self.statistics_history.record_departure_loan(stats, from, parent, to, is_loan, date);
+        self.statistics_history
+            .record_departure_loan(stats, from, parent, to, is_loan, date);
         self.last_transfer_date = Some(date);
         self.is_force_match_selection = false;
     }
@@ -233,8 +239,8 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills,
-        PlayerStatistics, PlayerStatisticsHistoryItem,
+        PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills, PlayerStatistics,
+        PlayerStatisticsHistoryItem,
     };
 
     fn make_date(y: i32, m: u32, d: u32) -> NaiveDate {
@@ -272,7 +278,12 @@ mod tests {
         }
     }
 
-    fn make_history_item(start_year: u16, slug: &str, is_loan: bool, played: u16) -> PlayerStatisticsHistoryItem {
+    fn make_history_item(
+        start_year: u16,
+        slug: &str,
+        is_loan: bool,
+        played: u16,
+    ) -> PlayerStatisticsHistoryItem {
         let mut stats = PlayerStatistics::default();
         stats.played = played;
         PlayerStatisticsHistoryItem {
@@ -308,7 +319,11 @@ mod tests {
         assert_eq!(player.last_transfer_date, Some(make_date(2032, 1, 15)));
 
         // Only destination added — source stats saved if entry exists (none here for fresh player)
-        let juve = player.statistics_history.current.iter().find(|e| e.team_slug == "juventus");
+        let juve = player
+            .statistics_history
+            .current
+            .iter()
+            .find(|e| e.team_slug == "juventus");
         assert!(juve.is_some());
         assert_eq!(juve.unwrap().transfer_fee, Some(5_000_000.0));
     }
@@ -329,7 +344,11 @@ mod tests {
 
         assert_eq!(player.statistics.played, 0);
         // Only loan destination added
-        let torino = player.statistics_history.current.iter().find(|e| e.team_slug == "torino");
+        let torino = player
+            .statistics_history
+            .current
+            .iter()
+            .find(|e| e.team_slug == "torino");
         assert!(torino.is_some());
         assert!(torino.unwrap().is_loan);
     }
@@ -354,7 +373,8 @@ mod tests {
             is_loan: true,
             transfer_fee: Some(50_000.0),
             statistics: PlayerStatistics::default(),
-            departed_date: None, joined_date: make_date(2032, 1, 15),
+            departed_date: None,
+            joined_date: make_date(2032, 1, 15),
             seq_id: 0,
         });
 
@@ -364,7 +384,10 @@ mod tests {
 
         assert_eq!(player.statistics.played, 0);
         // Upsert updates existing Torino loan entry with 15 games
-        let torino = player.statistics_history.current.iter()
+        let torino = player
+            .statistics_history
+            .current
+            .iter()
             .find(|e| e.team_slug == "torino" && e.is_loan)
             .unwrap();
         assert_eq!(torino.statistics.played, 15);
@@ -400,7 +423,11 @@ mod tests {
         let mut player = make_player();
         player.statistics = make_stats(10, 2);
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            500, make_date(2032, 5, 31), 99, 0, 100,
+            500,
+            make_date(2032, 5, 31),
+            99,
+            0,
+            100,
         ));
 
         let team = make_team("Torino", "torino");
@@ -435,16 +462,30 @@ mod tests {
         // Simulate: loan entry + pre-loan entry already in current
         use crate::club::player::statistics::history::CurrentSeasonEntry;
         player.statistics_history.current.push(CurrentSeasonEntry {
-            team_name: "Torino".to_string(), team_slug: "torino".to_string(),
-            team_reputation: 100, league_name: "Serie A".to_string(), league_slug: "serie-a".to_string(),
-            is_loan: true, transfer_fee: None, statistics: make_stats(15, 0),
-            departed_date: None, joined_date: make_date(2032, 1, 1), seq_id: 0,
+            team_name: "Torino".to_string(),
+            team_slug: "torino".to_string(),
+            team_reputation: 100,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+            is_loan: true,
+            transfer_fee: None,
+            statistics: make_stats(15, 0),
+            departed_date: None,
+            joined_date: make_date(2032, 1, 1),
+            seq_id: 0,
         });
         player.statistics_history.current.push(CurrentSeasonEntry {
-            team_name: "Juventus".to_string(), team_slug: "juventus".to_string(),
-            team_reputation: 100, league_name: "Serie A".to_string(), league_slug: "serie-a".to_string(),
-            is_loan: false, transfer_fee: None, statistics: make_stats(10, 0),
-            departed_date: None, joined_date: make_date(2031, 8, 1), seq_id: 1,
+            team_name: "Juventus".to_string(),
+            team_slug: "juventus".to_string(),
+            team_reputation: 100,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: make_stats(10, 0),
+            departed_date: None,
+            joined_date: make_date(2031, 8, 1),
+            seq_id: 1,
         });
 
         let team = make_team("Juventus", "juventus");
@@ -455,7 +496,12 @@ mod tests {
         // current has 1 entry: seeded empty entry for new season
         assert_eq!(player.statistics_history.current.len(), 1);
         assert_eq!(player.statistics_history.current[0].team_slug, "juventus");
-        assert_eq!(player.statistics_history.current[0].statistics.total_games(), 0);
+        assert_eq!(
+            player.statistics_history.current[0]
+                .statistics
+                .total_games(),
+            0
+        );
     }
 
     #[test]
@@ -466,24 +512,42 @@ mod tests {
         // Two stints in current season
         use crate::club::player::statistics::history::CurrentSeasonEntry;
         player.statistics_history.current.push(CurrentSeasonEntry {
-            team_name: "Juventus".to_string(), team_slug: "juventus".to_string(),
-            team_reputation: 100, league_name: "Serie A".to_string(), league_slug: "serie-a".to_string(),
-            is_loan: false, transfer_fee: None, statistics: make_stats(10, 0),
-            departed_date: None, joined_date: make_date(2031, 8, 1), seq_id: 0,
+            team_name: "Juventus".to_string(),
+            team_slug: "juventus".to_string(),
+            team_reputation: 100,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: make_stats(10, 0),
+            departed_date: None,
+            joined_date: make_date(2031, 8, 1),
+            seq_id: 0,
         });
         player.statistics_history.current.push(CurrentSeasonEntry {
-            team_name: "Torino".to_string(), team_slug: "torino".to_string(),
-            team_reputation: 100, league_name: "Serie A".to_string(), league_slug: "serie-a".to_string(),
-            is_loan: true, transfer_fee: None, statistics: make_stats(15, 0),
-            departed_date: None, joined_date: make_date(2032, 1, 1), seq_id: 1,
+            team_name: "Torino".to_string(),
+            team_slug: "torino".to_string(),
+            team_reputation: 100,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+            is_loan: true,
+            transfer_fee: None,
+            statistics: make_stats(15, 0),
+            departed_date: None,
+            joined_date: make_date(2032, 1, 1),
+            seq_id: 1,
         });
 
         let team = make_team("Juventus", "juventus");
         player.on_season_end(Season::new(2031), &team, make_date(2032, 8, 1));
 
         // Season end merges current_stats (5 games) into the Juventus current entry
-        let juve = player.statistics_history.items.iter()
-            .find(|e| e.team_slug == "juventus").unwrap();
+        let juve = player
+            .statistics_history
+            .items
+            .iter()
+            .find(|e| e.team_slug == "juventus")
+            .unwrap();
         assert_eq!(juve.statistics.played, 15); // 10 + 5
     }
 
@@ -502,15 +566,22 @@ mod tests {
 
     /// Helper: pretty-print history for assertion messages
     fn describe_history(items: &[PlayerStatisticsHistoryItem]) -> String {
-        items.iter().enumerate().map(|(i, e)| {
-            format!(
-                "  [{}] {}: {} | {} | apps={} | fee={:?}",
-                i, e.season.display, e.team_slug,
-                if e.is_loan { "LOAN" } else { "PERM" },
-                e.statistics.played,
-                e.transfer_fee,
-            )
-        }).collect::<Vec<_>>().join("\n")
+        items
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                format!(
+                    "  [{}] {}: {} | {} | apps={} | fee={:?}",
+                    i,
+                    e.season.display,
+                    e.team_slug,
+                    if e.is_loan { "LOAN" } else { "PERM" },
+                    e.statistics.played,
+                    e.transfer_fee,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     // ---------------------------------------------------------------
@@ -526,7 +597,9 @@ mod tests {
         let torino = make_team("Torino", "torino");
 
         // -- Season 2025/26: full season at Roma, 30 apps --
-        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&roma, make_date(2025, 8, 1), false);
         player.statistics = make_stats(30, 8);
         player.on_season_end(Season::new(2025), &roma, make_date(2026, 8, 1));
 
@@ -557,39 +630,94 @@ mod tests {
         let desc = describe_history(history);
 
         // 2025/26: Roma 30 apps
-        let roma_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "roma");
+        let roma_2025 = history
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "roma");
         assert!(roma_2025.is_some(), "Missing Roma 2025/26 entry.\n{desc}");
-        assert_eq!(roma_2025.unwrap().statistics.played, 30, "Roma 2025/26 apps wrong.\n{desc}");
-        assert!(!roma_2025.unwrap().is_loan, "Roma 2025/26 should not be loan.\n{desc}");
+        assert_eq!(
+            roma_2025.unwrap().statistics.played,
+            30,
+            "Roma 2025/26 apps wrong.\n{desc}"
+        );
+        assert!(
+            !roma_2025.unwrap().is_loan,
+            "Roma 2025/26 should not be loan.\n{desc}"
+        );
 
         // 2026/27: Roma 3 apps (before transfer)
-        let roma_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "roma");
+        let roma_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "roma");
         assert!(roma_2026.is_some(), "Missing Roma 2026/27 entry.\n{desc}");
-        assert_eq!(roma_2026.unwrap().statistics.played, 3, "Roma 2026/27 apps wrong.\n{desc}");
+        assert_eq!(
+            roma_2026.unwrap().statistics.played,
+            3,
+            "Roma 2026/27 apps wrong.\n{desc}"
+        );
 
         // 2026/27: Juventus 0 apps (arrived 10 days before end)
-        let juve_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "juventus");
+        let juve_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "juventus");
         assert!(juve_2026.is_some(), "Missing Juve 2026/27 entry.\n{desc}");
-        assert_eq!(juve_2026.unwrap().statistics.played, 0, "Juve 2026/27 apps wrong.\n{desc}");
-        assert_eq!(juve_2026.unwrap().transfer_fee, Some(5_000_000.0), "Juve 2026/27 fee wrong.\n{desc}");
+        assert_eq!(
+            juve_2026.unwrap().statistics.played,
+            0,
+            "Juve 2026/27 apps wrong.\n{desc}"
+        );
+        assert_eq!(
+            juve_2026.unwrap().transfer_fee,
+            Some(5_000_000.0),
+            "Juve 2026/27 fee wrong.\n{desc}"
+        );
 
         // 2027/28: Juventus 12 apps (before loan)
-        let juve_2027 = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "juventus");
+        let juve_2027 = history
+            .iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "juventus");
         assert!(juve_2027.is_some(), "Missing Juve 2027/28 entry.\n{desc}");
-        assert_eq!(juve_2027.unwrap().statistics.played, 12, "Juve 2027/28 apps wrong.\n{desc}");
-        assert!(!juve_2027.unwrap().is_loan, "Juve 2027/28 should not be loan.\n{desc}");
+        assert_eq!(
+            juve_2027.unwrap().statistics.played,
+            12,
+            "Juve 2027/28 apps wrong.\n{desc}"
+        );
+        assert!(
+            !juve_2027.unwrap().is_loan,
+            "Juve 2027/28 should not be loan.\n{desc}"
+        );
 
         // 2027/28: Torino 10 apps (loan)
-        let torino_2027 = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "torino");
-        assert!(torino_2027.is_some(), "Missing Torino 2027/28 loan entry.\n{desc}");
-        assert_eq!(torino_2027.unwrap().statistics.played, 10, "Torino 2027/28 apps wrong.\n{desc}");
-        assert!(torino_2027.unwrap().is_loan, "Torino 2027/28 should be loan.\n{desc}");
+        let torino_2027 = history
+            .iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "torino");
+        assert!(
+            torino_2027.is_some(),
+            "Missing Torino 2027/28 loan entry.\n{desc}"
+        );
+        assert_eq!(
+            torino_2027.unwrap().statistics.played,
+            10,
+            "Torino 2027/28 apps wrong.\n{desc}"
+        );
+        assert!(
+            torino_2027.unwrap().is_loan,
+            "Torino 2027/28 should be loan.\n{desc}"
+        );
 
         // No phantom entries — exactly 5 history rows
-        assert_eq!(history.len(), 5, "Expected 5 history entries, got {}.\n{desc}", history.len());
+        assert_eq!(
+            history.len(),
+            5,
+            "Expected 5 history entries, got {}.\n{desc}",
+            history.len()
+        );
 
         // Current season (2028/29) should have 1 seeded entry for Juve
-        assert_eq!(player.statistics_history.current.len(), 1, "Current should have 1 seed entry");
+        assert_eq!(
+            player.statistics_history.current.len(),
+            1,
+            "Current should have 1 seed entry"
+        );
         assert_eq!(player.statistics_history.current[0].team_slug, "juventus");
     }
 
@@ -605,7 +733,9 @@ mod tests {
         let monza = make_team("Monza", "monza");
 
         // -- Season 2025/26: at Inter --
-        player.statistics_history.seed_initial_team(&inter, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&inter, make_date(2025, 8, 1), false);
         player.statistics = make_stats(25, 5);
 
         // Loaned to Monza in January
@@ -614,7 +744,11 @@ mod tests {
 
         // Season end snapshot: player still on loan at Monza
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            500, make_date(2026, 5, 31), 99, 0, 100,
+            500,
+            make_date(2026, 5, 31),
+            99,
+            0,
+            100,
         ));
         player.on_season_end(Season::new(2025), &monza, make_date(2026, 8, 1));
 
@@ -631,26 +765,57 @@ mod tests {
         let desc = describe_history(history);
 
         // 2025/26: Inter 25 apps (before loan)
-        let inter_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "inter");
+        let inter_2025 = history
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "inter");
         assert!(inter_2025.is_some(), "Missing Inter 2025/26.\n{desc}");
-        assert_eq!(inter_2025.unwrap().statistics.played, 25, "Inter 2025/26 apps wrong.\n{desc}");
+        assert_eq!(
+            inter_2025.unwrap().statistics.played,
+            25,
+            "Inter 2025/26 apps wrong.\n{desc}"
+        );
 
         // 2025/26: Monza 14 apps (loan)
-        let monza_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "monza");
+        let monza_2025 = history
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "monza");
         assert!(monza_2025.is_some(), "Missing Monza 2025/26 loan.\n{desc}");
-        assert_eq!(monza_2025.unwrap().statistics.played, 14, "Monza 2025/26 apps wrong.\n{desc}");
-        assert!(monza_2025.unwrap().is_loan, "Monza 2025/26 should be loan.\n{desc}");
+        assert_eq!(
+            monza_2025.unwrap().statistics.played,
+            14,
+            "Monza 2025/26 apps wrong.\n{desc}"
+        );
+        assert!(
+            monza_2025.unwrap().is_loan,
+            "Monza 2025/26 should be loan.\n{desc}"
+        );
 
         // 2026/27: Inter 28 apps
-        let inter_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "inter");
+        let inter_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "inter");
         assert!(inter_2026.is_some(), "Missing Inter 2026/27.\n{desc}");
-        assert_eq!(inter_2026.unwrap().statistics.played, 28, "Inter 2026/27 apps wrong.\n{desc}");
+        assert_eq!(
+            inter_2026.unwrap().statistics.played,
+            28,
+            "Inter 2026/27 apps wrong.\n{desc}"
+        );
 
         // NO phantom Monza entry in 2026/27
-        let monza_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "monza");
-        assert!(monza_2026.is_none(), "Phantom Monza in 2026/27 — stale seed not cleaned.\n{desc}");
+        let monza_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "monza");
+        assert!(
+            monza_2026.is_none(),
+            "Phantom Monza in 2026/27 — stale seed not cleaned.\n{desc}"
+        );
 
-        assert_eq!(history.len(), 3, "Expected 3 entries, got {}.\n{desc}", history.len());
+        assert_eq!(
+            history.len(),
+            3,
+            "Expected 3 entries, got {}.\n{desc}",
+            history.len()
+        );
     }
 
     // ---------------------------------------------------------------
@@ -666,7 +831,9 @@ mod tests {
         let marsaxlokk = make_team("Marsaxlokk", "marsaxlokk");
 
         // -- Setup: player at Gzira --
-        player.statistics_history.seed_initial_team(&gzira, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&gzira, make_date(2025, 8, 1), false);
 
         // -- Season 2025/26: loaned to Birkirkara --
         player.statistics = make_stats(0, 0);
@@ -675,7 +842,11 @@ mod tests {
 
         // Season end while on loan at Birkirkara
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            200, make_date(2026, 5, 31), 99, 0, 100,
+            200,
+            make_date(2026, 5, 31),
+            99,
+            0,
+            100,
         ));
         player.on_season_end(Season::new(2025), &birkirkara, make_date(2026, 8, 1));
         player.statistics = make_stats(0, 0);
@@ -689,7 +860,11 @@ mod tests {
 
         // Season end while on loan at Marsaxlokk
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            200, make_date(2027, 5, 31), 99, 0, 100,
+            200,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
         ));
         player.on_season_end(Season::new(2026), &marsaxlokk, make_date(2027, 8, 1));
         player.statistics = make_stats(0, 0);
@@ -704,39 +879,85 @@ mod tests {
         let desc = describe_history(history);
 
         // 2025/26: Gzira 0 apps for 9 days — kept as first career record
-        let gzira_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "gzira");
-        assert!(gzira_2025.is_some(), "First career record at Gzira should be kept even with 0 apps.\n{desc}");
+        let gzira_2025 = history
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "gzira");
+        assert!(
+            gzira_2025.is_some(),
+            "First career record at Gzira should be kept even with 0 apps.\n{desc}"
+        );
 
         // 2025/26: Birkirkara 21 apps (loan)
-        let birk_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "birkirkara");
+        let birk_2025 = history
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "birkirkara");
         assert!(birk_2025.is_some(), "Missing Birkirkara 2025/26.\n{desc}");
-        assert_eq!(birk_2025.unwrap().statistics.played, 21, "Birkirkara 2025/26 apps wrong.\n{desc}");
-        assert!(birk_2025.unwrap().is_loan, "Birkirkara should be loan.\n{desc}");
+        assert_eq!(
+            birk_2025.unwrap().statistics.played,
+            21,
+            "Birkirkara 2025/26 apps wrong.\n{desc}"
+        );
+        assert!(
+            birk_2025.unwrap().is_loan,
+            "Birkirkara should be loan.\n{desc}"
+        );
 
         // 2026/27: Gzira 1 app + Marsaxlokk 0 apps (loan)
-        let gzira_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "gzira");
+        let gzira_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "gzira");
         assert!(gzira_2026.is_some(), "Missing Gzira 2026/27.\n{desc}");
-        assert_eq!(gzira_2026.unwrap().statistics.played, 1, "Gzira 2026/27 apps wrong.\n{desc}");
+        assert_eq!(
+            gzira_2026.unwrap().statistics.played,
+            1,
+            "Gzira 2026/27 apps wrong.\n{desc}"
+        );
 
-        let mars_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "marsaxlokk");
+        let mars_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "marsaxlokk");
         assert!(mars_2026.is_some(), "Missing Marsaxlokk 2026/27.\n{desc}");
-        assert!(mars_2026.unwrap().is_loan, "Marsaxlokk should be loan.\n{desc}");
+        assert!(
+            mars_2026.unwrap().is_loan,
+            "Marsaxlokk should be loan.\n{desc}"
+        );
 
         // 2027/28: Gzira 20 apps
-        let gzira_2027 = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "gzira");
+        let gzira_2027 = history
+            .iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "gzira");
         assert!(gzira_2027.is_some(), "Missing Gzira 2027/28.\n{desc}");
-        assert_eq!(gzira_2027.unwrap().statistics.played, 20, "Gzira 2027/28 apps wrong.\n{desc}");
+        assert_eq!(
+            gzira_2027.unwrap().statistics.played,
+            20,
+            "Gzira 2027/28 apps wrong.\n{desc}"
+        );
 
         // NO phantom Birkirkara in 2026/27 or 2027/28
-        let birk_phantom = history.iter().find(|e| e.season.start_year >= 2026 && e.team_slug == "birkirkara");
-        assert!(birk_phantom.is_none(), "Phantom Birkirkara in later season.\n{desc}");
+        let birk_phantom = history
+            .iter()
+            .find(|e| e.season.start_year >= 2026 && e.team_slug == "birkirkara");
+        assert!(
+            birk_phantom.is_none(),
+            "Phantom Birkirkara in later season.\n{desc}"
+        );
 
         // NO phantom Marsaxlokk in 2027/28
-        let mars_phantom = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "marsaxlokk");
-        assert!(mars_phantom.is_none(), "Phantom Marsaxlokk in 2027/28.\n{desc}");
+        let mars_phantom = history
+            .iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "marsaxlokk");
+        assert!(
+            mars_phantom.is_none(),
+            "Phantom Marsaxlokk in 2027/28.\n{desc}"
+        );
 
         // 5 entries: Gzira(initial) + Birkirkara + (Gzira + Marsaxlokk) + Gzira
-        assert_eq!(history.len(), 5, "Expected 5 entries, got {}.\n{desc}", history.len());
+        assert_eq!(
+            history.len(),
+            5,
+            "Expected 5 entries, got {}.\n{desc}",
+            history.len()
+        );
     }
 
     // ---------------------------------------------------------------
@@ -752,7 +973,9 @@ mod tests {
         let empoli = make_team("Empoli", "empoli");
 
         // -- Season 2025/26: at Napoli, 20 apps --
-        player.statistics_history.seed_initial_team(&napoli, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&napoli, make_date(2025, 8, 1), false);
         player.statistics = make_stats(20, 5);
         player.on_season_end(Season::new(2025), &napoli, make_date(2026, 8, 1));
 
@@ -764,7 +987,11 @@ mod tests {
         // Play 18 games at Empoli
         player.statistics = make_stats(18, 4);
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            300, make_date(2027, 5, 31), 99, 0, 100,
+            300,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
         ));
         player.on_season_end(Season::new(2026), &empoli, make_date(2027, 8, 1));
         player.statistics = make_stats(0, 0);
@@ -775,26 +1002,61 @@ mod tests {
         let desc = describe_history(history);
 
         // 2025/26: Napoli 20 apps
-        let napoli_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "napoli");
+        let napoli_2025 = history
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "napoli");
         assert!(napoli_2025.is_some(), "Missing Napoli 2025/26.\n{desc}");
         assert_eq!(napoli_2025.unwrap().statistics.played, 20);
 
         // 2026/27: Juve 0 apps (bought, never played, loaned out same week)
-        let juve_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "juventus");
-        assert!(juve_2026.is_some(), "Missing Juve 2026/27 — player was bought even if 0 apps.\n{desc}");
-        assert_eq!(juve_2026.unwrap().statistics.played, 0, "Juve should have 0 apps.\n{desc}");
-        assert!(!juve_2026.unwrap().is_loan, "Juve entry should be permanent.\n{desc}");
-        assert_eq!(juve_2026.unwrap().transfer_fee, Some(2_000_000.0), "Juve fee wrong.\n{desc}");
+        let juve_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "juventus");
+        assert!(
+            juve_2026.is_some(),
+            "Missing Juve 2026/27 — player was bought even if 0 apps.\n{desc}"
+        );
+        assert_eq!(
+            juve_2026.unwrap().statistics.played,
+            0,
+            "Juve should have 0 apps.\n{desc}"
+        );
+        assert!(
+            !juve_2026.unwrap().is_loan,
+            "Juve entry should be permanent.\n{desc}"
+        );
+        assert_eq!(
+            juve_2026.unwrap().transfer_fee,
+            Some(2_000_000.0),
+            "Juve fee wrong.\n{desc}"
+        );
 
         // 2026/27: Empoli 18 apps (loan)
-        let empoli_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "empoli");
-        assert!(empoli_2026.is_some(), "Missing Empoli 2026/27 loan.\n{desc}");
-        assert_eq!(empoli_2026.unwrap().statistics.played, 18, "Empoli apps wrong.\n{desc}");
-        assert!(empoli_2026.unwrap().is_loan, "Empoli should be loan.\n{desc}");
+        let empoli_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "empoli");
+        assert!(
+            empoli_2026.is_some(),
+            "Missing Empoli 2026/27 loan.\n{desc}"
+        );
+        assert_eq!(
+            empoli_2026.unwrap().statistics.played,
+            18,
+            "Empoli apps wrong.\n{desc}"
+        );
+        assert!(
+            empoli_2026.unwrap().is_loan,
+            "Empoli should be loan.\n{desc}"
+        );
 
         // No phantom Empoli in future seasons
-        let empoli_phantom = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "empoli");
-        assert!(empoli_phantom.is_none(), "Phantom Empoli in 2027/28.\n{desc}");
+        let empoli_phantom = history
+            .iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "empoli");
+        assert!(
+            empoli_phantom.is_none(),
+            "Phantom Empoli in 2027/28.\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -810,7 +1072,9 @@ mod tests {
         let mosta = make_team("Mosta", "mosta");
 
         // -- Season 2025/26: at Gzira, loaned to Mosta early --
-        player.statistics_history.seed_initial_team(&gzira, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&gzira, make_date(2025, 8, 1), false);
         player.statistics = make_stats(0, 0);
         player.on_loan(&gzira, &mosta, 200.0, make_date(2025, 8, 10));
 
@@ -829,16 +1093,27 @@ mod tests {
         // Mosta loan: 18 apps — must be kept
         let mosta_entry = history.iter().find(|e| e.team_slug == "mosta");
         assert!(mosta_entry.is_some(), "Missing Mosta loan entry.\n{desc}");
-        assert_eq!(mosta_entry.unwrap().statistics.played, 18, "Mosta apps wrong.\n{desc}");
-        assert!(mosta_entry.unwrap().is_loan, "Mosta should be loan.\n{desc}");
+        assert_eq!(
+            mosta_entry.unwrap().statistics.played,
+            18,
+            "Mosta apps wrong.\n{desc}"
+        );
+        assert!(
+            mosta_entry.unwrap().is_loan,
+            "Mosta should be loan.\n{desc}"
+        );
 
         // Gzira 0 apps for 5 days — kept as the player's first career record
         let gzira_brief = history.iter().find(|e| {
-            e.season.start_year == 2025 && e.team_slug == "gzira"
-                && e.statistics.played == 0 && e.transfer_fee.is_none()
+            e.season.start_year == 2025
+                && e.team_slug == "gzira"
+                && e.statistics.played == 0
+                && e.transfer_fee.is_none()
         });
-        assert!(gzira_brief.is_some(),
-            "First career record at Gzira should be kept even with 0 apps.\n{desc}");
+        assert!(
+            gzira_brief.is_some(),
+            "First career record at Gzira should be kept even with 0 apps.\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -852,7 +1127,9 @@ mod tests {
         let gzira = make_team("Gzira United", "gzira");
         let mosta = make_team("Mosta", "mosta");
 
-        player.statistics_history.seed_initial_team(&gzira, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&gzira, make_date(2025, 8, 1), false);
         player.statistics = make_stats(0, 0);
         player.on_loan(&gzira, &mosta, 200.0, make_date(2025, 8, 10));
 
@@ -869,14 +1146,19 @@ mod tests {
         let desc = describe_history(history);
 
         // Gzira entry with 1 sub appearance — must be KEPT despite short stay
-        let gzira_entry = history.iter().find(|e| {
-            e.season.start_year == 2025 && e.team_slug == "gzira" && !e.is_loan
-        });
-        assert!(gzira_entry.is_some(),
-            "Gzira with 1 sub app should be kept even for brief stint.\n{desc}");
+        let gzira_entry = history
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "gzira" && !e.is_loan);
+        assert!(
+            gzira_entry.is_some(),
+            "Gzira with 1 sub app should be kept even for brief stint.\n{desc}"
+        );
         // played_subs merged into played at drain time
-        assert_eq!(gzira_entry.unwrap().statistics.played, 1,
-            "Gzira apps wrong (sub should be merged).\n{desc}");
+        assert_eq!(
+            gzira_entry.unwrap().statistics.played,
+            1,
+            "Gzira apps wrong (sub should be merged).\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -891,7 +1173,9 @@ mod tests {
         let juve = make_team("Juventus", "juventus");
         let torino = make_team("Torino", "torino");
 
-        player.statistics_history.seed_initial_team(&napoli, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&napoli, make_date(2025, 8, 1), false);
         player.statistics = make_stats(20, 5);
         player.on_season_end(Season::new(2025), &napoli, make_date(2026, 8, 1));
 
@@ -905,11 +1189,18 @@ mod tests {
         let desc = describe_history(history);
 
         // Juve 0 apps, only 3 days, BUT has a 10M transfer fee — must be kept
-        let juve_entry = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "juventus");
-        assert!(juve_entry.is_some(),
-            "Juve with transfer fee must be kept even for 0 apps / 3 days.\n{desc}");
-        assert_eq!(juve_entry.unwrap().transfer_fee, Some(10_000_000.0),
-            "Juve fee wrong.\n{desc}");
+        let juve_entry = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "juventus");
+        assert!(
+            juve_entry.is_some(),
+            "Juve with transfer fee must be kept even for 0 apps / 3 days.\n{desc}"
+        );
+        assert_eq!(
+            juve_entry.unwrap().transfer_fee,
+            Some(10_000_000.0),
+            "Juve fee wrong.\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -924,7 +1215,9 @@ mod tests {
         let torino = make_team("Torino", "torino");
 
         // Season 2025/26: at Roma, loaned to Torino, returns 2 months early
-        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&roma, make_date(2025, 8, 1), false);
         player.statistics = make_stats(2, 0);
         player.on_loan(&roma, &torino, 30_000.0, make_date(2025, 9, 1));
 
@@ -940,11 +1233,14 @@ mod tests {
         let desc = describe_history(history);
 
         // Roma 0 apps for 60 days (~20% of season) — should be KEPT
-        let roma_entries: Vec<_> = history.iter()
+        let roma_entries: Vec<_> = history
+            .iter()
             .filter(|e| e.season.start_year == 2025 && e.team_slug == "roma")
             .collect();
-        assert!(!roma_entries.is_empty(),
-            "Roma 0-app entry for 60 days (20%% of season) should be kept.\n{desc}");
+        assert!(
+            !roma_entries.is_empty(),
+            "Roma 0-app entry for 60 days (20%% of season) should be kept.\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -973,7 +1269,9 @@ mod tests {
         };
 
         // Season start: player at Floriana
-        player.statistics_history.seed_initial_team(&floriana, make_date(2026, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&floriana, make_date(2026, 8, 1), false);
 
         // Immediate loan to Spartak on Aug 1 (free loan)
         player.statistics = make_stats(0, 0);
@@ -995,8 +1293,14 @@ mod tests {
 
         // Spartak loan entry must exist (even with 0 games)
         let spartak_entry = history.iter().find(|e| e.team_slug == "spartak-moscow");
-        assert!(spartak_entry.is_some(), "Missing Spartak Moscow loan entry.\n{desc}");
-        assert!(spartak_entry.unwrap().is_loan, "Spartak entry should be a loan.\n{desc}");
+        assert!(
+            spartak_entry.is_some(),
+            "Missing Spartak Moscow loan entry.\n{desc}"
+        );
+        assert!(
+            spartak_entry.unwrap().is_loan,
+            "Spartak entry should be a loan.\n{desc}"
+        );
 
         // Floriana entry can exist (0 games, parent club)
         // The important thing is that BOTH entries are present
@@ -1021,7 +1325,9 @@ mod tests {
             league_slug: "russian-premier-league".to_string(),
         };
 
-        player.statistics_history.seed_initial_team(&floriana, make_date(2026, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&floriana, make_date(2026, 8, 1), false);
 
         player.statistics = make_stats(0, 0);
         player.on_loan(&floriana, &spartak, 0.0, make_date(2026, 8, 1));
@@ -1041,9 +1347,20 @@ mod tests {
         let desc = describe_history(history);
 
         let spartak_entry = history.iter().find(|e| e.team_slug == "spartak-moscow");
-        assert!(spartak_entry.is_some(), "Missing Spartak Moscow loan entry.\n{desc}");
-        assert_eq!(spartak_entry.unwrap().statistics.played, 15, "Spartak apps wrong.\n{desc}");
-        assert_eq!(spartak_entry.unwrap().statistics.goals, 3, "Spartak goals wrong.\n{desc}");
+        assert!(
+            spartak_entry.is_some(),
+            "Missing Spartak Moscow loan entry.\n{desc}"
+        );
+        assert_eq!(
+            spartak_entry.unwrap().statistics.played,
+            15,
+            "Spartak apps wrong.\n{desc}"
+        );
+        assert_eq!(
+            spartak_entry.unwrap().statistics.goals,
+            3,
+            "Spartak goals wrong.\n{desc}"
+        );
         assert!(spartak_entry.unwrap().is_loan, "Should be loan.\n{desc}");
     }
 
@@ -1073,7 +1390,9 @@ mod tests {
         };
 
         // -- Season 2025/26: player at Spartak, plays 25 games --
-        player.statistics_history.seed_initial_team(&spartak, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&spartak, make_date(2025, 8, 1), false);
         player.statistics = make_stats(25, 5);
         player.on_season_end(Season::new(2025), &spartak, make_date(2026, 8, 1));
 
@@ -1081,7 +1400,11 @@ mod tests {
         player.statistics = make_stats(0, 0);
         player.on_manual_loan(&spartak, &spartak, &floriana, make_date(2026, 8, 1));
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            500, make_date(2027, 5, 31), 99, 0, 100,
+            500,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
         ));
 
         // Player plays 20 games at Floriana in season 2026/27
@@ -1099,7 +1422,11 @@ mod tests {
         player.statistics = make_stats(0, 0);
         player.on_manual_loan(&spartak, &spartak, &floriana, make_date(2027, 8, 16));
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            500, make_date(2029, 5, 31), 99, 0, 100,
+            500,
+            make_date(2029, 5, 31),
+            99,
+            0,
+            100,
         ));
 
         // -- Season 2027/28: player at Floriana, 22 games --
@@ -1122,27 +1449,69 @@ mod tests {
         let desc = describe_history(history);
 
         // 2025/26: Spartak 25 apps
-        let spartak_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "spartak-moscow");
+        let spartak_2025 = history
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "spartak-moscow");
         assert!(spartak_2025.is_some(), "Missing Spartak 2025/26.\n{desc}");
-        assert_eq!(spartak_2025.unwrap().statistics.played, 25, "Spartak 2025/26 apps wrong.\n{desc}");
+        assert_eq!(
+            spartak_2025.unwrap().statistics.played,
+            25,
+            "Spartak 2025/26 apps wrong.\n{desc}"
+        );
 
         // 2026/27: Floriana 20 apps (loan 1)
-        let floriana_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "floriana");
-        assert!(floriana_2026.is_some(), "Missing Floriana 2026/27 (loan 1).\n{desc}");
-        assert_eq!(floriana_2026.unwrap().statistics.played, 20, "Floriana 2026/27 apps wrong.\n{desc}");
-        assert!(floriana_2026.unwrap().is_loan, "Floriana 2026/27 should be loan.\n{desc}");
+        let floriana_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "floriana");
+        assert!(
+            floriana_2026.is_some(),
+            "Missing Floriana 2026/27 (loan 1).\n{desc}"
+        );
+        assert_eq!(
+            floriana_2026.unwrap().statistics.played,
+            20,
+            "Floriana 2026/27 apps wrong.\n{desc}"
+        );
+        assert!(
+            floriana_2026.unwrap().is_loan,
+            "Floriana 2026/27 should be loan.\n{desc}"
+        );
 
         // 2027/28: Floriana 22 apps (loan 2, season 1) ← THIS IS THE ONE USER SAYS IS MISSING
-        let floriana_2027 = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "floriana");
-        assert!(floriana_2027.is_some(), "Missing Floriana 2027/28 (loan 2, season 1) — THIS IS THE BUG.\n{desc}");
-        assert_eq!(floriana_2027.unwrap().statistics.played, 22, "Floriana 2027/28 apps wrong.\n{desc}");
-        assert!(floriana_2027.unwrap().is_loan, "Floriana 2027/28 should be loan.\n{desc}");
+        let floriana_2027 = history
+            .iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "floriana");
+        assert!(
+            floriana_2027.is_some(),
+            "Missing Floriana 2027/28 (loan 2, season 1) — THIS IS THE BUG.\n{desc}"
+        );
+        assert_eq!(
+            floriana_2027.unwrap().statistics.played,
+            22,
+            "Floriana 2027/28 apps wrong.\n{desc}"
+        );
+        assert!(
+            floriana_2027.unwrap().is_loan,
+            "Floriana 2027/28 should be loan.\n{desc}"
+        );
 
         // 2028/29: Floriana 18 apps (loan 2, season 2)
-        let floriana_2028 = history.iter().find(|e| e.season.start_year == 2028 && e.team_slug == "floriana");
-        assert!(floriana_2028.is_some(), "Missing Floriana 2028/29 (loan 2, season 2).\n{desc}");
-        assert_eq!(floriana_2028.unwrap().statistics.played, 18, "Floriana 2028/29 apps wrong.\n{desc}");
-        assert!(floriana_2028.unwrap().is_loan, "Floriana 2028/29 should be loan.\n{desc}");
+        let floriana_2028 = history
+            .iter()
+            .find(|e| e.season.start_year == 2028 && e.team_slug == "floriana");
+        assert!(
+            floriana_2028.is_some(),
+            "Missing Floriana 2028/29 (loan 2, season 2).\n{desc}"
+        );
+        assert_eq!(
+            floriana_2028.unwrap().statistics.played,
+            18,
+            "Floriana 2028/29 apps wrong.\n{desc}"
+        );
+        assert!(
+            floriana_2028.unwrap().is_loan,
+            "Floriana 2028/29 should be loan.\n{desc}"
+        );
     }
 
     /// Reproduces the exact scenario: when Russia's Season(2026) snapshot hasn't
@@ -1168,7 +1537,9 @@ mod tests {
         };
 
         // -- Season 2025/26: player at Spartak, plays 25 games --
-        player.statistics_history.seed_initial_team(&spartak, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&spartak, make_date(2025, 8, 1), false);
         player.statistics = make_stats(25, 5);
         player.on_season_end(Season::new(2025), &spartak, make_date(2026, 8, 1));
 
@@ -1176,7 +1547,11 @@ mod tests {
         player.statistics = make_stats(0, 0);
         player.on_manual_loan(&spartak, &spartak, &floriana, make_date(2026, 8, 1));
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            500, make_date(2027, 5, 31), 99, 0, 100,
+            500,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
         ));
 
         // Player plays 20 games at Floriana in season 2026/27
@@ -1194,7 +1569,11 @@ mod tests {
         player.statistics = make_stats(0, 0);
         player.on_manual_loan(&spartak, &spartak, &floriana, make_date(2027, 8, 16));
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            500, make_date(2029, 5, 31), 99, 0, 100,
+            500,
+            make_date(2029, 5, 31),
+            99,
+            0,
+            100,
         ));
 
         // NOW Russia's snapshot runs (late) for Season(2026)
@@ -1220,23 +1599,52 @@ mod tests {
         let desc = describe_history(history);
 
         // 2025/26: Spartak 25 apps
-        let spartak_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "spartak-moscow");
+        let spartak_2025 = history
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "spartak-moscow");
         assert!(spartak_2025.is_some(), "Missing Spartak 2025/26.\n{desc}");
 
         // 2026/27: Floriana 20 apps (loan 1) — should exist as a separate season entry
-        let floriana_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "floriana");
-        assert!(floriana_2026.is_some(), "Missing Floriana 2026/27 (loan 1) — entries from 2026/27 not separately frozen.\n{desc}");
-        assert_eq!(floriana_2026.unwrap().statistics.played, 20, "Floriana 2026/27 apps wrong.\n{desc}");
+        let floriana_2026 = history
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "floriana");
+        assert!(
+            floriana_2026.is_some(),
+            "Missing Floriana 2026/27 (loan 1) — entries from 2026/27 not separately frozen.\n{desc}"
+        );
+        assert_eq!(
+            floriana_2026.unwrap().statistics.played,
+            20,
+            "Floriana 2026/27 apps wrong.\n{desc}"
+        );
 
         // 2027/28: Floriana 22 apps (loan 2, season 1)
-        let floriana_2027 = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "floriana");
-        assert!(floriana_2027.is_some(), "Missing Floriana 2027/28 (loan 2, season 1).\n{desc}");
-        assert_eq!(floriana_2027.unwrap().statistics.played, 22, "Floriana 2027/28 apps wrong.\n{desc}");
+        let floriana_2027 = history
+            .iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "floriana");
+        assert!(
+            floriana_2027.is_some(),
+            "Missing Floriana 2027/28 (loan 2, season 1).\n{desc}"
+        );
+        assert_eq!(
+            floriana_2027.unwrap().statistics.played,
+            22,
+            "Floriana 2027/28 apps wrong.\n{desc}"
+        );
 
         // 2028/29: Floriana 18 apps (loan 2, season 2)
-        let floriana_2028 = history.iter().find(|e| e.season.start_year == 2028 && e.team_slug == "floriana");
-        assert!(floriana_2028.is_some(), "Missing Floriana 2028/29 (loan 2, season 2).\n{desc}");
-        assert_eq!(floriana_2028.unwrap().statistics.played, 18, "Floriana 2028/29 apps wrong.\n{desc}");
+        let floriana_2028 = history
+            .iter()
+            .find(|e| e.season.start_year == 2028 && e.team_slug == "floriana");
+        assert!(
+            floriana_2028.is_some(),
+            "Missing Floriana 2028/29 (loan 2, season 2).\n{desc}"
+        );
+        assert_eq!(
+            floriana_2028.unwrap().statistics.played,
+            18,
+            "Floriana 2028/29 apps wrong.\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1266,7 +1674,9 @@ mod tests {
         };
 
         // -- Season 2025/26: player at Floriana --
-        player.statistics_history.seed_initial_team(&floriana, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&floriana, make_date(2025, 8, 1), false);
         player.statistics = make_stats(0, 0);
         player.on_season_end(Season::new(2025), &floriana, make_date(2026, 8, 1));
 
@@ -1274,7 +1684,11 @@ mod tests {
         player.statistics = make_stats(0, 0);
         player.on_manual_loan(&floriana, &floriana, &bari, make_date(2026, 8, 15));
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            500, make_date(2029, 5, 31), 99, 0, 100,
+            500,
+            make_date(2029, 5, 31),
+            99,
+            0,
+            100,
         ));
 
         // -- Season 2026/27: player at Bari, plays 15 games --
@@ -1298,13 +1712,20 @@ mod tests {
         let history = &player.statistics_history.items;
         let desc = describe_history(history);
 
-        let bari_2027: Vec<_> = history.iter()
+        let bari_2027: Vec<_> = history
+            .iter()
             .filter(|e| e.season.start_year == 2027 && e.team_slug == "bari")
             .collect();
-        assert_eq!(bari_2027.len(), 1,
-            "Expected exactly 1 Bari entry for 2027/28, got {}.\n{desc}", bari_2027.len());
-        assert_eq!(bari_2027[0].statistics.played, 11,
-            "Bari 2027/28 should have 11 apps (10 + 1 merged).\n{desc}");
+        assert_eq!(
+            bari_2027.len(),
+            1,
+            "Expected exactly 1 Bari entry for 2027/28, got {}.\n{desc}",
+            bari_2027.len()
+        );
+        assert_eq!(
+            bari_2027[0].statistics.played, 11,
+            "Bari 2027/28 should have 11 apps (10 + 1 merged).\n{desc}"
+        );
         assert!(bari_2027[0].is_loan, "Should be loan.\n{desc}");
     }
 
@@ -1321,7 +1742,9 @@ mod tests {
         };
 
         // Seed and play a season
-        player.statistics_history.seed_initial_team(&bari, make_date(2026, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&bari, make_date(2026, 8, 1), false);
         player.statistics = make_stats(20, 5);
         player.on_season_end(Season::new(2026), &bari, make_date(2027, 8, 20));
 
@@ -1340,13 +1763,20 @@ mod tests {
         let history = &player.statistics_history.items;
         let desc = describe_history(history);
 
-        let bari_2027: Vec<_> = history.iter()
+        let bari_2027: Vec<_> = history
+            .iter()
             .filter(|e| e.season.start_year == 2027 && e.team_slug == "bari")
             .collect();
-        assert_eq!(bari_2027.len(), 1,
-            "Expected exactly 1 Bari entry for 2027/28, got {}.\n{desc}", bari_2027.len());
-        assert_eq!(bari_2027[0].statistics.played, 12,
-            "Bari 2027/28 should have 12 apps (no merge needed).\n{desc}");
+        assert_eq!(
+            bari_2027.len(),
+            1,
+            "Expected exactly 1 Bari entry for 2027/28, got {}.\n{desc}",
+            bari_2027.len()
+        );
+        assert_eq!(
+            bari_2027[0].statistics.played, 12,
+            "Bari 2027/28 should have 12 apps (no merge needed).\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1361,7 +1791,9 @@ mod tests {
         let zabbar = make_team("Zabbar St. Patrick", "zabbar");
 
         // -- Setup: player at Sporting CP --
-        player.statistics_history.seed_initial_team(&parent, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&parent, make_date(2025, 8, 1), false);
         player.statistics = make_stats(10, 2);
         player.on_season_end(Season::new(2025), &parent, make_date(2026, 8, 25));
 
@@ -1369,7 +1801,11 @@ mod tests {
         player.statistics = make_stats(0, 0);
         player.on_manual_loan(&parent, &parent, &zabbar, make_date(2026, 9, 1));
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            200, make_date(2028, 4, 30), 99, 0, 100,
+            200,
+            make_date(2028, 4, 30),
+            99,
+            0,
+            100,
         ));
 
         // Player plays 20 matches at Zabbar in 2026/27
@@ -1379,28 +1815,49 @@ mod tests {
         player.on_season_end(Season::new(2026), &zabbar, make_date(2027, 8, 25));
 
         // Verify: frozen 2026/27 entry must have 20 games
-        let zabbar_2026 = player.statistics_history.items.iter()
+        let zabbar_2026 = player
+            .statistics_history
+            .items
+            .iter()
             .find(|e| e.season.start_year == 2026 && e.team_slug == "zabbar");
-        assert!(zabbar_2026.is_some(), "Missing Zabbar 2026/27 entry.\n{}",
-            describe_history(&player.statistics_history.items));
-        assert_eq!(zabbar_2026.unwrap().statistics.played, 20,
+        assert!(
+            zabbar_2026.is_some(),
+            "Missing Zabbar 2026/27 entry.\n{}",
+            describe_history(&player.statistics_history.items)
+        );
+        assert_eq!(
+            zabbar_2026.unwrap().statistics.played,
+            20,
             "Zabbar 2026/27 should have 20 apps.\n{}",
-            describe_history(&player.statistics_history.items));
+            describe_history(&player.statistics_history.items)
+        );
 
         // -- Season 2027/28: continues at Zabbar, plays 15 matches --
         player.statistics = make_stats(15, 2);
 
         // View during season: both seasons should be visible
-        let view = player.statistics_history.view_items(Some(&player.statistics));
-        let view_2026 = view.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "zabbar");
+        let view = player
+            .statistics_history
+            .view_items(Some(&player.statistics));
+        let view_2026 = view
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "zabbar");
         assert!(view_2026.is_some(), "2026/27 Zabbar should be in view.\n");
-        assert_eq!(view_2026.unwrap().statistics.played, 20,
-            "2026/27 Zabbar view should still show 20 apps");
+        assert_eq!(
+            view_2026.unwrap().statistics.played,
+            20,
+            "2026/27 Zabbar view should still show 20 apps"
+        );
 
-        let view_2027 = view.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "zabbar");
+        let view_2027 = view
+            .iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "zabbar");
         assert!(view_2027.is_some(), "2027/28 Zabbar should be in view");
-        assert_eq!(view_2027.unwrap().statistics.played, 15,
-            "2027/28 Zabbar view should show 15 live apps");
+        assert_eq!(
+            view_2027.unwrap().statistics.played,
+            15,
+            "2027/28 Zabbar view should show 15 live apps"
+        );
 
         // Season end 2027/28
         player.on_season_end(Season::new(2027), &zabbar, make_date(2028, 8, 25));
@@ -1409,19 +1866,33 @@ mod tests {
         let history = &player.statistics_history.items;
         let desc = describe_history(history);
 
-        let zabbar_2026 = history.iter()
+        let zabbar_2026 = history
+            .iter()
             .find(|e| e.season.start_year == 2026 && e.team_slug == "zabbar");
         assert!(zabbar_2026.is_some(), "Missing Zabbar 2026/27.\n{desc}");
-        assert_eq!(zabbar_2026.unwrap().statistics.played, 20,
-            "Zabbar 2026/27 should have 20 apps after second season end.\n{desc}");
-        assert!(zabbar_2026.unwrap().is_loan, "Zabbar 2026/27 should be loan.\n{desc}");
+        assert_eq!(
+            zabbar_2026.unwrap().statistics.played,
+            20,
+            "Zabbar 2026/27 should have 20 apps after second season end.\n{desc}"
+        );
+        assert!(
+            zabbar_2026.unwrap().is_loan,
+            "Zabbar 2026/27 should be loan.\n{desc}"
+        );
 
-        let zabbar_2027 = history.iter()
+        let zabbar_2027 = history
+            .iter()
             .find(|e| e.season.start_year == 2027 && e.team_slug == "zabbar");
         assert!(zabbar_2027.is_some(), "Missing Zabbar 2027/28.\n{desc}");
-        assert_eq!(zabbar_2027.unwrap().statistics.played, 15,
-            "Zabbar 2027/28 should have 15 apps.\n{desc}");
-        assert!(zabbar_2027.unwrap().is_loan, "Zabbar 2027/28 should be loan.\n{desc}");
+        assert_eq!(
+            zabbar_2027.unwrap().statistics.played,
+            15,
+            "Zabbar 2027/28 should have 15 apps.\n{desc}"
+        );
+        assert!(
+            zabbar_2027.unwrap().is_loan,
+            "Zabbar 2027/28 should be loan.\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1436,7 +1907,9 @@ mod tests {
         let zabbar = make_team("Zabbar St. Patrick", "zabbar");
 
         // -- Setup: player at Floriana --
-        player.statistics_history.seed_initial_team(&floriana, make_date(2027, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&floriana, make_date(2027, 8, 1), false);
         player.statistics = make_stats(0, 0);
         player.on_season_end(Season::new(2027), &floriana, make_date(2028, 8, 25));
 
@@ -1444,7 +1917,11 @@ mod tests {
         player.statistics = make_stats(0, 0);
         player.on_manual_loan(&floriana, &floriana, &zabbar, make_date(2028, 9, 1));
         player.contract_loan = Some(crate::PlayerClubContract::new_loan(
-            200, make_date(2030, 4, 30), 99, 0, 100,
+            200,
+            make_date(2030, 4, 30),
+            99,
+            0,
+            100,
         ));
         player.statistics = make_stats(23, 5);
         player.on_season_end(Season::new(2028), &zabbar, make_date(2029, 8, 25));
@@ -1464,22 +1941,35 @@ mod tests {
         let desc = describe_history(history);
 
         // 2028/29: Zabbar 23 apps (loan)
-        let zabbar_2028 = history.iter()
+        let zabbar_2028 = history
+            .iter()
             .find(|e| e.season.start_year == 2028 && e.team_slug == "zabbar");
         assert!(zabbar_2028.is_some(), "Missing Zabbar 2028/29.\n{desc}");
-        assert_eq!(zabbar_2028.unwrap().statistics.played, 23, "Zabbar 2028/29.\n{desc}");
+        assert_eq!(
+            zabbar_2028.unwrap().statistics.played,
+            23,
+            "Zabbar 2028/29.\n{desc}"
+        );
 
         // 2029/30: Zabbar 20 apps (loan) — from loan_return snapshot
-        let zabbar_2029 = history.iter()
+        let zabbar_2029 = history
+            .iter()
             .find(|e| e.season.start_year == 2029 && e.team_slug == "zabbar");
         assert!(zabbar_2029.is_some(), "Missing Zabbar 2029/30.\n{desc}");
-        assert_eq!(zabbar_2029.unwrap().statistics.played, 20, "Zabbar 2029/30.\n{desc}");
+        assert_eq!(
+            zabbar_2029.unwrap().statistics.played,
+            20,
+            "Zabbar 2029/30.\n{desc}"
+        );
 
         // NO phantom Floriana 2029/30 — player only spent a few weeks there
-        let floriana_2029 = history.iter()
+        let floriana_2029 = history
+            .iter()
             .find(|e| e.season.start_year == 2029 && e.team_slug == "floriana");
-        assert!(floriana_2029.is_none(),
-            "Phantom Floriana 2029/30 should be dropped (0 apps, arrived late).\n{desc}");
+        assert!(
+            floriana_2029.is_none(),
+            "Phantom Floriana 2029/30 should be dropped (0 apps, arrived late).\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1516,7 +2006,9 @@ mod tests {
         };
 
         // -- Season 2025/26: player at Dynamo --
-        player.statistics_history.seed_initial_team(&dynamo, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&dynamo, make_date(2025, 8, 1), false);
         player.statistics = make_stats(10, 2);
         player.on_season_end(Season::new(2025), &dynamo, make_date(2026, 8, 1));
 
@@ -1550,30 +2042,50 @@ mod tests {
         let desc = describe_history(history);
 
         // 2027/28 Kryvbas: must have the 610K fee
-        let kryvbas_2027 = history.iter()
+        let kryvbas_2027 = history
+            .iter()
             .find(|e| e.season.start_year == 2027 && e.team_slug == "kryvbas");
-        assert!(kryvbas_2027.is_some(),
-            "Missing Kryvbas 2027/28 entry.\n{desc}");
-        assert_eq!(kryvbas_2027.unwrap().transfer_fee, Some(610_000.0),
-            "Kryvbas 2027/28 transfer fee must be 610K.\n{desc}");
-        assert_eq!(kryvbas_2027.unwrap().statistics.played, 20,
-            "Kryvbas 2027/28 apps.\n{desc}");
+        assert!(
+            kryvbas_2027.is_some(),
+            "Missing Kryvbas 2027/28 entry.\n{desc}"
+        );
+        assert_eq!(
+            kryvbas_2027.unwrap().transfer_fee,
+            Some(610_000.0),
+            "Kryvbas 2027/28 transfer fee must be 610K.\n{desc}"
+        );
+        assert_eq!(
+            kryvbas_2027.unwrap().statistics.played,
+            20,
+            "Kryvbas 2027/28 apps.\n{desc}"
+        );
 
         // 2026/27 Deportivo: should show as loan
-        let deportivo_2026 = history.iter()
+        let deportivo_2026 = history
+            .iter()
             .find(|e| e.season.start_year == 2026 && e.team_slug == "deportivo-tachira");
-        assert!(deportivo_2026.is_some(),
-            "Missing Deportivo 2026/27 entry.\n{desc}");
-        assert!(deportivo_2026.unwrap().is_loan,
-            "Deportivo should be loan.\n{desc}");
+        assert!(
+            deportivo_2026.is_some(),
+            "Missing Deportivo 2026/27 entry.\n{desc}"
+        );
+        assert!(
+            deportivo_2026.unwrap().is_loan,
+            "Deportivo should be loan.\n{desc}"
+        );
 
         // 2026/27 Dynamo: should have 1 app
-        let dynamo_2026 = history.iter()
+        let dynamo_2026 = history
+            .iter()
             .find(|e| e.season.start_year == 2026 && e.team_slug == "dynamo-kyiv");
-        assert!(dynamo_2026.is_some(),
-            "Missing Dynamo 2026/27 entry.\n{desc}");
-        assert_eq!(dynamo_2026.unwrap().statistics.played, 1,
-            "Dynamo 2026/27 apps.\n{desc}");
+        assert!(
+            dynamo_2026.is_some(),
+            "Missing Dynamo 2026/27 entry.\n{desc}"
+        );
+        assert_eq!(
+            dynamo_2026.unwrap().statistics.played,
+            1,
+            "Dynamo 2026/27 apps.\n{desc}"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1590,7 +2102,9 @@ mod tests {
         let juve = make_team("Juventus", "juventus");
 
         // -- Season 2025/26: at Roma --
-        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&roma, make_date(2025, 8, 1), false);
         player.statistics = make_stats(20, 5);
         player.on_season_end(Season::new(2025), &roma, make_date(2026, 8, 1));
 
@@ -1615,16 +2129,23 @@ mod tests {
         let desc = describe_history(history);
 
         // Juve 2026/27: should have the 8M fee (frozen in first snapshot)
-        let juve_2026 = history.iter()
+        let juve_2026 = history
+            .iter()
             .find(|e| e.season.start_year == 2026 && e.team_slug == "juventus");
         assert!(juve_2026.is_some(), "Missing Juve 2026/27.\n{desc}");
-        assert_eq!(juve_2026.unwrap().transfer_fee, Some(8_000_000.0),
-            "Juve 2026/27 fee wrong.\n{desc}");
+        assert_eq!(
+            juve_2026.unwrap().transfer_fee,
+            Some(8_000_000.0),
+            "Juve 2026/27 fee wrong.\n{desc}"
+        );
 
         // Napoli: should have the 12M fee (was in current when guard fired)
-        let napoli_entry = history.iter()
+        let napoli_entry = history
+            .iter()
             .find(|e| e.team_slug == "napoli" && e.transfer_fee == Some(12_000_000.0));
-        assert!(napoli_entry.is_some(),
-            "Napoli entry with 12M fee must survive the duplicate season guard.\n{desc}");
+        assert!(
+            napoli_entry.is_some(),
+            "Napoli entry with 12M fee must survive the duplicate season guard.\n{desc}"
+        );
     }
 }

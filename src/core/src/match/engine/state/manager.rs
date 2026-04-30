@@ -1,5 +1,7 @@
 use crate::r#match::engine::goal::assign_kickoff;
-use crate::r#match::{MatchContext, MatchField, MatchState, PlayMatchStateResult, PlayerSide, Score, TeamsTactics};
+use crate::r#match::{
+    MatchContext, MatchField, MatchState, PlayMatchStateResult, PlayerSide, Score, TeamsTactics,
+};
 
 pub struct StateManager {
     current_state: MatchState,
@@ -154,9 +156,18 @@ mod tests {
     fn league_match_ends_after_second_half_even_when_tied() {
         let mut state_manager = StateManager::new();
         let score = tied_score();
-        assert_eq!(state_manager.next(&score, false), Some(MatchState::FirstHalf));
-        assert_eq!(state_manager.next(&score, false), Some(MatchState::HalfTime));
-        assert_eq!(state_manager.next(&score, false), Some(MatchState::SecondHalf));
+        assert_eq!(
+            state_manager.next(&score, false),
+            Some(MatchState::FirstHalf)
+        );
+        assert_eq!(
+            state_manager.next(&score, false),
+            Some(MatchState::HalfTime)
+        );
+        assert_eq!(
+            state_manager.next(&score, false),
+            Some(MatchState::SecondHalf)
+        );
         assert_eq!(state_manager.next(&score, false), None);
     }
 
@@ -164,11 +175,23 @@ mod tests {
     fn knockout_tie_triggers_extra_time_then_shootout() {
         let mut state_manager = StateManager::new();
         let score = tied_score();
-        assert_eq!(state_manager.next(&score, true), Some(MatchState::FirstHalf));
+        assert_eq!(
+            state_manager.next(&score, true),
+            Some(MatchState::FirstHalf)
+        );
         assert_eq!(state_manager.next(&score, true), Some(MatchState::HalfTime));
-        assert_eq!(state_manager.next(&score, true), Some(MatchState::SecondHalf));
-        assert_eq!(state_manager.next(&score, true), Some(MatchState::ExtraTime));
-        assert_eq!(state_manager.next(&score, true), Some(MatchState::PenaltyShootout));
+        assert_eq!(
+            state_manager.next(&score, true),
+            Some(MatchState::SecondHalf)
+        );
+        assert_eq!(
+            state_manager.next(&score, true),
+            Some(MatchState::ExtraTime)
+        );
+        assert_eq!(
+            state_manager.next(&score, true),
+            Some(MatchState::PenaltyShootout)
+        );
         assert_eq!(state_manager.next(&score, true), None);
     }
 
@@ -176,9 +199,15 @@ mod tests {
     fn knockout_decided_in_regulation_ends_early() {
         let mut state_manager = StateManager::new();
         let score = decided_score();
-        assert_eq!(state_manager.next(&score, true), Some(MatchState::FirstHalf));
+        assert_eq!(
+            state_manager.next(&score, true),
+            Some(MatchState::FirstHalf)
+        );
         assert_eq!(state_manager.next(&score, true), Some(MatchState::HalfTime));
-        assert_eq!(state_manager.next(&score, true), Some(MatchState::SecondHalf));
+        assert_eq!(
+            state_manager.next(&score, true),
+            Some(MatchState::SecondHalf)
+        );
         assert_eq!(state_manager.next(&score, true), None);
     }
 }

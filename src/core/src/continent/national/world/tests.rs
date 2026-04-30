@@ -13,21 +13,19 @@ use std::collections::HashMap;
 use crate::academy::ClubAcademy;
 use crate::club::player::builder::PlayerBuilder;
 use crate::competitions::global::GlobalCompetitionFixture;
-use crate::continent::national::{NationalCompetitionPhase, NationalTeamCompetitions};
 use crate::continent::Continent;
+use crate::continent::national::{NationalCompetitionPhase, NationalTeamCompetitions};
 use crate::league::LeagueCollection;
 use crate::r#match::{
-    FieldSquad, MatchResultRaw, PlayerMatchEndStats, ResultMatchPositionData, Score,
-    TeamScore,
+    FieldSquad, MatchResultRaw, PlayerMatchEndStats, ResultMatchPositionData, Score, TeamScore,
 };
-use crate::shared::fullname::FullName;
 use crate::shared::Location;
+use crate::shared::fullname::FullName;
 use crate::{
-    Club, ClubColors, ClubFinances, ClubStatus, Country, NationalSquadPlayer,
-    PersonAttributes, PlayerAttributes, PlayerCollection, PlayerFieldPositionGroup,
-    PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatusType,
-    StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType,
-    TrainingSchedule,
+    Club, ClubColors, ClubFinances, ClubStatus, Country, NationalSquadPlayer, PersonAttributes,
+    PlayerAttributes, PlayerCollection, PlayerFieldPositionGroup, PlayerPosition,
+    PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatusType, StaffCollection,
+    TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
 };
 
 use super::lookups::{country_lookup, country_lookup_mut};
@@ -49,7 +47,10 @@ fn make_player(id: u32, country_id: u32, position: PlayerPositionType) -> crate:
         .attributes(PersonAttributes::default())
         .skills(PlayerSkills::default())
         .positions(PlayerPositions {
-            positions: vec![PlayerPosition { position, level: 18 }],
+            positions: vec![PlayerPosition {
+                position,
+                level: 18,
+            }],
         })
         .player_attributes(PlayerAttributes {
             current_ability: 150,
@@ -142,11 +143,7 @@ fn synth_score(home: u8, away: u8) -> Score {
     }
 }
 
-fn synth_match_result(
-    home_score: u8,
-    away_score: u8,
-    scorer_id: Option<u32>,
-) -> MatchResultRaw {
+fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) -> MatchResultRaw {
     let mut player_stats: HashMap<u32, PlayerMatchEndStats> = HashMap::new();
     if let Some(id) = scorer_id {
         player_stats.insert(
@@ -218,8 +215,8 @@ fn build_world_squad_includes_foreign_based_player() {
     }
 
     let date = d(2026, 9, 6);
-    let squad = build_world_match_squad(&mut continents, 1, date)
-        .expect("squad should build for Brazil");
+    let squad =
+        build_world_match_squad(&mut continents, 1, date).expect("squad should build for Brazil");
 
     let in_main = squad.main_squad.iter().any(|p| p.id == 101);
     let in_subs = squad.substitutes.iter().any(|p| p.id == 101);
@@ -321,14 +318,8 @@ fn global_tournament_result_updates_caps_schedule_and_match_result() {
     let raw = synth_match_result(2, 1, Some(101));
     let date = d(2026, 6, 20);
 
-    let match_result = apply_global_tournament_result(
-        &mut continents,
-        &fixture,
-        &raw,
-        date,
-        "WC",
-        "World Cup",
-    );
+    let match_result =
+        apply_global_tournament_result(&mut continents, &fixture, &raw, date, "WC", "World Cup");
 
     assert_eq!(match_result.league_slug, "international");
     assert_eq!(match_result.home_team_id, 1);
@@ -437,10 +428,7 @@ fn emergency_callup_uses_world_candidates_and_bumps_metric() {
 /// leave forever-`result: None` rows in each country's schedule.
 #[test]
 fn call_up_squad_does_not_add_pending_friendlies() {
-    let mut nt = crate::NationalTeam::new(
-        1,
-        &crate::CountryGeneratorData::empty().people_names,
-    );
+    let mut nt = crate::NationalTeam::new(1, &crate::CountryGeneratorData::empty().people_names);
     nt.country_name = "TestLand".to_string();
     nt.reputation = 9000;
     nt.country_id = 1;

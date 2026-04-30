@@ -1,14 +1,16 @@
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
+use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::recruitment::{ScoutMonitoringSource, ScoutPlayerMonitoring};
 use crate::transfers::pipeline::scouting_config::ScoutingConfig;
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, PlayerObservation, ScoutMatchAssignment, ScoutingAssignment,
-    ScoutingRecommendation, TransferNeedPriority, TransferRequest, TransferRequestStatus,
+    DetailedScoutingReport, PlayerObservation, ReportRiskFlag, ScoutMatchAssignment,
+    ScoutingAssignment, ScoutingRecommendation, TransferNeedPriority, TransferRequest,
+    TransferRequestStatus,
 };
 use crate::transfers::window::PlayerValuationCalculator;
-use crate::transfers::ScoutingRegion;
 use crate::utils::IntegerUtils;
 use crate::{
     ClubPhilosophy, Country, Person, PlayerStatusType, StaffEventType, StaffPosition, TeamType,
@@ -48,6 +50,84 @@ struct MatchScoutingObservationResult {
     assessed_potential: u8,
     match_rating: f32,
     is_new: bool,
+}
+
+/// Rich update payload for an active monitoring row. Built during the
+/// immutable read pass of `process_scouting` / `process_match_scouting`
+/// and applied during pass 2 against the mutable `ClubTransferPlan`.
+struct MonitoringUpdate {
+    club_id: u32,
+    scout_staff_id: u32,
+    player_id: u32,
+    source: ScoutMonitoringSource,
+    transfer_request_id: Option<u32>,
+    origin_assignment_id: Option<u32>,
+    assessed_ability: u8,
+    assessed_potential: u8,
+    confidence: f32,
+    role_fit: f32,
+    estimated_value: f64,
+    risk_flags: Vec<ReportRiskFlag>,
+    is_match: bool,
+    region: Option<crate::transfers::ScoutingRegion>,
+}
+
+/// Apply a monitoring update against a `ClubTransferPlan`. Either
+/// upserts an existing row for `(scout_staff_id, player_id)` or
+/// creates a fresh one. Pure-state mutation — no side effects beyond
+/// the plan.
+fn apply_monitoring_update(
+    plan: &mut crate::transfers::pipeline::ClubTransferPlan,
+    update: MonitoringUpdate,
+    date: NaiveDate,
+) {
+    if let Some(existing) = plan.find_monitoring_mut(update.scout_staff_id, update.player_id) {
+        // Refresh linkage if monitoring originated from a different
+        // request and now matches an active one — prefer the newer
+        // active linkage so meeting agendas stay coherent.
+        if update.transfer_request_id.is_some() && existing.transfer_request_id.is_none() {
+            existing.transfer_request_id = update.transfer_request_id;
+        }
+        if update.origin_assignment_id.is_some() && existing.origin_assignment_id.is_none() {
+            existing.origin_assignment_id = update.origin_assignment_id;
+        }
+        if existing.region.is_none() {
+            existing.region = update.region;
+        }
+        existing.record_observation(
+            update.assessed_ability,
+            update.assessed_potential,
+            update.confidence,
+            update.role_fit,
+            update.estimated_value,
+            update.risk_flags,
+            date,
+            update.is_match,
+        );
+    } else {
+        let id = plan.next_monitoring_id();
+        let mut row = ScoutPlayerMonitoring::new(
+            id,
+            update.scout_staff_id,
+            update.player_id,
+            update.source,
+            date,
+        );
+        row.transfer_request_id = update.transfer_request_id;
+        row.origin_assignment_id = update.origin_assignment_id;
+        row.region = update.region;
+        row.record_observation(
+            update.assessed_ability,
+            update.assessed_potential,
+            update.confidence,
+            update.role_fit,
+            update.estimated_value,
+            update.risk_flags,
+            date,
+            update.is_match,
+        );
+        plan.scout_monitoring.push(row);
+    }
 }
 
 impl PipelineProcessor {
@@ -212,9 +292,11 @@ impl PipelineProcessor {
                 continue;
             }
 
-            let max_assignments = available_scouts
-                .len()
-                .min(ScoutingConfig::default().assignment.max_match_assignments_per_club);
+            let max_assignments = available_scouts.len().min(
+                ScoutingConfig::default()
+                    .assignment
+                    .max_match_assignments_per_club,
+            );
 
             // Score each youth/reserve team from other clubs by how many matching players it has
             let mut team_scores: Vec<(u32, u32, u32, usize)> = Vec::new(); // (team_id, club_id, team_idx_for_ref, score)
@@ -275,10 +357,7 @@ impl PipelineProcessor {
                 let scout_id = available_scouts[i];
 
                 // Link to relevant scouting assignment IDs
-                let linked_ids: Vec<u32> = active_assignments
-                    .iter()
-                    .map(|a| a.id)
-                    .collect();
+                let linked_ids: Vec<u32> = active_assignments.iter().map(|a| a.id).collect();
 
                 actions.push(MatchScoutAssignmentAction {
                     club_id: club.id,
@@ -326,6 +405,7 @@ impl PipelineProcessor {
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
         let mut attended_updates: Vec<(u32, u32, NaiveDate)> = Vec::new(); // (club_id, team_id, date)
         let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new(); // (club_id, staff_id, event)
+        let mut monitoring_updates: Vec<MonitoringUpdate> = Vec::new();
 
         // Pass 1: Immutable reads
         for club in &country.clubs {
@@ -340,8 +420,8 @@ impl PipelineProcessor {
                     .clubs
                     .iter()
                     .find(|c| c.id == match_assignment.target_club_id);
-                let target_team = target_club
-                    .and_then(|c| c.teams.find(match_assignment.target_team_id));
+                let target_team =
+                    target_club.and_then(|c| c.teams.find(match_assignment.target_team_id));
 
                 let (target_club, target_team) = match (target_club, target_team) {
                     (Some(c), Some(t)) => (c, t),
@@ -366,7 +446,11 @@ impl PipelineProcessor {
 
                 // Mark attendance
                 attended_updates.push((club.id, match_assignment.target_team_id, current_date));
-                staff_events.push((club.id, match_assignment.scout_staff_id, StaffEventType::MatchObserved));
+                staff_events.push((
+                    club.id,
+                    match_assignment.scout_staff_id,
+                    StaffEventType::MatchObserved,
+                ));
 
                 // Observe all players on the target team
                 for player in &target_team.players.players {
@@ -388,7 +472,9 @@ impl PipelineProcessor {
                         None => continue,
                     };
 
-                    let existing_obs = assignment.observations.iter()
+                    let existing_obs = assignment
+                        .observations
+                        .iter()
                         .find(|o| o.player_id == player.id);
                     let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
 
@@ -409,13 +495,15 @@ impl PipelineProcessor {
                     );
 
                     // Assess from visible skills and match performance, not hidden CA/PA
-                    let skill_ability = player.skills.calculate_ability_for_position(player.position());
+                    let skill_ability = player
+                        .skills
+                        .calculate_ability_for_position(player.position());
                     let match_bonus = config.match_rating_bonus(match_rating);
 
                     let assessed_ability = (skill_ability as i32
                         + match_bonus
                         + IntegerUtils::random(-ability_error, ability_error))
-                        .clamp(1, 200) as u8;
+                    .clamp(1, 200) as u8;
 
                     let growth_potential = Self::estimate_growth_potential(
                         player_age,
@@ -428,7 +516,7 @@ impl PipelineProcessor {
                     let assessed_potential = (skill_ability as i32
                         + growth_potential as i32
                         + IntegerUtils::random(-potential_error, potential_error))
-                        .clamp(1, 200) as u8;
+                    .clamp(1, 200) as u8;
 
                     let is_new = !assignment.has_observation_for(player.id);
 
@@ -477,10 +565,10 @@ impl PipelineProcessor {
                             )
                         };
 
-                        if recommendation != ScoutingRecommendation::Pass {
-                            let (target_league_rep, target_club_rep) =
-                                PlayerValuationCalculator::seller_context(country, target_club);
-                            let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
+                        let (target_league_rep, target_club_rep) =
+                            PlayerValuationCalculator::seller_context(country, target_club);
+                        let estimated_value =
+                            PlayerValuationCalculator::calculate_value_with_price_level(
                                 player,
                                 current_date,
                                 country.settings.pricing.price_level,
@@ -488,29 +576,50 @@ impl PipelineProcessor {
                                 target_club_rep,
                             );
 
-                            let player_age = player.age(current_date);
-                            let (contract_months, _) = player
-                                .contract
-                                .as_ref()
-                                .map(|c| {
-                                    let days = (c.expiration - current_date).num_days().max(0);
-                                    ((days / 30).min(i16::MAX as i64) as i16, c.salary)
-                                })
-                                .unwrap_or((0, 0));
-                            let risk_flags = Self::evaluate_risk_flags(
-                                player.player_attributes.is_injured,
-                                player.skills.mental.determination,
-                                player_age,
-                                contract_months,
-                                player.player_attributes.world_reputation,
-                                Self::club_world_reputation(club),
-                            );
-                            let role_fit = assignment.role_profile.fit(
-                                player.skills.technical.average(),
-                                player.skills.mental.average(),
-                                player.skills.physical.average(),
-                            );
+                        let player_age = player.age(current_date);
+                        let (contract_months, _) = player
+                            .contract
+                            .as_ref()
+                            .map(|c| {
+                                let days = (c.expiration - current_date).num_days().max(0);
+                                ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+                            })
+                            .unwrap_or((0, 0));
+                        let risk_flags = Self::evaluate_risk_flags(
+                            player.player_attributes.is_injured,
+                            player.skills.mental.determination,
+                            player_age,
+                            contract_months,
+                            player.player_attributes.world_reputation,
+                            Self::club_world_reputation(club),
+                        );
+                        let role_fit = assignment.role_profile.fit(
+                            player.skills.technical.average(),
+                            player.skills.mental.average(),
+                            player.skills.physical.average(),
+                        );
 
+                        // Match-day monitoring update fires regardless
+                        // of the recommendation tier — the scout has
+                        // formed an opinion either way.
+                        monitoring_updates.push(MonitoringUpdate {
+                            club_id: club.id,
+                            scout_staff_id: match_assignment.scout_staff_id,
+                            player_id: player.id,
+                            source: ScoutMonitoringSource::MatchStandout,
+                            transfer_request_id: Some(assignment.transfer_request_id),
+                            origin_assignment_id: Some(assignment.id),
+                            assessed_ability,
+                            assessed_potential,
+                            confidence,
+                            role_fit,
+                            estimated_value: estimated_value.amount,
+                            risk_flags: risk_flags.clone(),
+                            is_match: true,
+                            region: None,
+                        });
+
+                        if recommendation != ScoutingRecommendation::Pass {
                             reports.push(ScoutingReportResult {
                                 club_id: club.id,
                                 report: DetailedScoutingReport {
@@ -565,12 +674,10 @@ impl PipelineProcessor {
 
         for report in reports {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == report.club_id) {
-                if !club
-                    .transfer_plan
-                    .scouting_reports
-                    .iter()
-                    .any(|r| r.player_id == report.report.player_id && r.assignment_id == report.assignment_id)
-                {
+                if !club.transfer_plan.scouting_reports.iter().any(|r| {
+                    r.player_id == report.report.player_id
+                        && r.assignment_id == report.assignment_id
+                }) {
                     club.transfer_plan.scouting_reports.push(report.report);
 
                     if let Some(assignment) = club
@@ -599,6 +706,13 @@ impl PipelineProcessor {
                 {
                     match_assign.last_attended = Some(date);
                 }
+            }
+        }
+
+        // Apply monitoring updates — match-context scouting.
+        for update in monitoring_updates {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == update.club_id) {
+                apply_monitoring_update(&mut club.transfer_plan, update, current_date);
             }
         }
 
@@ -641,7 +755,11 @@ impl PipelineProcessor {
                         continue;
                     }
                     let value = PlayerValuationCalculator::calculate_value_with_price_level(
-                        player, date, price_level, seller_league_rep, seller_club_rep,
+                        player,
+                        date,
+                        price_level,
+                        seller_league_rep,
+                        seller_club_rep,
                     );
                     let statuses = player.statuses.get();
                     let (contract_months_remaining, salary) = player
@@ -666,7 +784,9 @@ impl PipelineProcessor {
                         estimated_value: value.amount,
                         is_listed: statuses.contains(&PlayerStatusType::Lst),
                         is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
-                        skill_ability: player.skills.calculate_ability_for_position(player.position()),
+                        skill_ability: player
+                            .skills
+                            .calculate_ability_for_position(player.position()),
                         average_rating: player.statistics.average_rating,
                         goals: player.statistics.goals,
                         assists: player.statistics.assists,
@@ -693,7 +813,11 @@ impl PipelineProcessor {
         players
     }
 
-    pub fn process_scouting(country: &mut Country, foreign_players: &[PlayerSummary], date: NaiveDate) {
+    pub fn process_scouting(
+        country: &mut Country,
+        foreign_players: &[PlayerSummary],
+        date: NaiveDate,
+    ) {
         let country_id = country.id;
         let country_reputation = country.reputation;
         // Single source of truth for observation/error/recommendation/risk-flag tuning.
@@ -711,6 +835,7 @@ impl PipelineProcessor {
         let mut familiarity_events: Vec<(u32, u32, ScoutingRegion)> = Vec::new();
         let mut rejected_events: Vec<(u32, u32)> = Vec::new(); // (club_id, player_id)
         let mut wanted_player_ids: Vec<u32> = Vec::new();
+        let mut monitoring_updates: Vec<MonitoringUpdate> = Vec::new();
 
         for club in &country.clubs {
             let plan = &club.transfer_plan;
@@ -720,18 +845,21 @@ impl PipelineProcessor {
                     continue;
                 }
 
-                let (judging_ability, judging_potential) = if let Some(scout_id) = assignment.scout_staff_id {
-                    Self::get_scout_skills(club, scout_id)
-                } else {
-                    let d = config.observation.default_judging_when_no_scout;
-                    (d, d)
-                };
+                let (judging_ability, judging_potential) =
+                    if let Some(scout_id) = assignment.scout_staff_id {
+                        Self::get_scout_skills(club, scout_id)
+                    } else {
+                        let d = config.observation.default_judging_when_no_scout;
+                        (d, d)
+                    };
 
                 // Borrow the scout's knowledge struct once — we need both
                 // known_regions (slice) and familiarity (per-region lookup).
-                let scout_knowledge = assignment.scout_staff_id
+                let scout_knowledge = assignment
+                    .scout_staff_id
                     .and_then(|sid| {
-                        club.teams.iter()
+                        club.teams
+                            .iter()
                             .flat_map(|t| t.staffs.iter())
                             .find(|s| s.id == sid)
                     })
@@ -759,39 +887,46 @@ impl PipelineProcessor {
                 let (age_min, age_max, ability_floor) = match philosophy {
                     ClubPhilosophy::DevelopAndSell => {
                         let youth_floor = assignment.min_ability.saturating_sub(20);
-                        (assignment.preferred_age_min.min(16), assignment.preferred_age_max, youth_floor)
+                        (
+                            assignment.preferred_age_min.min(16),
+                            assignment.preferred_age_max,
+                            youth_floor,
+                        )
                     }
-                    ClubPhilosophy::SignToCompete => {
-                        (assignment.preferred_age_min, assignment.preferred_age_max, assignment.min_ability)
-                    }
-                    _ => {
-                        (assignment.preferred_age_min, assignment.preferred_age_max, assignment.min_ability)
-                    }
+                    ClubPhilosophy::SignToCompete => (
+                        assignment.preferred_age_min,
+                        assignment.preferred_age_max,
+                        assignment.min_ability,
+                    ),
+                    _ => (
+                        assignment.preferred_age_min,
+                        assignment.preferred_age_max,
+                        assignment.min_ability,
+                    ),
                 };
 
                 let player_filter = |p: &&PlayerSummary| -> bool {
-                    if p.club_id == club.id || p.position_group != target_group
-                        || club.is_rival(p.club_id) {
+                    if p.club_id == club.id
+                        || p.position_group != target_group
+                        || club.is_rival(p.club_id)
+                    {
                         return false;
                     }
                     if club.transfer_plan.is_rejected(p.player_id, date) {
                         return false;
                     }
-                    let effective_min = if p.age <= 21 && matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
-                        ability_floor
-                    } else {
-                        assignment.min_ability
-                    };
-                    p.age >= age_min
-                        && p.age <= age_max
-                        && p.skill_ability >= effective_min
+                    let effective_min =
+                        if p.age <= 21 && matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
+                            ability_floor
+                        } else {
+                            assignment.min_ability
+                        };
+                    p.age >= age_min && p.age <= age_max && p.skill_ability >= effective_min
                 };
 
                 // Domestic players (always visible)
-                let mut matching: Vec<&PlayerSummary> = all_players
-                    .iter()
-                    .filter(player_filter)
-                    .collect();
+                let mut matching: Vec<&PlayerSummary> =
+                    all_players.iter().filter(player_filter).collect();
 
                 // Foreign players from scout's known regions (region-based matching)
                 // Only scout leagues with equal or lower reputation than our own country.
@@ -799,13 +934,10 @@ impl PipelineProcessor {
                 if !scout_known_regions.is_empty() {
                     let foreign_matching: Vec<&PlayerSummary> = foreign_players
                         .iter()
+                        .filter(|p| p.country_reputation <= country_reputation)
                         .filter(|p| {
-                            p.country_reputation <= country_reputation
-                        })
-                        .filter(|p| {
-                            let player_region = ScoutingRegion::from_country(
-                                p.continent_id, &p.country_code,
-                            );
+                            let player_region =
+                                ScoutingRegion::from_country(p.continent_id, &p.country_code);
                             scout_known_regions.contains(&player_region)
                         })
                         .filter(player_filter)
@@ -824,8 +956,7 @@ impl PipelineProcessor {
                 // This is what real clubs do — Opta/Wyscout shortlists come
                 // first, scouts watch the narrowed list in person.
                 let data_skill = Self::club_data_analysis_skill(club);
-                if let Some(target_pool) =
-                    config.data_prefilter_target(matching.len(), data_skill)
+                if let Some(target_pool) = config.data_prefilter_target(matching.len(), data_skill)
                 {
                     let noise = config.data_prefilter_noise(data_skill);
                     let mut scored: Vec<(&PlayerSummary, f32)> = matching
@@ -836,10 +967,13 @@ impl PipelineProcessor {
                             (*p, score + jitter)
                         })
                         .collect();
-                    scored.sort_by(|a, b| {
-                        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    matching = scored.into_iter().take(target_pool).map(|(p, _)| p).collect();
+                    scored
+                        .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    matching = scored
+                        .into_iter()
+                        .take(target_pool)
+                        .map(|(p, _)| p)
+                        .collect();
                 }
 
                 let obs_per_day = config.observations_per_day(judging_ability);
@@ -888,9 +1022,8 @@ impl PipelineProcessor {
                     // with empirical experience (familiarity, 0-100). A veteran
                     // scout who's been scouting a region for years is sharper than
                     // a brand-new assignee, even to a "known" region.
-                    let target_region = ScoutingRegion::from_country(
-                        target.continent_id, &target.country_code,
-                    );
+                    let target_region =
+                        ScoutingRegion::from_country(target.continent_id, &target.country_code);
                     let is_domestic = target.country_id == country_id;
                     let is_known_region = scout_known_regions.contains(&target_region);
                     let familiarity = scout_knowledge
@@ -919,7 +1052,7 @@ impl PipelineProcessor {
                     let assessed_ability = (target.skill_ability as i32
                         + performance_bonus
                         + IntegerUtils::random(-ability_error, ability_error))
-                        .clamp(1, 200) as u8;
+                    .clamp(1, 200) as u8;
 
                     // Estimate potential from age, mental attributes, and current skill level
                     // Young players with strong mentals (determination, work rate) suggest higher ceiling
@@ -934,7 +1067,7 @@ impl PipelineProcessor {
                     let assessed_potential = (target.skill_ability as i32
                         + growth_potential as i32
                         + IntegerUtils::random(-potential_error, potential_error))
-                        .clamp(1, 200) as u8;
+                    .clamp(1, 200) as u8;
 
                     let is_new = !assignment.has_observation_for(target.player_id);
 
@@ -970,8 +1103,7 @@ impl PipelineProcessor {
                     let confidence = config.pool_report_confidence(final_obs_count as u8);
                     let youth_bonus =
                         config.youth_bonus(target.age, assessed_ability, assessed_potential);
-                    let stats_bonus =
-                        config.stats_bonus(target.appearances, target.average_rating);
+                    let stats_bonus = config.stats_bonus(target.appearances, target.average_rating);
                     let effective_ability = assessed_ability as i16 + youth_bonus + stats_bonus;
                     let recommendation = config.recommendation_for(
                         effective_ability,
@@ -980,22 +1112,46 @@ impl PipelineProcessor {
                         assignment.min_ability,
                     );
 
+                    let role_fit_now = assignment.role_profile.fit(
+                        target.technical_avg,
+                        target.mental_avg,
+                        target.physical_avg,
+                    );
+                    let risk_flags_now = Self::evaluate_risk_flags(
+                        target.is_injured,
+                        target.determination,
+                        target.age,
+                        target.contract_months_remaining,
+                        target.world_reputation,
+                        Self::club_world_reputation(club),
+                    );
+
+                    // Always update the monitoring row when a real scout
+                    // is on this assignment — even if the recommendation
+                    // is Pass, the scout has formed an opinion that the
+                    // recruitment meeting will see.
+                    if let Some(scout_id) = assignment.scout_staff_id {
+                        monitoring_updates.push(MonitoringUpdate {
+                            club_id: club.id,
+                            scout_staff_id: scout_id,
+                            player_id: target.player_id,
+                            source: ScoutMonitoringSource::TransferRequest,
+                            transfer_request_id: Some(assignment.transfer_request_id),
+                            origin_assignment_id: Some(assignment.id),
+                            assessed_ability,
+                            assessed_potential,
+                            confidence,
+                            role_fit: role_fit_now,
+                            estimated_value: target.estimated_value,
+                            risk_flags: risk_flags_now.clone(),
+                            is_match: false,
+                            region: Some(target_region),
+                        });
+                    }
+
                     if recommendation == ScoutingRecommendation::Pass {
                         rejected_events.push((club.id, target.player_id));
                     } else {
-                        let risk_flags = Self::evaluate_risk_flags(
-                            target.is_injured,
-                            target.determination,
-                            target.age,
-                            target.contract_months_remaining,
-                            target.world_reputation,
-                            Self::club_world_reputation(club),
-                        );
-                        let role_fit = assignment.role_profile.fit(
-                            target.technical_avg,
-                            target.mental_avg,
-                            target.physical_avg,
-                        );
                         reports.push(ScoutingReportResult {
                             club_id: club.id,
                             report: DetailedScoutingReport {
@@ -1006,8 +1162,8 @@ impl PipelineProcessor {
                                 confidence,
                                 estimated_value: target.estimated_value,
                                 recommendation,
-                                role_fit,
-                                risk_flags,
+                                role_fit: role_fit_now,
+                                risk_flags: risk_flags_now,
                             },
                             assignment_id: assignment.id,
                         });
@@ -1026,16 +1182,18 @@ impl PipelineProcessor {
                     .find(|a| a.id == obs.assignment_id)
                 {
                     if obs.is_new {
-                        assignment.observations.push(
-                            PlayerObservation::new(
-                                obs.player_id,
-                                obs.assessed_ability,
-                                obs.assessed_potential,
-                                date,
-                            ),
-                        );
+                        assignment.observations.push(PlayerObservation::new(
+                            obs.player_id,
+                            obs.assessed_ability,
+                            obs.assessed_potential,
+                            date,
+                        ));
                     } else if let Some(existing) = assignment.find_observation_mut(obs.player_id) {
-                        existing.add_observation(obs.assessed_ability, obs.assessed_potential, date);
+                        existing.add_observation(
+                            obs.assessed_ability,
+                            obs.assessed_potential,
+                            date,
+                        );
                     }
                 }
             }
@@ -1043,12 +1201,10 @@ impl PipelineProcessor {
 
         for report in reports {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == report.club_id) {
-                if !club
-                    .transfer_plan
-                    .scouting_reports
-                    .iter()
-                    .any(|r| r.player_id == report.report.player_id && r.assignment_id == report.assignment_id)
-                {
+                if !club.transfer_plan.scouting_reports.iter().any(|r| {
+                    r.player_id == report.report.player_id
+                        && r.assignment_id == report.assignment_id
+                }) {
                     club.transfer_plan.scouting_reports.push(report.report);
 
                     if let Some(assignment) = club
@@ -1066,11 +1222,20 @@ impl PipelineProcessor {
             }
         }
 
+        // Apply monitoring updates — pool-context scouting.
+        for update in monitoring_updates {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == update.club_id) {
+                apply_monitoring_update(&mut club.transfer_plan, update, date);
+            }
+        }
+
         // Set Wnt status on newly scouted players
         for player_id in &wanted_player_ids {
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
-                    if let Some(player) = team.players.players.iter_mut().find(|p| p.id == *player_id) {
+                    if let Some(player) =
+                        team.players.players.iter_mut().find(|p| p.id == *player_id)
+                    {
                         if !player.statuses.get().contains(&PlayerStatusType::Wnt) {
                             player.statuses.add(date, PlayerStatusType::Wnt);
                         }
@@ -1109,7 +1274,8 @@ impl PipelineProcessor {
         let rejection_months = config.assignment.rejection_memory_months;
         for (club_id, player_id) in rejected_events {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                club.transfer_plan.reject_player(player_id, date, rejection_months);
+                club.transfer_plan
+                    .reject_player(player_id, date, rejection_months);
             }
         }
     }
@@ -1145,10 +1311,8 @@ impl PipelineProcessor {
         for c in &country.clubs {
             for t in &c.teams.teams {
                 for p in &t.players.players {
-                    current_ability.insert(
-                        p.id,
-                        p.skills.calculate_ability_for_position(p.position()),
-                    );
+                    current_ability
+                        .insert(p.id, p.skills.calculate_ability_for_position(p.position()));
                 }
             }
         }
@@ -1166,10 +1330,7 @@ impl PipelineProcessor {
                     s.contract
                         .as_ref()
                         .map(|c| {
-                            matches!(
-                                c.position,
-                                StaffPosition::Scout | StaffPosition::ChiefScout,
-                            )
+                            matches!(c.position, StaffPosition::Scout | StaffPosition::ChiefScout,)
                         })
                         .unwrap_or(false)
                 })
@@ -1180,10 +1341,9 @@ impl PipelineProcessor {
             let refresh_count =
                 config.shadow_refresh_count(club.transfer_plan.shadow_reports.len());
             for _ in 0..refresh_count {
-                let idx = IntegerUtils::random(
-                    0,
-                    club.transfer_plan.shadow_reports.len() as i32 - 1,
-                ) as usize;
+                let idx =
+                    IntegerUtils::random(0, club.transfer_plan.shadow_reports.len() as i32 - 1)
+                        as usize;
                 let shadow = &club.transfer_plan.shadow_reports[idx];
                 let truth = match current_ability.get(&shadow.report.player_id) {
                     Some(v) => *v,
@@ -1192,8 +1352,8 @@ impl PipelineProcessor {
 
                 // Drift old assessment toward truth, damped by scout skill.
                 // High-skill scouts re-measure almost exactly; low-skill drift is noisier.
-                let noise = (config.error.max_judging - judging as i16).max(config.error.min_error)
-                    as i32;
+                let noise =
+                    (config.error.max_judging - judging as i16).max(config.error.min_error) as i32;
                 let drift = IntegerUtils::random(-noise, noise);
                 let blended = ((shadow.observed_ability as i32 + truth as i32) / 2 + drift)
                     .clamp(1, 200) as u8;
@@ -1232,10 +1392,13 @@ impl PipelineProcessor {
 
         // Weight = base(1.0) + reputation bonus (0.0 to 5.0)
         // Uses max of world and home reputation for visibility
-        let weights: Vec<f32> = players.iter().map(|p| {
-            let rep = p.world_reputation.max(p.home_reputation) as f32;
-            1.0 + (rep / 2000.0).min(5.0)
-        }).collect();
+        let weights: Vec<f32> = players
+            .iter()
+            .map(|p| {
+                let rep = p.world_reputation.max(p.home_reputation) as f32;
+                1.0 + (rep / 2000.0).min(5.0)
+            })
+            .collect();
 
         let total: f32 = weights.iter().sum();
         let roll = IntegerUtils::random(0, (total * 100.0) as i32) as f32 / 100.0;

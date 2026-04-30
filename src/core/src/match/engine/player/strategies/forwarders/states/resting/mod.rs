@@ -1,5 +1,5 @@
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -25,9 +25,7 @@ impl StateProcessingHandler for ForwardRestingState {
         // 1. Stamina recovered enough - get back in the game
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
         if stamina >= STAMINA_RECOVERY_THRESHOLD {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Walking,
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Walking));
         }
 
         // 2. Ball is very close - must react regardless of fatigue
@@ -51,15 +49,12 @@ impl StateProcessingHandler for ForwardRestingState {
         // reduced intensity. The fatigue curve will keep penalising
         // their pace so it's still a meaningful rest.
         if ctx.in_state_time > MAX_REST_TICKS {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Walking,
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Walking));
         }
 
         // Stay resting
         None
     }
-
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))
@@ -69,4 +64,3 @@ impl StateProcessingHandler for ForwardRestingState {
         ForwardCondition::new(ActivityIntensity::Recovery).process(ctx);
     }
 }
-

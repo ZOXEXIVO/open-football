@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct ContinentContext {
-    id: u32
+    id: u32,
 }
 
 impl ContinentContext {

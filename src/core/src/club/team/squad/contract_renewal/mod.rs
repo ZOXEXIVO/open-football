@@ -1,8 +1,8 @@
 use crate::club::player::calculators::{ContractValuation, ValuationContext};
+use crate::club::player::mailbox::RejectionReason;
 use crate::club::player::mailbox::handlers::contract_proposal::{
     ProcessContractHandler, RENEWAL_REJECTED_LABEL,
 };
-use crate::club::player::mailbox::RejectionReason;
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
 use crate::{
@@ -247,18 +247,15 @@ impl ContractRenewalManager {
             //      a Req/Lst/Frt player extending is just paperwork.
             //   4. Ability hasn't visibly fallen off a cliff vs potential
             //      (>40% decline = the player is finished, let the deal run).
-            let now_status = player
-                .contract
-                .as_ref()
-                .map(|c| c.squad_status.clone());
+            let now_status = player.contract.as_ref().map(|c| c.squad_status.clone());
             let days_to_expiry = player
                 .contract
                 .as_ref()
                 .map(|c| (c.expiration - date).num_days())
                 .unwrap_or(i64::MAX);
             let in_final_year = days_to_expiry > 0 && days_to_expiry <= 365;
-            let played_share = (player.statistics.played as f32)
-                .max(player.statistics.played_subs as f32 / 2.0);
+            let played_share =
+                (player.statistics.played as f32).max(player.statistics.played_subs as f32 / 2.0);
             let is_contributor = matches!(
                 now_status.as_ref(),
                 Some(crate::PlayerSquadStatus::KeyPlayer)
@@ -426,9 +423,12 @@ impl ContractRenewalManager {
     /// rejected offer gets a much longer one before we come back with a
     /// revised deal.
     fn recently_offered(player: &Player, date: NaiveDate) -> bool {
-        let last = player.decision_history.items.iter().rev().find(|d| {
-            d.decision == DECISION_LABEL || d.decision == RENEWAL_REJECTED_LABEL
-        });
+        let last = player
+            .decision_history
+            .items
+            .iter()
+            .rev()
+            .find(|d| d.decision == DECISION_LABEL || d.decision == RENEWAL_REJECTED_LABEL);
         match last {
             Some(d) if d.decision == RENEWAL_REJECTED_LABEL => {
                 (date - d.date).num_days() < RENEWAL_COOLDOWN_AFTER_REJECT_DAYS
@@ -557,14 +557,8 @@ impl ContractRenewalManager {
             offered = offered.max(contract.salary + 1);
         }
 
-        let mut proposal = PlayerContractProposal::basic(
-            offered,
-            years,
-            negotiation_skill,
-            0,
-            0,
-            None,
-        );
+        let mut proposal =
+            PlayerContractProposal::basic(offered, years, negotiation_skill, 0, 0, None);
 
         // Profile-driven package decoration. The `urgency` knob blends
         // attempts, market interest, and final-panic into one budget for
@@ -669,8 +663,7 @@ impl WageStructureSnapshot {
                     first_team_sum = first_team_sum.saturating_add(c.salary);
                     first_team_count += 1;
                 }
-                PlayerSquadStatus::FirstTeamSquadRotation
-                | PlayerSquadStatus::MainBackupPlayer => {
+                PlayerSquadStatus::FirstTeamSquadRotation | PlayerSquadStatus::MainBackupPlayer => {
                     backup_sum = backup_sum.saturating_add(c.salary);
                     backup_count += 1;
                 }
@@ -740,7 +733,9 @@ impl PlayerProfile {
         let rep = player.player_attributes.current_reputation;
         let potential = player.player_attributes.potential_ability;
 
-        if age <= 23 && (potential >= 130 || matches!(status, PlayerSquadStatus::HotProspectForTheFuture)) {
+        if age <= 23
+            && (potential >= 130 || matches!(status, PlayerSquadStatus::HotProspectForTheFuture))
+        {
             return PlayerProfile::YoungProspect;
         }
         if age >= 31 {
@@ -976,7 +971,10 @@ mod wage_structure_tests {
     fn key_player_may_marginally_exceed_top() {
         let s = snapshot(200_000, 150_000, 60_000);
         // Asking for 300k — clamped to 110% of top = 220k.
-        assert_eq!(s.cap_for_status(300_000, &PlayerSquadStatus::KeyPlayer), 220_000);
+        assert_eq!(
+            s.cap_for_status(300_000, &PlayerSquadStatus::KeyPlayer),
+            220_000
+        );
     }
 
     #[test]
@@ -1000,13 +998,19 @@ mod wage_structure_tests {
     #[test]
     fn cap_passes_through_when_under_limit() {
         let s = snapshot(200_000, 150_000, 60_000);
-        assert_eq!(s.cap_for_status(50_000, &PlayerSquadStatus::FirstTeamRegular), 50_000);
+        assert_eq!(
+            s.cap_for_status(50_000, &PlayerSquadStatus::FirstTeamRegular),
+            50_000
+        );
     }
 
     #[test]
     fn empty_structure_does_not_clamp() {
         let s = snapshot(0, 0, 0);
-        assert_eq!(s.cap_for_status(500_000, &PlayerSquadStatus::KeyPlayer), 500_000);
+        assert_eq!(
+            s.cap_for_status(500_000, &PlayerSquadStatus::KeyPlayer),
+            500_000
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use crate::r#match::{MatchPlayerLite, PlayerSide, StateProcessingContext};
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::{MatchPlayerLite, PlayerSide, StateProcessingContext};
 
 pub struct PlayerTeammatesOperationsImpl<'b> {
     ctx: &'b StateProcessingContext<'b>,
@@ -43,8 +43,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
             .entries
             .iter()
             .filter(move |entry| {
-                entry.team_id == team_id
-                    && entry.position.position_group() == position_group
+                entry.team_id == team_id && entry.position.position_group() == position_group
             })
             .map(|entry| MatchPlayerLite {
                 id: entry.id,
@@ -86,7 +85,11 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         self.nearby_range(1.0, max_distance)
     }
 
-    pub fn nearby_range(&'b self, min_distance: f32, max_distance: f32) -> impl Iterator<Item = MatchPlayerLite> + 'b {
+    pub fn nearby_range(
+        &'b self,
+        min_distance: f32,
+        max_distance: f32,
+    ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
         self.ctx
             .tick_context
             .grid
@@ -107,14 +110,21 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
     pub fn nearby_to_opponent_goal(&'b self) -> Option<MatchPlayerLite> {
         let want_min_x = self.ctx.player.side == Some(PlayerSide::Right);
 
-        self.nearby(300.0)
-            .reduce(|best, candidate| {
-                if want_min_x {
-                    if candidate.position.x < best.position.x { candidate } else { best }
+        self.nearby(300.0).reduce(|best, candidate| {
+            if want_min_x {
+                if candidate.position.x < best.position.x {
+                    candidate
                 } else {
-                    if candidate.position.x > best.position.x { candidate } else { best }
+                    best
                 }
-            })
+            } else {
+                if candidate.position.x > best.position.x {
+                    candidate
+                } else {
+                    best
+                }
+            }
+        })
     }
 
     pub fn nearby_ids(&self, max_distance: f32) -> impl Iterator<Item = (u32, f32)> + 'b {

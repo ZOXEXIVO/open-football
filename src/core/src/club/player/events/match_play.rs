@@ -87,8 +87,7 @@ impl Player {
 
         // GK conceded / clean-sheet bookkeeping — only for starting GKs.
         // Subs who came on briefly don't get attributed the full team conceded.
-        if self.position().is_goalkeeper()
-            && matches!(o.participation, MatchParticipation::Starter)
+        if self.position().is_goalkeeper() && matches!(o.participation, MatchParticipation::Starter)
         {
             let s = stats_bucket_mut(self, o.is_cup, o.is_friendly);
             s.conceded += o.team_goals_against as u16;
@@ -197,8 +196,7 @@ impl Player {
                 self.attributes.pressure,
             );
             let scene_mul = if o.is_cup || o.is_derby { 1.25 } else { 1.0 };
-            let rep_mul =
-                scaling::reputation_amplifier(self.player_attributes.current_reputation);
+            let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let mag = cfg.catalog.decisive_goal * pressure_mul * scene_mul * rep_mul;
             self.happiness
                 .add_event_with_cooldown(HappinessEventType::DecisiveGoal, mag, 14);
@@ -210,8 +208,7 @@ impl Player {
         let fan_praise_trigger =
             o.is_motm || o.effective_rating >= 8.0 || (o.team_won && had_contribution);
         if fan_praise_trigger {
-            let rep_mul =
-                scaling::reputation_amplifier(self.player_attributes.current_reputation);
+            let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let scene_mul = if o.is_cup || o.is_derby { 1.2 } else { 1.0 };
             let mag = cfg.catalog.fan_praise * rep_mul * scene_mul;
             self.happiness
@@ -225,8 +222,7 @@ impl Player {
             || o.effective_rating < 5.7
             || (o.team_lost && o.effective_rating < 6.2);
         if fan_criticism_trigger {
-            let rep_mul =
-                scaling::reputation_amplifier(self.player_attributes.current_reputation);
+            let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let provoke_mul = scaling::criticism_amplifier(
                 self.attributes.controversy,
                 self.attributes.temperament,
@@ -248,8 +244,7 @@ impl Player {
             || (o.is_motm && (o.is_cup || o.is_derby))
             || exceptional_gk_shutout;
         if media_praise_trigger {
-            let rep_mul =
-                scaling::reputation_amplifier(self.player_attributes.current_reputation);
+            let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let mag = cfg.catalog.media_praise * rep_mul;
             self.happiness
                 .add_event_with_cooldown(HappinessEventType::MediaPraise, mag, 30);
@@ -263,15 +258,12 @@ impl Player {
         // every fullback was the hero of the match.
         if o.is_derby {
             if o.team_won {
-                let is_back_line =
-                    self.position().is_goalkeeper() || self.position().is_defender();
+                let is_back_line = self.position().is_goalkeeper() || self.position().is_defender();
                 let standout = o.stats.goals > 0
                     || o.stats.assists > 0
                     || o.is_motm
                     || o.effective_rating >= 7.5
-                    || (is_back_line
-                        && o.team_goals_against == 0
-                        && o.effective_rating >= 7.2);
+                    || (is_back_line && o.team_goals_against == 0 && o.effective_rating >= 7.2);
                 if standout {
                     let bonus = if o.stats.goals > 0 || o.is_motm {
                         2.0

@@ -1,8 +1,8 @@
-use crate::club::player::interaction::{
-    default_cooldown_days, InteractionOutcome, InteractionTone, InteractionTopic,
-    ManagerInteraction,
-};
 use crate::club::player::ManagerPromiseKind;
+use crate::club::player::interaction::{
+    InteractionOutcome, InteractionTone, InteractionTopic, ManagerInteraction,
+    default_cooldown_days,
+};
 use crate::{ChangeType, HappinessEventType, PlayerStatusType, RelationshipChange, SimulatorData};
 use chrono::Duration;
 
@@ -58,7 +58,9 @@ impl TeamBehaviourResult {
             }
             if termination.payout > 0 {
                 if let Some(club) = data.club_mut(club_id) {
-                    club.finance.balance.push_expense_player_wages(termination.payout as i64);
+                    club.finance
+                        .balance
+                        .push_expense_player_wages(termination.payout as i64);
                 }
             }
             // Now a free agent — drop him from every club's shortlist,
@@ -72,7 +74,10 @@ impl TeamBehaviourResult {
             }
             log::debug!(
                 "Contract terminated: player {} by club {} — payout {} ({})",
-                termination.player_id, club_id, termination.payout, termination.reason
+                termination.player_id,
+                club_id,
+                termination.payout,
+                termination.reason
             );
         }
     }
@@ -98,7 +103,9 @@ impl TeamBehaviourResult {
                             talk.relationship_change.abs(),
                         )
                     };
-                    player.relations.update_staff_relationship(talk.staff_id, change, sim_date);
+                    player
+                        .relations
+                        .update_staff_relationship(talk.staff_id, change, sim_date);
 
                     // Coach rapport mirrors the staff-relation update —
                     // mid-magnitude relationship deltas become rapport ticks
@@ -106,9 +113,13 @@ impl TeamBehaviourResult {
                     let rapport_amount = (talk.relationship_change.abs() * 4.0).round() as i16;
                     if rapport_amount > 0 {
                         if talk.relationship_change >= 0.0 {
-                            player.rapport.on_positive(talk.staff_id, sim_date, rapport_amount);
+                            player
+                                .rapport
+                                .on_positive(talk.staff_id, sim_date, rapport_amount);
                         } else {
-                            player.rapport.on_negative(talk.staff_id, sim_date, rapport_amount);
+                            player
+                                .rapport
+                                .on_negative(talk.staff_id, sim_date, rapport_amount);
                         }
                     }
 
@@ -123,7 +134,9 @@ impl TeamBehaviourResult {
                     match talk.talk_type {
                         ManagerTalkType::Praise => HappinessEventType::ManagerPraise,
                         ManagerTalkType::Discipline => HappinessEventType::ManagerDiscipline,
-                        ManagerTalkType::PlayingTimeTalk => HappinessEventType::ManagerPlayingTimePromise,
+                        ManagerTalkType::PlayingTimeTalk => {
+                            HappinessEventType::ManagerPlayingTimePromise
+                        }
                         _ => HappinessEventType::ManagerPraise,
                     }
                 } else {
@@ -177,10 +190,9 @@ impl TeamBehaviourResult {
                             promise_created = true;
                         }
                         ManagerTalkType::PlayingTimeRequest => {
-                            player.happiness.add_event(
-                                HappinessEventType::ManagerPlayingTimePromise,
-                                8.0,
-                            );
+                            player
+                                .happiness
+                                .add_event(HappinessEventType::ManagerPlayingTimePromise, 8.0);
                             player.record_promise_full(
                                 ManagerPromiseKind::PlayingTime,
                                 sim_date,
@@ -197,10 +209,9 @@ impl TeamBehaviourResult {
                             // nothing actually happens, the player stays.
                             if !player.is_force_match_selection {
                                 player.statuses.add(sim_date, PlayerStatusType::Loa);
-                                player.happiness.add_event(
-                                    HappinessEventType::LoanListingAccepted,
-                                    5.0,
-                                );
+                                player
+                                    .happiness
+                                    .add_event(HappinessEventType::LoanListingAccepted, 5.0);
                             }
                         }
                         _ => {}
@@ -216,10 +227,9 @@ impl TeamBehaviourResult {
                             // refusal hits softer than a wishy-washy fob.
                             player.statuses.add(sim_date, PlayerStatusType::Fut);
                             let mag = if talk.honest_framing { -3.0 } else { -5.0 };
-                            player.happiness.add_event(
-                                HappinessEventType::LackOfPlayingTime,
-                                mag,
-                            );
+                            player
+                                .happiness
+                                .add_event(HappinessEventType::LackOfPlayingTime, mag);
                         }
                         _ => {}
                     }
@@ -407,9 +417,7 @@ pub(crate) fn topic_for_talk(talk: ManagerTalkType) -> InteractionTopic {
         ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest => {
             InteractionTopic::PlayingTime
         }
-        ManagerTalkType::MoraleTalk | ManagerTalkType::Motivational => {
-            InteractionTopic::PoorForm
-        }
+        ManagerTalkType::MoraleTalk | ManagerTalkType::Motivational => InteractionTopic::PoorForm,
         ManagerTalkType::Praise => InteractionTopic::GoodForm,
         ManagerTalkType::Discipline => InteractionTopic::Discipline,
         ManagerTalkType::TransferDiscussion => InteractionTopic::TransferRequest,

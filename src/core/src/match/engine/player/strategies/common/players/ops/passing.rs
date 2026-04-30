@@ -31,15 +31,17 @@ impl<'p> PassingOperationsImpl<'p> {
     }
 
     /// Find a safe pass option with custom max distance
-    pub fn find_safe_pass_option_with_distance(&self, max_distance: f32) -> Option<MatchPlayerLite> {
+    pub fn find_safe_pass_option_with_distance(
+        &self,
+        max_distance: f32,
+    ) -> Option<MatchPlayerLite> {
         let teammates = self.ctx.players().teammates();
 
         // Prioritize closest teammates with clear passing lanes
         let safe_options: Vec<MatchPlayerLite> = teammates
             .nearby(max_distance)
             .filter(|t| {
-                self.ctx.player().has_clear_pass(t.id)
-                    && !self.is_teammate_under_pressure(t)
+                self.ctx.player().has_clear_pass(t.id) && !self.is_teammate_under_pressure(t)
             })
             .collect();
 
@@ -60,7 +62,10 @@ impl<'p> PassingOperationsImpl<'p> {
     }
 
     /// Find the best pass option with custom max distance
-    pub fn find_best_pass_option_with_distance(&self, max_distance: f32) -> Option<(MatchPlayerLite, &'static str)> {
+    pub fn find_best_pass_option_with_distance(
+        &self,
+        max_distance: f32,
+    ) -> Option<(MatchPlayerLite, &'static str)> {
         PassEvaluator::find_best_pass_option(self.ctx, max_distance)
     }
 
@@ -163,7 +168,12 @@ impl<'p> PassingOperationsImpl<'p> {
         // Single scan at max distance, bucket by distance
         let mut markers = 0;
         let mut close_markers = 0;
-        for (_id, dist) in self.ctx.tick_context.grid.opponents(teammate.id, marking_distance) {
+        for (_id, dist) in self
+            .ctx
+            .tick_context
+            .grid
+            .opponents(teammate.id, marking_distance)
+        {
             markers += 1;
             if dist <= close_distance {
                 close_markers += 1;

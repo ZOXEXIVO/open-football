@@ -19,8 +19,8 @@ use super::squad::build_world_match_squad;
 use super::stats::{
     apply_world_elo, apply_world_international_stats, record_world_country_schedule,
 };
-use crate::continent::national::NationalCompetitionFixture;
 use crate::continent::Continent;
+use crate::continent::national::NationalCompetitionFixture;
 use crate::r#match::{MatchResult, MatchSquad};
 
 /// Pair a continent index with one of its national-competition
@@ -63,8 +63,7 @@ pub fn simulate_world_national_competitions(
 
     let mut collected: Vec<MatchResult> = Vec::with_capacity(engine_results.len());
     for (stamp_idx, raw) in engine_results {
-        if let Some(match_result) =
-            apply_match_outcome(continents, &stamped[stamp_idx], raw, date)
+        if let Some(match_result) = apply_match_outcome(continents, &stamped[stamp_idx], raw, date)
         {
             collected.push(match_result);
         }
@@ -86,8 +85,7 @@ fn advance_competition_cycles(continents: &mut [Continent], date: NaiveDate) {
             .map(|c| (c.id, c.reputation))
             .collect();
         country_ids_by_rep.sort_by(|a, b| b.1.cmp(&a.1));
-        let sorted_ids: Vec<u32> =
-            country_ids_by_rep.iter().map(|(id, _)| *id).collect();
+        let sorted_ids: Vec<u32> = country_ids_by_rep.iter().map(|(id, _)| *id).collect();
         continent
             .national_team_competitions
             .check_new_cycles(date, &sorted_ids, continent_id);
@@ -97,13 +95,13 @@ fn advance_competition_cycles(continents: &mut [Continent], date: NaiveDate) {
 /// Snapshot today's fixtures across every continent into a flat list,
 /// stamped with the originating continent index so results can be
 /// fanned back correctly.
-fn collect_todays_fixtures(
-    continents: &[Continent],
-    date: NaiveDate,
-) -> Vec<StampedFixture> {
+fn collect_todays_fixtures(continents: &[Continent], date: NaiveDate) -> Vec<StampedFixture> {
     let mut stamped: Vec<StampedFixture> = Vec::new();
     for (idx, continent) in continents.iter().enumerate() {
-        for fixture in continent.national_team_competitions.get_todays_matches(date) {
+        for fixture in continent
+            .national_team_competitions
+            .get_todays_matches(date)
+        {
             stamped.push(StampedFixture {
                 continent_idx: idx,
                 fixture,
@@ -125,10 +123,8 @@ fn build_squads(
         .iter()
         .enumerate()
         .filter_map(|(stamp_idx, stamp)| {
-            let home =
-                build_world_match_squad(continents, stamp.fixture.home_country_id, date)?;
-            let away =
-                build_world_match_squad(continents, stamp.fixture.away_country_id, date)?;
+            let home = build_world_match_squad(continents, stamp.fixture.home_country_id, date)?;
+            let away = build_world_match_squad(continents, stamp.fixture.away_country_id, date)?;
             Some((stamp_idx, home, away))
         })
         .collect()
@@ -208,12 +204,7 @@ fn apply_match_outcome(
         .map(|(&id, stats)| (id, stats.goals))
         .collect();
 
-    apply_world_international_stats(
-        continents,
-        home_country_id,
-        away_country_id,
-        &player_goals,
-    );
+    apply_world_international_stats(continents, home_country_id, away_country_id, &player_goals);
     apply_world_elo(
         continents,
         home_country_id,

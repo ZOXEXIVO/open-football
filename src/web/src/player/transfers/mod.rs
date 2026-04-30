@@ -1,7 +1,7 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
-use crate::common::slug::{resolve_player_page, PlayerPage};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -48,6 +48,7 @@ pub struct PlayerTransfersTemplate {
     pub transfer_status: PlayerTransferStatusDto,
     pub listing: Option<PlayerListingDto>,
     pub interested_clubs: Vec<PlayerInterestedClubDto>,
+    pub monitoring: Vec<PlayerMonitoringDto>,
     pub negotiations: Vec<PlayerNegotiationDto>,
     pub completed: Vec<PlayerCompletedTransferDto>,
 }
@@ -79,6 +80,24 @@ pub struct PlayerNegotiationDto {
 pub struct PlayerInterestedClubDto {
     pub club_name: String,
     pub club_slug: String,
+}
+
+/// Scout-monitoring summary for the player's transfers page. One row
+/// per (scout, club) actively watching this player. Replaces the bare
+/// "interested clubs" list with something that names the scout, shows
+/// observation count, and surfaces meeting status.
+pub struct PlayerMonitoringDto {
+    pub club_name: String,
+    pub club_slug: String,
+    pub scout_name: String,
+    pub scout_id: u32,
+    /// i18n key — "monitoring_status_active", "..._report_ready", etc.
+    pub status_key: String,
+    pub last_observed: String,
+    /// 0..100 percentage for the UI bar.
+    pub confidence_pct: u8,
+    pub times_watched: u16,
+    pub matches_watched: u16,
 }
 
 pub struct PlayerCompletedTransferDto {
@@ -160,7 +179,11 @@ pub async fn player_transfers_action(
         &route_params.lang,
         "/transfers",
     )? {
-        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Found {
+            player,
+            team,
+            canonical_slug,
+        } => (player, team, canonical_slug),
         PlayerPage::Redirect(r) => return Ok(r),
     };
 
@@ -173,7 +196,10 @@ pub async fn player_transfers_action(
         .iter()
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let league_refs: Vec<(&str, &str)> = country_leagues
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
 
     let now = simulator_data.date.date();
 
@@ -198,8 +224,14 @@ pub async fn player_transfers_action(
         .copied()
         .collect();
 
-    let league_rep = team_opt.and_then(|t| t.league_id).and_then(|lid| simulator_data.league(lid)).map(|l| l.reputation).unwrap_or(0);
-    let club_rep = team_opt.map(|t| t.reputation.world).unwrap_or(0);
+    let league_rep = team_opt
+        .and_then(|t| t.league_id)
+        .and_then(|lid| simulator_data.league(lid))
+        .map(|l| l.reputation)
+        .unwrap_or(0);
+    let club_rep = team_opt
+        .map(|t| t.reputation.market_value_score())
+        .unwrap_or(0);
 
     let transfer_status = PlayerTransferStatusDto {
         value: FormattingUtils::format_money(player.value(now, league_rep, club_rep)),
@@ -213,7 +245,10 @@ pub async fn player_transfers_action(
             .iter()
             .map(|s| status_type_to_i18n_key(s).to_string())
             .collect(),
-        reason: player.decision_history.items.last()
+        reason: player
+            .decision_history
+            .items
+            .last()
             .map(|d| i18n.t(&d.decision).to_string())
             .unwrap_or_default(),
     };
@@ -241,19 +276,15 @@ pub async fn player_transfers_action(
                 .filter(|n| {
                     n.player_id == player.id
                         && (n.status == NegotiationStatus::Pending
-                        || n.status == NegotiationStatus::Countered)
+                            || n.status == NegotiationStatus::Countered)
                 })
                 .map(|n| {
                     let buying_club = simulator_data.club(n.buying_club_id);
                     let buying_team = buying_club.and_then(|c| c.teams.teams.first());
 
                     PlayerNegotiationDto {
-                        buying_club_name: buying_team
-                            .map(|t| t.name.clone())
-                            .unwrap_or_default(),
-                        buying_club_slug: buying_team
-                            .map(|t| t.slug.clone())
-                            .unwrap_or_default(),
+                        buying_club_name: buying_team.map(|t| t.name.clone()).unwrap_or_default(),
+                        buying_club_slug: buying_team.map(|t| t.slug.clone()).unwrap_or_default(),
                         offer_amount: FormattingUtils::format_money(
                             n.current_offer.base_fee.amount,
                         ),
@@ -274,6 +305,31 @@ pub async fn player_transfers_action(
         .map(|(_club_id, club_name, team_slug)| PlayerInterestedClubDto {
             club_name,
             club_slug: team_slug,
+        })
+        .collect();
+
+    // Detailed monitoring rows: who is watching the player, with what
+    // status, how often, and how confident the scout is.
+    let monitoring_rows = simulator_data.player_monitoring_details(player.id);
+    let monitoring: Vec<PlayerMonitoringDto> = monitoring_rows
+        .into_iter()
+        .map(|row| PlayerMonitoringDto {
+            club_name: row.club_name,
+            club_slug: row.team_slug,
+            scout_name: row.scout_name.unwrap_or_else(|| {
+                // Fall back to a localized "recruitment department" label
+                // when no specific scout is named on the row.
+                i18n.t("recruitment_department").to_string()
+            }),
+            scout_id: row.scout_staff_id.unwrap_or(0),
+            status_key: format!("monitoring_status_{}", row.status),
+            last_observed: row
+                .last_observed
+                .map(|d| d.format("%d.%m.%Y").to_string())
+                .unwrap_or_default(),
+            confidence_pct: (row.confidence * 100.0).round().clamp(0.0, 100.0) as u8,
+            times_watched: row.times_watched,
+            matches_watched: row.matches_watched,
         })
         .collect();
 
@@ -303,31 +359,39 @@ pub async fn player_transfers_action(
                     core::transfers::TransferType::Free => "transfer_type_free",
                 };
 
-                (t.transfer_date, PlayerCompletedTransferDto {
-                    from_club_name: t.from_team_name.clone(),
-                    from_club_slug: from_slug,
-                    to_club_name: t.to_team_name.clone(),
-                    to_club_slug: to_slug,
-                    fee: if t.fee.amount > 0.0 {
-                        FormattingUtils::format_money(t.fee.amount)
-                    } else {
-                        "Free".to_string()
+                (
+                    t.transfer_date,
+                    PlayerCompletedTransferDto {
+                        from_club_name: t.from_team_name.clone(),
+                        from_club_slug: from_slug,
+                        to_club_name: t.to_team_name.clone(),
+                        to_club_slug: to_slug,
+                        fee: if t.fee.amount > 0.0 {
+                            FormattingUtils::format_money(t.fee.amount)
+                        } else {
+                            "Free".to_string()
+                        },
+                        date: t.transfer_date.format("%d.%m.%Y").to_string(),
+                        transfer_type_key: transfer_type_key.to_string(),
+                        reason: i18n.t(&t.reason).to_string(),
                     },
-                    date: t.transfer_date.format("%d.%m.%Y").to_string(),
-                    transfer_type_key: transfer_type_key.to_string(),
-                    reason: i18n.t(&t.reason).to_string(),
-                })
+                )
             })
             .collect();
         transfers.sort_by(|a, b| b.0.cmp(&a.0));
         // Deduplicate cross-country transfers (stored in both countries' histories)
-        transfers.dedup_by(|a, b| a.0 == b.0 && a.1.from_club_name == b.1.from_club_name && a.1.to_club_name == b.1.to_club_name);
+        transfers.dedup_by(|a, b| {
+            a.0 == b.0
+                && a.1.from_club_name == b.1.from_club_name
+                && a.1.to_club_name == b.1.to_club_name
+        });
         transfers.into_iter().map(|(_, dto)| dto).collect()
     };
 
     let title = format!(
         "{} {}",
-        player.full_name.display_first_name(), player.full_name.display_last_name()
+        player.full_name.display_first_name(),
+        player.full_name.display_last_name()
     );
 
     Ok(PlayerTransfersTemplate {
@@ -343,15 +407,41 @@ pub async fn player_transfers_action(
                 i18n.t("free_agent").to_string()
             }
         }),
-        sub_title_link: team_opt.map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug)).unwrap_or_default(),
+        sub_title_link: team_opt
+            .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
+            .unwrap_or_default(),
         sub_title_country_code: String::new(),
-        header_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.background.clone())).unwrap_or_else(|| "#808080".to_string()),
-        foreground_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.foreground.clone())).unwrap_or_else(|| "#ffffff".to_string()),
+        header_color: team_opt
+            .and_then(|t| {
+                simulator_data
+                    .club(t.club_id)
+                    .map(|c| c.colors.background.clone())
+            })
+            .unwrap_or_else(|| "#808080".to_string()),
+        foreground_color: team_opt
+            .and_then(|t| {
+                simulator_data
+                    .club(t.club_id)
+                    .map(|c| c.colors.foreground.clone())
+            })
+            .unwrap_or_else(|| "#ffffff".to_string()),
         menu_sections: if let Some(team) = team_opt {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
             let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
-            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-            views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main)
+            let mp = views::MenuParams {
+                i18n: &i18n,
+                lang: &route_params.lang,
+                current_path: &current_path,
+                country_name: cn,
+                country_slug: cs,
+            };
+            views::team_menu(
+                &mp,
+                &neighbor_refs,
+                &team.slug,
+                &league_refs,
+                team.team_type == core::TeamType::Main,
+            )
         } else {
             Vec::new()
         },
@@ -369,9 +459,11 @@ pub async fn player_transfers_action(
         transfer_status,
         listing,
         interested_clubs,
+        monitoring,
         negotiations,
         completed,
-    }.into_response())
+    }
+    .into_response())
 }
 
 fn get_neighbor_teams(
@@ -388,7 +480,10 @@ fn get_neighbor_teams(
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
         .map(|country| {
-            country.leagues.leagues.iter()
+            country
+                .leagues
+                .leagues
+                .iter()
                 .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
@@ -398,6 +493,9 @@ fn get_neighbor_teams(
 
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }

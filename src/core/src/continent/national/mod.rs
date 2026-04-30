@@ -70,9 +70,10 @@ impl NationalTeamCompetitions {
             };
 
             // Check if there's already an active competition for this config
-            let already_active = self.competitions.iter().any(|c| {
-                c.config.id == config.id && c.phase != CompetitionPhase::Completed
-            });
+            let already_active = self
+                .competitions
+                .iter()
+                .any(|c| c.config.id == config.id && c.phase != CompetitionPhase::Completed);
 
             if already_active {
                 continue;

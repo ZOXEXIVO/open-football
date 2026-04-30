@@ -77,7 +77,10 @@ impl CoachInstruction {
 
     /// Whether players should prefer keeping possession over attacking
     pub fn prefer_possession(&self) -> bool {
-        matches!(self, CoachInstruction::SlowDown | CoachInstruction::WasteTime | CoachInstruction::ParkTheBus)
+        matches!(
+            self,
+            CoachInstruction::SlowDown | CoachInstruction::WasteTime | CoachInstruction::ParkTheBus
+        )
     }
 }
 
@@ -124,8 +127,8 @@ impl MatchCoach {
     /// Called periodically (every ~500 ticks = ~5 seconds).
     pub fn evaluate(
         &mut self,
-        score_diff: i8, // positive = leading, negative = losing
-        match_progress: f32, // 0.0 = start, 1.0 = end of match
+        score_diff: i8,          // positive = leading, negative = losing
+        match_progress: f32,     // 0.0 = start, 1.0 = end of match
         avg_team_condition: f32, // 0.0-1.0
         current_tick: u64,
     ) {

@@ -70,11 +70,7 @@ impl TeamBehaviour {
                 if b.id == captain_id {
                     continue;
                 }
-                let level_ab = a
-                    .relations
-                    .get_player(b.id)
-                    .map(|r| r.level)
-                    .unwrap_or(0.0);
+                let level_ab = a.relations.get_player(b.id).map(|r| r.level).unwrap_or(0.0);
                 if level_ab > -25.0 {
                     continue;
                 }
@@ -83,8 +79,16 @@ impl TeamBehaviour {
                 // the captain (relation level <= -20), the intervention
                 // lands with half the force; if both already respect
                 // the captain (level >= 30) it lands a quarter harder.
-                let a_to_cap = a.relations.get_player(captain_id).map(|r| r.level).unwrap_or(0.0);
-                let b_to_cap = b.relations.get_player(captain_id).map(|r| r.level).unwrap_or(0.0);
+                let a_to_cap = a
+                    .relations
+                    .get_player(captain_id)
+                    .map(|r| r.level)
+                    .unwrap_or(0.0);
+                let b_to_cap = b
+                    .relations
+                    .get_player(captain_id)
+                    .map(|r| r.level)
+                    .unwrap_or(0.0);
                 let captain_relation_mult = if a_to_cap <= -20.0 || b_to_cap <= -20.0 {
                     0.5
                 } else if a_to_cap >= 30.0 && b_to_cap >= 30.0 {
@@ -96,27 +100,29 @@ impl TeamBehaviour {
                 // bad the relationship is (worse → more visible
                 // intervention, but still small per week).
                 let intensity = ((-level_ab - 25.0) / 75.0).clamp(0.0, 1.0);
-                let nudge = ((strength * 0.4 + intensity * 0.2) * captain_relation_mult)
-                    .clamp(0.0, 0.6);
+                let nudge =
+                    ((strength * 0.4 + intensity * 0.2) * captain_relation_mult).clamp(0.0, 0.6);
                 if nudge < 0.05 {
                     continue;
                 }
-                result.players.relationship_result.push(
-                    PlayerRelationshipChangeResult {
+                result
+                    .players
+                    .relationship_result
+                    .push(PlayerRelationshipChangeResult {
                         from_player_id: a.id,
                         to_player_id: b.id,
                         relationship_change: nudge,
                         change_type: ChangeType::PersonalSupport,
-                    },
-                );
-                result.players.relationship_result.push(
-                    PlayerRelationshipChangeResult {
+                    });
+                result
+                    .players
+                    .relationship_result
+                    .push(PlayerRelationshipChangeResult {
                         from_player_id: b.id,
                         to_player_id: a.id,
                         relationship_change: nudge,
                         change_type: ChangeType::PersonalSupport,
-                    },
-                );
+                    });
                 emitted += 1;
             }
         }
@@ -163,8 +169,8 @@ impl TeamBehaviour {
             .map(|c| c.skills.mental.leadership)
             .unwrap_or(10.0);
         let leadership_scale = (captain_leadership / 20.0).clamp(0.0, 1.0);
-        let base_delta = (captain_morale - 50.0) * 0.02;  // -1..1
-        let delta = base_delta * leadership_scale;        // -1..1 scaled
+        let base_delta = (captain_morale - 50.0) * 0.02; // -1..1
+        let delta = base_delta * leadership_scale; // -1..1 scaled
 
         if delta.abs() < 0.05 {
             return;

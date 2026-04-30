@@ -26,7 +26,13 @@ impl Player {
         coach: &CoachingEffect,
         club_rep_0_to_1: f32,
     ) {
-        self.process_development_with(now, league_reputation, coach, club_rep_0_to_1, &mut ThreadRolls);
+        self.process_development_with(
+            now,
+            league_reputation,
+            coach,
+            club_rep_0_to_1,
+            &mut ThreadRolls,
+        );
     }
 
     /// Same as [`Player::process_development`] but the per-skill rolls

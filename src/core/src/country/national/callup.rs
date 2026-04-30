@@ -8,11 +8,10 @@
 //!    the trimmed pool to fill positional quotas, then `derive_reasons`
 //!    annotates every pick with auditable primary / secondary reasons.
 
-use super::types::{
-    BREAK_WINDOWS, CallUpCandidate, CallUpReason, MIN_REAL_PLAYERS, NationalSquadPlayer,
-    SQUAD_SIZE,
-};
 use super::NationalTeam;
+use super::types::{
+    BREAK_WINDOWS, CallUpCandidate, CallUpReason, MIN_REAL_PLAYERS, NationalSquadPlayer, SQUAD_SIZE,
+};
 use crate::{
     Country, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType, Tactics,
     TeamType,
@@ -133,8 +132,7 @@ impl NationalTeam {
             return None;
         }
 
-        let condition_pct =
-            (player.player_attributes.condition as f32 / 10000.0) * 100.0;
+        let condition_pct = (player.player_attributes.condition as f32 / 10000.0) * 100.0;
 
         let position_levels: Vec<(PlayerPositionType, u8)> = player
             .positions
@@ -190,7 +188,13 @@ impl NationalTeam {
     /// Several frozen items can share a season (mid-season transfer/loan) so
     /// games are summed and rating is weighted by minutes-played.
     pub(super) fn summarise_last_season(player: &Player) -> (u16, f32, u16) {
-        let last_year = match player.statistics_history.items.iter().map(|i| i.season.start_year).max() {
+        let last_year = match player
+            .statistics_history
+            .items
+            .iter()
+            .map(|i| i.season.start_year)
+            .max()
+        {
             Some(y) => y,
             None => return (0, 0.0, 0),
         };
@@ -203,7 +207,10 @@ impl NationalTeam {
             if item.season.start_year != last_year {
                 continue;
             }
-            let games = item.statistics.played.saturating_add(item.statistics.played_subs);
+            let games = item
+                .statistics
+                .played
+                .saturating_add(item.statistics.played_subs);
             apps = apps.saturating_add(games);
             goals = goals.saturating_add(item.statistics.goals);
             if item.statistics.average_rating > 0.0 && games > 0 {
@@ -230,7 +237,9 @@ impl NationalTeam {
         candidates.sort_by(|a, b| {
             let score_a = Self::scouting_score(a);
             let score_b = Self::scouting_score(b);
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         candidates.truncate(Self::MAX_CANDIDATE_POOL);
@@ -303,12 +312,8 @@ impl NationalTeam {
 
         let is_tournament = Self::is_in_tournament_period(date);
 
-        let selected = Self::select_balanced_squad(
-            &candidates,
-            &self.tactics,
-            is_tournament,
-            country_id,
-        );
+        let selected =
+            Self::select_balanced_squad(&candidates, &self.tactics, is_tournament, country_id);
 
         for (idx, reason, secondaries) in &selected {
             let c = &candidates[*idx];
@@ -500,7 +505,7 @@ impl NationalTeam {
         let rating_norm = if effective_rating > 0.0 {
             (effective_rating / 10.0).clamp(0.0, 1.0) * 100.0
         } else {
-            30.0  // No rating = below average assumption
+            30.0 // No rating = below average assumption
         };
         // Games: blend current with last season so a player who was a regular
         // last year but has just 1-2 games this season still scores well.
@@ -556,7 +561,8 @@ impl NationalTeam {
         // and only 1 so far this year is still recognised as a goal-scorer.
         let total_games_f = (candidate.played as f32).max(1.0);
         let blended_goals = candidate.goals as f32 + candidate.last_season_goals as f32 * 0.4;
-        let blended_games = (candidate.played as f32 + candidate.last_season_apps as f32 * 0.4).max(1.0);
+        let blended_games =
+            (candidate.played as f32 + candidate.last_season_apps as f32 * 0.4).max(1.0);
         let goals_per_game = if candidate.played >= 5 {
             candidate.goals as f32 / total_games_f
         } else {
@@ -564,8 +570,8 @@ impl NationalTeam {
         };
         let assists_per_game = candidate.assists as f32 / total_games_f;
         let pom_norm = (candidate.player_of_the_match as f32).min(8.0) / 8.0 * 30.0;
-        let discipline_penalty = candidate.red_cards as f32 * 10.0
-            + candidate.yellow_cards as f32 * 1.5;
+        let discipline_penalty =
+            candidate.red_cards as f32 * 10.0 + candidate.yellow_cards as f32 * 1.5;
 
         let impact_score = match candidate.position_group {
             PlayerFieldPositionGroup::Forward => {
@@ -597,7 +603,13 @@ impl NationalTeam {
         // 10. Coach bias — deterministic per country
         let coach_bias = match country_id % 4 {
             0 => (candidate.international_apps as f32).min(80.0) / 80.0 * 5.0,
-            1 => if candidate.age <= 24 { 5.0 } else { 0.0 },
+            1 => {
+                if candidate.age <= 24 {
+                    5.0
+                } else {
+                    0.0
+                }
+            }
             2 => (candidate.world_reputation.max(0) as f32 / 5000.0).clamp(0.0, 1.0) * 5.0,
             _ => (candidate.leadership / 20.0).clamp(0.0, 1.0) * 5.0,
         };
@@ -664,10 +676,9 @@ impl NationalTeam {
 
         let [gk_quota, def_quota, mid_quota, fwd_quota] = Self::positional_quotas(tactics);
 
-        let desc =
-            |a: &(usize, f32), b: &(usize, f32)| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            };
+        let desc = |a: &(usize, f32), b: &(usize, f32)| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        };
 
         let by_group = |group: PlayerFieldPositionGroup| {
             let mut v: Vec<(usize, f32)> = scored

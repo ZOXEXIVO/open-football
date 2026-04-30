@@ -12,7 +12,7 @@ The goal is not to create another manager game, but to build a realistic simulat
 where football ecosystems can run, develop, and surprise you on their own.
 
 Tired of Football Manager changing its interface, editor workflow, and database format
-every year? 
+every year?
 
 Open Football is built around a stable structure: the interface and data model
 stay familiar while the simulation logic, mechanics, and football intelligence keep
@@ -40,17 +40,6 @@ The project is designed to answer questions like:
 - How does a transfer affect a player's career and a club's future?
 - Can data-driven match simulation produce believable league tables and results?
 - What happens when an entire football world keeps running without intervention?
-
-
-### Single binary with full-functional simulator
-
-You can run it on your local computer with a
-[single binary file](https://github.com/ZOXEXIVO/open-football/releases).
-
-You can run it on your local PC or remote server (and open it with {SERVER_IP}:18000)
-
-<img src=".docs/images/single_binary.png" alt="Open Football Banner" width="900">
-
 
 ## For Football Manager Scouts and Database Editors
 
@@ -114,6 +103,15 @@ finances, and match engine can turn it into success.
 ![Match page](.docs/images/match.jpg "Match page")
 
 ![Match event view](.docs/images/match.avif "Match event view")
+
+### Single binary with full-functional simulator
+
+You can run it on your local computer with a
+[single binary file](https://github.com/ZOXEXIVO/open-football/releases).
+
+You can run it on your local PC or remote server (and open it with {SERVER_IP}:18000)
+
+<img src=".docs/images/single_binary.png" alt="Open Football Banner" width="900">
 
 ## Running Locally
 

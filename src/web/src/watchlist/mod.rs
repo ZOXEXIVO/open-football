@@ -1,18 +1,18 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use core::utils::{DateUtils, FormattingUtils};
 use chrono::NaiveDate;
 use core::Player;
 use core::PlayerPositionType;
 use core::PlayerStatusType;
 use core::SimulatorData;
+use core::utils::{DateUtils, FormattingUtils};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -96,7 +96,10 @@ pub async fn watchlist_page_action(
                 Some(WatchlistPlayerDto {
                     potential_ability: get_potential_ability_stars_by_staff(
                         player,
-                        head_coach.staff_attributes.knowledge.judging_player_potential,
+                        head_coach
+                            .staff_attributes
+                            .knowledge
+                            .judging_player_potential,
                         head_coach.id,
                     ),
                     team_name: team.name.clone(),
@@ -106,7 +109,7 @@ pub async fn watchlist_page_action(
                     value: FormattingUtils::format_money(player.value(
                         now,
                         league.map(|l| l.reputation).unwrap_or(0),
-                        team.reputation.world,
+                        team.reputation.market_value_score(),
                     )),
                     unhappy: !player.happiness.is_happy(),
                     transfer_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
@@ -119,7 +122,11 @@ pub async fn watchlist_page_action(
                     retired: true,
                     ..base_watchlist_dto(player, simulator_data, now)
                 })
-            } else if let Some(player) = simulator_data.free_agents.iter().find(|p| p.id == player_id) {
+            } else if let Some(player) = simulator_data
+                .free_agents
+                .iter()
+                .find(|p| p.id == player_id)
+            {
                 // Player was released to the global free-agent pool (via the
                 // "move to free agent" action) — no team, not retired. Without
                 // this branch the watchlist silently drops him on next render.
@@ -191,7 +198,9 @@ pub async fn watchlist_remove_action(
 
     if let Some(ref mut arc_data) = *guard {
         let simulator_data = Arc::make_mut(arc_data);
-        simulator_data.watchlist.retain(|&id| id != route_params.player_id);
+        simulator_data
+            .watchlist
+            .retain(|&id| id != route_params.player_id);
     }
 
     StatusCode::OK

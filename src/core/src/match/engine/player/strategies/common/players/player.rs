@@ -1,3 +1,7 @@
+use crate::r#match::player::strategies::players::{
+    DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl,
+    ShootingOperationsImpl, SkillOperationsImpl,
+};
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{
     MatchPlayer, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -7,7 +11,6 @@ use crate::{PlayerAttributes, PlayerSkills};
 use nalgebra::Vector3;
 use rand::RngExt;
 use std::sync::OnceLock;
-use crate::r#match::player::strategies::players::{DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl, ShootingOperationsImpl, SkillOperationsImpl};
 
 /// Zero-valued fallback returned by [`PlayerOperationsImpl::skills`] /
 /// [`PlayerOperationsImpl::attributes`] when the requested `player_id`
@@ -151,10 +154,8 @@ impl<'p> PlayerOperationsImpl<'p> {
         let distance_blend = (distance_to_goal / (max_field_distance * 0.3)).clamp(0.0, 1.0);
         let shot_skill = finishing_f * (1.0 - distance_blend) + long_shots_f * distance_blend;
 
-        let base_accuracy = shot_skill * 0.45
-            + technique_f * 0.25
-            + first_touch_f * 0.15
-            + composure_f * 0.15;
+        let base_accuracy =
+            shot_skill * 0.45 + technique_f * 0.25 + first_touch_f * 0.15 + composure_f * 0.15;
 
         // Distance modifier: closer = more accurate (multiplicative, not part of accuracy blend)
         let distance_modifier = if distance_to_goal < 100.0 {
@@ -255,7 +256,11 @@ impl<'p> PlayerOperationsImpl<'p> {
     }
 
     pub fn pass_teammate_power(&self, teammate_id: u32) -> f32 {
-        let distance = self.ctx.tick_context.grid.get(self.ctx.player.id, teammate_id);
+        let distance = self
+            .ctx
+            .tick_context
+            .grid
+            .get(self.ctx.player.id, teammate_id);
 
         let skills = &self.ctx.player.skills;
 
@@ -268,8 +273,8 @@ impl<'p> PlayerOperationsImpl<'p> {
         let vision = skills.mental.vision / 20.0;
         let composure = skills.mental.composure / 20.0;
 
-        let skill_factor = passing * 0.35 + technique * 0.2 + strength * 0.15
-            + vision * 0.15 + composure * 0.15;
+        let skill_factor =
+            passing * 0.35 + technique * 0.2 + strength * 0.15 + vision * 0.15 + composure * 0.15;
 
         // Condition: slight power loss when exhausted (0-10000 scale)
         // Ranges from 0.92 (exhausted) to 1.0 (fresh)
@@ -348,9 +353,8 @@ impl<'p> PlayerOperationsImpl<'p> {
         let shot_skill = finishing * (1.0 - distance_blend) + long_shots * distance_blend;
 
         // Skill multiplier with floor so even low-skill players generate some power
-        let skill_multiplier = 0.2 + 0.8 * (
-            shot_skill * 0.3 + technique * 0.25 + strength * 0.25 + composure * 0.2
-        );
+        let skill_multiplier =
+            0.2 + 0.8 * (shot_skill * 0.3 + technique * 0.25 + strength * 0.25 + composure * 0.2);
 
         // Distance factor: longer shots need more power (1.0 close, up to 1.4 far)
         let distance_ratio = (goal_distance / max_field_distance).clamp(0.0, 1.0);
@@ -452,8 +456,8 @@ impl<'p> PlayerOperationsImpl<'p> {
         // opening they see shrinks. Use the narrower side.
         let near_post_offset = (lateral_offset - GOAL_HALF_WIDTH).max(0.0);
         let far_post_offset = lateral_offset + GOAL_HALF_WIDTH;
-        let visible_opening = (far_post_offset.atan2(x_offset)
-            - near_post_offset.atan2(x_offset)).abs();
+        let visible_opening =
+            (far_post_offset.atan2(x_offset) - near_post_offset.atan2(x_offset)).abs();
         const MIN_SHOOTING_ANGLE_RAD: f32 = 0.21; // ~12°
         if visible_opening < MIN_SHOOTING_ANGLE_RAD {
             return false;
@@ -464,7 +468,11 @@ impl<'p> PlayerOperationsImpl<'p> {
         // relative to the direct line. 5u (~2.5 m) matches "defender
         // breathing on you, but shot still possible"; 8u was
         // shoulder-to-shoulder and rejected nearly every box shot.
-        let immediate_pressure = self.ctx.players().opponents().nearby(5.0)
+        let immediate_pressure = self
+            .ctx
+            .players()
+            .opponents()
+            .nearby(5.0)
             .any(|opp| !opp.tactical_positions.is_goalkeeper());
         if immediate_pressure {
             return false;
@@ -475,7 +483,11 @@ impl<'p> PlayerOperationsImpl<'p> {
         let check_distance = distance_to_goal * 0.80;
 
         // Count blockers along the shot path.
-        let blockers = self.ctx.players().opponents().all()
+        let blockers = self
+            .ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|opp| {
                 if opp.tactical_positions.is_goalkeeper() {
                     return false;
@@ -491,7 +503,7 @@ impl<'p> PlayerOperationsImpl<'p> {
                 let closest_point = player_position + direction_to_goal * projection;
                 let perp_distance = ((opp.position.x - closest_point.x).powi(2)
                     + (opp.position.y - closest_point.y).powi(2))
-                    .sqrt();
+                .sqrt();
 
                 let opp_skills = self.skills(opp.id);
                 let def_quality = (opp_skills.technical.marking

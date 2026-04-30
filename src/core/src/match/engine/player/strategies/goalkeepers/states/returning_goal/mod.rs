@@ -46,7 +46,6 @@ impl StateProcessingHandler for GoalkeeperReturningGoalState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {

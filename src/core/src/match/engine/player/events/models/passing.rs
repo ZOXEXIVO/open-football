@@ -11,7 +11,7 @@ pub struct PassingEventContext {
 }
 
 impl PassingEventContext {
-    pub fn new() -> PassingEventBuilder{
+    pub fn new() -> PassingEventBuilder {
         PassingEventBuilder::new()
     }
 }
@@ -66,7 +66,9 @@ impl PassingEventBuilder {
             from_player_id: self.from_player_id.unwrap(),
             to_player_id,
             pass_target: ctx.tick_context.positions.players.position(to_player_id),
-            pass_force: self.pass_force.unwrap_or_else(|| ctx.player().pass_teammate_power(to_player_id)),
+            pass_force: self
+                .pass_force
+                .unwrap_or_else(|| ctx.player().pass_teammate_power(to_player_id)),
             reason: self.reason.unwrap_or("No reason specified"),
         }
     }

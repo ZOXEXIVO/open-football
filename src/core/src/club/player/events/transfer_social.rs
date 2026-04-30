@@ -35,20 +35,14 @@ impl Player {
             // proper "wanted by a bigger club" event, not a generic
             // manager talk.
             let mag = 1.0 + (rep_diff - 0.1).clamp(0.0, 0.6) * 4.0;
-            self.happiness.add_event_with_cooldown(
-                HappinessEventType::WantedByBiggerClub,
-                mag,
-                14,
-            );
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::WantedByBiggerClub, mag, 14);
         } else {
             // Settled player disrupted by headline-grabbing rumour —
             // tabloid drama, modelled as media noise.
             let mag = -(0.5 + (rep_diff - 0.1).clamp(0.0, 0.4) * 2.0);
-            self.happiness.add_event_with_cooldown(
-                HappinessEventType::MediaCriticism,
-                mag,
-                14,
-            );
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::MediaCriticism, mag, 14);
         }
     }
 
@@ -154,7 +148,11 @@ impl Player {
         // Bond strength: 65→1.0, 100→1.4
         let bond = ((bond_friendship - 65.0).clamp(0.0, 35.0) / 35.0) * 0.4 + 1.0;
         let nat_mul = if same_nationality { 1.20 } else { 1.0 };
-        let rep_mul = if departing_was_high_reputation { 1.15 } else { 1.0 };
+        let rep_mul = if departing_was_high_reputation {
+            1.15
+        } else {
+            1.0
+        };
         let mag = base * bond * nat_mul * rep_mul;
         self.happiness.add_event_with_partner_and_cooldown(
             HappinessEventType::CloseFriendSold,

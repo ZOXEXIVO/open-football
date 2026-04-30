@@ -113,7 +113,9 @@ impl PlayerFieldData {
                 let idx = self.len;
                 self.items[idx] = PlayerFieldMetadata {
                     player_id: p.id,
-                    side: p.side.unwrap_or_else(|| panic!("unknown player side, player_id = {}", p.id)),
+                    side: p
+                        .side
+                        .unwrap_or_else(|| panic!("unknown player side, player_id = {}", p.id)),
                     position: p.position,
                     velocity: p.velocity,
                 };
@@ -122,7 +124,12 @@ impl PlayerFieldData {
             }
         } else {
             // Fast path: only update positions and velocities in-place
-            for (i, p) in field.players.iter().chain(field.substitutes.iter()).enumerate() {
+            for (i, p) in field
+                .players
+                .iter()
+                .chain(field.substitutes.iter())
+                .enumerate()
+            {
                 self.items[i].position = p.position;
                 self.items[i].velocity = p.velocity;
             }

@@ -1,9 +1,12 @@
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
-use crate::PlayerFieldPositionGroup;
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler,
+};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -28,7 +31,7 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(teammate.id)
                         .with_reason("GK_DISTRIBUTING")
-                        .build(ctx)
+                        .build(ctx),
                 )),
             ));
         }
@@ -45,7 +48,6 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
         // The goalkeeper should not be trying to catch the ball since they already have it
         None
     }
-
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))
@@ -74,7 +76,10 @@ impl GoalkeeperDistributingState {
     /// Unit scale: 1u = 0.125m, field 840u = 105m. The halfway line
     /// sits at x = field_width/2. A GK at x ≈ 20u kicks towards x ≈ 420u
     /// (~50m), matching a real goal kick.
-    fn find_best_pass_option<'a>(&'a self, ctx: &'a StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
+    fn find_best_pass_option<'a>(
+        &'a self,
+        ctx: &'a StateProcessingContext<'a>,
+    ) -> Option<MatchPlayerLite> {
         const MAX_SEARCH: f32 = 560.0; // ~70m, elite GK punt
         const MIN_RECEIVE_DISTANCE: f32 = 30.0; // no back-passes / tap-outs
         const BLOCK_CORRIDOR: f32 = 8.0; // lane width for interception check
@@ -86,7 +91,8 @@ impl GoalkeeperDistributingState {
         let mut best_score = 0.0;
 
         for teammate in ctx.players().teammates().nearby(MAX_SEARCH) {
-            if teammate.tactical_positions.position_group() == PlayerFieldPositionGroup::Goalkeeper {
+            if teammate.tactical_positions.position_group() == PlayerFieldPositionGroup::Goalkeeper
+            {
                 continue;
             }
             let distance = (teammate.position - ctx.player.position).norm();
@@ -111,7 +117,9 @@ impl GoalkeeperDistributingState {
             let blocked = ctx.players().opponents().all().any(|opp| {
                 let to_opp = opp.position - ctx.player.position;
                 let proj = to_opp.dot(&pass_dir);
-                if proj < 10.0 || proj > distance { return false; }
+                if proj < 10.0 || proj > distance {
+                    return false;
+                }
                 let proj_pt = ctx.player.position + pass_dir * proj;
                 (opp.position - proj_pt).norm() < BLOCK_CORRIDOR
             });

@@ -1,5 +1,5 @@
-use chrono::prelude::*;
 use chrono::NaiveDate;
+use chrono::prelude::*;
 
 pub struct DateUtils;
 

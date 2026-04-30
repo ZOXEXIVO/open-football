@@ -1,6 +1,6 @@
+use crate::Staff;
 use crate::club::staff::attributes::StaffCoaching;
 use crate::club::staff::staff::CoachingStyle;
-use crate::Staff;
 
 // ─── PerceptionLens ─────────────────────────────────────────────────
 
@@ -17,11 +17,11 @@ pub struct PerceptionLens {
 impl PerceptionLens {
     pub fn from_style_and_staff(style: &CoachingStyle, coaching: &StaffCoaching) -> Self {
         let (tech_w, mental_w, phys_w, atk_focus, creat_focus, phys_focus) = match style {
-            CoachingStyle::Tactical         => (0.30, 0.45, 0.25, 0.5, 0.3, 0.4),
-            CoachingStyle::Authoritarian    => (0.30, 0.40, 0.30, 0.4, 0.2, 0.7),
+            CoachingStyle::Tactical => (0.30, 0.45, 0.25, 0.5, 0.3, 0.4),
+            CoachingStyle::Authoritarian => (0.30, 0.40, 0.30, 0.4, 0.2, 0.7),
             CoachingStyle::Transformational => (0.40, 0.35, 0.25, 0.6, 0.8, 0.3),
-            CoachingStyle::Democratic       => (0.35, 0.35, 0.30, 0.5, 0.5, 0.5),
-            CoachingStyle::LaissezFaire     => (0.35, 0.30, 0.35, 0.6, 0.7, 0.6),
+            CoachingStyle::Democratic => (0.35, 0.35, 0.30, 0.5, 0.5, 0.5),
+            CoachingStyle::LaissezFaire => (0.35, 0.30, 0.35, 0.6, 0.7, 0.6),
         };
 
         let atk_def_ratio = if coaching.attacking + coaching.defending > 0 {
@@ -99,20 +99,18 @@ impl CoachProfile {
             CoachingStyle::Democratic => -0.05,
             _ => 0.0,
         };
-        let confirmation_bias = (determination_norm * 0.4
-            + (1.0 - adaptability_norm) * 0.6
-            + conf_style_mod)
-            .clamp(0.0, 1.0);
+        let confirmation_bias =
+            (determination_norm * 0.4 + (1.0 - adaptability_norm) * 0.6 + conf_style_mod)
+                .clamp(0.0, 1.0);
 
         let neg_style_mod = match staff.coaching_style {
             CoachingStyle::Authoritarian => 0.15,
             CoachingStyle::Transformational => -0.1,
             _ => 0.0,
         };
-        let negativity_bias = (discipline_norm * 0.5
-            + (1.0 - man_management_norm) * 0.5
-            + neg_style_mod)
-            .clamp(0.0, 1.0);
+        let negativity_bias =
+            (discipline_norm * 0.5 + (1.0 - man_management_norm) * 0.5 + neg_style_mod)
+                .clamp(0.0, 1.0);
 
         let phys_style_base = match staff.coaching_style {
             CoachingStyle::Authoritarian => 0.7,
@@ -152,9 +150,8 @@ impl CoachProfile {
             CoachingStyle::LaissezFaire => 0.15,
             _ => 0.0,
         };
-        let tactical_blindness = (1.0 - coaching.tactical as f32 / 20.0 * 0.7
-            + tact_style_mod)
-            .clamp(0.0, 0.8);
+        let tactical_blindness =
+            (1.0 - coaching.tactical as f32 / 20.0 * 0.7 + tact_style_mod).clamp(0.0, 0.8);
 
         let recency_style_mod = match staff.coaching_style {
             CoachingStyle::LaissezFaire => 0.1,

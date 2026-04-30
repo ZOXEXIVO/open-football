@@ -1,6 +1,6 @@
 use crate::r#match::engine::player::strategies::common::{
-    ActivityIntensityConfig, ConditionProcessor,
-    LOW_CONDITION_THRESHOLD, FIELD_PLAYER_JADEDNESS_INTERVAL, JADEDNESS_INCREMENT,
+    ActivityIntensityConfig, ConditionProcessor, FIELD_PLAYER_JADEDNESS_INTERVAL,
+    JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
 };
 
 /// Forward-specific activity intensity configuration

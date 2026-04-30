@@ -47,8 +47,7 @@ impl TeamReputation {
     /// site so they stop reading just `world` and flattening domestic
     /// strength.
     pub fn market_value_score(&self) -> u16 {
-        let blended =
-            self.home as f32 * 0.2 + self.national as f32 * 0.3 + self.world as f32 * 0.5;
+        let blended = self.home as f32 * 0.2 + self.national as f32 * 0.3 + self.world as f32 * 0.5;
         blended.round().clamp(0.0, 10000.0) as u16
     }
 
@@ -90,7 +89,7 @@ impl TeamReputation {
                 national: self.national,
                 world: self.world,
                 overall: self.overall_score(),
-            }
+            },
         );
 
         // Decay old factors
@@ -153,10 +152,10 @@ impl TeamReputation {
     pub fn apply_monthly_decay(&mut self) {
         // Reputation slowly decays without achievements
         let decay_rate = match self.level() {
-            ReputationLevel::Elite => 0.995,       // Slower decay for elite teams
+            ReputationLevel::Elite => 0.995, // Slower decay for elite teams
             ReputationLevel::Continental => 0.993,
             ReputationLevel::National => 0.990,
-            _ => 0.988,                           // Faster decay for lower reputation
+            _ => 0.988, // Faster decay for lower reputation
         };
 
         if self.momentum.current < 0.0 {
@@ -181,11 +180,13 @@ impl TeamReputation {
         for result in results {
             let result_value = match result.outcome {
                 MatchOutcome::Win => {
-                    let opponent_factor = result.opponent_reputation as f32 / self.overall_score().max(100.0);
+                    let opponent_factor =
+                        result.opponent_reputation as f32 / self.overall_score().max(100.0);
                     0.03 * opponent_factor
                 }
                 MatchOutcome::Draw => {
-                    let opponent_factor = result.opponent_reputation as f32 / self.overall_score().max(100.0);
+                    let opponent_factor =
+                        result.opponent_reputation as f32 / self.overall_score().max(100.0);
                     0.01 * opponent_factor - 0.005
                 }
                 MatchOutcome::Loss => {
@@ -217,7 +218,7 @@ impl TeamReputation {
             p if p <= 0.25 => 0.01,  // Top 25%
             p if p <= 0.5 => 0.0,    // Top 50%
             p if p <= 0.75 => -0.01, // Bottom 50%
-            _ => -0.02,               // Bottom 25%
+            _ => -0.02,              // Bottom 25%
         }
     }
 
@@ -257,9 +258,9 @@ impl TeamReputation {
 
     /// Check if reputation meets requirements
     pub fn meets_requirements(&self, requirements: &ReputationRequirements) -> bool {
-        self.home >= requirements.min_home &&
-            self.national >= requirements.min_national &&
-            self.world >= requirements.min_world
+        self.home >= requirements.min_home
+            && self.national >= requirements.min_national
+            && self.world >= requirements.min_world
     }
 
     /// Get attractiveness factor for transfers/signings
@@ -344,18 +345,24 @@ impl ReputationHistory {
             return ReputationTrend::Stable;
         }
 
-        let recent_avg = self.snapshots.iter()
+        let recent_avg = self
+            .snapshots
+            .iter()
             .rev()
             .take(4)
             .map(|(_, s)| s.overall)
-            .sum::<f32>() / 4.0;
+            .sum::<f32>()
+            / 4.0;
 
-        let older_avg = self.snapshots.iter()
+        let older_avg = self
+            .snapshots
+            .iter()
             .rev()
             .skip(4)
             .take(4)
             .map(|(_, s)| s.overall)
-            .sum::<f32>() / 4.0;
+            .sum::<f32>()
+            / 4.0;
 
         let change = recent_avg - older_avg;
 
@@ -557,7 +564,7 @@ mod tests {
         let achievement = Achievement::new(
             AchievementType::LeagueTitle,
             NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            8
+            8,
         );
 
         rep.process_achievement(achievement);
@@ -583,7 +590,12 @@ mod tests {
             },
         ];
 
-        rep.process_weekly_update(&results, 3, 20, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+        rep.process_weekly_update(
+            &results,
+            3,
+            20,
+            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        );
 
         assert!(rep.momentum.current > 0.0);
     }
@@ -597,7 +609,7 @@ mod tests {
         rep.process_achievement(Achievement::new(
             AchievementType::ContinentalTrophy,
             NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            10
+            10,
         ));
 
         let new_attractiveness = rep.attractiveness_factor();

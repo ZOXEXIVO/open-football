@@ -1,14 +1,12 @@
 use crate::{Player, PlayerCollectionResult, SimulatorData};
 
 pub struct ClubAcademyResult {
-    pub players: PlayerCollectionResult
+    pub players: PlayerCollectionResult,
 }
 
 impl ClubAcademyResult {
     pub fn new(players: PlayerCollectionResult) -> Self {
-        ClubAcademyResult {
-            players
-        }
+        ClubAcademyResult { players }
     }
 
     pub fn process(&self, _: &mut SimulatorData) {}

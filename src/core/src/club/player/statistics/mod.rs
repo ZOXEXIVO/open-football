@@ -1,6 +1,6 @@
-pub(crate) mod types;
 mod history;
 mod processing;
+pub(crate) mod types;
 
-pub use types::*;
 pub use history::*;
+pub use types::*;

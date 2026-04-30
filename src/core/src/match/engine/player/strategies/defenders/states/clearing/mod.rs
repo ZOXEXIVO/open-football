@@ -1,8 +1,8 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::PlayerSide;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::state::PlayerState;
-use crate::r#match::player::PlayerSide;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -34,7 +34,8 @@ impl StateProcessingHandler for DefenderClearingState {
         let at_right_boundary = ball_position.x >= field_width - BOUNDARY_THRESHOLD;
         let at_top_boundary = ball_position.y >= field_height - BOUNDARY_THRESHOLD;
         let at_bottom_boundary = ball_position.y <= BOUNDARY_THRESHOLD;
-        let at_boundary = at_left_boundary || at_right_boundary || at_top_boundary || at_bottom_boundary;
+        let at_boundary =
+            at_left_boundary || at_right_boundary || at_top_boundary || at_bottom_boundary;
 
         // Determine clearance direction based on player's side (always clear AWAY from own goal)
         let is_left_side = ctx.player.side == Some(PlayerSide::Left);
@@ -68,11 +69,7 @@ impl StateProcessingHandler for DefenderClearingState {
         let z_velocity = if at_boundary { 6.0 } else { 5.0 };
 
         // Combine horizontal and vertical components
-        let ball_velocity = Vector3::new(
-            horizontal_velocity.x,
-            horizontal_velocity.y,
-            z_velocity,
-        );
+        let ball_velocity = Vector3::new(horizontal_velocity.x, horizontal_velocity.y, z_velocity);
 
         // Add the clear ball event with the calculated velocity
         state
@@ -82,7 +79,6 @@ impl StateProcessingHandler for DefenderClearingState {
         // Return the updated state with the clearing event
         Some(state)
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;

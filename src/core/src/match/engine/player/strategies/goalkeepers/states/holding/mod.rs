@@ -23,7 +23,8 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
         // After holding for a skill-based duration, transition to distribute the ball
         // Better decision-makers distribute faster
         let decision = ctx.player.skills.mental.decisions / 20.0;
-        let holding_duration = MAX_HOLDING_DURATION - ((MAX_HOLDING_DURATION - MIN_HOLDING_DURATION) as f32 * decision) as u64;
+        let holding_duration = MAX_HOLDING_DURATION
+            - ((MAX_HOLDING_DURATION - MIN_HOLDING_DURATION) as f32 * decision) as u64;
         if ctx.in_state_time >= holding_duration {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Distributing,
@@ -35,7 +36,6 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
         // they already possess
         None
     }
-
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

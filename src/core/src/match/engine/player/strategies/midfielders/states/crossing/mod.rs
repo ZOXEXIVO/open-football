@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -47,7 +47,6 @@ impl StateProcessingHandler for MidfielderCrossingState {
         None
     }
 
-
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Stationary while preparing the cross
         Some(Vector3::new(0.0, 0.0, 0.0))
@@ -89,7 +88,10 @@ impl MidfielderCrossingState {
             let pass_distance = pass_vector.magnitude();
             let pass_direction = pass_vector.normalize();
 
-            let opponents_in_path = ctx.players().opponents().all()
+            let opponents_in_path = ctx
+                .players()
+                .opponents()
+                .all()
                 .filter(|opponent| {
                     let to_opponent = opponent.position - ctx.player.position;
                     let projection = to_opponent.dot(&pass_direction);
@@ -115,9 +117,7 @@ impl MidfielderCrossingState {
             };
 
             // Penalize targets with tight marking
-            let close_opponents = ctx.tick_context.grid
-                .opponents(teammate.id, 8.0)
-                .count();
+            let close_opponents = ctx.tick_context.grid.opponents(teammate.id, 8.0).count();
             let marking_penalty = match close_opponents {
                 0 => 1.0,
                 1 => 0.6,
@@ -127,7 +127,8 @@ impl MidfielderCrossingState {
             // Reduce score if 1 opponent in cross path
             let path_penalty = if opponents_in_path == 1 { 0.6 } else { 1.0 };
 
-            let score = (heading_skill + (150.0 - dist_to_goal) / 10.0) * marking_penalty * path_penalty;
+            let score =
+                (heading_skill + (150.0 - dist_to_goal) / 10.0) * marking_penalty * path_penalty;
 
             if let Some((_, best_score)) = &best_target {
                 if score > *best_score {

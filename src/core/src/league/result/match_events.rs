@@ -1,13 +1,13 @@
 use super::LeagueResult;
+use crate::club::StaffPosition;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::{MatchOutcome, MatchParticipation};
 use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
 };
 use crate::club::team::team_talks::{
-    apply_team_talk_dated, MatchPhase, TeamTalkContext, TeamTalkTone,
+    MatchPhase, TeamTalkContext, TeamTalkTone, apply_team_talk_dated,
 };
-use crate::club::StaffPosition;
 use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, EUROPA_LEAGUE_ID};
 use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
@@ -230,9 +230,7 @@ impl LeagueResult {
                             .clubs
                             .iter()
                             .find(|c| c.id == current_club_id)
-                            .map(|club| {
-                                PlayerValuationCalculator::seller_context(country, club)
-                            })
+                            .map(|club| PlayerValuationCalculator::seller_context(country, club))
                     })
                     .unwrap_or((0, 0));
                 let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
@@ -905,10 +903,7 @@ impl LeagueResult {
                                 magnitude: 0.10,
                                 event: None,
                             });
-                        } else if p.controversy >= 14.0
-                            && motm_controversy >= 11.0
-                            && same_group
-                        {
+                        } else if p.controversy >= 14.0 && motm_controversy >= 11.0 && same_group {
                             updates.push(Update {
                                 from: p.id,
                                 to: motm,
@@ -954,10 +949,14 @@ impl LeagueResult {
                     } else {
                         RelationshipChange::negative(upd.change_type, signed.abs())
                     };
-                    player.relations.update_player_relationship(upd.to, change, now);
+                    player
+                        .relations
+                        .update_player_relationship(upd.to, change, now);
                     if let Some((kind, mag)) = upd.event {
                         if bump_event(&mut event_budget, upd.from) {
-                            player.happiness.add_event_with_partner(kind, mag, Some(upd.to));
+                            player
+                                .happiness
+                                .add_event_with_partner(kind, mag, Some(upd.to));
                         }
                     }
                 }

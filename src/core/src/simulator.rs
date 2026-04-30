@@ -1,15 +1,15 @@
 use crate::ai::{Ai, AiBatchProcessor};
 use crate::club::ai::apply_ai_responses;
 use crate::club::board::manager_market;
-use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::competitions::GlobalCompetitions;
+use crate::competitions::simulation::GlobalCompetitionSimulator;
+use crate::config::SimulatorConfig;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::national::world as national_world;
 use crate::continent::{Continent, ContinentResult};
 use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
-use crate::config::SimulatorConfig;
 use crate::transfers::TransferPool;
 use crate::utils::random::engine as rng_engine;
 use crate::{Player, Staff, TeamInfo};
@@ -97,7 +97,8 @@ impl FootballSimulator {
             current_date.date(),
         );
         for match_result in &national_match_results {
-            data.match_store.push(match_result.clone(), current_date.date());
+            data.match_store
+                .push(match_result.clone(), current_date.date());
         }
         result.match_results.extend(national_match_results);
 
@@ -238,8 +239,7 @@ pub struct SimulatorData {
     /// requesting-club ↔ candidate ↔ source-club triplet that
     /// progresses through `ApproachState` over ~5 daily ticks before
     /// either resolving in a signing (with cascade) or being rejected.
-    pub pending_manager_approaches:
-        Vec<crate::club::board::manager_market::ManagerApproach>,
+    pub pending_manager_approaches: Vec<crate::club::board::manager_market::ManagerApproach>,
 
     pub watchlist: Vec<u32>,
 
@@ -284,18 +284,28 @@ impl SimulatorData {
     /// before the first `simulate()` call. A nationality lookup that misses
     /// returns `None` silently, so a forgotten generator step manifests as
     /// blank flags / empty country names in the UI rather than a panic.
-    pub fn new(date: NaiveDateTime, continents: Vec<Continent>, global_competitions: GlobalCompetitions) -> Self {
+    pub fn new(
+        date: NaiveDateTime,
+        continents: Vec<Continent>,
+        global_competitions: GlobalCompetitions,
+    ) -> Self {
         // Build country_info from simulation participants
-        let country_info: HashMap<u32, CountryInfo> = continents.iter()
+        let country_info: HashMap<u32, CountryInfo> = continents
+            .iter()
             .flat_map(|cont| &cont.countries)
-            .map(|c| (c.id, CountryInfo {
-                id: c.id,
-                code: c.code.clone(),
-                slug: c.slug.clone(),
-                name: c.name.clone(),
-                continent_id: c.continent_id,
-                reputation: c.reputation,
-            }))
+            .map(|c| {
+                (
+                    c.id,
+                    CountryInfo {
+                        id: c.id,
+                        code: c.code.clone(),
+                        slug: c.slug.clone(),
+                        name: c.name.clone(),
+                        continent_id: c.continent_id,
+                        reputation: c.reputation,
+                    },
+                )
+            })
             .collect();
 
         let mut data = SimulatorData {
@@ -327,8 +337,23 @@ impl SimulatorData {
 
     /// Register country info for countries that may not have active leagues in the simulation.
     /// Called by the database generator to ensure nationality lookups always succeed.
-    pub fn add_country_info(&mut self, id: u32, code: String, slug: String, name: String, continent_id: u32, reputation: u16) {
-        self.country_info.entry(id).or_insert(CountryInfo { id, code, slug, name, continent_id, reputation });
+    pub fn add_country_info(
+        &mut self,
+        id: u32,
+        code: String,
+        slug: String,
+        name: String,
+        continent_id: u32,
+        reputation: u16,
+    ) {
+        self.country_info.entry(id).or_insert(CountryInfo {
+            id,
+            code,
+            slug,
+            name,
+            continent_id,
+            reputation,
+        });
     }
 
     /// Walk every player slot in the simulator and bump the procedural id
@@ -474,9 +499,9 @@ impl SimulatorData {
     /// removed from team rosters by the retirement pipeline). Sets
     /// `dirty_player_index` so the next index rebuild picks up the moves.
     pub fn sweep_released_to_free_agents(&mut self) {
+        use crate::PlayerStatusType;
         use crate::shared::{Currency, CurrencyValue};
         use crate::transfers::{CompletedTransfer, TransferType};
-        use crate::PlayerStatusType;
 
         let date = self.date.date();
         let mut released: Vec<Player> = Vec::new();
@@ -582,10 +607,7 @@ impl SimulatorData {
         }
 
         // Apply Int status across every club in every continent.
-        crate::NationalTeam::apply_callup_statuses_across_world(
-            &mut self.continents,
-            date,
-        );
+        crate::NationalTeam::apply_callup_statuses_across_world(&mut self.continents, date);
     }
 
     /// World-level Int release. Runs after all matches (continent
@@ -595,8 +617,8 @@ impl SimulatorData {
     /// the per-player Int flag is cleared.
     pub fn process_world_national_team_release(&mut self) {
         let date = self.date.date();
-        let need_release = crate::NationalTeam::is_break_end(date)
-            || crate::NationalTeam::is_tournament_end(date);
+        let need_release =
+            crate::NationalTeam::is_break_end(date) || crate::NationalTeam::is_tournament_end(date);
         if !need_release {
             return;
         }
@@ -664,8 +686,7 @@ fn settle_parent_residual_loan_wages(data: &mut SimulatorData) {
                         };
                         let parent_annual = parent_contract.salary;
                         let borrower_annual = loan.salary;
-                        let residual_annual =
-                            parent_annual.saturating_sub(borrower_annual);
+                        let residual_annual = parent_annual.saturating_sub(borrower_annual);
                         if residual_annual == 0 {
                             continue;
                         }
@@ -720,9 +741,7 @@ fn build_league_lookup(country: &crate::Country) -> HashMap<u32, (String, String
 /// True if any team in the club has at least one player needing a current-
 /// season seed entry. Cheap traversal — exits as soon as one is found.
 fn club_has_players_needing_seed(club: &crate::Club) -> bool {
-    club.teams
-        .iter()
-        .any(|t| team_has_players_needing_seed(t))
+    club.teams.iter().any(|t| team_has_players_needing_seed(t))
 }
 
 fn team_has_players_needing_seed(team: &crate::club::Team) -> bool {
@@ -746,10 +765,7 @@ struct ClubSeedingContext {
 }
 
 impl ClubSeedingContext {
-    fn resolve(
-        club: &crate::Club,
-        league_lookup: &HashMap<u32, (String, String)>,
-    ) -> Self {
+    fn resolve(club: &crate::Club, league_lookup: &HashMap<u32, (String, String)>) -> Self {
         let main_team = club.teams.main();
         let main_name = main_team.map(|t| t.name.clone());
         let main_slug = main_team.map(|t| t.slug.clone());
@@ -780,9 +796,7 @@ impl ClubSeedingContext {
                 .league_id
                 .and_then(|lid| self.league_lookup.get(&lid))
                 .cloned()
-                .unwrap_or_else(|| {
-                    (self.main_league_name.clone(), self.main_league_slug.clone())
-                });
+                .unwrap_or_else(|| (self.main_league_name.clone(), self.main_league_slug.clone()));
             TeamInfo {
                 name: team.name.clone(),
                 slug: team.slug.clone(),

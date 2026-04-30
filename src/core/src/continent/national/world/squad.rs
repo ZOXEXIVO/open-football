@@ -59,7 +59,11 @@ pub fn build_world_match_squad(
         .collect();
 
     let country = country_lookup(continents, country_id)?;
-    Some(country.national_team.build_match_squad_from_refs(&all_clubs))
+    Some(
+        country
+            .national_team
+            .build_match_squad_from_refs(&all_clubs),
+    )
 }
 
 /// World-aware emergency call-up. Builds a candidate pool from every
@@ -67,11 +71,7 @@ pub fn build_world_match_squad(
 /// fans the Int status out across the whole world (so a foreign-based
 /// selectee at a Spanish club ends up flagged correctly even when
 /// their nation sits on a different continent).
-fn emergency_world_callup(
-    continents: &mut [Continent],
-    country_id: u32,
-    date: NaiveDate,
-) {
+fn emergency_world_callup(continents: &mut [Continent], country_id: u32, date: NaiveDate) {
     EMERGENCY_CALLUPS.fetch_add(1, Ordering::Relaxed);
 
     let country_name = country_lookup(continents, country_id)
@@ -93,7 +93,9 @@ fn emergency_world_callup(
         continents.iter().flat_map(|c| c.countries.iter()),
         date,
     );
-    let candidates = candidates_by_country.remove(&country_id).unwrap_or_default();
+    let candidates = candidates_by_country
+        .remove(&country_id)
+        .unwrap_or_default();
 
     if let Some(country) = country_lookup_mut(continents, country_id) {
         country.national_team.country_name = country.name.clone();

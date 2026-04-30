@@ -130,7 +130,6 @@ impl Schedule {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct ScheduleError {
     pub message: String,
@@ -351,7 +350,8 @@ mod tests {
             id: "".to_string(),
             league_id: 0,
             league_slug: "slug".to_string(),
-            date: NaiveDate::from_ymd_opt(2024, 3, 16).unwrap()
+            date: NaiveDate::from_ymd_opt(2024, 3, 16)
+                .unwrap()
                 .and_hms_opt(0, 0, 0)
                 .unwrap(),
             home_team_id: 0,

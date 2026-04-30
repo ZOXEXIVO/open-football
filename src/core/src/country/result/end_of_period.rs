@@ -1,13 +1,13 @@
-use chrono::{Datelike, NaiveDate};
-use log::{debug, info};
 use super::CountryResult;
-use crate::utils::{DateUtils, IntegerUtils};
 use crate::club::team::reputation::{Achievement, AchievementType};
+use crate::simulator::SimulatorData;
+use crate::utils::{DateUtils, IntegerUtils};
 use crate::{
     ClubResult, Country, HappinessEventType, Person, Player, PlayerHappiness, PlayerStatusType,
     StaffPosition, TeamInfo, TeamType,
 };
-use crate::simulator::SimulatorData;
+use chrono::{Datelike, NaiveDate};
+use log::{debug, info};
 use std::collections::HashMap;
 
 struct LoanReturnEvent {
@@ -25,7 +25,8 @@ impl CountryResult {
         club_results: &[ClubResult],
     ) {
         // Get season dates from league settings
-        let season = data.country(country_id)
+        let season = data
+            .country(country_id)
             .map(|c| c.season_dates())
             .unwrap_or_default();
 
@@ -64,16 +65,23 @@ impl CountryResult {
         // non-friendly league in the country has finished its season. Using
         // the tier-1 end date alone can fire before lower tiers are done,
         // leaving their final_table empty and silently skipping the swap.
-        let latest_end_month = data.country(country_id)
+        let latest_end_month = data
+            .country(country_id)
             .map(|c| {
-                c.leagues.leagues.iter()
+                c.leagues
+                    .leagues
+                    .iter()
                     .filter(|l| !l.friendly)
                     .map(|l| l.settings.season_ending_half.to_month)
                     .max()
                     .unwrap_or(season.end_month)
             })
             .unwrap_or(season.end_month);
-        let promo_month = if latest_end_month == 12 { 1u8 } else { latest_end_month + 1 };
+        let promo_month = if latest_end_month == 12 {
+            1u8
+        } else {
+            latest_end_month + 1
+        };
         if DateUtils::is_month_beginning(date) && date.month() as u8 == promo_month {
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_promotion_relegation(country, date);
@@ -96,19 +104,15 @@ impl CountryResult {
         }
     }
 
-    fn process_season_awards(
-        country: &mut Country,
-        _club_results: &[ClubResult],
-        date: NaiveDate,
-    ) {
+    fn process_season_awards(country: &mut Country, _club_results: &[ClubResult], date: NaiveDate) {
         debug!("Processing season awards");
 
         // Build team_id -> club index mapping
-        let team_to_club: HashMap<u32, usize> = country.clubs.iter()
+        let team_to_club: HashMap<u32, usize> = country
+            .clubs
+            .iter()
             .enumerate()
-            .flat_map(|(ci, club)| {
-                club.teams.iter().map(move |t| (t.id, ci))
-            })
+            .flat_map(|(ci, club)| club.teams.iter().map(move |t| (t.id, ci)))
             .collect();
 
         // Trophy reputation boost: league champions and promoted sides get
@@ -322,7 +326,10 @@ impl CountryResult {
             if tv > 0 {
                 club.finance.balance.push_income_tv(tv);
             }
-            debug!("Season awards: {} - prize: ${}, TV: ${}", club.name, prize, tv);
+            debug!(
+                "Season awards: {} - prize: ${}, TV: ${}",
+                club.name, prize, tv
+            );
         }
 
         // Per-player season events. One pass over the (team_id, event,
@@ -368,11 +375,7 @@ impl CountryResult {
 
     /// Process loan returns — must run AFTER club_result.process() so that
     /// ClubResult player references remain valid during contract processing.
-    pub(super) fn process_loan_returns(
-        data: &mut SimulatorData,
-        country_id: u32,
-        date: NaiveDate,
-    ) {
+    pub(super) fn process_loan_returns(data: &mut SimulatorData, country_id: u32, date: NaiveDate) {
         // Only check on the 1st and last day of each month to avoid daily scans
         if date.day() != 1 && date.day() < 28 {
             return;
@@ -441,17 +444,16 @@ impl CountryResult {
                 .unwrap_or_default();
 
             for team in club.teams.iter() {
-                let (team_name, team_slug, team_reputation) = if team.team_type == TeamType::Main
-                    || main_name.is_none()
-                {
-                    (team.name.clone(), team.slug.clone(), team.reputation.world)
-                } else {
-                    (
-                        main_name.clone().unwrap_or_default(),
-                        main_slug.clone().unwrap_or_default(),
-                        main_reputation.unwrap_or(0),
-                    )
-                };
+                let (team_name, team_slug, team_reputation) =
+                    if team.team_type == TeamType::Main || main_name.is_none() {
+                        (team.name.clone(), team.slug.clone(), team.reputation.world)
+                    } else {
+                        (
+                            main_name.clone().unwrap_or_default(),
+                            main_slug.clone().unwrap_or_default(),
+                            main_reputation.unwrap_or(0),
+                        )
+                    };
 
                 for player in team.players.iter() {
                     if let Some(ref loan_contract) = player.contract_loan {
@@ -481,16 +483,14 @@ impl CountryResult {
 
     /// Execute a single loan return: take player from borrowing club, place at parent club.
     /// Both clubs are resolved globally by ID — works for domestic and cross-country.
-    fn execute_loan_return(
-        data: &mut SimulatorData,
-        event: LoanReturnEvent,
-        date: NaiveDate,
-    ) {
+    fn execute_loan_return(data: &mut SimulatorData, event: LoanReturnEvent, date: NaiveDate) {
         // Find parent club location first — abort early if missing
         let parent_pos = data.find_club_main_team(event.parent_club_id);
         if parent_pos.is_none() {
-            debug!("Loan return skipped: parent club {} not found for player {}",
-                event.parent_club_id, event.player_id);
+            debug!(
+                "Loan return skipped: parent club {} not found for player {}",
+                event.parent_club_id, event.player_id
+            );
             return;
         }
 
@@ -501,7 +501,8 @@ impl CountryResult {
             let country = &data.continents[pci].countries[pcoi];
             let club = &country.clubs[pcli];
             let team = &club.teams.teams[pti];
-            let league_info = team.league_id
+            let league_info = team
+                .league_id
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                 .map(|l| (l.name.clone(), l.slug.clone()))
                 .unwrap_or_default();
@@ -518,8 +519,9 @@ impl CountryResult {
         let player_pos = data.find_player_position(event.player_id);
         let mut player = match player_pos {
             Some((ci, coi, cli, ti)) => {
-                match data.continents[ci].countries[coi].clubs[cli]
-                    .teams.teams[ti].players.take_player(&event.player_id)
+                match data.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
+                    .players
+                    .take_player(&event.player_id)
                 {
                     Some(p) => p,
                     None => return,
@@ -534,10 +536,13 @@ impl CountryResult {
         player.statuses.statuses.clear();
 
         // Place at parent club
-        debug!("Loan return: player {} from club {} back to club {}",
-            event.player_id, event.borrowing_club_id, event.parent_club_id);
-        data.continents[pci].countries[pcoi].clubs[pcli]
-            .teams.teams[pti].players.add(player);
+        debug!(
+            "Loan return: player {} from club {} back to club {}",
+            event.player_id, event.borrowing_club_id, event.parent_club_id
+        );
+        data.continents[pci].countries[pcoi].clubs[pcli].teams.teams[pti]
+            .players
+            .add(player);
     }
 
     /// Monthly check: retire players who are clearly past max retirement age
@@ -558,9 +563,14 @@ impl CountryResult {
 
         for (club_idx, team_idx, player_id) in to_retire {
             if let Some(mut player) = country.clubs[club_idx].teams.teams[team_idx]
-                .players.take_player(&player_id)
+                .players
+                .take_player(&player_id)
             {
-                debug!("Overdue retirement: {} (age {})", player.full_name, player.age(date));
+                debug!(
+                    "Overdue retirement: {} (age {})",
+                    player.full_name,
+                    player.age(date)
+                );
                 player.statuses.add(date, PlayerStatusType::Ret);
                 player.contract = None;
                 player.retired = true;
@@ -582,13 +592,13 @@ impl CountryResult {
         let position = player.position();
 
         let max_retire_age = match ca {
-            0..=39   => 37u8,
-            40..=69  => 38,
-            70..=99  => 39,
+            0..=39 => 37u8,
+            40..=69 => 38,
+            70..=99 => 39,
             100..=129 => 40,
             130..=159 => 41,
             160..=179 => 42,
-            _         => 43,
+            _ => 43,
         };
 
         let position_offset: i8 = if position.is_goalkeeper() {
@@ -607,17 +617,23 @@ impl CountryResult {
             _ => 1,
         };
 
-        let max_age = (max_retire_age as i16 + position_offset as i16 + id_jitter as i16)
-            .clamp(35, 47) as u8;
+        let max_age =
+            (max_retire_age as i16 + position_offset as i16 + id_jitter as i16).clamp(35, 47) as u8;
 
         // Players still getting games get a 1-year grace period
         let has_recent_games = player.statistics.total_games() >= 5
-            || player.statistics_history.items
+            || player
+                .statistics_history
+                .items
                 .last()
                 .map(|h| h.statistics.total_games() >= 5)
                 .unwrap_or(true);
 
-        let effective_max = if has_recent_games { max_age + 1 } else { max_age };
+        let effective_max = if has_recent_games {
+            max_age + 1
+        } else {
+            max_age
+        };
 
         age >= effective_max
     }
@@ -641,9 +657,14 @@ impl CountryResult {
         // Execute retirements: remove from team, add Ret status, store in retired_players
         for (club_idx, team_idx, player_id) in to_retire {
             if let Some(mut player) = country.clubs[club_idx].teams.teams[team_idx]
-                .players.take_player(&player_id)
+                .players
+                .take_player(&player_id)
             {
-                debug!("Player retired: {} (age {})", player.full_name, player.age(date));
+                debug!(
+                    "Player retired: {} (age {})",
+                    player.full_name,
+                    player.age(date)
+                );
                 player.statuses.add(date, PlayerStatusType::Ret);
                 player.contract = None;
                 player.retired = true;
@@ -667,13 +688,13 @@ impl CountryResult {
         // Wider age windows with finer CA granularity (5-6 year spread)
         // This prevents mass retirement at a single age boundary
         let (min_retire_age, max_retire_age) = match ca {
-            0..=39   => (31u8, 36u8),
-            40..=69  => (32, 37),
-            70..=99  => (33, 38),
+            0..=39 => (31u8, 36u8),
+            40..=69 => (32, 37),
+            70..=99 => (33, 38),
             100..=129 => (34, 39),
             130..=159 => (35, 40),
             160..=179 => (36, 41),
-            _         => (37, 42),
+            _ => (37, 42),
         };
 
         // Position adjustments: GK +2, defenders +1, forwards -1
@@ -695,10 +716,10 @@ impl CountryResult {
             _ => 1,
         };
 
-        let min_age = (min_retire_age as i16 + position_offset as i16 + id_jitter as i16)
-            .clamp(30, 44) as u8;
-        let max_age = (max_retire_age as i16 + position_offset as i16 + id_jitter as i16)
-            .clamp(34, 46) as u8;
+        let min_age =
+            (min_retire_age as i16 + position_offset as i16 + id_jitter as i16).clamp(30, 44) as u8;
+        let max_age =
+            (max_retire_age as i16 + position_offset as i16 + id_jitter as i16).clamp(34, 46) as u8;
 
         // Too young to retire
         if age < min_age {
@@ -712,7 +733,9 @@ impl CountryResult {
 
         // Still playing regularly? Reduce chance but don't fully block
         let current_season_games = player.statistics.total_games();
-        let last_season_games = player.statistics_history.items
+        let last_season_games = player
+            .statistics_history
+            .items
             .last()
             .map(|h| h.statistics.total_games())
             .unwrap_or(0);
@@ -793,7 +816,14 @@ impl CountryResult {
             .leagues
             .leagues
             .iter()
-            .map(|l| (l.id, l.settings.tier, l.settings.relegation_spots, l.settings.promotion_spots))
+            .map(|l| {
+                (
+                    l.id,
+                    l.settings.tier,
+                    l.settings.relegation_spots,
+                    l.settings.promotion_spots,
+                )
+            })
             .collect();
 
         // For each league with relegation_spots > 0, find its paired league
@@ -822,7 +852,12 @@ impl CountryResult {
                 .find(|l| l.id == tier1_id)
                 .and_then(|l| l.final_table.as_ref())
                 .map(|table| {
-                    table.iter().rev().take(nominal_swap).map(|r| r.team_id).collect()
+                    table
+                        .iter()
+                        .rev()
+                        .take(nominal_swap)
+                        .map(|r| r.team_id)
+                        .collect()
                 })
                 .unwrap_or_default();
 
@@ -832,9 +867,7 @@ impl CountryResult {
                 .iter()
                 .find(|l| l.id == tier2_id)
                 .and_then(|l| l.final_table.as_ref())
-                .map(|table| {
-                    table.iter().take(nominal_swap).map(|r| r.team_id).collect()
-                })
+                .map(|table| table.iter().take(nominal_swap).map(|r| r.team_id).collect())
                 .unwrap_or_default();
 
             // Must balance: never relegate more than we promote (or vice versa)
@@ -849,8 +882,10 @@ impl CountryResult {
                     tier1_id, tier2_id, nominal_swap, swap_count
                 );
             }
-            let relegated_team_ids: Vec<u32> = relegated_candidates.into_iter().take(swap_count).collect();
-            let promoted_team_ids: Vec<u32> = promoted_candidates.into_iter().take(swap_count).collect();
+            let relegated_team_ids: Vec<u32> =
+                relegated_candidates.into_iter().take(swap_count).collect();
+            let promoted_team_ids: Vec<u32> =
+                promoted_candidates.into_iter().take(swap_count).collect();
 
             // Build a tier-2 club expectation map: clubs that finished
             // inside the promotion window (top promotion_spots + a couple
@@ -879,8 +914,10 @@ impl CountryResult {
 
                 for team in &mut club.teams.teams {
                     if relegated_team_ids.contains(&team.id) {
-                        info!("⬇️ Relegation: team {} ({}) moves to league {}",
-                              team.name, team.id, tier2_id);
+                        info!(
+                            "⬇️ Relegation: team {} ({}) moves to league {}",
+                            team.name, team.id, tier2_id
+                        );
                         team.league_id = Some(tier2_id);
                         new_main_league_id = Some(tier2_id);
                         // Year-defining wound — emit per player. The promo
@@ -891,11 +928,7 @@ impl CountryResult {
                         // Self::apply_team_squad_event helper which takes
                         // &mut country would conflict).
                         for player in team.players.iter_mut() {
-                            player.on_team_season_event(
-                                HappinessEventType::Relegated,
-                                365,
-                                date,
-                            );
+                            player.on_team_season_event(HappinessEventType::Relegated, 365, date);
                             // Activate any RelegationWageDecrease and
                             // RelegationFeeRelease clauses on the player's
                             // contract. Each helper consumes the matching
@@ -906,8 +939,10 @@ impl CountryResult {
                             }
                         }
                     } else if promoted_team_ids.contains(&team.id) {
-                        info!("⬆️ Promotion: team {} ({}) moves to league {}",
-                              team.name, team.id, tier1_id);
+                        info!(
+                            "⬆️ Promotion: team {} ({}) moves to league {}",
+                            team.name, team.id, tier1_id
+                        );
                         team.league_id = Some(tier1_id);
                         new_main_league_id = Some(tier1_id);
                         // Symmetric to the relegation hooks above —
@@ -986,9 +1021,7 @@ impl CountryResult {
                 }
 
                 if bonus_total > 0 {
-                    club.finance
-                        .balance
-                        .push_expense_player_wages(bonus_total);
+                    club.finance.balance.push_expense_player_wages(bonus_total);
                 }
 
                 // Move sub-teams to the matching youth league of the new main league
@@ -1074,11 +1107,7 @@ impl CountryResult {
                     continue;
                 }
                 for player in team.players.iter_mut() {
-                    player.on_team_season_event(
-                        HappinessEventType::RelegationFear,
-                        30,
-                        date,
-                    );
+                    player.on_team_season_event(HappinessEventType::RelegationFear, 30, date);
                 }
             }
         }
@@ -1283,13 +1312,7 @@ mod tests {
         // 5-team league → 8 matches per team. Stop at 4 played (50%) so
         // we sit *under* the 60% audit gate. Drop-zone position alone
         // shouldn't trigger fear in early autumn.
-        let rows = vec![
-            (1, 4, 10),
-            (2, 4, 8),
-            (3, 4, 6),
-            (5, 4, 2),
-            (4, 4, 1),
-        ];
+        let rows = vec![(1, 4, 10), (2, 4, 8), (3, 4, 6), (5, 4, 2), (4, 4, 1)];
         let league = make_league_with_table(1, 7000, rows);
         let mut country = build_country(vec![club], vec![league]);
 
@@ -1399,7 +1422,12 @@ mod tests {
             .find(|e| e.event_type == HappinessEventType::TrophyWon)
             .unwrap()
             .magnitude;
-        assert!(mag_b > mag_a, "prestige 1.5 ({}) should exceed prestige 1.0 ({})", mag_b, mag_a);
+        assert!(
+            mag_b > mag_a,
+            "prestige 1.5 ({}) should exceed prestige 1.0 ({})",
+            mag_b,
+            mag_a
+        );
     }
 
     #[test]

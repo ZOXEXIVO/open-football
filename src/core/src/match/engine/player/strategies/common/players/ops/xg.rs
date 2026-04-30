@@ -36,7 +36,12 @@ impl ShotQualityEvaluator {
         let skill_factor = Self::skill_factor(ctx, distance);
 
         // Combine all factors
-        let xg = distance_factor * angle_factor * gk_factor * pressure_factor * clear_factor * skill_factor;
+        let xg = distance_factor
+            * angle_factor
+            * gk_factor
+            * pressure_factor
+            * clear_factor
+            * skill_factor;
 
         xg.clamp(0.0, 0.95)
     }
@@ -61,7 +66,12 @@ impl ShotQualityEvaluator {
         }
     }
 
-    fn angle_factor(player_y: f32, goal_y: f32, distance: f32, ctx: &StateProcessingContext) -> f32 {
+    fn angle_factor(
+        player_y: f32,
+        goal_y: f32,
+        distance: f32,
+        ctx: &StateProcessingContext,
+    ) -> f32 {
         let field_height = ctx.context.field_size.height as f32;
         let goal_half_width = 29.0; // ~3.66m half-width = 7.32m real goal width
 

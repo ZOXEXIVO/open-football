@@ -318,10 +318,12 @@ impl PlayerHappiness {
         for event in &mut self.recent_events {
             event.days_ago += cfg.decay_step_days;
         }
-        self.recent_events.retain(|e| e.days_ago <= cfg.event_retention_days);
+        self.recent_events
+            .retain(|e| e.days_ago <= cfg.event_retention_days);
 
         if self.recent_events.len() > cfg.recent_events_cap {
-            self.recent_events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
+            self.recent_events
+                .sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
             self.recent_events.truncate(cfg.recent_events_cap);
         }
     }
@@ -367,7 +369,8 @@ impl PlayerHappiness {
         });
 
         if self.recent_events.len() > cfg.recent_events_cap {
-            self.recent_events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
+            self.recent_events
+                .sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
             self.recent_events.truncate(cfg.recent_events_cap);
         }
     }
@@ -376,7 +379,8 @@ impl PlayerHappiness {
     /// `days` days (inclusive). Cheap O(n) scan — `recent_events` is
     /// capped, so this is bounded.
     pub fn has_recent_event(&self, event_type: &HappinessEventType, days: u16) -> bool {
-        self.recent_events.iter()
+        self.recent_events
+            .iter()
             .any(|e| e.event_type == *event_type && e.days_ago <= days)
     }
 
@@ -537,7 +541,8 @@ mod tests {
         let second = h.add_event_with_cooldown(HappinessEventType::DerbyHero, 5.0, 14);
         assert!(!second, "second emit inside cooldown should be skipped");
         assert_eq!(
-            h.recent_events.iter()
+            h.recent_events
+                .iter()
                 .filter(|e| e.event_type == HappinessEventType::DerbyHero)
                 .count(),
             1

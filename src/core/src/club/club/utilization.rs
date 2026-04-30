@@ -1,3 +1,4 @@
+use super::Club;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
 use crate::transfers::window::PlayerValuationCalculator;
@@ -5,7 +6,6 @@ use crate::utils::FormattingUtils;
 use crate::{ContractType, Person, PlayerStatusType, ReputationLevel, TransferItem};
 use chrono::NaiveDate;
 use log::debug;
-use super::Club;
 
 impl Club {
     /// Monthly audit: identify underutilized players in non-main teams and list them for loan/transfer.
@@ -27,14 +27,17 @@ impl Club {
         };
 
         // Wealthy clubs within squad targets don't need to aggressively list
-        let total_squad: usize = self.teams.iter()
-            .map(|t| t.players.len()).sum();
-        let max_squad = self.board.season_targets
+        let total_squad: usize = self.teams.iter().map(|t| t.players.len()).sum();
+        let max_squad = self
+            .board
+            .season_targets
             .as_ref()
             .map(|t| t.max_squad_size as usize)
             .unwrap_or(50);
-        let wealthy_within_limits = matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental)
-            && total_squad < max_squad;
+        let wealthy_within_limits = matches!(
+            rep_level,
+            ReputationLevel::Elite | ReputationLevel::Continental
+        ) && total_squad < max_squad;
 
         // Collect underutilized player decisions
         let mut loan_players: Vec<(usize, u32, String)> = Vec::new();
@@ -47,7 +50,9 @@ impl Club {
 
             for player in team.players.iter() {
                 // Skip youth contracts
-                if player.contract.as_ref()
+                if player
+                    .contract
+                    .as_ref()
                     .map(|c| c.contract_type == ContractType::Youth)
                     .unwrap_or(false)
                 {
@@ -61,7 +66,9 @@ impl Club {
 
                 // Skip already listed/loaned
                 let statuses = player.statuses.get();
-                if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Loa) {
+                if statuses.contains(&PlayerStatusType::Lst)
+                    || statuses.contains(&PlayerStatusType::Loa)
+                {
                     continue;
                 }
 
@@ -101,11 +108,23 @@ impl Club {
                 if age <= 23 && pa > ca.saturating_add(5) {
                     loan_players.push((ti, player.id, "dec_reason_young_develop".to_string()));
                 } else if ca < 60 && pa < 70 {
-                    transfer_players.push((ti, player.id, "dec_reason_low_ability_surplus".to_string()));
+                    transfer_players.push((
+                        ti,
+                        player.id,
+                        "dec_reason_low_ability_surplus".to_string(),
+                    ));
                 } else if age >= 34 && ca < main_avg_ca.saturating_sub(20) {
                     transfer_players.push((ti, player.id, "dec_reason_aging_surplus".to_string()));
-                } else if matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental) && age <= 29 {
-                    loan_players.push((ti, player.id, "dec_reason_underutilized_top_club".to_string()));
+                } else if matches!(
+                    rep_level,
+                    ReputationLevel::Elite | ReputationLevel::Continental
+                ) && age <= 29
+                {
+                    loan_players.push((
+                        ti,
+                        player.id,
+                        "dec_reason_underutilized_top_club".to_string(),
+                    ));
                 } else {
                     transfer_players.push((ti, player.id, "dec_reason_underutilized".to_string()));
                 }
@@ -145,7 +164,9 @@ impl Club {
             let team_name = self.teams.teams[team_idx].name.clone();
 
             let loan_fee = if rep_multiplier > 0.0 {
-                let player_value = self.teams.teams[team_idx].players.find(player_id)
+                let player_value = self.teams.teams[team_idx]
+                    .players
+                    .find(player_id)
                     .map(|p| p.value(date, seller_league_rep, seller_club_rep))
                     .unwrap_or(0.0);
                 FormattingUtils::round_fee(player_value * rep_multiplier)
@@ -166,17 +187,23 @@ impl Club {
                 "dec_decided_board".to_string(),
             );
 
-            debug!("Board loan-listed: {} (age {}, CA={}) from {}, loan fee: {}",
-                player.full_name, player.age(date),
+            debug!(
+                "Board loan-listed: {} (age {}, CA={}) from {}, loan fee: {}",
+                player.full_name,
+                player.age(date),
                 player.player_attributes.current_ability,
-                team_name, loan_fee);
+                team_name,
+                loan_fee
+            );
 
-            self.transfer_plan.loan_out_candidates.push(LoanOutCandidate {
-                player_id,
-                reason: LoanOutReason::LackOfPlayingTime,
-                status: LoanOutStatus::Listed,
-                loan_fee,
-            });
+            self.transfer_plan
+                .loan_out_candidates
+                .push(LoanOutCandidate {
+                    player_id,
+                    reason: LoanOutReason::LackOfPlayingTime,
+                    status: LoanOutStatus::Listed,
+                    loan_fee,
+                });
         }
 
         // Process transfer recommendations
@@ -206,16 +233,21 @@ impl Club {
                 "dec_decided_board".to_string(),
             );
 
-            debug!("Board transfer-listed: {} (age {}, CA={}) from {}, asking {}",
-                player.full_name, player.age(date),
+            debug!(
+                "Board transfer-listed: {} (age {}, CA={}) from {}, asking {}",
+                player.full_name,
+                player.age(date),
                 player.player_attributes.current_ability,
                 team_name,
-                asking_price);
+                asking_price
+            );
 
-            self.teams.teams[main_idx].transfer_list.add(TransferItem::new(
-                player_id,
-                CurrencyValue::new(asking_price, Currency::Usd),
-            ));
+            self.teams.teams[main_idx]
+                .transfer_list
+                .add(TransferItem::new(
+                    player_id,
+                    CurrencyValue::new(asking_price, Currency::Usd),
+                ));
         }
     }
 }

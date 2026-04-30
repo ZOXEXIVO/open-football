@@ -226,6 +226,29 @@ pub struct BoardTransferProposal {
     pub player_ability: Option<u8>,
     pub squad_avg_ability: u8,
     pub shortlist_score: f32,
+    /// Optional recruitment-meeting dossier built from scout monitoring
+    /// state. When present, the board uses it to relax or tighten its
+    /// tolerance — strong consensus + chief scout backing earn extra
+    /// rope; thin discussion or risk-heavy dossiers get less.
+    /// When `None` the board falls back to the legacy decision path
+    /// (preserves behaviour for non-pipeline call sites and tests).
+    pub dossier: Option<BoardDossierSummary>,
+}
+
+/// Compact, board-facing snapshot of the recruitment dossier. We pull
+/// only the fields the board actually reasons about so the board layer
+/// stays decoupled from `pipeline::recruitment`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BoardDossierSummary {
+    pub scout_votes: u8,
+    pub chief_scout_support: bool,
+    pub avg_confidence: f32,
+    pub avg_role_fit: f32,
+    pub risk_flag_count: u8,
+    /// Sum of weighted scout votes from the latest meeting on the player.
+    pub consensus_score: f32,
+    pub data_support: bool,
+    pub matches_watched: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -395,6 +418,36 @@ impl ClubBoard {
             tolerance -= 0.15;
         }
 
+        // Dossier-driven tolerance shift. Strong consensus + chief
+        // scout backing + plenty of confidence earn extra board rope;
+        // thin or risk-heavy dossiers tighten tolerance. Done before
+        // the over-allocation gate so a well-supported target can
+        // survive a slightly higher fee, and a poorly-supported one
+        // can fall short even if the fee is close to budget.
+        if let Some(d) = proposal.dossier {
+            if d.consensus_score >= 2.5 && d.chief_scout_support {
+                tolerance += 0.20;
+            } else if d.consensus_score >= 1.5 {
+                tolerance += 0.10;
+            } else if d.consensus_score <= 0.5 && d.scout_votes >= 2 {
+                tolerance -= 0.15;
+            }
+            if d.avg_confidence >= 0.8 {
+                tolerance += 0.05;
+            } else if d.avg_confidence < 0.5 {
+                tolerance -= 0.10;
+            }
+            if d.risk_flag_count >= 3 {
+                tolerance -= 0.15;
+            }
+            if d.data_support {
+                tolerance += 0.05;
+            }
+            if d.avg_role_fit < 0.85 {
+                tolerance -= 0.10;
+            }
+        }
+
         if over_allocated > tolerance.max(0.50) {
             return BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline);
         }
@@ -405,6 +458,17 @@ impl ClubBoard {
 
         if self.transfer_conflicts_with_vision(proposal) {
             return BoardTransferDecision::Conditional(BoardTransferConcern::ConflictsWithVision);
+        }
+
+        // Dossier-driven veto: if the dossier shows a serious red flag
+        // (split votes / no role fit / multiple risks) the board sends
+        // it back to the recruitment team rather than approving.
+        if let Some(d) = proposal.dossier {
+            // "Two scouts watching, consensus near zero" = open
+            // disagreement. The board doesn't sign on a flip-coin.
+            if d.scout_votes >= 2 && d.consensus_score.abs() < 0.4 && d.risk_flag_count >= 2 {
+                return BoardTransferDecision::Vetoed(BoardTransferConcern::WeakSportingCase);
+            }
         }
 
         if over_allocated > 1.0 || remaining_budget <= allocated_budget * 0.25 {
@@ -636,15 +700,10 @@ impl ClubBoard {
         // Wage budget: target wage/revenue ratio. Healthy clubs run
         // 55–65% wages on revenue; distressed clubs squeeze that down to
         // 45–50%; reckless elite owners are allowed to push to 70%.
-        let target_ratio = wage_revenue_target(
-            board_ctx.ffp_status,
-            self.chairman.ambition,
-            rep,
-        );
+        let target_ratio = wage_revenue_target(board_ctx.ffp_status, self.chairman.ambition, rep);
         let revenue_floor = projected_income.max(board_ctx.total_annual_wages as f64);
-        let wage_budget = (revenue_floor * target_ratio).max(board_ctx.total_annual_wages as f64
-            * 0.95)
-            as i32;
+        let wage_budget =
+            (revenue_floor * target_ratio).max(board_ctx.total_annual_wages as f64 * 0.95) as i32;
 
         // Squad size limits based on reputation
         let (min_squad, max_squad) = if rep >= 0.8 {
@@ -1009,6 +1068,7 @@ mod style_fit_tests {
             player_ability: Some(65),
             squad_avg_ability: 60,
             shortlist_score: 1.0,
+            dossier: None,
         }
     }
 
@@ -1112,6 +1172,96 @@ mod style_fit_tests {
         );
 
         assert!(board.review_transfer_proposal(&proposal).is_approved());
+    }
+
+    #[test]
+    fn strong_dossier_relaxes_board_tolerance() {
+        // A proposal that's borderline on budget normally gets flagged
+        // financial-discipline. With a strong dossier (consensus + chief
+        // scout backing + high confidence) the board approves anyway.
+        let mut board = ClubBoard::new();
+        board.vision.financial_stance = FinancialStance::Balanced;
+        let mut proposal = transfer_proposal(
+            1_700_000.0,
+            1_000_000.0,
+            TransferNeedPriority::Important,
+            TransferNeedReason::QualityUpgrade,
+        );
+        // Without dossier — borderline.
+        let baseline = board.review_transfer_proposal(&proposal);
+        // With strong dossier — should approve.
+        proposal.dossier = Some(BoardDossierSummary {
+            scout_votes: 3,
+            chief_scout_support: true,
+            avg_confidence: 0.85,
+            avg_role_fit: 1.10,
+            risk_flag_count: 0,
+            consensus_score: 3.0,
+            data_support: true,
+            matches_watched: 4,
+        });
+        let with_dossier = board.review_transfer_proposal(&proposal);
+        // Dossier-backed should be at least as approved as the baseline.
+        // Specifically: a strong dossier should never downgrade an
+        // Approved into a Vetoed.
+        if matches!(baseline, BoardTransferDecision::Vetoed(_)) {
+            assert!(
+                with_dossier.is_approved(),
+                "strong dossier should rescue a borderline veto, got {:?}",
+                with_dossier
+            );
+        } else {
+            assert!(with_dossier.is_approved());
+        }
+    }
+
+    #[test]
+    fn split_vote_dossier_with_risk_flags_vetoes() {
+        // Two scouts watching, split decision, multiple risk flags →
+        // board sends it back to recruitment instead of approving.
+        let mut board = ClubBoard::new();
+        let mut proposal = transfer_proposal(
+            900_000.0,
+            1_000_000.0,
+            TransferNeedPriority::Important,
+            TransferNeedReason::QualityUpgrade,
+        );
+        proposal.dossier = Some(BoardDossierSummary {
+            scout_votes: 3,
+            chief_scout_support: false,
+            avg_confidence: 0.55,
+            avg_role_fit: 0.95,
+            risk_flag_count: 3,
+            consensus_score: 0.0,
+            data_support: false,
+            matches_watched: 1,
+        });
+        let decision = board.review_transfer_proposal(&proposal);
+        assert!(
+            matches!(decision, BoardTransferDecision::Vetoed(_)),
+            "split-vote risk-heavy dossier must veto, got {:?}",
+            decision
+        );
+    }
+
+    #[test]
+    fn dossier_is_optional_legacy_path_unchanged() {
+        // Ensure the no-dossier path produces exactly the same result
+        // as the pre-recruitment-meeting baseline. The whole point of
+        // the optional field is backwards compatibility.
+        let mut board = ClubBoard::new();
+        board.vision.financial_stance = FinancialStance::Conservative;
+        let proposal = transfer_proposal(
+            2_000_000.0,
+            1_000_000.0,
+            TransferNeedPriority::Important,
+            TransferNeedReason::QualityUpgrade,
+        );
+        let decision = board.review_transfer_proposal(&proposal);
+        assert!(matches!(
+            decision,
+            BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline)
+        ));
     }
 
     #[test]
@@ -1231,11 +1381,7 @@ fn ambition_budget_multiplier(goal: Option<LongTermGoal>) -> f64 {
 /// Target wage-to-revenue ratio. Healthy clubs target 55–65%; distressed
 /// clubs squeeze it to 45–50%; reckless owners at the elite tier are
 /// allowed up to 70%.
-fn wage_revenue_target(
-    ffp: FfpStatus,
-    ambition: ChairmanAmbition,
-    reputation_score: f32,
-) -> f64 {
+fn wage_revenue_target(ffp: FfpStatus, ambition: ChairmanAmbition, reputation_score: f32) -> f64 {
     let base: f64 = match ffp {
         FfpStatus::Clean => 0.62,
         FfpStatus::Watchlist => 0.55,

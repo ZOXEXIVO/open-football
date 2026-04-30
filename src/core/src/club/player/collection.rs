@@ -1,8 +1,8 @@
+use crate::PlayerPositionType;
 use crate::club::player::player::Player;
 use crate::club::{PlayerCollectionResult, PlayerResult};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
-use crate::PlayerPositionType;
 use std::ops::Index;
 
 #[derive(Debug, Clone)]
@@ -31,7 +31,11 @@ impl PlayerCollection {
         // Mark transfer-requested players as transfer-listed instead of removing them.
         // The transfer market will handle the actual move later.
         for transfer_request_player_id in player_results.iter().flat_map(|p| &p.transfer_requests) {
-            if let Some(player) = self.players.iter_mut().find(|p| p.id == *transfer_request_player_id) {
+            if let Some(player) = self
+                .players
+                .iter_mut()
+                .find(|p| p.id == *transfer_request_player_id)
+            {
                 if let Some(ref mut contract) = player.contract {
                     contract.is_transfer_listed = true;
                 }
@@ -150,8 +154,7 @@ impl Index<u32> for PlayerCollection {
     type Output = Player;
 
     fn index(&self, player_id: u32) -> &Self::Output {
-        self
-            .players
+        self.players
             .iter()
             .find(|p| p.id == player_id)
             .expect(&format!("no player with id = {}", player_id))

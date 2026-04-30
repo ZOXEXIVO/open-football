@@ -1,8 +1,8 @@
+use crate::HappinessEventType;
 use crate::club::player::behaviour_config::AdaptationConfig;
 use crate::club::player::language::Language;
 use crate::club::player::player::{ManagerPromiseKind, Player};
 use crate::club::{Person, PlayerPositionType};
-use crate::HappinessEventType;
 use chrono::NaiveDate;
 
 /// Multi-axis reputation gap between the player and his current
@@ -248,11 +248,9 @@ impl Player {
         }
 
         // Adaptability + professionalism contributions.
-        let adapt_contribution =
-            ((self.attributes.adaptability - 10.0) * 1.2).clamp(-10.0, 12.0);
+        let adapt_contribution = ((self.attributes.adaptability - 10.0) * 1.2).clamp(-10.0, 12.0);
         score += adapt_contribution;
-        let prof_contribution =
-            ((self.attributes.professionalism - 10.0) * 0.7).clamp(-6.0, 7.0);
+        let prof_contribution = ((self.attributes.professionalism - 10.0) * 0.7).clamp(-6.0, 7.0);
         score += prof_contribution;
 
         // Role fit against the formation.
@@ -260,7 +258,10 @@ impl Player {
             let primary = self.position();
             if f.iter().any(|p| *p == primary) {
                 score += 10.0;
-            } else if f.iter().any(|p| p.position_group() == primary.position_group()) {
+            } else if f
+                .iter()
+                .any(|p| p.position_group() == primary.position_group())
+            {
                 score += 4.0;
             } else {
                 score -= 12.0;
@@ -348,9 +349,9 @@ impl Player {
             return true;
         }
         langs.iter().any(|l| {
-            self.languages.iter().any(|pl| {
-                pl.language == *l && (pl.is_native || pl.proficiency >= 70)
-            })
+            self.languages
+                .iter()
+                .any(|pl| pl.language == *l && (pl.is_native || pl.proficiency >= 70))
         })
     }
 
@@ -365,7 +366,9 @@ impl Player {
         country_code: &str,
         formation: Option<&[PlayerPositionType; 11]>,
     ) {
-        let Some(pending) = self.pending_signing.take() else { return };
+        let Some(pending) = self.pending_signing.take() else {
+            return;
+        };
         let cfg = AdaptationConfig::default();
 
         // Ambition / dream / elite-club reactions fire for loans too —
@@ -373,7 +376,11 @@ impl Player {
         // if you're going back in a year. Loans pay at the borrowing club's
         // loan wage (distinct from a full contract) so salary shock/boost
         // is skipped for them; that lever is tuned for permanent moves.
-        let loan_damp = if pending.is_loan { cfg.loan_damp_factor } else { 1.0 };
+        let loan_damp = if pending.is_loan {
+            cfg.loan_damp_factor
+        } else {
+            1.0
+        };
         let is_favorite_destination = self.favorite_clubs.contains(&pending.destination_club_id);
         // Ambition shock is muted when joining a favorite club — the player
         // knew what they were signing for and the sentimental pull covers the
@@ -419,7 +426,8 @@ impl Player {
 
         if !self.speaks_local_language(country_code) {
             let mag = if pending.is_loan { -3.0 } else { -5.0 };
-            self.happiness.add_event(HappinessEventType::FeelingIsolated, mag);
+            self.happiness
+                .add_event(HappinessEventType::FeelingIsolated, mag);
         }
 
         if let Some(f) = formation {
@@ -455,7 +463,9 @@ impl Player {
     fn emit_salary_shock(&mut self, previous_salary: Option<u32>) {
         let cfg = AdaptationConfig::default();
         let Some(prev) = previous_salary else { return };
-        let Some(new) = self.contract.as_ref().map(|c| c.salary) else { return };
+        let Some(new) = self.contract.as_ref().map(|c| c.salary) else {
+            return;
+        };
         if prev == 0 {
             return;
         }
@@ -463,8 +473,7 @@ impl Player {
         if ratio >= cfg.salary_shock_ratio {
             return;
         }
-        let severity =
-            ((cfg.salary_shock_ratio - ratio) / cfg.salary_shock_ratio).clamp(0.0, 1.0);
+        let severity = ((cfg.salary_shock_ratio - ratio) / cfg.salary_shock_ratio).clamp(0.0, 1.0);
         self.happiness
             .add_event(HappinessEventType::SalaryShock, -6.0 - 6.0 * severity);
     }
@@ -533,7 +542,9 @@ impl Player {
     fn emit_salary_boost(&mut self, previous_salary: Option<u32>) {
         let cfg = AdaptationConfig::default();
         let Some(prev) = previous_salary else { return };
-        let Some(new) = self.contract.as_ref().map(|c| c.salary) else { return };
+        let Some(new) = self.contract.as_ref().map(|c| c.salary) else {
+            return;
+        };
         if prev == 0 {
             return;
         }
@@ -555,7 +566,8 @@ impl Player {
             .iter()
             .any(|p| p.position_group() == primary.position_group());
         let mag = if group_match { -4.0 } else { -8.0 };
-        self.happiness.add_event(HappinessEventType::RoleMismatch, mag);
+        self.happiness
+            .add_event(HappinessEventType::RoleMismatch, mag);
     }
 
     /// Development multiplier applied when a player has just stepped up to
@@ -563,11 +575,7 @@ impl Player {
     /// absorbing a new tactical culture accelerates growth — but only
     /// while there's still catching up to do. The effect fades over the
     /// settlement window and is proportional to the rep gap.
-    pub fn step_up_development_multiplier(
-        &self,
-        now: NaiveDate,
-        club_rep_0_to_1: f32,
-    ) -> f32 {
+    pub fn step_up_development_multiplier(&self, now: NaiveDate, club_rep_0_to_1: f32) -> f32 {
         AdaptationConfig::default().step_up_dev_multiplier(
             self.days_since_transfer(now),
             club_rep_0_to_1,
@@ -625,11 +633,9 @@ impl Player {
         // (Settlement multiplier branches handle this; we mirror the same
         // tiering when deciding whether to fire isolation.)
         let in_early_window = weeks < cfg.early_isolation_max_weeks;
-        let strict_isolation_gate = !speaks_local
-            && adapt < cfg.early_isolation_max_adaptability;
-        let no_shared_language_low_adapt = squad.same_language_teammates == 0
-            && !speaks_local
-            && adapt < 8.0;
+        let strict_isolation_gate = !speaks_local && adapt < cfg.early_isolation_max_adaptability;
+        let no_shared_language_low_adapt =
+            squad.same_language_teammates == 0 && !speaks_local && adapt < 8.0;
 
         // Higher chance for no-shared-language low-adaptability foreign
         // signings (35% per week for first 4 weeks, before dampener).
@@ -641,8 +647,7 @@ impl Player {
         } else {
             0.0
         };
-        let isolation_chance =
-            (isolation_base_chance * isolation_dampener).clamp(0.0, 1.0);
+        let isolation_chance = (isolation_base_chance * isolation_dampener).clamp(0.0, 1.0);
 
         if isolation_chance > 0.0 {
             // Use deterministic per-day roll so testing stays stable.
@@ -661,14 +666,10 @@ impl Player {
         if weeks >= cfg.settled_min_weeks
             && (pull_toward_bonding > cfg.settled_pull_threshold || speaks_local)
         {
-            self.happiness.add_event_with_cooldown(
-                HappinessEventType::SettledIntoSquad,
-                1.0,
-                365,
-            );
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::SettledIntoSquad, 1.0, 365);
         }
     }
-
 }
 
 /// Deterministic per-day per-player isolation roll, in `[0, 1)`. Same date +

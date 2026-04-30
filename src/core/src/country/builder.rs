@@ -1,7 +1,10 @@
 use crate::country::national::NationalTeam;
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
-use crate::{Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations, CountrySettings, InternationalCompetition, MediaCoverage};
+use crate::{
+    Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations,
+    CountrySettings, InternationalCompetition, MediaCoverage,
+};
 
 #[derive(Default, Clone)]
 pub struct CountryBuilder {
@@ -100,7 +103,10 @@ impl CountryBuilder {
         self
     }
 
-    pub fn international_competitions(mut self, competitions: Vec<InternationalCompetition>) -> Self {
+    pub fn international_competitions(
+        mut self,
+        competitions: Vec<InternationalCompetition>,
+    ) -> Self {
         self.international_competitions = Some(competitions);
         self
     }
@@ -122,16 +128,23 @@ impl CountryBuilder {
 
     pub fn build(self) -> Result<Country, String> {
         let id = self.id.ok_or("id is required")?;
-        let generator_data = self.generator_data.unwrap_or_else(CountryGeneratorData::empty);
-        let national_team = self.national_team
+        let generator_data = self
+            .generator_data
+            .unwrap_or_else(CountryGeneratorData::empty);
+        let national_team = self
+            .national_team
             .unwrap_or_else(|| NationalTeam::new(id, &generator_data.people_names));
         Ok(Country {
             id,
             code: self.code.ok_or("code is required")?,
             slug: self.slug.ok_or("slug is required")?,
             name: self.name.ok_or("name is required")?,
-            background_color: self.background_color.unwrap_or_else(|| "#1e272d".to_string()),
-            foreground_color: self.foreground_color.unwrap_or_else(|| "#ffffff".to_string()),
+            background_color: self
+                .background_color
+                .unwrap_or_else(|| "#1e272d".to_string()),
+            foreground_color: self
+                .foreground_color
+                .unwrap_or_else(|| "#ffffff".to_string()),
             continent_id: self.continent_id.ok_or("continent_id is required")?,
             leagues: self.leagues.ok_or("leagues is required")?,
             clubs: self.clubs.ok_or("clubs is required")?,

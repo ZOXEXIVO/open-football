@@ -1,5 +1,5 @@
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -20,7 +20,13 @@ impl StateProcessingHandler for MidfielderWalkingState {
 
         // CRITICAL: Check for opponent with ball first (highest priority)
         // Using new chaining syntax: nearby(100.0).with_ball(ctx)
-        if let Some(opponent) = ctx.players().opponents().nearby(100.0).with_ball(ctx).next() {
+        if let Some(opponent) = ctx
+            .players()
+            .opponents()
+            .nearby(100.0)
+            .with_ball(ctx)
+            .next()
+        {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
             // If opponent with ball is close, tackle immediately
@@ -122,13 +128,12 @@ impl StateProcessingHandler for MidfielderWalkingState {
         // Midfielders shouldn't walk for long — get back into the action
         if ctx.in_state_time > 20 {
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running
+                MidfielderState::Running,
             ));
         }
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if ctx.player.should_follow_waypoints(ctx) {
@@ -141,8 +146,8 @@ impl StateProcessingHandler for MidfielderWalkingState {
                         current_waypoint: ctx.player.waypoint_manager.current_index,
                         path_offset: 5.0,
                     }
-                        .calculate(ctx.player)
-                        .velocity,
+                    .calculate(ctx.player)
+                    .velocity,
                 );
             }
         }
@@ -159,8 +164,9 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 target: ctx.player.start_position,
                 slowing_distance: 30.0,
             }
-                .calculate(ctx.player)
-                .velocity * 0.4, // Walking pace
+            .calculate(ctx.player)
+            .velocity
+                * 0.4, // Walking pace
         )
     }
 

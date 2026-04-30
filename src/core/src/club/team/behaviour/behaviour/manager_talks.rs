@@ -130,7 +130,9 @@ impl TeamBehaviour {
                     return true;
                 }
                 let Some(date) = today else { return true };
-                let Some(player) = players.find(*player_id) else { return true };
+                let Some(player) = players.find(*player_id) else {
+                    return true;
+                };
                 let topic = topic_for_talk(talk_type.clone());
                 !player.interactions.topic_on_cooldown(topic, date)
             })
@@ -142,7 +144,10 @@ impl TeamBehaviour {
         let mut seen: Vec<(u32, InteractionTopic)> = Vec::new();
         talk_candidates.retain(|(player_id, talk_type, _)| {
             let topic = topic_for_talk(talk_type.clone());
-            if seen.iter().any(|(pid, t)| *pid == *player_id && *t == topic) {
+            if seen
+                .iter()
+                .any(|(pid, t)| *pid == *player_id && *t == topic)
+            {
                 return false;
             }
             seen.push((*player_id, topic));
@@ -176,7 +181,9 @@ impl TeamBehaviour {
         let loyalty = player.attributes.loyalty;
 
         // Relationship bonus from existing relationship
-        let relationship_bonus = player.relations.get_staff(manager.id)
+        let relationship_bonus = player
+            .relations
+            .get_staff(manager.id)
             .map(|r| (r.level / 100.0) * 0.2)
             .unwrap_or(0.0);
 
@@ -190,10 +197,7 @@ impl TeamBehaviour {
         let promise_chance = player.happiness.factors.promise_trust / 100.0;
         let credibility_chance = player.happiness.factors.coach_credibility / 120.0;
 
-        let success_chance = (0.5
-            + man_management / 40.0
-            + motivating / 60.0
-            - temperament / 60.0
+        let success_chance = (0.5 + man_management / 40.0 + motivating / 60.0 - temperament / 60.0
             + professionalism / 80.0
             + loyalty / 80.0
             + relationship_bonus
@@ -221,10 +225,8 @@ impl TeamBehaviour {
         // manager has high man_management; weak coaches lie.
         let topic = topic_for_talk(talk_type.clone());
         let tone = pick_tone(&talk_type, manager, player);
-        let credibility = player.promise_credibility(
-            ManagerPromiseKind::PlayingTime,
-            Some(manager.id),
-        );
+        let credibility =
+            player.promise_credibility(ManagerPromiseKind::PlayingTime, Some(manager.id));
 
         // Honest framing if the talk is a "you'll play more" / "we'll
         // sort it out" promise but the squad situation makes that hard
@@ -235,9 +237,8 @@ impl TeamBehaviour {
                 | InteractionTopic::TransferRequest
                 | InteractionTopic::ContractStatus
         );
-        let honest_framing = promise_topic
-            && credibility < 50
-            && (man_management + discipline) / 2.0 >= 12.0;
+        let honest_framing =
+            promise_topic && credibility < 50 && (man_management + discipline) / 2.0 >= 12.0;
 
         // Outcomes — base table.
         let (mut morale_change, mut relationship_change) = match (&talk_type, actual_success) {
@@ -293,12 +294,20 @@ impl TeamBehaviour {
         } else {
             morale_change >= 0.0
         };
-        let rapport_mult = player.rapport.talk_reception_multiplier(manager.id, positive_tone);
+        let rapport_mult = player
+            .rapport
+            .talk_reception_multiplier(manager.id, positive_tone);
         morale_change *= rapport_mult;
 
         debug!(
             "Manager talk: {} with player {} - type {:?}, tone {:?}, honest {}, success: {}, cred {}",
-            manager.full_name, player.full_name, talk_type, tone, honest_framing, actual_success, credibility
+            manager.full_name,
+            player.full_name,
+            talk_type,
+            tone,
+            honest_framing,
+            actual_success,
+            credibility
         );
 
         ManagerTalkResult {
@@ -387,7 +396,8 @@ impl TeamBehaviour {
                 let determination_factor = determination / 20.0;
 
                 // Ambitious, determined prospects request loans sooner
-                let desire = age_urgency * 0.4 + ambition_factor * 0.35 + determination_factor * 0.25;
+                let desire =
+                    age_urgency * 0.4 + ambition_factor * 0.35 + determination_factor * 0.25;
 
                 // At age 21+ with decent ambition (>10), almost always request
                 // At age 19-20, need high ambition (>14) or long wait
@@ -412,7 +422,8 @@ impl TeamBehaviour {
 
             let ability_modifier = (ability as f32 - 60.0) / 140.0;
             let ambition_modifier = 1.0 - ambition / 30.0;
-            let combined_modifier = (ambition_modifier * 0.5 + (1.0 - ability_modifier) * 0.5).max(0.4);
+            let combined_modifier =
+                (ambition_modifier * 0.5 + (1.0 - ability_modifier) * 0.5).max(0.4);
             let threshold = (21.0 * combined_modifier) as u16;
 
             let playing_time_factor = calculate_playing_time_factor_for_complaint(player);
@@ -508,7 +519,9 @@ impl TeamBehaviour {
         let ambition = player.attributes.ambition;
         let determination = player.skills.mental.determination;
 
-        let relationship_bonus = player.relations.get_staff(manager.id)
+        let relationship_bonus = player
+            .relations
+            .get_staff(manager.id)
             .map(|r| (r.level / 100.0) * 0.2)
             .unwrap_or(0.0);
 
@@ -516,8 +529,10 @@ impl TeamBehaviour {
             // For loan requests, "success" means the manager AGREES to loan the player.
             // High ambition/determination players are MORE convincing (harder to deny).
             // Good man_management coaches are more likely to agree to a sensible loan.
-            let player_conviction = ambition / 20.0 * 0.4 + determination / 20.0 * 0.3
-                + professionalism / 20.0 * 0.2 + 0.1;
+            let player_conviction = ambition / 20.0 * 0.4
+                + determination / 20.0 * 0.3
+                + professionalism / 20.0 * 0.2
+                + 0.1;
             let coach_willingness = man_management / 20.0 * 0.5 + motivating / 20.0 * 0.3;
 
             // Same trio of modifiers as conduct_manager_talk: rapport
@@ -544,7 +559,7 @@ impl TeamBehaviour {
             let success = rand::random::<f32>() < success_chance;
 
             let (mut morale_change, rel_change) = if success {
-                (5.0, 0.2)   // Player happy — loan agreed
+                (5.0, 0.2) // Player happy — loan agreed
             } else {
                 // Denied loan — ambitious players take it harder
                 let morale_hit = -3.0 - (ambition / 20.0) * 4.0; // -3 to -7
@@ -556,8 +571,9 @@ impl TeamBehaviour {
             // (the player reads it as confirmation that the coach
             // doesn't rate them).
             let positive_tone = success;
-            let rapport_mult =
-                player.rapport.talk_reception_multiplier(manager.id, positive_tone);
+            let rapport_mult = player
+                .rapport
+                .talk_reception_multiplier(manager.id, positive_tone);
             morale_change *= rapport_mult;
 
             let tone = pick_tone(&talk_type, manager, player);
@@ -821,10 +837,9 @@ mod tests {
         let morale_change: f32 = -5.8;
         let positive_tone = false;
 
-        let low_rapport_morale = morale_change
-            * low_rapport.talk_reception_multiplier(99, positive_tone);
-        let neutral_morale = morale_change
-            * neutral.talk_reception_multiplier(99, positive_tone);
+        let low_rapport_morale =
+            morale_change * low_rapport.talk_reception_multiplier(99, positive_tone);
+        let neutral_morale = morale_change * neutral.talk_reception_multiplier(99, positive_tone);
 
         assert!(
             low_rapport_morale < neutral_morale,
@@ -850,6 +865,9 @@ mod tests {
         } else {
             morale_change >= 0.0
         };
-        assert!(!positive_tone, "successful Discipline should still read negative");
+        assert!(
+            !positive_tone,
+            "successful Discipline should still read negative"
+        );
     }
 }

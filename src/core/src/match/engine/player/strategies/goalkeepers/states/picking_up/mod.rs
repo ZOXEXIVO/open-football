@@ -57,7 +57,6 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
         }
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the ball to pick it up
         let ball_position = ctx.tick_context.positions.ball.position;

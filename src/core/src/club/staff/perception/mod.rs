@@ -67,17 +67,14 @@ impl CoachDecisionState {
         let coach_seed = self.profile.coach_seed;
         let stubbornness = self.profile.stubbornness;
 
-        let impression = self
-            .impressions
-            .entry(player.id)
-            .or_insert_with(|| {
-                let mut imp = PlayerImpression::new(player.id, date);
-                imp.bias = initial_bias;
-                imp.prev_red_cards = player.statistics.red_cards;
-                imp.prev_goals = player.statistics.goals;
-                imp.prev_avg_rating = player.statistics.average_rating;
-                imp
-            });
+        let impression = self.impressions.entry(player.id).or_insert_with(|| {
+            let mut imp = PlayerImpression::new(player.id, date);
+            imp.bias = initial_bias;
+            imp.prev_red_cards = player.statistics.red_cards;
+            imp.prev_goals = player.statistics.goals;
+            imp.prev_avg_rating = player.statistics.average_rating;
+            imp
+        });
 
         impression.bias.visibility = visibility;
 
@@ -116,7 +113,8 @@ impl CoachDecisionState {
         let mut heat_delta: f32 = 0.0;
 
         if player.statistics.red_cards > impression.prev_red_cards {
-            impression.bias.quality_offset = (impression.bias.quality_offset - 0.5 * negativity_bias).clamp(-3.0, 3.0);
+            impression.bias.quality_offset =
+                (impression.bias.quality_offset - 0.5 * negativity_bias).clamp(-3.0, 3.0);
             impression.bias.disappointments = impression.bias.disappointments.saturating_add(1);
             impression.bias.overreaction_timer = (3.0 + volatility * 3.0) as u8;
             impression.bias.overreaction_magnitude = -1.5 * volatility;
@@ -127,26 +125,33 @@ impl CoachDecisionState {
         if impression.prev_avg_rating > 0.0
             && player.statistics.average_rating < impression.prev_avg_rating - 0.5
         {
-            impression.bias.quality_offset = (impression.bias.quality_offset - 0.3 * negativity_bias).clamp(-3.0, 3.0);
+            impression.bias.quality_offset =
+                (impression.bias.quality_offset - 0.3 * negativity_bias).clamp(-3.0, 3.0);
             if volatility > 0.4 {
-                impression.bias.overreaction_timer = impression.bias.overreaction_timer
+                impression.bias.overreaction_timer = impression
+                    .bias
+                    .overreaction_timer
                     .max((2.0 + volatility * 2.0) as u8);
-                impression.bias.overreaction_magnitude = (impression.bias.overreaction_magnitude
-                    - 0.8 * volatility).clamp(-3.0, 3.0);
+                impression.bias.overreaction_magnitude =
+                    (impression.bias.overreaction_magnitude - 0.8 * volatility).clamp(-3.0, 3.0);
             }
             heat_delta += 0.10 * volatility;
         }
 
         if player.statistics.goals > impression.prev_goals + 2 {
-            impression.bias.quality_offset = (impression.bias.quality_offset + 0.3).clamp(-3.0, 3.0);
-            impression.bias.overreaction_timer = impression.bias.overreaction_timer
+            impression.bias.quality_offset =
+                (impression.bias.quality_offset + 0.3).clamp(-3.0, 3.0);
+            impression.bias.overreaction_timer = impression
+                .bias
+                .overreaction_timer
                 .max((2.0 + volatility) as u8);
-            impression.bias.overreaction_magnitude = (impression.bias.overreaction_magnitude
-                + 1.0 * volatility).clamp(-3.0, 3.0);
+            impression.bias.overreaction_magnitude =
+                (impression.bias.overreaction_magnitude + 1.0 * volatility).clamp(-3.0, 3.0);
         }
 
         if player.behaviour.is_poor() {
-            impression.bias.quality_offset = (impression.bias.quality_offset - 0.4 * negativity_bias).clamp(-3.0, 3.0);
+            impression.bias.quality_offset =
+                (impression.bias.quality_offset - 0.4 * negativity_bias).clamp(-3.0, 3.0);
             impression.bias.disappointments = impression.bias.disappointments.saturating_add(1);
             impression.bias.overreaction_timer = (2.0 + volatility * 2.0) as u8;
             impression.bias.overreaction_magnitude = -1.0 * volatility;
@@ -156,7 +161,8 @@ impl CoachDecisionState {
         if player.statistics.average_rating > 7.5
             && player.statistics.played + player.statistics.played_subs > 3
         {
-            impression.bias.quality_offset = (impression.bias.quality_offset + 0.3).clamp(-3.0, 3.0);
+            impression.bias.quality_offset =
+                (impression.bias.quality_offset + 0.3).clamp(-3.0, 3.0);
         }
 
         impression.prev_red_cards = player.statistics.red_cards;
@@ -167,22 +173,28 @@ impl CoachDecisionState {
         if impression.bias.overreaction_timer > 0 {
             impression.bias.overreaction_timer -= 1;
             impression.bias.quality_offset = (impression.bias.quality_offset
-                + impression.bias.overreaction_magnitude * 0.15).clamp(-3.0, 3.0);
+                + impression.bias.overreaction_magnitude * 0.15)
+                .clamp(-3.0, 3.0);
         } else {
             impression.bias.overreaction_magnitude *= 0.5;
         }
 
         // Perception drift
-        let drift_noise = perception_noise_raw(coach_seed, player.id,
-            current_week.wrapping_add(0xDFFF)) * 0.12 * (1.0 - judging_accuracy);
-        impression.bias.perception_drift = (impression.bias.perception_drift * 0.97 + drift_noise)
-            .clamp(-2.0, 2.0);
+        let drift_noise =
+            perception_noise_raw(coach_seed, player.id, current_week.wrapping_add(0xDFFF))
+                * 0.12
+                * (1.0 - judging_accuracy);
+        impression.bias.perception_drift =
+            (impression.bias.perception_drift * 0.97 + drift_noise).clamp(-2.0, 2.0);
 
         // Bias decay
         impression.bias.quality_offset *= 0.98;
-        let offset_noise = perception_noise_raw(coach_seed, player.id,
-            current_week.wrapping_add(0xD01F)) * 0.05 * (1.0 - judging_accuracy);
-        impression.bias.quality_offset = (impression.bias.quality_offset + offset_noise).clamp(-3.0, 3.0);
+        let offset_noise =
+            perception_noise_raw(coach_seed, player.id, current_week.wrapping_add(0xD01F))
+                * 0.05
+                * (1.0 - judging_accuracy);
+        impression.bias.quality_offset =
+            (impression.bias.quality_offset + offset_noise).clamp(-3.0, 3.0);
 
         impression.bias.sunk_cost *= 0.95;
 
@@ -198,7 +210,8 @@ impl CoachDecisionState {
             let base_blend = trust_in_decisions * 0.6;
             let delta = new_quality - impression.perceived_quality;
 
-            let direction_matches = (delta > 0.0) == (impression.perceived_quality >= impression.bias.first_impression);
+            let direction_matches =
+                (delta > 0.0) == (impression.perceived_quality >= impression.bias.first_impression);
             let conf_shift = if direction_matches {
                 -confirmation_bias * 0.15
             } else {
@@ -213,7 +226,8 @@ impl CoachDecisionState {
 
             let vis_dampening = (1.0 - visibility) * 0.2;
 
-            let old_weight = (base_blend + conf_shift + neg_shift + vis_dampening).clamp(0.15, 0.90);
+            let old_weight =
+                (base_blend + conf_shift + neg_shift + vis_dampening).clamp(0.15, 0.90);
             let new_weight = 1.0 - old_weight;
 
             impression.perceived_quality =

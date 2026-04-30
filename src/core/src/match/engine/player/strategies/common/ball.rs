@@ -30,11 +30,7 @@ impl<'b> BallOperationsImpl<'b> {
     }
 
     pub fn velocity(&self) -> Vector3<f32> {
-        self.ctx
-            .tick_context
-            .positions
-            .ball
-            .velocity        
+        self.ctx.tick_context.positions.ball.velocity
     }
 
     #[inline]
@@ -142,7 +138,7 @@ impl<'b> BallOperationsImpl<'b> {
         match self.ctx.player.side {
             Some(PlayerSide::Left) => self.ctx.context.goal_positions.left,
             Some(PlayerSide::Right) => self.ctx.context.goal_positions.right,
-            _ =>  panic!("no player side"),
+            _ => panic!("no player side"),
         }
     }
 
@@ -214,7 +210,11 @@ impl<'b> BallOperationsImpl<'b> {
     /// Check if current player has been notified to take the ball
     #[inline]
     pub fn is_player_notified(&self) -> bool {
-        self.ctx.tick_context.ball.notified_players().contains(&self.ctx.player.id)
+        self.ctx
+            .tick_context
+            .ball
+            .notified_players()
+            .contains(&self.ctx.player.id)
     }
 
     /// Check if ball should be taken immediately (emergency situation)
@@ -231,7 +231,8 @@ impl<'b> BallOperationsImpl<'b> {
 
         if (is_nearby || is_notified) && !self.is_owned() {
             let ball_velocity = self.speed();
-            if ball_velocity < 3.0 { // Increased from 1.0 to catch slow rolling balls
+            if ball_velocity < 3.0 {
+                // Increased from 1.0 to catch slow rolling balls
                 return true;
             }
         }

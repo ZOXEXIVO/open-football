@@ -1,4 +1,5 @@
-﻿use crate::r#match::defenders::states::DefenderState;
+﻿use crate::club::player::traits::PlayerTrait;
+use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::tactics::TacticalPositions;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
@@ -9,7 +10,6 @@ use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{GameTickContext, MatchContext, StateProcessingContext};
-use crate::club::player::traits::PlayerTrait;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerPositionType,
     PlayerSkills,
@@ -158,7 +158,8 @@ impl MatchPlayer {
     }
 
     pub fn rebuild_waypoint_cache(&mut self) {
-        self.cached_waypoints = self.tactical_position
+        self.cached_waypoints = self
+            .tactical_position
             .tactical_positions
             .iter()
             .filter(|tp| tp.position == self.tactical_position.current_position)
@@ -347,16 +348,19 @@ impl MatchPlayer {
         // simultaneously.
         let me_id = self.id;
         let me_pos = self.position;
-        let teammate_crowding = ctx.players().teammates().all()
-            .any(|t| {
-                if t.id == me_id { return false; }
-                let d_sq = (t.position - me_pos).norm_squared();
-                if d_sq >= 144.0 { return false; } // 12² = 144
-                // Only one of the pair peels (the lower id). Keeps the
-                // behaviour deterministic per-tick and avoids both
-                // leaving their post simultaneously.
-                t.id > me_id
-            });
+        let teammate_crowding = ctx.players().teammates().all().any(|t| {
+            if t.id == me_id {
+                return false;
+            }
+            let d_sq = (t.position - me_pos).norm_squared();
+            if d_sq >= 144.0 {
+                return false;
+            } // 12² = 144
+            // Only one of the pair peels (the lower id). Keeps the
+            // behaviour deterministic per-tick and avoids both
+            // leaving their post simultaneously.
+            t.id > me_id
+        });
         if teammate_crowding {
             return true;
         }

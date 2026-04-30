@@ -1,5 +1,5 @@
-use std::env;
 use log::info;
+use std::env;
 
 pub struct Settings {
     pub match_events: bool,
@@ -19,11 +19,16 @@ impl Settings {
                 .map(|v| v == "true")
                 .unwrap_or(false);
 
-        let match_threads = args.iter()
+        let match_threads = args
+            .iter()
             .find(|arg| arg.starts_with("--match-threads="))
             .and_then(|arg| arg.strip_prefix("--match-threads="))
             .and_then(|v| v.parse().ok())
-            .or_else(|| env::var("MATCH_PLAY_POOL_MAX_THREADS").ok().and_then(|v| v.parse().ok()))
+            .or_else(|| {
+                env::var("MATCH_PLAY_POOL_MAX_THREADS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+            })
             .unwrap_or_else(|| {
                 std::thread::available_parallelism()
                     .map(|n| n.get())

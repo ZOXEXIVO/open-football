@@ -1,5 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -56,8 +56,11 @@ impl StateProcessingHandler for DefenderPressingState {
             // Scale pressing distance by tactical intensity
             let intensity = ctx.team().tactics().pressing_intensity();
             let pressing_threshold = if ctx.ball().on_own_side()
-                && ctx.ball().distance_to_own_goal() < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD {
-                BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD + MAX_PRESSING_BONUS_DEFENSIVE_THIRD * intensity
+                && ctx.ball().distance_to_own_goal()
+                    < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD
+            {
+                BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD
+                    + MAX_PRESSING_BONUS_DEFENSIVE_THIRD * intensity
             } else {
                 BASE_PRESSING_DISTANCE + MAX_PRESSING_BONUS * intensity
             };
@@ -108,7 +111,6 @@ impl StateProcessingHandler for DefenderPressingState {
             ))
         }
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the opponent with the ball
@@ -191,7 +193,8 @@ impl StateProcessingHandler for DefenderPressingState {
 
         // Loose ball nearby — pursue it
         if !ctx.ball().is_owned() && ctx.ball().distance() < 80.0 {
-            let direction = (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
+            let direction =
+                (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
             let speed = ctx.player.skills.physical.pace;
             return Some(direction * speed);
         }

@@ -133,13 +133,17 @@ fn pct(val: f32) -> String {
 impl Player {
     pub fn as_llm(&self, staff: &Staff, sim_date: chrono::NaiveDate) -> String {
         let age = DateUtils::age(self.birth_date, sim_date);
-        let positions: BTreeMap<String, String> = self.positions.positions
+        let positions: BTreeMap<String, String> = self
+            .positions
+            .positions
             .iter()
             .filter(|p| p.level >= 5)
-            .map(|p| (
-                p.position.get_short_name().to_string(),
-                format!("{}%", p.level as u32 * 5),
-            ))
+            .map(|p| {
+                (
+                    p.position.get_short_name().to_string(),
+                    format!("{}%", p.level as u32 * 5),
+                )
+            })
             .collect();
         let morale = self.happiness.morale as u8;
         let status = self.status_string();
@@ -213,17 +217,35 @@ impl Player {
             physical_condition: format!("{}%", attr.condition_percentage()),
             condition_label: self.condition_label().as_str().to_string(),
             match_readiness: pct(self.skills.physical.match_readiness),
-            fitness: format!("{}%", (attr.fitness as f32 / 10000.0 * 100.0).round() as u32),
-            jadedness: format!("{}%", (attr.jadedness as f32 / 10000.0 * 100.0).round() as u32),
+            fitness: format!(
+                "{}%",
+                (attr.fitness as f32 / 10000.0 * 100.0).round() as u32
+            ),
+            jadedness: format!(
+                "{}%",
+                (attr.jadedness as f32 / 10000.0 * 100.0).round() as u32
+            ),
             morale: format!("{}%", morale),
             status,
             contract_months_left,
             annual_wage,
             squad_status,
             reputation: PlayerReputationLlm {
-                current: format!("{}%", (self.player_attributes.current_reputation as f32 / 10000.0 * 100.0).round() as u32),
-                home: format!("{}%", (self.player_attributes.home_reputation as f32 / 10000.0 * 100.0).round() as u32),
-                world: format!("{}%", (self.player_attributes.world_reputation as f32 / 10000.0 * 100.0).round() as u32),
+                current: format!(
+                    "{}%",
+                    (self.player_attributes.current_reputation as f32 / 10000.0 * 100.0).round()
+                        as u32
+                ),
+                home: format!(
+                    "{}%",
+                    (self.player_attributes.home_reputation as f32 / 10000.0 * 100.0).round()
+                        as u32
+                ),
+                world: format!(
+                    "{}%",
+                    (self.player_attributes.world_reputation as f32 / 10000.0 * 100.0).round()
+                        as u32
+                ),
             },
             technical: PlayerTechnicalLlm {
                 corners: pct(t.corners),
@@ -283,13 +305,19 @@ impl Player {
 
         let mut flags = Vec::new();
         if self.player_attributes.is_injured {
-            flags.push(format!("INJ {}d", self.player_attributes.injury_days_remaining));
+            flags.push(format!(
+                "INJ {}d",
+                self.player_attributes.injury_days_remaining
+            ));
         }
         if self.player_attributes.is_banned {
             flags.push("BAN".to_string());
         }
         if self.player_attributes.is_in_recovery() {
-            flags.push(format!("REC {}d", self.player_attributes.recovery_days_remaining));
+            flags.push(format!(
+                "REC {}d",
+                self.player_attributes.recovery_days_remaining
+            ));
         }
 
         let statuses = self.statuses.get();
@@ -306,7 +334,11 @@ impl Player {
             flags.push("UNH".to_string());
         }
 
-        if flags.is_empty() { "OK".to_string() } else { flags.join(" ") }
+        if flags.is_empty() {
+            "OK".to_string()
+        } else {
+            flags.join(" ")
+        }
     }
 
     fn training_trend_llm(&self) -> Option<PlayerTrainingTrendLlm> {
@@ -326,16 +358,20 @@ impl Player {
     }
 
     fn club_history_vec(&self) -> Vec<PlayerHistoryLlm> {
-        self.statistics_history.items.iter().rev().take(3).map(|h| {
-            PlayerHistoryLlm {
+        self.statistics_history
+            .items
+            .iter()
+            .rev()
+            .take(3)
+            .map(|h| PlayerHistoryLlm {
                 club_reputation: format!("{}/10000", h.team_reputation),
                 season: h.season.display.clone(),
                 apps: h.statistics.played + h.statistics.played_subs,
                 goals: h.statistics.goals,
                 assists: h.statistics.assists,
                 average_rating: h.statistics.average_rating,
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     fn staff_relationship_llm(staff: &Staff, player_id: u32) -> String {

@@ -1,16 +1,16 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
-use crate::common::slug::{resolve_player_page, PlayerPage};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
-use core::utils::FormattingUtils;
 use core::Player;
 use core::PlayerStatusType;
 use core::SimulatorData;
+use core::utils::FormattingUtils;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -150,7 +150,11 @@ pub async fn player_personal_action(
         &route_params.lang,
         "/personal",
     )? {
-        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Found {
+            player,
+            team,
+            canonical_slug,
+        } => (player, team, canonical_slug),
         PlayerPage::Redirect(r) => return Ok(r),
     };
 
@@ -159,16 +163,31 @@ pub async fn player_personal_action(
     } else {
         (Vec::new(), Vec::new())
     };
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
+    let league_refs: Vec<(&str, &str)> = country_leagues
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
 
-    let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
+    let title = format!(
+        "{} {}",
+        player.full_name.display_first_name(),
+        player.full_name.display_last_name()
+    );
 
     let personality = get_personality(player);
     let morale = get_morale(player, &i18n);
     let happiness_factors = get_happiness_factors(player, &i18n);
     let concerns = get_concerns(player, &i18n);
-    let behaviour = i18n.t(&format!("behaviour_{}", player.behaviour.as_str().to_lowercase())).to_string();
+    let behaviour = i18n
+        .t(&format!(
+            "behaviour_{}",
+            player.behaviour.as_str().to_lowercase()
+        ))
+        .to_string();
 
     let manager_relationship = team_opt
         .map(|team| {
@@ -177,10 +196,15 @@ pub async fn player_personal_action(
         })
         .flatten();
 
-    let favorite_clubs: Vec<FavoriteClubDto> = player.favorite_clubs.iter()
+    let favorite_clubs: Vec<FavoriteClubDto> = player
+        .favorite_clubs
+        .iter()
         .filter_map(|&club_id| {
             simulator_data.club(club_id).map(|club| {
-                let slug = club.teams.teams.iter()
+                let slug = club
+                    .teams
+                    .teams
+                    .iter()
                     .find(|t| t.team_type == core::TeamType::Main)
                     .map(|t| t.slug.clone())
                     .unwrap_or_default();
@@ -208,15 +232,41 @@ pub async fn player_personal_action(
                 i18n.t("free_agent").to_string()
             }
         }),
-        sub_title_link: team_opt.map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug)).unwrap_or_default(),
+        sub_title_link: team_opt
+            .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
+            .unwrap_or_default(),
         sub_title_country_code: String::new(),
-        header_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.background.clone())).unwrap_or_else(|| "#808080".to_string()),
-        foreground_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.foreground.clone())).unwrap_or_else(|| "#ffffff".to_string()),
+        header_color: team_opt
+            .and_then(|t| {
+                simulator_data
+                    .club(t.club_id)
+                    .map(|c| c.colors.background.clone())
+            })
+            .unwrap_or_else(|| "#808080".to_string()),
+        foreground_color: team_opt
+            .and_then(|t| {
+                simulator_data
+                    .club(t.club_id)
+                    .map(|c| c.colors.foreground.clone())
+            })
+            .unwrap_or_else(|| "#ffffff".to_string()),
         menu_sections: if let Some(team) = team_opt {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
             let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
-            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
-            views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main)
+            let mp = views::MenuParams {
+                i18n: &i18n,
+                lang: &route_params.lang,
+                current_path: &current_path,
+                country_name: cn,
+                country_slug: cs,
+            };
+            views::team_menu(
+                &mp,
+                &neighbor_refs,
+                &team.slug,
+                &league_refs,
+                team.team_type == core::TeamType::Main,
+            )
         } else {
             Vec::new()
         },
@@ -240,7 +290,8 @@ pub async fn player_personal_action(
         favorite_clubs,
         player_info,
         reputation,
-    }.into_response())
+    }
+    .into_response())
 }
 
 fn get_personality(player: &Player) -> PersonalityDto {
@@ -256,7 +307,16 @@ fn get_personality(player: &Player) -> PersonalityDto {
         attrs.sportsmanship.round().clamp(1.0, 20.0) as u8,
         attrs.temperament.round().clamp(1.0, 20.0) as u8,
     ];
-    let names = ["adaptability", "ambition", "controversy", "loyalty", "pressure", "professionalism", "sportsmanship", "temperament"];
+    let names = [
+        "adaptability",
+        "ambition",
+        "controversy",
+        "loyalty",
+        "pressure",
+        "professionalism",
+        "sportsmanship",
+        "temperament",
+    ];
 
     // Centered in a 400x280 viewBox with enough room for labels
     let cx: f32 = 200.0;
@@ -286,7 +346,11 @@ fn get_personality(player: &Player) -> PersonalityDto {
     for i in 0..n {
         let angle = angle_at(i);
         let ratio = values[i] as f32 / 20.0;
-        data_points.push(format!("{:.1},{:.1}", cx + max_r * ratio * angle.cos(), cy + max_r * ratio * angle.sin()));
+        data_points.push(format!(
+            "{:.1},{:.1}",
+            cx + max_r * ratio * angle.cos(),
+            cy + max_r * ratio * angle.sin()
+        ));
 
         radar_axes.push(RadarAxisDto {
             x2: cx + max_r * angle.cos(),
@@ -352,14 +416,20 @@ fn get_player_info(player: &Player, i18n: &I18n) -> PlayerInfoDto {
             PlayerSquadStatus::NotNeeded => i18n.t("squad_not_needed"),
             _ => "",
         };
-        let wage = format!("{} {}", FormattingUtils::format_money(contract.salary as f64), i18n.t("per_year"));
+        let wage = format!(
+            "{} {}",
+            FormattingUtils::format_money(contract.salary as f64),
+            i18n.t("per_year")
+        );
         let expiry = contract.expiration.format("%d.%m.%Y").to_string();
         (status.to_string(), wage, expiry)
     } else {
         (String::new(), String::new(), String::new())
     };
 
-    let languages: Vec<PlayerLanguageDto> = player.languages.iter()
+    let languages: Vec<PlayerLanguageDto> = player
+        .languages
+        .iter()
         .filter(|l| l.proficiency >= 5 || l.is_native)
         .map(|l| PlayerLanguageDto {
             name: i18n.t(l.language.i18n_key()).to_string(),
@@ -471,7 +541,11 @@ fn get_concerns(player: &Player, i18n: &I18n) -> Vec<String> {
 
     // Add happiness-derived concerns
     let f = &player.happiness.factors;
-    if f.playing_time < -3.0 && !concerns.iter().any(|c| c.contains(&i18n.t("concern_unhappy").to_string())) {
+    if f.playing_time < -3.0
+        && !concerns
+            .iter()
+            .any(|c| c.contains(&i18n.t("concern_unhappy").to_string()))
+    {
         concerns.push(i18n.t("concern_lacking_playing_time").to_string());
     }
     if f.salary_satisfaction < -3.0 {
@@ -487,7 +561,11 @@ fn get_concerns(player: &Player, i18n: &I18n) -> Vec<String> {
     concerns
 }
 
-fn get_manager_relationship(player: &Player, head_coach: &core::Staff, i18n: &I18n) -> Option<ManagerRelationshipDto> {
+fn get_manager_relationship(
+    player: &Player,
+    head_coach: &core::Staff,
+    i18n: &I18n,
+) -> Option<ManagerRelationshipDto> {
     let rel = player.relations.get_staff(head_coach.id)?;
     let level = rel.level.round().clamp(-100.0, 100.0) as i8;
     let label = if level > 50 {
@@ -528,15 +606,22 @@ fn reputation_label(value: i16, i18n: &I18n) -> String {
         i18n.t("rep_local")
     } else {
         i18n.t("rep_unknown")
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn get_reputation(player: &Player, i18n: &I18n) -> ReputationDto {
     let pa = &player.player_attributes;
     // Scale 0-10000 to 0-100 for progress bar percentage
-    let current_pct = (pa.current_reputation as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
-    let home_pct = (pa.home_reputation as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
-    let world_pct = (pa.world_reputation as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
+    let current_pct = (pa.current_reputation as f32 / 100.0)
+        .round()
+        .clamp(0.0, 100.0) as u8;
+    let home_pct = (pa.home_reputation as f32 / 100.0)
+        .round()
+        .clamp(0.0, 100.0) as u8;
+    let world_pct = (pa.world_reputation as f32 / 100.0)
+        .round()
+        .clamp(0.0, 100.0) as u8;
 
     ReputationDto {
         current: current_pct,
@@ -562,7 +647,10 @@ fn get_neighbor_teams(
     let mut country_leagues: Vec<(u32, String, String)> = data
         .country_by_club(club_id)
         .map(|country| {
-            country.leagues.leagues.iter()
+            country
+                .leagues
+                .leagues
+                .iter()
                 .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
@@ -572,6 +660,9 @@ fn get_neighbor_teams(
 
     Ok((
         teams,
-        country_leagues.into_iter().map(|(_, name, slug)| (name, slug)).collect(),
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
     ))
 }

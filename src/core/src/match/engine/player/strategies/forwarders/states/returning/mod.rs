@@ -1,8 +1,8 @@
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior, MATCH_TIME_MS,
+    ConditionContext, MATCH_TIME_MS, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -22,12 +22,10 @@ impl StateProcessingHandler for ForwardReturningState {
             ));
         }
 
-        if ctx.team().is_control_ball(){
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running,
-            ));
+        if ctx.team().is_control_ball() {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
-        
+
         if !ctx.team().is_control_ball() && ctx.ball().distance() < 200.0 {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Intercepting,
@@ -66,7 +64,6 @@ impl StateProcessingHandler for ForwardReturningState {
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(

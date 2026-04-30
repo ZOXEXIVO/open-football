@@ -8,9 +8,7 @@
 //! around the captain, rather than acts the captain directly performs.
 
 use super::TeamBehaviour;
-use crate::club::team::behaviour::{
-    PlayerRelationshipChangeResult, TeamBehaviourResult,
-};
+use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{ChangeType, Player, PlayerCollection};
@@ -67,14 +65,15 @@ impl TeamBehaviour {
                         // The young player gravitates toward the senior:
                         // direction is youth→leader, mirroring how
                         // mentorship admiration propagates.
-                        result.players.relationship_result.push(
-                            PlayerRelationshipChangeResult {
+                        result
+                            .players
+                            .relationship_result
+                            .push(PlayerRelationshipChangeResult {
                                 from_player_id: other.id,
                                 to_player_id: leader.id,
                                 relationship_change: lift,
                                 change_type: ChangeType::MentorshipBond,
-                            },
-                        );
+                            });
                     }
                 }
 
@@ -102,14 +101,15 @@ impl TeamBehaviour {
                         // from the controversial star, not the other way
                         // round — the star feels untouchable, the pro
                         // feels embarrassed by association.
-                        result.players.relationship_result.push(
-                            PlayerRelationshipChangeResult {
+                        result
+                            .players
+                            .relationship_result
+                            .push(PlayerRelationshipChangeResult {
                                 from_player_id: other.id,
                                 to_player_id: leader.id,
                                 relationship_change: drag,
                                 change_type: ChangeType::ReputationTension,
-                            },
-                        );
+                            });
                     }
                 }
             }

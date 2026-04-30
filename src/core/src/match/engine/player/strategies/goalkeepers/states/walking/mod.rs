@@ -1,12 +1,11 @@
+use crate::IntegerUtils;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::processor::StateChangeResult;
-use crate::r#match::player::strategies::processor::{StateProcessingContext, StateProcessingHandler};
-use crate::r#match::{
-    ConditionContext, PlayerSide, SteeringBehavior,
-    VectorExtensions,
+use crate::r#match::player::strategies::processor::{
+    StateProcessingContext, StateProcessingHandler,
 };
-use crate::IntegerUtils;
+use crate::r#match::{ConditionContext, PlayerSide, SteeringBehavior, VectorExtensions};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -114,7 +113,6 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Calculate optimal position using goalkeeper skills
         let optimal_position = self.calculate_intelligent_position(ctx);
@@ -129,8 +127,9 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
                     distance: 50.0,
                     angle: IntegerUtils::random(0, 360) as f32,
                 }
-                    .calculate(ctx.player)
-                    .velocity * 0.7, // Active movement for fine positioning
+                .calculate(ctx.player)
+                .velocity
+                    * 0.7, // Active movement for fine positioning
             )
         } else {
             // Need to reposition - use arrive for smooth movement
@@ -139,8 +138,8 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
                     target: optimal_position,
                     slowing_distance: 15.0,
                 }
-                    .calculate(ctx.player)
-                    .velocity,
+                .calculate(ctx.player)
+                .velocity,
             )
         }
     }
@@ -161,7 +160,9 @@ impl GoalkeeperWalkingState {
 
         // Check for opponents with ball
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
-            let distance_to_opponent = opponent_with_ball.position.distance_to(&ctx.player.position);
+            let distance_to_opponent = opponent_with_ball
+                .position
+                .distance_to(&ctx.player.position);
 
             // Better concentration means better threat assessment
             if distance_to_opponent < 50.0 {
@@ -196,7 +197,8 @@ impl GoalkeeperWalkingState {
         let anticipation = goalkeeper_skills.mental.anticipation / 20.0;
 
         // Combined skill factor for coming out
-        let coming_out_ability = (decision_skill + rushing_out + command_of_area + anticipation) / 4.0;
+        let coming_out_ability =
+            (decision_skill + rushing_out + command_of_area + anticipation) / 4.0;
 
         // Base threshold adjusted by skills
         let base_threshold = 100.0;
@@ -209,12 +211,14 @@ impl GoalkeeperWalkingState {
         // Check if goalkeeper can reach ball first
         if ball_loose && ball_in_danger_zone {
             // Use acceleration and agility for reach calculation
-            let reach_ability = (goalkeeper_skills.physical.acceleration +
-                goalkeeper_skills.physical.agility) / 40.0;
+            let reach_ability = (goalkeeper_skills.physical.acceleration
+                + goalkeeper_skills.physical.agility)
+                / 40.0;
 
             // Check if any opponent is closer
             for opponent in ctx.players().opponents().nearby(150.0) {
-                let opp_distance_to_ball = (opponent.position - ctx.tick_context.positions.ball.position).magnitude();
+                let opp_distance_to_ball =
+                    (opponent.position - ctx.tick_context.positions.ball.position).magnitude();
                 let keeper_distance_to_ball = ball_distance;
 
                 // Factor in goalkeeper's reach ability
@@ -292,7 +296,12 @@ impl GoalkeeperWalkingState {
 
             // Position more centrally when ball is far
             let mut new_position = goal_position;
-            new_position.x += optimal_distance * (if ctx.player.side == Some(PlayerSide::Left) { 1.0 } else { -1.0 });
+            new_position.x += optimal_distance
+                * (if ctx.player.side == Some(PlayerSide::Left) {
+                    1.0
+                } else {
+                    -1.0
+                });
 
             self.limit_to_penalty_area(new_position, ctx)
         }

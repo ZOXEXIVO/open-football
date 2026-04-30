@@ -5,9 +5,9 @@ use crate::{Player, PlayerSquadStatus, Tactics};
 use chrono::NaiveDate;
 use log::debug;
 
+use super::SelectionPolicy;
 use super::helpers;
 use super::scoring::ScoringEngine;
-use super::SelectionPolicy;
 
 /// Select the best starting 11 for competitive matches.
 pub(crate) fn select_starting_eleven(
@@ -433,7 +433,10 @@ fn policy_starting_adjustment(
     // Use position-weighted physical_load so a 90-min wingback gets
     // rotated where a 90-min keeper isn't. Falls back to minutes_last_7
     // when the new field hasn't accumulated yet (early sim, fresh save).
-    let load = player.load.physical_load_7.max(player.load.minutes_last_7 * 0.95);
+    let load = player
+        .load
+        .physical_load_7
+        .max(player.load.minutes_last_7 * 0.95);
     let morale = player.happiness.morale;
 
     (match policy {

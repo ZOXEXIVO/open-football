@@ -22,7 +22,8 @@ impl StateProcessingHandler for GoalkeeperDivingState {
         }
 
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
-        let ball_moving_away = ball_velocity.dot(&(ctx.player.position - ctx.ball().direction_to_own_goal())) > 0.0;
+        let ball_moving_away =
+            ball_velocity.dot(&(ctx.player.position - ctx.ball().direction_to_own_goal())) > 0.0;
 
         // Ball is far away and moving away from goal — the dive missed
         // the line, the shot went wide, or the ball was already deflected
@@ -49,7 +50,9 @@ impl StateProcessingHandler for GoalkeeperDivingState {
             ));
         } else if self.is_ball_nearby(ctx) {
             let mut result = StateChangeResult::with_goalkeeper_state(GoalkeeperState::Catching);
-            result.events.add_player_event(PlayerEvent::ClaimBall(ctx.player.id));
+            result
+                .events
+                .add_player_event(PlayerEvent::ClaimBall(ctx.player.id));
             return Some(result);
         }
 
@@ -61,7 +64,6 @@ impl StateProcessingHandler for GoalkeeperDivingState {
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let dive_direction = self.calculate_dive_direction(ctx);
@@ -105,7 +107,8 @@ impl GoalkeeperDivingState {
         let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
         let agility = ctx.player.skills.physical.agility / 20.0;
         // Explosive dive speed — reflexes and agility are primary drivers
-        let base_speed = (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.5;
+        let base_speed =
+            (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.5;
         // Elite: 1.1 + 0.9 + 0.5 = 2.5x, mediocre: 1.1 + 0.41 + 0.23 = 1.74x
         let skill_boost = 1.1 + reflexes * 0.9 + agility * 0.5;
         base_speed * urgency * skill_boost
@@ -117,7 +120,9 @@ impl GoalkeeperDivingState {
 
         let own_goal = ctx.ball().direction_to_own_goal();
         let distance_to_goal = (ball_position - own_goal).magnitude();
-        let velocity_towards_goal = ball_velocity.dot(&(own_goal - ball_position).normalize()).max(0.0);
+        let velocity_towards_goal = ball_velocity
+            .dot(&(own_goal - ball_position).normalize())
+            .max(0.0);
 
         // Scale for actual ball speeds (~1.0-2.0/tick)
         let urgency: f32 = (1.0 - distance_to_goal / 100.0) * (1.0 + velocity_towards_goal / 2.0);
@@ -161,8 +166,8 @@ impl GoalkeeperDivingState {
         // base offset 0.15 → 0.05, skill scale 0.80 → 0.75 — elite
         // diving save lands ~0.65, mediocre ~0.20, top end can't
         // exceed 0.82.
-        let catch_probability = (0.05 + skill_blend * 0.75 - stretch_penalty - speed_penalty)
-            .clamp(0.05, 0.82);
+        let catch_probability =
+            (0.05 + skill_blend * 0.75 - stretch_penalty - speed_penalty).clamp(0.05, 0.82);
 
         rand::random::<f32>() < catch_probability
     }

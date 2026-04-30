@@ -1,4 +1,6 @@
-use crate::r#match::{CoachInstruction, GamePhase, MatchCoach, PlayerSide, StateProcessingContext, TeamTacticalState};
+use crate::r#match::{
+    CoachInstruction, GamePhase, MatchCoach, PlayerSide, StateProcessingContext, TeamTacticalState,
+};
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
 
@@ -62,11 +64,10 @@ impl<'b> TeamOperationsImpl<'b> {
     pub fn is_attack_ready(&self) -> bool {
         let ctx = self.ctx;
         let goal_pos = ctx.player().opponent_goal_position();
-        ctx.players().teammates().all()
-            .filter(|t| {
-                t.tactical_positions.is_forward()
-                    || t.tactical_positions.is_midfielder()
-            })
+        ctx.players()
+            .teammates()
+            .all()
+            .filter(|t| t.tactical_positions.is_forward() || t.tactical_positions.is_midfielder())
             .any(|t| (t.position - goal_pos).magnitude() <= 80.0)
     }
 
@@ -174,7 +175,7 @@ impl<'b> TeamOperationsImpl<'b> {
                     if ball_velocity.norm_squared() > 1.0 {
                         // Determine which way is "forward" based on team side
                         let forward_direction = match self.ctx.player.side {
-                            Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0),  // Left team attacks right
+                            Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0), // Left team attacks right
                             Some(PlayerSide::Right) => Vector3::new(-1.0, 0.0, 0.0), // Right team attacks left
                             None => Vector3::new(0.0, 0.0, 0.0),
                         };
@@ -198,17 +199,26 @@ impl<'b> TeamOperationsImpl<'b> {
         // is closer to the ball than any opponent
         let ball_pos = self.ctx.tick_context.positions.ball.position;
 
-        let closest_teammate_dist_sq = self.ctx.players().teammates().all()
+        let closest_teammate_dist_sq = self
+            .ctx
+            .players()
+            .teammates()
+            .all()
             .map(|p| (p.position - ball_pos).norm_squared())
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        let closest_opponent_dist_sq = self.ctx.players().opponents().all()
+        let closest_opponent_dist_sq = self
+            .ctx
+            .players()
+            .opponents()
+            .all()
             .map(|p| (p.position - ball_pos).norm_squared())
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         // If a teammate is significantly closer to the ball than any opponent
         // 0.7 distance ratio = 0.49 squared ratio
-        if let (Some(team_sq), Some(opp_sq)) = (closest_teammate_dist_sq, closest_opponent_dist_sq) {
+        if let (Some(team_sq), Some(opp_sq)) = (closest_teammate_dist_sq, closest_opponent_dist_sq)
+        {
             if team_sq < opp_sq * 0.49 {
                 return true;
             }
@@ -255,28 +265,24 @@ impl<'b> TeamOperationsImpl<'b> {
     pub fn is_teammate_chasing_ball(&self) -> bool {
         let ball_position = self.ctx.tick_context.positions.ball.position;
 
-        self.ctx
-            .players()
-            .teammates()
-            .all()
-            .any(|player| {
-                // Check if player is heading toward the ball
-                let player_position = self.ctx.tick_context.positions.players.position(player.id);
-                let player_velocity = self.ctx.tick_context.positions.players.velocity(player.id);
+        self.ctx.players().teammates().all().any(|player| {
+            // Check if player is heading toward the ball
+            let player_position = self.ctx.tick_context.positions.players.position(player.id);
+            let player_velocity = self.ctx.tick_context.positions.players.velocity(player.id);
 
-                if player_velocity.norm_squared() < 0.01 {
-                    return false;
-                }
+            if player_velocity.norm_squared() < 0.01 {
+                return false;
+            }
 
-                let direction_to_ball = (ball_position - player_position).normalize();
-                let player_direction = player_velocity.normalize();
-                let dot_product = direction_to_ball.dot(&player_direction);
+            let direction_to_ball = (ball_position - player_position).normalize();
+            let player_direction = player_velocity.normalize();
+            let dot_product = direction_to_ball.dot(&player_direction);
 
-                // Player is moving toward the ball (use norm_squared for distance comparison)
-                dot_product > 0.85 &&
-                    (ball_position - player_position).norm_squared() <
-                        (ball_position - self.ctx.player.position).norm_squared() * 1.44 // 1.2^2
-            })
+            // Player is moving toward the ball (use norm_squared for distance comparison)
+            dot_product > 0.85
+                && (ball_position - player_position).norm_squared()
+                    < (ball_position - self.ctx.player.position).norm_squared() * 1.44 // 1.2^2
+        })
     }
 
     // Determine if this player is the best positioned to chase the ball
@@ -298,7 +304,13 @@ impl<'b> TeamOperationsImpl<'b> {
             let skills = &self.ctx.player.skills;
             let pace_factor = skills.physical.pace / 20.0;
             let acceleration_factor = skills.physical.acceleration / 20.0;
-            let position_factor = match self.ctx.player.tactical_position.current_position.position_group() {
+            let position_factor = match self
+                .ctx
+                .player
+                .tactical_position
+                .current_position
+                .position_group()
+            {
                 PlayerFieldPositionGroup::Forward => 1.2,
                 PlayerFieldPositionGroup::Midfielder => 1.1,
                 PlayerFieldPositionGroup::Defender => 0.9,
@@ -311,34 +323,30 @@ impl<'b> TeamOperationsImpl<'b> {
         let threshold = player_score * 0.64; // 0.8^2
 
         // Compare against teammates
-        !self.ctx
-            .players()
-            .teammates()
-            .all()
-            .any(|teammate| {
-                let dist_sq = (ball_position - teammate.position).norm_squared();
-                // Quick distance check
-                if dist_sq > player_dist_sq {
-                    return false;
-                }
+        !self.ctx.players().teammates().all().any(|teammate| {
+            let dist_sq = (ball_position - teammate.position).norm_squared();
+            // Quick distance check
+            if dist_sq > player_dist_sq {
+                return false;
+            }
 
-                let skills = match self.ctx.context.players.by_id(teammate.id) {
-                    Some(p) => &p.skills,
-                    None => return false,
-                };
+            let skills = match self.ctx.context.players.by_id(teammate.id) {
+                Some(p) => &p.skills,
+                None => return false,
+            };
 
-                let pace_factor = skills.physical.pace / 20.0;
-                let acceleration_factor = skills.physical.acceleration / 20.0;
-                let position_factor = match teammate.tactical_positions.position_group() {
-                    PlayerFieldPositionGroup::Forward => 1.2,
-                    PlayerFieldPositionGroup::Midfielder => 1.1,
-                    PlayerFieldPositionGroup::Defender => 0.9,
-                    PlayerFieldPositionGroup::Goalkeeper => 0.5,
-                };
+            let pace_factor = skills.physical.pace / 20.0;
+            let acceleration_factor = skills.physical.acceleration / 20.0;
+            let position_factor = match teammate.tactical_positions.position_group() {
+                PlayerFieldPositionGroup::Forward => 1.2,
+                PlayerFieldPositionGroup::Midfielder => 1.1,
+                PlayerFieldPositionGroup::Defender => 0.9,
+                PlayerFieldPositionGroup::Goalkeeper => 0.5,
+            };
 
-                let ability = pace_factor * acceleration_factor * position_factor * 0.5 + 0.5;
-                let score = dist_sq / (ability * ability);
-                score < threshold
-            })
+            let ability = pace_factor * acceleration_factor * position_factor * 0.5 + 0.5;
+            let score = dist_sq / (ability * ability);
+            score < threshold
+        })
     }
 }

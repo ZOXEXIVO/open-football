@@ -1,8 +1,6 @@
 // Assuming rand is available
 extern crate rand;
-use crate::club::{
-    PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus
-};
+use crate::club::{PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus};
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
@@ -35,6 +33,17 @@ pub enum StaffEventType {
     Birthday,
     HighFatigue,
     ContractNegotiation,
+    /// Staff attended a recruitment meeting that voted on transfer
+    /// targets. Surfaces in the staff event feed so users can see when
+    /// scouts have been participating in board-facing decisions.
+    RecruitmentMeeting,
+    /// Staff publicly recommended a target which the meeting promoted
+    /// to the shortlist or sent to the board.
+    TargetRecommended,
+    /// Staff voted to reject a target which the meeting then dropped.
+    TargetRejected,
+    /// Staff presented a recruitment dossier to the board for approval.
+    BoardPresentation,
 }
 
 #[derive(Debug, Clone)]
@@ -52,8 +61,8 @@ pub struct Staff {
     pub focus: Option<CoachFocus>,
 
     // New fields for enhanced simulation
-    pub fatigue: f32,  // 0-100, affects performance
-    pub job_satisfaction: f32,  // 0-100, affects retention
+    pub fatigue: f32,          // 0-100, affects performance
+    pub job_satisfaction: f32, // 0-100, affects retention
     pub recent_performance: StaffPerformance,
     pub coaching_style: CoachingStyle,
     pub training_schedule: Vec<StaffTrainingSession>,
@@ -218,10 +227,7 @@ impl StaffCollection {
     /// The head coach slot — permanent manager OR interim caretaker.
     /// Returns `None` if neither seat is filled.
     pub fn manager(&self) -> Option<&Staff> {
-        self.find_by_any_position(&[
-            StaffPosition::Manager,
-            StaffPosition::CaretakerManager,
-        ])
+        self.find_by_any_position(&[StaffPosition::Manager, StaffPosition::CaretakerManager])
     }
 
     /// Mutable counterpart of `manager`.
@@ -229,10 +235,12 @@ impl StaffCollection {
         self.staffs.iter_mut().find(|s| {
             s.contract
                 .as_ref()
-                .map(|c| matches!(
-                    c.position,
-                    StaffPosition::Manager | StaffPosition::CaretakerManager
-                ))
+                .map(|c| {
+                    matches!(
+                        c.position,
+                        StaffPosition::Manager | StaffPosition::CaretakerManager
+                    )
+                })
                 .unwrap_or(false)
         })
     }
@@ -275,9 +283,7 @@ impl StaffCollection {
     where
         F: FnMut(&Staff) -> u32,
     {
-        self.coaches()
-            .max_by_key(|s| score_fn(s))
-            .map(|s| s.id)
+        self.coaches().max_by_key(|s| score_fn(s)).map(|s| s.id)
     }
 
     /// Remove the staff member currently holding `position` and return them
@@ -377,9 +383,9 @@ impl StaffCollection {
 #[derive(Debug, Clone)]
 pub struct StaffPerformance {
     pub training_effectiveness: f32,  // 0-1 multiplier
-    pub player_development_rate: f32,  // 0-1 multiplier
+    pub player_development_rate: f32, // 0-1 multiplier
     pub injury_prevention_rate: f32,  // 0-1 multiplier
-    pub tactical_implementation: f32,  // 0-1 multiplier
+    pub tactical_implementation: f32, // 0-1 multiplier
     pub last_evaluation_date: Option<NaiveDate>,
 }
 
@@ -562,7 +568,9 @@ impl Staff {
                 }
 
                 // Staff member initiates renewal discussion
-                if self.attributes.ambition > 15.0 && self.recent_performance.training_effectiveness > 0.7 {
+                if self.attributes.ambition > 15.0
+                    && self.recent_performance.training_effectiveness > 0.7
+                {
                     result.contract.wants_improved_terms = true;
                     result.contract.requested_salary = contract.salary as f32 * 1.3;
                 }
@@ -600,7 +608,11 @@ impl Staff {
         }
 
         // Vacation periods provide significant recovery (off-season)
-        let season = ctx.country.as_ref().map(|c| c.season_dates).unwrap_or_default();
+        let season = ctx
+            .country
+            .as_ref()
+            .map(|c| c.season_dates)
+            .unwrap_or_default();
         if season.is_off_season(ctx.simulation.date.date()) {
             self.fatigue = (self.fatigue - 30.0).max(0.0);
         }
@@ -638,7 +650,8 @@ impl Staff {
         }
 
         // Execute today's training if scheduled
-        let today_session = self.get_todays_training(ctx.simulation.date)
+        let today_session = self
+            .get_todays_training(ctx.simulation.date)
             .map(|s| (s.session_type.clone(), s.intensity.clone()));
 
         if let Some((session_type, intensity)) = today_session {
@@ -696,8 +709,8 @@ impl Staff {
         }
 
         // Apply change with dampening
-        self.job_satisfaction = (self.job_satisfaction + satisfaction_change * 0.5)
-            .clamp(0.0, 100.0);
+        self.job_satisfaction =
+            (self.job_satisfaction + satisfaction_change * 0.5).clamp(0.0, 100.0);
 
         // Report significant satisfaction issues
         if self.job_satisfaction < 30.0 {
@@ -766,10 +779,15 @@ impl Staff {
         }
     }
 
-    fn process_professional_development(&mut self, ctx: &GlobalContext<'_>, result: &mut StaffResult) {
+    fn process_professional_development(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        result: &mut StaffResult,
+    ) {
         // Check for license upgrade opportunities
         if self.should_upgrade_license() {
-            if rand::random::<f32>() < 0.01 {  // Small daily chance
+            if rand::random::<f32>() < 0.01 {
+                // Small daily chance
                 result.license_upgrade_available = true;
                 self.add_event(StaffEventType::LicenseUpgrade);
 
@@ -787,7 +805,7 @@ impl Staff {
         // Attending courses or conferences
         if self.is_on_course(ctx.simulation.date.date()) {
             result.on_professional_development = true;
-            self.fatigue = (self.fatigue - 5.0).max(0.0);  // Courses are refreshing
+            self.fatigue = (self.fatigue - 5.0).max(0.0); // Courses are refreshing
             self.add_event(StaffEventType::ProfessionalDevelopment);
         }
     }
@@ -800,8 +818,7 @@ impl Staff {
     // Helper methods
 
     fn wants_renewal(&self) -> bool {
-        self.job_satisfaction > 40.0 &&
-            self.behaviour.state != PersonBehaviourState::Poor
+        self.job_satisfaction > 40.0 && self.behaviour.state != PersonBehaviourState::Poor
     }
 
     fn calculate_desired_salary(&self) -> f32 {
@@ -834,13 +851,13 @@ impl Staff {
     fn has_coaching_duties(&self) -> bool {
         matches!(
             self.contract.as_ref().map(|c| &c.position),
-            Some(StaffPosition::Manager) |
-            Some(StaffPosition::AssistantManager) |
-            Some(StaffPosition::Coach) |
-            Some(StaffPosition::FitnessCoach) |
-            Some(StaffPosition::GoalkeeperCoach) |
-            Some(StaffPosition::FirstTeamCoach) |
-            Some(StaffPosition::YouthCoach)
+            Some(StaffPosition::Manager)
+                | Some(StaffPosition::AssistantManager)
+                | Some(StaffPosition::Coach)
+                | Some(StaffPosition::FitnessCoach)
+                | Some(StaffPosition::GoalkeeperCoach)
+                | Some(StaffPosition::FirstTeamCoach)
+                | Some(StaffPosition::YouthCoach)
         )
     }
 
@@ -895,17 +912,18 @@ impl Staff {
             chrono::Weekday::Wed => 2,
             chrono::Weekday::Thu => 3,
             chrono::Weekday::Fri => 4,
-            _ => return None,  // No training on weekends
+            _ => return None, // No training on weekends
         };
 
         self.training_schedule.get(index)
     }
 
     fn calculate_training_effectiveness(&self) -> f32 {
-        let base = (self.staff_attributes.coaching.technical as f32 +
-            self.staff_attributes.coaching.tactical as f32 +
-            self.staff_attributes.coaching.fitness as f32 +
-            self.staff_attributes.coaching.mental as f32) / 80.0;
+        let base = (self.staff_attributes.coaching.technical as f32
+            + self.staff_attributes.coaching.tactical as f32
+            + self.staff_attributes.coaching.fitness as f32
+            + self.staff_attributes.coaching.mental as f32)
+            / 80.0;
 
         let fatigue_penalty = if self.fatigue > 50.0 {
             1.0 - ((self.fatigue - 50.0) / 100.0)
@@ -936,8 +954,10 @@ impl Staff {
             StaffLicenseType::NationalC => 20000.0,
         };
 
-        let skill_multiplier = (self.staff_attributes.coaching.tactical as f32 +
-            self.staff_attributes.coaching.technical as f32) / 40.0 + 0.5;
+        let skill_multiplier = (self.staff_attributes.coaching.tactical as f32
+            + self.staff_attributes.coaching.technical as f32)
+            / 40.0
+            + 0.5;
 
         base * skill_multiplier * self.recent_performance.training_effectiveness
     }
@@ -971,7 +991,7 @@ impl Staff {
             }
         }
 
-        prob.min(0.9)  // Cap at 90% chance
+        prob.min(0.9) // Cap at 90% chance
     }
 
     fn determine_resignation_reason(&self) -> ResignationReason {
@@ -991,7 +1011,7 @@ impl Staff {
         if let Some(last_eval) = self.recent_performance.last_evaluation_date {
             (date - last_eval).num_days() >= 30
         } else {
-            true  // First evaluation
+            true // First evaluation
         }
     }
 
@@ -999,7 +1019,9 @@ impl Staff {
         // Simplified calculation - would need actual team/player data
         StaffPerformance {
             training_effectiveness: self.calculate_training_effectiveness(),
-            player_development_rate: (self.staff_attributes.coaching.working_with_youngsters as f32 / 20.0),
+            player_development_rate: (self.staff_attributes.coaching.working_with_youngsters
+                as f32
+                / 20.0),
             injury_prevention_rate: (self.staff_attributes.medical.sports_science as f32 / 20.0),
             tactical_implementation: (self.staff_attributes.coaching.tactical as f32 / 20.0),
             last_evaluation_date: Some(ctx.simulation.date.date()),
@@ -1009,18 +1031,16 @@ impl Staff {
     fn should_upgrade_license(&self) -> bool {
         // Check if eligible for license upgrade
         match self.license {
-            StaffLicenseType::NationalC => {
-                self.staff_attributes.coaching.tactical > 10
-            },
+            StaffLicenseType::NationalC => self.staff_attributes.coaching.tactical > 10,
             StaffLicenseType::NationalB => {
-                self.staff_attributes.coaching.tactical > 12 &&
-                    self.staff_attributes.coaching.technical > 12
-            },
+                self.staff_attributes.coaching.tactical > 12
+                    && self.staff_attributes.coaching.technical > 12
+            }
             StaffLicenseType::NationalA => {
-                self.staff_attributes.coaching.tactical > 14 &&
-                    self.staff_attributes.coaching.technical > 14
-            },
-            _ => false,  // Continental licenses need special conditions
+                self.staff_attributes.coaching.tactical > 14
+                    && self.staff_attributes.coaching.technical > 14
+            }
+            _ => false, // Continental licenses need special conditions
         }
     }
 
@@ -1037,12 +1057,21 @@ impl Staff {
             if rand::random::<f32>() < 0.25 {
                 let improvement = 1;
                 match rand::random::<u8>() % 3 {
-                    0 => self.staff_attributes.knowledge.judging_player_ability =
-                        (self.staff_attributes.knowledge.judging_player_ability + improvement).min(20),
-                    1 => self.staff_attributes.knowledge.judging_player_potential =
-                        (self.staff_attributes.knowledge.judging_player_potential + improvement).min(20),
-                    _ => self.staff_attributes.data_analysis.judging_player_data =
-                        (self.staff_attributes.data_analysis.judging_player_data + improvement).min(20),
+                    0 => {
+                        self.staff_attributes.knowledge.judging_player_ability =
+                            (self.staff_attributes.knowledge.judging_player_ability + improvement)
+                                .min(20)
+                    }
+                    1 => {
+                        self.staff_attributes.knowledge.judging_player_potential =
+                            (self.staff_attributes.knowledge.judging_player_potential + improvement)
+                                .min(20)
+                    }
+                    _ => {
+                        self.staff_attributes.data_analysis.judging_player_data =
+                            (self.staff_attributes.data_analysis.judging_player_data + improvement)
+                                .min(20)
+                    }
                 }
             }
             return;
@@ -1055,18 +1084,30 @@ impl Staff {
 
             // Improve a random coaching attribute
             match rand::random::<u8>() % 6 {
-                0 => self.staff_attributes.coaching.attacking =
-                    (self.staff_attributes.coaching.attacking + improvement).min(20),
-                1 => self.staff_attributes.coaching.defending =
-                    (self.staff_attributes.coaching.defending + improvement).min(20),
-                2 => self.staff_attributes.coaching.tactical =
-                    (self.staff_attributes.coaching.tactical + improvement).min(20),
-                3 => self.staff_attributes.coaching.technical =
-                    (self.staff_attributes.coaching.technical + improvement).min(20),
-                4 => self.staff_attributes.coaching.fitness =
-                    (self.staff_attributes.coaching.fitness + improvement).min(20),
-                _ => self.staff_attributes.coaching.mental =
-                    (self.staff_attributes.coaching.mental + improvement).min(20),
+                0 => {
+                    self.staff_attributes.coaching.attacking =
+                        (self.staff_attributes.coaching.attacking + improvement).min(20)
+                }
+                1 => {
+                    self.staff_attributes.coaching.defending =
+                        (self.staff_attributes.coaching.defending + improvement).min(20)
+                }
+                2 => {
+                    self.staff_attributes.coaching.tactical =
+                        (self.staff_attributes.coaching.tactical + improvement).min(20)
+                }
+                3 => {
+                    self.staff_attributes.coaching.technical =
+                        (self.staff_attributes.coaching.technical + improvement).min(20)
+                }
+                4 => {
+                    self.staff_attributes.coaching.fitness =
+                        (self.staff_attributes.coaching.fitness + improvement).min(20)
+                }
+                _ => {
+                    self.staff_attributes.coaching.mental =
+                        (self.staff_attributes.coaching.mental + improvement).min(20)
+                }
             }
         }
     }
@@ -1147,7 +1188,7 @@ pub enum StaffLicenseType {
     ContinentalC,
     NationalA,
     NationalB,
-    NationalC
+    NationalC,
 }
 
 // Default implementations
@@ -1182,4 +1223,3 @@ impl StaffClubContract {
         (self.expired - now.date()).num_days()
     }
 }
-

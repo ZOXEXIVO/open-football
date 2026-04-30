@@ -30,11 +30,8 @@ impl Player {
         let age_factor = if age <= 21 { 1.0 } else { 0.6 };
         let mag = base * age_factor;
         // 5-year cooldown ≈ one-shot per career spell.
-        self.happiness.add_event_with_cooldown(
-            HappinessEventType::YouthBreakthrough,
-            mag,
-            365 * 5,
-        );
+        self.happiness
+            .add_event_with_cooldown(HappinessEventType::YouthBreakthrough, mag, 365 * 5);
     }
 
     /// React to a team-level season / competition outcome. Magnitude is

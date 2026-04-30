@@ -1,29 +1,28 @@
+use crate::HappinessEventType;
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::builder::PlayerBuilder;
-use crate::club::player::happiness::TeamSeasonState;
 use crate::club::player::development::CoachingEffect;
+use crate::club::player::happiness::TeamSeasonState;
 use crate::club::player::injury::processing::MedicalStaffQuality;
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::language::PlayerLanguage;
 use crate::club::player::load::PlayerLoad;
+use crate::club::player::mailbox::PlayerContractAsk;
 use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
 use crate::club::player::utils::PlayerUtils;
-use crate::HappinessEventType;
-use crate::club::player::mailbox::PlayerContractAsk;
 use crate::club::{
-    PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox,
-    PlayerResult, PlayerSkills, PlayerTraining,
+    PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox, PlayerResult,
+    PlayerSkills, PlayerTraining,
 };
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
 use crate::{
-    Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness,
-    PlayerPositionType, PlayerPositions,
-    PlayerStatistics, PlayerStatisticsHistory,
-    PlayerStatus, PlayerTrainingHistory, PlayerValueCalculator, Relations,
+    Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerPositionType,
+    PlayerPositions, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
+    PlayerTrainingHistory, PlayerValueCalculator, Relations,
 };
 use chrono::NaiveDate;
 use std::fmt::{Display, Formatter, Result};
@@ -254,44 +253,100 @@ impl Player {
     // accessor uses a `_mut` suffix.
     // ========================================================
 
-    pub fn skills(&self) -> &PlayerSkills { &self.skills }
-    pub fn skills_mut(&mut self) -> &mut PlayerSkills { &mut self.skills }
+    pub fn skills(&self) -> &PlayerSkills {
+        &self.skills
+    }
+    pub fn skills_mut(&mut self) -> &mut PlayerSkills {
+        &mut self.skills
+    }
 
-    pub fn attributes(&self) -> &PersonAttributes { &self.attributes }
-    pub fn attributes_mut(&mut self) -> &mut PersonAttributes { &mut self.attributes }
+    pub fn attributes(&self) -> &PersonAttributes {
+        &self.attributes
+    }
+    pub fn attributes_mut(&mut self) -> &mut PersonAttributes {
+        &mut self.attributes
+    }
 
-    pub fn player_attributes(&self) -> &PlayerAttributes { &self.player_attributes }
-    pub fn player_attributes_mut(&mut self) -> &mut PlayerAttributes { &mut self.player_attributes }
+    pub fn player_attributes(&self) -> &PlayerAttributes {
+        &self.player_attributes
+    }
+    pub fn player_attributes_mut(&mut self) -> &mut PlayerAttributes {
+        &mut self.player_attributes
+    }
 
-    pub fn happiness(&self) -> &PlayerHappiness { &self.happiness }
-    pub fn happiness_mut(&mut self) -> &mut PlayerHappiness { &mut self.happiness }
+    pub fn happiness(&self) -> &PlayerHappiness {
+        &self.happiness
+    }
+    pub fn happiness_mut(&mut self) -> &mut PlayerHappiness {
+        &mut self.happiness
+    }
 
-    pub fn statuses(&self) -> &PlayerStatus { &self.statuses }
-    pub fn statuses_mut(&mut self) -> &mut PlayerStatus { &mut self.statuses }
+    pub fn statuses(&self) -> &PlayerStatus {
+        &self.statuses
+    }
+    pub fn statuses_mut(&mut self) -> &mut PlayerStatus {
+        &mut self.statuses
+    }
 
-    pub fn statistics(&self) -> &PlayerStatistics { &self.statistics }
-    pub fn statistics_mut(&mut self) -> &mut PlayerStatistics { &mut self.statistics }
+    pub fn statistics(&self) -> &PlayerStatistics {
+        &self.statistics
+    }
+    pub fn statistics_mut(&mut self) -> &mut PlayerStatistics {
+        &mut self.statistics
+    }
 
-    pub fn cup_statistics(&self) -> &PlayerStatistics { &self.cup_statistics }
-    pub fn friendly_statistics(&self) -> &PlayerStatistics { &self.friendly_statistics }
-    pub fn statistics_history(&self) -> &PlayerStatisticsHistory { &self.statistics_history }
+    pub fn cup_statistics(&self) -> &PlayerStatistics {
+        &self.cup_statistics
+    }
+    pub fn friendly_statistics(&self) -> &PlayerStatistics {
+        &self.friendly_statistics
+    }
+    pub fn statistics_history(&self) -> &PlayerStatisticsHistory {
+        &self.statistics_history
+    }
 
-    pub fn contract(&self) -> Option<&PlayerClubContract> { self.contract.as_ref() }
-    pub fn contract_loan(&self) -> Option<&PlayerClubContract> { self.contract_loan.as_ref() }
+    pub fn contract(&self) -> Option<&PlayerClubContract> {
+        self.contract.as_ref()
+    }
+    pub fn contract_loan(&self) -> Option<&PlayerClubContract> {
+        self.contract_loan.as_ref()
+    }
 
-    pub fn plan(&self) -> Option<&PlayerPlan> { self.plan.as_ref() }
-    pub fn promises(&self) -> &[ManagerPromise] { &self.promises }
-    pub fn traits(&self) -> &[PlayerTrait] { &self.traits }
+    pub fn plan(&self) -> Option<&PlayerPlan> {
+        self.plan.as_ref()
+    }
+    pub fn promises(&self) -> &[ManagerPromise] {
+        &self.promises
+    }
+    pub fn traits(&self) -> &[PlayerTrait] {
+        &self.traits
+    }
 
-    pub fn relations(&self) -> &Relations { &self.relations }
-    pub fn rapport(&self) -> &PlayerRapport { &self.rapport }
-    pub fn load(&self) -> &PlayerLoad { &self.load }
+    pub fn relations(&self) -> &Relations {
+        &self.relations
+    }
+    pub fn rapport(&self) -> &PlayerRapport {
+        &self.rapport
+    }
+    pub fn load(&self) -> &PlayerLoad {
+        &self.load
+    }
 
-    pub fn favorite_clubs(&self) -> &[u32] { &self.favorite_clubs }
-    pub fn languages(&self) -> &[PlayerLanguage] { &self.languages }
-    pub fn last_transfer_date(&self) -> Option<NaiveDate> { self.last_transfer_date }
-    pub fn is_retired(&self) -> bool { self.retired }
-    pub fn is_generated(&self) -> bool { self.generated }
+    pub fn favorite_clubs(&self) -> &[u32] {
+        &self.favorite_clubs
+    }
+    pub fn languages(&self) -> &[PlayerLanguage] {
+        &self.languages
+    }
+    pub fn last_transfer_date(&self) -> Option<NaiveDate> {
+        self.last_transfer_date
+    }
+    pub fn is_retired(&self) -> bool {
+        self.retired
+    }
+    pub fn is_generated(&self) -> bool {
+        self.generated
+    }
 
     /// Canonical URL segment for this player: `{id}-{ascii-folded-name}`.
     /// Falls back to just the id when the name folds to nothing (e.g. all
@@ -350,7 +405,12 @@ impl Player {
     /// callers (transfer-shock pipeline, older talk results). New code
     /// should use [`Player::record_promise_full`] so credibility &
     /// importance are anchored honestly at creation time.
-    pub fn record_promise(&mut self, kind: ManagerPromiseKind, made_on: NaiveDate, horizon_days: i64) {
+    pub fn record_promise(
+        &mut self,
+        kind: ManagerPromiseKind,
+        made_on: NaiveDate,
+        horizon_days: i64,
+    ) {
         self.record_promise_full(kind, made_on, horizon_days, None, None, false);
     }
 
@@ -438,9 +498,7 @@ impl Player {
             .happiness
             .recent_events
             .iter()
-            .filter(|e| {
-                e.event_type == HappinessEventType::PromiseBroken && e.days_ago <= 90
-            })
+            .filter(|e| e.event_type == HappinessEventType::PromiseBroken && e.days_ago <= 90)
             .count() as i32;
         score -= recent_broken * 12;
 
@@ -511,9 +569,11 @@ impl Player {
 
         // Pure-data check — formation isn't known here. Default to "kept"
         // unless a RoleMismatch event fired in the last 60 days.
-        let in_preferred_pos = !self.happiness.recent_events.iter().any(|e| {
-            e.event_type == HappinessEventType::RoleMismatch && e.days_ago <= 60
-        });
+        let in_preferred_pos = !self
+            .happiness
+            .recent_events
+            .iter()
+            .any(|e| e.event_type == HappinessEventType::RoleMismatch && e.days_ago <= 60);
 
         // Snapshot whether a KeyPlayer / FirstTeamRegular status currently
         // holds — drives TacticalRole verification.
@@ -553,7 +613,11 @@ impl Player {
                         let starts_pct =
                             (delta_starts as u32 * 100 / delta_apps.max(1) as u32) as u16;
                         // Default target 60% of appearances as starts.
-                        let req = if p.target_value > 0 { p.target_value } else { 60 };
+                        let req = if p.target_value > 0 {
+                            p.target_value
+                        } else {
+                            60
+                        };
                         starts_pct >= req
                     }
                 }
@@ -585,8 +649,7 @@ impl Player {
                     self.happiness.recent_events.iter().any(|e| {
                         matches!(
                             e.event_type,
-                            HappinessEventType::ContractRenewal
-                                | HappinessEventType::ContractOffer
+                            HappinessEventType::ContractRenewal | HappinessEventType::ContractOffer
                         ) && e.days_ago <= (now - p.made_on).num_days().max(0) as u16
                     })
                 }
@@ -614,23 +677,18 @@ impl Player {
             let mag = (4.0 * kept_weight).clamp(1.0, 14.0);
             self.happiness
                 .add_event(HappinessEventType::PromiseKept, mag);
-            self.happiness.factors.manager_relationship = (self
-                .happiness
-                .factors
-                .manager_relationship
-                + (2.0 * kept_weight).clamp(0.0, 6.0))
-            .clamp(-15.0, 15.0);
+            self.happiness.factors.manager_relationship =
+                (self.happiness.factors.manager_relationship + (2.0 * kept_weight).clamp(0.0, 6.0))
+                    .clamp(-15.0, 15.0);
         }
         if broken_weight > 0.0 {
             let mag = -(8.0 * broken_weight).clamp(2.0, 24.0);
             self.happiness
                 .add_event(HappinessEventType::PromiseBroken, mag);
-            self.happiness.factors.manager_relationship = (self
-                .happiness
-                .factors
-                .manager_relationship
-                - (4.0 * broken_weight).clamp(0.0, 12.0))
-            .clamp(-15.0, 15.0);
+            self.happiness.factors.manager_relationship =
+                (self.happiness.factors.manager_relationship
+                    - (4.0 * broken_weight).clamp(0.0, 12.0))
+                .clamp(-15.0, 15.0);
         }
     }
 
@@ -655,12 +713,7 @@ impl Player {
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             let club_rep = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
             let formation = ctx.team.as_ref().and_then(|t| t.formation);
-            self.process_transfer_shock(
-                now.date(),
-                club_rep,
-                country_code,
-                formation.as_ref(),
-            );
+            self.process_transfer_shock(now.date(), club_rep, country_code, formation.as_ref());
         }
 
         // Injury recovery (daily) — driven by the parent club's medical
@@ -689,10 +742,16 @@ impl Player {
             let season_state = TeamSeasonState {
                 league_position: ctx.club.as_ref().map(|c| c.league_position).unwrap_or(0),
                 league_size: ctx.club.as_ref().map(|c| c.league_size).unwrap_or(0),
-                season_progress: ctx.club.as_ref()
-                    .map(|c| if c.total_league_matches > 0 {
-                        c.league_matches_played as f32 / c.total_league_matches as f32
-                    } else { 0.0 })
+                season_progress: ctx
+                    .club
+                    .as_ref()
+                    .map(|c| {
+                        if c.total_league_matches > 0 {
+                            c.league_matches_played as f32 / c.total_league_matches as f32
+                        } else {
+                            0.0
+                        }
+                    })
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0),
                 league_reputation: ctx.league.as_ref().map(|l| l.reputation).unwrap_or(0),
@@ -722,15 +781,22 @@ impl Player {
             let coach_effect = ctx
                 .club
                 .as_ref()
-                .map(|c| CoachingEffect::from_scores(
-                    c.coach_best_technical,
-                    c.coach_best_mental,
-                    c.coach_best_fitness,
-                    c.coach_best_goalkeeping,
-                    c.youth_coaching_quality,
-                ))
+                .map(|c| {
+                    CoachingEffect::from_scores(
+                        c.coach_best_technical,
+                        c.coach_best_mental,
+                        c.coach_best_fitness,
+                        c.coach_best_goalkeeping,
+                        c.youth_coaching_quality,
+                    )
+                })
                 .unwrap_or_else(CoachingEffect::neutral);
-            self.process_development(now.date(), league_reputation, &coach_effect, team_reputation);
+            self.process_development(
+                now.date(),
+                league_reputation,
+                &coach_effect,
+                team_reputation,
+            );
             // Language learning when playing abroad
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             self.process_language_learning(now.date(), country_code);
@@ -761,8 +827,20 @@ impl Player {
         PlayerValueCalculator::calculate(self, date, 1.0, league_reputation, club_reputation)
     }
 
-    pub fn value_with_price_level(&self, date: NaiveDate, price_level: f32, league_reputation: u16, club_reputation: u16) -> f64 {
-        PlayerValueCalculator::calculate(self, date, price_level, league_reputation, club_reputation)
+    pub fn value_with_price_level(
+        &self,
+        date: NaiveDate,
+        price_level: f32,
+        league_reputation: u16,
+        club_reputation: u16,
+    ) -> f64 {
+        PlayerValueCalculator::calculate(
+            self,
+            date,
+            price_level,
+            league_reputation,
+            club_reputation,
+        )
     }
 
     #[inline]
@@ -805,7 +883,7 @@ impl Player {
     /// Weekly language learning: if the player is in a country whose language
     /// they don't speak natively, they gradually learn it.
     fn process_language_learning(&mut self, now: NaiveDate, country_code: &str) {
-        use crate::club::player::language::{weekly_language_progress, Language};
+        use crate::club::player::language::{Language, weekly_language_progress};
 
         if country_code.is_empty() {
             return;
@@ -820,18 +898,26 @@ impl Player {
 
         for target_lang in &country_languages {
             // Check if player already speaks this language natively
-            let already_native = self.languages.iter().any(|l| l.language == *target_lang && l.is_native);
+            let already_native = self
+                .languages
+                .iter()
+                .any(|l| l.language == *target_lang && l.is_native);
             if already_native {
                 continue;
             }
 
             // Check if already fully fluent (proficiency >= 100)
-            let already_fluent = self.languages.iter().any(|l| l.language == *target_lang && l.proficiency >= 100);
+            let already_fluent = self
+                .languages
+                .iter()
+                .any(|l| l.language == *target_lang && l.proficiency >= 100);
             if already_fluent {
                 continue;
             }
 
-            let current_prof = self.languages.iter()
+            let current_prof = self
+                .languages
+                .iter()
                 .find(|l| l.language == *target_lang)
                 .map(|l| l.proficiency)
                 .unwrap_or(0);
@@ -865,10 +951,15 @@ impl Player {
                 .find(|&&t| prev_prof < t && new_prof >= t)
                 .copied();
 
-            if let Some(lang_entry) = self.languages.iter_mut().find(|l| l.language == *target_lang) {
+            if let Some(lang_entry) = self
+                .languages
+                .iter_mut()
+                .find(|l| l.language == *target_lang)
+            {
                 lang_entry.proficiency = new_prof;
             } else {
-                self.languages.push(PlayerLanguage::learning(*target_lang, gain));
+                self.languages
+                    .push(PlayerLanguage::learning(*target_lang, gain));
             }
 
             if let Some(t) = crossed_threshold {

@@ -42,11 +42,19 @@ fn is_recovery_compatible_session(session_type: &TrainingType) -> bool {
 pub struct TeamTraining;
 
 impl TeamTraining {
-    pub fn train(team: &mut Team, date: NaiveDateTime, facility_quality: f32) -> TeamTrainingResult {
+    pub fn train(
+        team: &mut Team,
+        date: NaiveDateTime,
+        facility_quality: f32,
+    ) -> TeamTrainingResult {
         Self::train_with_facilities(team, date, facility_quality)
     }
 
-    fn train_with_facilities(team: &mut Team, date: NaiveDateTime, facility_quality: f32) -> TeamTrainingResult {
+    fn train_with_facilities(
+        team: &mut Team,
+        date: NaiveDateTime,
+        facility_quality: f32,
+    ) -> TeamTrainingResult {
         let mut result = TeamTrainingResult::new();
 
         // Check if it's training time
@@ -72,13 +80,8 @@ impl TeamTraining {
         // Execute today's training sessions
         if let Some(sessions) = weekly_plan.sessions.get(&current_weekday) {
             for session in sessions {
-                let session_results = Self::execute_training_session(
-                    team,
-                    coach,
-                    session,
-                    date,
-                    facility_quality,
-                );
+                let session_results =
+                    Self::execute_training_session(team, coach, session, date, facility_quality);
                 result.player_results.extend(session_results);
             }
         }
@@ -101,13 +104,7 @@ impl TeamTraining {
         let mut results = Vec::with_capacity(participants.len());
 
         for player in participants {
-            let mut r = PlayerTraining::train(
-                player,
-                coach,
-                session,
-                date,
-                facility_quality,
-            );
+            let mut r = PlayerTraining::train(player, coach, session, date, facility_quality);
             // Chemistry multiplier: a player happy in the dressing room
             // gets 10% more out of a session; one in a toxic one gets 10%
             // less. Narrow band so chemistry is meaningful without being
@@ -124,11 +121,7 @@ impl TeamTraining {
     /// Credit the coach with specialization days for each participant's
     /// position group. Called after training, so the coach develops deep
     /// expertise over time in whichever groups they spend most sessions on.
-    fn accrue_coach_specialization(
-        team: &mut Team,
-        coach_id: u32,
-        participant_ids: &[u32],
-    ) {
+    fn accrue_coach_specialization(team: &mut Team, coach_id: u32, participant_ids: &[u32]) {
         // Build a multiset of groups trained this session.
         let mut group_counts: [u32; 4] = [0; 4];
         for pid in participant_ids {
@@ -147,10 +140,18 @@ impl TeamTraining {
         // had participants. Multiple players don't double-count — what
         // matters is whether the coach ran that group today.
         if let Some(coach) = team.staffs.find_mut(coach_id) {
-            if group_counts[0] > 0 { coach.accrue_specialization(PlayerFieldPositionGroup::Goalkeeper, 1); }
-            if group_counts[1] > 0 { coach.accrue_specialization(PlayerFieldPositionGroup::Defender, 1); }
-            if group_counts[2] > 0 { coach.accrue_specialization(PlayerFieldPositionGroup::Midfielder, 1); }
-            if group_counts[3] > 0 { coach.accrue_specialization(PlayerFieldPositionGroup::Forward, 1); }
+            if group_counts[0] > 0 {
+                coach.accrue_specialization(PlayerFieldPositionGroup::Goalkeeper, 1);
+            }
+            if group_counts[1] > 0 {
+                coach.accrue_specialization(PlayerFieldPositionGroup::Defender, 1);
+            }
+            if group_counts[2] > 0 {
+                coach.accrue_specialization(PlayerFieldPositionGroup::Midfielder, 1);
+            }
+            if group_counts[3] > 0 {
+                coach.accrue_specialization(PlayerFieldPositionGroup::Forward, 1);
+            }
         }
     }
 
@@ -209,9 +210,14 @@ impl TeamTraining {
         true
     }
 
-    fn apply_team_cohesion_effects(team: &mut Team, training_results: &TeamTrainingResult, sim_date: chrono::NaiveDate) {
+    fn apply_team_cohesion_effects(
+        team: &mut Team,
+        training_results: &TeamTrainingResult,
+        sim_date: chrono::NaiveDate,
+    ) {
         // Players training together build relationships
-        let participant_ids: Vec<u32> = training_results.player_results
+        let participant_ids: Vec<u32> = training_results
+            .player_results
             .iter()
             .map(|r| r.player_id)
             .collect();
@@ -228,7 +234,11 @@ impl TeamTraining {
 
         // Coach-player relationship updates based on training quality
         let coach_id = team.staffs.head_coach().id;
-        let coach_effectiveness = team.staffs.head_coach().recent_performance.training_effectiveness;
+        let coach_effectiveness = team
+            .staffs
+            .head_coach()
+            .recent_performance
+            .training_effectiveness;
 
         // Rapport accrual: every participant spent a day with the coach.
         // Small positive drift + shared_days increment, even if no other
@@ -246,7 +256,8 @@ impl TeamTraining {
         Self::accrue_coach_specialization(team, coach_id, &participant_ids);
 
         // Calculate average morale change across training results
-        let total_morale: f32 = training_results.player_results
+        let total_morale: f32 = training_results
+            .player_results
             .iter()
             .map(|r| r.effects.morale_change)
             .sum();
@@ -266,7 +277,9 @@ impl TeamTraining {
                         ChangeType::CoachingSuccess,
                         relationship_boost,
                     );
-                    player.relations.update_staff_relationship(coach_id, change, sim_date);
+                    player
+                        .relations
+                        .update_staff_relationship(coach_id, change, sim_date);
                 }
             }
         }
@@ -289,9 +302,8 @@ impl TeamTraining {
 
         // Index morale changes by player id so we don't iterate the result
         // vector once per pair.
-        let mut morale_change: HashMap<u32, f32> = HashMap::with_capacity(
-            training_results.player_results.len(),
-        );
+        let mut morale_change: HashMap<u32, f32> =
+            HashMap::with_capacity(training_results.player_results.len());
         for r in &training_results.player_results {
             morale_change.insert(r.player_id, r.effects.morale_change);
         }
@@ -326,16 +338,16 @@ impl TeamTraining {
                     .filter(|l| l.is_native || l.proficiency >= 60)
                     .map(|l| (l.language, l.proficiency))
                     .collect();
-                let mentor_target = p
-                    .relations
-                    .player_relations_iter()
-                    .find_map(|(other_id, rel)| {
-                        if rel.mentorship.is_some() {
-                            Some(*other_id)
-                        } else {
-                            None
-                        }
-                    });
+                let mentor_target =
+                    p.relations
+                        .player_relations_iter()
+                        .find_map(|(other_id, rel)| {
+                            if rel.mentorship.is_some() {
+                                Some(*other_id)
+                            } else {
+                                None
+                            }
+                        });
                 Some(Snap {
                     id: *id,
                     position_group: group,
@@ -373,36 +385,54 @@ impl TeamTraining {
                     (_, Some(lb)) => a.languages.iter().any(|(l, _)| *l == lb),
                     _ => false,
                 };
-                let mentor_pair =
-                    a.mentor_target == Some(b.id) || b.mentor_target == Some(a.id);
+                let mentor_pair = a.mentor_target == Some(b.id) || b.mentor_target == Some(a.id);
                 let both_pro = a.professionalism >= 14.0 && b.professionalism >= 14.0;
-                let avg_session_morale =
-                    (morale_change.get(&a.id).copied().unwrap_or(0.0)
-                        + morale_change.get(&b.id).copied().unwrap_or(0.0))
-                        / 2.0;
+                let avg_session_morale = (morale_change.get(&a.id).copied().unwrap_or(0.0)
+                    + morale_change.get(&b.id).copied().unwrap_or(0.0))
+                    / 2.0;
                 let positive_session = avg_session_morale > 0.0;
                 let either_low_morale = a.morale < 35.0 || b.morale < 35.0;
-                let either_high_controversy =
-                    a.controversy > 14.0 || b.controversy > 14.0;
-                let either_low_pro =
-                    a.professionalism < 8.0 || b.professionalism < 8.0;
+                let either_high_controversy = a.controversy > 14.0 || b.controversy > 14.0;
+                let either_low_pro = a.professionalism < 8.0 || b.professionalism < 8.0;
 
                 // Bond chance build-up.
                 let mut bond_chance = 0.03;
-                if same_group { bond_chance += 0.04; }
-                if shared_language { bond_chance += 0.05; }
-                if mentor_pair { bond_chance += 0.08; }
-                if both_pro { bond_chance += 0.03; }
-                if positive_session { bond_chance += 0.04; }
-                if direct_rivals { bond_chance -= 0.04; }
-                if either_low_morale { bond_chance -= 0.03; }
-                if either_high_controversy { bond_chance -= 0.03; }
+                if same_group {
+                    bond_chance += 0.04;
+                }
+                if shared_language {
+                    bond_chance += 0.05;
+                }
+                if mentor_pair {
+                    bond_chance += 0.08;
+                }
+                if both_pro {
+                    bond_chance += 0.03;
+                }
+                if positive_session {
+                    bond_chance += 0.04;
+                }
+                if direct_rivals {
+                    bond_chance -= 0.04;
+                }
+                if either_low_morale {
+                    bond_chance -= 0.03;
+                }
+                if either_high_controversy {
+                    bond_chance -= 0.03;
+                }
 
                 // Friction chance.
                 let mut friction_chance = 0.01;
-                if direct_rivals { friction_chance += 0.04; }
-                if either_low_pro { friction_chance += 0.03; }
-                if either_high_controversy { friction_chance += 0.03; }
+                if direct_rivals {
+                    friction_chance += 0.04;
+                }
+                if either_low_pro {
+                    friction_chance += 0.03;
+                }
+                if either_high_controversy {
+                    friction_chance += 0.03;
+                }
 
                 // Deterministic per-pair "roll" — same hash twice in the
                 // same week resolves identically. Independent rolls for
@@ -412,19 +442,49 @@ impl TeamTraining {
 
                 if bond_chance > 0.0 && bond_roll < bond_chance {
                     let mut mag: f32 = 0.08;
-                    if mentor_pair { mag += 0.10; }
-                    if shared_language { mag += 0.05; }
+                    if mentor_pair {
+                        mag += 0.10;
+                    }
+                    if shared_language {
+                        mag += 0.05;
+                    }
                     mag = mag.clamp(0.08, 0.25);
-                    effects.push(Effect { from: a.id, to: b.id, relation_change: mag, bond: true });
-                    effects.push(Effect { from: b.id, to: a.id, relation_change: mag, bond: true });
+                    effects.push(Effect {
+                        from: a.id,
+                        to: b.id,
+                        relation_change: mag,
+                        bond: true,
+                    });
+                    effects.push(Effect {
+                        from: b.id,
+                        to: a.id,
+                        relation_change: mag,
+                        bond: true,
+                    });
                 } else if friction_chance > 0.0 && friction_roll < friction_chance {
                     let mut mag: f32 = 0.10;
-                    if direct_rivals { mag += 0.08; }
-                    if either_low_pro { mag += 0.07; }
-                    if either_high_controversy { mag += 0.05; }
+                    if direct_rivals {
+                        mag += 0.08;
+                    }
+                    if either_low_pro {
+                        mag += 0.07;
+                    }
+                    if either_high_controversy {
+                        mag += 0.05;
+                    }
                     mag = mag.clamp(0.10, 0.35);
-                    effects.push(Effect { from: a.id, to: b.id, relation_change: -mag, bond: false });
-                    effects.push(Effect { from: b.id, to: a.id, relation_change: -mag, bond: false });
+                    effects.push(Effect {
+                        from: a.id,
+                        to: b.id,
+                        relation_change: -mag,
+                        bond: false,
+                    });
+                    effects.push(Effect {
+                        from: b.id,
+                        to: a.id,
+                        relation_change: -mag,
+                        bond: false,
+                    });
                 }
             }
         }
@@ -490,7 +550,9 @@ impl TeamTraining {
 
     fn get_coach_philosophy(coach: &Staff) -> CoachingPhilosophy {
         // Determine coach philosophy based on attributes
-        let tactical_focus = if coach.staff_attributes.coaching.attacking > coach.staff_attributes.coaching.defending {
+        let tactical_focus = if coach.staff_attributes.coaching.attacking
+            > coach.staff_attributes.coaching.defending
+        {
             if coach.staff_attributes.coaching.attacking > 15 {
                 TacticalFocus::Attacking
             } else {
@@ -518,7 +580,6 @@ impl TeamTraining {
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum TrainingType {
@@ -571,11 +632,11 @@ pub struct TrainingSession {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrainingIntensity {
-    VeryLight,  // 20-40% max effort - recovery sessions
-    Light,      // 40-60% max effort - technical work
-    Moderate,   // 60-75% max effort - standard training
-    High,       // 75-90% max effort - intense sessions
-    VeryHigh,   // 90-100% max effort - match simulation
+    VeryLight, // 20-40% max effort - recovery sessions
+    Light,     // 40-60% max effort - technical work
+    Moderate,  // 60-75% max effort - standard training
+    High,      // 75-90% max effort - intense sessions
+    VeryHigh,  // 90-100% max effort - match simulation
 }
 
 // ============== Weekly Training Schedule ==============
@@ -589,11 +650,11 @@ pub struct WeeklyTrainingPlan {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PeriodizationPhase {
-    PreSeason,      // High volume, building fitness
-    EarlySeason,    // Balancing fitness and tactics
-    MidSeason,      // Maintenance and tactical focus
-    LateSeason,     // Managing fatigue, focus on recovery
-    OffSeason,      // Rest and light maintenance
+    PreSeason,   // High volume, building fitness
+    EarlySeason, // Balancing fitness and tactics
+    MidSeason,   // Maintenance and tactical focus
+    LateSeason,  // Managing fatigue, focus on recovery
+    OffSeason,   // Rest and light maintenance
 }
 
 impl WeeklyTrainingPlan {
@@ -611,10 +672,16 @@ impl WeeklyTrainingPlan {
             .collect();
 
         // Monday - Recovery or moderate training
-        sessions.insert(Weekday::Mon, Self::monday_sessions(previous_match_day, phase));
+        sessions.insert(
+            Weekday::Mon,
+            Self::monday_sessions(previous_match_day, phase),
+        );
 
         // Tuesday - Main training day
-        sessions.insert(Weekday::Tue, Self::tuesday_sessions(phase, coach_philosophy));
+        sessions.insert(
+            Weekday::Tue,
+            Self::tuesday_sessions(phase, coach_philosophy),
+        );
 
         // Wednesday - Tactical/Technical focus
         sessions.insert(Weekday::Wed, Self::wednesday_sessions(phase));
@@ -638,7 +705,10 @@ impl WeeklyTrainingPlan {
         }
     }
 
-    fn monday_sessions(previous_match: Option<Weekday>, _phase: PeriodizationPhase) -> Vec<TrainingSession> {
+    fn monday_sessions(
+        previous_match: Option<Weekday>,
+        _phase: PeriodizationPhase,
+    ) -> Vec<TrainingSession> {
         if previous_match == Some(Weekday::Sun) || previous_match == Some(Weekday::Sat) {
             // Recovery after weekend match
             vec![
@@ -655,7 +725,7 @@ impl WeeklyTrainingPlan {
                     duration_minutes: 30,
                     focus_positions: vec![],
                     participants: vec![],
-                }
+                },
             ]
         } else {
             // Normal training
@@ -673,12 +743,15 @@ impl WeeklyTrainingPlan {
                     duration_minutes: 45,
                     focus_positions: vec![],
                     participants: vec![],
-                }
+                },
             ]
         }
     }
 
-    fn tuesday_sessions(phase: PeriodizationPhase, philosophy: &CoachingPhilosophy) -> Vec<TrainingSession> {
+    fn tuesday_sessions(
+        phase: PeriodizationPhase,
+        philosophy: &CoachingPhilosophy,
+    ) -> Vec<TrainingSession> {
         let base_intensity = match phase {
             PeriodizationPhase::PreSeason => TrainingIntensity::High,
             PeriodizationPhase::MidSeason => TrainingIntensity::Moderate,
@@ -705,7 +778,7 @@ impl WeeklyTrainingPlan {
                 duration_minutes: 30,
                 focus_positions: vec![],
                 participants: vec![],
-            }
+            },
         ]
     }
 
@@ -722,24 +795,28 @@ impl WeeklyTrainingPlan {
                 session_type: TrainingType::Shooting,
                 intensity: TrainingIntensity::Moderate,
                 duration_minutes: 45,
-                focus_positions: vec![PlayerPositionType::Striker, PlayerPositionType::ForwardCenter],
+                focus_positions: vec![
+                    PlayerPositionType::Striker,
+                    PlayerPositionType::ForwardCenter,
+                ],
                 participants: vec![],
-            }
+            },
         ]
     }
 
-    fn thursday_sessions(next_match: Option<Weekday>, _phase: PeriodizationPhase) -> Vec<TrainingSession> {
+    fn thursday_sessions(
+        next_match: Option<Weekday>,
+        _phase: PeriodizationPhase,
+    ) -> Vec<TrainingSession> {
         if next_match == Some(Weekday::Sat) {
             // Light preparation for Saturday match
-            vec![
-                TrainingSession {
-                    session_type: TrainingType::MatchPreparation,
-                    intensity: TrainingIntensity::Light,
-                    duration_minutes: 60,
-                    focus_positions: vec![],
-                    participants: vec![],
-                }
-            ]
+            vec![TrainingSession {
+                session_type: TrainingType::MatchPreparation,
+                intensity: TrainingIntensity::Light,
+                duration_minutes: 60,
+                focus_positions: vec![],
+                participants: vec![],
+            }]
         } else {
             // Full training session
             vec![
@@ -756,12 +833,15 @@ impl WeeklyTrainingPlan {
                     duration_minutes: 60,
                     focus_positions: vec![],
                     participants: vec![],
-                }
+                },
             ]
         }
     }
 
-    fn friday_sessions(next_match: Option<Weekday>, _phase: PeriodizationPhase) -> Vec<TrainingSession> {
+    fn friday_sessions(
+        next_match: Option<Weekday>,
+        _phase: PeriodizationPhase,
+    ) -> Vec<TrainingSession> {
         if next_match == Some(Weekday::Sat) {
             // Final preparation
             vec![
@@ -778,7 +858,7 @@ impl WeeklyTrainingPlan {
                     duration_minutes: 45,
                     focus_positions: vec![],
                     participants: vec![],
-                }
+                },
             ]
         } else {
             // Normal training
@@ -796,7 +876,7 @@ impl WeeklyTrainingPlan {
                     duration_minutes: 45,
                     focus_positions: vec![],
                     participants: vec![],
-                }
+                },
             ]
         }
     }
@@ -805,15 +885,13 @@ impl WeeklyTrainingPlan {
         if next_match == Some(Weekday::Sat) {
             vec![] // Match day
         } else {
-            vec![
-                TrainingSession {
-                    session_type: TrainingType::MatchPreparation,
-                    intensity: TrainingIntensity::High,
-                    duration_minutes: 90,
-                    focus_positions: vec![],
-                    participants: vec![],
-                }
-            ]
+            vec![TrainingSession {
+                session_type: TrainingType::MatchPreparation,
+                intensity: TrainingIntensity::High,
+                duration_minutes: 90,
+                focus_positions: vec![],
+                participants: vec![],
+            }]
         }
     }
 
@@ -821,15 +899,13 @@ impl WeeklyTrainingPlan {
         if next_match == Some(Weekday::Sun) {
             vec![] // Match day
         } else {
-            vec![
-                TrainingSession {
-                    session_type: TrainingType::RestDay,
-                    intensity: TrainingIntensity::VeryLight,
-                    duration_minutes: 0,
-                    focus_positions: vec![],
-                    participants: vec![],
-                }
-            ]
+            vec![TrainingSession {
+                session_type: TrainingType::RestDay,
+                intensity: TrainingIntensity::VeryLight,
+                duration_minutes: 0,
+                focus_positions: vec![],
+                participants: vec![],
+            }]
         }
     }
 }
@@ -864,14 +940,30 @@ impl TrainingEffects {
     pub fn scale_gains(&mut self, factor: f32) {
         let f = factor.max(0.0);
         let p = &mut self.physical_gains;
-        p.stamina *= f; p.strength *= f; p.pace *= f; p.agility *= f;
-        p.balance *= f; p.jumping *= f; p.natural_fitness *= f;
+        p.stamina *= f;
+        p.strength *= f;
+        p.pace *= f;
+        p.agility *= f;
+        p.balance *= f;
+        p.jumping *= f;
+        p.natural_fitness *= f;
         let t = &mut self.technical_gains;
-        t.first_touch *= f; t.passing *= f; t.crossing *= f; t.dribbling *= f;
-        t.finishing *= f; t.heading *= f; t.tackling *= f; t.technique *= f;
+        t.first_touch *= f;
+        t.passing *= f;
+        t.crossing *= f;
+        t.dribbling *= f;
+        t.finishing *= f;
+        t.heading *= f;
+        t.tackling *= f;
+        t.technique *= f;
         let m = &mut self.mental_gains;
-        m.concentration *= f; m.decisions *= f; m.positioning *= f;
-        m.teamwork *= f; m.vision *= f; m.work_rate *= f; m.leadership *= f;
+        m.concentration *= f;
+        m.decisions *= f;
+        m.positioning *= f;
+        m.teamwork *= f;
+        m.vision *= f;
+        m.work_rate *= f;
+        m.leadership *= f;
     }
 }
 
@@ -888,8 +980,13 @@ pub struct PhysicalGains {
 
 impl PhysicalGains {
     pub fn total(&self) -> f32 {
-        self.stamina + self.strength + self.pace + self.agility
-            + self.balance + self.jumping + self.natural_fitness
+        self.stamina
+            + self.strength
+            + self.pace
+            + self.agility
+            + self.balance
+            + self.jumping
+            + self.natural_fitness
     }
 }
 
@@ -907,8 +1004,14 @@ pub struct TechnicalGains {
 
 impl TechnicalGains {
     pub fn total(&self) -> f32 {
-        self.first_touch + self.passing + self.crossing + self.dribbling
-            + self.finishing + self.heading + self.tackling + self.technique
+        self.first_touch
+            + self.passing
+            + self.crossing
+            + self.dribbling
+            + self.finishing
+            + self.heading
+            + self.tackling
+            + self.technique
     }
 }
 
@@ -925,8 +1028,13 @@ pub struct MentalGains {
 
 impl MentalGains {
     pub fn total(&self) -> f32 {
-        self.concentration + self.decisions + self.positioning
-            + self.teamwork + self.vision + self.work_rate + self.leadership
+        self.concentration
+            + self.decisions
+            + self.positioning
+            + self.teamwork
+            + self.vision
+            + self.work_rate
+            + self.leadership
     }
 }
 
@@ -1093,9 +1201,9 @@ pub struct TrainingLoadManager {
 
 #[derive(Debug, Clone)]
 pub struct PlayerTrainingLoad {
-    pub acute_load: f32,        // Last 7 days
-    pub chronic_load: f32,      // Last 28 days
-    pub load_ratio: f32,        // Acute/Chronic ratio
+    pub acute_load: f32,   // Last 7 days
+    pub chronic_load: f32, // Last 28 days
+    pub load_ratio: f32,   // Acute/Chronic ratio
     pub cumulative_fatigue: f32,
     pub last_high_intensity: Option<NaiveDateTime>,
     pub sessions_this_week: u8,
@@ -1113,7 +1221,12 @@ impl PlayerTrainingLoad {
         }
     }
 
-    pub fn update_load(&mut self, session_load: f32, intensity: &TrainingIntensity, date: NaiveDateTime) {
+    pub fn update_load(
+        &mut self,
+        session_load: f32,
+        intensity: &TrainingIntensity,
+        date: NaiveDateTime,
+    ) {
         // Update acute load (exponentially weighted)
         self.acute_load = self.acute_load * 0.9 + session_load * 0.1;
 
@@ -1131,7 +1244,10 @@ impl PlayerTrainingLoad {
         self.cumulative_fatigue = (self.cumulative_fatigue + session_load * 0.2).min(100.0);
 
         // Track high intensity sessions
-        if matches!(intensity, TrainingIntensity::High | TrainingIntensity::VeryHigh) {
+        if matches!(
+            intensity,
+            TrainingIntensity::High | TrainingIntensity::VeryHigh
+        ) {
             self.last_high_intensity = Some(date);
         }
 
@@ -1152,9 +1268,7 @@ impl PlayerTrainingLoad {
     }
 
     pub fn needs_rest(&self) -> bool {
-        self.cumulative_fatigue > 75.0 ||
-            self.load_ratio > 1.5 ||
-            self.sessions_this_week >= 6
+        self.cumulative_fatigue > 75.0 || self.load_ratio > 1.5 || self.sessions_this_week >= 6
     }
 
     pub fn weekly_reset(&mut self) {

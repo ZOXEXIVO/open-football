@@ -1,19 +1,17 @@
+use crate::PlayerFieldPositionGroup;
+use crate::r#match::common_states::CommonInjuredState;
 use crate::r#match::defenders::states::{DefenderState, DefenderStrategies};
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::forwarders::states::{ForwardState, ForwardStrategies};
 use crate::r#match::goalkeepers::states::state::{GoalkeeperState, GoalkeeperStrategies};
 use crate::r#match::midfielders::states::{MidfielderState, MidfielderStrategies};
+use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, Midfielder};
-use crate::r#match::{
-    BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer,
-};
-use crate::r#match::player::memory::PlayerMemory;
-use crate::r#match::common_states::CommonInjuredState;
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
 use crate::r#match::team::TeamOperationsImpl;
-use crate::PlayerFieldPositionGroup;
+use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer};
 use log::debug;
 use nalgebra::Vector3;
 
@@ -51,20 +49,20 @@ impl PlayerFieldPositionGroup {
         // got closer) should yield back to Running. Without the yield,
         // chasers pile up over time because TakeBall only exits on
         // ownership, not on "someone else is a better chaser now".
-        let override_state_time =
-            if Self::should_yield_takeball(*self, player, tick_context) {
-                player.state = Self::yield_state_for(*self);
-                0
-            } else if Self::should_force_takeball(*self, player, tick_context) {
-                player.state = Self::takeball_state_for(*self);
-                0
-            } else {
-                in_state_time
-            };
+        let override_state_time = if Self::should_yield_takeball(*self, player, tick_context) {
+            player.state = Self::yield_state_for(*self);
+            0
+        } else if Self::should_force_takeball(*self, player, tick_context) {
+            player.state = Self::takeball_state_for(*self);
+            0
+        } else {
+            in_state_time
+        };
         let _ = context; // all needed state lives in player + tick_context
 
         let player_state = player.state;
-        let state_processor = StateProcessor::new(override_state_time, player, context, tick_context);
+        let state_processor =
+            StateProcessor::new(override_state_time, player, context, tick_context);
 
         match player_state {
             // Common states
@@ -83,9 +81,13 @@ impl PlayerFieldPositionGroup {
     #[inline]
     fn takeball_state_for(group: PlayerFieldPositionGroup) -> PlayerState {
         match group {
-            PlayerFieldPositionGroup::Goalkeeper => PlayerState::Goalkeeper(GoalkeeperState::TakeBall),
+            PlayerFieldPositionGroup::Goalkeeper => {
+                PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
+            }
             PlayerFieldPositionGroup::Defender => PlayerState::Defender(DefenderState::TakeBall),
-            PlayerFieldPositionGroup::Midfielder => PlayerState::Midfielder(MidfielderState::TakeBall),
+            PlayerFieldPositionGroup::Midfielder => {
+                PlayerState::Midfielder(MidfielderState::TakeBall)
+            }
             PlayerFieldPositionGroup::Forward => PlayerState::Forward(ForwardState::TakeBall),
         }
     }
@@ -97,9 +99,13 @@ impl PlayerFieldPositionGroup {
     #[inline]
     fn yield_state_for(group: PlayerFieldPositionGroup) -> PlayerState {
         match group {
-            PlayerFieldPositionGroup::Goalkeeper => PlayerState::Goalkeeper(GoalkeeperState::Standing),
+            PlayerFieldPositionGroup::Goalkeeper => {
+                PlayerState::Goalkeeper(GoalkeeperState::Standing)
+            }
             PlayerFieldPositionGroup::Defender => PlayerState::Defender(DefenderState::Running),
-            PlayerFieldPositionGroup::Midfielder => PlayerState::Midfielder(MidfielderState::Running),
+            PlayerFieldPositionGroup::Midfielder => {
+                PlayerState::Midfielder(MidfielderState::Running)
+            }
             PlayerFieldPositionGroup::Forward => PlayerState::Forward(ForwardState::Running),
         }
     }
@@ -126,7 +132,9 @@ impl PlayerFieldPositionGroup {
         if tick_context.ball.is_owned {
             return false;
         }
-        let Some(my_side) = player.side else { return false; };
+        let Some(my_side) = player.side else {
+            return false;
+        };
         // Use landing_position here to match `should_force_takeball`.
         // If yield used the current aerial position and force used
         // landing, a designated chaser could get yielded mid-flight

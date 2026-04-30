@@ -67,22 +67,22 @@ impl Relations {
     pub fn update(&mut self, player_id: u32, increment: f32, date: NaiveDate) {
         // Create a relationship change based on the increment
         let change = if increment >= 0.0 {
-            RelationshipChange::positive(
-                ChangeType::NaturalProgression,
-                increment.abs(),
-            )
+            RelationshipChange::positive(ChangeType::NaturalProgression, increment.abs())
         } else {
-            RelationshipChange::negative(
-                ChangeType::NaturalProgression,
-                increment.abs(),
-            )
+            RelationshipChange::negative(ChangeType::NaturalProgression, increment.abs())
         };
 
         self.update_player_relationship(player_id, change, date);
     }
 
     /// Update with a specific change type and simulation date
-    pub fn update_with_type(&mut self, player_id: u32, increment: f32, change_type: ChangeType, date: NaiveDate) {
+    pub fn update_with_type(
+        &mut self,
+        player_id: u32,
+        increment: f32,
+        change_type: ChangeType,
+        date: NaiveDate,
+    ) {
         let change = if increment >= 0.0 {
             RelationshipChange::positive(change_type, increment.abs())
         } else {
@@ -204,7 +204,8 @@ impl Relations {
 
     /// Check if player is a favorite
     pub fn is_favorite_player(&self, player_id: u32) -> bool {
-        self.players.get(player_id)
+        self.players
+            .get(player_id)
             .map(|r| r.is_favorite())
             .unwrap_or(false)
     }
@@ -242,7 +243,8 @@ impl Relations {
 
     /// Get coaching receptiveness (how well player responds to coaching)
     pub fn get_coaching_receptiveness(&self, coach_id: u32) -> f32 {
-        self.staffs.get(coach_id)
+        self.staffs
+            .get(coach_id)
             .map(|r| r.calculate_coaching_multiplier())
             .unwrap_or(1.0)
     }
@@ -256,7 +258,9 @@ impl Relations {
 
     /// Get influence level in the dressing room
     pub fn get_influence_level(&self, player_id: u32) -> InfluenceLevel {
-        let base_influence = self.players.get(player_id)
+        let base_influence = self
+            .players
+            .get(player_id)
             .map(|r| r.influence)
             .unwrap_or(0.0);
 
@@ -363,7 +367,6 @@ impl Relations {
             .map(|g| g.cohesion.clamp(0.0, 1.0))
             .unwrap_or(0.0)
     }
-
 }
 
 /// Store for relationships of a specific type
@@ -392,14 +395,16 @@ impl<T: Relationship> RelationStore<T> {
     }
 
     fn get_favorites(&self) -> Vec<u32> {
-        self.relations.iter()
+        self.relations
+            .iter()
             .filter(|(_, r)| r.is_favorite())
             .map(|(id, _)| *id)
             .collect()
     }
 
     fn get_disliked(&self) -> Vec<u32> {
-        self.relations.iter()
+        self.relations
+            .iter()
             .filter(|(_, r)| r.is_disliked())
             .map(|(id, _)| *id)
             .collect()
@@ -411,7 +416,7 @@ impl<T: Relationship> RelationStore<T> {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item=(&u32, &T)> {
+    fn iter(&self) -> impl Iterator<Item = (&u32, &T)> {
         self.relations.iter()
     }
 }
@@ -512,9 +517,7 @@ impl Relationship for PlayerRelation {
         // trust, professional_respect already on 0..100
         // Mirror the spec weighting: relation quality = level*0.4 + (trust-50)*0.3 + (prof_respect-50)*0.3
         // Centre trust/prof around 50 to keep neutral input → 50 output.
-        let combined = level_axis * 0.4
-            + self.trust * 0.3
-            + self.professional_respect * 0.3;
+        let combined = level_axis * 0.4 + self.trust * 0.3 + self.professional_respect * 0.3;
         combined.clamp(0.0, 100.0)
     }
 
@@ -712,7 +715,7 @@ impl Relationship for StaffRelation {
                 self.level += magnitude * 2.0;
             }
             ChangeType::DisciplinaryAction => {
-                self.authority_respect += magnitude;  // Can increase if fair
+                self.authority_respect += magnitude; // Can increase if fair
                 self.personal_bond -= magnitude * 2.0;
                 self.level -= magnitude;
             }
@@ -768,14 +771,17 @@ impl GroupDynamics {
         const LEAVE_THRESHOLD: f32 = 40.0;
 
         // Find or seed the inner-circle group for this subject.
-        let group = self.groups.entry(INNER_CIRCLE_GROUP).or_insert_with(|| Group {
-            id: INNER_CIRCLE_GROUP,
-            members: HashSet::new(),
-            leader_id: None,      // subject-owned: leader = the subject, but we don't know their id here
-            cohesion: 0.0,
-            group_type: GroupType::Social,
-            rival_group: None,
-        });
+        let group = self
+            .groups
+            .entry(INNER_CIRCLE_GROUP)
+            .or_insert_with(|| Group {
+                id: INNER_CIRCLE_GROUP,
+                members: HashSet::new(),
+                leader_id: None, // subject-owned: leader = the subject, but we don't know their id here
+                cohesion: 0.0,
+                group_type: GroupType::Social,
+                rival_group: None,
+            });
 
         let was_member = group.members.contains(&entity_id);
 
@@ -811,15 +817,18 @@ impl GroupDynamics {
     }
 
     fn get_entity_groups(&self, entity_id: u32) -> Vec<GroupId> {
-        self.entity_groups.get(&entity_id)
+        self.entity_groups
+            .get(&entity_id)
             .map(|groups| groups.iter().copied().collect())
             .unwrap_or_default()
     }
 
     fn get_leadership_bonus(&self, entity_id: u32) -> f32 {
-        self.entity_groups.get(&entity_id)
+        self.entity_groups
+            .get(&entity_id)
             .map(|groups| {
-                groups.iter()
+                groups
+                    .iter()
                     .filter_map(|gid| self.groups.get(gid))
                     .filter(|g| g.leader_id == Some(entity_id))
                     .map(|g| 0.2 * g.cohesion)
@@ -923,7 +932,9 @@ impl TeamChemistry {
         let coach_relationship = calculate_coach_relationship(staffs);
         let leadership_quality = calculate_leadership_quality_default(&ctx);
         let conflict_level = calculate_conflict_level(players);
-        let group_cohesion = (ctx.inner_circle_cohesion * 100.0).clamp(0.0, 100.0).max(50.0);
+        let group_cohesion = (ctx.inner_circle_cohesion * 100.0)
+            .clamp(0.0, 100.0)
+            .max(50.0);
         let turnover = turnover_penalty_for(ctx.recent_signings_90d);
 
         self.factors = ChemistryFactors {
@@ -963,11 +974,7 @@ impl TeamChemistry {
         let circle = if ctx.inner_circle_cohesion > 0.0 {
             ctx.inner_circle_cohesion
         } else {
-            groups
-                .groups
-                .values()
-                .map(|g| g.cohesion)
-                .sum::<f32>()
+            groups.groups.values().map(|g| g.cohesion).sum::<f32>()
                 / groups.groups.len().max(1) as f32
         };
         let group_cohesion = (circle * 100.0).clamp(0.0, 100.0).max(35.0);
@@ -1039,12 +1046,24 @@ fn calculate_leadership_quality_default(ctx: &ChemistryContext) -> f32 {
     let mut score = 0.0f32;
     let mut weight = 0.0f32;
     for (i, v) in leadership_norm.iter().enumerate() {
-        let w = if i == 0 { 1.5 } else if i == 1 { 1.2 } else { 1.0 };
+        let w = if i == 0 {
+            1.5
+        } else if i == 1 {
+            1.2
+        } else {
+            1.0
+        };
         score += v * w;
         weight += w;
     }
     for (i, v) in influence_norm.iter().enumerate() {
-        let w = if i == 0 { 0.6 } else if i == 1 { 0.5 } else { 0.4 };
+        let w = if i == 0 {
+            0.6
+        } else if i == 1 {
+            0.5
+        } else {
+            0.4
+        };
         score += v * w;
         weight += w;
     }
@@ -1292,10 +1311,7 @@ mod tests {
     fn test_player_relationship_updates() {
         let mut relations = Relations::new();
 
-        let change = RelationshipChange::positive(
-            ChangeType::TrainingBonding,
-            0.5,
-        );
+        let change = RelationshipChange::positive(ChangeType::TrainingBonding, 0.5);
 
         relations.update_player_relationship(
             1,
@@ -1311,10 +1327,7 @@ mod tests {
     fn test_coaching_receptiveness() {
         let mut relations = Relations::new();
 
-        let change = RelationshipChange::positive(
-            ChangeType::CoachingSuccess,
-            0.8,
-        );
+        let change = RelationshipChange::positive(ChangeType::CoachingSuccess, 0.8);
 
         relations.update_staff_relationship(
             1,
@@ -1332,10 +1345,7 @@ mod tests {
 
         // Add some positive relationships
         for i in 1..5 {
-            let change = RelationshipChange::positive(
-                ChangeType::TeamSuccess,
-                0.5,
-            );
+            let change = RelationshipChange::positive(ChangeType::TeamSuccess, 0.5);
             relations.update_player_relationship(
                 i,
                 change,

@@ -43,7 +43,9 @@ pub struct PlayerRapport {
 
 impl PlayerRapport {
     pub fn new() -> Self {
-        Self { coaches: Vec::new() }
+        Self {
+            coaches: Vec::new(),
+        }
     }
 
     /// Return the rapport entry (creating it if missing).

@@ -84,13 +84,12 @@ impl<'p> DefensiveOperationsImpl<'p> {
 
                 // Check if in attacking position (closer to our goal than most defenders)
                 let defender_x = self.ctx.player.position.x;
-                let is_in_dangerous_position = if own_goal_position.x
-                    < self.ctx.context.field_size.width as f32 / 2.0
-                {
-                    opp.position.x < defender_x + 20.0 // Attacker is ahead or close
-                } else {
-                    opp.position.x > defender_x - 20.0
-                };
+                let is_in_dangerous_position =
+                    if own_goal_position.x < self.ctx.context.field_size.width as f32 / 2.0 {
+                        opp.position.x < defender_x + 20.0 // Attacker is ahead or close
+                    } else {
+                        opp.position.x > defender_x - 20.0
+                    };
 
                 if !is_in_dangerous_position {
                     return false;
@@ -302,7 +301,11 @@ impl<'p> DefensiveOperationsImpl<'p> {
         let my_dist = (self.ctx.player.position - carrier.position).magnitude();
         // Only the two closest defenders engage. The rest hold shape
         // so the box isn't emptied. Rank by distance, tiebreak on id.
-        let closer_defenders = self.ctx.players().teammates().defenders()
+        let closer_defenders = self
+            .ctx
+            .players()
+            .teammates()
+            .defenders()
             .filter(|d| d.id != my_id)
             .filter(|d| {
                 let dist = (d.position - carrier.position).magnitude();
@@ -334,7 +337,11 @@ impl<'p> DefensiveOperationsImpl<'p> {
         // shape and track secondary runners.
         let my_id = self.ctx.player.id;
         let my_dist = (self.ctx.player.position - carrier.position).magnitude();
-        let closer = self.ctx.players().teammates().defenders()
+        let closer = self
+            .ctx
+            .players()
+            .teammates()
+            .defenders()
             .filter(|d| d.id != my_id)
             .any(|d| (d.position - carrier.position).magnitude() < my_dist);
         !closer
@@ -354,8 +361,8 @@ impl<'p> DefensiveOperationsImpl<'p> {
 
     /// Check if in dangerous defensive position (near own goal)
     pub fn in_dangerous_position(&self) -> bool {
-        let distance_to_goal = (self.ctx.player.position - self.ctx.ball().direction_to_own_goal())
-            .magnitude();
+        let distance_to_goal =
+            (self.ctx.player.position - self.ctx.ball().direction_to_own_goal()).magnitude();
         let danger_threshold = self.ctx.context.field_size.width as f32 * 0.15; // 15% of field width
 
         distance_to_goal < danger_threshold
@@ -502,7 +509,11 @@ impl<'p> DefensiveOperationsImpl<'p> {
     }
 
     /// Calculate danger score for an opponent
-    fn calculate_opponent_danger_score(&self, opponent: &MatchPlayerLite, own_goal: Vector3<f32>) -> f32 {
+    fn calculate_opponent_danger_score(
+        &self,
+        opponent: &MatchPlayerLite,
+        own_goal: Vector3<f32>,
+    ) -> f32 {
         let mut score = 0.0;
 
         // Distance to our goal (closer = more dangerous)
@@ -525,7 +536,8 @@ impl<'p> DefensiveOperationsImpl<'p> {
         }
 
         // Close to ball (potential receiver)
-        let ball_distance = (opponent.position - self.ctx.tick_context.positions.ball.position).magnitude();
+        let ball_distance =
+            (opponent.position - self.ctx.tick_context.positions.ball.position).magnitude();
         score += (100.0 - ball_distance.min(100.0)) / 2.0;
 
         score
@@ -560,10 +572,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
                 .players()
                 .teammates()
                 .defenders()
-                .filter(|d| {
-                    d.id != self.ctx.player.id
-                        && (d.position - my_pos).magnitude() < 50.0
-                })
+                .filter(|d| d.id != self.ctx.player.id && (d.position - my_pos).magnitude() < 50.0)
                 .count();
 
             return covering_defenders < dangerous_nearby;

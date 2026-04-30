@@ -16,14 +16,19 @@ pub struct CountryResult {
 
 impl CountryResult {
     pub fn new(country_id: u32, leagues: Vec<LeagueResult>, clubs: Vec<ClubResult>) -> Self {
-        CountryResult { country_id, leagues, clubs }
+        CountryResult {
+            country_id,
+            leagues,
+            clubs,
+        }
     }
 
     pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
         let current_date = data.date.date();
         let country_id = self.get_country_id(data);
 
-        let season_dates = data.country(country_id)
+        let season_dates = data
+            .country(country_id)
             .map(|c| c.season_dates())
             .unwrap_or_default();
 

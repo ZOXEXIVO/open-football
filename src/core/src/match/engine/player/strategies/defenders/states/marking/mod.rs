@@ -1,5 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -59,7 +59,8 @@ impl StateProcessingHandler for DefenderMarkingState {
 
         if ball_position.z > HEADING_HEIGHT
             && ball_distance < HEADING_DISTANCE
-            && ctx.ball().is_towards_player_with_angle(0.6) {
+            && ctx.ball().is_towards_player_with_angle(0.6)
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Heading,
             ));
@@ -128,7 +129,6 @@ impl StateProcessingHandler for DefenderMarkingState {
         }
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move to maintain goal-side position relative to the opponent being marked
 
@@ -138,7 +138,8 @@ impl StateProcessingHandler for DefenderMarkingState {
 
             // Predict opponent's future position
             let prediction_time = 0.3; // Look ahead 300ms
-            let opponent_future_position = opponent_to_mark.position + opponent_velocity * prediction_time;
+            let opponent_future_position =
+                opponent_to_mark.position + opponent_velocity * prediction_time;
 
             // Calculate goal-side marking position
             // Position between opponent and own goal (goal-side = toward our goal)
@@ -206,7 +207,10 @@ impl DefenderMarkingState {
     }
 
     /// Find the most dangerous opponent to mark based on multiple factors
-    fn find_most_dangerous_opponent(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+    fn find_most_dangerous_opponent(
+        &self,
+        ctx: &StateProcessingContext,
+    ) -> Option<MatchPlayerLite> {
         let player_ops = ctx.player();
         let own_goal_position = ctx.ball().direction_to_own_goal();
         let ball_position = ctx.tick_context.positions.ball.position;
@@ -253,7 +257,8 @@ impl DefenderMarkingState {
             let opponent_skills = player_ops.skills(opponent.id);
             let attacking_skill = (opponent_skills.physical.pace
                 + opponent_skills.technical.dribbling
-                + opponent_skills.technical.finishing) / 3.0;
+                + opponent_skills.technical.finishing)
+                / 3.0;
             danger_score += attacking_skill / 20.0;
 
             if danger_score > best_score {
@@ -265,4 +270,3 @@ impl DefenderMarkingState {
         best_opponent
     }
 }
-

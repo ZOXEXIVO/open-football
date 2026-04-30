@@ -1,4 +1,4 @@
-use super::{ai_service, CompletedAiRequest, PendingAiRequest};
+use super::{CompletedAiRequest, PendingAiRequest, ai_service};
 
 pub struct AiBatchProcessor;
 

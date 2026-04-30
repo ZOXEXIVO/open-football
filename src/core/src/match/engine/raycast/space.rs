@@ -1,5 +1,5 @@
-use nalgebra::Vector3;
 use crate::r#match::MatchField;
+use nalgebra::Vector3;
 
 const MAX_COLLIDERS: usize = 24; // 1 ball + 22 players + 1 spare
 

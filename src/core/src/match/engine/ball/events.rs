@@ -43,11 +43,11 @@ impl BallEventDispatcher {
 
         if context.logging_enabled {
             match event {
-                BallEvent::TakeMe(_) | BallEvent::Claimed(_) => {},
+                BallEvent::TakeMe(_) | BallEvent::Claimed(_) => {}
                 BallEvent::Intercepted(pid, _) => {
                     debug!("Ball event: Intercepted by player {}", pid);
-                },
-                _ => debug!("Ball event: {:?}", event)
+                }
+                _ => debug!("Ball event: {:?}", event),
             }
         }
 
@@ -55,7 +55,11 @@ impl BallEventDispatcher {
             BallEvent::Goal(metadata) => {
                 // Determine which team scored based on the goalscorer's team, not goal position.
                 // Goal position (GoalSide) is unreliable after halftime side swap.
-                if let Some(scorer) = field.players.iter().find(|p| p.id == metadata.goalscorer_player_id) {
+                if let Some(scorer) = field
+                    .players
+                    .iter()
+                    .find(|p| p.id == metadata.goalscorer_player_id)
+                {
                     let is_home_scorer = scorer.team_id == context.score.home_team.team_id;
 
                     if metadata.auto_goal {

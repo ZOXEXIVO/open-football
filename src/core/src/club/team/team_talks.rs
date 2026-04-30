@@ -7,9 +7,9 @@
 //! The match engine can call `apply_pre_match_talk` at kickoff,
 //! `apply_half_time_talk` at 45', and `apply_full_time_talk` at 90'.
 
-use crate::club::player::Player;
 use crate::club::HappinessEventType;
 use crate::club::Staff;
+use crate::club::player::Player;
 use chrono::NaiveDate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +112,11 @@ pub fn apply_team_talk_dated<'a, I>(
             TeamTalkTone::Criticise => -1.0,
             TeamTalkTone::Encourage => 1.5,
             TeamTalkTone::Passionate => {
-                if ctx.big_match { 2.0 } else { 0.8 }
+                if ctx.big_match {
+                    2.0
+                } else {
+                    0.8
+                }
             }
             TeamTalkTone::TacticalSilent => 0.0,
         };
@@ -222,14 +226,10 @@ fn recently_repeated_tone(player: &Player, tone: TeamTalkTone, window_days: u16)
         tone,
         TeamTalkTone::Praise | TeamTalkTone::Encourage | TeamTalkTone::Passionate
     );
-    player
-        .happiness
-        .recent_events
-        .iter()
-        .any(|e| {
-            e.event_type == HappinessEventType::DressingRoomSpeech
-                && e.days_ago <= window_days
-                && (e.magnitude > 0.5) == want_positive
-                && e.magnitude.abs() >= 0.5
-        })
+    player.happiness.recent_events.iter().any(|e| {
+        e.event_type == HappinessEventType::DressingRoomSpeech
+            && e.days_ago <= window_days
+            && (e.magnitude > 0.5) == want_positive
+            && e.magnitude.abs() >= 0.5
+    })
 }

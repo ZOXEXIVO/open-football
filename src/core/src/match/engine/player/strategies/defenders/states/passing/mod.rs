@@ -1,10 +1,10 @@
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -49,7 +49,11 @@ impl StateProcessingHandler for DefenderPassingState {
 
         // If teammates are tired, prefer a safe short pass
         if self.are_teammates_tired(ctx) {
-            if let Some(safe_target) = ctx.player().passing().find_safe_pass_option_with_distance(100.0) {
+            if let Some(safe_target) = ctx
+                .player()
+                .passing()
+                .find_safe_pass_option_with_distance(100.0)
+            {
                 let dist = (safe_target.position - ctx.player.position).magnitude();
                 if dist >= 20.0 {
                     return Some(StateChangeResult::with_defender_state_and_event(
@@ -68,7 +72,11 @@ impl StateProcessingHandler for DefenderPassingState {
 
         // Normal passing situation - evaluate options more carefully
         // Defenders use shorter max distance (200 units) to avoid wild long passes
-        if let Some((best_target, _reason)) = ctx.player().passing().find_best_pass_option_with_distance(200.0) {
+        if let Some((best_target, _reason)) = ctx
+            .player()
+            .passing()
+            .find_best_pass_option_with_distance(200.0)
+        {
             // ANTI-LOOP: Ensure pass target is far enough away for the ball to actually reach them.
             // Very short passes (< 30 units) with low pass force create claim-pass-reclaim loops.
             let pass_distance = (best_target.position - ctx.player.position).magnitude();
@@ -112,7 +120,11 @@ impl StateProcessingHandler for DefenderPassingState {
             // If we've been in this state for a while, make a decision
 
             // Try to find a safe pass option (directionally aware) rather than any random teammate
-            if let Some(safe_target) = ctx.player().passing().find_safe_pass_option_with_distance(200.0) {
+            if let Some(safe_target) = ctx
+                .player()
+                .passing()
+                .find_safe_pass_option_with_distance(200.0)
+            {
                 let dist = (safe_target.position - ctx.player.position).magnitude();
                 if dist >= 20.0 {
                     return Some(StateChangeResult::with_defender_state_and_event(
@@ -144,21 +156,22 @@ impl StateProcessingHandler for DefenderPassingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // While holding the ball and looking for pass options, move slowly or stand still
 
         // If player should adjust position to find better passing angles
         if self.should_adjust_position(ctx) {
             // Calculate target position based on the defensive situation
-            if let Some(target_position) = ctx.player().movement().calculate_better_passing_position() {
+            if let Some(target_position) =
+                ctx.player().movement().calculate_better_passing_position()
+            {
                 return Some(
                     SteeringBehavior::Arrive {
                         target: target_position,
                         slowing_distance: 5.0, // Short distance for subtle movement
                     }
-                        .calculate(ctx.player)
-                        .velocity,
+                    .calculate(ctx.player)
+                    .velocity,
                 );
             }
         }

@@ -1,5 +1,5 @@
 use crate::club::player::traits::PlayerTrait;
-use crate::r#match::{StateProcessingContext};
+use crate::r#match::StateProcessingContext;
 
 /// Operations for shooting decision-making
 pub struct ShootingOperationsImpl<'p> {
@@ -52,7 +52,11 @@ impl<'p> ShootingOperationsImpl<'p> {
         let skill_mult = 0.7 + finishing * 0.6; // 0.7 .. 1.3
         // Penalise a pressured / blocked shot — matches the real gameplay
         // where a defender in the corridor drastically reduces xG.
-        let clarity_mult = if self.ctx.player().has_clear_shot() { 1.0 } else { 0.40 };
+        let clarity_mult = if self.ctx.player().has_clear_shot() {
+            1.0
+        } else {
+            0.40
+        };
         (distance_factor * skill_mult * clarity_mult).clamp(0.0, 0.90)
     }
 
@@ -143,8 +147,12 @@ impl<'p> ShootingOperationsImpl<'p> {
         let prefers_pass = player.has_trait(PlayerTrait::LooksForPassRatherThanAttemptShot);
 
         // Single scan: count opponents within 8 units (reused below)
-        let opponents_within_8 = self.ctx.tick_context.grid
-            .opponents(self.ctx.player.id, 8.0).count();
+        let opponents_within_8 = self
+            .ctx
+            .tick_context
+            .grid
+            .opponents(self.ctx.player.id, 8.0)
+            .count();
 
         // Check if heavily marked — prefer pass if 2+ opponents very close
         // (a pass-first trait makes players even less willing to shoot here)
@@ -170,15 +178,10 @@ impl<'p> ShootingOperationsImpl<'p> {
 
         // Check if teammates are in MUCH better positions first
         let opponent_goal_pos = self.ctx.player().opponent_goal_position();
-        let better_positioned_teammate = self
-            .ctx
-            .players()
-            .teammates()
-            .nearby(100.0)
-            .any(|t| {
-                let t_dist = (t.position - opponent_goal_pos).magnitude();
-                t_dist < distance * TEAMMATE_ADVANTAGE_RATIO
-            });
+        let better_positioned_teammate = self.ctx.players().teammates().nearby(100.0).any(|t| {
+            let t_dist = (t.position - opponent_goal_pos).magnitude();
+            t_dist < distance * TEAMMATE_ADVANTAGE_RATIO
+        });
 
         // High teamwork players defer to better-positioned teammates.
         // "Looks for pass" reinforces this; "Shoots from distance" ignores it.
@@ -195,9 +198,7 @@ impl<'p> ShootingOperationsImpl<'p> {
         }
 
         // Optimal distance with reasonable ability
-        if distance <= OPTIMAL_SHOOTING_DISTANCE
-            && (confidence + finishing) / 2.0 > 0.55
-        {
+        if distance <= OPTIMAL_SHOOTING_DISTANCE && (confidence + finishing) / 2.0 > 0.55 {
             return true;
         }
 
@@ -206,10 +207,8 @@ impl<'p> ShootingOperationsImpl<'p> {
         // and accept a bit more pressure — this is where the PPM most changes
         // match feel (Robben, Lampard, Steven Gerrard-style hits).
         if distance <= MEDIUM_RANGE_DISTANCE
-            && (
-                (prefers_shot && long_shots > 0.35 && finishing > 0.35 && opponents_within_8 <= 1)
-                || (long_shots > 0.5 && finishing > 0.45 && opponents_within_8 == 0)
-            )
+            && ((prefers_shot && long_shots > 0.35 && finishing > 0.35 && opponents_within_8 <= 1)
+                || (long_shots > 0.5 && finishing > 0.45 && opponents_within_8 == 0))
         {
             return true;
         }
@@ -264,7 +263,8 @@ impl<'p> ShootingOperationsImpl<'p> {
         if player.has_trait(PlayerTrait::PowersShots) {
             adjusted += 0.03;
         }
-        if player.has_trait(PlayerTrait::ShootsFromDistance) && distance > OPTIMAL_SHOOTING_DISTANCE {
+        if player.has_trait(PlayerTrait::ShootsFromDistance) && distance > OPTIMAL_SHOOTING_DISTANCE
+        {
             adjusted += 0.08;
         }
         adjusted.clamp(0.0, 1.0)
@@ -298,7 +298,12 @@ impl<'p> ShootingOperationsImpl<'p> {
         // Single scan at max distance, bucket by distance
         let mut close_opponents = 0;
         let mut medium_opponents = 0;
-        for (_id, dist) in self.ctx.tick_context.grid.opponents(self.ctx.player.id, 10.0) {
+        for (_id, dist) in self
+            .ctx
+            .tick_context
+            .grid
+            .opponents(self.ctx.player.id, 10.0)
+        {
             if dist <= 5.0 {
                 close_opponents += 1;
             }

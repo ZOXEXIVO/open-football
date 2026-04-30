@@ -1,6 +1,10 @@
-use nalgebra::Vector3;
-use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchCoach, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamTacticalState, TeamsTactics, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS};
 use crate::r#match::engine::result::{PenaltyShootoutKick, PlayerMatchEndStats};
+use crate::r#match::{
+    GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach,
+    MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score,
+    TeamTacticalState, TeamsTactics,
+};
+use nalgebra::Vector3;
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;
 const MAX_STOPPAGE_PER_PERIOD_MS: u64 = 15 * 60 * 1000;
@@ -61,7 +65,13 @@ pub struct MatchContext {
 }
 
 impl MatchContext {
-    pub fn new(field: &MatchField, players: MatchPlayerCollection, score: Score, is_friendly: bool, is_knockout: bool) -> Self {
+    pub fn new(
+        field: &MatchField,
+        players: MatchPlayerCollection,
+        score: Score,
+        is_friendly: bool,
+        is_knockout: bool,
+    ) -> Self {
         MatchContext {
             state: GameState::new(),
             time: MatchTime::new(),
@@ -108,10 +118,8 @@ impl MatchContext {
             MatchState::FirstHalf | MatchState::SecondHalf => {
                 new_time < MATCH_HALF_TIME_MS + self.period_stoppage_time_ms
             }
-            MatchState::ExtraTime => {
-                new_time < MATCH_EXTRA_TIME_MS + self.period_stoppage_time_ms
-            }
-            _ => false
+            MatchState::ExtraTime => new_time < MATCH_EXTRA_TIME_MS + self.period_stoppage_time_ms,
+            _ => false,
         }
     }
 
@@ -175,7 +183,10 @@ impl MatchContext {
     }
 
     pub fn subs_used_by_team(&self, team_id: u32) -> usize {
-        self.substitutions.iter().filter(|s| s.team_id == team_id).count()
+        self.substitutions
+            .iter()
+            .filter(|s| s.team_id == team_id)
+            .count()
     }
 
     pub fn can_substitute(&self, team_id: u32) -> bool {
@@ -198,7 +209,13 @@ impl MatchContext {
         }
     }
 
-    pub fn record_substitution(&mut self, team_id: u32, player_out_id: u32, player_in_id: u32, match_time: u64) {
+    pub fn record_substitution(
+        &mut self,
+        team_id: u32,
+        player_out_id: u32,
+        player_in_id: u32,
+        match_time: u64,
+    ) {
         self.substitutions.push(SubstitutionRecord {
             team_id,
             player_out_id,
@@ -212,7 +229,7 @@ impl MatchContext {
         let field_height = self.field_size.height as f32;
         let scale = field_width / 105.0; // Field units per real meter
         let penalty_area_width = 40.32 * scale; // 40.32m wide (centered on goal)
-        let penalty_area_depth = 16.5 * scale;  // 16.5m deep from goal line
+        let penalty_area_depth = 16.5 * scale; // 16.5m deep from goal line
 
         if is_home_team {
             PenaltyArea::new(
@@ -235,7 +252,6 @@ impl MatchContext {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub struct PenaltyArea {

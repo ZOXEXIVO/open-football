@@ -23,8 +23,8 @@ impl PlayerAgent {
     /// controversy both drive greed (visible entitlement + willingness to
     /// rock the boat for a bigger deal); raw loyalty drives agent loyalty.
     pub fn for_player(player: &Player) -> Self {
-        let greed = ((player.attributes.ambition + player.attributes.controversy) / 40.0)
-            .clamp(0.0, 1.0);
+        let greed =
+            ((player.attributes.ambition + player.attributes.controversy) / 40.0).clamp(0.0, 1.0);
         let loyalty = (player.attributes.loyalty / 20.0).clamp(0.0, 1.0);
         Self { greed, loyalty }
     }
@@ -125,7 +125,10 @@ mod tests {
         let loyal = agent(10.0, 10.0, 20.0);
         let upward = loyal.personal_terms_delta(0.3);
         let lateral = loyal.personal_terms_delta(0.0);
-        assert!(lateral < upward, "lateral {lateral} should hurt more than upward {upward}");
+        assert!(
+            lateral < upward,
+            "lateral {lateral} should hurt more than upward {upward}"
+        );
     }
 
     #[test]

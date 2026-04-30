@@ -5,10 +5,10 @@
 //! / Penalty Taking. The match engine can consult `SetPieceSetup` when a
 //! set-piece event fires.
 
-use crate::club::player::skills::Mental;
-use crate::club::player::Player;
-use crate::club::PlayerPositionType;
 use crate::PersonAttributes;
+use crate::club::PlayerPositionType;
+use crate::club::player::Player;
+use crate::club::player::skills::Mental;
 
 #[derive(Debug, Clone, Default)]
 pub struct SetPieceSetup {
@@ -68,7 +68,9 @@ impl SetPieceSetup {
         let score = |score_fn: fn(&Player) -> f32| -> Option<u32> {
             pool.iter()
                 .max_by(|a, b| {
-                    score_fn(a).partial_cmp(&score_fn(b)).unwrap_or(std::cmp::Ordering::Equal)
+                    score_fn(a)
+                        .partial_cmp(&score_fn(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|p| p.id)
         };
@@ -81,7 +83,9 @@ impl SetPieceSetup {
         let penalty_taker = score(|p| {
             let t = &p.skills.technical;
             let m = &p.skills.mental;
-            t.penalty_taking * 0.5 + t.finishing * 0.2 + t.technique * 0.15
+            t.penalty_taking * 0.5
+                + t.finishing * 0.2
+                + t.technique * 0.15
                 + (20.0 - m.pressure_handling(&p.attributes)) * 0.15
         });
 

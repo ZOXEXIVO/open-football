@@ -1,7 +1,10 @@
+use super::activity_intensity::{ActivityIntensity, ActivityIntensityConfig};
+use super::constants::{
+    FATIGUE_RATE_MULTIPLIER, MATCH_CONDITION_FLOOR, MAX_CONDITION, MAX_JADEDNESS,
+    RECOVERY_RATE_MULTIPLIER,
+};
 use crate::r#match::ConditionContext;
 use log::trace;
-use super::activity_intensity::{ActivityIntensity, ActivityIntensityConfig};
-use super::constants::{MAX_CONDITION, MATCH_CONDITION_FLOOR, MAX_JADEDNESS, FATIGUE_RATE_MULTIPLIER, RECOVERY_RATE_MULTIPLIER};
 
 /// Generic condition processor with role-specific configurations
 pub struct ConditionProcessor<T: ActivityIntensityConfig> {
@@ -40,9 +43,10 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         // Calculate velocity-based fatigue (75% of total effect)
         // Use squared values to avoid sqrt — compare ratio² against threshold²
         let velocity_sq = ctx.player.velocity.norm_squared();
-        let max_speed = ctx.player.skills.max_speed_with_condition(
-            ctx.player.player_attributes.condition,
-        );
+        let max_speed = ctx
+            .player
+            .skills
+            .max_speed_with_condition(ctx.player.player_attributes.condition);
         let max_speed_sq = max_speed * max_speed;
 
         // intensity_ratio_sq = (speed / max_speed)²
@@ -102,7 +106,8 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             FATIGUE_RATE_MULTIPLIER * late_match_fatigue_mult
         };
 
-        let condition_change_f = combined_fatigue * stamina_factor * fitness_factor * rate_multiplier;
+        let condition_change_f =
+            combined_fatigue * stamina_factor * fitness_factor * rate_multiplier;
 
         // Accumulate fractional fatigue to avoid float-to-int truncation losing small per-tick values
         ctx.player.fatigue_accumulator += condition_change_f;
@@ -116,8 +121,9 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
 
             // Apply condition change (clamped to MATCH_CONDITION_FLOOR..MAX_CONDITION)
             // In FM, condition never drops below ~30% even during the most intense match
-            ctx.player.player_attributes.condition =
-                (ctx.player.player_attributes.condition - condition_change).clamp(MATCH_CONDITION_FLOOR, MAX_CONDITION);
+            ctx.player.player_attributes.condition = (ctx.player.player_attributes.condition
+                - condition_change)
+                .clamp(MATCH_CONDITION_FLOOR, MAX_CONDITION);
 
             trace!(
                 "Condition: player={}, vel_sq={:.3}, change={}, acc={:.3}, condition: {} -> {}",
@@ -132,10 +138,12 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
 
         // If condition drops very low, slightly increase jadedness (long-term tiredness)
         if ctx.player.player_attributes.condition < T::low_condition_threshold()
-            && ctx.in_state_time % T::jadedness_interval() == 0 {
+            && ctx.in_state_time % T::jadedness_interval() == 0
+        {
             // Increase jadedness slightly when very tired
-            ctx.player.player_attributes.jadedness =
-                (ctx.player.player_attributes.jadedness + T::jadedness_increment()).min(MAX_JADEDNESS);
+            ctx.player.player_attributes.jadedness = (ctx.player.player_attributes.jadedness
+                + T::jadedness_increment())
+            .min(MAX_JADEDNESS);
         }
     }
 }

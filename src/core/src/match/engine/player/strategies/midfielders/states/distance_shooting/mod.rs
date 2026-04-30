@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -82,7 +82,6 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
@@ -109,8 +108,7 @@ impl MidfielderDistanceShootingState {
         let has_clear_shot = ctx.player().has_clear_shot();
 
         let distance_threshold = 100.0; // ~50m for long shots
-        let heavily_marked = ctx.tick_context.grid
-            .opponents(ctx.player.id, 10.0).count() >= 2;
+        let heavily_marked = ctx.tick_context.grid.opponents(ctx.player.id, 10.0).count() >= 2;
 
         distance_to_goal <= distance_threshold
             && has_clear_shot
@@ -122,7 +120,8 @@ impl MidfielderDistanceShootingState {
         // Determine if the player should pass based on the game state
 
         let teammates = ctx.players().teammates();
-        let mut open_teammates = teammates.all()
+        let mut open_teammates = teammates
+            .all()
             .filter(|teammate| self.is_teammate_open(ctx, teammate));
 
         let has_open_teammate = open_teammates.next().is_some();

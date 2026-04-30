@@ -14,8 +14,8 @@
 //! per-save overrides can be plumbed in later without re-touching the
 //! call sites.
 
-use crate::transfers::pipeline::ScoutingRecommendation;
 use crate::transfers::ReportRiskFlag;
+use crate::transfers::pipeline::ScoutingRecommendation;
 
 // ============================================================
 // Sub-configs grouped by concern
@@ -349,12 +349,7 @@ impl ScoutingConfig {
     /// Region penalty applied to the base error term. Domestic
     /// observations get 1.0; foreign observations are scaled by
     /// `(known/unknown) - familiarity/divisor`, floored.
-    pub fn region_penalty(
-        &self,
-        is_domestic: bool,
-        is_known_region: bool,
-        familiarity: u8,
-    ) -> f32 {
+    pub fn region_penalty(&self, is_domestic: bool, is_known_region: bool, familiarity: u8) -> f32 {
         if is_domestic {
             return self.region.domestic_penalty;
         }
@@ -363,8 +358,7 @@ impl ScoutingConfig {
         } else {
             self.region.unknown_foreign_penalty
         };
-        (base - familiarity as f32 / self.region.familiarity_divisor)
-            .max(self.region.penalty_floor)
+        (base - familiarity as f32 / self.region.familiarity_divisor).max(self.region.penalty_floor)
     }
 
     /// Youth bonus added to assessed ability before computing the
@@ -402,11 +396,7 @@ impl ScoutingConfig {
     /// Distinct from `stats_bonus`: this fires during observation, not
     /// recommendation. Players visibly performing get a small upward
     /// nudge; visibly struggling players a small downward nudge.
-    pub fn performance_bonus(
-        &self,
-        appearances: u16,
-        average_rating: f32,
-    ) -> i32 {
+    pub fn performance_bonus(&self, appearances: u16, average_rating: f32) -> i32 {
         let r = &self.recommendation;
         if appearances >= r.perf_high_apps_min && average_rating > r.perf_high_rating_min {
             r.perf_high_bonus
@@ -607,9 +597,15 @@ mod tests {
     fn youth_bonus_only_fires_for_young_with_gap() {
         let c = ScoutingConfig::default();
         // Young + big gap → tier 1
-        assert_eq!(c.youth_bonus(20, 100, 130), c.recommendation.youth_tier1_bonus);
+        assert_eq!(
+            c.youth_bonus(20, 100, 130),
+            c.recommendation.youth_tier1_bonus
+        );
         // Young + medium gap → tier 2
-        assert_eq!(c.youth_bonus(22, 100, 115), c.recommendation.youth_tier2_bonus);
+        assert_eq!(
+            c.youth_bonus(22, 100, 115),
+            c.recommendation.youth_tier2_bonus
+        );
         // Old + gap → no bonus
         assert_eq!(c.youth_bonus(28, 100, 130), 0);
         // Young + no gap → no bonus

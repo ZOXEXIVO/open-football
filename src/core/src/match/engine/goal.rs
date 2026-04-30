@@ -1,7 +1,7 @@
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::GoalSide;
 use crate::r#match::field::MatchField;
 use crate::r#match::{MatchContext, PlayerSide};
-use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
 use super::engine::MatchFieldSize;

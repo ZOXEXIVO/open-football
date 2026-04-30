@@ -5,9 +5,9 @@
 
 use chrono::NaiveDate;
 
+use crate::TeamInfo;
 use crate::club::PlayerClubContract;
 use crate::r#match::PlayerMatchEndStats;
-use crate::TeamInfo;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MatchParticipation {

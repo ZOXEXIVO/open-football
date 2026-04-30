@@ -1,5 +1,5 @@
-use crate::r#match::{Match, MatchResult, MatchResultRaw, MatchSquad};
 use crate::r#match::engine::FootballEngine;
+use crate::r#match::{Match, MatchResult, MatchResultRaw, MatchSquad};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 pub struct MatchPlayEnginePool {
@@ -19,17 +19,16 @@ impl MatchPlayEnginePool {
 
     /// Play league/cup matches through the pool (produces MatchResult with league metadata)
     pub fn play(&self, matches: Vec<Match>) -> Vec<MatchResult> {
-        self.pool.install(|| {
-            matches
-                .into_par_iter()
-                .map(|m| m.play())
-                .collect()
-        })
+        self.pool
+            .install(|| matches.into_par_iter().map(|m| m.play()).collect())
     }
 
     /// Play raw squad-vs-squad matches through the pool (for national team / international matches).
     /// Each input is (index, home_squad, away_squad). Returns (index, MatchResultRaw).
-    pub fn play_squads(&self, matches: Vec<(usize, MatchSquad, MatchSquad)>) -> Vec<(usize, MatchResultRaw)> {
+    pub fn play_squads(
+        &self,
+        matches: Vec<(usize, MatchSquad, MatchSquad)>,
+    ) -> Vec<(usize, MatchResultRaw)> {
         self.pool.install(|| {
             matches
                 .into_par_iter()

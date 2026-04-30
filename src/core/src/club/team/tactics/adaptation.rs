@@ -1,5 +1,7 @@
 use crate::r#match::EnhancedTacticsSelector;
-use crate::{Player, RecommendationPriority, TacticSelectionReason, Tactics, TacticsSelector, Team};
+use crate::{
+    Player, RecommendationPriority, TacticSelectionReason, Tactics, TacticsSelector, Team,
+};
 use log::{debug, info};
 
 impl Team {

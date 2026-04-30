@@ -1,4 +1,6 @@
-use crate::r#match::player::strategies::processor::{StateProcessingContext, StateProcessingHandler};
+use crate::r#match::player::strategies::processor::{
+    StateProcessingContext, StateProcessingHandler,
+};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]

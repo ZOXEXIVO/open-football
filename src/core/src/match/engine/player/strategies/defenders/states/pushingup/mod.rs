@@ -1,9 +1,9 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::PlayerSide;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -28,11 +28,13 @@ impl StateProcessingHandler for DefenderPushingUpState {
         }
 
         if !ctx.team().is_control_ball() {
-            if let Some(opponent) = ctx.players().opponents().nearby(TACKLING_DISTANCE_THRESHOLD).next() {
-                let distance_to_opponent = ctx
-                    .tick_context
-                    .grid
-                    .get(opponent.id, ctx.player.id);
+            if let Some(opponent) = ctx
+                .players()
+                .opponents()
+                .nearby(TACKLING_DISTANCE_THRESHOLD)
+                .next()
+            {
+                let distance_to_opponent = ctx.tick_context.grid.get(opponent.id, ctx.player.id);
 
                 if distance_to_opponent <= TACKLING_DISTANCE_THRESHOLD {
                     return Some(StateChangeResult::with_defender_state(
@@ -64,7 +66,6 @@ impl StateProcessingHandler for DefenderPushingUpState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // OVERLAPPING RUN: If wide defender with teammate on ball on same flank,
         // sprint ahead of ball carrier along touchline
@@ -76,8 +77,9 @@ impl StateProcessingHandler for DefenderPushingUpState {
                     target,
                     target_velocity: Vector3::zeros(),
                 }
-                    .calculate(ctx.player)
-                    .velocity * (1.0 + acceleration * 0.3), // Sprint bonus
+                .calculate(ctx.player)
+                .velocity
+                    * (1.0 + acceleration * 0.3), // Sprint bonus
             );
         }
 
@@ -88,8 +90,8 @@ impl StateProcessingHandler for DefenderPushingUpState {
                 target: optimal_position,
                 target_velocity: Vector3::zeros(), // Static target position
             }
-                .calculate(ctx.player)
-                .velocity,
+            .calculate(ctx.player)
+            .velocity,
         )
     }
 
@@ -204,9 +206,15 @@ impl DefenderPushingUpState {
 
         let teammates = ctx.players().teammates();
 
-        let attacking_teammates: Vec<_> = teammates.all().into_iter()
+        let attacking_teammates: Vec<_> = teammates
+            .all()
+            .into_iter()
             .filter(|p| {
-                if is_left { p.position.x > mid_x } else { p.position.x < mid_x }
+                if is_left {
+                    p.position.x > mid_x
+                } else {
+                    p.position.x < mid_x
+                }
             })
             .collect();
 

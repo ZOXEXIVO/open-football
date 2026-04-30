@@ -1,5 +1,5 @@
-use std::sync::{Arc, Mutex};
 use super::PendingAiRequest;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct Ai {

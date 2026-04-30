@@ -1,7 +1,7 @@
 use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -88,12 +88,10 @@ impl StateProcessingHandler for DefenderStandingState {
             // foul spike (multiple simultaneous tackle attempts with
             // independent foul rolls) and the "running in groups"
             // visual — the whole back line pulled out of shape.
-            let is_primary_or_emergency =
-                matches!(
-                    ctx.player().defensive().defensive_role_for_ball_carrier(),
-                    DefensiveRole::Primary
-                )
-                || ctx.player().defensive().is_box_emergency_for_me();
+            let is_primary_or_emergency = matches!(
+                ctx.player().defensive().defensive_role_for_ball_carrier(),
+                DefensiveRole::Primary
+            ) || ctx.player().defensive().is_box_emergency_for_me();
             if distance_to_opponent < TACKLE_DISTANCE && is_primary_or_emergency {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
@@ -114,7 +112,9 @@ impl StateProcessingHandler for DefenderStandingState {
             // the Primary role to actually commit to pressing. Outside
             // this, defenders hold shape until the carrier gets closer.
             let press_engage_threshold = if ctx.ball().on_own_side()
-                && ctx.ball().distance_to_own_goal() < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD {
+                && ctx.ball().distance_to_own_goal()
+                    < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD
+            {
                 PRESSING_DISTANCE_DEFENSIVE_THIRD
             } else {
                 PRESSING_DISTANCE
@@ -220,7 +220,11 @@ impl StateProcessingHandler for DefenderStandingState {
 
         // Mark or guard unmarked attackers in our area
         if ctx.ball().on_own_side() || ctx.ball().distance() < 200.0 {
-            if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE * 2.0) {
+            if let Some(unmarked) = ctx
+                .player()
+                .defensive()
+                .find_unmarked_opponent(MARKING_DISTANCE * 2.0)
+            {
                 let dist = unmarked.distance(ctx);
                 if dist < MARKING_DISTANCE {
                     // Close enough to mark tightly
@@ -265,7 +269,6 @@ impl StateProcessingHandler for DefenderStandingState {
         None
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Check if player should follow waypoints even when standing
         if ctx.player.should_follow_waypoints(ctx) {
@@ -279,7 +282,8 @@ impl StateProcessingHandler for DefenderStandingState {
                         path_offset: 3.0,
                     }
                     .calculate(ctx.player)
-                    .velocity * 0.5, // Slower speed when standing
+                    .velocity
+                        * 0.5, // Slower speed when standing
                 );
             }
         }

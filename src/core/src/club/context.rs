@@ -85,7 +85,13 @@ impl<'c> ClubContext<'c> {
         }
     }
 
-    pub fn with_facilities(mut self, training: f32, youth: f32, academy: f32, recruitment: f32) -> Self {
+    pub fn with_facilities(
+        mut self,
+        training: f32,
+        youth: f32,
+        academy: f32,
+        recruitment: f32,
+    ) -> Self {
         self.training_facility_quality = training;
         self.youth_facility_quality = youth;
         self.academy_quality = academy;

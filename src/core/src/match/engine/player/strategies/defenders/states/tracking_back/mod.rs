@@ -1,8 +1,8 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::{
-    ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior, MATCH_TIME_MS,
+    ConditionContext, MATCH_TIME_MS, PlayerDistanceFromStartPosition, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -65,7 +65,6 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         }
     }
 
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let start_position = ctx.player.start_position;
         let distance_from_start = ctx.player().distance_from_start_position();
@@ -95,7 +94,7 @@ impl StateProcessingHandler for DefenderTrackingBackState {
             }
             .calculate(ctx.player)
             .velocity
-            * urgency,
+                * urgency,
         )
     }
 

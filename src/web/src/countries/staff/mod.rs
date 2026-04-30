@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -66,18 +66,30 @@ pub async fn country_staff_action(
     let country_id = indexes
         .slug_indexes
         .get_country_by_slug(&route_params.country_slug)
-        .ok_or_else(|| ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug)))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug))
+        })?;
 
     let country: &Country = simulator_data
         .continents
         .iter()
         .flat_map(|c| &c.countries)
         .find(|country| country.id == country_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Country with ID {} not found in continents", country_id)))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "Country with ID {} not found in continents",
+                country_id
+            ))
+        })?;
 
     let continent = simulator_data
         .continent(country.continent_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Continent with ID {} not found", country.continent_id)))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "Continent with ID {} not found",
+                country.continent_id
+            ))
+        })?;
 
     let now = simulator_data.date.date();
 
@@ -101,8 +113,17 @@ pub async fn country_staff_action(
         })
         .collect();
 
-    let current_path = format!("/{}/countries/{}/staff", route_params.lang, route_params.country_slug);
-    let cl: Vec<(&str, &str)> = country.leagues.leagues.iter().filter(|l| !l.friendly).map(|l| (l.name.as_str(), l.slug.as_str())).collect();
+    let current_path = format!(
+        "/{}/countries/{}/staff",
+        route_params.lang, route_params.country_slug
+    );
+    let cl: Vec<(&str, &str)> = country
+        .leagues
+        .leagues
+        .iter()
+        .filter(|l| !l.friendly)
+        .map(|l| (l.name.as_str(), l.slug.as_str()))
+        .collect();
 
     Ok(CountryStaffTemplate {
         css_version: CSS_VERSION,
@@ -116,7 +137,13 @@ pub async fn country_staff_action(
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {
-            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: &country.name, country_slug: &route_params.country_slug };
+            let mp = views::MenuParams {
+                i18n: &i18n,
+                lang: &route_params.lang,
+                current_path: &current_path,
+                country_name: &country.name,
+                country_slug: &route_params.country_slug,
+            };
             views::country_menu(&mp, &cl)
         },
         lang: route_params.lang,

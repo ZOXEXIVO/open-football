@@ -113,27 +113,27 @@ impl PlayerPositionType {
     pub fn position_group(&self) -> PlayerFieldPositionGroup {
         match *self {
             PlayerPositionType::Goalkeeper => PlayerFieldPositionGroup::Goalkeeper,
-            PlayerPositionType::Sweeper |
-            PlayerPositionType::DefenderLeft |
-            PlayerPositionType::DefenderCenterLeft |
-            PlayerPositionType::DefenderCenter |
-            PlayerPositionType::DefenderCenterRight |
-            PlayerPositionType::DefenderRight |
-            PlayerPositionType::DefensiveMidfielder => PlayerFieldPositionGroup::Defender,
-            PlayerPositionType::MidfielderLeft |
-            PlayerPositionType::MidfielderCenterLeft |
-            PlayerPositionType::MidfielderCenter |
-            PlayerPositionType::MidfielderCenterRight |
-            PlayerPositionType::MidfielderRight |
-            PlayerPositionType::AttackingMidfielderLeft |
-            PlayerPositionType::AttackingMidfielderCenter |
-            PlayerPositionType::AttackingMidfielderRight |
-            PlayerPositionType::WingbackLeft |
-            PlayerPositionType::WingbackRight => PlayerFieldPositionGroup::Midfielder,
-            PlayerPositionType::ForwardLeft |
-            PlayerPositionType::ForwardCenter |
-            PlayerPositionType::ForwardRight |
-            PlayerPositionType::Striker => PlayerFieldPositionGroup::Forward,
+            PlayerPositionType::Sweeper
+            | PlayerPositionType::DefenderLeft
+            | PlayerPositionType::DefenderCenterLeft
+            | PlayerPositionType::DefenderCenter
+            | PlayerPositionType::DefenderCenterRight
+            | PlayerPositionType::DefenderRight
+            | PlayerPositionType::DefensiveMidfielder => PlayerFieldPositionGroup::Defender,
+            PlayerPositionType::MidfielderLeft
+            | PlayerPositionType::MidfielderCenterLeft
+            | PlayerPositionType::MidfielderCenter
+            | PlayerPositionType::MidfielderCenterRight
+            | PlayerPositionType::MidfielderRight
+            | PlayerPositionType::AttackingMidfielderLeft
+            | PlayerPositionType::AttackingMidfielderCenter
+            | PlayerPositionType::AttackingMidfielderRight
+            | PlayerPositionType::WingbackLeft
+            | PlayerPositionType::WingbackRight => PlayerFieldPositionGroup::Midfielder,
+            PlayerPositionType::ForwardLeft
+            | PlayerPositionType::ForwardCenter
+            | PlayerPositionType::ForwardRight
+            | PlayerPositionType::Striker => PlayerFieldPositionGroup::Forward,
         }
     }
 }
@@ -188,13 +188,48 @@ impl PlayerPositions {
         }
 
         const GROUPS: &[Group] = &[
-            Group { base: "DC", center: "DC", left: "DCL", right: "DCR" },
-            Group { base: "MC", center: "MC", left: "MCL", right: "MCR" },
-            Group { base: "AM", center: "AMC", left: "AML", right: "AMR" },
-            Group { base: "D", center: "", left: "DL", right: "DR" },
-            Group { base: "M", center: "", left: "ML", right: "MR" },
-            Group { base: "F", center: "FC", left: "FL", right: "FR" },
-            Group { base: "W", center: "", left: "WL", right: "WR" },
+            Group {
+                base: "DC",
+                center: "DC",
+                left: "DCL",
+                right: "DCR",
+            },
+            Group {
+                base: "MC",
+                center: "MC",
+                left: "MCL",
+                right: "MCR",
+            },
+            Group {
+                base: "AM",
+                center: "AMC",
+                left: "AML",
+                right: "AMR",
+            },
+            Group {
+                base: "D",
+                center: "",
+                left: "DL",
+                right: "DR",
+            },
+            Group {
+                base: "M",
+                center: "",
+                left: "ML",
+                right: "MR",
+            },
+            Group {
+                base: "F",
+                center: "FC",
+                left: "FL",
+                right: "FR",
+            },
+            Group {
+                base: "W",
+                center: "",
+                left: "WL",
+                right: "WR",
+            },
         ];
 
         let mut used = vec![false; names.len()];
@@ -222,14 +257,18 @@ impl PlayerPositions {
 
             // Build compact string
             let mut sides = String::new();
-            if has_left { sides.push('L'); }
+            if has_left {
+                sides.push('L');
+            }
             if has_center && !group.center.is_empty() {
                 // For groups where center == base (DC, MC), don't add C inside parens
                 if group.center != group.base {
                     sides.push('C');
                 }
             }
-            if has_right { sides.push('R'); }
+            if has_right {
+                sides.push('R');
+            }
 
             if sides.is_empty() {
                 result.push(group.base.to_string());
@@ -341,7 +380,13 @@ mod tests {
 
     fn make_positions(types: &[PlayerPositionType]) -> PlayerPositions {
         PlayerPositions {
-            positions: types.iter().map(|&t| PlayerPosition { position: t, level: 10 }).collect(),
+            positions: types
+                .iter()
+                .map(|&t| PlayerPosition {
+                    position: t,
+                    level: 10,
+                })
+                .collect(),
         }
     }
 
@@ -401,10 +446,7 @@ mod tests {
 
     #[test]
     fn compact_no_grouping_needed() {
-        let p = make_positions(&[
-            PlayerPositionType::Goalkeeper,
-            PlayerPositionType::Striker,
-        ]);
+        let p = make_positions(&[PlayerPositionType::Goalkeeper, PlayerPositionType::Striker]);
         assert_eq!("GK, ST", p.display_positions_compact());
     }
 

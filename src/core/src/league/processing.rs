@@ -1,6 +1,6 @@
+use crate::Club;
 use crate::context::GlobalContext;
 use crate::r#match::MatchResult;
-use crate::Club;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
@@ -18,7 +18,8 @@ impl League {
         self.table.update_from_results(match_results);
 
         match_results.iter().for_each(|mr| {
-            self.matches.push(mr.copy_without_data_positions(), current_date);
+            self.matches
+                .push(mr.copy_without_data_positions(), current_date);
         });
 
         self.update_league_dynamics(match_results, clubs, current_date);
@@ -54,14 +55,24 @@ impl League {
         _clubs: &[Club],
         _current_date: NaiveDate,
     ) {
-        let home_losing_streak = self.dynamics.get_team_losing_streak(result.score.home_team.team_id);
+        let home_losing_streak = self
+            .dynamics
+            .get_team_losing_streak(result.score.home_team.team_id);
         if home_losing_streak > 5 {
-            debug!("🔴 Manager under severe pressure at team {}", result.score.home_team.team_id);
+            debug!(
+                "🔴 Manager under severe pressure at team {}",
+                result.score.home_team.team_id
+            );
         }
 
-        let away_losing_streak = self.dynamics.get_team_losing_streak(result.score.away_team.team_id);
+        let away_losing_streak = self
+            .dynamics
+            .get_team_losing_streak(result.score.away_team.team_id);
         if away_losing_streak > 5 {
-            debug!("🔴 Manager under severe pressure at team {}", result.score.away_team.team_id);
+            debug!(
+                "🔴 Manager under severe pressure at team {}",
+                result.score.away_team.team_id
+            );
         }
     }
 
@@ -81,7 +92,8 @@ impl League {
         }
 
         if season_progress > 0.5 {
-            self.dynamics.update_relegation_battle(&self.table, total_teams);
+            self.dynamics
+                .update_relegation_battle(&self.table, total_teams);
         }
 
         if season_progress > 0.7 {
@@ -98,8 +110,8 @@ impl League {
         }
 
         let competitive_balance = self.statistics.competitive_balance_index;
-        let avg_goals_per_game = self.statistics.total_goals as f32 /
-            self.statistics.total_matches.max(1) as f32;
+        let avg_goals_per_game =
+            self.statistics.total_goals as f32 / self.statistics.total_matches.max(1) as f32;
 
         let mut reputation_change: i16 = 0;
 
@@ -111,7 +123,8 @@ impl League {
             reputation_change += 1;
         }
 
-        self.reputation = (self.reputation as i32 + reputation_change as i32).clamp(0, 10000) as u16;
+        self.reputation =
+            (self.reputation as i32 + reputation_change as i32).clamp(0, 10000) as u16;
     }
 
     fn check_milestones_and_events(&mut self, _clubs: &[Club], current_date: NaiveDate) {
@@ -119,25 +132,33 @@ impl League {
 
         let upcoming_matches = self.schedule.get_matches_in_next_days(current_date, 7);
         for match_item in upcoming_matches {
-            if self.dynamics.is_derby(match_item.home_team_id, match_item.away_team_id) {
-                debug!("🔥 Derby coming up: Team {} vs Team {}",
-                      match_item.home_team_id, match_item.away_team_id);
+            if self
+                .dynamics
+                .is_derby(match_item.home_team_id, match_item.away_team_id)
+            {
+                debug!(
+                    "🔥 Derby coming up: Team {} vs Team {}",
+                    match_item.home_team_id, match_item.away_team_id
+                );
             }
         }
 
         let matches_played = self.table.rows.first().map(|r| r.played).unwrap_or(0);
-        self.milestones.check_season_milestones(matches_played, &self.table);
+        self.milestones
+            .check_season_milestones(matches_played, &self.table);
     }
 
     fn apply_regulatory_actions(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {
         for club in clubs {
             if self.regulations.check_ffp_violation(club) {
                 debug!("⚠️ FFP violation detected for club: {}", club.name);
-                self.regulations.apply_ffp_sanctions(club.id, &mut self.table);
+                self.regulations
+                    .apply_ffp_sanctions(club.id, &mut self.table);
             }
         }
 
-        self.regulations.process_pending_cases(ctx.simulation.date.date());
+        self.regulations
+            .process_pending_cases(ctx.simulation.date.date());
     }
 
     pub(super) fn process_non_matchday(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {
@@ -166,10 +187,10 @@ impl League {
     }
 
     fn is_international_break(&self, date: NaiveDate) -> bool {
-        (date.month() == 9 && date.day() >= 4 && date.day() <= 12) ||
-            (date.month() == 10 && date.day() >= 9 && date.day() <= 17) ||
-            (date.month() == 11 && date.day() >= 13 && date.day() <= 21) ||
-            (date.month() == 3 && date.day() >= 20 && date.day() <= 28)
+        (date.month() == 9 && date.day() >= 4 && date.day() <= 12)
+            || (date.month() == 10 && date.day() >= 9 && date.day() <= 17)
+            || (date.month() == 11 && date.day() >= 13 && date.day() <= 21)
+            || (date.month() == 3 && date.day() >= 20 && date.day() <= 28)
     }
 
     fn process_season_end(&mut self, _clubs: &[Club], current_date: NaiveDate) {
@@ -197,10 +218,14 @@ impl League {
 
     #[allow(dead_code)]
     pub(super) fn calculate_matches_remaining(&self, team_id: u32) -> usize {
-        self.schedule.tours.iter()
+        self.schedule
+            .tours
+            .iter()
             .flat_map(|t| &t.items)
-            .filter(|item| item.result.is_none() &&
-                (item.home_team_id == team_id || item.away_team_id == team_id))
+            .filter(|item| {
+                item.result.is_none()
+                    && (item.home_team_id == team_id || item.away_team_id == team_id)
+            })
             .count()
     }
 }

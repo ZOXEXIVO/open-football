@@ -1,5 +1,8 @@
 use crate::simulator::SimulatorData;
-use crate::{ChangeType, HappinessEventType, HealthIssue, Player, RelationshipChange, RelationshipEvent, ResignationReason, StaffContractResult, StaffMoraleEvent, StaffTrainingResult, StaffWarning};
+use crate::{
+    ChangeType, HappinessEventType, HealthIssue, Player, RelationshipChange, RelationshipEvent,
+    ResignationReason, StaffContractResult, StaffMoraleEvent, StaffTrainingResult, StaffWarning,
+};
 
 pub struct StaffCollectionResult {
     pub staff: Vec<StaffResult>,
@@ -96,42 +99,47 @@ impl StaffResult {
             match event {
                 RelationshipEvent::PositiveInteraction => {
                     if let Some(player) = Self::random_player(data) {
-                        let change = RelationshipChange::positive(
-                            ChangeType::CoachingSuccess,
-                            0.5,
-                        );
-                        player.relations.update_staff_relationship(self.staff_id, change, sim_date);
-                        player.happiness.add_event(HappinessEventType::ManagerEncouragement, 1.5);
+                        let change = RelationshipChange::positive(ChangeType::CoachingSuccess, 0.5);
+                        player
+                            .relations
+                            .update_staff_relationship(self.staff_id, change, sim_date);
+                        player
+                            .happiness
+                            .add_event(HappinessEventType::ManagerEncouragement, 1.5);
                     }
                 }
                 RelationshipEvent::Conflict => {
                     if let Some(player) = Self::random_player(data) {
-                        let change = RelationshipChange::negative(
-                            ChangeType::TacticalDisagreement,
-                            0.3,
-                        );
-                        player.relations.update_staff_relationship(self.staff_id, change, sim_date);
-                        player.happiness.add_event(HappinessEventType::ManagerCriticism, -2.0);
+                        let change =
+                            RelationshipChange::negative(ChangeType::TacticalDisagreement, 0.3);
+                        player
+                            .relations
+                            .update_staff_relationship(self.staff_id, change, sim_date);
+                        player
+                            .happiness
+                            .add_event(HappinessEventType::ManagerCriticism, -2.0);
                     }
                 }
                 RelationshipEvent::MentorshipStarted => {
                     if let Some(player) = Self::random_player(data) {
-                        let change = RelationshipChange::positive(
-                            ChangeType::PersonalSupport,
-                            0.8,
-                        );
-                        player.relations.update_staff_relationship(self.staff_id, change, sim_date);
-                        player.happiness.add_event(HappinessEventType::ManagerEncouragement, 2.0);
+                        let change = RelationshipChange::positive(ChangeType::PersonalSupport, 0.8);
+                        player
+                            .relations
+                            .update_staff_relationship(self.staff_id, change, sim_date);
+                        player
+                            .happiness
+                            .add_event(HappinessEventType::ManagerEncouragement, 2.0);
                     }
                 }
                 RelationshipEvent::TrustBuilt => {
                     if let Some(player) = Self::random_player(data) {
-                        let change = RelationshipChange::positive(
-                            ChangeType::CoachingSuccess,
-                            0.6,
-                        );
-                        player.relations.update_staff_relationship(self.staff_id, change, sim_date);
-                        player.happiness.add_event_default(HappinessEventType::ManagerTacticalInstruction);
+                        let change = RelationshipChange::positive(ChangeType::CoachingSuccess, 0.6);
+                        player
+                            .relations
+                            .update_staff_relationship(self.staff_id, change, sim_date);
+                        player
+                            .happiness
+                            .add_event_default(HappinessEventType::ManagerTacticalInstruction);
                     }
                 }
             }
@@ -151,7 +159,9 @@ impl StaffResult {
 
     fn random_player(data: &mut SimulatorData) -> Option<&mut Player> {
         // Pick a random player from the simulation data
-        let player_count: usize = data.continents.iter()
+        let player_count: usize = data
+            .continents
+            .iter()
             .flat_map(|c| &c.countries)
             .flat_map(|c| &c.clubs)
             .flat_map(|c| &c.teams.teams)

@@ -2,9 +2,9 @@ use crate::league::{
     LeagueSettings, ScheduleError, ScheduleGenerator, ScheduleItem, ScheduleTour, Season,
 };
 use crate::utils::DateUtils;
-use chrono::prelude::*;
 use chrono::Duration;
 use chrono::NaiveDate;
+use chrono::prelude::*;
 use log::warn;
 
 // const DAY_PLAYING_TIMES: [(u8, u8); 4] = [(13, 0), (14, 0), (16, 0), (18, 0)];
@@ -47,7 +47,7 @@ impl ScheduleGenerator for RoundSchedule {
                 league_settings.season_starting_half.from_month as u32,
                 league_settings.season_starting_half.from_day as u32,
             )
-                .unwrap(),
+            .unwrap(),
         );
 
         let current_date_time =
@@ -211,7 +211,11 @@ fn generate_game_pairs(teams: &[u32], _tours_count: usize) -> Vec<(u32, u32)> {
     // `generate_tours` skips them so they never reach a ScheduleTour.
     let mut result = Vec::with_capacity(first_half.len() * 2);
     result.extend(first_half.iter().map(|&(h, a)| {
-        if h == BYE || a == BYE { (BYE, BYE) } else { (h, a) }
+        if h == BYE || a == BYE {
+            (BYE, BYE)
+        } else {
+            (h, a)
+        }
     }));
     for &(h, a) in &first_half {
         if h == BYE || a == BYE {
@@ -255,14 +259,26 @@ mod tests {
             for item in &tour.items {
                 *home_count.entry(item.home_team_id).or_default() += 1;
                 *away_count.entry(item.away_team_id).or_default() += 1;
-                *pair_count.entry((item.home_team_id, item.away_team_id)).or_default() += 1;
+                *pair_count
+                    .entry((item.home_team_id, item.away_team_id))
+                    .or_default() += 1;
             }
         }
 
         // Every team: 19 home, 19 away in a 20-team double round-robin.
         for &t in &teams {
-            assert_eq!(home_count.get(&t).copied().unwrap_or(0), 19, "home count team {}", t);
-            assert_eq!(away_count.get(&t).copied().unwrap_or(0), 19, "away count team {}", t);
+            assert_eq!(
+                home_count.get(&t).copied().unwrap_or(0),
+                19,
+                "home count team {}",
+                t
+            );
+            assert_eq!(
+                away_count.get(&t).copied().unwrap_or(0),
+                19,
+                "away count team {}",
+                t
+            );
         }
 
         // Every ordered (home, away) pair exactly once (380 total).
@@ -320,8 +336,18 @@ mod tests {
                 longest_home = longest_home.max(cur_home);
                 longest_away = longest_away.max(cur_away);
             }
-            assert!(longest_home <= 4, "team {} had {} consecutive home games", tid, longest_home);
-            assert!(longest_away <= 4, "team {} had {} consecutive away games", tid, longest_away);
+            assert!(
+                longest_home <= 4,
+                "team {} had {} consecutive home games",
+                tid,
+                longest_home
+            );
+            assert!(
+                longest_away <= 4,
+                "team {} had {} consecutive away games",
+                tid,
+                longest_away
+            );
         }
     }
 
@@ -351,13 +377,25 @@ mod tests {
             for item in &tour.items {
                 *home_count.entry(item.home_team_id).or_default() += 1;
                 *away_count.entry(item.away_team_id).or_default() += 1;
-                *pair_count.entry((item.home_team_id, item.away_team_id)).or_default() += 1;
+                *pair_count
+                    .entry((item.home_team_id, item.away_team_id))
+                    .or_default() += 1;
             }
         }
 
         for &t in &teams {
-            assert_eq!(home_count.get(&t).copied().unwrap_or(0), 14, "home count team {}", t);
-            assert_eq!(away_count.get(&t).copied().unwrap_or(0), 14, "away count team {}", t);
+            assert_eq!(
+                home_count.get(&t).copied().unwrap_or(0),
+                14,
+                "home count team {}",
+                t
+            );
+            assert_eq!(
+                away_count.get(&t).copied().unwrap_or(0),
+                14,
+                "away count team {}",
+                t
+            );
         }
         for (&(h, a), &c) in &pair_count {
             assert_ne!(h, a);

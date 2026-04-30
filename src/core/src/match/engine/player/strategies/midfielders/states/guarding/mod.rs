@@ -1,5 +1,5 @@
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -84,9 +84,7 @@ impl StateProcessingHandler for MidfielderGuardingState {
             }
 
             // Ball coming toward guarded opponent — intercept
-            if ctx.ball().distance() < 80.0
-                && ctx.ball().is_towards_player_with_angle(0.7)
-            {
+            if ctx.ball().distance() < 80.0 && ctx.ball().is_towards_player_with_angle(0.7) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
                 ));
@@ -138,7 +136,6 @@ impl StateProcessingHandler for MidfielderGuardingState {
             ))
         }
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if let Some(opponent) = self.find_guard_target(ctx) {
@@ -222,7 +219,9 @@ impl MidfielderGuardingState {
 
             // Factor 4: Unmarked bonus — no defender or midfielder covering this attacker
             // From the opponent's POV, our teammates are their "opponents"
-            let has_nearby_cover = ctx.tick_context.grid
+            let has_nearby_cover = ctx
+                .tick_context
+                .grid
                 .opponents(opponent.id, 15.0)
                 .any(|(t_id, _)| t_id != ctx.player.id);
 

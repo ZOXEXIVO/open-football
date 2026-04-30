@@ -1,9 +1,9 @@
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -26,7 +26,13 @@ impl StateProcessingHandler for MidfielderReturningState {
         }
 
         // CRITICAL: Tackle/press if an opponent has the ball nearby
-        if let Some(opponent) = ctx.players().opponents().nearby(100.0).with_ball(ctx).next() {
+        if let Some(opponent) = ctx
+            .players()
+            .opponents()
+            .nearby(100.0)
+            .with_ball(ctx)
+            .next()
+        {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
             if opponent_distance < 40.0 {
@@ -41,7 +47,10 @@ impl StateProcessingHandler for MidfielderReturningState {
             }
         }
 
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+        if !ctx.team().is_control_ball()
+            && ctx.ball().distance() < 250.0
+            && ctx.ball().is_towards_player_with_angle(0.8)
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Intercepting,
             ));
@@ -81,7 +90,6 @@ impl StateProcessingHandler for MidfielderReturningState {
 
         None
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let dist_to_start = (ctx.player.position - ctx.player.start_position).magnitude();

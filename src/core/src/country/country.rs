@@ -1,16 +1,16 @@
-use chrono::{Datelike, NaiveDate};
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
+use crate::country::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::{Club, ClubResult, Player};
+use chrono::{Datelike, NaiveDate};
 use log::debug;
-use crate::country::builder::CountryBuilder;
 
 use super::{
-    CountrySettings, CountryGeneratorData, CountryEconomicFactors,
-    InternationalCompetition, MediaCoverage, CountryRegulations,
+    CountryEconomicFactors, CountryGeneratorData, CountryRegulations, CountrySettings,
+    InternationalCompetition, MediaCoverage,
 };
 
 #[derive(Clone)]
@@ -52,7 +52,12 @@ pub struct SeasonDates {
 
 impl Default for SeasonDates {
     fn default() -> Self {
-        SeasonDates { end_day: 31, end_month: 5, start_day: 20, start_month: 8 }
+        SeasonDates {
+            end_day: 31,
+            end_month: 5,
+            start_day: 20,
+            start_month: 8,
+        }
     }
 }
 
@@ -66,10 +71,8 @@ impl SeasonDates {
     pub fn is_off_season(&self, date: NaiveDate) -> bool {
         let m = date.month() as u8;
         let d = date.day() as u8;
-        let after_end = m > self.end_month
-            || (m == self.end_month && d > self.end_day);
-        let before_start = m < self.start_month
-            || (m == self.start_month && d < self.start_day);
+        let after_end = m > self.end_month || (m == self.end_month && d > self.end_day);
+        let before_start = m < self.start_month || (m == self.start_month && d < self.start_day);
         after_end && before_start
     }
 }
@@ -82,7 +85,9 @@ impl Country {
     /// Get season dates from the country's primary (tier-1, non-friendly) league.
     /// Falls back to May 31 / Aug 20 if no league is found.
     pub fn season_dates(&self) -> SeasonDates {
-        self.leagues.leagues.iter()
+        self.leagues
+            .leagues
+            .iter()
             .find(|l| !l.friendly && l.settings.tier == 1)
             .or_else(|| self.leagues.leagues.iter().find(|l| !l.friendly))
             .map(|l| SeasonDates {
@@ -97,7 +102,10 @@ impl Country {
     pub(crate) fn simulate(&mut self, ctx: GlobalContext<'_>) -> CountryResult {
         let country_name = self.name.clone();
 
-        debug!("Simulating country: {} (Reputation: {})", country_name, self.reputation);
+        debug!(
+            "Simulating country: {} (Reputation: {})",
+            country_name, self.reputation
+        );
 
         // Phase 1: League Competitions
         let league_results = self.leagues.simulate(&self.clubs, &ctx);
@@ -108,8 +116,10 @@ impl Country {
             let mut c = ctx;
             if let Some(ref mut country_ctx) = c.country {
                 country_ctx.tv_revenue_multiplier = self.economic_factors.tv_revenue_multiplier;
-                country_ctx.sponsorship_market_strength = self.economic_factors.sponsorship_market_strength;
-                country_ctx.stadium_attendance_factor = self.economic_factors.stadium_attendance_factor;
+                country_ctx.sponsorship_market_strength =
+                    self.economic_factors.sponsorship_market_strength;
+                country_ctx.stadium_attendance_factor =
+                    self.economic_factors.stadium_attendance_factor;
                 country_ctx.price_level = self.settings.pricing.price_level;
                 country_ctx.reputation = self.reputation;
             }
@@ -131,13 +141,24 @@ impl Country {
                 continue;
             }
             let league_size = league.table.rows.len() as u8;
-            let total_matches = if league_size > 1 { (league_size - 1) * 2 } else { 0 };
+            let total_matches = if league_size > 1 {
+                (league_size - 1) * 2
+            } else {
+                0
+            };
             let tier = league.settings.tier.max(1);
             let league_rep = league.reputation;
             for (pos, row) in league.table.rows.iter().enumerate() {
                 team_league_info.insert(
                     row.team_id,
-                    ((pos + 1) as u8, league_size, total_matches, row.played, tier, league_rep),
+                    (
+                        (pos + 1) as u8,
+                        league_size,
+                        total_matches,
+                        row.played,
+                        tier,
+                        league_rep,
+                    ),
                 );
             }
         }
@@ -147,12 +168,16 @@ impl Country {
         self.clubs
             .iter_mut()
             .map(|club| {
-                let league_info = club.teams.main()
+                let league_info = club
+                    .teams
+                    .main()
                     .and_then(|t| team_league_info.get(&t.id))
                     .copied()
                     .unwrap_or((0, 0, 0, 0, 1, 0));
 
-                let (main_blended_rep, main_world_rep) = club.teams.main()
+                let (main_blended_rep, main_world_rep) = club
+                    .teams
+                    .main()
                     .map(|t| {
                         let blended = t.reputation.market_value_score();
                         let world = t.reputation.world;
@@ -165,9 +190,13 @@ impl Country {
                 let club_ctx = {
                     let mut c = club_ctx;
                     if let Some(ref mut cc) = c.club {
-                        *cc = cc.clone()
+                        *cc = cc
+                            .clone()
                             .with_league_position(
-                                league_info.0, league_info.1, league_info.2, league_info.3,
+                                league_info.0,
+                                league_info.1,
+                                league_info.2,
+                                league_info.3,
                             )
                             .with_main_league_tier(league_info.4)
                             .with_reputations(

@@ -1,7 +1,7 @@
 use crate::club::player::language::PlayerLanguage;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::rapport::PlayerRapport;
-use crate::club::player::traits::{generate_player_traits, PlayerTrait};
+use crate::club::player::traits::{PlayerTrait, generate_player_traits};
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox, PlayerSkills,
     PlayerTraining,
@@ -179,7 +179,9 @@ impl PlayerBuilder {
     pub fn build(self) -> Result<Player, String> {
         let skills = self.skills.ok_or("skills is required")?;
         let positions = self.positions.ok_or("positions is required")?;
-        let player_attributes = self.player_attributes.ok_or("player_attributes is required")?;
+        let player_attributes = self
+            .player_attributes
+            .ok_or("player_attributes is required")?;
         let traits = self.traits.unwrap_or_else(|| {
             generate_player_traits(
                 &skills,
@@ -204,13 +206,19 @@ impl PlayerBuilder {
             player_attributes,
             mailbox: self.mailbox.unwrap_or_else(PlayerMailbox::new),
             training: self.training.unwrap_or_else(PlayerTraining::new),
-            training_history: self.training_history.unwrap_or_else(PlayerTrainingHistory::new),
+            training_history: self
+                .training_history
+                .unwrap_or_else(PlayerTrainingHistory::new),
             relations: self.relations.unwrap_or_else(Relations::new),
             statistics: self.statistics.unwrap_or_default(),
             friendly_statistics: self.friendly_statistics.unwrap_or_default(),
             cup_statistics: self.cup_statistics.unwrap_or_default(),
-            statistics_history: self.statistics_history.unwrap_or_else(PlayerStatisticsHistory::new),
-            decision_history: self.decision_history.unwrap_or_else(PlayerDecisionHistory::new),
+            statistics_history: self
+                .statistics_history
+                .unwrap_or_else(PlayerStatisticsHistory::new),
+            decision_history: self
+                .decision_history
+                .unwrap_or_else(PlayerDecisionHistory::new),
             languages: self.languages.unwrap_or_default(),
             last_transfer_date: None,
             plan: None,

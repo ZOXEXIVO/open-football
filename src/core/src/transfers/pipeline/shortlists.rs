@@ -164,7 +164,31 @@ impl PipelineProcessor {
                         // role_fit is ~[0.5, 1.25]; center it around 1.0 so a perfect
                         // fit lifts score ~25% and a bad fit drops ~50%.
                         let role_mult = r.role_fit.clamp(0.5, 1.25);
-                        let score = base_score * depth_mult * risk_multiplier * role_mult;
+                        // Meeting endorsement multiplier: candidates who
+                        // were explicitly promoted by a recruitment
+                        // meeting earn a small boost so they outrank
+                        // raw market fallbacks at equal raw quality.
+                        // Players the meeting rejected are filtered
+                        // out via `rejected_players`, so the negative
+                        // case is handled there.
+                        let meeting_mult = if plan
+                            .scout_monitoring
+                            .iter()
+                            .any(|m| {
+                                m.player_id == r.player_id
+                                    && matches!(
+                                        m.status,
+                                        crate::transfers::pipeline::ScoutMonitoringStatus::PromotedToShortlist
+                                            | crate::transfers::pipeline::ScoutMonitoringStatus::Negotiating
+                                    )
+                            })
+                        {
+                            1.10
+                        } else {
+                            1.0
+                        };
+                        let score =
+                            base_score * depth_mult * risk_multiplier * role_mult * meeting_mult;
 
                         ShortlistCandidate {
                             player_id: r.player_id,
@@ -316,6 +340,10 @@ impl PipelineProcessor {
             named_target: Option<u32>,
             satisfaction_delta: f32,
             loyalty_delta: i16,
+            /// Lead scout id if the dossier surfaced one — used to fire
+            /// a `BoardPresentation` event so the staff feed shows
+            /// which scout took the dossier in front of the board.
+            lead_scout_staff_id: Option<u32>,
         }
         let mut decisions: Vec<Decision> = Vec::new();
         let mut player_snapshots: HashMap<u32, PlayerApprovalSnapshot> = HashMap::new();
@@ -370,6 +398,34 @@ impl PipelineProcessor {
 
                 // Veto rules live on the board so chairman temperament,
                 // confidence, and long-term vision stay in one domain.
+                // Pull a dossier off the recruitment-meeting state if
+                // any scouts have been monitoring this candidate; the
+                // board uses it to relax/tighten tolerance.
+                let dossier = Self::build_board_dossier(plan, top.player_id, req.id);
+                let lead_scout_id = plan
+                    .scout_monitoring
+                    .iter()
+                    .filter(|m| m.player_id == top.player_id)
+                    .max_by(|a, b| {
+                        a.confidence
+                            .partial_cmp(&b.confidence)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|m| m.scout_staff_id);
+                let dossier_summary = if dossier.scout_votes > 0 || dossier.matches_watched > 0 {
+                    Some(crate::club::board::BoardDossierSummary {
+                        scout_votes: dossier.scout_votes,
+                        chief_scout_support: dossier.chief_scout_support,
+                        avg_confidence: dossier.avg_confidence,
+                        avg_role_fit: dossier.avg_role_fit,
+                        risk_flag_count: dossier.risk_flag_count,
+                        consensus_score: dossier.consensus_score,
+                        data_support: dossier.data_support,
+                        matches_watched: dossier.matches_watched,
+                    })
+                } else {
+                    None
+                };
                 let snapshot = player_snapshots.get(&top.player_id).copied();
                 let proposal = BoardTransferProposal {
                     fee,
@@ -381,6 +437,7 @@ impl PipelineProcessor {
                     player_ability: snapshot.map(|s| s.ability),
                     squad_avg_ability,
                     shortlist_score: top.score,
+                    dossier: dossier_summary,
                 };
                 let board_decision = club.board.review_transfer_proposal(&proposal);
                 let veto_reason: Option<&str> = if board_decision.is_approved() {
@@ -400,6 +457,7 @@ impl PipelineProcessor {
                         // Vetoing a manager's top target is a public
                         // disagreement — shifts the chairman-manager bond.
                         loyalty_delta: board_decision.loyalty_delta(&req.priority),
+                        lead_scout_staff_id: lead_scout_id,
                     });
                 } else {
                     // Green-lit target. Pin it so downstream can fast-track.
@@ -411,6 +469,7 @@ impl PipelineProcessor {
                         satisfaction_delta: board_decision
                             .manager_satisfaction_delta(&req.priority),
                         loyalty_delta: board_decision.loyalty_delta(&req.priority),
+                        lead_scout_staff_id: lead_scout_id,
                     });
                 }
             }
@@ -445,6 +504,47 @@ impl PipelineProcessor {
                         {
                             mgr.job_satisfaction =
                                 (mgr.job_satisfaction + d.satisfaction_delta).clamp(0.0, 100.0);
+                        }
+                    }
+                }
+                // Surface a BoardPresentation event on the lead scout
+                // so the staff page reflects who took the dossier in
+                // front of the board.
+                if let Some(scout_id) = d.lead_scout_staff_id {
+                    for team in &mut club.teams.teams {
+                        if let Some(staff) = team.staffs.find_mut(scout_id) {
+                            staff.add_event(
+                                crate::club::staff::staff::StaffEventType::BoardPresentation,
+                            );
+                            break;
+                        }
+                    }
+                }
+                // If approved, advance the monitoring rows for the
+                // signed target so subsequent ticks see Negotiating
+                // status rather than PromotedToShortlist.
+                if d.approved {
+                    if let Some(player_id) = d.named_target {
+                        club.transfer_plan.set_monitoring_status_for_player(
+                            player_id,
+                            crate::transfers::pipeline::ScoutMonitoringStatus::Negotiating,
+                        );
+                    }
+                }
+                // Vetoed targets fall back to monitoring — scouts
+                // keep an eye but downstream pursuit halts.
+                if !d.approved {
+                    if let Some(player_id) = d.named_target {
+                        for m in club.transfer_plan.scout_monitoring.iter_mut() {
+                            if m.player_id == player_id
+                                && matches!(
+                                    m.status,
+                                    crate::transfers::pipeline::ScoutMonitoringStatus::PromotedToShortlist
+                                )
+                            {
+                                m.status =
+                                    crate::transfers::pipeline::ScoutMonitoringStatus::Active;
+                            }
                         }
                     }
                 }

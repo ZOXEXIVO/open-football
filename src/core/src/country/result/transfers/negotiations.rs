@@ -1,19 +1,19 @@
 use super::types::{
-    find_player_in_country, find_player_in_country_mut, DeferredTransfer, NegotiationData,
-    TransferActivitySummary,
+    DeferredTransfer, NegotiationData, TransferActivitySummary, find_player_in_country,
+    find_player_in_country_mut,
 };
 use crate::club::player::agent::PlayerAgent;
+use crate::club::player::calculators::{
+    ContractValuation, ValuationContext, squad_status_wage_factor,
+};
 use crate::country::result::CountryResult;
+use crate::transfers::TransferListingStatus;
+use crate::transfers::TransferWindowManager;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
 use crate::transfers::offer::TransferClause;
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::scouting_region::ScoutingRegion;
-use crate::transfers::TransferListingStatus;
-use crate::transfers::TransferWindowManager;
 use crate::utils::{FloatUtils, FormattingUtils};
-use crate::club::player::calculators::{
-    squad_status_wage_factor, ContractValuation, ValuationContext,
-};
 use crate::{Country, PlayerSquadStatus, PlayerStatusType, WageCalculator};
 use chrono::NaiveDate;
 

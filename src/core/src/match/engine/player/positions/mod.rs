@@ -1,8 +1,8 @@
+pub mod ball;
 pub mod closure;
 pub mod grid;
-pub mod players;
-pub mod ball;
 pub mod objects;
+pub mod players;
 
 pub use ball::*;
 pub use closure::*;

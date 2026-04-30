@@ -1,21 +1,21 @@
 pub(crate) mod config;
-pub(crate) mod types;
-mod listings;
-mod negotiations;
 pub(crate) mod execution;
 mod free_agents;
+mod listings;
+mod negotiations;
+pub(crate) mod types;
 
-use chrono::NaiveDate;
-use log::debug;
-use types::TransferActivitySummary;
 use super::CountryResult;
 use crate::simulator::SimulatorData;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::PipelineProcessor;
+use chrono::NaiveDate;
 use config::TransferConfig;
 use free_agents::{
-    execute_global_free_agent_signing, snapshot_global_free_agents, GlobalFreeAgentSigning,
+    GlobalFreeAgentSigning, execute_global_free_agent_signing, snapshot_global_free_agents,
 };
+use log::debug;
+use types::TransferActivitySummary;
 
 impl CountryResult {
     pub(super) fn simulate_transfer_market(
@@ -35,7 +35,8 @@ impl CountryResult {
 
         // Collect foreign player pool from other countries (for cross-country scouting)
         let foreign_players = if window_open {
-            data.continents.iter()
+            data.continents
+                .iter()
                 .flat_map(|cont| &cont.countries)
                 .filter(|c| c.id != country_id)
                 .flat_map(|c| PipelineProcessor::collect_player_pool(c, current_date))
@@ -70,7 +71,12 @@ impl CountryResult {
             // Expire stale negotiations
             let expired = country.transfer_market.update(current_date);
             for (buying_club_id, player_id) in expired {
-                PipelineProcessor::on_negotiation_resolved(country, buying_club_id, player_id, false);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    buying_club_id,
+                    player_id,
+                    false,
+                );
             }
 
             // Free agents and contract expirations. Returns deferred
@@ -95,6 +101,12 @@ impl CountryResult {
                 PipelineProcessor::assign_scouts_to_matches(country, current_date);
                 PipelineProcessor::process_match_scouting(country, current_date);
                 PipelineProcessor::process_scouting(country, &foreign_players, current_date);
+                // Weekly recruitment meeting — scouts vote, chief
+                // scout / DoF / manager weigh in, decisions are stamped
+                // onto monitoring rows + shortlist. Runs only on Mondays
+                // inside the function so daily ticks pay only the
+                // weekday check.
+                PipelineProcessor::run_recruitment_meetings(country, current_date);
                 PipelineProcessor::build_shortlists(country, current_date);
                 // Board review: veto named targets that blow past the
                 // approved budget or clash with the chairman's financial
@@ -108,8 +120,11 @@ impl CountryResult {
                 PipelineProcessor::scan_loan_market(country, current_date);
 
                 // Cross-country loan scanning: clubs can find loan targets abroad
-                PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);
-
+                PipelineProcessor::scan_foreign_loan_market(
+                    country,
+                    &foreign_players,
+                    current_date,
+                );
             }
 
             // Year-round shadow-squad maintenance: runs on every tick (weekly
@@ -152,11 +167,7 @@ impl CountryResult {
 
         // Phase 2: Execute all completed transfers (domestic + foreign) via unified path
         for transfer in &deferred_transfers {
-            let success = execution::execute_transfer(
-                data,
-                transfer,
-                current_date,
-            );
+            let success = execution::execute_transfer(data, transfer, current_date);
 
             if success {
                 data.dirty_player_index = true;

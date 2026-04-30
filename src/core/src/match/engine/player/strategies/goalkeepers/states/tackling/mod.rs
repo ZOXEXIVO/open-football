@@ -3,8 +3,7 @@ use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperC
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 use rand::RngExt;
@@ -48,7 +47,8 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
 
             if tackle_success {
                 #[cfg(feature = "match-logs")]
-                crate::tackle_stats::GK_SUCCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::tackle_stats::GK_SUCCESSES
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let mut state_change =
                     StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
                 state_change
@@ -61,16 +61,12 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
                     StateChangeResult::with_goalkeeper_state(GoalkeeperState::Standing);
                 state_change
                     .events
-                    .add_player_event(PlayerEvent::CommitFoul(
-                        ctx.player.id,
-                        foul_severity,
-                    ));
+                    .add_player_event(PlayerEvent::CommitFoul(ctx.player.id, foul_severity));
                 state_change.start_tackle_cooldown = true;
                 return Some(state_change);
             } else {
-                let mut state_change = StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Standing,
-                );
+                let mut state_change =
+                    StateChangeResult::with_goalkeeper_state(GoalkeeperState::Standing);
                 state_change.start_tackle_cooldown = true;
                 return Some(state_change);
             }
@@ -80,7 +76,6 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
             ))
         }
     }
-
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the opponent to attempt the tackle

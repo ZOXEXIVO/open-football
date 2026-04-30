@@ -10,13 +10,20 @@ use super::config::ScheduleConfig;
 /// For N teams (odd): N matchdays per round (one team gets a bye each matchday).
 ///
 /// Returns (matchday, home_idx, away_idx) tuples with matchday 1-based.
-pub fn generate_round_robin_fixtures(team_count: usize, matchdays_available: usize) -> Vec<(u8, usize, usize)> {
+pub fn generate_round_robin_fixtures(
+    team_count: usize,
+    matchdays_available: usize,
+) -> Vec<(u8, usize, usize)> {
     if team_count < 2 {
         return Vec::new();
     }
 
     // For circle method, we need an even number of slots
-    let n = if team_count % 2 == 0 { team_count } else { team_count + 1 };
+    let n = if team_count % 2 == 0 {
+        team_count
+    } else {
+        team_count + 1
+    };
     let rounds_single = n - 1; // matchdays for one leg
 
     let mut fixtures = Vec::new();

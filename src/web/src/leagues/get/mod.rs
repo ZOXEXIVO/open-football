@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::common::slug::player_history_slug;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
@@ -9,8 +9,8 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Duration;
 use core::league::ScheduleTour;
-use core::r#match::player::statistics::MatchStatisticType;
 use core::r#match::GoalDetail;
+use core::r#match::player::statistics::MatchStatisticType;
 use itertools::*;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -119,7 +119,12 @@ pub async fn league_get_action(
         .unwrap()
         .slug_indexes
         .get_league_by_slug(&route_params.league_slug)
-        .ok_or_else(|| ApiError::NotFound(format!("League with slug {} not found", route_params.league_slug)))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "League with slug {} not found",
+                route_params.league_slug
+            ))
+        })?;
 
     let league = simulator_data.league(league_id).unwrap();
     let country = simulator_data.country(league.country_id).unwrap();
@@ -199,9 +204,12 @@ pub async fn league_get_action(
                                                     name: player.full_name.to_string(),
                                                     time: format!(
                                                         "('{})",
-                                                        Duration::new((detail.time / 1000) as i64, 0)
-                                                            .unwrap()
-                                                            .num_minutes()
+                                                        Duration::new(
+                                                            (detail.time / 1000) as i64,
+                                                            0
+                                                        )
+                                                        .unwrap()
+                                                        .num_minutes()
                                                     ),
                                                     auto_goal: detail.is_auto_goal,
                                                 })
@@ -225,9 +233,12 @@ pub async fn league_get_action(
                                                     name: player.full_name.to_string(),
                                                     time: format!(
                                                         "('{})",
-                                                        Duration::new((detail.time / 1000) as i64, 0)
-                                                            .unwrap()
-                                                            .num_minutes()
+                                                        Duration::new(
+                                                            (detail.time / 1000) as i64,
+                                                            0
+                                                        )
+                                                        .unwrap()
+                                                        .num_minutes()
                                                     ),
                                                     auto_goal: detail.is_auto_goal,
                                                 })
@@ -255,9 +266,20 @@ pub async fn league_get_action(
         .iter()
         .flat_map(|continent| &continent.countries)
         .flat_map(|country| {
-            country.leagues.leagues.iter().filter(|l| !l.friendly).map(move |league| {
-                (league.reputation, league.name.clone(), league.slug.clone(), country.name.clone(), country.code.clone())
-            })
+            country
+                .leagues
+                .leagues
+                .iter()
+                .filter(|l| !l.friendly)
+                .map(move |league| {
+                    (
+                        league.reputation,
+                        league.name.clone(),
+                        league.slug.clone(),
+                        country.name.clone(),
+                        country.code.clone(),
+                    )
+                })
         })
         .collect();
 
@@ -266,14 +288,14 @@ pub async fn league_get_action(
     let competition_reputation: Vec<CompetitionReputationItem> = reputation_data
         .into_iter()
         .take(10)
-        .map(|(_, league_name, league_slug, country_name, country_code)| {
-            CompetitionReputationItem {
+        .map(
+            |(_, league_name, league_slug, country_name, country_code)| CompetitionReputationItem {
                 league_name,
                 league_slug,
                 country_name,
                 country_code,
-            }
-        })
+            },
+        )
         .collect();
 
     // League-scoped goal & assist tally — count from this league's
@@ -329,8 +351,12 @@ pub async fn league_get_action(
     let mut rating_data: Vec<(u32, String, String, String, u16, f32)> = Vec::new();
 
     for (&pid, &goals) in &goals_per_player {
-        let Some(player) = simulator_data.player(pid) else { continue };
-        let Some((team_name, team_slug)) = resolve_team_for_player(pid) else { continue };
+        let Some(player) = simulator_data.player(pid) else {
+            continue;
+        };
+        let Some((team_name, team_slug)) = resolve_team_for_player(pid) else {
+            continue;
+        };
         let played = player.statistics.played + player.statistics.played_subs;
         apps_per_player.insert(pid, played);
         scorer_data.push((
@@ -344,11 +370,15 @@ pub async fn league_get_action(
     }
 
     for (&pid, &assists) in &assists_per_player {
-        let Some(player) = simulator_data.player(pid) else { continue };
-        let Some((team_name, team_slug)) = resolve_team_for_player(pid) else { continue };
-        let played = *apps_per_player.entry(pid).or_insert_with(|| {
-            player.statistics.played + player.statistics.played_subs
-        });
+        let Some(player) = simulator_data.player(pid) else {
+            continue;
+        };
+        let Some((team_name, team_slug)) = resolve_team_for_player(pid) else {
+            continue;
+        };
+        let played = *apps_per_player
+            .entry(pid)
+            .or_insert_with(|| player.statistics.played + player.statistics.played_subs);
         assister_data.push((
             pid,
             player.full_name.to_string(),
@@ -378,8 +408,7 @@ pub async fn league_get_action(
                             continue;
                         }
                         for p in &sibling.players.players {
-                            if p.is_force_match_selection
-                                && !effective.iter().any(|q| q.id == p.id)
+                            if p.is_force_match_selection && !effective.iter().any(|q| q.id == p.id)
                             {
                                 effective.push(p);
                             }
@@ -414,40 +443,48 @@ pub async fn league_get_action(
     let top_scorers: Vec<LeaguePlayerStatItem> = scorer_data
         .into_iter()
         .take(10)
-        .map(|(player_id, player_name, team_name, team_slug, played, goals)| LeaguePlayerStatItem {
-            player_slug: player_history_slug(simulator_data, player_id, &player_name),
-            player_name,
-            team_name,
-            team_slug,
-            played,
-            stat_value: goals.to_string(),
-        })
+        .map(
+            |(player_id, player_name, team_name, team_slug, played, goals)| LeaguePlayerStatItem {
+                player_slug: player_history_slug(simulator_data, player_id, &player_name),
+                player_name,
+                team_name,
+                team_slug,
+                played,
+                stat_value: goals.to_string(),
+            },
+        )
         .collect();
 
     let top_assisters: Vec<LeaguePlayerStatItem> = assister_data
         .into_iter()
         .take(10)
-        .map(|(player_id, player_name, team_name, team_slug, played, assists)| LeaguePlayerStatItem {
-            player_slug: player_history_slug(simulator_data, player_id, &player_name),
-            player_name,
-            team_name,
-            team_slug,
-            played,
-            stat_value: assists.to_string(),
-        })
+        .map(
+            |(player_id, player_name, team_name, team_slug, played, assists)| {
+                LeaguePlayerStatItem {
+                    player_slug: player_history_slug(simulator_data, player_id, &player_name),
+                    player_name,
+                    team_name,
+                    team_slug,
+                    played,
+                    stat_value: assists.to_string(),
+                }
+            },
+        )
         .collect();
 
     let top_rated: Vec<LeaguePlayerStatItem> = rating_data
         .into_iter()
         .take(10)
-        .map(|(player_id, player_name, team_name, team_slug, played, rating)| LeaguePlayerStatItem {
-            player_slug: player_history_slug(simulator_data, player_id, &player_name),
-            player_name,
-            team_name,
-            team_slug,
-            played,
-            stat_value: format!("{:.2}", rating),
-        })
+        .map(
+            |(player_id, player_name, team_name, team_slug, played, rating)| LeaguePlayerStatItem {
+                player_slug: player_history_slug(simulator_data, player_id, &player_name),
+                player_name,
+                team_name,
+                team_slug,
+                played,
+                stat_value: format!("{:.2}", rating),
+            },
+        )
         .collect();
 
     let league_title = views::league_display_name(&league, &i18n, simulator_data);
@@ -464,11 +501,23 @@ pub async fn league_get_action(
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {
-            let mut cl: Vec<(u32, &str, &str)> = country.leagues.leagues.iter().filter(|l| !l.friendly).map(|l| (l.id, l.name.as_str(), l.slug.as_str())).collect();
+            let mut cl: Vec<(u32, &str, &str)> = country
+                .leagues
+                .leagues
+                .iter()
+                .filter(|l| !l.friendly)
+                .map(|l| (l.id, l.name.as_str(), l.slug.as_str()))
+                .collect();
             cl.sort_by_key(|(id, _, _)| *id);
             let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
             let current_path = format!("/{}/leagues/{}", &route_params.lang, &league.slug);
-            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: &country.name, country_slug: &country.slug };
+            let mp = views::MenuParams {
+                i18n: &i18n,
+                lang: &route_params.lang,
+                current_path: &current_path,
+                country_name: &country.name,
+                country_slug: &country.slug,
+            };
             views::league_menu(&mp, &league.slug, &cl_refs)
         },
         league_slug: league.slug.clone(),

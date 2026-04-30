@@ -2,14 +2,14 @@ pub mod providers;
 pub mod registry;
 pub mod routes;
 
-use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use registry::AiProviderInfo;
 use serde::Deserialize;
 
@@ -96,10 +96,7 @@ pub async fn ai_add_provider_action(
     let request = providers::OllamaRequest::new(&body.host, body.port, &body.model)
         .with_batch_size(body.batch_size.unwrap_or(1));
 
-    state.ai_registry.add(
-        &body.name,
-        Box::new(request),
-    ).await;
+    state.ai_registry.add(&body.name, Box::new(request)).await;
 
     StatusCode::OK
 }
