@@ -119,9 +119,7 @@
             var g3 = document.createElement('div');
             g3.className = 'fm-search-group';
             var items3 = data.players.map(function(p) {
-                var faceSrc = '/api/players/' + encodeURIComponent(p.id) +
-                    '/face.svg?age=' + encodeURIComponent(p.age) +
-                    '&cc=' + encodeURIComponent(p.country_code || '');
+                var faceSrc = '/api/players/' + encodeURIComponent(p.id) + '/face.svg';
                 var realSrc = 'https://open-football.org/player/' + encodeURIComponent(p.id) + '.png';
                 var sub = p.is_free_agent ? esc(i18n.freeAgent) : esc(p.team_name || '');
                 var img = p.generated
