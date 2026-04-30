@@ -233,7 +233,10 @@ impl PlayersOdb {
             let physical_club = p.loan.as_ref().map(|l| l.to_club_id).unwrap_or(p.club_id);
             by_physical_club.entry(physical_club).or_default().push(p);
         }
-        PlayersOdb { by_physical_club, free_agents }
+        PlayersOdb {
+            by_physical_club,
+            free_agents,
+        }
     }
 
     pub fn for_club(&self, club_id: u32) -> Option<&[OdbPlayer]> {
@@ -281,7 +284,10 @@ mod tests {
             birth_date: NaiveDate::from_ymd_opt(1995, 5, 15).unwrap(),
             country_id: 776,
             club_id,
-            positions: vec![OdbPosition { code: "MC".into(), level: 18 }],
+            positions: vec![OdbPosition {
+                code: "MC".into(),
+                level: 18,
+            }],
             preferred_foot: None,
             height: None,
             weight: None,
@@ -325,7 +331,10 @@ mod tests {
         let mut p = make_player(99, 0, None);
         p.contract = None;
         let odb = PlayersOdb::from_players(vec![p]);
-        assert!(odb.for_club(0).is_none(), "free agent must not occupy a synthetic club_id=0 bucket");
+        assert!(
+            odb.for_club(0).is_none(),
+            "free agent must not occupy a synthetic club_id=0 bucket"
+        );
         assert_eq!(odb.free_agents().len(), 1);
         assert_eq!(odb.free_agents()[0].id, 99);
     }
@@ -333,8 +342,14 @@ mod tests {
     #[test]
     fn loaned_player_indexed_under_borrower() {
         let odb = PlayersOdb::from_players(vec![make_player(2, 1139, Some(866))]);
-        assert!(!odb.has_club(1139), "parent club must not list the loaned player in their squad");
-        assert!(odb.has_club(866), "borrower physically fields the loaned player");
+        assert!(
+            !odb.has_club(1139),
+            "parent club must not list the loaned player in their squad"
+        );
+        assert!(
+            odb.has_club(866),
+            "borrower physically fields the loaned player"
+        );
     }
 
     /// Smoke test: the embedded compiled DB loads and contains a non-trivial

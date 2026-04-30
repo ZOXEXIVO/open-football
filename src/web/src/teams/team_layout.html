@@ -8,6 +8,7 @@
     <a class="fm-tab{% if active_tab == "staff" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/staff">{{ i18n.t("staff") }}</a>
     <a class="fm-tab{% if active_tab == "tactics" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("tactics") }}</a>
     {% if show_finances_tab %}<a class="fm-tab{% if active_tab == "finances" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/finances">{{ i18n.t("finances") }}</a>{% endif %}
+    <a class="fm-tab{% if active_tab == "scouting" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/scouting">{{ i18n.t("scouting") }}</a>
     {% if show_academy_tab %}<a class="fm-tab{% if active_tab == "academy" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/academy">{{ i18n.t("academy") }}</a>{% endif %}
     <a class="fm-tab{% if active_tab == "schedule" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/schedule">{{ i18n.t("schedule") }}</a>
     <a class="fm-tab{% if active_tab == "stats" %} active{% endif %}" href="/{{ lang }}/teams/{{ team_slug }}/stats">{{ i18n.t("stats") }}</a>

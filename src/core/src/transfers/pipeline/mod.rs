@@ -95,6 +95,24 @@ pub enum TransferNeedPriority {
     Optional,
 }
 
+impl TransferNeedPriority {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TransferNeedPriority::Critical => "request_priority_critical",
+            TransferNeedPriority::Important => "request_priority_important",
+            TransferNeedPriority::Optional => "request_priority_optional",
+        }
+    }
+
+    pub fn dashboard_sort_bucket(&self) -> u8 {
+        match self {
+            TransferNeedPriority::Critical => 0,
+            TransferNeedPriority::Important => 1,
+            TransferNeedPriority::Optional => 2,
+        }
+    }
+}
+
 /// Why the coach is requesting this position - derived from tactical analysis.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransferNeedReason {
@@ -124,6 +142,27 @@ pub enum TransferNeedReason {
     OpportunisticLoanUpgrade,
 }
 
+impl TransferNeedReason {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TransferNeedReason::FormationGap => "request_reason_formation_gap",
+            TransferNeedReason::QualityUpgrade => "request_reason_quality_upgrade",
+            TransferNeedReason::DepthCover => "request_reason_depth_cover",
+            TransferNeedReason::SuccessionPlanning => "request_reason_succession_planning",
+            TransferNeedReason::DevelopmentSigning => "request_reason_development_signing",
+            TransferNeedReason::StaffRecommendation => "request_reason_staff_recommendation",
+            TransferNeedReason::LoanToFillSquad => "request_reason_loan_to_fill_squad",
+            TransferNeedReason::ExperiencedHead => "request_reason_experienced_head",
+            TransferNeedReason::SquadPadding => "request_reason_squad_padding",
+            TransferNeedReason::CheapReinforcement => "request_reason_cheap_reinforcement",
+            TransferNeedReason::InjuryCoverLoan => "request_reason_injury_cover_loan",
+            TransferNeedReason::OpportunisticLoanUpgrade => {
+                "request_reason_opportunistic_loan_upgrade"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransferRequestStatus {
     Pending,
@@ -132,6 +171,30 @@ pub enum TransferRequestStatus {
     Negotiating,
     Fulfilled,
     Abandoned,
+}
+
+impl TransferRequestStatus {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TransferRequestStatus::Pending => "request_status_pending",
+            TransferRequestStatus::ScoutingActive => "request_status_scouting_active",
+            TransferRequestStatus::Shortlisted => "request_status_shortlisted",
+            TransferRequestStatus::Negotiating => "request_status_negotiating",
+            TransferRequestStatus::Fulfilled => "request_status_fulfilled",
+            TransferRequestStatus::Abandoned => "request_status_abandoned",
+        }
+    }
+
+    pub fn dashboard_sort_bucket(&self) -> u8 {
+        match self {
+            TransferRequestStatus::Negotiating => 0,
+            TransferRequestStatus::Shortlisted => 1,
+            TransferRequestStatus::ScoutingActive => 2,
+            TransferRequestStatus::Pending => 3,
+            TransferRequestStatus::Fulfilled => 4,
+            TransferRequestStatus::Abandoned => 5,
+        }
+    }
 }
 
 // ============================================================
@@ -428,6 +491,39 @@ pub enum ScoutingRecommendation {
     Buy,
     Consider,
     Pass,
+}
+
+impl ScoutingRecommendation {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            ScoutingRecommendation::StrongBuy => "recommendation_strong_buy",
+            ScoutingRecommendation::Buy => "recommendation_buy",
+            ScoutingRecommendation::Consider => "recommendation_consider",
+            ScoutingRecommendation::Pass => "recommendation_pass",
+        }
+    }
+
+    /// Lower = higher in the dashboard reports table.
+    pub fn dashboard_sort_bucket(&self) -> u8 {
+        match self {
+            ScoutingRecommendation::StrongBuy => 0,
+            ScoutingRecommendation::Buy => 1,
+            ScoutingRecommendation::Consider => 2,
+            ScoutingRecommendation::Pass => 3,
+        }
+    }
+}
+
+impl ReportRiskFlag {
+    pub fn as_i18n_key(self) -> &'static str {
+        match self {
+            ReportRiskFlag::CurrentlyInjured => "risk_currently_injured",
+            ReportRiskFlag::PoorAttitude => "risk_poor_attitude",
+            ReportRiskFlag::WageDemands => "risk_wage_demands",
+            ReportRiskFlag::ContractExpiring => "risk_contract_expiring",
+            ReportRiskFlag::AgeRisk => "risk_age_risk",
+        }
+    }
 }
 
 // ============================================================

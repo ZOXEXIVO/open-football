@@ -3,14 +3,14 @@ use core::shared::FullName;
 use core::utils::FloatUtils;
 use core::utils::IntegerUtils;
 use core::{
-    CoachFocus, MentalFocusType, PeopleNameGeneratorData, PersonAttributes,
-    PhysicalFocusType, Staff, StaffAttributes, StaffClubContract, StaffCoaching, StaffDataAnalysis,
+    CoachFocus, MentalFocusType, PeopleNameGeneratorData, PersonAttributes, PhysicalFocusType,
+    Staff, StaffAttributes, StaffClubContract, StaffCoaching, StaffDataAnalysis,
     StaffGoalkeeperCoaching, StaffKnowledge, StaffLicenseType, StaffMedical, StaffMental,
     StaffPosition, StaffStatus, TechnicalFocusType,
 };
 use rand::RngExt;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{LazyLock};
 
 static STAFF_ID_SEQUENCE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU32::new(1));
 
@@ -31,7 +31,12 @@ impl StaffGenerator {
 }
 
 impl StaffGenerator {
-    pub fn generate(&self, country_id: u32, position: StaffPosition, team_reputation: u16) -> Staff {
+    pub fn generate(
+        &self,
+        country_id: u32,
+        position: StaffPosition,
+        team_reputation: u16,
+    ) -> Staff {
         let now = Utc::now();
 
         let rep_factor = (team_reputation as f32 / 10000.0).clamp(0.0, 1.0);
@@ -45,10 +50,7 @@ impl StaffGenerator {
 
         Staff::new(
             STAFF_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst),
-            FullName::new(
-                self.generate_first_name(),
-                self.generate_last_name(),
-            ),
+            FullName::new(self.generate_first_name(), self.generate_last_name()),
             country_id,
             NaiveDate::from_ymd_opt(year as i32, month, day).unwrap(),
             Self::generate_staff_attributes(rep_factor),
@@ -149,14 +151,18 @@ impl StaffGenerator {
 
     fn generate_first_name(&self) -> String {
         let names = &self.people_names_data.first_names;
-        if names.is_empty() { return String::new(); }
+        if names.is_empty() {
+            return String::new();
+        }
         let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
         names[idx].to_owned()
     }
 
     fn generate_last_name(&self) -> String {
         let names = &self.people_names_data.last_names;
-        if names.is_empty() { return String::new(); }
+        if names.is_empty() {
+            return String::new();
+        }
         let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
         names[idx].to_owned()
     }

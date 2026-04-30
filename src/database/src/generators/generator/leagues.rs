@@ -6,14 +6,19 @@ use std::str::FromStr;
 use super::DatabaseGenerator;
 
 impl DatabaseGenerator {
-    pub(super) fn generate_leagues(country_id: u32, country_reputation: u16, data: &DatabaseEntity) -> Vec<League> {
-        data
-            .leagues
+    pub(super) fn generate_leagues(
+        country_id: u32,
+        country_reputation: u16,
+        data: &DatabaseEntity,
+    ) -> Vec<League> {
+        data.leagues
             .iter()
             .filter(|l| l.country_id == country_id)
             .map(|league| {
                 let financials = LeagueFinancials::from_reputation_and_tier(
-                    league.reputation, league.tier, country_reputation,
+                    league.reputation,
+                    league.tier,
+                    country_reputation,
                 );
                 let settings = LeagueSettings {
                     season_starting_half: DayMonthPeriod {
@@ -38,19 +43,34 @@ impl DatabaseGenerator {
                     }),
                 };
 
-                let mut l = League::new(league.id, league.name.clone(), league.slug.clone(), league.country_id, league.reputation, settings, false);
+                let mut l = League::new(
+                    league.id,
+                    league.name.clone(),
+                    league.slug.clone(),
+                    league.country_id,
+                    league.reputation,
+                    settings,
+                    false,
+                );
                 l.financials = financials;
                 l
             })
             .collect()
     }
 
-    pub(super) fn create_subteams_leagues(country_id: u32, clubs: &mut [Club], leagues: &mut Vec<League>, data: &DatabaseEntity) {
+    pub(super) fn create_subteams_leagues(
+        country_id: u32,
+        clubs: &mut [Club],
+        leagues: &mut Vec<League>,
+        data: &DatabaseEntity,
+    ) {
         // Build a map: club_id → parent league_id (from the club's Main team)
         let club_league_map: Vec<(u32, u32)> = clubs
             .iter()
             .filter_map(|club| {
-                let main_league_id = club.teams.teams
+                let main_league_id = club
+                    .teams
+                    .teams
                     .iter()
                     .find(|t| t.team_type == TeamType::Main)
                     .and_then(|t| t.league_id)?;
@@ -61,16 +81,26 @@ impl DatabaseGenerator {
         // Snapshot parent leagues to create subleagues per configured team type
         let parent_leagues: Vec<(u32, String, String, u16, LeagueSettings)> = leagues
             .iter()
-            .map(|l| (l.id, l.name.clone(), l.slug.clone(), l.reputation, l.settings.clone()))
+            .map(|l| {
+                (
+                    l.id,
+                    l.name.clone(),
+                    l.slug.clone(),
+                    l.reputation,
+                    l.settings.clone(),
+                )
+            })
             .collect();
 
         for (parent_id, parent_name, parent_slug, parent_rep, parent_settings) in &parent_leagues {
             // Find sub_leagues_competitions config from the league entity
-            let team_types: Vec<TeamType> = data.leagues
+            let team_types: Vec<TeamType> = data
+                .leagues
                 .iter()
                 .find(|l| l.id == *parent_id)
                 .map(|l| {
-                    l.sub_leagues_competitions.iter()
+                    l.sub_leagues_competitions
+                        .iter()
                         .filter_map(|s| TeamType::from_str(s).ok())
                         .collect()
                 })
@@ -79,7 +109,9 @@ impl DatabaseGenerator {
             for team_type in &team_types {
                 // Check if any club in this parent league has this team type
                 let has_type = clubs.iter().any(|club| {
-                    club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id)
+                    club_league_map
+                        .iter()
+                        .any(|(cid, lid)| *cid == club.id && lid == parent_id)
                         && club.teams.teams.iter().any(|t| t.team_type == *team_type)
                 });
 
@@ -125,7 +157,9 @@ impl DatabaseGenerator {
 
                 // Assign matching teams to this youth league
                 for club in clubs.iter_mut() {
-                    let is_in_parent = club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id);
+                    let is_in_parent = club_league_map
+                        .iter()
+                        .any(|(cid, lid)| *cid == club.id && lid == parent_id);
                     if !is_in_parent {
                         continue;
                     }

@@ -1,10 +1,8 @@
+use crate::DatabaseEntity;
 use crate::generators::{PlayerGenerator, StaffGenerator};
 use crate::loaders::ContinentEntity;
-use crate::DatabaseEntity;
 use core::league::LeagueCollection;
-use core::{
-    Country, CountryGeneratorData, CountryPricing, CountrySettings, SkinColorDistribution,
-};
+use core::{Country, CountryGeneratorData, CountryPricing, CountrySettings, SkinColorDistribution};
 use rayon::prelude::*;
 
 use super::DatabaseGenerator;
@@ -15,7 +13,9 @@ impl DatabaseGenerator {
         data: &DatabaseEntity,
     ) -> Vec<Country> {
         // Collect all country IDs that have clubs — scouts can know these regions
-        let _all_country_ids: Vec<u32> = data.countries.iter()
+        let _all_country_ids: Vec<u32> = data
+            .countries
+            .iter()
             .filter(|c| data.clubs.iter().any(|cl| cl.country_id == c.id))
             .map(|c| c.id)
             .collect();
@@ -26,8 +26,7 @@ impl DatabaseGenerator {
         // keeps cores busy even when one continent has few countries but
         // big leagues (e.g. Europe: 50 countries, but Spain/Italy/England
         // carry the bulk of the per-country work).
-        data
-            .countries
+        data.countries
             .par_iter()
             .filter(|cn| cn.continent_id == continent.id)
             .filter(|cn| data.leagues.iter().any(|l| l.country_id == cn.id))
@@ -91,6 +90,7 @@ impl DatabaseGenerator {
                     .generator_data(generator_data)
                     .build()
                     .expect("Failed to build Country")
-            }).collect()
+            })
+            .collect()
     }
 }

@@ -2,6 +2,7 @@ use super::TeamData;
 use crate::continent::Continent;
 use crate::country::Country;
 use crate::league::League;
+use crate::transfers::ScoutingRegion;
 use crate::{Club, Player, SimulatorData, Staff, Team};
 use chrono::NaiveDate;
 
@@ -26,6 +27,233 @@ pub struct PlayerMonitoringDetail {
     pub matches_watched: u16,
     pub shortlisted: bool,
     pub negotiating: bool,
+}
+
+/// Pre-resolved snapshot of a club's scouting department state, served
+/// to the web crate so templates stay presentational. Names, slugs,
+/// dates and enum-as-i18n-keys are already worked out — the UI just
+/// formats and links.
+#[derive(Debug, Clone, Default)]
+pub struct ClubScoutingDashboard {
+    pub summary: ScoutingSummary,
+    pub scout_workload: Vec<ScoutWorkloadRow>,
+    pub active_monitoring: Vec<ActiveMonitoringRow>,
+    pub scouting_reports: Vec<ScoutingReportRow>,
+    pub scouting_assignments: Vec<ScoutingAssignmentRow>,
+    pub match_assignments: Vec<MatchAssignmentRow>,
+    pub recruitment_meetings: Vec<RecruitmentMeetingRow>,
+    pub known_players: Vec<KnownPlayerRow>,
+    pub shadow_reports: Vec<ShadowReportRow>,
+    pub transfer_requests: Vec<TransferRequestRow>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ScoutingSummary {
+    pub active_scouts: u32,
+    pub active_monitored: u32,
+    pub report_ready: u32,
+    pub open_assignments: u32,
+    pub recent_meetings: u32,
+    pub promoted_to_shortlist: u32,
+    pub rejected_or_blocked: u32,
+    pub avg_confidence_pct: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoutWorkloadRow {
+    pub staff_id: u32,
+    pub staff_name: String,
+    pub role_key: String,
+    pub active_count: u32,
+    pub report_ready_count: u32,
+    pub avg_confidence_pct: u8,
+    pub last_observed: Option<NaiveDate>,
+    /// Pre-translated i18n keys for regions covered by this scout's
+    /// monitoring rows (e.g. `region_western_europe`).
+    pub region_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveMonitoringRow {
+    pub player_id: u32,
+    pub player_slug: String,
+    pub player_name: String,
+    pub player_position_short: String,
+    pub player_age: Option<u8>,
+    pub current_club_id: Option<u32>,
+    pub current_club_name: String,
+    pub current_team_slug: String,
+    pub scout_id: u32,
+    pub scout_name: String,
+    pub source_key: String,
+    pub status_key: String,
+    pub started_on: NaiveDate,
+    pub last_observed: NaiveDate,
+    pub times_watched: u16,
+    pub matches_watched: u16,
+    pub assessed_ability: u8,
+    pub assessed_potential: u8,
+    pub confidence_pct: u8,
+    pub role_fit_pct: u8,
+    pub estimated_value: f64,
+    pub risk_flag_keys: Vec<String>,
+    pub transfer_request_id: Option<u32>,
+    pub transfer_request_position_short: Option<String>,
+    pub latest_vote_key: Option<String>,
+    pub latest_decision_key: Option<String>,
+    /// Sort buckets (lower = higher in the table).
+    pub sort_bucket: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoutingReportRow {
+    pub player_id: u32,
+    pub player_slug: String,
+    pub player_name: String,
+    pub player_position_short: String,
+    pub current_club_name: String,
+    pub current_team_slug: String,
+    pub assignment_id: u32,
+    pub transfer_request_id: Option<u32>,
+    pub recommendation_key: String,
+    pub assessed_ability: u8,
+    pub assessed_potential: u8,
+    pub confidence_pct: u8,
+    pub role_fit_pct: u8,
+    pub estimated_value: f64,
+    pub risk_flag_keys: Vec<String>,
+    /// `true` when the row was rehydrated from a shadow report and
+    /// rebound to an active assignment.
+    pub from_shadow: bool,
+    /// Lower-is-higher sort bucket derived from the recommendation.
+    pub sort_bucket: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoutingAssignmentRow {
+    pub assignment_id: u32,
+    pub transfer_request_id: u32,
+    pub target_position_short: String,
+    pub min_ability: u8,
+    pub preferred_age_min: u8,
+    pub preferred_age_max: u8,
+    pub max_budget: f64,
+    pub scout_id: Option<u32>,
+    pub scout_name: Option<String>,
+    pub observation_count: u32,
+    pub reports_produced: u32,
+    pub completed: bool,
+    pub min_technical_avg: f32,
+    pub min_mental_avg: f32,
+    pub min_physical_avg: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchAssignmentRow {
+    pub scout_id: u32,
+    pub scout_name: String,
+    pub target_team_id: u32,
+    pub target_team_name: String,
+    pub target_team_slug: String,
+    pub linked_assignment_ids: Vec<u32>,
+    pub last_attended: Option<NaiveDate>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecruitmentMeetingRow {
+    pub id: u32,
+    pub date: NaiveDate,
+    pub participants: Vec<MeetingParticipant>,
+    pub agenda_request_ids: Vec<u32>,
+    pub decisions: Vec<MeetingDecisionRow>,
+    pub votes: Vec<MeetingVoteRow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MeetingParticipant {
+    pub staff_id: u32,
+    pub staff_name: String,
+    pub role_key: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct MeetingDecisionRow {
+    pub player_id: u32,
+    pub player_slug: String,
+    pub player_name: String,
+    pub transfer_request_id: Option<u32>,
+    pub decision_key: String,
+    pub consensus_score: f32,
+    pub chief_scout_support: bool,
+    pub data_support: bool,
+    pub board_risk_score: f32,
+    pub budget_fit: f32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct MeetingVoteRow {
+    pub scout_id: u32,
+    pub scout_name: String,
+    pub player_id: u32,
+    pub player_slug: String,
+    pub player_name: String,
+    pub vote_key: String,
+    pub score: f32,
+    pub confidence_pct: u8,
+    pub reason_key: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct KnownPlayerRow {
+    pub player_id: u32,
+    pub player_slug: String,
+    pub player_name: String,
+    pub last_known_club_name: String,
+    pub last_known_team_slug: String,
+    pub position_short: String,
+    pub position_group_key: String,
+    pub assessed_ability: u8,
+    pub assessed_potential: u8,
+    pub confidence_pct: u8,
+    pub estimated_fee: f64,
+    pub last_seen: NaiveDate,
+    pub official_appearances_seen: u16,
+    pub friendly_appearances_seen: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct ShadowReportRow {
+    pub player_id: u32,
+    pub player_slug: String,
+    pub player_name: String,
+    pub current_club_name: String,
+    pub current_team_slug: String,
+    pub position_group_key: String,
+    pub observed_ability: u8,
+    pub recorded_on: NaiveDate,
+    pub confidence_pct: u8,
+    pub recommendation_key: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TransferRequestRow {
+    pub id: u32,
+    pub position_short: String,
+    pub priority_key: String,
+    pub priority_sort_bucket: u8,
+    pub reason_key: String,
+    pub min_ability: u8,
+    pub ideal_ability: u8,
+    pub preferred_age_min: u8,
+    pub preferred_age_max: u8,
+    pub budget_allocation: f64,
+    pub status_key: String,
+    pub status_sort_bucket: u8,
+    pub named_target_id: Option<u32>,
+    pub named_target_slug: Option<String>,
+    pub named_target_name: Option<String>,
+    pub board_approved: Option<bool>,
 }
 
 /// One row in the staff-page workload UI showing what a scout is
@@ -851,5 +1079,757 @@ impl SimulatorData {
         }
 
         interested
+    }
+
+    /// Pre-resolve everything the web Scouting tab needs into a single
+    /// dashboard struct. Read-only — never mutates state.
+    pub fn club_scouting_dashboard(&self, club_id: u32) -> ClubScoutingDashboard {
+        ClubScoutingDashboardBuilder::new(self, club_id)
+            .map(|b| b.build())
+            .unwrap_or_default()
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Scouting dashboard builder — wraps row construction so the loose
+// resolution helpers don't leak as free functions. Lives in its own
+// impl block to keep the SimulatorData accessor surface focused.
+// ════════════════════════════════════════════════════════════════════
+
+use crate::transfers::pipeline::{
+    DetailedScoutingReport, RecruitmentDecisionType, ScoutMonitoringStatus, ScoutVoteChoice,
+    ScoutingAssignment, TransferRequest,
+};
+
+/// Holds references to the simulator, club, and pre-computed lookups
+/// used while assembling a `ClubScoutingDashboard`. Build once via
+/// `new`, then call `build` to consume it.
+pub struct ClubScoutingDashboardBuilder<'a> {
+    data: &'a SimulatorData,
+    club: &'a Club,
+    today: NaiveDate,
+    /// Latest scout vote per player across the meeting history.
+    latest_vote_per_player: std::collections::HashMap<u32, ScoutVoteChoice>,
+    /// Latest meeting decision per player.
+    latest_decision_per_player: std::collections::HashMap<u32, RecruitmentDecisionType>,
+    /// Open transfer requests indexed by id, used for monitoring context.
+    request_lookup: std::collections::HashMap<u32, &'a TransferRequest>,
+    /// Scouting assignments indexed by id, used for report context.
+    assignment_lookup: std::collections::HashMap<u32, &'a ScoutingAssignment>,
+}
+
+/// Per-scout accumulator built up while folding monitoring rows; later
+/// flattened into a `ScoutWorkloadRow`.
+struct ScoutWorkAccumulator {
+    staff_id: u32,
+    staff_name: String,
+    role_key: String,
+    active: u32,
+    report_ready: u32,
+    confidence_sum: f32,
+    confidence_count: u32,
+    last_observed: Option<NaiveDate>,
+    regions: std::collections::HashSet<ScoutingRegion>,
+}
+
+impl<'a> ClubScoutingDashboardBuilder<'a> {
+    pub fn new(data: &'a SimulatorData, club_id: u32) -> Option<Self> {
+        let club = data.club(club_id)?;
+        let plan = &club.transfer_plan;
+
+        // Walk meeting history newest-first so the first hit per player
+        // wins for both votes and decisions.
+        let mut latest_vote_per_player = std::collections::HashMap::new();
+        let mut latest_decision_per_player = std::collections::HashMap::new();
+        for meeting in plan.recruitment_meetings.iter().rev() {
+            for v in &meeting.player_votes {
+                latest_vote_per_player.entry(v.player_id).or_insert(v.vote);
+            }
+            for d in &meeting.decisions {
+                latest_decision_per_player
+                    .entry(d.player_id)
+                    .or_insert(d.decision);
+            }
+        }
+
+        let request_lookup: std::collections::HashMap<u32, &TransferRequest> =
+            plan.transfer_requests.iter().map(|r| (r.id, r)).collect();
+        let assignment_lookup: std::collections::HashMap<u32, &ScoutingAssignment> = plan
+            .scouting_assignments
+            .iter()
+            .map(|a| (a.id, a))
+            .collect();
+
+        Some(ClubScoutingDashboardBuilder {
+            data,
+            club,
+            today: data.date.date(),
+            latest_vote_per_player,
+            latest_decision_per_player,
+            request_lookup,
+            assignment_lookup,
+        })
+    }
+
+    pub fn build(self) -> ClubScoutingDashboard {
+        let summary = self.build_summary();
+        let scout_workload = self.build_scout_workload();
+        let active_monitoring = self.build_active_monitoring();
+        let scouting_reports = self.build_scouting_reports();
+        let (scouting_assignments, match_assignments) = self.build_assignments();
+        let recruitment_meetings = self.build_recruitment_meetings();
+        let known_players = self.build_known_players();
+        let shadow_reports = self.build_shadow_reports();
+        let transfer_requests = self.build_transfer_requests();
+
+        ClubScoutingDashboard {
+            summary,
+            scout_workload,
+            active_monitoring,
+            scouting_reports,
+            scouting_assignments,
+            match_assignments,
+            recruitment_meetings,
+            known_players,
+            shadow_reports,
+            transfer_requests,
+        }
+    }
+
+    fn plan(&self) -> &'a crate::transfers::pipeline::ClubTransferPlan {
+        &self.club.transfer_plan
+    }
+
+    fn full_staff_name(staff: &Staff) -> String {
+        format!(
+            "{} {}",
+            staff.full_name.first_name, staff.full_name.last_name
+        )
+    }
+
+    /// Resolve `(name, slug)` for a player whose record may have moved
+    /// to a retired pool. Returns `("","")` when the player can't be
+    /// found at all — callers fall back to a non-linked label.
+    fn resolve_player_link(&self, player_id: u32) -> (String, String) {
+        if let Some((p, _)) = self.data.player_with_team(player_id) {
+            return (
+                format!(
+                    "{} {}",
+                    p.full_name.display_first_name(),
+                    p.full_name.display_last_name()
+                ),
+                p.slug(),
+            );
+        }
+        if let Some(p) = self.data.retired_player(player_id) {
+            return (
+                format!(
+                    "{} {}",
+                    p.full_name.display_first_name(),
+                    p.full_name.display_last_name()
+                ),
+                p.slug(),
+            );
+        }
+        (String::new(), String::new())
+    }
+
+    fn staff_name(&self, staff_id: u32) -> String {
+        self.data
+            .staff_with_team(staff_id)
+            .map(|(s, _)| Self::full_staff_name(s))
+            .unwrap_or_default()
+    }
+
+    fn staff_role_key(&self, staff_id: u32) -> String {
+        self.data
+            .staff_with_team(staff_id)
+            .and_then(|(s, _)| s.contract.as_ref().map(|c| c.position.as_i18n_key()))
+            .unwrap_or("staff_scout")
+            .to_string()
+    }
+
+    fn build_summary(&self) -> ScoutingSummary {
+        let plan = self.plan();
+        let active_monitorings: Vec<_> = plan
+            .scout_monitoring
+            .iter()
+            .filter(|m| m.is_active_interest())
+            .collect();
+        let active_monitored = active_monitorings.len() as u32;
+        let report_ready = active_monitorings
+            .iter()
+            .filter(|m| matches!(m.status, ScoutMonitoringStatus::ReportReady))
+            .count() as u32;
+        let promoted_to_shortlist = active_monitorings
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m.status,
+                    ScoutMonitoringStatus::PromotedToShortlist | ScoutMonitoringStatus::Negotiating
+                )
+            })
+            .count() as u32;
+        let rejected_or_blocked = plan.rejected_players.len() as u32
+            + plan
+                .scout_monitoring
+                .iter()
+                .filter(|m| matches!(m.status, ScoutMonitoringStatus::Rejected))
+                .count() as u32;
+        let open_assignments = plan
+            .scouting_assignments
+            .iter()
+            .filter(|a| !a.completed)
+            .count() as u32;
+        let recent_meetings = plan.recruitment_meetings.len() as u32;
+        let avg_confidence_pct = if active_monitored > 0 {
+            let sum: f32 = active_monitorings.iter().map(|m| m.confidence).sum();
+            ((sum / active_monitored as f32) * 100.0).round().min(100.0) as u8
+        } else {
+            0
+        };
+        let mut scout_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for m in &active_monitorings {
+            scout_set.insert(m.scout_staff_id);
+        }
+        for a in &plan.scouting_assignments {
+            if !a.completed {
+                if let Some(id) = a.scout_staff_id {
+                    scout_set.insert(id);
+                }
+            }
+        }
+        ScoutingSummary {
+            active_scouts: scout_set.len() as u32,
+            active_monitored,
+            report_ready,
+            open_assignments,
+            recent_meetings,
+            promoted_to_shortlist,
+            rejected_or_blocked,
+            avg_confidence_pct,
+        }
+    }
+
+    fn build_scout_workload(&self) -> Vec<ScoutWorkloadRow> {
+        let plan = self.plan();
+        let mut workload_map: std::collections::HashMap<u32, ScoutWorkAccumulator> =
+            std::collections::HashMap::new();
+
+        // Seed every scouting-relevant staff on the club so empty rows
+        // still show up in the workload table.
+        for team in &self.club.teams.teams {
+            for staff in team.staffs.iter() {
+                let Some(contract) = &staff.contract else {
+                    continue;
+                };
+                let position = &contract.position;
+                let included = position.is_scouting()
+                    || matches!(position, crate::StaffPosition::DirectorOfFootball);
+                if !included {
+                    continue;
+                }
+                workload_map
+                    .entry(staff.id)
+                    .or_insert_with(|| ScoutWorkAccumulator {
+                        staff_id: staff.id,
+                        staff_name: Self::full_staff_name(staff),
+                        role_key: position.as_i18n_key().to_string(),
+                        active: 0,
+                        report_ready: 0,
+                        confidence_sum: 0.0,
+                        confidence_count: 0,
+                        last_observed: None,
+                        regions: std::collections::HashSet::new(),
+                    });
+            }
+        }
+
+        for m in plan
+            .scout_monitoring
+            .iter()
+            .filter(|m| m.is_active_interest())
+        {
+            let entry =
+                workload_map
+                    .entry(m.scout_staff_id)
+                    .or_insert_with(|| ScoutWorkAccumulator {
+                        staff_id: m.scout_staff_id,
+                        staff_name: self.staff_name(m.scout_staff_id),
+                        role_key: self.staff_role_key(m.scout_staff_id),
+                        active: 0,
+                        report_ready: 0,
+                        confidence_sum: 0.0,
+                        confidence_count: 0,
+                        last_observed: None,
+                        regions: std::collections::HashSet::new(),
+                    });
+            entry.active += 1;
+            if matches!(m.status, ScoutMonitoringStatus::ReportReady) {
+                entry.report_ready += 1;
+            }
+            entry.confidence_sum += m.confidence;
+            entry.confidence_count += 1;
+            entry.last_observed = match entry.last_observed {
+                Some(prev) => Some(prev.max(m.last_observed)),
+                None => Some(m.last_observed),
+            };
+            if let Some(region) = m.region {
+                entry.regions.insert(region);
+            }
+        }
+
+        let mut rows: Vec<ScoutWorkloadRow> = workload_map
+            .into_values()
+            .map(|a| {
+                let avg_confidence_pct = if a.confidence_count > 0 {
+                    ((a.confidence_sum / a.confidence_count as f32) * 100.0)
+                        .round()
+                        .min(100.0) as u8
+                } else {
+                    0
+                };
+                let mut region_keys: Vec<String> = a
+                    .regions
+                    .iter()
+                    .map(|r| r.as_i18n_key().to_string())
+                    .collect();
+                region_keys.sort();
+                ScoutWorkloadRow {
+                    staff_id: a.staff_id,
+                    staff_name: a.staff_name,
+                    role_key: a.role_key,
+                    active_count: a.active,
+                    report_ready_count: a.report_ready,
+                    avg_confidence_pct,
+                    last_observed: a.last_observed,
+                    region_keys,
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.active_count
+                .cmp(&a.active_count)
+                .then(b.report_ready_count.cmp(&a.report_ready_count))
+                .then(a.staff_name.cmp(&b.staff_name))
+        });
+        rows
+    }
+
+    fn build_active_monitoring(&self) -> Vec<ActiveMonitoringRow> {
+        let plan = self.plan();
+        let mut rows: Vec<ActiveMonitoringRow> = plan
+            .scout_monitoring
+            .iter()
+            .filter(|m| m.is_active_interest())
+            .map(|m| {
+                let player_lookup = self.data.player_with_team(m.player_id);
+                let (player_name, player_slug, player_pos_short, player_age) = match player_lookup {
+                    Some((p, _)) => (
+                        format!(
+                            "{} {}",
+                            p.full_name.display_first_name(),
+                            p.full_name.display_last_name()
+                        ),
+                        p.slug(),
+                        p.position().get_short_name().to_string(),
+                        Some(crate::utils::DateUtils::age(p.birth_date, self.today)),
+                    ),
+                    None => {
+                        let (n, s) = self.resolve_player_link(m.player_id);
+                        (n, s, String::new(), None)
+                    }
+                };
+                let (current_club_id, current_club_name, current_team_slug) = match player_lookup {
+                    Some((_, t)) => (
+                        Some(t.club_id),
+                        self.data
+                            .club(t.club_id)
+                            .map(|c| c.name.clone())
+                            .unwrap_or_default(),
+                        t.slug.clone(),
+                    ),
+                    None => (None, String::new(), String::new()),
+                };
+                ActiveMonitoringRow {
+                    player_id: m.player_id,
+                    player_slug,
+                    player_name,
+                    player_position_short: player_pos_short,
+                    player_age,
+                    current_club_id,
+                    current_club_name,
+                    current_team_slug,
+                    scout_id: m.scout_staff_id,
+                    scout_name: self.staff_name(m.scout_staff_id),
+                    source_key: m.source.as_i18n_key().to_string(),
+                    status_key: m.status.as_i18n_key().to_string(),
+                    started_on: m.started_on,
+                    last_observed: m.last_observed,
+                    times_watched: m.times_watched,
+                    matches_watched: m.matches_watched,
+                    assessed_ability: m.current_assessed_ability,
+                    assessed_potential: m.current_assessed_potential,
+                    confidence_pct: ((m.confidence * 100.0).round().min(100.0)) as u8,
+                    role_fit_pct: ((m.role_fit * 100.0).round().min(125.0)) as u8,
+                    estimated_value: m.estimated_value,
+                    risk_flag_keys: m
+                        .risk_flags
+                        .iter()
+                        .map(|f| f.as_i18n_key().to_string())
+                        .collect(),
+                    transfer_request_id: m.transfer_request_id,
+                    transfer_request_position_short: m
+                        .transfer_request_id
+                        .and_then(|id| self.request_lookup.get(&id))
+                        .map(|r| r.position.get_short_name().to_string()),
+                    latest_vote_key: self
+                        .latest_vote_per_player
+                        .get(&m.player_id)
+                        .map(|v| v.as_i18n_key().to_string()),
+                    latest_decision_key: self
+                        .latest_decision_per_player
+                        .get(&m.player_id)
+                        .map(|d| d.as_i18n_key().to_string()),
+                    sort_bucket: m.status.dashboard_sort_bucket(),
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            a.sort_bucket
+                .cmp(&b.sort_bucket)
+                .then(b.confidence_pct.cmp(&a.confidence_pct))
+                .then(b.last_observed.cmp(&a.last_observed))
+        });
+        rows
+    }
+
+    fn build_report_row(&self, r: &DetailedScoutingReport, from_shadow: bool) -> ScoutingReportRow {
+        let player_lookup = self.data.player_with_team(r.player_id);
+        let (player_name, player_slug, player_pos_short) = match player_lookup {
+            Some((p, _)) => (
+                format!(
+                    "{} {}",
+                    p.full_name.display_first_name(),
+                    p.full_name.display_last_name()
+                ),
+                p.slug(),
+                p.position().get_short_name().to_string(),
+            ),
+            None => {
+                let (n, s) = self.resolve_player_link(r.player_id);
+                (n, s, String::new())
+            }
+        };
+        let (current_club_name, current_team_slug) = match player_lookup {
+            Some((_, t)) => (
+                self.data
+                    .club(t.club_id)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default(),
+                t.slug.clone(),
+            ),
+            None => (String::new(), String::new()),
+        };
+        let transfer_request_id = self
+            .assignment_lookup
+            .get(&r.assignment_id)
+            .map(|a| a.transfer_request_id);
+        ScoutingReportRow {
+            player_id: r.player_id,
+            player_slug,
+            player_name,
+            player_position_short: player_pos_short,
+            current_club_name,
+            current_team_slug,
+            assignment_id: r.assignment_id,
+            transfer_request_id,
+            recommendation_key: r.recommendation.as_i18n_key().to_string(),
+            assessed_ability: r.assessed_ability,
+            assessed_potential: r.assessed_potential,
+            confidence_pct: ((r.confidence * 100.0).round().min(100.0)) as u8,
+            role_fit_pct: ((r.role_fit * 100.0).round().min(125.0)) as u8,
+            estimated_value: r.estimated_value,
+            risk_flag_keys: r
+                .risk_flags
+                .iter()
+                .map(|f| f.as_i18n_key().to_string())
+                .collect(),
+            from_shadow,
+            sort_bucket: r.recommendation.dashboard_sort_bucket(),
+        }
+    }
+
+    fn build_scouting_reports(&self) -> Vec<ScoutingReportRow> {
+        let plan = self.plan();
+        let active_report_player_ids: std::collections::HashSet<u32> =
+            plan.scouting_reports.iter().map(|r| r.player_id).collect();
+        let mut rows: Vec<ScoutingReportRow> = plan
+            .scouting_reports
+            .iter()
+            .map(|r| self.build_report_row(r, false))
+            .collect();
+        for sr in &plan.shadow_reports {
+            if active_report_player_ids.contains(&sr.report.player_id) {
+                continue;
+            }
+            rows.push(self.build_report_row(&sr.report, true));
+        }
+        rows.sort_by(|a, b| {
+            a.sort_bucket
+                .cmp(&b.sort_bucket)
+                .then(b.confidence_pct.cmp(&a.confidence_pct))
+                .then(b.assessed_ability.cmp(&a.assessed_ability))
+        });
+        rows
+    }
+
+    fn build_assignments(&self) -> (Vec<ScoutingAssignmentRow>, Vec<MatchAssignmentRow>) {
+        let plan = self.plan();
+        let mut scouting_assignments: Vec<ScoutingAssignmentRow> = plan
+            .scouting_assignments
+            .iter()
+            .map(|a| ScoutingAssignmentRow {
+                assignment_id: a.id,
+                transfer_request_id: a.transfer_request_id,
+                target_position_short: a.target_position.get_short_name().to_string(),
+                min_ability: a.min_ability,
+                preferred_age_min: a.preferred_age_min,
+                preferred_age_max: a.preferred_age_max,
+                max_budget: a.max_budget,
+                scout_id: a.scout_staff_id,
+                scout_name: a.scout_staff_id.map(|id| self.staff_name(id)),
+                observation_count: a.observations.len() as u32,
+                reports_produced: a.reports_produced,
+                completed: a.completed,
+                min_technical_avg: a.role_profile.min_technical_avg,
+                min_mental_avg: a.role_profile.min_mental_avg,
+                min_physical_avg: a.role_profile.min_physical_avg,
+            })
+            .collect();
+        scouting_assignments.sort_by(|a, b| {
+            a.completed
+                .cmp(&b.completed)
+                .then(a.transfer_request_id.cmp(&b.transfer_request_id))
+                .then(a.assignment_id.cmp(&b.assignment_id))
+        });
+
+        let mut match_assignments: Vec<MatchAssignmentRow> = plan
+            .scout_match_assignments
+            .iter()
+            .map(|m| {
+                let (target_team_name, target_team_slug) = self
+                    .data
+                    .team(m.target_team_id)
+                    .map(|t| (t.name.clone(), t.slug.clone()))
+                    .unwrap_or_default();
+                MatchAssignmentRow {
+                    scout_id: m.scout_staff_id,
+                    scout_name: self.staff_name(m.scout_staff_id),
+                    target_team_id: m.target_team_id,
+                    target_team_name,
+                    target_team_slug,
+                    linked_assignment_ids: m.linked_assignment_ids.clone(),
+                    last_attended: m.last_attended,
+                }
+            })
+            .collect();
+        match_assignments.sort_by(|a, b| b.last_attended.cmp(&a.last_attended));
+
+        (scouting_assignments, match_assignments)
+    }
+
+    fn build_recruitment_meetings(&self) -> Vec<RecruitmentMeetingRow> {
+        let plan = self.plan();
+        let mut rows: Vec<RecruitmentMeetingRow> = plan
+            .recruitment_meetings
+            .iter()
+            .rev()
+            .map(|mtg| {
+                let participants: Vec<MeetingParticipant> = mtg
+                    .participants
+                    .iter()
+                    .map(|sid| MeetingParticipant {
+                        staff_id: *sid,
+                        staff_name: self.staff_name(*sid),
+                        role_key: self.staff_role_key(*sid),
+                    })
+                    .collect();
+                let decisions: Vec<MeetingDecisionRow> = mtg
+                    .decisions
+                    .iter()
+                    .map(|d| {
+                        let (name, slug) = self.resolve_player_link(d.player_id);
+                        MeetingDecisionRow {
+                            player_id: d.player_id,
+                            player_slug: slug,
+                            player_name: name,
+                            transfer_request_id: d.transfer_request_id,
+                            decision_key: d.decision.as_i18n_key().to_string(),
+                            consensus_score: d.consensus_score,
+                            chief_scout_support: d.chief_scout_support,
+                            data_support: d.data_support,
+                            board_risk_score: d.board_risk_score,
+                            budget_fit: d.budget_fit,
+                            reason: d.reason.to_string(),
+                        }
+                    })
+                    .collect();
+                let votes: Vec<MeetingVoteRow> = mtg
+                    .player_votes
+                    .iter()
+                    .map(|v| {
+                        let (player_name, player_slug) = self.resolve_player_link(v.player_id);
+                        MeetingVoteRow {
+                            scout_id: v.scout_staff_id,
+                            scout_name: self.staff_name(v.scout_staff_id),
+                            player_id: v.player_id,
+                            player_slug,
+                            player_name,
+                            vote_key: v.vote.as_i18n_key().to_string(),
+                            score: v.score,
+                            confidence_pct: ((v.confidence * 100.0).round().min(100.0)) as u8,
+                            reason_key: v.reason.as_i18n_key().to_string(),
+                        }
+                    })
+                    .collect();
+                RecruitmentMeetingRow {
+                    id: mtg.id,
+                    date: mtg.date,
+                    participants,
+                    agenda_request_ids: mtg.agenda_request_ids.clone(),
+                    decisions,
+                    votes,
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| b.date.cmp(&a.date));
+        rows
+    }
+
+    fn build_known_players(&self) -> Vec<KnownPlayerRow> {
+        let plan = self.plan();
+        let mut rows: Vec<KnownPlayerRow> = plan
+            .known_players
+            .iter()
+            .map(|k| {
+                let (name, slug) = self.resolve_player_link(k.player_id);
+                let (last_known_club_name, last_known_team_slug) = self
+                    .data
+                    .club(k.last_known_club_id)
+                    .map(|c| {
+                        let team_slug = c
+                            .teams
+                            .teams
+                            .iter()
+                            .find(|t| t.team_type == crate::TeamType::Main)
+                            .or_else(|| c.teams.teams.first())
+                            .map(|t| t.slug.clone())
+                            .unwrap_or_default();
+                        (c.name.clone(), team_slug)
+                    })
+                    .unwrap_or_default();
+                KnownPlayerRow {
+                    player_id: k.player_id,
+                    player_slug: slug,
+                    player_name: name,
+                    last_known_club_name,
+                    last_known_team_slug,
+                    position_short: k.position.get_short_name().to_string(),
+                    position_group_key: k.position_group.as_i18n_key().to_string(),
+                    assessed_ability: k.assessed_ability,
+                    assessed_potential: k.assessed_potential,
+                    confidence_pct: ((k.confidence * 100.0).round().min(100.0)) as u8,
+                    estimated_fee: k.estimated_fee,
+                    last_seen: k.last_seen,
+                    official_appearances_seen: k.official_appearances_seen,
+                    friendly_appearances_seen: k.friendly_appearances_seen,
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+        rows
+    }
+
+    fn build_shadow_reports(&self) -> Vec<ShadowReportRow> {
+        let plan = self.plan();
+        let mut rows: Vec<ShadowReportRow> = plan
+            .shadow_reports
+            .iter()
+            .map(|s| {
+                let (name, slug) = self.resolve_player_link(s.report.player_id);
+                let (current_club_name, current_team_slug) = self
+                    .data
+                    .player_with_team(s.report.player_id)
+                    .map(|(_, t)| {
+                        let club_name = self
+                            .data
+                            .club(t.club_id)
+                            .map(|c| c.name.clone())
+                            .unwrap_or_default();
+                        (club_name, t.slug.clone())
+                    })
+                    .unwrap_or_default();
+                ShadowReportRow {
+                    player_id: s.report.player_id,
+                    player_slug: slug,
+                    player_name: name,
+                    current_club_name,
+                    current_team_slug,
+                    position_group_key: s.position_group.as_i18n_key().to_string(),
+                    observed_ability: s.observed_ability,
+                    recorded_on: s.recorded_on,
+                    confidence_pct: ((s.report.confidence * 100.0).round().min(100.0)) as u8,
+                    recommendation_key: s.report.recommendation.as_i18n_key().to_string(),
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| b.recorded_on.cmp(&a.recorded_on));
+        rows
+    }
+
+    fn build_transfer_requests(&self) -> Vec<TransferRequestRow> {
+        let plan = self.plan();
+        let mut rows: Vec<TransferRequestRow> = plan
+            .transfer_requests
+            .iter()
+            .map(|r| {
+                let (named_target_slug, named_target_name) = match r.named_target {
+                    Some(pid) => {
+                        let (name, slug) = self.resolve_player_link(pid);
+                        (
+                            if slug.is_empty() { None } else { Some(slug) },
+                            if name.is_empty() { None } else { Some(name) },
+                        )
+                    }
+                    None => (None, None),
+                };
+                TransferRequestRow {
+                    id: r.id,
+                    position_short: r.position.get_short_name().to_string(),
+                    priority_key: r.priority.as_i18n_key().to_string(),
+                    priority_sort_bucket: r.priority.dashboard_sort_bucket(),
+                    reason_key: r.reason.as_i18n_key().to_string(),
+                    min_ability: r.min_ability,
+                    ideal_ability: r.ideal_ability,
+                    preferred_age_min: r.preferred_age_min,
+                    preferred_age_max: r.preferred_age_max,
+                    budget_allocation: r.budget_allocation,
+                    status_key: r.status.as_i18n_key().to_string(),
+                    status_sort_bucket: r.status.dashboard_sort_bucket(),
+                    named_target_id: r.named_target,
+                    named_target_slug,
+                    named_target_name,
+                    board_approved: r.board_approved,
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            a.status_sort_bucket
+                .cmp(&b.status_sort_bucket)
+                .then(a.priority_sort_bucket.cmp(&b.priority_sort_bucket))
+                .then(a.id.cmp(&b.id))
+        });
+        rows
     }
 }

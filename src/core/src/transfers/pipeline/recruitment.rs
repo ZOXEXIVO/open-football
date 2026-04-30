@@ -284,6 +284,86 @@ impl ScoutVoteChoice {
             ScoutVoteChoice::Reject => -1.25,
         }
     }
+
+    pub fn as_i18n_key(self) -> &'static str {
+        match self {
+            ScoutVoteChoice::StrongApprove => "scout_vote_strong_approve",
+            ScoutVoteChoice::Approve => "scout_vote_approve",
+            ScoutVoteChoice::Monitor => "scout_vote_monitor",
+            ScoutVoteChoice::Reject => "scout_vote_reject",
+            ScoutVoteChoice::NeedsMoreInfo => "scout_vote_needs_more_info",
+        }
+    }
+}
+
+impl ScoutVoteReason {
+    pub fn as_i18n_key(self) -> &'static str {
+        match self {
+            ScoutVoteReason::ReadyNow => "vote_reason_ready_now",
+            ScoutVoteReason::HighPotential => "vote_reason_high_potential",
+            ScoutVoteReason::ValueOpportunity => "vote_reason_value_opportunity",
+            ScoutVoteReason::RoleFit => "vote_reason_role_fit",
+            ScoutVoteReason::PoorRoleFit => "vote_reason_poor_role_fit",
+            ScoutVoteReason::InjuryConcern => "vote_reason_injury_concern",
+            ScoutVoteReason::WageConcern => "vote_reason_wage_concern",
+            ScoutVoteReason::AgeConcern => "vote_reason_age_concern",
+            ScoutVoteReason::PoorAttitude => "vote_reason_poor_attitude",
+            ScoutVoteReason::TooExpensive => "vote_reason_too_expensive",
+            ScoutVoteReason::InsufficientConfidence => "vote_reason_insufficient_confidence",
+            ScoutVoteReason::BoardRisk => "vote_reason_board_risk",
+        }
+    }
+}
+
+impl ScoutMonitoringStatus {
+    pub fn as_i18n_key(self) -> &'static str {
+        match self {
+            ScoutMonitoringStatus::Active => "monitoring_status_active",
+            ScoutMonitoringStatus::Paused => "monitoring_status_paused",
+            ScoutMonitoringStatus::ReportReady => "monitoring_status_report_ready",
+            ScoutMonitoringStatus::PromotedToShortlist => "monitoring_status_shortlisted",
+            ScoutMonitoringStatus::Negotiating => "monitoring_status_negotiating",
+            ScoutMonitoringStatus::Signed => "monitoring_status_signed",
+            ScoutMonitoringStatus::Lost => "monitoring_status_lost",
+            ScoutMonitoringStatus::Rejected => "monitoring_status_rejected",
+        }
+    }
+
+    /// Lower = higher in the active monitoring table.
+    pub fn dashboard_sort_bucket(self) -> u8 {
+        match self {
+            ScoutMonitoringStatus::ReportReady => 0,
+            ScoutMonitoringStatus::PromotedToShortlist | ScoutMonitoringStatus::Negotiating => 1,
+            ScoutMonitoringStatus::Active => 2,
+            ScoutMonitoringStatus::Paused => 3,
+            _ => 4,
+        }
+    }
+}
+
+impl ScoutMonitoringSource {
+    pub fn as_i18n_key(self) -> &'static str {
+        match self {
+            ScoutMonitoringSource::TransferRequest => "monitoring_source_transfer_request",
+            ScoutMonitoringSource::StaffRecommendation => "monitoring_source_staff_recommendation",
+            ScoutMonitoringSource::MatchStandout => "monitoring_source_match_standout",
+            ScoutMonitoringSource::ShadowReport => "monitoring_source_shadow_report",
+            ScoutMonitoringSource::KnownPlayerRefresh => "monitoring_source_known_player_refresh",
+            ScoutMonitoringSource::ManualFollowUp => "monitoring_source_manual_follow_up",
+        }
+    }
+}
+
+impl RecruitmentDecisionType {
+    pub fn as_i18n_key(self) -> &'static str {
+        match self {
+            RecruitmentDecisionType::PromoteToShortlist => "decision_promote_to_shortlist",
+            RecruitmentDecisionType::KeepMonitoring => "decision_keep_monitoring",
+            RecruitmentDecisionType::Reject => "decision_reject",
+            RecruitmentDecisionType::AskBoardApproval => "decision_ask_board_approval",
+            RecruitmentDecisionType::StartNegotiation => "decision_start_negotiation",
+        }
+    }
 }
 
 // ============================================================

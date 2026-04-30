@@ -1,19 +1,19 @@
+mod clubs;
 mod countries;
 mod leagues;
-mod clubs;
 mod players;
 mod staffs;
 
-use chrono::{Datelike, Local, NaiveDate, NaiveDateTime};
-use core::context::NaiveTime;
-use core::continent::Continent;
-use core::competitions::GlobalCompetitions;
-use core::{
-    seed_core_player_id_sequence, CompetitionScope, NationalCompetitionConfig, SimulatorData,
-};
 use crate::DatabaseEntity;
 use crate::generators::PlayerGenerator;
 use crate::generators::convert::convert_national_competition;
+use chrono::{Datelike, Local, NaiveDate, NaiveDateTime};
+use core::competitions::GlobalCompetitions;
+use core::context::NaiveTime;
+use core::continent::Continent;
+use core::{
+    CompetitionScope, NationalCompetitionConfig, SimulatorData, seed_core_player_id_sequence,
+};
 use log::info;
 use rayon::prelude::*;
 
@@ -69,15 +69,13 @@ impl DatabaseGenerator {
                 // - global configs that have a qualifying zone for this continent
                 let continent_configs: Vec<NationalCompetitionConfig> = all_configs
                     .iter()
-                    .filter(|config| {
-                        match config.scope {
-                            CompetitionScope::Continental => {
-                                config.continent_id == Some(continent.id)
-                            }
-                            CompetitionScope::Global => {
-                                config.qualifying.zones.iter().any(|z| z.continent_id == continent.id)
-                            }
-                        }
+                    .filter(|config| match config.scope {
+                        CompetitionScope::Continental => config.continent_id == Some(continent.id),
+                        CompetitionScope::Global => config
+                            .qualifying
+                            .zones
+                            .iter()
+                            .any(|z| z.continent_id == continent.id),
                     })
                     .cloned()
                     .collect();
@@ -88,7 +86,8 @@ impl DatabaseGenerator {
                     Self::generate_countries(continent, data),
                     continent_configs,
                 )
-            }).collect();
+            })
+            .collect();
 
         let mut simulator_data = SimulatorData::new(current_date, continents, global_competitions);
 
@@ -121,12 +120,7 @@ impl DatabaseGenerator {
                             .find(|c| c.id == r.country_id)
                             .map(|c| (c.continent_id, c.code.clone()))
                             .unwrap_or((1, String::new()));
-                        PlayerGenerator::generate_from_odb(
-                            r,
-                            continent_id,
-                            &country_code,
-                            data,
-                        )
+                        PlayerGenerator::generate_from_odb(r, continent_id, &country_code, data)
                     })
                     .collect();
                 let count = hydrated.len();

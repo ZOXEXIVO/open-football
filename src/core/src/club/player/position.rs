@@ -468,3 +468,14 @@ pub enum PlayerFieldPositionGroup {
     Midfielder,
     Forward,
 }
+
+impl PlayerFieldPositionGroup {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            PlayerFieldPositionGroup::Goalkeeper => "pos_group_goalkeeper",
+            PlayerFieldPositionGroup::Defender => "pos_group_defender",
+            PlayerFieldPositionGroup::Midfielder => "pos_group_midfielder",
+            PlayerFieldPositionGroup::Forward => "pos_group_forward",
+        }
+    }
+}

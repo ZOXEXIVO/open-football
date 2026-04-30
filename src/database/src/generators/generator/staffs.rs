@@ -5,18 +5,39 @@ use core::{Staff, StaffPosition, TeamType};
 use super::DatabaseGenerator;
 
 impl DatabaseGenerator {
-    pub(super) fn generate_staffs(staff_generator: &StaffGenerator, country_id: u32, continent_id: u32, country_code: &str, team_reputation: u16, team_type: &TeamType) -> Vec<Staff> {
+    pub(super) fn generate_staffs(
+        staff_generator: &StaffGenerator,
+        country_id: u32,
+        continent_id: u32,
+        country_code: &str,
+        team_reputation: u16,
+        team_type: &TeamType,
+    ) -> Vec<Staff> {
         let mut staffs = Vec::with_capacity(30);
 
         if *team_type == TeamType::Main {
             // Only main team gets directors and scouts
-            staffs.push(staff_generator.generate(country_id, StaffPosition::DirectorOfFootball, team_reputation));
-            staffs.push(staff_generator.generate(country_id, StaffPosition::Director, team_reputation));
+            staffs.push(staff_generator.generate(
+                country_id,
+                StaffPosition::DirectorOfFootball,
+                team_reputation,
+            ));
+            staffs.push(staff_generator.generate(
+                country_id,
+                StaffPosition::Director,
+                team_reputation,
+            ));
 
             // Scouts get known_regions: home region + foreign regions weighted by transfer corridors
             // Better clubs have scouts with wider knowledge networks
-            let mut chief_scout = staff_generator.generate(country_id, StaffPosition::ChiefScout, team_reputation);
-            Self::assign_scout_regions(&mut chief_scout, continent_id, country_code, team_reputation);
+            let mut chief_scout =
+                staff_generator.generate(country_id, StaffPosition::ChiefScout, team_reputation);
+            Self::assign_scout_regions(
+                &mut chief_scout,
+                continent_id,
+                country_code,
+                team_reputation,
+            );
             staffs.push(chief_scout);
 
             // Scale scout count by reputation — real elite clubs run 8+ scouts,
@@ -32,13 +53,18 @@ impl DatabaseGenerator {
             };
 
             for _ in 0..scout_count {
-                let mut scout = staff_generator.generate(country_id, StaffPosition::Scout, team_reputation);
+                let mut scout =
+                    staff_generator.generate(country_id, StaffPosition::Scout, team_reputation);
                 Self::assign_scout_regions(&mut scout, continent_id, country_code, team_reputation);
                 staffs.push(scout);
             }
         }
 
-        staffs.push(staff_generator.generate(country_id, StaffPosition::AssistantManager, team_reputation));
+        staffs.push(staff_generator.generate(
+            country_id,
+            StaffPosition::AssistantManager,
+            team_reputation,
+        ));
         staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));
         staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));
         staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));
@@ -57,9 +83,14 @@ impl DatabaseGenerator {
     /// their personal home region is a corridor pick (e.g. Spartak hiring a
     /// Brazilian-born scout for S.America coverage) and they start with
     /// non-trivial familiarity there, modelling a real career hire.
-    fn assign_scout_regions(staff: &mut Staff, continent_id: u32, country_code: &str, team_reputation: u16) {
-        use core::transfers::ScoutingRegion;
+    fn assign_scout_regions(
+        staff: &mut Staff,
+        continent_id: u32,
+        country_code: &str,
+        team_reputation: u16,
+    ) {
         use core::RegionFamiliarity;
+        use core::transfers::ScoutingRegion;
 
         let club_region = ScoutingRegion::from_country(continent_id, country_code);
 
@@ -76,16 +107,21 @@ impl DatabaseGenerator {
         let corridors = club_region.transfer_corridors();
         let total_weight: u32 = corridors.iter().map(|(_, w)| *w as u32).sum();
 
-        let is_specialist =
-            specialist_chance > 0 && IntegerUtils::random(0, 100) < specialist_chance
-                && total_weight > 0 && !corridors.is_empty();
+        let is_specialist = specialist_chance > 0
+            && IntegerUtils::random(0, 100) < specialist_chance
+            && total_weight > 0
+            && !corridors.is_empty();
 
         let (home_region, mut regions, familiarity) = if is_specialist {
             let specialty = Self::pick_weighted_region(corridors, total_weight);
             (
                 specialty,
                 vec![specialty, club_region],
-                vec![RegionFamiliarity { region: specialty, level: 40, days_scouted: 400 }],
+                vec![RegionFamiliarity {
+                    region: specialty,
+                    level: 40,
+                    days_scouted: 400,
+                }],
             )
         } else {
             (club_region, vec![club_region], Vec::new())

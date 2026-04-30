@@ -1,11 +1,11 @@
 use crate::generators::player::SquadRole;
 use crate::generators::{PlayerGenerator, PositionType};
 use crate::{DatabaseEntity, ForeignPlayerEntry};
-use core::{AcademyGenerationContext, AcademyIntakeState, PlayerGenerator as CorePlayerGenerator};
+use chrono::Local;
 use core::PeopleNameGeneratorData;
 use core::utils::IntegerUtils;
+use core::{AcademyGenerationContext, AcademyIntakeState, PlayerGenerator as CorePlayerGenerator};
 use core::{Player, TeamType};
-use chrono::Local;
 
 /// Per-position role allocation. Each position bucket (GK/DEF/MID/ST)
 /// carries its own queue of `SquadRole` slots so role quality is spread
@@ -29,39 +29,86 @@ impl PositionRoleQueue {
     fn for_team(team_type: TeamType) -> Self {
         let (gk, def, mid, st) = match team_type {
             TeamType::Main => (
-                Self::shuffled(&[(SquadRole::Starter, 1), (SquadRole::Rotation, 1),
-                                 (SquadRole::Backup, 2), (SquadRole::Prospect, 1)]),
-                Self::shuffled(&[(SquadRole::Star, 1), (SquadRole::Starter, 4),
-                                 (SquadRole::Rotation, 2), (SquadRole::Backup, 1),
-                                 (SquadRole::Prospect, 1)]),
-                Self::shuffled(&[(SquadRole::Star, 1), (SquadRole::Starter, 4),
-                                 (SquadRole::Rotation, 2), (SquadRole::Backup, 1),
-                                 (SquadRole::Prospect, 1)]),
-                Self::shuffled(&[(SquadRole::Star, 1), (SquadRole::Starter, 3),
-                                 (SquadRole::Rotation, 1), (SquadRole::Backup, 1),
-                                 (SquadRole::Prospect, 1), (SquadRole::Fringe, 1)]),
+                Self::shuffled(&[
+                    (SquadRole::Starter, 1),
+                    (SquadRole::Rotation, 1),
+                    (SquadRole::Backup, 2),
+                    (SquadRole::Prospect, 1),
+                ]),
+                Self::shuffled(&[
+                    (SquadRole::Star, 1),
+                    (SquadRole::Starter, 4),
+                    (SquadRole::Rotation, 2),
+                    (SquadRole::Backup, 1),
+                    (SquadRole::Prospect, 1),
+                ]),
+                Self::shuffled(&[
+                    (SquadRole::Star, 1),
+                    (SquadRole::Starter, 4),
+                    (SquadRole::Rotation, 2),
+                    (SquadRole::Backup, 1),
+                    (SquadRole::Prospect, 1),
+                ]),
+                Self::shuffled(&[
+                    (SquadRole::Star, 1),
+                    (SquadRole::Starter, 3),
+                    (SquadRole::Rotation, 1),
+                    (SquadRole::Backup, 1),
+                    (SquadRole::Prospect, 1),
+                    (SquadRole::Fringe, 1),
+                ]),
             ),
             TeamType::Second | TeamType::B | TeamType::Reserve => (
-                Self::shuffled(&[(SquadRole::Starter, 1), (SquadRole::Backup, 2),
-                                 (SquadRole::Prospect, 2)]),
-                Self::shuffled(&[(SquadRole::Starter, 1), (SquadRole::Rotation, 2),
-                                 (SquadRole::Backup, 3), (SquadRole::Prospect, 2),
-                                 (SquadRole::Fringe, 1)]),
-                Self::shuffled(&[(SquadRole::Starter, 1), (SquadRole::Rotation, 2),
-                                 (SquadRole::Backup, 3), (SquadRole::Prospect, 3),
-                                 (SquadRole::Fringe, 1)]),
-                Self::shuffled(&[(SquadRole::Rotation, 1), (SquadRole::Backup, 2),
-                                 (SquadRole::Prospect, 2), (SquadRole::Fringe, 1)]),
+                Self::shuffled(&[
+                    (SquadRole::Starter, 1),
+                    (SquadRole::Backup, 2),
+                    (SquadRole::Prospect, 2),
+                ]),
+                Self::shuffled(&[
+                    (SquadRole::Starter, 1),
+                    (SquadRole::Rotation, 2),
+                    (SquadRole::Backup, 3),
+                    (SquadRole::Prospect, 2),
+                    (SquadRole::Fringe, 1),
+                ]),
+                Self::shuffled(&[
+                    (SquadRole::Starter, 1),
+                    (SquadRole::Rotation, 2),
+                    (SquadRole::Backup, 3),
+                    (SquadRole::Prospect, 3),
+                    (SquadRole::Fringe, 1),
+                ]),
+                Self::shuffled(&[
+                    (SquadRole::Rotation, 1),
+                    (SquadRole::Backup, 2),
+                    (SquadRole::Prospect, 2),
+                    (SquadRole::Fringe, 1),
+                ]),
             ),
             TeamType::U23 | TeamType::U21 | TeamType::U20 => (
-                Self::shuffled(&[(SquadRole::Rotation, 1), (SquadRole::Backup, 1),
-                                 (SquadRole::Prospect, 3)]),
-                Self::shuffled(&[(SquadRole::Rotation, 1), (SquadRole::Backup, 2),
-                                 (SquadRole::Prospect, 5), (SquadRole::Fringe, 1)]),
-                Self::shuffled(&[(SquadRole::Rotation, 2), (SquadRole::Backup, 2),
-                                 (SquadRole::Prospect, 5), (SquadRole::Fringe, 1)]),
-                Self::shuffled(&[(SquadRole::Rotation, 1), (SquadRole::Backup, 1),
-                                 (SquadRole::Prospect, 4), (SquadRole::Fringe, 1)]),
+                Self::shuffled(&[
+                    (SquadRole::Rotation, 1),
+                    (SquadRole::Backup, 1),
+                    (SquadRole::Prospect, 3),
+                ]),
+                Self::shuffled(&[
+                    (SquadRole::Rotation, 1),
+                    (SquadRole::Backup, 2),
+                    (SquadRole::Prospect, 5),
+                    (SquadRole::Fringe, 1),
+                ]),
+                Self::shuffled(&[
+                    (SquadRole::Rotation, 2),
+                    (SquadRole::Backup, 2),
+                    (SquadRole::Prospect, 5),
+                    (SquadRole::Fringe, 1),
+                ]),
+                Self::shuffled(&[
+                    (SquadRole::Rotation, 1),
+                    (SquadRole::Backup, 1),
+                    (SquadRole::Prospect, 4),
+                    (SquadRole::Fringe, 1),
+                ]),
             ),
             // U18/U19 don't use this distribution (academy path), but cover
             // the case for completeness.
@@ -78,7 +125,11 @@ impl PositionRoleQueue {
     fn shuffled(slots: &[(SquadRole, usize)]) -> Vec<SquadRole> {
         let total: usize = slots.iter().map(|(_, n)| n).sum();
         let mut v: Vec<SquadRole> = Vec::with_capacity(total);
-        for (role, n) in slots { for _ in 0..*n { v.push(*role); } }
+        for (role, n) in slots {
+            for _ in 0..*n {
+                v.push(*role);
+            }
+        }
         for i in (1..v.len()).rev() {
             let j = IntegerUtils::random(0, i as i32) as usize;
             v.swap(i, j);
@@ -122,7 +173,9 @@ impl DatabaseGenerator {
         // but with age range matching the team type. This ensures consistent quality between
         // initial squad generation and ongoing academy production.
         if matches!(team_type, TeamType::U18 | TeamType::U19) {
-            let people_names = data.names_by_country.iter()
+            let people_names = data
+                .names_by_country
+                .iter()
                 .find(|n| n.country_id == country_id)
                 .map(|n| PeopleNameGeneratorData {
                     first_names: n.first_names.clone(),
@@ -184,7 +237,11 @@ impl DatabaseGenerator {
             };
 
             for _ in 0..IntegerUtils::random(gk_range.0, gk_range.1) {
-                emit(core::PlayerPositionType::Goalkeeper, &mut players, &mut intake_state);
+                emit(
+                    core::PlayerPositionType::Goalkeeper,
+                    &mut players,
+                    &mut intake_state,
+                );
             }
             for _ in 0..IntegerUtils::random(def_range.0, def_range.1) {
                 let pos = match IntegerUtils::random(0, 4) {
@@ -240,7 +297,9 @@ impl DatabaseGenerator {
 
         let total_foreign_weight: i32 = foreign_players.iter().map(|fp| fp.weight as i32).sum();
 
-        let domestic_continent_id = data.countries.iter()
+        let domestic_continent_id = data
+            .countries
+            .iter()
             .find(|c| c.id == country_id)
             .map(|c| c.continent_id)
             .unwrap_or(1);
@@ -257,7 +316,10 @@ impl DatabaseGenerator {
                     for fp in foreign_players {
                         acc += fp.weight as i32;
                         if roll < acc {
-                            let names = data.names_by_country.iter().find(|n| n.country_id == fp.country_id);
+                            let names = data
+                                .names_by_country
+                                .iter()
+                                .find(|n| n.country_id == fp.country_id);
                             let people_names = match names {
                                 Some(n) => PeopleNameGeneratorData {
                                     first_names: n.first_names.clone(),
@@ -271,10 +333,12 @@ impl DatabaseGenerator {
                                 },
                             };
                             let foreign_gen = PlayerGenerator::with_people_names(&people_names);
-                            let foreign_country = data.countries.iter()
-                                .find(|c| c.id == fp.country_id);
-                            let foreign_country_rep = foreign_country.map(|c| c.reputation).unwrap_or(3000);
-                            let foreign_continent_id = foreign_country.map(|c| c.continent_id).unwrap_or(1);
+                            let foreign_country =
+                                data.countries.iter().find(|c| c.id == fp.country_id);
+                            let foreign_country_rep =
+                                foreign_country.map(|c| c.reputation).unwrap_or(3000);
+                            let foreign_continent_id =
+                                foreign_country.map(|c| c.continent_id).unwrap_or(1);
                             return foreign_gen.generate(
                                 fp.country_id,
                                 foreign_continent_id,
@@ -327,7 +391,11 @@ impl DatabaseGenerator {
 
         // Ensure main teams always have at least 25 players
         if *team_type == TeamType::Main {
-            let positions = [PositionType::Defender, PositionType::Midfielder, PositionType::Striker];
+            let positions = [
+                PositionType::Defender,
+                PositionType::Midfielder,
+                PositionType::Striker,
+            ];
             let mut pos_idx = 0;
             while players.len() < 25 {
                 players.push(generate_one(positions[pos_idx % positions.len()]));

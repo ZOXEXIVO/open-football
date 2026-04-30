@@ -1,16 +1,16 @@
+use crate::DatabaseEntity;
 use crate::generators::{PlayerGenerator, StaffGenerator};
 use crate::loaders::OdbPlayer;
-use crate::DatabaseEntity;
 use chrono::{Datelike, Utc};
 use core::club::academy::ClubAcademy;
 use core::context::NaiveTime;
 use core::shared::Location;
+use core::transfers::pipeline::ClubTransferPlan;
 use core::{
     Club, ClubBoard, ClubColors, ClubFacilities, ClubFinances, ClubPhilosophy, ClubStatus,
     FacilityLevel, Player, PlayerCollection, ReputationLevel, StaffCollection, Team,
-    TeamReputation, TeamType, TrainingSchedule, TeamCollection,
+    TeamCollection, TeamReputation, TeamType, TrainingSchedule,
 };
-use core::transfers::pipeline::ClubTransferPlan;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -36,8 +36,7 @@ impl DatabaseGenerator {
         // per club, so par_iter scales near-linearly with cores. The RNG is
         // thread-local (see core::utils::random::engine), and both generators
         // now take &self, so no further synchronisation is needed.
-        data
-            .clubs
+        data.clubs
             .par_iter()
             .filter(|c| c.country_id == country_id)
             .map(|club| {
@@ -67,7 +66,9 @@ impl DatabaseGenerator {
                         _ => ClubPhilosophy::Balanced,
                     }
                 } else {
-                    let main_rep = club.teams.iter()
+                    let main_rep = club
+                        .teams
+                        .iter()
                         .find(|t| t.team_type.eq_ignore_ascii_case("main"))
                         .map(|t| t.reputation.world)
                         .unwrap_or(0);
@@ -97,85 +98,93 @@ impl DatabaseGenerator {
                 let recruitment_quality = facilities.recruitment.multiplier();
 
                 Club {
-                id: club.id,
-                name: club.name.clone(),
-                location: Location {
-                    city_id: club.location.city_id,
-                },
-                board: ClubBoard::new(),
-                status: ClubStatus::Professional,
-                finance: ClubFinances::new(club.finance.balance as i64, Vec::new()),
-                academy: ClubAcademy::new(academy_rating),
-                colors: ClubColors {
-                    background: club.colors.background.clone(),
-                    foreground: club.colors.foreground.clone(),
-                },
-                transfer_plan: ClubTransferPlan::new(),
-                philosophy,
-                facilities,
-                rivals: club.rivals.clone(),
-                teams: TeamCollection::new(
-                    club.teams
-                        .iter()
-                        .map(|t| {
-                            let team_rep = t.reputation.world;
-                            let team_type = TeamType::from_str(&t.team_type).unwrap();
+                    id: club.id,
+                    name: club.name.clone(),
+                    location: Location {
+                        city_id: club.location.city_id,
+                    },
+                    board: ClubBoard::new(),
+                    status: ClubStatus::Professional,
+                    finance: ClubFinances::new(club.finance.balance as i64, Vec::new()),
+                    academy: ClubAcademy::new(academy_rating),
+                    colors: ClubColors {
+                        background: club.colors.background.clone(),
+                        foreground: club.colors.foreground.clone(),
+                    },
+                    transfer_plan: ClubTransferPlan::new(),
+                    philosophy,
+                    facilities,
+                    rivals: club.rivals.clone(),
+                    teams: TeamCollection::new(
+                        club.teams
+                            .iter()
+                            .map(|t| {
+                                let team_rep = t.reputation.world;
+                                let team_type = TeamType::from_str(&t.team_type).unwrap();
 
-                            // Main and the senior reserves (B, Second) carry
-                            // their full canonical name in the data
-                            // ("Spartak Moscow", "Spartak Moscow 2", "Real
-                            // Sociedad B"). Other sub-types (Reserve, U18..U23)
-                            // get their short type label appended at runtime.
-                            let team_name = match &team_type {
-                                TeamType::Main | TeamType::Second | TeamType::B => t.name.clone(),
-                                _ => format!("{} {}", t.name, team_type),
-                            };
+                                // Main and the senior reserves (B, Second) carry
+                                // their full canonical name in the data
+                                // ("Spartak Moscow", "Spartak Moscow 2", "Real
+                                // Sociedad B"). Other sub-types (Reserve, U18..U23)
+                                // get their short type label appended at runtime.
+                                let team_name = match &team_type {
+                                    TeamType::Main | TeamType::Second | TeamType::B => {
+                                        t.name.clone()
+                                    }
+                                    _ => format!("{} {}", t.name, team_type),
+                                };
 
-                            let players = PlayerCollection::new(build_team_players(
-                                player_generator,
-                                country_id,
-                                continent_id,
-                                country_code,
-                                team_rep,
-                                country_reputation,
-                                &team_type,
-                                t.league_id,
-                                data,
-                                academy_rating,
-                                youth_quality,
-                                academy_quality,
-                                recruitment_quality,
-                                odb_for_club.as_ref(),
-                            ));
+                                let players = PlayerCollection::new(build_team_players(
+                                    player_generator,
+                                    country_id,
+                                    continent_id,
+                                    country_code,
+                                    team_rep,
+                                    country_reputation,
+                                    &team_type,
+                                    t.league_id,
+                                    data,
+                                    academy_rating,
+                                    youth_quality,
+                                    academy_quality,
+                                    recruitment_quality,
+                                    odb_for_club.as_ref(),
+                                ));
 
-                            let staffs = StaffCollection::new(
-                                Self::generate_staffs(staff_generator, country_id, continent_id, country_code, team_rep, &team_type)
-                            );
+                                let staffs = StaffCollection::new(Self::generate_staffs(
+                                    staff_generator,
+                                    country_id,
+                                    continent_id,
+                                    country_code,
+                                    team_rep,
+                                    &team_type,
+                                ));
 
-                            Team::builder()
-                                .id(t.id)
-                                .league_id(t.league_id)
-                                .club_id(club.id)
-                                .name(team_name)
-                                .slug(t.slug.clone())
-                                .team_type(team_type)
-                                .training_schedule(TrainingSchedule::new(
-                                    NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-                                    NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
-                                ))
-                                .reputation(TeamReputation::new(
-                                    t.reputation.home,
-                                    t.reputation.national,
-                                    t.reputation.world,
-                                ))
-                                .players(players)
-                                .staffs(staffs)
-                                .build()
-                                .expect("Failed to build Team")
-                        })
-                        .collect(),
-                ),
-            }})
+                                Team::builder()
+                                    .id(t.id)
+                                    .league_id(t.league_id)
+                                    .club_id(club.id)
+                                    .name(team_name)
+                                    .slug(t.slug.clone())
+                                    .team_type(team_type)
+                                    .training_schedule(TrainingSchedule::new(
+                                        NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+                                        NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+                                    ))
+                                    .reputation(TeamReputation::new(
+                                        t.reputation.home,
+                                        t.reputation.national,
+                                        t.reputation.world,
+                                    ))
+                                    .players(players)
+                                    .staffs(staffs)
+                                    .build()
+                                    .expect("Failed to build Team")
+                            })
+                            .collect(),
+                    ),
+                }
+            })
             .collect()
     }
 }
@@ -214,7 +223,9 @@ fn build_team_players(
                 // single thread.
                 records
                     .par_iter()
-                    .map(|r| PlayerGenerator::generate_from_odb(r, continent_id, country_code, data))
+                    .map(|r| {
+                        PlayerGenerator::generate_from_odb(r, continent_id, country_code, data)
+                    })
                     .collect()
             })
             .unwrap_or_default();

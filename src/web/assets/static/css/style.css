@@ -6578,3 +6578,390 @@ a:link, a:visited, a:hover, a:active {
     }
 }
 
+/* ============================================
+   SCOUTING TAB
+   ============================================ */
+
+.sc-summary {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 1px;
+    background: #d8e1ce;
+    padding: 1px;
+}
+
+.sc-stat {
+    background: #f4f7ee;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.sc-stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: #6a8a5a;
+    line-height: 1.2;
+}
+
+.sc-stat-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #2d4a1a;
+    line-height: 1.1;
+}
+
+.sc-table-wrap {
+    overflow-x: auto;
+}
+
+.sc-table {
+    font-size: 11px;
+}
+
+.sc-table thead th {
+    white-space: nowrap;
+    padding: 6px 8px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.sc-table tbody td {
+    padding: 5px 8px;
+    vertical-align: middle;
+}
+
+.sc-table .sc-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.sc-table .sc-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}
+
+.sc-table .sc-reason {
+    color: #546a78;
+    font-size: 11px;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sc-table .sc-role-profile {
+    font-size: 11px;
+    color: #5a6a4a;
+    white-space: nowrap;
+}
+
+.sc-table .sc-regions,
+.sc-table .sc-risks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    max-width: 180px;
+}
+
+.sc-table-monitoring th,
+.sc-table-monitoring td {
+    padding: 4px 6px;
+}
+
+.sc-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 3px;
+    letter-spacing: 0.2px;
+    background: #e3ead7;
+    color: #2d4a1a;
+    white-space: nowrap;
+    line-height: 1.5;
+}
+
+.sc-badge-region {
+    background: #e8eef5;
+    color: #2c4a6e;
+}
+
+.sc-badge-risk {
+    background: #f5dcd6;
+    color: #7a2418;
+}
+
+.sc-badge-vote,
+.sc-badge-decision {
+    background: #eef0d6;
+    color: #5a5a14;
+}
+
+.sc-badge-completed {
+    background: #d6e5d6;
+    color: #2d5a2d;
+}
+
+.sc-badge-active-state {
+    background: #eef0d6;
+    color: #5a5a14;
+}
+
+.sc-badge-shadow {
+    background: #e0dde7;
+    color: #3a2a5a;
+}
+
+.sc-badge-active {
+    background: #d6e5d6;
+    color: #2d5a2d;
+}
+
+.sc-badge-board-approved {
+    background: #d6e5d6;
+    color: #2d5a2d;
+}
+
+.sc-badge-board-vetoed {
+    background: #f5dcd6;
+    color: #7a2418;
+}
+
+/* Status / decision / vote / recommendation / priority hue tints */
+.sc-badge-monitoring_status_active,
+.sc-badge-request_status_scouting_active {
+    background: #e3ead7;
+    color: #2d4a1a;
+}
+
+.sc-badge-monitoring_status_paused {
+    background: #ece8d8;
+    color: #6a5a18;
+}
+
+.sc-badge-monitoring_status_report_ready {
+    background: #f0e6c4;
+    color: #6a4a14;
+}
+
+.sc-badge-monitoring_status_shortlisted,
+.sc-badge-request_status_shortlisted {
+    background: #d6e5d6;
+    color: #2d5a2d;
+}
+
+.sc-badge-monitoring_status_negotiating,
+.sc-badge-request_status_negotiating {
+    background: #d8e6f0;
+    color: #1a4a6e;
+}
+
+.sc-badge-monitoring_status_signed,
+.sc-badge-request_status_fulfilled {
+    background: #cee0c4;
+    color: #1a4a14;
+}
+
+.sc-badge-monitoring_status_lost,
+.sc-badge-request_status_abandoned {
+    background: #e8d8d8;
+    color: #6a3030;
+}
+
+.sc-badge-monitoring_status_rejected,
+.sc-badge-decision_reject {
+    background: #f5dcd6;
+    color: #7a2418;
+}
+
+.sc-badge-recommendation_strong_buy {
+    background: #c4dfb8;
+    color: #1a4a14;
+}
+
+.sc-badge-recommendation_buy {
+    background: #d6e5d6;
+    color: #2d5a2d;
+}
+
+.sc-badge-recommendation_consider {
+    background: #ece8d8;
+    color: #6a5a18;
+}
+
+.sc-badge-recommendation_pass {
+    background: #f5dcd6;
+    color: #7a2418;
+}
+
+.sc-badge-decision_promote_to_shortlist,
+.sc-badge-decision_start_negotiation {
+    background: #d6e5d6;
+    color: #2d5a2d;
+}
+
+.sc-badge-decision_keep_monitoring {
+    background: #e3ead7;
+    color: #2d4a1a;
+}
+
+.sc-badge-decision_ask_board_approval {
+    background: #d8e6f0;
+    color: #1a4a6e;
+}
+
+.sc-badge-scout_vote_strong_approve {
+    background: #c4dfb8;
+    color: #1a4a14;
+}
+
+.sc-badge-scout_vote_approve {
+    background: #d6e5d6;
+    color: #2d5a2d;
+}
+
+.sc-badge-scout_vote_monitor {
+    background: #e3ead7;
+    color: #2d4a1a;
+}
+
+.sc-badge-scout_vote_needs_more_info {
+    background: #ece8d8;
+    color: #6a5a18;
+}
+
+.sc-badge-scout_vote_reject {
+    background: #f5dcd6;
+    color: #7a2418;
+}
+
+.sc-badge-request_priority_critical {
+    background: #f5dcd6;
+    color: #7a2418;
+}
+
+.sc-badge-request_priority_important {
+    background: #f0e6c4;
+    color: #6a4a14;
+}
+
+.sc-badge-request_priority_optional {
+    background: #e3ead7;
+    color: #2d4a1a;
+}
+
+.sc-badge-request_status_pending {
+    background: #ece8d8;
+    color: #6a5a18;
+}
+
+/* Recruitment meeting blocks */
+.sc-meeting {
+    border-top: 1px solid #d8e1ce;
+    padding: 10px 12px 12px;
+}
+
+.sc-meeting:first-child {
+    border-top: none;
+}
+
+.sc-meeting-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 6px;
+}
+
+.sc-meeting-date {
+    font-size: 13px;
+    font-weight: 700;
+    color: #2d4a1a;
+}
+
+.sc-meeting-id {
+    font-size: 11px;
+    color: #6a8a5a;
+    font-variant-numeric: tabular-nums;
+}
+
+.sc-meeting-agenda {
+    font-size: 11px;
+    color: #546a78;
+}
+
+.sc-meeting-participants {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    font-size: 11px;
+    color: #546a78;
+    margin-bottom: 8px;
+}
+
+.sc-meeting-label {
+    font-weight: 600;
+    color: #2d4a1a;
+    margin-right: 4px;
+}
+
+.sc-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    background: #e3ead7;
+    color: #2d4a1a;
+    font-size: 11px;
+    border-radius: 3px;
+    text-decoration: none;
+}
+
+.sc-pill:hover {
+    background: #d8e1ce;
+    text-decoration: none;
+}
+
+.sc-pill-role {
+    font-size: 10px;
+    color: #6a8a5a;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.sc-meeting-section {
+    margin-top: 8px;
+}
+
+.sc-meeting-section-head {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: #6a8a5a;
+    margin-bottom: 4px;
+}
+
+.sc-meeting-table {
+    font-size: 11px;
+}
+
+@media (max-width: 1100px) {
+    .sc-summary {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 600px) {
+    .sc-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}

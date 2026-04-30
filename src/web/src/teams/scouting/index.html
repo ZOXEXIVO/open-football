@@ -1,0 +1,606 @@
+{% extends "teams/team_layout.html" %}
+
+{% block html_title %}{{ title }} - {{ i18n.t("scouting") }} | {{ i18n.t("site_name") }}{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+
+    {# ── 1. Department summary ───────────────────────────────── #}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("scouting_department") }}</h3>
+        </div>
+        <div class="sc-summary">
+            <div class="sc-stat">
+                <div class="sc-stat-label">{{ i18n.t("sc_active_scouts") }}</div>
+                <div class="sc-stat-value">{{ summary.active_scouts }}</div>
+            </div>
+            <div class="sc-stat">
+                <div class="sc-stat-label">{{ i18n.t("sc_active_monitored") }}</div>
+                <div class="sc-stat-value">{{ summary.active_monitored }}</div>
+            </div>
+            <div class="sc-stat">
+                <div class="sc-stat-label">{{ i18n.t("sc_report_ready") }}</div>
+                <div class="sc-stat-value">{{ summary.report_ready }}</div>
+            </div>
+            <div class="sc-stat">
+                <div class="sc-stat-label">{{ i18n.t("sc_open_assignments") }}</div>
+                <div class="sc-stat-value">{{ summary.open_assignments }}</div>
+            </div>
+            <div class="sc-stat">
+                <div class="sc-stat-label">{{ i18n.t("sc_recent_meetings") }}</div>
+                <div class="sc-stat-value">{{ summary.recent_meetings }}</div>
+            </div>
+            <div class="sc-stat">
+                <div class="sc-stat-label">{{ i18n.t("sc_promoted_shortlist") }}</div>
+                <div class="sc-stat-value">{{ summary.promoted_to_shortlist }}</div>
+            </div>
+            <div class="sc-stat">
+                <div class="sc-stat-label">{{ i18n.t("sc_rejected_blocked") }}</div>
+                <div class="sc-stat-value">{{ summary.rejected_or_blocked }}</div>
+            </div>
+            <div class="sc-stat">
+                <div class="sc-stat-label">{{ i18n.t("sc_avg_confidence") }}</div>
+                <div class="sc-stat-value">{{ summary.avg_confidence_pct }}%</div>
+            </div>
+        </div>
+    </section>
+
+    {# ── 2. Scout workload ───────────────────────────────────── #}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("sc_scout_workload") }}</h3>
+            <span class="fm-panel-count">{{ scout_workload.len() }}</span>
+        </div>
+        {% if scout_workload.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("sc_no_scout_workload") }}</div>
+        {% else %}
+        <table class="fm-squad sc-table">
+            <thead>
+                <tr>
+                    <th>{{ i18n.t("name") }}</th>
+                    <th>{{ i18n.t("staff_role") }}</th>
+                    <th class="sc-num">{{ i18n.t("sc_active") }}</th>
+                    <th class="sc-num">{{ i18n.t("sc_report_ready") }}</th>
+                    <th class="sc-num">{{ i18n.t("confidence") }}</th>
+                    <th>{{ i18n.t("last_observed") }}</th>
+                    <th>{{ i18n.t("sc_regions") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for v in scout_workload %}
+                <tr>
+                    <td class="sc-name"><a href="/{{ lang }}/staff/{{ v.row.staff_id }}">{{ v.row.staff_name }}</a></td>
+                    <td>{{ i18n.t(v.row.role_key.as_str()) }}</td>
+                    <td class="sc-num">{{ v.row.active_count }}</td>
+                    <td class="sc-num">{{ v.row.report_ready_count }}</td>
+                    <td class="sc-num">{{ v.row.avg_confidence_pct }}%</td>
+                    <td>{{ v.last_observed_display }}</td>
+                    <td class="sc-regions">
+                        {% for region in v.row.region_keys %}<span class="sc-badge sc-badge-region">{{ i18n.t(region.as_str()) }}</span>{% endfor %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+
+    {# ── 3. Active monitoring board ───────────────────────────── #}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("active_monitoring") }}</h3>
+            <span class="fm-panel-count">{{ active_monitoring.len() }}</span>
+        </div>
+        {% if active_monitoring.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("sc_no_active_monitoring") }}</div>
+        {% else %}
+        <div class="sc-table-wrap">
+            <table class="fm-squad sc-table sc-table-monitoring">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("position") }}</th>
+                        <th class="sc-num">{{ i18n.t("age") }}</th>
+                        <th>{{ i18n.t("club") }}</th>
+                        <th>{{ i18n.t("scout") }}</th>
+                        <th>{{ i18n.t("sc_source") }}</th>
+                        <th>{{ i18n.t("sc_status") }}</th>
+                        <th>{{ i18n.t("sc_started") }}</th>
+                        <th>{{ i18n.t("last_observed") }}</th>
+                        <th class="sc-num">{{ i18n.t("watched") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_matches") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_ca") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_pa") }}</th>
+                        <th class="sc-num">{{ i18n.t("confidence") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_role_fit") }}</th>
+                        <th>{{ i18n.t("value") }}</th>
+                        <th>{{ i18n.t("sc_request") }}</th>
+                        <th>{{ i18n.t("latest_vote") }}</th>
+                        <th>{{ i18n.t("sc_decision") }}</th>
+                        <th>{{ i18n.t("sc_risk") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in active_monitoring %}
+                    <tr>
+                        <td class="sc-name">
+                            {% if !v.row.player_slug.is_empty() %}
+                            <a href="/{{ lang }}/players/{{ v.row.player_slug }}">{{ v.row.player_name }}</a>
+                            {% else %}
+                            {{ v.row.player_name }}
+                            {% endif %}
+                        </td>
+                        <td>{{ v.row.player_position_short }}</td>
+                        <td class="sc-num">{% match v.row.player_age %}{% when Some with (age) %}{{ age }}{% when None %}—{% endmatch %}</td>
+                        <td>
+                            {% if !v.row.current_team_slug.is_empty() %}
+                            <a href="/{{ lang }}/teams/{{ v.row.current_team_slug }}">{{ v.row.current_club_name }}</a>
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td><a href="/{{ lang }}/staff/{{ v.row.scout_id }}">{{ v.row.scout_name }}</a></td>
+                        <td>{{ i18n.t(v.row.source_key.as_str()) }}</td>
+                        <td><span class="sc-badge sc-badge-{{ v.row.status_key }}">{{ i18n.t(v.row.status_key.as_str()) }}</span></td>
+                        <td>{{ v.started_on_display }}</td>
+                        <td>{{ v.last_observed_display }}</td>
+                        <td class="sc-num">{{ v.row.times_watched }}</td>
+                        <td class="sc-num">{{ v.row.matches_watched }}</td>
+                        <td class="sc-num">{{ v.row.assessed_ability }}</td>
+                        <td class="sc-num">{{ v.row.assessed_potential }}</td>
+                        <td class="sc-num">{{ v.row.confidence_pct }}%</td>
+                        <td class="sc-num">{{ v.row.role_fit_pct }}%</td>
+                        <td>{{ v.estimated_value_display }}</td>
+                        <td>{% match v.row.transfer_request_id %}{% when Some with (id) %}#{{ id }}{% if let Some(p) = v.row.transfer_request_position_short %}&nbsp;{{ p }}{% endif %}{% when None %}—{% endmatch %}</td>
+                        <td>{% match v.row.latest_vote_key %}{% when Some with (key) %}<span class="sc-badge sc-badge-vote">{{ i18n.t(key.as_str()) }}</span>{% when None %}—{% endmatch %}</td>
+                        <td>{% match v.row.latest_decision_key %}{% when Some with (key) %}<span class="sc-badge sc-badge-decision">{{ i18n.t(key.as_str()) }}</span>{% when None %}—{% endmatch %}</td>
+                        <td class="sc-risks">
+                            {% for f in v.row.risk_flag_keys %}<span class="sc-badge sc-badge-risk">{{ i18n.t(f.as_str()) }}</span>{% endfor %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </section>
+
+    {# ── 4. Detailed scouting reports ─────────────────────────── #}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("scouting_reports") }}</h3>
+            <span class="fm-panel-count">{{ scouting_reports.len() }}</span>
+        </div>
+        {% if scouting_reports.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("sc_no_reports") }}</div>
+        {% else %}
+        <div class="sc-table-wrap">
+            <table class="fm-squad sc-table">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("position") }}</th>
+                        <th>{{ i18n.t("club") }}</th>
+                        <th>{{ i18n.t("sc_assignment") }}</th>
+                        <th>{{ i18n.t("sc_request") }}</th>
+                        <th>{{ i18n.t("sc_recommendation") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_ca") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_pa") }}</th>
+                        <th class="sc-num">{{ i18n.t("confidence") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_role_fit") }}</th>
+                        <th>{{ i18n.t("value") }}</th>
+                        <th>{{ i18n.t("sc_risk") }}</th>
+                        <th>{{ i18n.t("sc_origin") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in scouting_reports %}
+                    <tr>
+                        <td class="sc-name">
+                            {% if !v.row.player_slug.is_empty() %}
+                            <a href="/{{ lang }}/players/{{ v.row.player_slug }}">{{ v.row.player_name }}</a>
+                            {% else %}
+                            {{ v.row.player_name }}
+                            {% endif %}
+                        </td>
+                        <td>{{ v.row.player_position_short }}</td>
+                        <td>
+                            {% if !v.row.current_team_slug.is_empty() %}
+                            <a href="/{{ lang }}/teams/{{ v.row.current_team_slug }}">{{ v.row.current_club_name }}</a>
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>#{{ v.row.assignment_id }}</td>
+                        <td>{% match v.row.transfer_request_id %}{% when Some with (id) %}#{{ id }}{% when None %}—{% endmatch %}</td>
+                        <td><span class="sc-badge sc-badge-{{ v.row.recommendation_key }}">{{ i18n.t(v.row.recommendation_key.as_str()) }}</span></td>
+                        <td class="sc-num">{{ v.row.assessed_ability }}</td>
+                        <td class="sc-num">{{ v.row.assessed_potential }}</td>
+                        <td class="sc-num">{{ v.row.confidence_pct }}%</td>
+                        <td class="sc-num">{{ v.row.role_fit_pct }}%</td>
+                        <td>{{ v.estimated_value_display }}</td>
+                        <td class="sc-risks">
+                            {% for f in v.row.risk_flag_keys %}<span class="sc-badge sc-badge-risk">{{ i18n.t(f.as_str()) }}</span>{% endfor %}
+                        </td>
+                        <td>{% if v.row.from_shadow %}<span class="sc-badge sc-badge-shadow">{{ i18n.t("sc_origin_shadow") }}</span>{% else %}<span class="sc-badge sc-badge-active">{{ i18n.t("sc_origin_active") }}</span>{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </section>
+
+    {# ── 5. Scouting assignments + match assignments ──────────── #}
+    <div class="fm-transfers-row">
+        <section class="fm-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("scouting_assignments") }}</h3>
+                <span class="fm-panel-count">{{ scouting_assignments.len() }}</span>
+            </div>
+            {% if scouting_assignments.is_empty() %}
+            <div class="fm-empty">{{ i18n.t("sc_no_assignments") }}</div>
+            {% else %}
+            <div class="sc-table-wrap">
+                <table class="fm-squad sc-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>{{ i18n.t("sc_request") }}</th>
+                            <th>{{ i18n.t("position") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_min_ability") }}</th>
+                            <th>{{ i18n.t("sc_age_range") }}</th>
+                            <th>{{ i18n.t("sc_max_budget") }}</th>
+                            <th>{{ i18n.t("scout") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_observations") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_reports_produced") }}</th>
+                            <th>{{ i18n.t("sc_status") }}</th>
+                            <th>{{ i18n.t("sc_role_profile") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for v in scouting_assignments %}
+                        <tr>
+                            <td>#{{ v.row.assignment_id }}</td>
+                            <td>#{{ v.row.transfer_request_id }}</td>
+                            <td>{{ v.row.target_position_short }}</td>
+                            <td class="sc-num">{{ v.row.min_ability }}</td>
+                            <td>{{ v.row.preferred_age_min }}–{{ v.row.preferred_age_max }}</td>
+                            <td>{{ v.max_budget_display }}</td>
+                            <td>
+                                {% match v.row.scout_id %}
+                                {% when Some with (sid) %}<a href="/{{ lang }}/staff/{{ sid }}">{{ v.row.scout_name.as_deref().unwrap_or("") }}</a>
+                                {% when None %}—
+                                {% endmatch %}
+                            </td>
+                            <td class="sc-num">{{ v.row.observation_count }}</td>
+                            <td class="sc-num">{{ v.row.reports_produced }}</td>
+                            <td>{% if v.row.completed %}<span class="sc-badge sc-badge-completed">{{ i18n.t("sc_completed") }}</span>{% else %}<span class="sc-badge sc-badge-active-state">{{ i18n.t("sc_active_state") }}</span>{% endif %}</td>
+                            <td class="sc-role-profile">T&nbsp;{{ v.min_technical_display }} · M&nbsp;{{ v.min_mental_display }} · P&nbsp;{{ v.min_physical_display }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </section>
+
+        <section class="fm-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("match_scouting_assignments") }}</h3>
+                <span class="fm-panel-count">{{ match_assignments.len() }}</span>
+            </div>
+            {% if match_assignments.is_empty() %}
+            <div class="fm-empty">{{ i18n.t("sc_no_match_assignments") }}</div>
+            {% else %}
+            <table class="fm-squad sc-table">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("scout") }}</th>
+                        <th>{{ i18n.t("sc_target_team") }}</th>
+                        <th>{{ i18n.t("sc_linked_assignments") }}</th>
+                        <th>{{ i18n.t("sc_last_attended") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in match_assignments %}
+                    <tr>
+                        <td><a href="/{{ lang }}/staff/{{ v.row.scout_id }}">{{ v.row.scout_name }}</a></td>
+                        <td>
+                            {% if !v.row.target_team_slug.is_empty() %}
+                            <a href="/{{ lang }}/teams/{{ v.row.target_team_slug }}">{{ v.row.target_team_name }}</a>
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>{% for id in v.row.linked_assignment_ids %}#{{ id }}{% if !loop.last %}, {% endif %}{% endfor %}</td>
+                        <td>{{ v.last_attended_display }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </section>
+    </div>
+
+    {# ── 6. Recruitment meeting logs ──────────────────────────── #}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("recruitment_meetings") }}</h3>
+            <span class="fm-panel-count">{{ recruitment_meetings.len() }}</span>
+        </div>
+        {% if recruitment_meetings.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("sc_no_meetings") }}</div>
+        {% else %}
+        {% for v in recruitment_meetings %}
+        <div class="sc-meeting">
+            <div class="sc-meeting-head">
+                <span class="sc-meeting-date">{{ v.date_display }}</span>
+                <span class="sc-meeting-id">#{{ v.row.id }}</span>
+                {% if !v.row.agenda_request_ids.is_empty() %}
+                <span class="sc-meeting-agenda">
+                    {{ i18n.t("sc_agenda") }}:
+                    {% for id in v.row.agenda_request_ids %}#{{ id }}{% if !loop.last %}, {% endif %}{% endfor %}
+                </span>
+                {% endif %}
+            </div>
+            <div class="sc-meeting-participants">
+                <span class="sc-meeting-label">{{ i18n.t("sc_participants") }}:</span>
+                {% if v.row.participants.is_empty() %}—{% else %}
+                {% for p in v.row.participants %}<a class="sc-pill" href="/{{ lang }}/staff/{{ p.staff_id }}">{{ p.staff_name }} <span class="sc-pill-role">{{ i18n.t(p.role_key.as_str()) }}</span></a>{% endfor %}
+                {% endif %}
+            </div>
+
+            {% if !v.decisions.is_empty() %}
+            <div class="sc-meeting-section">
+                <div class="sc-meeting-section-head">{{ i18n.t("meeting_decisions") }}</div>
+                <table class="fm-squad sc-table sc-meeting-table">
+                    <thead>
+                        <tr>
+                            <th>{{ i18n.t("player") }}</th>
+                            <th>{{ i18n.t("sc_decision") }}</th>
+                            <th>{{ i18n.t("sc_request") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_consensus") }}</th>
+                            <th>{{ i18n.t("sc_chief_support") }}</th>
+                            <th>{{ i18n.t("sc_data_support") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_board_risk") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_budget_fit") }}</th>
+                            <th>{{ i18n.t("reason") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for d in v.decisions %}
+                        <tr>
+                            <td class="sc-name">
+                                {% if !d.row.player_slug.is_empty() %}
+                                <a href="/{{ lang }}/players/{{ d.row.player_slug }}">{{ d.row.player_name }}</a>
+                                {% else %}
+                                {{ d.row.player_name }}
+                                {% endif %}
+                            </td>
+                            <td><span class="sc-badge sc-badge-{{ d.row.decision_key }}">{{ i18n.t(d.row.decision_key.as_str()) }}</span></td>
+                            <td>{% match d.row.transfer_request_id %}{% when Some with (id) %}#{{ id }}{% when None %}—{% endmatch %}</td>
+                            <td class="sc-num">{{ d.consensus_display }}</td>
+                            <td>{% if d.row.chief_scout_support %}✓{% else %}—{% endif %}</td>
+                            <td>{% if d.row.data_support %}✓{% else %}—{% endif %}</td>
+                            <td class="sc-num">{{ d.board_risk_display }}</td>
+                            <td class="sc-num">{{ d.budget_fit_display }}</td>
+                            <td class="sc-reason">{{ d.row.reason }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if !v.votes.is_empty() %}
+            <div class="sc-meeting-section">
+                <div class="sc-meeting-section-head">{{ i18n.t("meeting_votes") }}</div>
+                <table class="fm-squad sc-table sc-meeting-table">
+                    <thead>
+                        <tr>
+                            <th>{{ i18n.t("scout") }}</th>
+                            <th>{{ i18n.t("player") }}</th>
+                            <th>{{ i18n.t("sc_vote") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_score") }}</th>
+                            <th class="sc-num">{{ i18n.t("confidence") }}</th>
+                            <th>{{ i18n.t("reason") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for vote in v.votes %}
+                        <tr>
+                            <td><a href="/{{ lang }}/staff/{{ vote.row.scout_id }}">{{ vote.row.scout_name }}</a></td>
+                            <td class="sc-name">
+                                {% if !vote.row.player_slug.is_empty() %}
+                                <a href="/{{ lang }}/players/{{ vote.row.player_slug }}">{{ vote.row.player_name }}</a>
+                                {% else %}
+                                {{ vote.row.player_name }}
+                                {% endif %}
+                            </td>
+                            <td><span class="sc-badge sc-badge-{{ vote.row.vote_key }}">{{ i18n.t(vote.row.vote_key.as_str()) }}</span></td>
+                            <td class="sc-num">{{ vote.score_display }}</td>
+                            <td class="sc-num">{{ vote.row.confidence_pct }}%</td>
+                            <td>{{ i18n.t(vote.row.reason_key.as_str()) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+        {% endif %}
+    </section>
+
+    {# ── 7. Known players + shadow reports ────────────────────── #}
+    <div class="fm-transfers-row">
+        <section class="fm-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("known_players") }}</h3>
+                <span class="fm-panel-count">{{ known_players.len() }}</span>
+            </div>
+            {% if known_players.is_empty() %}
+            <div class="fm-empty">{{ i18n.t("sc_no_known_players") }}</div>
+            {% else %}
+            <div class="sc-table-wrap">
+                <table class="fm-squad sc-table">
+                    <thead>
+                        <tr>
+                            <th>{{ i18n.t("player") }}</th>
+                            <th>{{ i18n.t("sc_last_known_club") }}</th>
+                            <th>{{ i18n.t("position") }}</th>
+                            <th>{{ i18n.t("sc_position_group") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_ca") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_pa") }}</th>
+                            <th class="sc-num">{{ i18n.t("confidence") }}</th>
+                            <th>{{ i18n.t("fee") }}</th>
+                            <th>{{ i18n.t("sc_last_seen") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_official_apps") }}</th>
+                            <th class="sc-num">{{ i18n.t("sc_friendly_apps") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for v in known_players %}
+                        <tr>
+                            <td class="sc-name">
+                                {% if !v.row.player_slug.is_empty() %}
+                                <a href="/{{ lang }}/players/{{ v.row.player_slug }}">{{ v.row.player_name }}</a>
+                                {% else %}
+                                {{ v.row.player_name }}
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if !v.row.last_known_team_slug.is_empty() %}
+                                <a href="/{{ lang }}/teams/{{ v.row.last_known_team_slug }}">{{ v.row.last_known_club_name }}</a>
+                                {% else %}
+                                —
+                                {% endif %}
+                            </td>
+                            <td>{{ v.row.position_short }}</td>
+                            <td>{{ i18n.t(v.row.position_group_key.as_str()) }}</td>
+                            <td class="sc-num">{{ v.row.assessed_ability }}</td>
+                            <td class="sc-num">{{ v.row.assessed_potential }}</td>
+                            <td class="sc-num">{{ v.row.confidence_pct }}%</td>
+                            <td>{{ v.estimated_fee_display }}</td>
+                            <td>{{ v.last_seen_display }}</td>
+                            <td class="sc-num">{{ v.row.official_appearances_seen }}</td>
+                            <td class="sc-num">{{ v.row.friendly_appearances_seen }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </section>
+
+        <section class="fm-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("shadow_reports") }}</h3>
+                <span class="fm-panel-count">{{ shadow_reports.len() }}</span>
+            </div>
+            {% if shadow_reports.is_empty() %}
+            <div class="fm-empty">{{ i18n.t("sc_no_shadow_reports") }}</div>
+            {% else %}
+            <table class="fm-squad sc-table">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("sc_position_group") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_observed_ability") }}</th>
+                        <th>{{ i18n.t("sc_recorded_on") }}</th>
+                        <th class="sc-num">{{ i18n.t("confidence") }}</th>
+                        <th>{{ i18n.t("sc_recommendation") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in shadow_reports %}
+                    <tr>
+                        <td class="sc-name">
+                            {% if !v.row.player_slug.is_empty() %}
+                            <a href="/{{ lang }}/players/{{ v.row.player_slug }}">{{ v.row.player_name }}</a>
+                            {% else %}
+                            {{ v.row.player_name }}
+                            {% endif %}
+                        </td>
+                        <td>{{ i18n.t(v.row.position_group_key.as_str()) }}</td>
+                        <td class="sc-num">{{ v.row.observed_ability }}</td>
+                        <td>{{ v.recorded_on_display }}</td>
+                        <td class="sc-num">{{ v.row.confidence_pct }}%</td>
+                        <td><span class="sc-badge sc-badge-{{ v.row.recommendation_key }}">{{ i18n.t(v.row.recommendation_key.as_str()) }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </section>
+    </div>
+
+    {# ── 8. Transfer request context ──────────────────────────── #}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("transfer_request_context") }}</h3>
+            <span class="fm-panel-count">{{ transfer_requests.len() }}</span>
+        </div>
+        {% if transfer_requests.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("sc_no_requests") }}</div>
+        {% else %}
+        <div class="sc-table-wrap">
+            <table class="fm-squad sc-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>{{ i18n.t("position") }}</th>
+                        <th>{{ i18n.t("sc_priority") }}</th>
+                        <th>{{ i18n.t("reason") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_min_ability") }}</th>
+                        <th class="sc-num">{{ i18n.t("sc_ideal_ability") }}</th>
+                        <th>{{ i18n.t("sc_age_range") }}</th>
+                        <th>{{ i18n.t("sc_budget_alloc") }}</th>
+                        <th>{{ i18n.t("sc_status") }}</th>
+                        <th>{{ i18n.t("sc_named_target") }}</th>
+                        <th>{{ i18n.t("sc_board_approved") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in transfer_requests %}
+                    <tr>
+                        <td>#{{ v.row.id }}</td>
+                        <td>{{ v.row.position_short }}</td>
+                        <td><span class="sc-badge sc-badge-{{ v.row.priority_key }}">{{ i18n.t(v.row.priority_key.as_str()) }}</span></td>
+                        <td>{{ i18n.t(v.row.reason_key.as_str()) }}</td>
+                        <td class="sc-num">{{ v.row.min_ability }}</td>
+                        <td class="sc-num">{{ v.row.ideal_ability }}</td>
+                        <td>{{ v.row.preferred_age_min }}–{{ v.row.preferred_age_max }}</td>
+                        <td>{{ v.budget_allocation_display }}</td>
+                        <td><span class="sc-badge sc-badge-{{ v.row.status_key }}">{{ i18n.t(v.row.status_key.as_str()) }}</span></td>
+                        <td>
+                            {% match v.row.named_target_id %}
+                            {% when Some with (_pid) %}
+                                {% if let Some(slug) = v.row.named_target_slug.as_deref() %}
+                                <a href="/{{ lang }}/players/{{ slug }}">{{ v.row.named_target_name.as_deref().unwrap_or("") }}</a>
+                                {% else %}
+                                {{ v.row.named_target_name.as_deref().unwrap_or("") }}
+                                {% endif %}
+                            {% when None %}
+                                —
+                            {% endmatch %}
+                        </td>
+                        <td>
+                            {% match v.row.board_approved %}
+                            {% when Some with (true) %}<span class="sc-badge sc-badge-board-approved">✓</span>
+                            {% when Some with (false) %}<span class="sc-badge sc-badge-board-vetoed">✗</span>
+                            {% when None %}—
+                            {% endmatch %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </section>
+
+</div>
+{% endblock %}

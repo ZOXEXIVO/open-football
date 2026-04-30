@@ -2,22 +2,20 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-use simulator_core::utils::TimeEstimation;
 use database::{DatabaseGenerator, DatabaseLoader};
 use env_logger::Env;
 use log::info;
-use web::{FootballSimulatorServer, GameAppData, I18nManager, Settings};
-use web::ai::registry::{AiProviderRegistry, RegistryAiService};
+use simulator_core::utils::TimeEstimation;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
+use web::ai::registry::{AiProviderRegistry, RegistryAiService};
+use web::{FootballSimulatorServer, GameAppData, I18nManager, Settings};
 
 #[tokio::main]
 async fn main() {
     color_eyre::install().unwrap();
 
-    env_logger::Builder::from_env(Env::default()
-        .default_filter_or("debug")
-    ).init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
 
     let settings = Settings::from_env();
 

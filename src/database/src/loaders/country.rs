@@ -36,7 +36,11 @@ pub struct SkinColorsEntity {
 
 impl Default for SkinColorsEntity {
     fn default() -> Self {
-        SkinColorsEntity { white: 50, black: 20, metis: 30 }
+        SkinColorsEntity {
+            white: 50,
+            black: 20,
+            metis: 30,
+        }
     }
 }
 

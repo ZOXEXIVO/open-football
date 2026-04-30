@@ -38,8 +38,7 @@ impl DataTreeLoader {
             .collect();
 
         // Which league ids survived filtering — clubs of disabled leagues get dropped.
-        let enabled_ids: std::collections::HashSet<u32> =
-            leagues.iter().map(|l| l.id).collect();
+        let enabled_ids: std::collections::HashSet<u32> = leagues.iter().map(|l| l.id).collect();
 
         let mut clubs: Vec<ClubEntity> = db
             .clubs
@@ -75,7 +74,11 @@ impl DataTreeLoader {
         leagues.sort_by_key(|l| l.id);
         clubs.sort_by_key(|c| c.id);
 
-        DataTreeResult { leagues, clubs, names_by_country }
+        DataTreeResult {
+            leagues,
+            clubs,
+            names_by_country,
+        }
     }
 }
 
@@ -101,8 +104,7 @@ mod tests {
         // Satellite directories under russian-second-division-* should not
         // appear as standalone clubs — they're folded into their parents.
         let satellite_ids: &[u32] = &[
-            58126843, 479504, 2000032541, 8066991, 58098003, 495359, 476302,
-            58135242, 8064339,
+            58126843, 479504, 2000032541, 8066991, 58098003, 495359, 476302, 58135242, 8064339,
         ];
         for sid in satellite_ids {
             assert!(
@@ -117,15 +119,15 @@ mod tests {
         // B slot ("ural-b"); every other parent gets "Second", the canonical
         // "{Club} 2" reserve type.
         let expected: &[(u32, &str, u32)] = &[
-            (1533, "Second", 2000272306),     // Ural   → russian-second-division-b-group-4
-            (1520, "Second", 2000272298),     // Dinamo Moscow → russian-second-division-a-gold
+            (1533, "Second", 2000272306), // Ural   → russian-second-division-b-group-4
+            (1520, "Second", 2000272298), // Dinamo Moscow → russian-second-division-a-gold
             (58126754, "Second", 2000272300), // Rodina → russian-second-division-a-silver
-            (1301106, "Second", 2000272303),  // Baltika → russian-second-division-b-group-2
-            (1529, "Second", 2000272303),     // Spartak Moscow → russian-second-division-b-group-2
+            (1301106, "Second", 2000272303), // Baltika → russian-second-division-b-group-2
+            (1529, "Second", 2000272303), // Spartak Moscow → russian-second-division-b-group-2
             (1301108, "Second", 2000272303), // Zenit  → russian-second-division-b-group-2
-            (130501, "Second", 2000272305),   // Arsenal Tula → russian-second-division-b-group-3
+            (130501, "Second", 2000272305), // Arsenal Tula → russian-second-division-b-group-3
             (58127493, "Second", 2000272306), // Orenburg → russian-second-division-b-group-4
-            (130509, "Second", 2000272306),   // Rubin  → russian-second-division-b-group-4
+            (130509, "Second", 2000272306), // Rubin  → russian-second-division-b-group-4
         ];
         let enabled_league_ids: std::collections::HashSet<u32> =
             tree.leagues.iter().map(|l| l.id).collect();
@@ -160,7 +162,9 @@ mod tests {
             assert!(
                 enabled_league_ids.contains(&league_id),
                 "{} team on parent {} points at non-enabled league {}",
-                want_type, parent_id, league_id
+                want_type,
+                parent_id,
+                league_id
             );
         }
     }

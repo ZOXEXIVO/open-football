@@ -1,16 +1,16 @@
-use crate::loaders::{CountryLoader, OdbHistoryItem, OdbPlayer, OdbPosition};
 use crate::DatabaseEntity;
+use crate::loaders::{CountryLoader, OdbHistoryItem, OdbPlayer, OdbPosition};
 use chrono::{Datelike, NaiveDate, Utc};
+use core::league::Season;
+use core::next_player_id;
 use core::shared::FullName;
 use core::utils::{FloatUtils, IntegerUtils};
-use core::league::Season;
 use core::{
     ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType, PlayerPositions,
     PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
     PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical, WageCalculator,
 };
-use core::next_player_id;
 
 // ── Skill index constants (flat array order) ────────────────────────────
 // Technical (0..14)
@@ -84,12 +84,10 @@ impl AgeCurve {
     /// Range: 0.92 .. 1.05 (fine-tuning, not a major multiplier).
     pub fn peak_modifier(skill_idx: usize, age: u32) -> f32 {
         let (peak_start, peak_end) = match skill_idx {
-            SK_ACCELERATION | SK_PACE | SK_AGILITY | SK_JUMPING | SK_BALANCE | SK_NATURAL_FITNESS => {
-                (18u32, 24u32)
-            }
-            SK_DECISIONS | SK_POSITIONING | SK_VISION | SK_LEADERSHIP | SK_COMPOSURE | SK_PASSING => {
-                (26, 34)
-            }
+            SK_ACCELERATION | SK_PACE | SK_AGILITY | SK_JUMPING | SK_BALANCE
+            | SK_NATURAL_FITNESS => (18u32, 24u32),
+            SK_DECISIONS | SK_POSITIONING | SK_VISION | SK_LEADERSHIP | SK_COMPOSURE
+            | SK_PASSING => (26, 34),
             _ => (22, 28),
         };
 
@@ -142,10 +140,15 @@ pub enum SkillGroup {
 
 impl SkillGroup {
     pub fn from_index(idx: usize) -> SkillGroup {
-        if idx < 14 { SkillGroup::Technical }
-        else if idx < 28 { SkillGroup::Mental }
-        else if idx < 36 { SkillGroup::Physical }
-        else { SkillGroup::MatchReadiness }
+        if idx < 14 {
+            SkillGroup::Technical
+        } else if idx < 28 {
+            SkillGroup::Mental
+        } else if idx < 36 {
+            SkillGroup::Physical
+        } else {
+            SkillGroup::MatchReadiness
+        }
     }
 }
 
@@ -163,104 +166,148 @@ impl RoleArchetype {
     }
 
     fn apply_inner(weights: &mut [f32; SKILL_COUNT], position: &PositionType) {
-    let roll = rand::random::<f32>();
-    match position {
-        PositionType::Goalkeeper => {
-            if roll < 0.35 {
-                // Shot Stopper
-                weights[SK_AGILITY] += 0.3; weights[SK_ANTICIPATION] += 0.2;
-                weights[SK_CONCENTRATION] += 0.2;
-            } else if roll < 0.60 {
-                // Sweeper Keeper
-                weights[SK_PACE] += 0.4; weights[SK_PASSING] += 0.4;
-                weights[SK_FIRST_TOUCH] += 0.3; weights[SK_BRAVERY] += 0.2;
-            } else if roll < 0.85 {
-                // Commanding
-                weights[SK_JUMPING] += 0.3; weights[SK_STRENGTH] += 0.3;
-                weights[SK_LEADERSHIP] += 0.3; weights[SK_BRAVERY] += 0.2;
-            } else {
-                weights[SK_POSITIONING] += 0.1; weights[SK_CONCENTRATION] += 0.1;
+        let roll = rand::random::<f32>();
+        match position {
+            PositionType::Goalkeeper => {
+                if roll < 0.35 {
+                    // Shot Stopper
+                    weights[SK_AGILITY] += 0.3;
+                    weights[SK_ANTICIPATION] += 0.2;
+                    weights[SK_CONCENTRATION] += 0.2;
+                } else if roll < 0.60 {
+                    // Sweeper Keeper
+                    weights[SK_PACE] += 0.4;
+                    weights[SK_PASSING] += 0.4;
+                    weights[SK_FIRST_TOUCH] += 0.3;
+                    weights[SK_BRAVERY] += 0.2;
+                } else if roll < 0.85 {
+                    // Commanding
+                    weights[SK_JUMPING] += 0.3;
+                    weights[SK_STRENGTH] += 0.3;
+                    weights[SK_LEADERSHIP] += 0.3;
+                    weights[SK_BRAVERY] += 0.2;
+                } else {
+                    weights[SK_POSITIONING] += 0.1;
+                    weights[SK_CONCENTRATION] += 0.1;
+                }
+            }
+            PositionType::Defender => {
+                if roll < 0.25 {
+                    // Ball-Playing
+                    weights[SK_PASSING] += 0.4;
+                    weights[SK_FIRST_TOUCH] += 0.3;
+                    weights[SK_COMPOSURE] += 0.3;
+                    weights[SK_TECHNIQUE] += 0.2;
+                    weights[SK_AGGRESSION] -= 0.2;
+                    weights[SK_HEADING] -= 0.1;
+                } else if roll < 0.50 {
+                    // Stopper
+                    weights[SK_AGGRESSION] += 0.3;
+                    weights[SK_HEADING] += 0.3;
+                    weights[SK_STRENGTH] += 0.3;
+                    weights[SK_BRAVERY] += 0.2;
+                    weights[SK_PASSING] -= 0.2;
+                    weights[SK_TECHNIQUE] -= 0.2;
+                } else if roll < 0.75 {
+                    // Athletic
+                    weights[SK_PACE] += 0.4;
+                    weights[SK_ACCELERATION] += 0.3;
+                    weights[SK_AGILITY] += 0.2;
+                    weights[SK_STAMINA] += 0.2;
+                    weights[SK_STRENGTH] -= 0.2;
+                    weights[SK_HEADING] -= 0.1;
+                } else {
+                    // No-Nonsense
+                    weights[SK_MARKING] += 0.3;
+                    weights[SK_TACKLING] += 0.2;
+                    weights[SK_POSITIONING] += 0.2;
+                    weights[SK_DRIBBLING] -= 0.3;
+                    weights[SK_FLAIR] -= 0.3;
+                }
+            }
+            PositionType::Midfielder => {
+                if roll < 0.20 {
+                    // Playmaker
+                    weights[SK_VISION] += 0.4;
+                    weights[SK_PASSING] += 0.3;
+                    weights[SK_TECHNIQUE] += 0.3;
+                    weights[SK_COMPOSURE] += 0.3;
+                    weights[SK_TACKLING] -= 0.3;
+                    weights[SK_STRENGTH] -= 0.2;
+                } else if roll < 0.40 {
+                    // Box-to-Box
+                    weights[SK_STAMINA] += 0.4;
+                    weights[SK_WORK_RATE] += 0.3;
+                    weights[SK_TACKLING] += 0.3;
+                    weights[SK_STRENGTH] += 0.2;
+                    weights[SK_FLAIR] -= 0.2;
+                } else if roll < 0.60 {
+                    // Ball Winner
+                    weights[SK_TACKLING] += 0.5;
+                    weights[SK_MARKING] += 0.4;
+                    weights[SK_AGGRESSION] += 0.3;
+                    weights[SK_STRENGTH] += 0.3;
+                    weights[SK_TECHNIQUE] -= 0.3;
+                    weights[SK_VISION] -= 0.3;
+                } else if roll < 0.80 {
+                    // Winger
+                    weights[SK_PACE] += 0.5;
+                    weights[SK_CROSSING] += 0.5;
+                    weights[SK_DRIBBLING] += 0.4;
+                    weights[SK_ACCELERATION] += 0.3;
+                    weights[SK_TACKLING] -= 0.3;
+                    weights[SK_HEADING] -= 0.3;
+                } else {
+                    // Mezzala
+                    weights[SK_DRIBBLING] += 0.4;
+                    weights[SK_OFF_THE_BALL] += 0.3;
+                    weights[SK_TECHNIQUE] += 0.3;
+                    weights[SK_ACCELERATION] += 0.2;
+                    weights[SK_MARKING] -= 0.2;
+                }
+            }
+            PositionType::Striker => {
+                if roll < 0.25 {
+                    // Poacher
+                    weights[SK_FINISHING] += 0.4;
+                    weights[SK_OFF_THE_BALL] += 0.4;
+                    weights[SK_ANTICIPATION] += 0.3;
+                    weights[SK_COMPOSURE] += 0.3;
+                    weights[SK_DRIBBLING] -= 0.3;
+                    weights[SK_PASSING] -= 0.3;
+                } else if roll < 0.45 {
+                    // Target Man
+                    weights[SK_HEADING] += 0.5;
+                    weights[SK_STRENGTH] += 0.5;
+                    weights[SK_FIRST_TOUCH] += 0.3;
+                    weights[SK_BRAVERY] += 0.3;
+                    weights[SK_PACE] -= 0.4;
+                    weights[SK_ACCELERATION] -= 0.3;
+                } else if roll < 0.65 {
+                    // Speed Merchant
+                    weights[SK_PACE] += 0.5;
+                    weights[SK_ACCELERATION] += 0.4;
+                    weights[SK_DRIBBLING] += 0.3;
+                    weights[SK_AGILITY] += 0.2;
+                    weights[SK_HEADING] -= 0.3;
+                    weights[SK_STRENGTH] -= 0.3;
+                } else if roll < 0.85 {
+                    // Complete Forward
+                    weights[SK_TECHNIQUE] += 0.2;
+                    weights[SK_PASSING] += 0.2;
+                    weights[SK_VISION] += 0.2;
+                    weights[SK_DECISIONS] += 0.2;
+                } else {
+                    // Deep-Lying Forward
+                    weights[SK_FIRST_TOUCH] += 0.4;
+                    weights[SK_PASSING] += 0.4;
+                    weights[SK_VISION] += 0.4;
+                    weights[SK_TECHNIQUE] += 0.3;
+                    weights[SK_HEADING] -= 0.3;
+                    weights[SK_OFF_THE_BALL] -= 0.2;
+                }
             }
         }
-        PositionType::Defender => {
-            if roll < 0.25 {
-                // Ball-Playing
-                weights[SK_PASSING] += 0.4; weights[SK_FIRST_TOUCH] += 0.3;
-                weights[SK_COMPOSURE] += 0.3; weights[SK_TECHNIQUE] += 0.2;
-                weights[SK_AGGRESSION] -= 0.2; weights[SK_HEADING] -= 0.1;
-            } else if roll < 0.50 {
-                // Stopper
-                weights[SK_AGGRESSION] += 0.3; weights[SK_HEADING] += 0.3;
-                weights[SK_STRENGTH] += 0.3; weights[SK_BRAVERY] += 0.2;
-                weights[SK_PASSING] -= 0.2; weights[SK_TECHNIQUE] -= 0.2;
-            } else if roll < 0.75 {
-                // Athletic
-                weights[SK_PACE] += 0.4; weights[SK_ACCELERATION] += 0.3;
-                weights[SK_AGILITY] += 0.2; weights[SK_STAMINA] += 0.2;
-                weights[SK_STRENGTH] -= 0.2; weights[SK_HEADING] -= 0.1;
-            } else {
-                // No-Nonsense
-                weights[SK_MARKING] += 0.3; weights[SK_TACKLING] += 0.2;
-                weights[SK_POSITIONING] += 0.2;
-                weights[SK_DRIBBLING] -= 0.3; weights[SK_FLAIR] -= 0.3;
-            }
-        }
-        PositionType::Midfielder => {
-            if roll < 0.20 {
-                // Playmaker
-                weights[SK_VISION] += 0.4; weights[SK_PASSING] += 0.3;
-                weights[SK_TECHNIQUE] += 0.3; weights[SK_COMPOSURE] += 0.3;
-                weights[SK_TACKLING] -= 0.3; weights[SK_STRENGTH] -= 0.2;
-            } else if roll < 0.40 {
-                // Box-to-Box
-                weights[SK_STAMINA] += 0.4; weights[SK_WORK_RATE] += 0.3;
-                weights[SK_TACKLING] += 0.3; weights[SK_STRENGTH] += 0.2;
-                weights[SK_FLAIR] -= 0.2;
-            } else if roll < 0.60 {
-                // Ball Winner
-                weights[SK_TACKLING] += 0.5; weights[SK_MARKING] += 0.4;
-                weights[SK_AGGRESSION] += 0.3; weights[SK_STRENGTH] += 0.3;
-                weights[SK_TECHNIQUE] -= 0.3; weights[SK_VISION] -= 0.3;
-            } else if roll < 0.80 {
-                // Winger
-                weights[SK_PACE] += 0.5; weights[SK_CROSSING] += 0.5;
-                weights[SK_DRIBBLING] += 0.4; weights[SK_ACCELERATION] += 0.3;
-                weights[SK_TACKLING] -= 0.3; weights[SK_HEADING] -= 0.3;
-            } else {
-                // Mezzala
-                weights[SK_DRIBBLING] += 0.4; weights[SK_OFF_THE_BALL] += 0.3;
-                weights[SK_TECHNIQUE] += 0.3; weights[SK_ACCELERATION] += 0.2;
-                weights[SK_MARKING] -= 0.2;
-            }
-        }
-        PositionType::Striker => {
-            if roll < 0.25 {
-                // Poacher
-                weights[SK_FINISHING] += 0.4; weights[SK_OFF_THE_BALL] += 0.4;
-                weights[SK_ANTICIPATION] += 0.3; weights[SK_COMPOSURE] += 0.3;
-                weights[SK_DRIBBLING] -= 0.3; weights[SK_PASSING] -= 0.3;
-            } else if roll < 0.45 {
-                // Target Man
-                weights[SK_HEADING] += 0.5; weights[SK_STRENGTH] += 0.5;
-                weights[SK_FIRST_TOUCH] += 0.3; weights[SK_BRAVERY] += 0.3;
-                weights[SK_PACE] -= 0.4; weights[SK_ACCELERATION] -= 0.3;
-            } else if roll < 0.65 {
-                // Speed Merchant
-                weights[SK_PACE] += 0.5; weights[SK_ACCELERATION] += 0.4;
-                weights[SK_DRIBBLING] += 0.3; weights[SK_AGILITY] += 0.2;
-                weights[SK_HEADING] -= 0.3; weights[SK_STRENGTH] -= 0.3;
-            } else if roll < 0.85 {
-                // Complete Forward
-                weights[SK_TECHNIQUE] += 0.2; weights[SK_PASSING] += 0.2;
-                weights[SK_VISION] += 0.2; weights[SK_DECISIONS] += 0.2;
-            } else {
-                // Deep-Lying Forward
-                weights[SK_FIRST_TOUCH] += 0.4; weights[SK_PASSING] += 0.4;
-                weights[SK_VISION] += 0.4; weights[SK_TECHNIQUE] += 0.3;
-                weights[SK_HEADING] -= 0.3; weights[SK_OFF_THE_BALL] -= 0.2;
-            }
-        }
-    }
     }
 }
 
@@ -315,52 +362,52 @@ pub struct SkillsArray;
 impl SkillsArray {
     /// Convert the flat array back into the structured `PlayerSkills`.
     pub fn into_skills(arr: &[f32; SKILL_COUNT]) -> PlayerSkills {
-    PlayerSkills {
-        technical: Technical {
-            corners: arr[SK_CORNERS],
-            crossing: arr[SK_CROSSING],
-            dribbling: arr[SK_DRIBBLING],
-            finishing: arr[SK_FINISHING],
-            first_touch: arr[SK_FIRST_TOUCH],
-            free_kicks: arr[SK_FREE_KICKS],
-            heading: arr[SK_HEADING],
-            long_shots: arr[SK_LONG_SHOTS],
-            long_throws: arr[SK_LONG_THROWS],
-            marking: arr[SK_MARKING],
-            passing: arr[SK_PASSING],
-            penalty_taking: arr[SK_PENALTY_TAKING],
-            tackling: arr[SK_TACKLING],
-            technique: arr[SK_TECHNIQUE],
-        },
-        mental: Mental {
-            aggression: arr[SK_AGGRESSION],
-            anticipation: arr[SK_ANTICIPATION],
-            bravery: arr[SK_BRAVERY],
-            composure: arr[SK_COMPOSURE],
-            concentration: arr[SK_CONCENTRATION],
-            decisions: arr[SK_DECISIONS],
-            determination: arr[SK_DETERMINATION],
-            flair: arr[SK_FLAIR],
-            leadership: arr[SK_LEADERSHIP],
-            off_the_ball: arr[SK_OFF_THE_BALL],
-            positioning: arr[SK_POSITIONING],
-            teamwork: arr[SK_TEAMWORK],
-            vision: arr[SK_VISION],
-            work_rate: arr[SK_WORK_RATE],
-        },
-        physical: Physical {
-            acceleration: arr[SK_ACCELERATION],
-            agility: arr[SK_AGILITY],
-            balance: arr[SK_BALANCE],
-            jumping: arr[SK_JUMPING],
-            natural_fitness: arr[SK_NATURAL_FITNESS],
-            pace: arr[SK_PACE],
-            stamina: arr[SK_STAMINA],
-            strength: arr[SK_STRENGTH],
-            match_readiness: arr[SK_MATCH_READINESS],
-        },
-        goalkeeping: Default::default(),
-    }
+        PlayerSkills {
+            technical: Technical {
+                corners: arr[SK_CORNERS],
+                crossing: arr[SK_CROSSING],
+                dribbling: arr[SK_DRIBBLING],
+                finishing: arr[SK_FINISHING],
+                first_touch: arr[SK_FIRST_TOUCH],
+                free_kicks: arr[SK_FREE_KICKS],
+                heading: arr[SK_HEADING],
+                long_shots: arr[SK_LONG_SHOTS],
+                long_throws: arr[SK_LONG_THROWS],
+                marking: arr[SK_MARKING],
+                passing: arr[SK_PASSING],
+                penalty_taking: arr[SK_PENALTY_TAKING],
+                tackling: arr[SK_TACKLING],
+                technique: arr[SK_TECHNIQUE],
+            },
+            mental: Mental {
+                aggression: arr[SK_AGGRESSION],
+                anticipation: arr[SK_ANTICIPATION],
+                bravery: arr[SK_BRAVERY],
+                composure: arr[SK_COMPOSURE],
+                concentration: arr[SK_CONCENTRATION],
+                decisions: arr[SK_DECISIONS],
+                determination: arr[SK_DETERMINATION],
+                flair: arr[SK_FLAIR],
+                leadership: arr[SK_LEADERSHIP],
+                off_the_ball: arr[SK_OFF_THE_BALL],
+                positioning: arr[SK_POSITIONING],
+                teamwork: arr[SK_TEAMWORK],
+                vision: arr[SK_VISION],
+                work_rate: arr[SK_WORK_RATE],
+            },
+            physical: Physical {
+                acceleration: arr[SK_ACCELERATION],
+                agility: arr[SK_AGILITY],
+                balance: arr[SK_BALANCE],
+                jumping: arr[SK_JUMPING],
+                natural_fitness: arr[SK_NATURAL_FITNESS],
+                pace: arr[SK_PACE],
+                stamina: arr[SK_STAMINA],
+                strength: arr[SK_STRENGTH],
+                match_readiness: arr[SK_MATCH_READINESS],
+            },
+            goalkeeping: Default::default(),
+        }
     }
 }
 
@@ -427,7 +474,15 @@ impl SquadRole {
     /// Headroom (PA - CA) range used when generating PA from target CA.
     /// Prospects carry the most ceiling; starters/stars are already near peak.
     fn pa_headroom_range(self, age: u32) -> (i32, i32) {
-        let age_dampen = if age >= 30 { 0 } else if age >= 27 { 4 } else if age >= 24 { 8 } else { 14 };
+        let age_dampen = if age >= 30 {
+            0
+        } else if age >= 27 {
+            4
+        } else if age >= 24 {
+            8
+        } else {
+            14
+        };
         match self {
             SquadRole::Star => (4 + age_dampen / 2, 12 + age_dampen),
             SquadRole::Starter => (4 + age_dampen / 2, 14 + age_dampen),
@@ -452,10 +507,12 @@ impl PhysicalProfile {
     pub fn for_position(primary: PlayerPositionType, country_id: u32) -> Self {
         let (lo, hi) = Self::height_range(primary);
         let offset = Self::country_height_offset(country_id);
-        let height = (IntegerUtils::random(lo + offset, hi + offset)
-            .clamp(160, 210)) as u8;
+        let height = (IntegerUtils::random(lo + offset, hi + offset).clamp(160, 210)) as u8;
         let weight = Self::weight_for(height, primary);
-        PhysicalProfile { height_cm: height, weight_kg: weight }
+        PhysicalProfile {
+            height_cm: height,
+            weight_kg: weight,
+        }
     }
 
     fn height_range(primary: PlayerPositionType) -> (i32, i32) {
@@ -470,8 +527,9 @@ impl PhysicalProfile {
             WingbackLeft | WingbackRight => (170, 182),
             MidfielderLeft | MidfielderRight => (170, 183),
             AttackingMidfielderCenter => (170, 183),
-            AttackingMidfielderLeft | AttackingMidfielderRight
-            | ForwardLeft | ForwardRight => (168, 182),
+            AttackingMidfielderLeft | AttackingMidfielderRight | ForwardLeft | ForwardRight => {
+                (168, 182)
+            }
         }
     }
 
@@ -482,9 +540,10 @@ impl PhysicalProfile {
     fn country_height_offset(country_id: u32) -> i32 {
         let code = CountryLoader::code_for_id(country_id);
         match code.as_str() {
-            "nl" | "dk" | "no" | "se" | "is" | "fi" | "lt" | "lv" | "ee"
-            | "de" | "at" | "ch" | "rs" | "me" | "ba" | "hr" | "si"
-            | "be" | "pl" | "cz" | "sk" | "ua" | "by" | "ru" => 3,
+            "nl" | "dk" | "no" | "se" | "is" | "fi" | "lt" | "lv" | "ee" | "de" | "at" | "ch"
+            | "rs" | "me" | "ba" | "hr" | "si" | "be" | "pl" | "cz" | "sk" | "ua" | "by" | "ru" => {
+                3
+            }
             "gb" | "ie" | "sc" | "wl" | "ni" => 1,
             "it" | "es" | "pt" | "fr" | "gr" | "tr" | "mt" => -1,
             "br" | "ar" | "uy" | "cl" | "py" | "bo" | "pe" | "ec" | "ve" | "co" | "mx" => -2,
@@ -535,8 +594,20 @@ impl FitnessState {
     pub fn for_age(age: u32) -> Self {
         // Preseason snapshot: pros come back near full condition; older
         // players carry slightly more wear.
-        let condition_base = if age >= 32 { 7800 } else if age >= 28 { 8200 } else { 8500 };
-        let fitness_base = if age >= 32 { 7400 } else if age >= 28 { 7800 } else { 8200 };
+        let condition_base = if age >= 32 {
+            7800
+        } else if age >= 28 {
+            8200
+        } else {
+            8500
+        };
+        let fitness_base = if age >= 32 {
+            7400
+        } else if age >= 28 {
+            7800
+        } else {
+            8200
+        };
         let condition = (condition_base + IntegerUtils::random(-400, 600)).clamp(6500, 9700) as i16;
         let fitness = (fitness_base + IntegerUtils::random(-500, 700)).clamp(6000, 9700) as i16;
         let jadedness = if age >= 32 {
@@ -544,13 +615,23 @@ impl FitnessState {
         } else {
             IntegerUtils::random(0, 1500) as i16
         };
-        FitnessState { condition, fitness, jadedness }
+        FitnessState {
+            condition,
+            fitness,
+            jadedness,
+        }
     }
 
     /// Initial match_readiness (0..20 scale). Pre-season state, lifted by
     /// fitness ratio. Older players ramp slightly slower.
     pub fn match_readiness(age: u32) -> f32 {
-        let base = if age >= 32 { 9.0 } else if age >= 28 { 11.0 } else { 12.5 };
+        let base = if age >= 32 {
+            9.0
+        } else if age >= 28 {
+            11.0
+        } else {
+            12.5
+        };
         let jitter = random_normal() * 1.5;
         (base + jitter).clamp(6.0, 16.0)
     }
@@ -648,7 +729,8 @@ impl PlayerGenerator {
     ) -> Player {
         let now = Utc::now();
 
-        let rep_factor = AbilityTarget::rep_blend(team_reputation, league_reputation, country_reputation);
+        let rep_factor =
+            AbilityTarget::rep_blend(team_reputation, league_reputation, country_reputation);
 
         let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
@@ -672,7 +754,8 @@ impl PlayerGenerator {
         // Picker is context-aware: PA, team_type, and squad_role bias the
         // distribution toward modern/specialist roles for top-tier squads
         // and toward traditional roles for lower tiers.
-        let primary_position = Self::pick_exact_position(bucket, potential_ability, team_type, role);
+        let primary_position =
+            Self::pick_exact_position(bucket, potential_ability, team_type, role);
         let positions = Self::generate_positions_from_primary(primary_position, potential_ability);
 
         let country_code = CountryLoader::code_for_id(country_id);
@@ -696,7 +779,10 @@ impl PlayerGenerator {
         SkillRescaler::clamp_to_cap(&mut skills, AgeCurve::skill_cap(age));
         skills.physical.match_readiness = FitnessState::match_readiness(age);
 
-        let is_youth = matches!(team_type, TeamType::U18 | TeamType::U19 | TeamType::U20 | TeamType::U21 | TeamType::U23);
+        let is_youth = matches!(
+            team_type,
+            TeamType::U18 | TeamType::U19 | TeamType::U20 | TeamType::U21 | TeamType::U23
+        );
 
         let player_attributes = Self::generate_player_attributes(
             rep_factor,
@@ -745,15 +831,20 @@ impl PlayerGenerator {
             _ => 0.30,
         };
 
-        let base_salary = (IntegerUtils::random(salary_min, salary_max) as f64 * age_salary_factor * ability_salary_factor) as u32;
+        let base_salary = (IntegerUtils::random(salary_min, salary_max) as f64
+            * age_salary_factor
+            * ability_salary_factor) as u32;
         let salary = if is_youth {
             Self::youth_salary(player_attributes.current_ability)
         } else {
             base_salary.max(Self::reserve_salary(player_attributes.current_ability))
         };
-        let contract_years = Self::generate_contract_years(age, player_attributes.current_ability, player_attributes.current_reputation);
-        let expiration =
-            NaiveDate::from_ymd_opt(now.year() + contract_years, 3, 14).unwrap();
+        let contract_years = Self::generate_contract_years(
+            age,
+            player_attributes.current_ability,
+            player_attributes.current_reputation,
+        );
+        let expiration = NaiveDate::from_ymd_opt(now.year() + contract_years, 3, 14).unwrap();
 
         let contract = if is_youth {
             PlayerClubContract::new_youth(salary, expiration)
@@ -762,12 +853,11 @@ impl PlayerGenerator {
         };
 
         // Native languages based on player's nationality
-        let native_languages: Vec<core::PlayerLanguage> = core::Language::from_country_code(
-            &CountryLoader::code_for_id(country_id)
-        )
-            .into_iter()
-            .map(|lang| core::PlayerLanguage::native(lang))
-            .collect();
+        let native_languages: Vec<core::PlayerLanguage> =
+            core::Language::from_country_code(&CountryLoader::code_for_id(country_id))
+                .into_iter()
+                .map(|lang| core::PlayerLanguage::native(lang))
+                .collect();
 
         Player::builder()
             .id(next_player_id())
@@ -807,16 +897,31 @@ impl PlayerGenerator {
         // Per-group age ratios still vary (mentality lags physicals etc.),
         // but they now scale the *target CA* baseline rather than PA.
         let tech_age_ratio = match age {
-            0..=17 => 0.78, 18..=19 => 0.85, 20..=22 => 0.92,
-            23..=26 => 0.97, 27..=29 => 1.0, 30..=32 => 0.97, _ => 0.93,
+            0..=17 => 0.78,
+            18..=19 => 0.85,
+            20..=22 => 0.92,
+            23..=26 => 0.97,
+            27..=29 => 1.0,
+            30..=32 => 0.97,
+            _ => 0.93,
         };
         let mental_age_ratio = match age {
-            0..=17 => 0.60, 18..=19 => 0.68, 20..=22 => 0.78,
-            23..=26 => 0.88, 27..=29 => 0.96, 30..=32 => 1.0, _ => 1.0,
+            0..=17 => 0.60,
+            18..=19 => 0.68,
+            20..=22 => 0.78,
+            23..=26 => 0.88,
+            27..=29 => 0.96,
+            30..=32 => 1.0,
+            _ => 1.0,
         };
         let physical_age_ratio = match age {
-            0..=17 => 0.72, 18..=19 => 0.82, 20..=22 => 0.90,
-            23..=26 => 0.97, 27..=29 => 1.0, 30..=32 => 0.93, _ => 0.82,
+            0..=17 => 0.72,
+            18..=19 => 0.82,
+            20..=22 => 0.90,
+            23..=26 => 0.97,
+            27..=29 => 1.0,
+            30..=32 => 0.93,
+            _ => 0.82,
         };
 
         let tech_mean = ca_skill_target * tech_age_ratio;
@@ -832,13 +937,19 @@ impl PlayerGenerator {
         RoleArchetype::apply(&mut pos_w, &bucket);
 
         let base_noise = 1.4 + rep_factor * 0.8;
-        let tech_noise = if age <= 18 { base_noise + 1.5 } else { base_noise + 0.4 };
+        let tech_noise = if age <= 18 {
+            base_noise + 1.5
+        } else {
+            base_noise + 0.4
+        };
         let mental_noise = base_noise * 0.5;
         let phys_noise = base_noise * 1.3;
 
         let mut skills = [0.0f32; SKILL_COUNT];
         for i in 0..SKILL_COUNT {
-            if i == SK_MATCH_READINESS { continue; }
+            if i == SK_MATCH_READINESS {
+                continue;
+            }
             let (group_mean, noise) = match SkillGroup::from_index(i) {
                 SkillGroup::Technical => (tech_mean, tech_noise),
                 SkillGroup::Mental => (mental_mean, mental_noise),
@@ -853,17 +964,23 @@ impl PlayerGenerator {
         // Mental cohesion: mentality is largely unified — strong-willed
         // players are strong-willed across the board, not just one slot.
         let m_avg: f32 = skills[14..28].iter().sum::<f32>() / 14.0;
-        for i in 14..28 { skills[i] = skills[i] * 0.70 + m_avg * 0.30; }
+        for i in 14..28 {
+            skills[i] = skills[i] * 0.70 + m_avg * 0.30;
+        }
 
         // Physical cohesion: lighter pull, keeps individuality.
         let p_avg: f32 = skills[28..36].iter().sum::<f32>() / 8.0;
-        for i in 28..36 { skills[i] = skills[i] * 0.85 + p_avg * 0.15; }
+        for i in 28..36 {
+            skills[i] = skills[i] * 0.85 + p_avg * 0.15;
+        }
 
         // Affinities + country bias before the age cap, so the cap is final.
         SkillAffinities::apply(&mut skills);
         let bias = super::country_bias::country_skill_bias(continent_id, country_code);
         for i in 0..SKILL_COUNT {
-            if i == SK_MATCH_READINESS { continue; }
+            if i == SK_MATCH_READINESS {
+                continue;
+            }
             skills[i] += bias[i];
         }
 
@@ -881,7 +998,9 @@ impl PlayerGenerator {
         let safe_floor = |f: f32| f.min(cap).max(1.0);
 
         for i in 0..SKILL_COUNT {
-            if i == SK_MATCH_READINESS { continue; }
+            if i == SK_MATCH_READINESS {
+                continue;
+            }
             if pos_w[i] >= 1.2 {
                 skills[i] = skills[i].max(safe_floor(key_floor));
             }
@@ -911,7 +1030,9 @@ impl PlayerGenerator {
         // initialised separately by `generate_player_attributes`.
         skills[SK_MATCH_READINESS] = 0.0;
 
-        for v in skills.iter_mut() { *v = v.clamp(0.0, 20.0); }
+        for v in skills.iter_mut() {
+            *v = v.clamp(0.0, 20.0);
+        }
 
         let mut result = SkillsArray::into_skills(&skills);
         if matches!(primary_position, PlayerPositionType::Goalkeeper) {
@@ -929,16 +1050,20 @@ impl PlayerGenerator {
     ///   Command: Command of Area, Aerial Reach, Communication, Punching
     ///   Distribution: Kicking, Throwing, First Touch, Passing
     ///   Specialist: Rushing Out, Eccentricity
-    fn generate_gk_skills(ca_skill_target: f32, age: u32, _pos_w: &[f32; SKILL_COUNT]) -> core::Goalkeeping {
+    fn generate_gk_skills(
+        ca_skill_target: f32,
+        age: u32,
+        _pos_w: &[f32; SKILL_COUNT],
+    ) -> core::Goalkeeping {
         // GK skills develop like mental — peak in late 20s/early 30s (experience matters)
         let gk_age_ratio = match age {
-            0..=17 =>  0.60,
+            0..=17 => 0.60,
             18..=19 => 0.70,
             20..=22 => 0.80,
             23..=26 => 0.90,
             27..=29 => 0.97,
             30..=34 => 1.0,
-            _ =>       0.95,
+            _ => 0.95,
         };
 
         let gk_mean = ca_skill_target * gk_age_ratio;
@@ -950,62 +1075,72 @@ impl PlayerGenerator {
         // Weights: 1.0 = average, >1.0 = boosted, <1.0 = reduced
         let (_archetype_name, w) = if roll < 0.35 {
             // Shot Stopper — elite reflexes, handling, positioning
-            ("shot_stopper", [
-                0.9,  // aerial_reach
-                0.9,  // command_of_area
-                0.8,  // communication
-                0.4,  // eccentricity
-                0.6,  // first_touch
-                1.6,  // handling
-                0.7,  // kicking
-                1.3,  // one_on_ones
-                0.6,  // passing
-                1.1,  // punching
-                1.7,  // reflexes
-                0.8,  // rushing_out
-                0.7,  // throwing
-            ])
+            (
+                "shot_stopper",
+                [
+                    0.9, // aerial_reach
+                    0.9, // command_of_area
+                    0.8, // communication
+                    0.4, // eccentricity
+                    0.6, // first_touch
+                    1.6, // handling
+                    0.7, // kicking
+                    1.3, // one_on_ones
+                    0.6, // passing
+                    1.1, // punching
+                    1.7, // reflexes
+                    0.8, // rushing_out
+                    0.7, // throwing
+                ],
+            )
         } else if roll < 0.60 {
             // Sweeper Keeper — distribution, rushing out, brave
-            ("sweeper_keeper", [
-                0.8,  // aerial_reach
-                1.0,  // command_of_area
-                1.0,  // communication
-                1.2,  // eccentricity
-                1.5,  // first_touch
-                1.1,  // handling
-                1.3,  // kicking
-                1.2,  // one_on_ones
-                1.4,  // passing
-                0.7,  // punching
-                1.1,  // reflexes
-                1.5,  // rushing_out
-                1.2,  // throwing
-            ])
+            (
+                "sweeper_keeper",
+                [
+                    0.8, // aerial_reach
+                    1.0, // command_of_area
+                    1.0, // communication
+                    1.2, // eccentricity
+                    1.5, // first_touch
+                    1.1, // handling
+                    1.3, // kicking
+                    1.2, // one_on_ones
+                    1.4, // passing
+                    0.7, // punching
+                    1.1, // reflexes
+                    1.5, // rushing_out
+                    1.2, // throwing
+                ],
+            )
         } else if roll < 0.82 {
             // Commanding — aerial dominance, communication, set-piece defense
-            ("commanding", [
-                1.6,  // aerial_reach
-                1.5,  // command_of_area
-                1.4,  // communication
-                0.5,  // eccentricity
-                0.7,  // first_touch
-                1.2,  // handling
-                0.9,  // kicking
-                1.0,  // one_on_ones
-                0.7,  // passing
-                1.3,  // punching
-                1.1,  // reflexes
-                0.9,  // rushing_out
-                0.8,  // throwing
-            ])
+            (
+                "commanding",
+                [
+                    1.6, // aerial_reach
+                    1.5, // command_of_area
+                    1.4, // communication
+                    0.5, // eccentricity
+                    0.7, // first_touch
+                    1.2, // handling
+                    0.9, // kicking
+                    1.0, // one_on_ones
+                    0.7, // passing
+                    1.3, // punching
+                    1.1, // reflexes
+                    0.9, // rushing_out
+                    0.8, // throwing
+                ],
+            )
         } else {
             // All-Rounder — balanced
-            ("all_rounder", [
-                1.0, 1.0, 1.0, 0.7,
-                1.0, 1.2, 1.0, 1.1,
-                0.9, 0.9, 1.2, 1.0, 0.9,
-            ])
+            (
+                "all_rounder",
+                [
+                    1.0, 1.0, 1.0, 0.7, 1.0, 1.2, 1.0, 1.1, 0.9, 0.9, 1.2, 1.0, 0.9,
+                ],
+            )
         };
 
         // Generate each GK skill
@@ -1021,9 +1156,9 @@ impl PlayerGenerator {
         let general_floor = (ca_skill_target * 0.25).clamp(2.0, 7.0);
 
         // Core skills (indices: 5=handling, 10=reflexes, 7=one_on_ones)
-        gk_skills[5] = gk_skills[5].max(core_floor);  // handling
+        gk_skills[5] = gk_skills[5].max(core_floor); // handling
         gk_skills[10] = gk_skills[10].max(core_floor); // reflexes
-        gk_skills[7] = gk_skills[7].max(core_floor);   // one_on_ones
+        gk_skills[7] = gk_skills[7].max(core_floor); // one_on_ones
 
         // All other skills get general floor
         for i in 0..13 {
@@ -1031,19 +1166,19 @@ impl PlayerGenerator {
         }
 
         core::Goalkeeping {
-            aerial_reach:    gk_skills[0],
+            aerial_reach: gk_skills[0],
             command_of_area: gk_skills[1],
-            communication:   gk_skills[2],
-            eccentricity:    gk_skills[3],
-            first_touch:     gk_skills[4],
-            handling:        gk_skills[5],
-            kicking:         gk_skills[6],
-            one_on_ones:     gk_skills[7],
-            passing:         gk_skills[8],
-            punching:        gk_skills[9],
-            reflexes:        gk_skills[10],
-            rushing_out:     gk_skills[11],
-            throwing:        gk_skills[12],
+            communication: gk_skills[2],
+            eccentricity: gk_skills[3],
+            first_touch: gk_skills[4],
+            handling: gk_skills[5],
+            kicking: gk_skills[6],
+            one_on_ones: gk_skills[7],
+            passing: gk_skills[8],
+            punching: gk_skills[9],
+            reflexes: gk_skills[10],
+            rushing_out: gk_skills[11],
+            throwing: gk_skills[12],
         }
     }
 
@@ -1086,7 +1221,7 @@ impl PlayerGenerator {
             }
             PositionType::Midfielder => {
                 let amc_chance = (5.0 + modern_pull * 22.0) as i32; // 5..27%
-                let dm_chance = 12 + (modern_pull * 8.0) as i32;    // 12..20%
+                let dm_chance = 12 + (modern_pull * 8.0) as i32; // 12..20%
                 let wide_chance = 22;
                 let roll = IntegerUtils::random(0, 100);
                 if roll < amc_chance {
@@ -1106,7 +1241,7 @@ impl PlayerGenerator {
                 // (FL, FR) and the occasional false 9 (FC). Lower-tier
                 // squads default to traditional ST.
                 let wide_chance = (16.0 + modern_pull * 30.0) as i32; // 16..46%
-                let fc_chance = (5.0 + modern_pull * 15.0) as i32;    // 5..20%
+                let fc_chance = (5.0 + modern_pull * 15.0) as i32; // 5..20%
                 let roll = IntegerUtils::random(0, 100);
                 if roll < wide_chance / 2 {
                     PlayerPositionType::ForwardLeft
@@ -1143,9 +1278,15 @@ impl PlayerGenerator {
     /// Generate the secondary/adjacent positions around a known primary.
     /// Primary always gets level 20; DC/MC fan out to formation slots; wide
     /// and high-PA players collect extras.
-    fn generate_positions_from_primary(primary: PlayerPositionType, potential_ability: u8) -> PlayerPositions {
+    fn generate_positions_from_primary(
+        primary: PlayerPositionType,
+        potential_ability: u8,
+    ) -> PlayerPositions {
         let mut positions = Vec::with_capacity(6);
-        positions.push(PlayerPosition { position: primary, level: 20 });
+        positions.push(PlayerPosition {
+            position: primary,
+            level: 20,
+        });
 
         // DC and MC players automatically get formation-slot variants
         match primary {
@@ -1177,7 +1318,10 @@ impl PlayerGenerator {
         for adj in &adjacent {
             if IntegerUtils::random(0, 99) < 40 {
                 let level = IntegerUtils::random(14, 18) as u8;
-                positions.push(PlayerPosition { position: *adj, level });
+                positions.push(PlayerPosition {
+                    position: *adj,
+                    level,
+                });
             }
         }
 
@@ -1187,7 +1331,10 @@ impl PlayerGenerator {
             if IntegerUtils::random(0, 99) < 15 {
                 if !positions.iter().any(|p| p.position == opposite) {
                     let level = IntegerUtils::random(12, 16) as u8;
-                    positions.push(PlayerPosition { position: opposite, level });
+                    positions.push(PlayerPosition {
+                        position: opposite,
+                        level,
+                    });
                 }
             }
         }
@@ -1242,12 +1389,22 @@ impl PlayerGenerator {
 
         // Age factor: young players get longer contracts, old players shorter
         match age {
-            0..=19 => { years += 1.5; }   // youth: clubs lock in prospects
-            20..=23 => { years += 1.0; }   // emerging: still investing
-            24..=29 => { }                  // peak: standard deals
-            30..=31 => { years -= 0.5; }   // early decline risk
-            32..=33 => { years -= 1.0; }   // short deals
-            _ => { years -= 1.5; }          // 34+: 1-2 year deals
+            0..=19 => {
+                years += 1.5;
+            } // youth: clubs lock in prospects
+            20..=23 => {
+                years += 1.0;
+            } // emerging: still investing
+            24..=29 => {} // peak: standard deals
+            30..=31 => {
+                years -= 0.5;
+            } // early decline risk
+            32..=33 => {
+                years -= 1.0;
+            } // short deals
+            _ => {
+                years -= 1.5;
+            } // 34+: 1-2 year deals
         }
 
         // High-ability players get longer deals (club wants to lock them in)
@@ -1319,14 +1476,9 @@ impl PlayerGenerator {
             weight: physical.weight_kg,
             height: physical.height_cm,
             value: 0,
-            current_reputation: IntegerUtils::random(
-                (rep_base as f32 * 0.3) as i32,
-                rep_base,
-            ) as i16,
-            home_reputation: IntegerUtils::random(
-                (rep_base as f32 * 0.5) as i32,
-                rep_base,
-            ) as i16,
+            current_reputation: IntegerUtils::random((rep_base as f32 * 0.3) as i32, rep_base)
+                as i16,
+            home_reputation: IntegerUtils::random((rep_base as f32 * 0.5) as i32, rep_base) as i16,
             world_reputation: IntegerUtils::random(
                 (rep_base as f32 * 0.1) as i32,
                 (rep_base as f32 * 0.4) as i32,
@@ -1362,14 +1514,18 @@ impl PlayerGenerator {
 
     fn generate_first_name(&self) -> String {
         let names = &self.people_names_data.first_names;
-        if names.is_empty() { return String::new(); }
+        if names.is_empty() {
+            return String::new();
+        }
         let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
         names[idx].to_owned()
     }
 
     fn generate_last_name(&self) -> String {
         let names = &self.people_names_data.last_names;
-        if names.is_empty() { return String::new(); }
+        if names.is_empty() {
+            return String::new();
+        }
         let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
         names[idx].to_owned()
     }
@@ -1448,7 +1604,9 @@ impl PlayerGenerator {
             builder = builder.statistics_history(history);
         }
 
-        builder.build().expect("Failed to build Player from ODB record")
+        builder
+            .build()
+            .expect("Failed to build Player from ODB record")
     }
 }
 
@@ -1520,7 +1678,13 @@ fn resolve_club_display(
     data: &DatabaseEntity,
 ) -> (String, String, u16, String, String) {
     let Some(club) = data.clubs.iter().find(|c| c.id == club_id) else {
-        return (String::new(), String::new(), 0, String::new(), String::new());
+        return (
+            String::new(),
+            String::new(),
+            0,
+            String::new(),
+            String::new(),
+        );
     };
 
     // Prefer the "Main" team; fall back to the first listed team.
@@ -1540,7 +1704,13 @@ fn resolve_club_display(
         .map(|l| (l.name.clone(), l.slug.clone()))
         .unwrap_or_default();
 
-    (club.name.clone(), team_slug, team_reputation, league_name, league_slug)
+    (
+        club.name.clone(),
+        team_slug,
+        team_reputation,
+        league_name,
+        league_slug,
+    )
 }
 
 fn age_in_years(dob: NaiveDate, now: NaiveDate) -> u32 {
@@ -1771,9 +1941,7 @@ fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<Play
     // (via the loaned-out scanner) while physically playing at the
     // borrower. Fall back to B → U23/U21/U20/U19/U18 → Main in that
     // order for clubs that don't have a Reserve team.
-    const TEAM_PRIORITY: [&str; 8] = [
-        "Reserve", "B", "U23", "U21", "U20", "U19", "U18", "Main",
-    ];
+    const TEAM_PRIORITY: [&str; 8] = ["Reserve", "B", "U23", "U21", "U20", "U19", "U18", "Main"];
     let loan_from_team_id = data
         .clubs
         .iter()
@@ -1791,11 +1959,7 @@ fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<Play
     let loan_salary = match loan.salary {
         Some(s) if s > 0 => s,
         _ => {
-            let parent_salary = record
-                .contract
-                .as_ref()
-                .and_then(|c| c.salary)
-                .unwrap_or(0);
+            let parent_salary = record.contract.as_ref().and_then(|c| c.salary).unwrap_or(0);
             if parent_salary > 0 {
                 WageCalculator::loan_wage_split(parent_salary).0
             } else {
@@ -1933,15 +2097,15 @@ fn build_player_attributes(
 pub struct SkillRescaler;
 
 impl SkillRescaler {
-    pub fn to_target_ca(
-        skills: &mut PlayerSkills,
-        primary: PlayerPositionType,
-        target_ca: u8,
-    ) {
-        if target_ca == 0 { return; }
+    pub fn to_target_ca(skills: &mut PlayerSkills, primary: PlayerPositionType, target_ca: u8) {
+        if target_ca == 0 {
+            return;
+        }
         let current = skills.calculate_ability_for_position(primary).max(1);
         let factor = (target_ca as f32 / current as f32).clamp(0.40, 2.50);
-        if (factor - 1.0).abs() < 0.02 { return; }
+        if (factor - 1.0).abs() < 0.02 {
+            return;
+        }
         Self::scale_in_place(skills, factor);
         let after = skills.calculate_ability_for_position(primary).max(1);
         let f2 = (target_ca as f32 / after as f32).clamp(0.85, 1.15);
@@ -1954,25 +2118,64 @@ impl SkillRescaler {
     /// re-enforce the age cap (rescaling can push young-player skills above
     /// the cap when the rep blend implies a CA the age can't yet support).
     pub fn clamp_to_cap(skills: &mut PlayerSkills, cap: f32) {
-        macro_rules! c { ($v:expr) => { $v = $v.min(cap).max(1.0) }; }
+        macro_rules! c {
+            ($v:expr) => {
+                $v = $v.min(cap).max(1.0)
+            };
+        }
         let t = &mut skills.technical;
-        c!(t.corners); c!(t.crossing); c!(t.dribbling); c!(t.finishing);
-        c!(t.first_touch); c!(t.free_kicks); c!(t.heading); c!(t.long_shots);
-        c!(t.long_throws); c!(t.marking); c!(t.passing); c!(t.penalty_taking);
-        c!(t.tackling); c!(t.technique);
+        c!(t.corners);
+        c!(t.crossing);
+        c!(t.dribbling);
+        c!(t.finishing);
+        c!(t.first_touch);
+        c!(t.free_kicks);
+        c!(t.heading);
+        c!(t.long_shots);
+        c!(t.long_throws);
+        c!(t.marking);
+        c!(t.passing);
+        c!(t.penalty_taking);
+        c!(t.tackling);
+        c!(t.technique);
         let m = &mut skills.mental;
-        c!(m.aggression); c!(m.anticipation); c!(m.bravery); c!(m.composure);
-        c!(m.concentration); c!(m.decisions); c!(m.determination); c!(m.flair);
-        c!(m.leadership); c!(m.off_the_ball); c!(m.positioning); c!(m.teamwork);
-        c!(m.vision); c!(m.work_rate);
+        c!(m.aggression);
+        c!(m.anticipation);
+        c!(m.bravery);
+        c!(m.composure);
+        c!(m.concentration);
+        c!(m.decisions);
+        c!(m.determination);
+        c!(m.flair);
+        c!(m.leadership);
+        c!(m.off_the_ball);
+        c!(m.positioning);
+        c!(m.teamwork);
+        c!(m.vision);
+        c!(m.work_rate);
         let p = &mut skills.physical;
-        c!(p.acceleration); c!(p.agility); c!(p.balance); c!(p.jumping);
-        c!(p.natural_fitness); c!(p.pace); c!(p.stamina); c!(p.strength);
+        c!(p.acceleration);
+        c!(p.agility);
+        c!(p.balance);
+        c!(p.jumping);
+        c!(p.natural_fitness);
+        c!(p.pace);
+        c!(p.stamina);
+        c!(p.strength);
         let g = &mut skills.goalkeeping;
-        c!(g.aerial_reach); c!(g.command_of_area); c!(g.communication);
-        c!(g.eccentricity); c!(g.first_touch); c!(g.handling); c!(g.kicking);
-        c!(g.one_on_ones); c!(g.passing); c!(g.punching); c!(g.reflexes);
-        c!(g.rushing_out); c!(g.throwing);
+        c!(g.aerial_reach);
+        c!(g.command_of_area);
+        c!(g.communication);
+        c!(g.eccentricity);
+        c!(g.first_touch);
+        c!(g.handling);
+        c!(g.kicking);
+        c!(g.one_on_ones);
+        c!(g.passing);
+        c!(g.punching);
+        c!(g.reflexes);
+        c!(g.rushing_out);
+        c!(g.throwing);
     }
 
     fn scale_in_place(skills: &mut PlayerSkills, factor: f32) {
@@ -1982,23 +2185,58 @@ impl SkillRescaler {
             };
         }
         let t = &mut skills.technical;
-        s!(t.corners); s!(t.crossing); s!(t.dribbling); s!(t.finishing);
-        s!(t.first_touch); s!(t.free_kicks); s!(t.heading); s!(t.long_shots);
-        s!(t.long_throws); s!(t.marking); s!(t.passing); s!(t.penalty_taking);
-        s!(t.tackling); s!(t.technique);
+        s!(t.corners);
+        s!(t.crossing);
+        s!(t.dribbling);
+        s!(t.finishing);
+        s!(t.first_touch);
+        s!(t.free_kicks);
+        s!(t.heading);
+        s!(t.long_shots);
+        s!(t.long_throws);
+        s!(t.marking);
+        s!(t.passing);
+        s!(t.penalty_taking);
+        s!(t.tackling);
+        s!(t.technique);
         let m = &mut skills.mental;
-        s!(m.aggression); s!(m.anticipation); s!(m.bravery); s!(m.composure);
-        s!(m.concentration); s!(m.decisions); s!(m.determination); s!(m.flair);
-        s!(m.leadership); s!(m.off_the_ball); s!(m.positioning); s!(m.teamwork);
-        s!(m.vision); s!(m.work_rate);
+        s!(m.aggression);
+        s!(m.anticipation);
+        s!(m.bravery);
+        s!(m.composure);
+        s!(m.concentration);
+        s!(m.decisions);
+        s!(m.determination);
+        s!(m.flair);
+        s!(m.leadership);
+        s!(m.off_the_ball);
+        s!(m.positioning);
+        s!(m.teamwork);
+        s!(m.vision);
+        s!(m.work_rate);
         let p = &mut skills.physical;
-        s!(p.acceleration); s!(p.agility); s!(p.balance); s!(p.jumping);
-        s!(p.natural_fitness); s!(p.pace); s!(p.stamina); s!(p.strength);
+        s!(p.acceleration);
+        s!(p.agility);
+        s!(p.balance);
+        s!(p.jumping);
+        s!(p.natural_fitness);
+        s!(p.pace);
+        s!(p.stamina);
+        s!(p.strength);
         let g = &mut skills.goalkeeping;
-        s!(g.aerial_reach); s!(g.command_of_area); s!(g.communication);
-        s!(g.eccentricity); s!(g.first_touch); s!(g.handling); s!(g.kicking);
-        s!(g.one_on_ones); s!(g.passing); s!(g.punching); s!(g.reflexes);
-        s!(g.rushing_out); s!(g.throwing);
+        s!(g.aerial_reach);
+        s!(g.command_of_area);
+        s!(g.communication);
+        s!(g.eccentricity);
+        s!(g.first_touch);
+        s!(g.handling);
+        s!(g.kicking);
+        s!(g.one_on_ones);
+        s!(g.passing);
+        s!(g.punching);
+        s!(g.reflexes);
+        s!(g.rushing_out);
+        s!(g.throwing);
     }
 }
 
@@ -2014,8 +2252,14 @@ impl PositionLayout {
         match primary {
             PlayerPositionType::Goalkeeper => vec![],
             PlayerPositionType::DefenderCenter => vec![PlayerPositionType::DefensiveMidfielder],
-            PlayerPositionType::DefenderCenterLeft => vec![PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderLeft],
-            PlayerPositionType::DefenderCenterRight => vec![PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderRight],
+            PlayerPositionType::DefenderCenterLeft => vec![
+                PlayerPositionType::DefenderCenter,
+                PlayerPositionType::DefenderLeft,
+            ],
+            PlayerPositionType::DefenderCenterRight => vec![
+                PlayerPositionType::DefenderCenter,
+                PlayerPositionType::DefenderRight,
+            ],
             PlayerPositionType::DefenderLeft => vec![PlayerPositionType::WingbackLeft],
             PlayerPositionType::DefenderRight => vec![PlayerPositionType::WingbackRight],
             PlayerPositionType::MidfielderCenter => {
@@ -2025,16 +2269,28 @@ impl PositionLayout {
                     vec![PlayerPositionType::AttackingMidfielderCenter]
                 }
             }
-            PlayerPositionType::MidfielderCenterLeft => vec![PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderLeft],
-            PlayerPositionType::MidfielderCenterRight => vec![PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderRight],
+            PlayerPositionType::MidfielderCenterLeft => vec![
+                PlayerPositionType::MidfielderCenter,
+                PlayerPositionType::MidfielderLeft,
+            ],
+            PlayerPositionType::MidfielderCenterRight => vec![
+                PlayerPositionType::MidfielderCenter,
+                PlayerPositionType::MidfielderRight,
+            ],
             PlayerPositionType::MidfielderLeft => vec![PlayerPositionType::AttackingMidfielderLeft],
-            PlayerPositionType::MidfielderRight => vec![PlayerPositionType::AttackingMidfielderRight],
+            PlayerPositionType::MidfielderRight => {
+                vec![PlayerPositionType::AttackingMidfielderRight]
+            }
             PlayerPositionType::WingbackLeft => vec![PlayerPositionType::DefenderLeft],
             PlayerPositionType::WingbackRight => vec![PlayerPositionType::DefenderRight],
             PlayerPositionType::DefensiveMidfielder => vec![PlayerPositionType::MidfielderCenter],
-            PlayerPositionType::AttackingMidfielderCenter => vec![PlayerPositionType::MidfielderCenter],
+            PlayerPositionType::AttackingMidfielderCenter => {
+                vec![PlayerPositionType::MidfielderCenter]
+            }
             PlayerPositionType::AttackingMidfielderLeft => vec![PlayerPositionType::MidfielderLeft],
-            PlayerPositionType::AttackingMidfielderRight => vec![PlayerPositionType::MidfielderRight],
+            PlayerPositionType::AttackingMidfielderRight => {
+                vec![PlayerPositionType::MidfielderRight]
+            }
             PlayerPositionType::Striker => vec![PlayerPositionType::ForwardCenter],
             PlayerPositionType::ForwardCenter => vec![PlayerPositionType::Striker],
             PlayerPositionType::ForwardLeft => vec![PlayerPositionType::AttackingMidfielderLeft],
@@ -2067,7 +2323,9 @@ impl PositionLayout {
             PlayerPositionType::AttackingMidfielderRight => Some(PlayerPositionType::ForwardRight),
             PlayerPositionType::Striker => Some(PlayerPositionType::AttackingMidfielderCenter),
             PlayerPositionType::ForwardLeft => Some(PlayerPositionType::ForwardCenter),
-            PlayerPositionType::ForwardCenter => Some(PlayerPositionType::AttackingMidfielderCenter),
+            PlayerPositionType::ForwardCenter => {
+                Some(PlayerPositionType::AttackingMidfielderCenter)
+            }
             PlayerPositionType::ForwardRight => Some(PlayerPositionType::ForwardCenter),
             _ => None,
         }
@@ -2083,8 +2341,12 @@ impl PositionLayout {
             PlayerPositionType::MidfielderRight => Some(PlayerPositionType::MidfielderLeft),
             PlayerPositionType::WingbackLeft => Some(PlayerPositionType::WingbackRight),
             PlayerPositionType::WingbackRight => Some(PlayerPositionType::WingbackLeft),
-            PlayerPositionType::AttackingMidfielderLeft => Some(PlayerPositionType::AttackingMidfielderRight),
-            PlayerPositionType::AttackingMidfielderRight => Some(PlayerPositionType::AttackingMidfielderLeft),
+            PlayerPositionType::AttackingMidfielderLeft => {
+                Some(PlayerPositionType::AttackingMidfielderRight)
+            }
+            PlayerPositionType::AttackingMidfielderRight => {
+                Some(PlayerPositionType::AttackingMidfielderLeft)
+            }
             PlayerPositionType::ForwardLeft => Some(PlayerPositionType::ForwardRight),
             PlayerPositionType::ForwardRight => Some(PlayerPositionType::ForwardLeft),
             _ => None,
@@ -2103,8 +2365,15 @@ mod position_tests {
             let multi = (0..total)
                 .filter(|_| {
                     let primary = PlayerGenerator::pick_exact_position(
-                        PositionType::Midfielder, pa, TeamType::Main, SquadRole::Starter);
-                    PlayerGenerator::generate_positions_from_primary(primary, pa).positions.len() > 1
+                        PositionType::Midfielder,
+                        pa,
+                        TeamType::Main,
+                        SquadRole::Starter,
+                    );
+                    PlayerGenerator::generate_positions_from_primary(primary, pa)
+                        .positions
+                        .len()
+                        > 1
                 })
                 .count();
             let pct = multi * 100 / total;
@@ -2141,7 +2410,20 @@ mod generator_validation_tests {
         max_age: i32,
     ) -> Vec<core::Player> {
         (0..n)
-            .map(|_| g.generate(1, 1, bucket, team_rep, league_rep, country_rep, team_type, role, min_age, max_age))
+            .map(|_| {
+                g.generate(
+                    1,
+                    1,
+                    bucket,
+                    team_rep,
+                    league_rep,
+                    country_rep,
+                    team_type,
+                    role,
+                    min_age,
+                    max_age,
+                )
+            })
             .collect()
     }
 
@@ -2152,61 +2434,184 @@ mod generator_validation_tests {
     #[test]
     fn weak_clubs_yield_lower_ca_than_top_clubs() {
         let g = make_gen();
-        let weak = sample(&g, 200, PositionType::Midfielder, 1500, 1500, 2000,
-            TeamType::Main, SquadRole::Starter, 22, 30);
-        let elite = sample(&g, 200, PositionType::Midfielder, 9500, 9500, 8500,
-            TeamType::Main, SquadRole::Starter, 22, 30);
-        let weak_ca: Vec<u8> = weak.iter().map(|p| p.player_attributes.current_ability).collect();
-        let elite_ca: Vec<u8> = elite.iter().map(|p| p.player_attributes.current_ability).collect();
+        let weak = sample(
+            &g,
+            200,
+            PositionType::Midfielder,
+            1500,
+            1500,
+            2000,
+            TeamType::Main,
+            SquadRole::Starter,
+            22,
+            30,
+        );
+        let elite = sample(
+            &g,
+            200,
+            PositionType::Midfielder,
+            9500,
+            9500,
+            8500,
+            TeamType::Main,
+            SquadRole::Starter,
+            22,
+            30,
+        );
+        let weak_ca: Vec<u8> = weak
+            .iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
+        let elite_ca: Vec<u8> = elite
+            .iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
         let dm = mean(&elite_ca) - mean(&weak_ca);
-        eprintln!("CA weak={:.1} elite={:.1} delta={:.1}", mean(&weak_ca), mean(&elite_ca), dm);
-        assert!(dm > 40.0, "elite clubs should mint distinctly stronger players (delta={:.1})", dm);
+        eprintln!(
+            "CA weak={:.1} elite={:.1} delta={:.1}",
+            mean(&weak_ca),
+            mean(&elite_ca),
+            dm
+        );
+        assert!(
+            dm > 40.0,
+            "elite clubs should mint distinctly stronger players (delta={:.1})",
+            dm
+        );
     }
 
     #[test]
     fn league_reputation_lifts_ca_at_equal_team_rep() {
         let g = make_gen();
-        let low_lg = sample(&g, 200, PositionType::Midfielder, 5000, 1500, 5000,
-            TeamType::Main, SquadRole::Starter, 22, 30);
-        let high_lg = sample(&g, 200, PositionType::Midfielder, 5000, 9500, 5000,
-            TeamType::Main, SquadRole::Starter, 22, 30);
-        let low: Vec<u8> = low_lg.iter().map(|p| p.player_attributes.current_ability).collect();
-        let high: Vec<u8> = high_lg.iter().map(|p| p.player_attributes.current_ability).collect();
+        let low_lg = sample(
+            &g,
+            200,
+            PositionType::Midfielder,
+            5000,
+            1500,
+            5000,
+            TeamType::Main,
+            SquadRole::Starter,
+            22,
+            30,
+        );
+        let high_lg = sample(
+            &g,
+            200,
+            PositionType::Midfielder,
+            5000,
+            9500,
+            5000,
+            TeamType::Main,
+            SquadRole::Starter,
+            22,
+            30,
+        );
+        let low: Vec<u8> = low_lg
+            .iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
+        let high: Vec<u8> = high_lg
+            .iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
         let dm = mean(&high) - mean(&low);
-        eprintln!("league CA low={:.1} high={:.1} delta={:.1}", mean(&low), mean(&high), dm);
-        assert!(dm > 10.0, "high-reputation league should pull CA up (delta={:.1})", dm);
+        eprintln!(
+            "league CA low={:.1} high={:.1} delta={:.1}",
+            mean(&low),
+            mean(&high),
+            dm
+        );
+        assert!(
+            dm > 10.0,
+            "high-reputation league should pull CA up (delta={:.1})",
+            dm
+        );
     }
 
     #[test]
     fn prospects_carry_more_headroom_than_starters() {
         let g = make_gen();
-        let starters = sample(&g, 200, PositionType::Midfielder, 7000, 7000, 6000,
-            TeamType::Main, SquadRole::Starter, 25, 28);
-        let prospects = sample(&g, 200, PositionType::Midfielder, 7000, 7000, 6000,
-            TeamType::U21, SquadRole::Prospect, 17, 19);
-        let starter_gap: Vec<i32> = starters.iter()
-            .map(|p| p.player_attributes.potential_ability as i32 - p.player_attributes.current_ability as i32)
+        let starters = sample(
+            &g,
+            200,
+            PositionType::Midfielder,
+            7000,
+            7000,
+            6000,
+            TeamType::Main,
+            SquadRole::Starter,
+            25,
+            28,
+        );
+        let prospects = sample(
+            &g,
+            200,
+            PositionType::Midfielder,
+            7000,
+            7000,
+            6000,
+            TeamType::U21,
+            SquadRole::Prospect,
+            17,
+            19,
+        );
+        let starter_gap: Vec<i32> = starters
+            .iter()
+            .map(|p| {
+                p.player_attributes.potential_ability as i32
+                    - p.player_attributes.current_ability as i32
+            })
             .collect();
-        let prospect_gap: Vec<i32> = prospects.iter()
-            .map(|p| p.player_attributes.potential_ability as i32 - p.player_attributes.current_ability as i32)
+        let prospect_gap: Vec<i32> = prospects
+            .iter()
+            .map(|p| {
+                p.player_attributes.potential_ability as i32
+                    - p.player_attributes.current_ability as i32
+            })
             .collect();
         let s_avg = starter_gap.iter().sum::<i32>() as f32 / starter_gap.len() as f32;
         let p_avg = prospect_gap.iter().sum::<i32>() as f32 / prospect_gap.len() as f32;
         eprintln!("PA-CA gap: starter={:.1} prospect={:.1}", s_avg, p_avg);
-        assert!(p_avg > s_avg + 15.0, "prospects must have more PA headroom than starters ({} vs {})", p_avg, s_avg);
+        assert!(
+            p_avg > s_avg + 15.0,
+            "prospects must have more PA headroom than starters ({} vs {})",
+            p_avg,
+            s_avg
+        );
     }
 
     #[test]
     fn pa_never_below_ca() {
         let g = make_gen();
-        for role in [SquadRole::Star, SquadRole::Starter, SquadRole::Rotation,
-                     SquadRole::Backup, SquadRole::Prospect, SquadRole::Fringe] {
-            let players = sample(&g, 100, PositionType::Midfielder, 6000, 6000, 5000,
-                TeamType::Main, role, 18, 32);
+        for role in [
+            SquadRole::Star,
+            SquadRole::Starter,
+            SquadRole::Rotation,
+            SquadRole::Backup,
+            SquadRole::Prospect,
+            SquadRole::Fringe,
+        ] {
+            let players = sample(
+                &g,
+                100,
+                PositionType::Midfielder,
+                6000,
+                6000,
+                5000,
+                TeamType::Main,
+                role,
+                18,
+                32,
+            );
             for p in &players {
-                assert!(p.player_attributes.potential_ability >= p.player_attributes.current_ability,
-                    "PA<CA for role {:?} ({}<{})", role,
-                    p.player_attributes.potential_ability, p.player_attributes.current_ability);
+                assert!(
+                    p.player_attributes.potential_ability >= p.player_attributes.current_ability,
+                    "PA<CA for role {:?} ({}<{})",
+                    role,
+                    p.player_attributes.potential_ability,
+                    p.player_attributes.current_ability
+                );
             }
         }
     }
@@ -2217,16 +2622,32 @@ mod generator_validation_tests {
         // have skill 19 if their country bias was high. Now bias is applied
         // *before* the cap. Verify no skill exceeds the per-player age cap.
         let g = make_gen();
-        let players = sample(&g, 200, PositionType::Striker, 9500, 9500, 9500,
-            TeamType::U21, SquadRole::Prospect, 16, 17);
+        let players = sample(
+            &g,
+            200,
+            PositionType::Striker,
+            9500,
+            9500,
+            9500,
+            TeamType::U21,
+            SquadRole::Prospect,
+            16,
+            17,
+        );
         let mut violations = 0;
         for p in &players {
             let chrono_now = chrono::Utc::now().date_naive();
             let age = (chrono_now.year() - p.birth_date.year()) as u32;
             let cap = AgeCurve::skill_cap(age);
             let s = &p.skills;
-            for v in [s.technical.finishing, s.technical.dribbling, s.physical.pace,
-                      s.physical.acceleration, s.mental.composure, s.mental.flair] {
+            for v in [
+                s.technical.finishing,
+                s.technical.dribbling,
+                s.physical.pace,
+                s.physical.acceleration,
+                s.mental.composure,
+                s.mental.flair,
+            ] {
                 if v > cap + 0.01 {
                     violations += 1;
                 }
@@ -2238,17 +2659,36 @@ mod generator_validation_tests {
     #[test]
     fn striker_ca_is_dominated_by_attacking_attributes() {
         let g = make_gen();
-        let strikers = sample(&g, 200, PositionType::Striker, 8000, 8000, 7000,
-            TeamType::Main, SquadRole::Starter, 24, 28);
+        let strikers = sample(
+            &g,
+            200,
+            PositionType::Striker,
+            8000,
+            8000,
+            7000,
+            TeamType::Main,
+            SquadRole::Starter,
+            24,
+            28,
+        );
         let mut finish_dominant = 0;
         let mut tackle_dominant = 0;
         for p in &strikers {
-            if p.skills.technical.finishing > p.skills.technical.tackling + 2.0 { finish_dominant += 1; }
-            if p.skills.technical.tackling > p.skills.technical.finishing + 2.0 { tackle_dominant += 1; }
+            if p.skills.technical.finishing > p.skills.technical.tackling + 2.0 {
+                finish_dominant += 1;
+            }
+            if p.skills.technical.tackling > p.skills.technical.finishing + 2.0 {
+                tackle_dominant += 1;
+            }
         }
-        eprintln!("strikers (n=200): finish>>tackle={}, tackle>>finish={}",
-            finish_dominant, tackle_dominant);
-        assert!(finish_dominant > 150, "most strikers should have finishing well above tackling");
+        eprintln!(
+            "strikers (n=200): finish>>tackle={}, tackle>>finish={}",
+            finish_dominant, tackle_dominant
+        );
+        assert!(
+            finish_dominant > 150,
+            "most strikers should have finishing well above tackling"
+        );
         assert!(tackle_dominant < 5, "strikers shouldn't be strong tacklers");
     }
 
@@ -2257,11 +2697,28 @@ mod generator_validation_tests {
         // Prospects on a U21 squad at a top club should still be young and
         // have CA below their PA — they shouldn't read like first-team stars.
         let g = make_gen();
-        let u21 = sample(&g, 300, PositionType::Midfielder, 9000, 9000, 8000,
-            TeamType::U21, SquadRole::Prospect, 17, 20);
-        let elite_ca_count = u21.iter().filter(|p| p.player_attributes.current_ability >= 150).count();
+        let u21 = sample(
+            &g,
+            300,
+            PositionType::Midfielder,
+            9000,
+            9000,
+            8000,
+            TeamType::U21,
+            SquadRole::Prospect,
+            17,
+            20,
+        );
+        let elite_ca_count = u21
+            .iter()
+            .filter(|p| p.player_attributes.current_ability >= 150)
+            .count();
         eprintln!("U21 with CA>=150: {}/300", elite_ca_count);
-        assert!(elite_ca_count < 5, "U21 prospects shouldn't mint CA>=150 players ({}/300)", elite_ca_count);
+        assert!(
+            elite_ca_count < 5,
+            "U21 prospects shouldn't mint CA>=150 players ({}/300)",
+            elite_ca_count
+        );
     }
 
     #[test]
@@ -2270,14 +2727,31 @@ mod generator_validation_tests {
         // the rescaler's two-pass loop converges, and the age cap is high
         // enough not to clamp them.
         let g = make_gen();
-        let players = sample(&g, 300, PositionType::Midfielder, 7000, 7000, 6000,
-            TeamType::Main, SquadRole::Starter, 24, 28);
-        let cas: Vec<u8> = players.iter().map(|p| p.player_attributes.current_ability).collect();
+        let players = sample(
+            &g,
+            300,
+            PositionType::Midfielder,
+            7000,
+            7000,
+            6000,
+            TeamType::Main,
+            SquadRole::Starter,
+            24,
+            28,
+        );
+        let cas: Vec<u8> = players
+            .iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
         let avg = mean(&cas);
         // Target for these inputs is roughly: rep_curve ≈ 0.71 * (0.50*0.7 + 0.30*0.7 + 0.20*0.6) ≈ 0.68
         // base_ca ≈ 35 + 0.68*145 ≈ 134; with Starter (1.10) and age 1.0 → ~147 ± noise.
         eprintln!("adult Starter@(7000/7000/6000) average CA = {:.1}", avg);
-        assert!(avg > 120.0 && avg < 165.0, "adult CA out of expected band: {}", avg);
+        assert!(
+            avg > 120.0 && avg < 165.0,
+            "adult CA out of expected band: {}",
+            avg
+        );
     }
 
     #[test]
@@ -2287,18 +2761,42 @@ mod generator_validation_tests {
         // but in practice noise + position weights produce CA much lower than target.
         // The CONTRACT: young players' final CA may be below their target, never above.
         let g = make_gen();
-        let players = sample(&g, 300, PositionType::Midfielder, 9500, 9500, 9000,
-            TeamType::U21, SquadRole::Prospect, 16, 17);
+        let players = sample(
+            &g,
+            300,
+            PositionType::Midfielder,
+            9500,
+            9500,
+            9000,
+            TeamType::U21,
+            SquadRole::Prospect,
+            16,
+            17,
+        );
         // Compute a synthetic target band by reproducing AbilityTarget::current_for math
         // for these inputs, then verify CAs cluster below or near it.
-        let cas: Vec<u8> = players.iter().map(|p| p.player_attributes.current_ability).collect();
+        let cas: Vec<u8> = players
+            .iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
         let max = *cas.iter().max().unwrap();
         let avg = mean(&cas);
-        eprintln!("16-17yo prospect@(top tier) avg CA = {:.1}, max = {}", avg, max);
+        eprintln!(
+            "16-17yo prospect@(top tier) avg CA = {:.1}, max = {}",
+            avg, max
+        );
         // Hard ceiling enforced by age cap. No 16-17yo should hit elite CA values.
-        assert!(max < 145, "16-17yo CA shouldn't exceed 145 (got max={})", max);
+        assert!(
+            max < 145,
+            "16-17yo CA shouldn't exceed 145 (got max={})",
+            max
+        );
         // Average should sit in a young-player band, well below adult-Starter levels.
-        assert!(avg < 110.0, "16-17yo prospects shouldn't average like adult Starters: {:.1}", avg);
+        assert!(
+            avg < 110.0,
+            "16-17yo prospects shouldn't average like adult Starters: {:.1}",
+            avg
+        );
     }
 
     #[test]
@@ -2306,11 +2804,27 @@ mod generator_validation_tests {
         // Skill rescaling should land the final CA within a few points of
         // the target the role + rep blend implies.
         let g = make_gen();
-        let players = sample(&g, 300, PositionType::Midfielder, 6500, 6500, 5500,
-            TeamType::Main, SquadRole::Starter, 24, 28);
-        let cas: Vec<u8> = players.iter().map(|p| p.player_attributes.current_ability).collect();
+        let players = sample(
+            &g,
+            300,
+            PositionType::Midfielder,
+            6500,
+            6500,
+            5500,
+            TeamType::Main,
+            SquadRole::Starter,
+            24,
+            28,
+        );
+        let cas: Vec<u8> = players
+            .iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
         let avg = mean(&cas);
-        eprintln!("Starter@(team6500/league6500/country5500) average CA = {:.1}", avg);
+        eprintln!(
+            "Starter@(team6500/league6500/country5500) average CA = {:.1}",
+            avg
+        );
         // Empirical band: should land in the 95..145 range for these inputs.
         assert!(avg > 90.0 && avg < 150.0, "average CA out of band: {}", avg);
     }
@@ -2318,14 +2832,31 @@ mod generator_validation_tests {
     #[test]
     fn position_aware_height_for_goalkeeper() {
         let g = make_gen();
-        let gks = sample(&g, 100, PositionType::Goalkeeper, 6000, 6000, 5000,
-            TeamType::Main, SquadRole::Starter, 22, 30);
+        let gks = sample(
+            &g,
+            100,
+            PositionType::Goalkeeper,
+            6000,
+            6000,
+            5000,
+            TeamType::Main,
+            SquadRole::Starter,
+            22,
+            30,
+        );
         let heights: Vec<u8> = gks.iter().map(|p| p.player_attributes.height).collect();
         let avg = heights.iter().map(|&h| h as f32).sum::<f32>() / heights.len() as f32;
-        eprintln!("avg GK height: {:.1}cm (range {}..{})",
-            avg, *heights.iter().min().unwrap(), *heights.iter().max().unwrap());
+        eprintln!(
+            "avg GK height: {:.1}cm (range {}..{})",
+            avg,
+            *heights.iter().min().unwrap(),
+            *heights.iter().max().unwrap()
+        );
         assert!(avg > 184.0, "GKs must average over 184cm (was {:.1})", avg);
-        assert!(*heights.iter().min().unwrap() >= 180, "GKs shouldn't be under 180cm");
+        assert!(
+            *heights.iter().min().unwrap() >= 180,
+            "GKs shouldn't be under 180cm"
+        );
     }
 
     #[test]
@@ -2336,11 +2867,14 @@ mod generator_validation_tests {
         // where PhysicalProfile used uppercase arms.
         for country_id in 1..200u32 {
             let code = crate::loaders::CountryLoader::code_for_id(country_id);
-            if code.is_empty() { continue; }
+            if code.is_empty() {
+                continue;
+            }
             assert!(
                 code.chars().all(|c| !c.is_ascii_uppercase()),
                 "country {} returned non-lowercase code '{}'",
-                country_id, code
+                country_id,
+                code
             );
         }
     }
@@ -2353,19 +2887,31 @@ mod generator_validation_tests {
         // Dutch CB height collapses to the baseline range.
         use crate::loaders::CountryLoader;
         let countries = CountryLoader::load();
-        let nl = countries.iter().find(|c| c.code.eq_ignore_ascii_case("nl")).map(|c| c.id);
-        let jp = countries.iter().find(|c| c.code.eq_ignore_ascii_case("jp")).map(|c| c.id);
+        let nl = countries
+            .iter()
+            .find(|c| c.code.eq_ignore_ascii_case("nl"))
+            .map(|c| c.id);
+        let jp = countries
+            .iter()
+            .find(|c| c.code.eq_ignore_ascii_case("jp"))
+            .map(|c| c.id);
         if let (Some(nl_id), Some(jp_id)) = (nl, jp) {
             let mut nl_total = 0i32;
             let mut jp_total = 0i32;
             for _ in 0..200 {
-                nl_total += PhysicalProfile::for_position(PlayerPositionType::DefenderCenter, nl_id).height_cm as i32;
-                jp_total += PhysicalProfile::for_position(PlayerPositionType::DefenderCenter, jp_id).height_cm as i32;
+                nl_total += PhysicalProfile::for_position(PlayerPositionType::DefenderCenter, nl_id)
+                    .height_cm as i32;
+                jp_total += PhysicalProfile::for_position(PlayerPositionType::DefenderCenter, jp_id)
+                    .height_cm as i32;
             }
             let nl_avg = nl_total as f32 / 200.0;
             let jp_avg = jp_total as f32 / 200.0;
             eprintln!("DC height: NL avg={:.1}cm, JP avg={:.1}cm", nl_avg, jp_avg);
-            assert!(nl_avg - jp_avg > 4.0, "expected NL CBs noticeably taller than JP CBs (delta={})", nl_avg - jp_avg);
+            assert!(
+                nl_avg - jp_avg > 4.0,
+                "expected NL CBs noticeably taller than JP CBs (delta={})",
+                nl_avg - jp_avg
+            );
         }
     }
 
@@ -2383,15 +2929,46 @@ mod generator_validation_tests {
             (TeamType::U21, SquadRole::Prospect, 17, 20, 90),
             (TeamType::U20, SquadRole::Prospect, 17, 19, 85),
         ] {
-            let players = sample(&g, 200, PositionType::Midfielder, 7000, 7000, 6000,
-                tt, role, age_lo, age_hi);
-            let cas: Vec<u8> = players.iter().map(|p| p.player_attributes.current_ability).collect();
-            let pas: Vec<u8> = players.iter().map(|p| p.player_attributes.potential_ability).collect();
+            let players = sample(
+                &g,
+                200,
+                PositionType::Midfielder,
+                7000,
+                7000,
+                6000,
+                tt,
+                role,
+                age_lo,
+                age_hi,
+            );
+            let cas: Vec<u8> = players
+                .iter()
+                .map(|p| p.player_attributes.current_ability)
+                .collect();
+            let pas: Vec<u8> = players
+                .iter()
+                .map(|p| p.player_attributes.potential_ability)
+                .collect();
             let ca_avg = mean(&cas);
             let pa_avg = mean(&pas);
-            eprintln!("{:?}/{:?} ages {}..{}: CA avg={:.1}, PA avg={:.1}", tt, role, age_lo, age_hi, ca_avg, pa_avg);
-            assert!(ca_avg < max_ca_avg as f32, "{:?} CA avg {} exceeds expected {}", tt, ca_avg, max_ca_avg);
-            assert!(pa_avg >= ca_avg, "{:?} PA<CA averages: PA={:.1} CA={:.1}", tt, pa_avg, ca_avg);
+            eprintln!(
+                "{:?}/{:?} ages {}..{}: CA avg={:.1}, PA avg={:.1}",
+                tt, role, age_lo, age_hi, ca_avg, pa_avg
+            );
+            assert!(
+                ca_avg < max_ca_avg as f32,
+                "{:?} CA avg {} exceeds expected {}",
+                tt,
+                ca_avg,
+                max_ca_avg
+            );
+            assert!(
+                pa_avg >= ca_avg,
+                "{:?} PA<CA averages: PA={:.1} CA={:.1}",
+                tt,
+                pa_avg,
+                ca_avg
+            );
         }
     }
 
@@ -2402,21 +2979,72 @@ mod generator_validation_tests {
         // weight-table regressions silently flattening profiles.
         let g = make_gen();
         // (bucket, position-anchor extractor, anchor name, baseline extractor, baseline name)
-        let cases: &[(PositionType, &dyn Fn(&core::PlayerSkills) -> f32, &str, &dyn Fn(&core::PlayerSkills) -> f32, &str)] = &[
-            (PositionType::Goalkeeper, &|s| s.goalkeeping.handling, "handling", &|s| s.technical.finishing, "finishing"),
-            (PositionType::Defender, &|s| s.technical.tackling, "tackling", &|s| s.technical.finishing, "finishing"),
-            (PositionType::Midfielder, &|s| s.technical.passing, "passing", &|s| s.technical.finishing, "finishing"),
-            (PositionType::Striker, &|s| s.technical.finishing, "finishing", &|s| s.technical.tackling, "tackling"),
+        let cases: &[(
+            PositionType,
+            &dyn Fn(&core::PlayerSkills) -> f32,
+            &str,
+            &dyn Fn(&core::PlayerSkills) -> f32,
+            &str,
+        )] = &[
+            (
+                PositionType::Goalkeeper,
+                &|s| s.goalkeeping.handling,
+                "handling",
+                &|s| s.technical.finishing,
+                "finishing",
+            ),
+            (
+                PositionType::Defender,
+                &|s| s.technical.tackling,
+                "tackling",
+                &|s| s.technical.finishing,
+                "finishing",
+            ),
+            (
+                PositionType::Midfielder,
+                &|s| s.technical.passing,
+                "passing",
+                &|s| s.technical.finishing,
+                "finishing",
+            ),
+            (
+                PositionType::Striker,
+                &|s| s.technical.finishing,
+                "finishing",
+                &|s| s.technical.tackling,
+                "tackling",
+            ),
         ];
         for (bucket, anchor, anchor_name, baseline, baseline_name) in cases.iter() {
-            let players = sample(&g, 200, *bucket, 7500, 7500, 6500,
-                TeamType::Main, SquadRole::Starter, 24, 28);
-            let anchor_avg: f32 = players.iter().map(|p| anchor(&p.skills)).sum::<f32>() / players.len() as f32;
-            let baseline_avg: f32 = players.iter().map(|p| baseline(&p.skills)).sum::<f32>() / players.len() as f32;
-            eprintln!("{:?}: {}={:.2}, {}={:.2}", bucket, anchor_name, anchor_avg, baseline_name, baseline_avg);
-            assert!(anchor_avg > baseline_avg + 2.0,
+            let players = sample(
+                &g,
+                200,
+                *bucket,
+                7500,
+                7500,
+                6500,
+                TeamType::Main,
+                SquadRole::Starter,
+                24,
+                28,
+            );
+            let anchor_avg: f32 =
+                players.iter().map(|p| anchor(&p.skills)).sum::<f32>() / players.len() as f32;
+            let baseline_avg: f32 =
+                players.iter().map(|p| baseline(&p.skills)).sum::<f32>() / players.len() as f32;
+            eprintln!(
+                "{:?}: {}={:.2}, {}={:.2}",
+                bucket, anchor_name, anchor_avg, baseline_name, baseline_avg
+            );
+            assert!(
+                anchor_avg > baseline_avg + 2.0,
                 "{:?}: dominant {} ({:.2}) should beat baseline {} ({:.2}) by 2+",
-                bucket, anchor_name, anchor_avg, baseline_name, baseline_avg);
+                bucket,
+                anchor_name,
+                anchor_avg,
+                baseline_name,
+                baseline_avg
+            );
         }
     }
 
@@ -2436,13 +3064,27 @@ mod generator_validation_tests {
         let mut wb_count = 0;
         let mut fb_count = 0;
         for _ in 0..600 {
-            let p = g.generate(1, 1, PositionType::Defender, 7500, 7500, 6500,
-                TeamType::Main, SquadRole::Starter, 24, 28);
+            let p = g.generate(
+                1,
+                1,
+                PositionType::Defender,
+                7500,
+                7500,
+                6500,
+                TeamType::Main,
+                SquadRole::Starter,
+                24,
+                28,
+            );
             let primary = p.positions.positions.first().map(|x| x.position).unwrap();
-            let attack = p.skills.physical.pace + p.skills.physical.stamina
-                + p.skills.technical.crossing + p.skills.technical.dribbling;
-            let defend = p.skills.technical.marking + p.skills.mental.positioning
-                + p.skills.technical.heading + p.skills.physical.strength;
+            let attack = p.skills.physical.pace
+                + p.skills.physical.stamina
+                + p.skills.technical.crossing
+                + p.skills.technical.dribbling;
+            let defend = p.skills.technical.marking
+                + p.skills.mental.positioning
+                + p.skills.technical.heading
+                + p.skills.physical.strength;
             match primary {
                 PlayerPositionType::WingbackLeft | PlayerPositionType::WingbackRight => {
                     wb_attack_total += attack;
@@ -2462,16 +3104,24 @@ mod generator_validation_tests {
             let wb_defend = wb_defend_total / wb_count as f32;
             let fb_attack = fb_attack_total / fb_count as f32;
             let fb_defend = fb_defend_total / fb_count as f32;
-            eprintln!("WB(n={}): attack={:.1} defend={:.1}; FB(n={}): attack={:.1} defend={:.1}",
-                wb_count, wb_attack, wb_defend, fb_count, fb_attack, fb_defend);
+            eprintln!(
+                "WB(n={}): attack={:.1} defend={:.1}; FB(n={}): attack={:.1} defend={:.1}",
+                wb_count, wb_attack, wb_defend, fb_count, fb_attack, fb_defend
+            );
             // WB attack signature outweighs their own defend signature; FB
             // is the inverse. This is the position differentiation we want.
-            assert!(wb_attack > wb_defend - 1.0,
+            assert!(
+                wb_attack > wb_defend - 1.0,
                 "WB attack signature should match or beat defend signature ({} vs {})",
-                wb_attack, wb_defend);
-            assert!(fb_defend > fb_attack - 5.0,
+                wb_attack,
+                wb_defend
+            );
+            assert!(
+                fb_defend > fb_attack - 5.0,
                 "FB defend signature should be in line with attack signature ({} vs {})",
-                fb_defend, fb_attack);
+                fb_defend,
+                fb_attack
+            );
         }
     }
 
@@ -2487,44 +3137,114 @@ mod generator_validation_tests {
             let mut squad: Vec<core::Player> = Vec::new();
             // GK 3-5, DEF 6-9, MID 7-10, ST 5-8 — same as the live generator.
             for _ in 0..IntegerUtils::random(3, 5) {
-                squad.push(g.generate(1, 1, PositionType::Goalkeeper, 7500, 7500, 6500,
-                    TeamType::Main, SquadRole::Starter, 17, 35));
+                squad.push(g.generate(
+                    1,
+                    1,
+                    PositionType::Goalkeeper,
+                    7500,
+                    7500,
+                    6500,
+                    TeamType::Main,
+                    SquadRole::Starter,
+                    17,
+                    35,
+                ));
             }
             for _ in 0..IntegerUtils::random(6, 9) {
-                squad.push(g.generate(1, 1, PositionType::Defender, 7500, 7500, 6500,
-                    TeamType::Main, SquadRole::Starter, 17, 35));
+                squad.push(g.generate(
+                    1,
+                    1,
+                    PositionType::Defender,
+                    7500,
+                    7500,
+                    6500,
+                    TeamType::Main,
+                    SquadRole::Starter,
+                    17,
+                    35,
+                ));
             }
             for _ in 0..IntegerUtils::random(7, 10) {
-                squad.push(g.generate(1, 1, PositionType::Midfielder, 7500, 7500, 6500,
-                    TeamType::Main, SquadRole::Starter, 17, 35));
+                squad.push(g.generate(
+                    1,
+                    1,
+                    PositionType::Midfielder,
+                    7500,
+                    7500,
+                    6500,
+                    TeamType::Main,
+                    SquadRole::Starter,
+                    17,
+                    35,
+                ));
             }
             for _ in 0..IntegerUtils::random(5, 8) {
-                squad.push(g.generate(1, 1, PositionType::Striker, 7500, 7500, 6500,
-                    TeamType::Main, SquadRole::Starter, 17, 35));
+                squad.push(g.generate(
+                    1,
+                    1,
+                    PositionType::Striker,
+                    7500,
+                    7500,
+                    6500,
+                    TeamType::Main,
+                    SquadRole::Starter,
+                    17,
+                    35,
+                ));
             }
 
-            let primaries: Vec<PlayerPositionType> = squad.iter()
+            let primaries: Vec<PlayerPositionType> = squad
+                .iter()
                 .filter_map(|p| p.positions.positions.first().map(|x| x.position))
                 .collect();
-            let has_gk = primaries.iter().any(|p| matches!(p, PlayerPositionType::Goalkeeper));
-            let has_cb = primaries.iter().any(|p| matches!(p,
-                PlayerPositionType::DefenderCenter | PlayerPositionType::DefenderCenterLeft | PlayerPositionType::DefenderCenterRight));
-            let has_fb_or_wb = primaries.iter().any(|p| matches!(p,
-                PlayerPositionType::DefenderLeft | PlayerPositionType::DefenderRight
-                | PlayerPositionType::WingbackLeft | PlayerPositionType::WingbackRight));
-            let has_central_mid = primaries.iter().any(|p| matches!(p,
-                PlayerPositionType::MidfielderCenter | PlayerPositionType::DefensiveMidfielder
-                | PlayerPositionType::AttackingMidfielderCenter));
-            let has_striker = primaries.iter().any(|p| matches!(p,
-                PlayerPositionType::Striker | PlayerPositionType::ForwardCenter
-                | PlayerPositionType::ForwardLeft | PlayerPositionType::ForwardRight));
+            let has_gk = primaries
+                .iter()
+                .any(|p| matches!(p, PlayerPositionType::Goalkeeper));
+            let has_cb = primaries.iter().any(|p| {
+                matches!(
+                    p,
+                    PlayerPositionType::DefenderCenter
+                        | PlayerPositionType::DefenderCenterLeft
+                        | PlayerPositionType::DefenderCenterRight
+                )
+            });
+            let has_fb_or_wb = primaries.iter().any(|p| {
+                matches!(
+                    p,
+                    PlayerPositionType::DefenderLeft
+                        | PlayerPositionType::DefenderRight
+                        | PlayerPositionType::WingbackLeft
+                        | PlayerPositionType::WingbackRight
+                )
+            });
+            let has_central_mid = primaries.iter().any(|p| {
+                matches!(
+                    p,
+                    PlayerPositionType::MidfielderCenter
+                        | PlayerPositionType::DefensiveMidfielder
+                        | PlayerPositionType::AttackingMidfielderCenter
+                )
+            });
+            let has_striker = primaries.iter().any(|p| {
+                matches!(
+                    p,
+                    PlayerPositionType::Striker
+                        | PlayerPositionType::ForwardCenter
+                        | PlayerPositionType::ForwardLeft
+                        | PlayerPositionType::ForwardRight
+                )
+            });
 
             if !(has_gk && has_cb && has_fb_or_wb && has_central_mid && has_striker) {
                 squads_missing += 1;
             }
         }
         eprintln!("squads missing some bucket: {}/50", squads_missing);
-        assert!(squads_missing < 5, "Too many squads ({}) missing core position buckets", squads_missing);
+        assert!(
+            squads_missing < 5,
+            "Too many squads ({}) missing core position buckets",
+            squads_missing
+        );
     }
 
     #[test]
@@ -2532,15 +3252,38 @@ mod generator_validation_tests {
         // Used to flow through the PA pipeline; should now be a state value
         // in the 6..16 band regardless of CA.
         let g = make_gen();
-        let elite = sample(&g, 100, PositionType::Striker, 9500, 9500, 9500,
-            TeamType::Main, SquadRole::Star, 25, 28);
-        let weak = sample(&g, 100, PositionType::Striker, 1500, 1500, 1500,
-            TeamType::Main, SquadRole::Backup, 25, 28);
+        let elite = sample(
+            &g,
+            100,
+            PositionType::Striker,
+            9500,
+            9500,
+            9500,
+            TeamType::Main,
+            SquadRole::Star,
+            25,
+            28,
+        );
+        let weak = sample(
+            &g,
+            100,
+            PositionType::Striker,
+            1500,
+            1500,
+            1500,
+            TeamType::Main,
+            SquadRole::Backup,
+            25,
+            28,
+        );
         for p in elite.iter().chain(weak.iter()) {
             let mr = p.skills.physical.match_readiness;
-            assert!(mr >= 5.0 && mr <= 17.0,
+            assert!(
+                mr >= 5.0 && mr <= 17.0,
                 "match_readiness out of state range: {} (CA={})",
-                mr, p.player_attributes.current_ability);
+                mr,
+                p.player_attributes.current_ability
+            );
         }
     }
 }

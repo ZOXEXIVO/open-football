@@ -318,12 +318,19 @@ pub fn team_menu(
 
     if is_main_team {
         let finances_url = format!("/{}/teams/{}/finances", p.lang, team_slug);
+        let scouting_url = format!("/{}/teams/{}/scouting", p.lang, team_slug);
         let academy_url = format!("/{}/teams/{}/academy", p.lang, team_slug);
         items.push(MenuItem {
             active: p.current_path == finances_url,
             title: p.i18n.t("finances").to_string(),
             url: finances_url,
             icon: "fa-coins".to_string(),
+        });
+        items.push(MenuItem {
+            active: p.current_path == scouting_url,
+            title: p.i18n.t("scouting").to_string(),
+            url: scouting_url,
+            icon: "fa-binoculars".to_string(),
         });
         items.push(MenuItem {
             active: p.current_path == academy_url,

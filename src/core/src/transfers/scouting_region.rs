@@ -253,6 +253,26 @@ impl ScoutingRegion {
         }
     }
 
+    pub fn as_i18n_key(self) -> &'static str {
+        match self {
+            ScoutingRegion::WesternEurope => "region_western_europe",
+            ScoutingRegion::EasternEurope => "region_eastern_europe",
+            ScoutingRegion::Scandinavia => "region_scandinavia",
+            ScoutingRegion::MiddleEastEurope => "region_middle_east_europe",
+            ScoutingRegion::SouthAmerica => "region_south_america",
+            ScoutingRegion::WestAfrica => "region_west_africa",
+            ScoutingRegion::NorthAfrica => "region_north_africa",
+            ScoutingRegion::EastSouthAfrica => "region_east_south_africa",
+            ScoutingRegion::NorthAmerica => "region_north_america",
+            ScoutingRegion::CentralAmericaCaribbean => "region_central_america_caribbean",
+            ScoutingRegion::EastAsia => "region_east_asia",
+            ScoutingRegion::SoutheastAsia => "region_southeast_asia",
+            ScoutingRegion::MiddleEast => "region_middle_east",
+            ScoutingRegion::SouthAsia => "region_south_asia",
+            ScoutingRegion::Oceania => "region_oceania",
+        }
+    }
+
     /// All regions as a static array (for iteration).
     pub fn all() -> &'static [ScoutingRegion] {
         &[

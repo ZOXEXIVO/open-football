@@ -79,6 +79,35 @@ impl StaffPosition {
             Self::HeadOfYouthDevelopment | Self::YouthCoach | Self::U19Manager | Self::U21Manager
         )
     }
+
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            Self::Manager => "staff_manager",
+            Self::AssistantManager => "staff_assistant_manager",
+            Self::CaretakerManager => "staff_caretaker_manager",
+            Self::Coach => "staff_coach",
+            Self::FirstTeamCoach => "staff_first_team_coach",
+            Self::FitnessCoach => "staff_fitness_coach",
+            Self::GoalkeeperCoach => "staff_goalkeeper_coach",
+            Self::YouthCoach => "staff_youth_coach",
+            Self::U21Manager => "staff_u21_manager",
+            Self::U19Manager => "staff_u19_manager",
+            Self::Scout => "staff_scout",
+            Self::ChiefScout => "staff_chief_scout",
+            Self::Physio => "staff_physio",
+            Self::HeadOfPhysio => "staff_head_of_physio",
+            Self::Chairman => "staff_chairman",
+            Self::Director => "staff_director",
+            Self::ManagingDirector => "staff_managing_director",
+            Self::DirectorOfFootball => "staff_director_of_football",
+            Self::GeneralManager => "staff_general_manager",
+            Self::HeadOfYouthDevelopment => "staff_head_of_youth_dev",
+            Self::MediaPundit => "staff_media_pundit",
+            Self::DataAnalyst => "staff_data_analyst",
+            Self::HeadOfRecruitment => "staff_head_of_recruitment",
+            Self::Free => "staff_free",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
