@@ -12,7 +12,7 @@
 
 #[macro_export]
 macro_rules! match_log_info {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {/
         #[cfg(feature = "match-logs")]
         { log::info!($($arg)*); }
     };

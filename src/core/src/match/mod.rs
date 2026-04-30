@@ -1,3 +1,6 @@
+#[macro_use]
+pub mod logs;
+
 pub mod engine;
 
 pub mod game;

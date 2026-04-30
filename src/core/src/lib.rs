@@ -45,9 +45,6 @@ pub fn match_engine_pool() -> &'static r#match::MatchPlayEnginePool {
     })
 }
 
-#[macro_use]
-pub mod match_logs;
-
 // Re-export shot-gate diagnostic counters for the dev stats harness.
 // Only compiled with the `match-logs` feature.
 #[cfg(feature = "match-logs")]
