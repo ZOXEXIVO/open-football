@@ -2225,8 +2225,10 @@ mod tests {
 
         // No "Free Agent" row exists.
         assert!(
-            !view.iter().any(|e| e.team_slug == "free-agent"
-                || e.team_name.eq_ignore_ascii_case("Free Agent")),
+            !view
+                .iter()
+                .any(|e| e.team_slug == "free-agent"
+                    || e.team_name.eq_ignore_ascii_case("Free Agent")),
             "Free-agent period must not produce a club row"
         );
 
@@ -2540,12 +2542,17 @@ mod tests {
         // Mid-season view (no frozen items yet) — the starting-club row must be
         // visible and unaffected by live B stats on the active loan spell.
         player.statistics = make_stats(7, 1);
-        let view = player.statistics_history.view_items(Some(&player.statistics));
+        let view = player
+            .statistics_history
+            .view_items(Some(&player.statistics));
         let a_view = view
             .iter()
             .find(|e| e.season.start_year == 2026 && e.team_slug == "club-a")
             .expect("Starting club must appear in view before any season-end snapshot");
-        assert!(!a_view.is_loan, "Starting Club A row is permanent, not loan");
+        assert!(
+            !a_view.is_loan,
+            "Starting Club A row is permanent, not loan"
+        );
         assert_eq!(
             a_view.statistics.played, 0,
             "Starting club had no games — view must show 0, not live B stats"
@@ -2642,7 +2649,10 @@ mod tests {
         let b_item = items
             .iter()
             .find(|e| e.season.start_year == 2026 && e.team_slug == "club-b");
-        assert!(b_item.is_some(), "Club B with explicit fee must survive.\n{desc}");
+        assert!(
+            b_item.is_some(),
+            "Club B with explicit fee must survive.\n{desc}"
+        );
         assert!(b_item.unwrap().is_loan);
     }
 
@@ -2729,7 +2739,9 @@ mod tests {
 
         // Live: 10 apps at Chaika.
         player.statistics = make_stats(10, 0);
-        let view = player.statistics_history.view_items(Some(&player.statistics));
+        let view = player
+            .statistics_history
+            .view_items(Some(&player.statistics));
 
         let spartak_2026 = view
             .iter()
@@ -2774,9 +2786,7 @@ mod tests {
         let spartak_frozen = items
             .iter()
             .find(|e| e.season.start_year == 2026 && e.team_slug == "spartak-moscow")
-            .unwrap_or_else(|| {
-                panic!("Spartak Moscow 2026/27 row dropped at season-end.\n{desc}")
-            });
+            .unwrap_or_else(|| panic!("Spartak Moscow 2026/27 row dropped at season-end.\n{desc}"));
         assert!(!spartak_frozen.is_loan);
         assert_eq!(spartak_frozen.statistics.played, 0);
 
@@ -2788,4 +2798,3 @@ mod tests {
         assert_eq!(chaika_frozen.statistics.played, 10);
     }
 }
-

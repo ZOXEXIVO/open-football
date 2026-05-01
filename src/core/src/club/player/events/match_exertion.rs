@@ -8,10 +8,10 @@
 
 use chrono::NaiveDate;
 
+use crate::PlayerStatusType;
 use crate::club::player::injury::InjuryType;
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
-use crate::PlayerStatusType;
 
 /// Youth-aware match exertion modifiers. Encapsulates the three knobs the
 /// post-match exertion path adjusts when the player is too young for adult
@@ -107,8 +107,6 @@ impl Player {
             1.0
         };
 
-        let friendly_factor = if is_friendly { 0.45 } else { 1.0 };
-
         // 1.0 unit per minute at neutral CB intensity, scaled by position,
         // how empty the player finished, and (for senior competitive
         // matches) the player's biological maturity. A 90-min senior
@@ -116,10 +114,19 @@ impl Player {
         // peer — protecting the kids from being silently pushed past
         // sustainable workloads by a manager who insists on selecting
         // them every week.
-        let match_load = minutes * position_factor * depletion_factor * friendly_factor * maturity_load;
+        //
+        // The friendly discount is owned by [`PlayerLoad::record_match_load`]
+        // — `match_load` is the raw competitive-equivalent load, and the
+        // 0.45× friendly factor is applied exactly once when it gets
+        // booked into the rolling load windows. Debt and jadedness apply
+        // the same friendly discount inline below so a friendly cameo
+        // doesn't pile up training-pace fatigue at adult-match rates.
+        let match_load = minutes * position_factor * depletion_factor * maturity_load;
         let hi_load = match_load * hi_share;
         self.load
             .record_match_load(match_load, hi_load, is_friendly);
+
+        let friendly_intensity = if is_friendly { 0.45 } else { 1.0 };
 
         // Debt: half from raw load, half from "running on fumes" tax.
         // A 90-min midfielder at 60% finish adds ~45 units; a 90-min
@@ -127,7 +134,7 @@ impl Player {
         // harder (2.0× for under-15s) because adolescent recovery is
         // slower than adult recovery for the same load.
         let depletion_tax = match_load * (50.0 - condition_pct).max(0.0) / 100.0;
-        let debt_add = (match_load * 0.5 + depletion_tax * friendly_factor) * maturity_debt
+        let debt_add = (match_load * 0.5 + depletion_tax) * friendly_intensity * maturity_debt
             / maturity_load.max(0.001);
         // Note: match_load already carries `maturity_load`. We re-scale
         // to apply the *debt-specific* maturity multiplier instead, so
@@ -153,13 +160,15 @@ impl Player {
         }
 
         // Jadedness: scaled by match_load (which already carries the
-        // youth multiplier) and recent congestion. A keeper's 90 now
-        // adds ~160; a wingback's 90 in a 3-game week tops ~520; a 14yo
-        // wingback's 90 tops ~940 — a single senior match leaves him
-        // visibly drained.
+        // youth multiplier) and recent congestion, with the same friendly
+        // discount as recovery debt — a pre-season cameo is training-pace
+        // running, not match-pace, and shouldn't drain the tank as if it
+        // were. A keeper's 90 now adds ~160; a wingback's 90 in a 3-game
+        // week tops ~520; a 14yo wingback's 90 tops ~940 — a single
+        // senior match leaves him visibly drained.
         let congestion = self.load.matches_last_14() as f32;
         let congestion_mult = 1.0 + (congestion - 2.0).max(0.0) * 0.20;
-        let jad_gain = (match_load * 4.0 * congestion_mult).round() as i32;
+        let jad_gain = (match_load * friendly_intensity * 4.0 * congestion_mult).round() as i32;
         let new_jad = self.player_attributes.jadedness as i32 + jad_gain;
         self.player_attributes.jadedness = new_jad.clamp(0, 10_000) as i16;
 
@@ -269,4 +278,3 @@ impl PositionLoad {
         }
     }
 }
-

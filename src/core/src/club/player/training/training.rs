@@ -319,7 +319,8 @@ impl PlayerTraining {
         // remains useful at every age.
         let physical_maturity = Self::calculate_physical_maturity_factor(player.age(date.date()));
         if physical_maturity < 1.0 {
-            effects.physical_gains = Self::scale_physical(effects.physical_gains, physical_maturity);
+            effects.physical_gains =
+                Self::scale_physical(effects.physical_gains, physical_maturity);
         }
 
         // Calculate session performance score (1-20):
@@ -746,8 +747,7 @@ mod training_load_tests {
         let adult_r = PlayerTraining::train(&adult, &coach, &s, date, 0.6);
 
         assert!(
-            young_r.effects.physical_gains.strength * 1.5
-                < adult_r.effects.physical_gains.strength,
+            young_r.effects.physical_gains.strength * 1.5 < adult_r.effects.physical_gains.strength,
             "14yo strength gain {} too close to 22yo {} — physical maturity gate not biting",
             young_r.effects.physical_gains.strength,
             adult_r.effects.physical_gains.strength

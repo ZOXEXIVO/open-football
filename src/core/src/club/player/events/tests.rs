@@ -1959,3 +1959,93 @@ fn returning_from_injury_player_carries_elevated_match_risk() {
         h
     );
 }
+
+// ── Friendly discount source-of-truth ─────────────────────────────────
+//
+// `on_match_exertion` used to multiply by 0.45 for friendlies and then
+// hand that already-discounted load to `PlayerLoad::record_match_load`
+// — which applies its own 0.45 — so friendlies actually booked at
+// 0.2025× competitive load. The fix routes the friendly discount
+// through `record_match_load` exclusively for the load windows; debt
+// and jadedness apply the same single discount inline. A friendly 90
+// minutes ends up at ~0.45× competitive across every book.
+
+#[test]
+fn friendly_competitive_load_ratio_is_single_discount() {
+    let date = d(2025, 9, 14);
+    let mut friendly = fresh_player(PlayerPositionType::MidfielderCenter);
+    let mut competitive = fresh_player(PlayerPositionType::MidfielderCenter);
+
+    friendly.on_match_exertion(90.0, date, true);
+    competitive.on_match_exertion(90.0, date, false);
+
+    // Friendly load should be ~0.45× competitive — one discount, not
+    // 0.45 × 0.45 = 0.2025× as the previous double-application produced.
+    let ratio = friendly.load.physical_load_7 / competitive.load.physical_load_7;
+    assert!(
+        (ratio - 0.45).abs() < 0.05,
+        "friendly/competitive load ratio {} should be ~0.45 (got friendly={}, competitive={})",
+        ratio,
+        friendly.load.physical_load_7,
+        competitive.load.physical_load_7,
+    );
+}
+
+#[test]
+fn youth_friendly_cameo_does_not_apply_youth_senior_overload_multipliers() {
+    // The youth maturity load multiplier deliberately returns 1.0 for
+    // friendlies — pre-season cameos are already discounted by the
+    // friendly factor and shouldn't pile a 1.8× youth multiplier on top.
+    // A 14yo and a 27yo friendly cameo should book the same load.
+    let date = d(2025, 9, 14);
+    let mut youth = fresh_player(PlayerPositionType::MidfielderCenter);
+    youth.birth_date = d(2011, 1, 1); // 14
+    let mut adult = fresh_player(PlayerPositionType::MidfielderCenter);
+    adult.birth_date = d(1998, 1, 1); // 27
+
+    youth.on_match_exertion(90.0, date, true);
+    adult.on_match_exertion(90.0, date, true);
+
+    let diff = (youth.load.physical_load_7 - adult.load.physical_load_7).abs();
+    assert!(
+        diff < adult.load.physical_load_7 * 0.05,
+        "youth friendly load {} should match adult {} within 5%",
+        youth.load.physical_load_7,
+        adult.load.physical_load_7
+    );
+    let debt_diff = (youth.load.recovery_debt - adult.load.recovery_debt).abs();
+    assert!(
+        debt_diff < adult.load.recovery_debt.max(1.0) * 0.10,
+        "youth friendly debt {} should match adult {} within 10%",
+        youth.load.recovery_debt,
+        adult.load.recovery_debt
+    );
+}
+
+#[test]
+fn youth_competitive_full_match_higher_load_and_debt_than_adult() {
+    // The other side of the same fix: competitive matches DO apply the
+    // youth maturity multipliers. A 14yo's 90-minute senior start books
+    // ~1.8× the load and ~2.0× the recovery debt of an adult peer.
+    let date = d(2025, 9, 14);
+    let mut youth = fresh_player(PlayerPositionType::MidfielderCenter);
+    youth.birth_date = d(2011, 1, 1); // 14
+    let mut adult = fresh_player(PlayerPositionType::MidfielderCenter);
+    adult.birth_date = d(1998, 1, 1); // 27
+
+    youth.on_match_exertion(90.0, date, false);
+    adult.on_match_exertion(90.0, date, false);
+
+    assert!(
+        youth.load.physical_load_7 > adult.load.physical_load_7 * 1.5,
+        "youth competitive load {} should beat adult {} by ≥ 1.5×",
+        youth.load.physical_load_7,
+        adult.load.physical_load_7
+    );
+    assert!(
+        youth.load.recovery_debt > adult.load.recovery_debt * 1.7,
+        "youth competitive debt {} should beat adult {} by ≥ 1.7×",
+        youth.load.recovery_debt,
+        adult.load.recovery_debt
+    );
+}

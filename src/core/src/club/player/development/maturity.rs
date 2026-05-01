@@ -96,10 +96,16 @@ impl MaturityModel {
     ///
     /// Football model — optimal monthly minute bands (per
     /// [`MaturityModel::optimal_minutes_band`]):
-    ///   * 14-15: 0–300 useful, 300–600 diminishing, above → outright burn-out
+    ///   * 14-15: 100–300 useful, 300–600 diminishing, above → outright burn-out
     ///   * 16-17: 300–900 useful, 900–1500 diminishing
     ///   * 18-21: 600–1800 useful, 1800–2500 diminishing
     ///   * 22-29: 600–2200 useful (peak window)
+    ///
+    /// `low > 0` for the under-16 band is deliberate: zero senior minutes is
+    /// the default state for a 14yo (training only with the academy) and
+    /// must be neutral / slightly under, not a 1.10× boost. A small ramp
+    /// from `low/0` rewards controlled cameos without rewarding paper
+    /// inclusion that doesn't translate into minutes.
     pub(super) fn senior_exposure_multiplier(
         age: u8,
         minutes_last_30: f32,
@@ -137,7 +143,7 @@ impl MaturityModel {
     /// floor.
     fn optimal_minutes_band(age: u8) -> (f32, f32, f32) {
         match age {
-            0..=15 => (0.0, 300.0, 600.0),
+            0..=15 => (100.0, 300.0, 600.0),
             16..=17 => (300.0, 900.0, 1500.0),
             18..=21 => (600.0, 1800.0, 2500.0),
             22..=29 => (600.0, 2200.0, 3000.0),
@@ -175,11 +181,7 @@ impl MaturityModel {
     /// Adults (19+) skip the gate entirely — managers may have any reason
     /// to punch a player above his weight, and senior development isn't
     /// gated by it the way youth development is.
-    pub(super) fn challenge_band_multiplier(
-        age: u8,
-        player_ca: u8,
-        league_reputation: u16,
-    ) -> f32 {
+    pub(super) fn challenge_band_multiplier(age: u8, player_ca: u8, league_reputation: u16) -> f32 {
         if age >= 19 {
             return 1.0;
         }
@@ -347,6 +349,48 @@ mod tests {
     fn senior_exposure_managed_youth_minutes_lift_above_one() {
         let m = MaturityModel::senior_exposure_multiplier(15, 200.0, 200.0, 5000, 80);
         assert!(m > 1.0, "got {}", m);
+    }
+
+    #[test]
+    fn senior_exposure_zero_minutes_under_16_is_not_a_boost() {
+        // A 14yo with no senior minutes is the default state — training
+        // with the academy. The previous low=0 band let m=0 read as
+        // band_score 1.10 (the upper edge of the productive zone), which
+        // turned "didn't play any senior minutes" into a development
+        // boost. Zero senior minutes must be neutral or slightly below.
+        let m = MaturityModel::senior_exposure_multiplier(14, 0.0, 0.0, 5000, 100);
+        assert!(m <= 1.0, "zero-minute 14yo got a boost: {}", m);
+        assert!(m >= 0.90, "zero-minute 14yo over-penalised: {}", m);
+    }
+
+    #[test]
+    fn senior_exposure_managed_minutes_beats_zero_minutes_for_15yo() {
+        // Controlled senior cameos (~200 min/30d) for a 15yo should
+        // outperform zero senior minutes — that's the whole reason the
+        // under-16 band ramps up at all. The previous bug rewarded the
+        // *absence* of minutes, removing the manager's incentive to give
+        // a kid a controlled debut.
+        let zero = MaturityModel::senior_exposure_multiplier(15, 0.0, 0.0, 5000, 100);
+        let managed = MaturityModel::senior_exposure_multiplier(15, 200.0, 200.0, 5000, 100);
+        assert!(
+            managed > zero,
+            "managed minutes {} should beat zero {}",
+            managed,
+            zero
+        );
+    }
+
+    #[test]
+    fn senior_exposure_zero_minutes_17yo_below_controlled_minutes() {
+        // The 16-17 band already had low=300 so m=0 sat below the
+        // productive zone — but pin the behaviour so a future re-tune of
+        // the under-16 band doesn't accidentally drag the 16-17 baseline
+        // up to 1.10 too. A 17yo getting controlled senior minutes must
+        // outpace the same 17yo getting none.
+        let zero = MaturityModel::senior_exposure_multiplier(17, 0.0, 0.0, 5000, 110);
+        let controlled = MaturityModel::senior_exposure_multiplier(17, 600.0, 600.0, 5000, 110);
+        assert!(zero < controlled, "zero={} controlled={}", zero, controlled);
+        assert!(zero <= 1.0, "17yo zero got a boost: {}", zero);
     }
 
     #[test]

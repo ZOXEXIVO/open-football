@@ -180,7 +180,15 @@ impl PlayerStatisticsHistory {
                 entry.transfer_fee = fee;
             }
         } else {
-            self.push_entry(team, season_start_year, stats, is_loan, fee, joined_date, kind);
+            self.push_entry(
+                team,
+                season_start_year,
+                stats,
+                is_loan,
+                fee,
+                joined_date,
+                kind,
+            );
         }
     }
 
@@ -227,7 +235,10 @@ impl PlayerStatisticsHistory {
         let season = Season::new(entry.season_start_year);
         let season_start = season.start_date();
         let season_end = season.end_date();
-        let end_date = entry.departed_date.unwrap_or(season_end).max(entry.joined_date);
+        let end_date = entry
+            .departed_date
+            .unwrap_or(season_end)
+            .max(entry.joined_date);
         let days_at_club = (end_date - entry.joined_date).num_days().max(0) as f64;
         let season_days = (season_end - season_start).num_days().max(1) as f64;
         let share = days_at_club / season_days;
@@ -274,9 +285,10 @@ impl PlayerStatisticsHistory {
         is_first_career: bool,
         has_loan_peer: bool,
     ) {
-        if items.iter().any(|i| {
-            i.season.start_year == entry.season_start_year && i.seq_id == entry.seq_id
-        }) {
+        if items
+            .iter()
+            .any(|i| i.season.start_year == entry.season_start_year && i.seq_id == entry.seq_id)
+        {
             return;
         }
         if let Some(existing) = items.iter_mut().rev().find(|i| {
@@ -432,10 +444,7 @@ impl PlayerStatisticsHistory {
         // Prefer the active loan entry for the date's season; if the borrowing
         // country already snapshotted that season, fall back to any active loan
         // entry at borrowing (a forward-looking SeasonSeed).
-        let target_year = if self
-            .find_active_mut(year, &borrowing.slug, true)
-            .is_some()
-        {
+        let target_year = if self.find_active_mut(year, &borrowing.slug, true).is_some() {
             Some(year)
         } else if remaining_stats.total_games() > 0 {
             // No same-season active spell — but real games were played, so
@@ -549,12 +558,10 @@ impl PlayerStatisticsHistory {
             // recorded separately). Otherwise: attach to the most recent same-
             // season departed source row that still has zero stats — that's the
             // row those games actually belonged to.
-            let attached_to_active = if let Some(active) = self
-                .current
-                .iter_mut()
-                .rev()
-                .find(|e| !e.is_loan && e.season_start_year == year && e.departed_date.is_none())
-            {
+            let attached_to_active = if let Some(active) =
+                self.current.iter_mut().rev().find(|e| {
+                    !e.is_loan && e.season_start_year == year && e.departed_date.is_none()
+                }) {
                 Self::merge_or_set_stats(&mut active.statistics, last_stats.clone());
                 active.departed_date = Some(date);
                 true
@@ -667,9 +674,7 @@ impl PlayerStatisticsHistory {
         self.flush_stale_to(target_year);
 
         let frozen_match_exists = self.items.iter().any(|i| {
-            i.season.start_year == target_year
-                && i.team_slug == team.slug
-                && i.is_loan == is_loan
+            i.season.start_year == target_year && i.team_slug == team.slug && i.is_loan == is_loan
         });
 
         // Three-way apply for current_stats:
@@ -736,11 +741,9 @@ impl PlayerStatisticsHistory {
         }
 
         let next_year = target_year + 1;
-        if !self
-            .current
-            .iter()
-            .any(|e| e.season_start_year == next_year && e.team_slug == team.slug && e.is_loan == is_loan)
-        {
+        if !self.current.iter().any(|e| {
+            e.season_start_year == next_year && e.team_slug == team.slug && e.is_loan == is_loan
+        }) {
             self.push_entry(
                 team,
                 next_year,
@@ -802,7 +805,9 @@ impl PlayerStatisticsHistory {
             }
 
             let statistics = if is_active && Some(entry.seq_id) == active_seq {
-                live_stats.cloned().unwrap_or_else(|| entry.statistics.clone())
+                live_stats
+                    .cloned()
+                    .unwrap_or_else(|| entry.statistics.clone())
             } else {
                 entry.statistics.clone()
             };

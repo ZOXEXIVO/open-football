@@ -190,8 +190,16 @@ pub fn process_substitutions(
                 break;
             }
             let position_group = position.position_group();
-            if let Some(player_in_id) = Substitutions::find_best_substitute(field, team_id, position_group) {
-                if Substitutions::execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
+            if let Some(player_in_id) =
+                Substitutions::find_best_substitute(field, team_id, position_group)
+            {
+                if Substitutions::execute_substitution(
+                    field,
+                    context,
+                    team_id,
+                    *player_out_id,
+                    player_in_id,
+                ) {
                     subs_made += 1;
                 }
             }
@@ -211,8 +219,16 @@ pub fn process_substitutions(
                 continue;
             }
             let position_group = position.position_group();
-            if let Some(player_in_id) = Substitutions::find_best_substitute(field, team_id, position_group) {
-                if Substitutions::execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
+            if let Some(player_in_id) =
+                Substitutions::find_best_substitute(field, team_id, position_group)
+            {
+                if Substitutions::execute_substitution(
+                    field,
+                    context,
+                    team_id,
+                    *player_out_id,
+                    player_in_id,
+                ) {
                     subs_made += 1;
                 }
             }
@@ -237,8 +253,16 @@ pub fn process_substitutions(
             }
 
             let position_group = position.position_group();
-            if let Some(player_in_id) = Substitutions::find_best_substitute(field, team_id, position_group) {
-                if Substitutions::execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
+            if let Some(player_in_id) =
+                Substitutions::find_best_substitute(field, team_id, position_group)
+            {
+                if Substitutions::execute_substitution(
+                    field,
+                    context,
+                    team_id,
+                    *player_out_id,
+                    player_in_id,
+                ) {
                     subs_made += 1;
                 }
             }
@@ -357,7 +381,8 @@ pub fn process_substitutions(
                     .min_by_key(|&(_, cond)| cond);
 
                 if let Some((out_id, _)) = player_out {
-                    if Substitutions::execute_substitution(field, context, team_id, out_id, *sub_id) {
+                    if Substitutions::execute_substitution(field, context, team_id, out_id, *sub_id)
+                    {
                         subs_made += 1;
                         dev_subs_made += 1;
                     }
@@ -375,180 +400,178 @@ pub fn process_substitutions(
 pub(super) struct Substitutions;
 
 impl Substitutions {
+    /// Per-tick in-match injury roll. A small per-player chance scaled by
+    /// jadedness, low condition, age, and low natural_fitness. When triggered,
+    /// condition is slammed down to 1500 — just below the CRITICAL_CONDITION
+    /// threshold (2000) so the next pass of the force-sub loop pulls the
+    /// player off. The actual injury type / recovery days are decided by the
+    /// post-match path (`on_match_exertion` rolls the injury from minutes +
+    /// existing proneness); this function only models the **in-match event**.
+    fn roll_in_match_injuries(field: &mut MatchField, context: &mut MatchContext) {
+        let match_minute = context.total_match_time / 60_000;
+        if match_minute < 5 {
+            return; // No opening-minute theatre
+        }
 
-/// Per-tick in-match injury roll. A small per-player chance scaled by
-/// jadedness, low condition, age, and low natural_fitness. When triggered,
-/// condition is slammed down to 1500 — just below the CRITICAL_CONDITION
-/// threshold (2000) so the next pass of the force-sub loop pulls the
-/// player off. The actual injury type / recovery days are decided by the
-/// post-match path (`on_match_exertion` rolls the injury from minutes +
-/// existing proneness); this function only models the **in-match event**.
-fn roll_in_match_injuries(field: &mut MatchField, context: &mut MatchContext) {
-    let match_minute = context.total_match_time / 60_000;
-    if match_minute < 5 {
-        return; // No opening-minute theatre
+        let mut victims: Vec<u32> = Vec::new();
+
+        for player in field.players.iter() {
+            // Skip subs (they're not on the pitch) and goalkeepers (rarely
+            // forced off for non-contact injury mid-match).
+            if player.tactical_position.current_position == crate::PlayerPositionType::Goalkeeper {
+                continue;
+            }
+            // Already destroyed condition — no extra work needed.
+            if player.player_attributes.condition < 2000 {
+                continue;
+            }
+            if player.is_sent_off {
+                continue;
+            }
+
+            let jaded = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
+            let cond = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
+            let nat_fit = (player.skills.physical.natural_fitness / 20.0).clamp(0.1, 1.0);
+            let minutes_factor = (match_minute as f32 / 90.0).clamp(0.0, 1.2);
+
+            // Base rate per substitution window (~10-15 minutes between calls).
+            // Starts at 0.0005 for a fresh prime player and climbs toward
+            // 0.01 for a jaded, tired 35-year-old late in the match. This
+            // delivers an injury roughly every 15-20 matches at the team
+            // level, which matches real-world "one injury per match" noise.
+            let base = 0.0005
+                + jaded * 0.004
+                + (1.0 - cond) * 0.003
+                + (1.0 - nat_fit) * 0.002
+                + minutes_factor * 0.001;
+
+            if rand::random::<f32>() < base {
+                victims.push(player.id);
+            }
+        }
+
+        if !victims.is_empty() {
+            context.record_stoppage_time(60_000 * victims.len() as u64);
+        }
+
+        for pid in victims {
+            if let Some(p) = field.get_player_mut(pid) {
+                // Smack the condition down — the critical-condition path in
+                // `process_substitutions` will now pull them off on this tick.
+                p.player_attributes.condition = 1500;
+            }
+        }
     }
 
-    let mut victims: Vec<u32> = Vec::new();
+    /// Execute a single substitution: save stats, swap players, update context.
+    fn execute_substitution(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        team_id: u32,
+        player_out_id: u32,
+        player_in_id: u32,
+    ) -> bool {
+        // Save subbed-out player's stats before they're replaced
+        if let Some(player_out) = field.get_player(player_out_id) {
+            let goals = player_out.statistics.goals_count();
+            let assists = player_out.statistics.assists_count();
 
-    for player in field.players.iter() {
-        // Skip subs (they're not on the pitch) and goalkeepers (rarely
-        // forced off for non-contact injury mid-match).
-        if player.tactical_position.current_position == crate::PlayerPositionType::Goalkeeper {
-            continue;
+            context.substituted_out_stats.push((
+                player_out_id,
+                PlayerMatchEndStats {
+                    shots_on_target: player_out.memory.shots_on_target as u16,
+                    shots_total: player_out.memory.shots_taken as u16,
+                    passes_attempted: player_out.statistics.passes_attempted,
+                    passes_completed: player_out.statistics.passes_completed,
+                    tackles: player_out.statistics.tackles,
+                    interceptions: player_out.statistics.interceptions,
+                    saves: player_out.statistics.saves,
+                    shots_faced: player_out.statistics.shots_faced,
+                    goals,
+                    assists,
+                    match_rating: 0.0,
+                    xg: player_out.memory.xg_total,
+                    position_group: player_out
+                        .tactical_position
+                        .current_position
+                        .position_group(),
+                    fouls: player_out.fouls_committed as u16,
+                    yellow_cards: player_out.statistics.yellow_cards_count(),
+                    red_cards: player_out.statistics.red_cards_count(),
+                },
+            ));
         }
-        // Already destroyed condition — no extra work needed.
-        if player.player_attributes.condition < 2000 {
-            continue;
-        }
-        if player.is_sent_off {
-            continue;
+
+        if !field.substitute_player(player_out_id, player_in_id) {
+            return false;
         }
 
-        let jaded = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
-        let cond = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
-        let nat_fit = (player.skills.physical.natural_fitness / 20.0).clamp(0.1, 1.0);
-        let minutes_factor = (match_minute as f32 / 90.0).clamp(0.0, 1.2);
-
-        // Base rate per substitution window (~10-15 minutes between calls).
-        // Starts at 0.0005 for a fresh prime player and climbs toward
-        // 0.01 for a jaded, tired 35-year-old late in the match. This
-        // delivers an injury roughly every 15-20 matches at the team
-        // level, which matches real-world "one injury per match" noise.
-        let base = 0.0005
-            + jaded * 0.004
-            + (1.0 - cond) * 0.003
-            + (1.0 - nat_fit) * 0.002
-            + minutes_factor * 0.001;
-
-        if rand::random::<f32>() < base {
-            victims.push(player.id);
-        }
-    }
-
-    if !victims.is_empty() {
-        context.record_stoppage_time(60_000 * victims.len() as u64);
-    }
-
-    for pid in victims {
-        if let Some(p) = field.get_player_mut(pid) {
-            // Smack the condition down — the critical-condition path in
-            // `process_substitutions` will now pull them off on this tick.
-            p.player_attributes.condition = 1500;
-        }
-    }
-}
-
-/// Execute a single substitution: save stats, swap players, update context.
-fn execute_substitution(
-    field: &mut MatchField,
-    context: &mut MatchContext,
-    team_id: u32,
-    player_out_id: u32,
-    player_in_id: u32,
-) -> bool {
-    // Save subbed-out player's stats before they're replaced
-    if let Some(player_out) = field.get_player(player_out_id) {
-        let goals = player_out.statistics.goals_count();
-        let assists = player_out.statistics.assists_count();
-
-        context.substituted_out_stats.push((
+        context.record_substitution(
+            team_id,
             player_out_id,
-            PlayerMatchEndStats {
-                shots_on_target: player_out.memory.shots_on_target as u16,
-                shots_total: player_out.memory.shots_taken as u16,
-                passes_attempted: player_out.statistics.passes_attempted,
-                passes_completed: player_out.statistics.passes_completed,
-                tackles: player_out.statistics.tackles,
-                interceptions: player_out.statistics.interceptions,
-                saves: player_out.statistics.saves,
-                shots_faced: player_out.statistics.shots_faced,
-                goals,
-                assists,
-                match_rating: 0.0,
-                xg: player_out.memory.xg_total,
-                position_group: player_out
-                    .tactical_position
-                    .current_position
-                    .position_group(),
-                fouls: player_out.fouls_committed as u16,
-                yellow_cards: player_out.statistics.yellow_cards_count(),
-                red_cards: player_out.statistics.red_cards_count(),
-            },
-        ));
-    }
+            player_in_id,
+            context.total_match_time,
+        );
+        context.record_stoppage_time(30_000);
+        context.players.remove_player(player_out_id);
 
-    if !field.substitute_player(player_out_id, player_in_id) {
-        return false;
-    }
-
-    context.record_substitution(
-        team_id,
-        player_out_id,
-        player_in_id,
-        context.total_match_time,
-    );
-    context.record_stoppage_time(30_000);
-    context.players.remove_player(player_out_id);
-
-    if let Some(field_player) = field.get_player(player_in_id) {
-        context
-            .players
-            .update_player(player_in_id, field_player.clone());
-    }
-
-    let left_squad = field.left_side_players.as_mut();
-    let right_squad = field.right_side_players.as_mut();
-    if let Some(squad) = left_squad {
-        if squad.team_id == team_id {
-            squad.mark_substitute_used(player_in_id);
+        if let Some(field_player) = field.get_player(player_in_id) {
+            context
+                .players
+                .update_player(player_in_id, field_player.clone());
         }
-    }
-    if let Some(squad) = right_squad {
-        if squad.team_id == team_id {
-            squad.mark_substitute_used(player_in_id);
+
+        let left_squad = field.left_side_players.as_mut();
+        let right_squad = field.right_side_players.as_mut();
+        if let Some(squad) = left_squad {
+            if squad.team_id == team_id {
+                squad.mark_substitute_used(player_in_id);
+            }
         }
+        if let Some(squad) = right_squad {
+            if squad.team_id == team_id {
+                squad.mark_substitute_used(player_in_id);
+            }
+        }
+
+        true
     }
 
-    true
-}
+    fn find_best_substitute(
+        field: &MatchField,
+        team_id: u32,
+        position_group: PlayerFieldPositionGroup,
+    ) -> Option<u32> {
+        let team_subs: Vec<&MatchPlayer> = field
+            .substitutes
+            .iter()
+            .filter(|p| p.team_id == team_id)
+            .collect();
 
-fn find_best_substitute(
-    field: &MatchField,
-    team_id: u32,
-    position_group: PlayerFieldPositionGroup,
-) -> Option<u32> {
-    let team_subs: Vec<&MatchPlayer> = field
-        .substitutes
-        .iter()
-        .filter(|p| p.team_id == team_id)
-        .collect();
+        if team_subs.is_empty() {
+            return None;
+        }
 
-    if team_subs.is_empty() {
-        return None;
+        // Try to find a sub with matching position group
+        let position_match = team_subs
+            .iter()
+            .filter(|p| p.tactical_position.current_position.position_group() == position_group)
+            .max_by_key(|p| p.player_attributes.current_ability);
+
+        if let Some(sub) = position_match {
+            return Some(sub.id);
+        }
+
+        // Fallback: best available outfield sub (never use GK as outfield replacement)
+        team_subs
+            .iter()
+            .filter(|p| {
+                p.tactical_position.current_position.position_group()
+                    != PlayerFieldPositionGroup::Goalkeeper
+            })
+            .max_by_key(|p| p.player_attributes.current_ability)
+            .map(|p| p.id)
     }
-
-    // Try to find a sub with matching position group
-    let position_match = team_subs
-        .iter()
-        .filter(|p| p.tactical_position.current_position.position_group() == position_group)
-        .max_by_key(|p| p.player_attributes.current_ability);
-
-    if let Some(sub) = position_match {
-        return Some(sub.id);
-    }
-
-    // Fallback: best available outfield sub (never use GK as outfield replacement)
-    team_subs
-        .iter()
-        .filter(|p| {
-            p.tactical_position.current_position.position_group()
-                != PlayerFieldPositionGroup::Goalkeeper
-        })
-        .max_by_key(|p| p.player_attributes.current_ability)
-        .map(|p| p.id)
-}
-
 }
 
 #[cfg(test)]
