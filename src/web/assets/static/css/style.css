@@ -6582,36 +6582,134 @@ a:link, a:visited, a:hover, a:active {
    SCOUTING TAB
    ============================================ */
 
+.sc-subtabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
+    border: 1px solid #263340;
+    border-radius: 4px;
+    padding: 4px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.sc-subtab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    color: #6a7a86;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    text-decoration: none !important;
+    transition: color 0.15s, background 0.15s;
+    font-family: inherit;
+}
+
+.sc-subtab:hover {
+    color: #c8d6e0;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.sc-subtab.active {
+    color: #fff;
+    background: linear-gradient(180deg, #2a3a47 0%, #213038 100%);
+    box-shadow: inset 0 -2px 0 #4a9d5b;
+}
+
+.sc-subtab-icon {
+    font-size: 11px;
+    opacity: 0.85;
+}
+
+.sc-subtab-count {
+    display: inline-flex;
+    min-width: 18px;
+    height: 16px;
+    padding: 0 5px;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: #8a949c;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+}
+
+.sc-subtab.active .sc-subtab-count {
+    color: #0e1f12;
+    background: #6db974;
+}
+
+.sc-tab-panel {
+    display: none;
+}
+
+.sc-tab-panel.active {
+    display: block;
+}
+
+.sc-tab-panel > .fm-panel + .fm-panel,
+.sc-tab-panel > .fm-panel + .fm-transfers-row,
+.sc-tab-panel > .fm-transfers-row + .fm-panel,
+.sc-tab-panel > .fm-transfers-row + .fm-transfers-row {
+    margin-top: 10px;
+}
+
 .sc-summary {
     display: grid;
     grid-template-columns: repeat(8, minmax(0, 1fr));
     gap: 1px;
-    background: #d8e1ce;
+    background: #263340;
     padding: 1px;
 }
 
 .sc-stat {
-    background: #f4f7ee;
-    padding: 8px 10px;
+    background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
+    padding: 12px 14px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
     min-width: 0;
+    position: relative;
+}
+
+.sc-stat::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 12px;
+    bottom: 12px;
+    width: 2px;
+    background: #4a9d5b;
+    opacity: 0.55;
 }
 
 .sc-stat-label {
-    font-size: 10px;
+    font-size: 9px;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
-    color: #6a8a5a;
+    letter-spacing: 0.6px;
+    color: #6a7a86;
     line-height: 1.2;
 }
 
 .sc-stat-value {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
-    color: #2d4a1a;
+    color: #d8dee4;
     line-height: 1.1;
+    font-variant-numeric: tabular-nums;
 }
 
 .sc-table-wrap {
@@ -6619,19 +6717,19 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .sc-table {
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .sc-table thead th {
     white-space: nowrap;
-    padding: 6px 8px;
-    font-size: 10px;
+    padding: 7px 8px;
+    font-size: 9px;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.5px;
 }
 
 .sc-table tbody td {
-    padding: 5px 8px;
+    padding: 6px 8px;
     vertical-align: middle;
 }
 
@@ -6639,6 +6737,7 @@ a:link, a:visited, a:hover, a:active {
     text-align: right;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    color: #c8d2da;
 }
 
 .sc-table .sc-name {
@@ -6646,10 +6745,11 @@ a:link, a:visited, a:hover, a:active {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 180px;
+    font-weight: 500;
 }
 
 .sc-table .sc-reason {
-    color: #546a78;
+    color: #7a8690;
     font-size: 11px;
     max-width: 220px;
     overflow: hidden;
@@ -6659,7 +6759,7 @@ a:link, a:visited, a:hover, a:active {
 
 .sc-table .sc-role-profile {
     font-size: 11px;
-    color: #5a6a4a;
+    color: #8a96a0;
     white-space: nowrap;
 }
 
@@ -6673,200 +6773,238 @@ a:link, a:visited, a:hover, a:active {
 
 .sc-table-monitoring th,
 .sc-table-monitoring td {
-    padding: 4px 6px;
+    padding: 5px 6px;
 }
 
 .sc-badge {
     display: inline-block;
-    padding: 1px 6px;
+    padding: 2px 7px;
     font-size: 10px;
     font-weight: 600;
     border-radius: 3px;
-    letter-spacing: 0.2px;
-    background: #e3ead7;
-    color: #2d4a1a;
+    letter-spacing: 0.3px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #b0bac2;
     white-space: nowrap;
     line-height: 1.5;
+    border: 1px solid transparent;
 }
 
 .sc-badge-region {
-    background: #e8eef5;
-    color: #2c4a6e;
+    background: rgba(70, 132, 196, 0.16);
+    color: #8fb8e0;
+    border-color: rgba(70, 132, 196, 0.28);
 }
 
 .sc-badge-risk {
-    background: #f5dcd6;
-    color: #7a2418;
+    background: rgba(193, 76, 76, 0.16);
+    color: #e89090;
+    border-color: rgba(193, 76, 76, 0.32);
 }
 
 .sc-badge-vote,
 .sc-badge-decision {
-    background: #eef0d6;
-    color: #5a5a14;
+    background: rgba(212, 168, 67, 0.14);
+    color: #e8c270;
+    border-color: rgba(212, 168, 67, 0.26);
 }
 
 .sc-badge-completed {
-    background: #d6e5d6;
-    color: #2d5a2d;
+    background: rgba(74, 157, 91, 0.18);
+    color: #7fd28b;
+    border-color: rgba(74, 157, 91, 0.32);
 }
 
 .sc-badge-active-state {
-    background: #eef0d6;
-    color: #5a5a14;
+    background: rgba(212, 168, 67, 0.14);
+    color: #e8c270;
+    border-color: rgba(212, 168, 67, 0.26);
 }
 
 .sc-badge-shadow {
-    background: #e0dde7;
-    color: #3a2a5a;
+    background: rgba(140, 110, 196, 0.16);
+    color: #b89fe6;
+    border-color: rgba(140, 110, 196, 0.30);
 }
 
 .sc-badge-active {
-    background: #d6e5d6;
-    color: #2d5a2d;
+    background: rgba(74, 157, 91, 0.18);
+    color: #7fd28b;
+    border-color: rgba(74, 157, 91, 0.32);
 }
 
 .sc-badge-board-approved {
-    background: #d6e5d6;
-    color: #2d5a2d;
+    background: rgba(74, 157, 91, 0.22);
+    color: #8ddc99;
+    border-color: rgba(74, 157, 91, 0.40);
 }
 
 .sc-badge-board-vetoed {
-    background: #f5dcd6;
-    color: #7a2418;
+    background: rgba(193, 76, 76, 0.18);
+    color: #ec9090;
+    border-color: rgba(193, 76, 76, 0.36);
 }
 
 /* Status / decision / vote / recommendation / priority hue tints */
 .sc-badge-monitoring_status_active,
 .sc-badge-request_status_scouting_active {
-    background: #e3ead7;
-    color: #2d4a1a;
+    background: rgba(74, 157, 91, 0.14);
+    color: #7fd28b;
+    border-color: rgba(74, 157, 91, 0.28);
 }
 
 .sc-badge-monitoring_status_paused {
-    background: #ece8d8;
-    color: #6a5a18;
+    background: rgba(150, 150, 150, 0.10);
+    color: #a0a8b0;
+    border-color: rgba(150, 150, 150, 0.22);
 }
 
 .sc-badge-monitoring_status_report_ready {
-    background: #f0e6c4;
-    color: #6a4a14;
+    background: rgba(212, 168, 67, 0.18);
+    color: #f0cf7c;
+    border-color: rgba(212, 168, 67, 0.36);
 }
 
 .sc-badge-monitoring_status_shortlisted,
 .sc-badge-request_status_shortlisted {
-    background: #d6e5d6;
-    color: #2d5a2d;
+    background: rgba(74, 157, 91, 0.20);
+    color: #8ddc99;
+    border-color: rgba(74, 157, 91, 0.36);
 }
 
 .sc-badge-monitoring_status_negotiating,
 .sc-badge-request_status_negotiating {
-    background: #d8e6f0;
-    color: #1a4a6e;
+    background: rgba(70, 132, 196, 0.18);
+    color: #93bce4;
+    border-color: rgba(70, 132, 196, 0.34);
 }
 
 .sc-badge-monitoring_status_signed,
 .sc-badge-request_status_fulfilled {
-    background: #cee0c4;
-    color: #1a4a14;
+    background: rgba(74, 157, 91, 0.26);
+    color: #95e0a1;
+    border-color: rgba(74, 157, 91, 0.46);
 }
 
 .sc-badge-monitoring_status_lost,
 .sc-badge-request_status_abandoned {
-    background: #e8d8d8;
-    color: #6a3030;
+    background: rgba(120, 100, 90, 0.18);
+    color: #b09a90;
+    border-color: rgba(120, 100, 90, 0.32);
 }
 
 .sc-badge-monitoring_status_rejected,
 .sc-badge-decision_reject {
-    background: #f5dcd6;
-    color: #7a2418;
+    background: rgba(193, 76, 76, 0.18);
+    color: #e89090;
+    border-color: rgba(193, 76, 76, 0.34);
 }
 
 .sc-badge-recommendation_strong_buy {
-    background: #c4dfb8;
-    color: #1a4a14;
+    background: rgba(74, 157, 91, 0.30);
+    color: #9cebab;
+    border-color: rgba(74, 157, 91, 0.55);
+    font-weight: 700;
 }
 
 .sc-badge-recommendation_buy {
-    background: #d6e5d6;
-    color: #2d5a2d;
+    background: rgba(74, 157, 91, 0.18);
+    color: #7fd28b;
+    border-color: rgba(74, 157, 91, 0.34);
 }
 
 .sc-badge-recommendation_consider {
-    background: #ece8d8;
-    color: #6a5a18;
+    background: rgba(212, 168, 67, 0.14);
+    color: #e8c270;
+    border-color: rgba(212, 168, 67, 0.26);
 }
 
 .sc-badge-recommendation_pass {
-    background: #f5dcd6;
-    color: #7a2418;
+    background: rgba(193, 76, 76, 0.14);
+    color: #d88080;
+    border-color: rgba(193, 76, 76, 0.28);
 }
 
 .sc-badge-decision_promote_to_shortlist,
 .sc-badge-decision_start_negotiation {
-    background: #d6e5d6;
-    color: #2d5a2d;
+    background: rgba(74, 157, 91, 0.20);
+    color: #8ddc99;
+    border-color: rgba(74, 157, 91, 0.36);
 }
 
 .sc-badge-decision_keep_monitoring {
-    background: #e3ead7;
-    color: #2d4a1a;
+    background: rgba(74, 157, 91, 0.12);
+    color: #7fd28b;
+    border-color: rgba(74, 157, 91, 0.24);
 }
 
 .sc-badge-decision_ask_board_approval {
-    background: #d8e6f0;
-    color: #1a4a6e;
+    background: rgba(70, 132, 196, 0.16);
+    color: #93bce4;
+    border-color: rgba(70, 132, 196, 0.30);
 }
 
 .sc-badge-scout_vote_strong_approve {
-    background: #c4dfb8;
-    color: #1a4a14;
+    background: rgba(74, 157, 91, 0.30);
+    color: #9cebab;
+    border-color: rgba(74, 157, 91, 0.55);
+    font-weight: 700;
 }
 
 .sc-badge-scout_vote_approve {
-    background: #d6e5d6;
-    color: #2d5a2d;
+    background: rgba(74, 157, 91, 0.18);
+    color: #7fd28b;
+    border-color: rgba(74, 157, 91, 0.34);
 }
 
 .sc-badge-scout_vote_monitor {
-    background: #e3ead7;
-    color: #2d4a1a;
+    background: rgba(74, 157, 91, 0.10);
+    color: #7fd28b;
+    border-color: rgba(74, 157, 91, 0.22);
 }
 
 .sc-badge-scout_vote_needs_more_info {
-    background: #ece8d8;
-    color: #6a5a18;
+    background: rgba(212, 168, 67, 0.14);
+    color: #e8c270;
+    border-color: rgba(212, 168, 67, 0.26);
 }
 
 .sc-badge-scout_vote_reject {
-    background: #f5dcd6;
-    color: #7a2418;
+    background: rgba(193, 76, 76, 0.18);
+    color: #e89090;
+    border-color: rgba(193, 76, 76, 0.34);
 }
 
 .sc-badge-request_priority_critical {
-    background: #f5dcd6;
-    color: #7a2418;
+    background: rgba(193, 76, 76, 0.22);
+    color: #ec9090;
+    border-color: rgba(193, 76, 76, 0.42);
+    font-weight: 700;
 }
 
 .sc-badge-request_priority_important {
-    background: #f0e6c4;
-    color: #6a4a14;
+    background: rgba(212, 168, 67, 0.18);
+    color: #f0cf7c;
+    border-color: rgba(212, 168, 67, 0.36);
 }
 
 .sc-badge-request_priority_optional {
-    background: #e3ead7;
-    color: #2d4a1a;
+    background: rgba(150, 160, 170, 0.10);
+    color: #a0aab4;
+    border-color: rgba(150, 160, 170, 0.22);
 }
 
 .sc-badge-request_status_pending {
-    background: #ece8d8;
-    color: #6a5a18;
+    background: rgba(212, 168, 67, 0.12);
+    color: #d8b870;
+    border-color: rgba(212, 168, 67, 0.24);
 }
 
 /* Recruitment meeting blocks */
 .sc-meeting {
-    border-top: 1px solid #d8e1ce;
-    padding: 10px 12px 12px;
+    border-top: 1px solid #263340;
+    padding: 12px 14px 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.012) 0%, rgba(255,255,255,0) 100%);
 }
 
 .sc-meeting:first-child {
@@ -6878,76 +7016,93 @@ a:link, a:visited, a:hover, a:active {
     flex-wrap: wrap;
     align-items: baseline;
     gap: 12px;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed #263340;
 }
 
 .sc-meeting-date {
     font-size: 13px;
     font-weight: 700;
-    color: #2d4a1a;
+    color: #d8dee4;
+    letter-spacing: 0.2px;
 }
 
 .sc-meeting-id {
     font-size: 11px;
-    color: #6a8a5a;
+    color: #6a7a86;
     font-variant-numeric: tabular-nums;
+    font-weight: 600;
 }
 
 .sc-meeting-agenda {
     font-size: 11px;
-    color: #546a78;
+    color: #8a96a0;
 }
 
 .sc-meeting-participants {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 5px;
     align-items: center;
     font-size: 11px;
-    color: #546a78;
+    color: #8a96a0;
     margin-bottom: 8px;
 }
 
 .sc-meeting-label {
-    font-weight: 600;
-    color: #2d4a1a;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 700;
+    color: #6a7a86;
     margin-right: 4px;
 }
 
 .sc-pill {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 2px 8px;
-    background: #e3ead7;
-    color: #2d4a1a;
+    gap: 6px;
+    padding: 3px 9px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid #263340;
+    color: #c8d2da;
     font-size: 11px;
-    border-radius: 3px;
+    font-weight: 500;
+    border-radius: 11px;
     text-decoration: none;
+    transition: background 0.12s, border-color 0.12s;
 }
 
 .sc-pill:hover {
-    background: #d8e1ce;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: #3a4a58;
     text-decoration: none;
+    color: #fff;
 }
 
 .sc-pill-role {
-    font-size: 10px;
+    font-size: 9px;
     color: #6a8a5a;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+    color: #7fb088;
 }
 
 .sc-meeting-section {
-    margin-top: 8px;
+    margin-top: 10px;
 }
 
 .sc-meeting-section-head {
-    font-size: 11px;
+    font-size: 10px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
-    color: #6a8a5a;
-    margin-bottom: 4px;
+    letter-spacing: 0.8px;
+    color: #6a7a86;
+    margin-bottom: 6px;
+    padding-left: 8px;
+    border-left: 2px solid #4a9d5b;
 }
 
 .sc-meeting-table {
@@ -6963,5 +7118,10 @@ a:link, a:visited, a:hover, a:active {
 @media (max-width: 600px) {
     .sc-summary {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .sc-subtab {
+        padding: 7px 10px;
+        font-size: 9px;
+        letter-spacing: 0.5px;
     }
 }
