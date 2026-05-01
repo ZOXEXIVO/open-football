@@ -6622,7 +6622,6 @@ a:link, a:visited, a:hover, a:active {
 .sc-subtab.active {
     color: #fff;
     background: linear-gradient(180deg, #2a3a47 0%, #213038 100%);
-    box-shadow: inset 0 -2px 0 #4a9d5b;
 }
 
 .sc-subtab-icon {
@@ -6647,8 +6646,8 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .sc-subtab.active .sc-subtab-count {
-    color: #0e1f12;
-    background: #6db974;
+    color: var(--tab-fg-active, #0e1f12);
+    background: var(--header-bg, #6db974);
 }
 
 .sc-tab-panel {
