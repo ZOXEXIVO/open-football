@@ -10,10 +10,12 @@ use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{GameTickContext, MatchContext, StateProcessingContext};
+use crate::utils::DateUtils;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerPositionType,
     PlayerSkills,
 };
+use chrono::NaiveDate;
 use nalgebra::Vector3;
 use std::fmt::*;
 
@@ -74,6 +76,22 @@ pub struct MatchPlayer {
     /// Manager flag protecting this player from fatigue / development subs.
     /// Mirrored from `Player::is_force_match_selection` at squad-build time.
     pub is_force_match_selection: bool,
+
+    /// Player's birth date, mirrored from the source `Player`. Read by the
+    /// in-match substitution logic to apply age-appropriate protection
+    /// thresholds for under-18 players (lower fatigue ceiling, condition
+    /// floor that overrides the manager's force-selection flag).
+    pub birth_date: NaiveDate,
+}
+
+impl MatchPlayer {
+    /// Age in whole years on `today`. Defined here (not on `Player`) so
+    /// match-side code never has to reach back through the simulator
+    /// data graph.
+    #[inline]
+    pub fn age_at(&self, today: NaiveDate) -> u8 {
+        DateUtils::age(self.birth_date, today)
+    }
 }
 
 impl MatchPlayer {
@@ -123,6 +141,7 @@ impl MatchPlayer {
             tackle_cooldown: 0,
             pending_shot_reason: None,
             is_force_match_selection: player.is_force_match_selection,
+            birth_date: player.birth_date,
         }
     }
 

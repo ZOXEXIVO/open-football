@@ -1845,6 +1845,69 @@ fn three_matches_in_seven_days_accrue_higher_debt_than_one_match() {
     );
 }
 
+// ── Maturity-amplified match exertion ─────────────────────────────────
+
+#[test]
+fn under_15_competitive_match_carries_far_more_load_than_adult_peer() {
+    // Same position, same minutes, same condition. The 14-year-old's
+    // body absorbs senior intensity at roughly 1.8× the adult cost.
+    let date = d(2025, 9, 14);
+    let mut adult = fresh_player(PlayerPositionType::MidfielderCenter);
+    adult.birth_date = d(1998, 1, 1); // 27
+    let mut youth = fresh_player(PlayerPositionType::MidfielderCenter);
+    youth.birth_date = d(2011, 1, 1); // 14
+
+    adult.on_match_exertion(90.0, date, false);
+    youth.on_match_exertion(90.0, date, false);
+
+    // Load: at least 1.5× the adult's (1.8× nominal, allowing for the
+    // depletion-factor and friendly-factor folds in the formula).
+    assert!(
+        youth.load.physical_load_7 > adult.load.physical_load_7 * 1.5,
+        "youth load {} not far enough above adult {}",
+        youth.load.physical_load_7,
+        adult.load.physical_load_7
+    );
+    // Recovery debt: amplified even harder (target 2.0×).
+    assert!(
+        youth.load.recovery_debt > adult.load.recovery_debt * 1.7,
+        "youth debt {} not far enough above adult {}",
+        youth.load.recovery_debt,
+        adult.load.recovery_debt
+    );
+    // Jadedness ends up materially higher too.
+    assert!(
+        (youth.player_attributes.jadedness as i32)
+            > (adult.player_attributes.jadedness as i32) + 200,
+        "youth jad {} should exceed adult jad {} by a clear margin",
+        youth.player_attributes.jadedness,
+        adult.player_attributes.jadedness
+    );
+}
+
+#[test]
+fn under_15_friendly_match_does_not_get_maturity_amplification() {
+    // Pre-season cameos are already discounted via the friendly factor;
+    // the maturity multiplier deliberately doesn't pile on top of that.
+    let date = d(2025, 9, 14);
+    let mut youth_friendly = fresh_player(PlayerPositionType::MidfielderCenter);
+    youth_friendly.birth_date = d(2011, 1, 1); // 14
+    let mut adult_friendly = fresh_player(PlayerPositionType::MidfielderCenter);
+    adult_friendly.birth_date = d(1998, 1, 1); // 27
+
+    youth_friendly.on_match_exertion(90.0, date, true);
+    adult_friendly.on_match_exertion(90.0, date, true);
+
+    // Within ~5% of each other — friendlies don't amplify by age.
+    let diff = (youth_friendly.load.physical_load_7 - adult_friendly.load.physical_load_7).abs();
+    assert!(
+        diff < adult_friendly.load.physical_load_7 * 0.05,
+        "youth friendly load {} should match adult {} within 5%",
+        youth_friendly.load.physical_load_7,
+        adult_friendly.load.physical_load_7
+    );
+}
+
 #[test]
 fn condition_floor_is_enforced_post_match() {
     let mut p = fresh_player(PlayerPositionType::Striker);

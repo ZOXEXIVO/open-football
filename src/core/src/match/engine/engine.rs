@@ -589,7 +589,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
                 let period_time = context.time.time;
                 if period_time >= next_sub_time_ms {
-                    process_substitutions(field, context, 2);
+                    // Wall-clock today — the engine doesn't track sim
+                    // date directly. Used only for the youth-protection
+                    // sub branch, where the comparison is age <= 17.
+                    let today = chrono::Utc::now().naive_utc().date();
+                    process_substitutions(field, context, 2, today);
                     let mut rng = rand::rng();
                     next_sub_time_ms = period_time + rng.random_range(5..15) * 60 * 1000;
                 }

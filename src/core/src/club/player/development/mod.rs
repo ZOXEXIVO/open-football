@@ -38,6 +38,7 @@
 
 mod age_curve;
 mod coaching;
+mod maturity;
 mod modifiers;
 mod position_weights;
 mod rolls;

@@ -34,10 +34,13 @@ pub(super) fn personality_multiplier(
 
 // ── Match-experience multiplier ─────────────────────────────────────────
 //
-// Counts both official and friendly appearances. Official matches have full
-// weight; friendly appearances contribute at only 20% because the competitive
-// intensity and development stimulus is much lower. Loaning a young player
-// for 30 league games is far more impactful than 30 U20 games.
+// Historical: counted both official and friendly appearances and folded
+// them into a multiplier capped at 1.40. Replaced in the development tick
+// by [`super::maturity::senior_exposure_multiplier`], which reads rolling
+// minutes and physical load directly off `PlayerLoad` instead of raw
+// appearance counts. The function below is retained for any downstream
+// consumer that still wants the count-based summary view.
+#[allow(dead_code)]
 pub(super) fn match_experience_multiplier(
     started: u16,
     sub_apps: u16,

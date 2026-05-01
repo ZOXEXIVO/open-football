@@ -1,11 +1,67 @@
+use chrono::NaiveDate;
+
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::field::MatchField;
 use crate::r#match::{MatchContext, MatchPlayer};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
+/// In-match youth-protection thresholds and the candidate predicate.
+/// Encapsulates the "should this kid be hooked even though the manager
+/// pinned him in?" decision so the substitution loop reads as one branch
+/// and tests can pin behaviour without standing up a full
+/// `MatchField`/`MatchContext` fixture.
+///
+/// Football model: real coaches pull young players off the pitch when
+/// they look gone — even if a more experienced peer would be left on.
+/// The thresholds match the in-game "Rst" status logic (jadedness > 7000
+/// triggers the post-match rest flag) but apply during play so a 15yo
+/// pinned into a top-flight first team still gets protected mid-match.
+pub(super) struct YouthProtection;
+
+impl YouthProtection {
+    /// Condition (0-10000) below which an under-17 in a senior match is
+    /// pulled off even if the manager force-selected them. Pushing a kid
+    /// through 90 minutes on a dangerously low tank is how you end
+    /// careers — the protection takes precedence over a roster pin.
+    const CONDITION_THRESHOLD: i16 = 4500;
+
+    /// Jadedness (0-10000) above which an under-17 is hooked for
+    /// protection. Roughly the "Rst" threshold but applied during the
+    /// match instead of post-match.
+    const JADEDNESS_THRESHOLD: i16 = 8500;
+
+    /// Age at or below which the protection thresholds override the
+    /// manager's force-selection flag. 17 is the FIFA-standard age at
+    /// which a player can be registered for senior international
+    /// football, but until then the body is still maturing — and the
+    /// in-match guardrails follow the body, not the paperwork.
+    const MAX_AGE: u8 = 17;
+
+    /// True when the player is young enough and drained enough that the
+    /// force-selection flag should be ignored in favour of pulling him
+    /// off the pitch. Goalkeepers and players already in the critical
+    /// pass (condition < 2000) are excluded so the predicate does not
+    /// double-fire.
+    pub(super) fn is_candidate(player: &MatchPlayer, today: NaiveDate) -> bool {
+        if player.tactical_position.current_position == PlayerPositionType::Goalkeeper {
+            return false;
+        }
+        if player.player_attributes.condition < 2000 {
+            return false; // critical pass owns it
+        }
+        if player.age_at(today) > Self::MAX_AGE {
+            return false;
+        }
+        player.player_attributes.condition < Self::CONDITION_THRESHOLD
+            || player.player_attributes.jadedness > Self::JADEDNESS_THRESHOLD
+    }
+}
+
 /// Process substitutions for both teams.
 ///
-/// Two strategies:
+/// Three strategies, in priority order:
+/// 0. **Critical injury** — anyone (force-selected or not) with condition
+///    < 2000 is pulled off; under-17 protection runs alongside.
 /// 1. **Fatigue subs** — replace the most tired players
 /// 2. **Development subs** — when winning comfortably, bring on bench players
 ///    who need match experience (loan players, youth, etc.)
@@ -13,12 +69,13 @@ pub fn process_substitutions(
     field: &mut MatchField,
     context: &mut MatchContext,
     max_subs_per_team: usize,
+    today: NaiveDate,
 ) {
     // Roll for explicit in-match injuries first so the force-sub logic
     // downstream picks them up. A match can now produce genuine injury-
     // driven substitutions instead of waiting for condition to drift down
     // naturally.
-    roll_in_match_injuries(field, context);
+    Substitutions::roll_in_match_injuries(field, context);
 
     let team_ids = [field.home_team_id, field.away_team_id];
 
@@ -89,6 +146,30 @@ pub fn process_substitutions(
 
         critical_candidates.sort_by_key(|&(_, cond, _)| cond);
 
+        // Youth-protection candidates: under-17 players whose condition or
+        // jadedness has dropped into the danger band. The force-selection
+        // flag does not protect them — a manager who pinned a 15-year-old
+        // into the XI cannot keep him on the pitch at 35% condition.
+        // Goalkeepers stay on the pitch (substitute keepers are usually a
+        // bigger risk than a tired starter). The predicate is extracted
+        // to a helper so tests can pin its behaviour without standing up
+        // a full MatchField/MatchContext fixture.
+        let mut youth_protection_candidates: Vec<(u32, i16, PlayerPositionType)> = field
+            .players
+            .iter()
+            .filter(|p| p.team_id == team_id)
+            .filter(|p| YouthProtection::is_candidate(p, today))
+            .map(|p| {
+                (
+                    p.id,
+                    p.player_attributes.condition,
+                    p.tactical_position.current_position,
+                )
+            })
+            .collect();
+
+        youth_protection_candidates.sort_by_key(|&(_, cond, _)| cond);
+
         // Determine sub strategy based on match situation:
         // - Tired subs: always replace the most fatigued player
         // - Comfortable lead (2+ goals, 65+ min): also use development subs
@@ -109,8 +190,29 @@ pub fn process_substitutions(
                 break;
             }
             let position_group = position.position_group();
-            if let Some(player_in_id) = find_best_substitute(field, team_id, position_group) {
-                if execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
+            if let Some(player_in_id) = Substitutions::find_best_substitute(field, team_id, position_group) {
+                if Substitutions::execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
+                    subs_made += 1;
+                }
+            }
+        }
+
+        // Zero-and-a-half: youth-protection. A 15-year-old at 35% condition
+        // or 90%+ jadedness is hooked even when the manager pinned him in.
+        // Real coaches pull young players off the pitch when they look
+        // gone — the force-selection flag should not be a back door for
+        // overloading a body that hasn't finished growing.
+        for (player_out_id, _condition, position) in &youth_protection_candidates {
+            if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
+                break;
+            }
+            // Don't double-process if the critical pass already pulled them.
+            if field.get_player(*player_out_id).is_none() {
+                continue;
+            }
+            let position_group = position.position_group();
+            if let Some(player_in_id) = Substitutions::find_best_substitute(field, team_id, position_group) {
+                if Substitutions::execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
                     subs_made += 1;
                 }
             }
@@ -135,8 +237,8 @@ pub fn process_substitutions(
             }
 
             let position_group = position.position_group();
-            if let Some(player_in_id) = find_best_substitute(field, team_id, position_group) {
-                if execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
+            if let Some(player_in_id) = Substitutions::find_best_substitute(field, team_id, position_group) {
+                if Substitutions::execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
                     subs_made += 1;
                 }
             }
@@ -181,7 +283,7 @@ pub fn process_substitutions(
                 .map(|(id, _, _)| *id);
 
             if let (Some(in_id), Some(out_id)) = (sub_in, sub_out) {
-                if execute_substitution(field, context, team_id, out_id, in_id) {
+                if Substitutions::execute_substitution(field, context, team_id, out_id, in_id) {
                     subs_made += 1;
                 }
             }
@@ -255,7 +357,7 @@ pub fn process_substitutions(
                     .min_by_key(|&(_, cond)| cond);
 
                 if let Some((out_id, _)) = player_out {
-                    if execute_substitution(field, context, team_id, out_id, *sub_id) {
+                    if Substitutions::execute_substitution(field, context, team_id, out_id, *sub_id) {
                         subs_made += 1;
                         dev_subs_made += 1;
                     }
@@ -264,6 +366,15 @@ pub fn process_substitutions(
         }
     }
 }
+
+/// Match-side helpers grouped under one namespace. The free-function
+/// versions of these helpers all lived at module scope; bundling them
+/// under a struct keeps `process_substitutions` readable, lets tests
+/// reach in via stable `Substitutions::xxx` paths, and gives the file a
+/// single place to grow per-difficulty / per-rule-set knobs later.
+pub(super) struct Substitutions;
+
+impl Substitutions {
 
 /// Per-tick in-match injury roll. A small per-player chance scaled by
 /// jadedness, low condition, age, and low natural_fitness. When triggered,
@@ -436,4 +547,103 @@ fn find_best_substitute(
         })
         .max_by_key(|p| p.player_attributes.current_ability)
         .map(|p| p.id)
+}
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
+    };
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn build_match_player(birth: NaiveDate, pos: PlayerPositionType) -> MatchPlayer {
+        let mut attrs = PlayerAttributes::default();
+        attrs.condition = 9000;
+        attrs.jadedness = 1000;
+        let player = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("T".to_string(), "P".to_string()))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: pos,
+                    level: 18,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        MatchPlayer::from_player(1, &player, pos, false)
+    }
+
+    fn today() -> NaiveDate {
+        d(2025, 6, 1)
+    }
+
+    #[test]
+    fn youth_protection_fires_for_under_17_with_low_condition() {
+        let mut p = build_match_player(d(2010, 1, 1), PlayerPositionType::ForwardLeft); // 15
+        p.player_attributes.condition = 4000;
+        assert!(YouthProtection::is_candidate(&p, today()));
+    }
+
+    #[test]
+    fn youth_protection_fires_for_under_17_with_high_jadedness() {
+        let mut p = build_match_player(d(2009, 1, 1), PlayerPositionType::MidfielderCenter); // 16
+        p.player_attributes.condition = 6000;
+        p.player_attributes.jadedness = 9000;
+        assert!(YouthProtection::is_candidate(&p, today()));
+    }
+
+    #[test]
+    fn youth_protection_silent_for_under_17_with_normal_condition() {
+        let mut p = build_match_player(d(2010, 1, 1), PlayerPositionType::ForwardLeft);
+        p.player_attributes.condition = 7000;
+        p.player_attributes.jadedness = 3000;
+        assert!(!YouthProtection::is_candidate(&p, today()));
+    }
+
+    #[test]
+    fn youth_protection_silent_for_18yo_with_low_condition() {
+        let mut p = build_match_player(d(2007, 1, 1), PlayerPositionType::ForwardLeft); // 18
+        p.player_attributes.condition = 3000;
+        assert!(!YouthProtection::is_candidate(&p, today()));
+    }
+
+    #[test]
+    fn youth_protection_skips_goalkeepers() {
+        let mut p = build_match_player(d(2010, 1, 1), PlayerPositionType::Goalkeeper);
+        p.player_attributes.condition = 3000;
+        assert!(!YouthProtection::is_candidate(&p, today()));
+    }
+
+    #[test]
+    fn youth_protection_skips_critical_pass_owners() {
+        // Below 2000 → critical-injury pass owns it; predicate must
+        // defer to that to avoid double-firing.
+        let mut p = build_match_player(d(2010, 1, 1), PlayerPositionType::ForwardLeft);
+        p.player_attributes.condition = 1500;
+        assert!(!YouthProtection::is_candidate(&p, today()));
+    }
+
+    #[test]
+    fn youth_protection_fires_even_when_force_selected() {
+        // The force-selection flag must NOT make the predicate skip the
+        // player — that's the whole point.
+        let mut p = build_match_player(d(2010, 1, 1), PlayerPositionType::ForwardLeft);
+        p.player_attributes.condition = 4000;
+        p.is_force_match_selection = true;
+        assert!(YouthProtection::is_candidate(&p, today()));
+    }
 }

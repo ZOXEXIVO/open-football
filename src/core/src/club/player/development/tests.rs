@@ -484,6 +484,412 @@ fn goalkeeping_skills_use_later_peak_curve() {
     );
 }
 
+// ── Maturity / overload regression suite ──────────────────────────────
+//
+// These tests exist because the previous tick gave the manager an
+// implicit shortcut: pin a 14-year-old high-PA prospect to the senior
+// XI, win the league reputation lottery, hire an elite coach, and the
+// kid would touch world-class CA inside two seasons. The new tick uses
+// load + maturity + soft per-week caps so that
+//   * the curve under 16 is restrained on its own,
+//   * exposure that overshoots the optimal monthly minute band turns
+//     negative,
+//   * a youth at the wrong level (overmatched in a top league) learns
+//     less, not more,
+//   * stacked positive multipliers can't compound past a soft cap, and
+//   * the step-up bonus does not fire for under-18s.
+//
+// Each test below pins one of these guarantees so a future tweak that
+// re-opens the shortcut fails loudly.
+
+fn make_player_with_load(
+    birth: NaiveDate,
+    pos: PlayerPositionType,
+    skills: PlayerSkills,
+    pa: u8,
+    person: PersonAttributes,
+    minutes_30: f32,
+    load_30: f32,
+    load_7: f32,
+    condition: i16,
+    jadedness: i16,
+) -> Player {
+    let mut p = make_player(birth, pos, skills, pa, person);
+    p.player_attributes.condition = condition;
+    p.player_attributes.jadedness = jadedness;
+    p.load.minutes_last_30 = minutes_30;
+    p.load.physical_load_30 = load_30;
+    p.load.physical_load_7 = load_7;
+    p
+}
+
+fn run_weekly_ticks(
+    p: &mut Player,
+    start: NaiveDate,
+    weeks: u32,
+    league_rep: u16,
+    coach: &CoachingEffect,
+    club_rep: f32,
+) {
+    for w in 0..weeks {
+        let now = start + chrono::Duration::weeks(w as i64);
+        p.process_development_with(now, league_rep, coach, club_rep, &mut FixedRolls(1.0));
+    }
+}
+
+#[test]
+fn forced_14yo_in_top_first_team_only_drifts_up_over_a_season() {
+    // Pinned 14-year-old playing senior matches every week at an elite
+    // club, top-five league reputation, with the best coach the system
+    // can produce. Even with every multiplier on his side he must not
+    // turn into a senior star inside one season.
+    let start = d(2025, 7, 1);
+    let birth = d(2011, 1, 1); // 14
+    let pa = 190u8;
+
+    let mut p = make_player_with_load(
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        pa,
+        person_pro(18.0, 18.0),
+        // Senior schedule load: ~360 mins/30d (pinned starter), heavy
+        // 1300-unit chronic load and a recent 350-unit week.
+        360.0,
+        1300.0,
+        350.0,
+        7000,
+        5000,
+    );
+
+    let initial_ca = p.player_attributes.current_ability;
+    let initial_finishing = p.skills.technical.finishing;
+    let initial_pa = p.player_attributes.potential_ability;
+
+    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
+
+    // 40 weeks ≈ a full domestic season.
+    run_weekly_ticks(&mut p, start, 40, 9000, &coach, 0.95);
+
+    let ca_gain = p.player_attributes.current_ability as i32 - initial_ca as i32;
+    let finishing_gain = p.skills.technical.finishing - initial_finishing;
+
+    // Tight bounds — a forced 14yo in the senior first team must not
+    // jump CA into the senior-star band over a season.
+    assert!(
+        ca_gain <= 15,
+        "forced 14yo gained {} CA in a season — should be tightly bounded",
+        ca_gain
+    );
+    assert!(
+        finishing_gain < 1.5,
+        "forced 14yo gained {} finishing in a season — should drip, not flow",
+        finishing_gain
+    );
+    // PA must NOT be raised by routine development. The biological
+    // ceiling is set at intake; a manager's selection choice can't
+    // shift it.
+    assert_eq!(
+        p.player_attributes.potential_ability, initial_pa,
+        "PA was raised during weekly development — must stay at its biological ceiling"
+    );
+}
+
+#[test]
+fn forced_14yo_with_extreme_overload_grows_less_than_managed_peer() {
+    // Two 14-year-old prospects, identical PA, identical setup. The
+    // overloaded one is being pushed past the burn-out band; the managed
+    // one is on a youth-appropriate schedule. Over a season the managed
+    // peer must end up with more skill growth.
+    let start = d(2025, 7, 1);
+    let birth = d(2011, 1, 1);
+    let pa = 190u8;
+    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
+
+    // Overloaded: 1800 mins/30d, drained, jaded, deep load.
+    let mut overloaded = make_player_with_load(
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        pa,
+        person_pro(18.0, 18.0),
+        1800.0,
+        2000.0,
+        650.0,
+        4500,
+        8500,
+    );
+    overloaded.load.recovery_debt = 500.0;
+    let pre_over = overloaded.skills.technical.finishing;
+
+    // Managed: 200 mins/30d, fresh, low jadedness.
+    let mut managed = make_player_with_load(
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        pa,
+        person_pro(18.0, 18.0),
+        200.0,
+        300.0,
+        100.0,
+        9500,
+        1500,
+    );
+    let pre_man = managed.skills.technical.finishing;
+
+    run_weekly_ticks(&mut overloaded, start, 40, 9000, &coach, 0.95);
+    run_weekly_ticks(&mut managed, start, 40, 9000, &coach, 0.95);
+
+    let overloaded_gain = overloaded.skills.technical.finishing - pre_over;
+    let managed_gain = managed.skills.technical.finishing - pre_man;
+
+    assert!(
+        managed_gain > overloaded_gain,
+        "managed 14yo finishing gain {} should beat overloaded peer {}",
+        managed_gain,
+        overloaded_gain
+    );
+}
+
+#[test]
+fn controlled_minutes_help_17yo_but_overload_penalises_him() {
+    // 17yo benefits from controlled senior minutes; the same 17yo on
+    // an extreme schedule grows less. This is the band-shape test for
+    // the 16-17 age tier — `senior_exposure_multiplier` peaks inside
+    // 300..900 mins/30d and falls past it.
+    let start = d(2025, 7, 1);
+    let birth = d(2008, 1, 1); // 17
+    let pa = 175u8;
+    let coach = CoachingEffect::from_scores(15, 15, 15, 15, 0.6);
+
+    let mut controlled = make_player_with_load(
+        birth,
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        pa,
+        person_pro(15.0, 14.0),
+        600.0,  // sweet spot for 16-17
+        700.0,
+        180.0,
+        9200,
+        2000,
+    );
+    let pre_controlled = controlled.skills.technical.passing;
+
+    let mut overloaded = make_player_with_load(
+        birth,
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        pa,
+        person_pro(15.0, 14.0),
+        1700.0, // way past the 16-17 hard cap
+        2400.0,
+        650.0,
+        4500,
+        8500,
+    );
+    overloaded.load.recovery_debt = 600.0;
+    let pre_overloaded = overloaded.skills.technical.passing;
+
+    run_weekly_ticks(&mut controlled, start, 30, 6000, &coach, 0.6);
+    run_weekly_ticks(&mut overloaded, start, 30, 6000, &coach, 0.6);
+
+    let controlled_gain = controlled.skills.technical.passing - pre_controlled;
+    let overloaded_gain = overloaded.skills.technical.passing - pre_overloaded;
+
+    assert!(
+        controlled_gain > overloaded_gain,
+        "controlled 17yo passing gain {} should beat overloaded peer {}",
+        controlled_gain,
+        overloaded_gain
+    );
+}
+
+#[test]
+fn well_managed_19yo_still_develops_well() {
+    // The 18-21 age tier is the main acceleration window. A 19yo with
+    // appropriate minutes and a strong coach must actually move the
+    // needle — the new restraint on under-16s should not silently drag
+    // adult development too.
+    let start = d(2025, 7, 1);
+    let birth = d(2006, 1, 1); // 19
+    let pa = 175u8;
+    let coach = CoachingEffect::from_scores(18, 18, 18, 18, 0.6);
+
+    let mut p = make_player_with_load(
+        birth,
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        pa,
+        person_pro(15.0, 14.0),
+        1200.0, // sweet spot for 18-21
+        1400.0,
+        320.0,
+        9200,
+        2500,
+    );
+    let pre = p.skills.technical.passing;
+
+    run_weekly_ticks(&mut p, start, 30, 7000, &coach, 0.7);
+
+    let gain = p.skills.technical.passing - pre;
+    assert!(
+        gain > 0.4,
+        "well-managed 19yo passing gained {} in 30 weeks — should be a real bump",
+        gain
+    );
+}
+
+#[test]
+fn step_up_bonus_does_not_fire_for_under_18s() {
+    // Two 15-year-olds: one identical except for being inside the
+    // step-up window after a transfer to a much bigger club. The
+    // step-up bonus must NOT lift his growth — at this age he trains
+    // with the academy regardless of brand.
+    let start = d(2025, 7, 1);
+    let birth = d(2010, 1, 1); // 15
+    let pa = 180u8;
+    let coach = CoachingEffect::neutral();
+
+    let mut control = make_player_with_load(
+        birth,
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        pa,
+        person_pro(15.0, 14.0),
+        200.0,
+        250.0,
+        80.0,
+        9500,
+        1500,
+    );
+
+    let mut transferee = make_player_with_load(
+        birth,
+        PlayerPositionType::MidfielderCenter,
+        baseline_skills(),
+        pa,
+        person_pro(15.0, 14.0),
+        200.0,
+        250.0,
+        80.0,
+        9500,
+        1500,
+    );
+    // Place him inside the settlement window with a huge rep gap. The
+    // raw step_up multiplier would lift growth at adult ages.
+    transferee.player_attributes.world_reputation = 1000;
+    transferee.last_transfer_date = Some(start);
+
+    let pre_control = control.skills.technical.passing;
+    let pre_transferee = transferee.skills.technical.passing;
+
+    // High-rep destination club so the step-up math wants to fire.
+    run_weekly_ticks(&mut control, start, 8, 9000, &coach, 0.95);
+    run_weekly_ticks(&mut transferee, start, 8, 9000, &coach, 0.95);
+
+    let control_gain = control.skills.technical.passing - pre_control;
+    let transferee_gain = transferee.skills.technical.passing - pre_transferee;
+
+    // Equal within float noise — the step-up bonus is dampened to 0
+    // for under-15s.
+    assert!(
+        (control_gain - transferee_gain).abs() < 0.01,
+        "step-up bonus leaked to a 15yo: control={} transferee={}",
+        control_gain,
+        transferee_gain
+    );
+}
+
+#[test]
+fn pa_does_not_increase_during_normal_development() {
+    // Run a high-PA young player through a season's worth of ticks at
+    // every plausible setup. The biological ceiling (PA) must not move.
+    let start = d(2025, 7, 1);
+    let birth = d(2008, 1, 1); // 17
+    let initial_pa = 180u8;
+    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
+
+    let mut p = make_player_with_load(
+        birth,
+        PlayerPositionType::Striker,
+        baseline_skills(),
+        initial_pa,
+        person_pro(18.0, 18.0),
+        700.0,
+        900.0,
+        220.0,
+        9500,
+        2000,
+    );
+
+    run_weekly_ticks(&mut p, start, 50, 8000, &coach, 0.85);
+
+    assert_eq!(
+        p.player_attributes.potential_ability, initial_pa,
+        "PA drifted from {} to {} — weekly development must not raise the ceiling",
+        initial_pa, p.player_attributes.potential_ability
+    );
+    // CA must remain ≤ PA after the tick clamps it.
+    assert!(
+        p.player_attributes.current_ability <= p.player_attributes.potential_ability,
+        "CA {} exceeded PA {} after development",
+        p.player_attributes.current_ability,
+        p.player_attributes.potential_ability
+    );
+}
+
+#[test]
+fn under_16_physical_growth_capped_far_below_adult_peer() {
+    // A 14yo and a 19yo, both starting at the same physical baseline,
+    // both elite-PA, both well-managed. The 14yo's pace must end up
+    // gaining a small fraction of what the 19yo gains.
+    let start = d(2025, 7, 1);
+    let pa = 185u8;
+    let coach = CoachingEffect::from_scores(20, 20, 20, 20, 1.0);
+
+    let mut young = make_player_with_load(
+        d(2011, 1, 1), // 14
+        PlayerPositionType::ForwardLeft,
+        baseline_skills(),
+        pa,
+        person_pro(15.0, 14.0),
+        200.0,
+        250.0,
+        80.0,
+        9500,
+        1500,
+    );
+    let pre_young = young.skills.physical.pace;
+
+    let mut prime = make_player_with_load(
+        d(2006, 1, 1), // 19
+        PlayerPositionType::ForwardLeft,
+        baseline_skills(),
+        pa,
+        person_pro(15.0, 14.0),
+        1200.0,
+        1400.0,
+        300.0,
+        9500,
+        2000,
+    );
+    let pre_prime = prime.skills.physical.pace;
+
+    run_weekly_ticks(&mut young, start, 30, 6000, &coach, 0.6);
+    run_weekly_ticks(&mut prime, start, 30, 6000, &coach, 0.6);
+
+    let young_gain = young.skills.physical.pace - pre_young;
+    let prime_gain = prime.skills.physical.pace - pre_prime;
+
+    assert!(
+        young_gain * 3.0 < prime_gain,
+        "14yo pace gain {} too close to 19yo {} — physical maturity gate not biting",
+        young_gain,
+        prime_gain
+    );
+}
+
 #[test]
 fn coaching_effect_amplifies_growth() {
     let now = d(2025, 6, 1);

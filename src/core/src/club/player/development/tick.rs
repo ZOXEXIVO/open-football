@@ -1,9 +1,31 @@
 //! Weekly development tick: the public entry point that wires every
-//! component (age curve, position weights, modifiers, coaching, rolls)
-//! into a single per-skill update for one player.
+//! component (age curve, position weights, modifiers, maturity, coaching,
+//! rolls) into a single per-skill update for one player.
+//!
+//! The tick reads three independent signals and stacks them under a hard
+//! per-week cap so no signal — coach quality, big-club step-up, league
+//! reputation, raw playing minutes — can compound into an implausible
+//! one-week jump.
+//!
+//! Signals:
+//!   * Raw age-curve band (capped per-category by the maturity model).
+//!   * Senior-exposure multiplier from rolling 30-day minutes/load
+//!     (replaces the previous appearance-count boost so that *minutes
+//!     and physical load* drive growth, not the bare fact of being
+//!     selected). A force-selected 14-year-old getting full senior loads
+//!     now hits the band-overuse penalty inside this helper.
+//!   * Acute-overload modifier from condition / jadedness / 7-day load /
+//!     recovery debt. Hits under-18s harder than adults.
+//!
+//! After all multipliers stack, [`maturity::weekly_growth_cap`] caps the
+//! positive change. PA is never raised as a side effect of growth — if
+//! recomputed CA exceeds PA the CA is clamped down instead, since PA is
+//! the player's biological ceiling and shouldn't drift upward from a
+//! manager's selection choices.
 
 use super::age_curve::*;
 use super::coaching::CoachingEffect;
+use super::maturity::MaturityModel;
 use super::modifiers::*;
 use super::position_weights::*;
 use super::rolls::{RollSource, ThreadRolls};
@@ -48,6 +70,7 @@ impl Player {
     ) {
         let age = DateUtils::age(self.birth_date, now);
         let pa = self.player_attributes.potential_ability as f32;
+        let ca = self.player_attributes.current_ability;
 
         // Body state gates everything else.
         let fitness = if self.player_attributes.is_injured {
@@ -81,16 +104,27 @@ impl Player {
             self.skills.mental.work_rate,
         );
 
-        let official_games = self.statistics.total_games() + self.cup_statistics.total_games();
-        let friendly_games = self.friendly_statistics.total_games();
-
-        let match_exp = match_experience_multiplier(
-            self.statistics.played + self.cup_statistics.played,
-            self.statistics.played_subs + self.cup_statistics.played_subs,
-            self.friendly_statistics.played,
-            self.friendly_statistics.played_subs,
+        // Replaces the old appearance-count multiplier. Reads rolling
+        // 30-day minutes and physical load straight off PlayerLoad so a
+        // forced selection that doesn't actually translate into minutes
+        // doesn't fire, and a forced selection that *does* push a 14yo
+        // past 600 senior minutes/month penalises growth instead of
+        // boosting it.
+        let exposure_mult = MaturityModel::senior_exposure_multiplier(
+            age,
+            self.load.minutes_last_30,
+            self.load.physical_load_30,
+            league_reputation,
+            ca,
         );
 
+        // Friendly/official ratio still informs growth — competitive
+        // games stress the player more than pre-season cameos. Kept on
+        // the same scale as before for backward-compatible behaviour at
+        // adult ages, but its weight is dwarfed by exposure_mult for
+        // youngsters now.
+        let official_games = self.statistics.total_games() + self.cup_statistics.total_games();
+        let friendly_games = self.friendly_statistics.total_games();
         let official_bonus = official_match_bonus(official_games, friendly_games);
 
         let rating_mult = rating_multiplier(self.statistics.average_rating, official_games);
@@ -102,8 +136,13 @@ impl Player {
 
         let comp_quality = competition_quality_multiplier(league_reputation);
 
-        // Extra boost while the player catches up to a clearly better club.
-        let step_up_mult = self.step_up_development_multiplier(now, club_rep_0_to_1);
+        // Raw step-up bonus from the adaptation system, dampened by an
+        // age factor: under-15s get nothing (they train with the academy
+        // regardless of brand), 16-17s get 20% of the bonus, 18-year-olds
+        // 65%, adults the full effect.
+        let step_up_raw = self.step_up_development_multiplier(now, club_rep_0_to_1);
+        let step_up_age = MaturityModel::step_up_age_factor(age);
+        let step_up_mult = 1.0 + (step_up_raw - 1.0) * step_up_age;
 
         // Workload / fitness / readiness modifiers.
         let condition_pct = self.player_attributes.condition_percentage();
@@ -111,6 +150,18 @@ impl Player {
         let workload_growth = workload_growth_modifier(condition_pct, jadedness);
         let workload_decline = workload_decline_amplifier(condition_pct, jadedness);
         let readiness_mult = match_readiness_multiplier(self.skills.physical.match_readiness);
+
+        // Acute overload: 7-day load + condition + jadedness + recovery
+        // debt. Independent of the rolling-minutes signal so a player
+        // who's just been smashed by three matches in a week sees growth
+        // suppressed even if his 30-day total still fits the optimal band.
+        let overload_mult = MaturityModel::overload_development_modifier(
+            age,
+            self.load.physical_load_7,
+            condition_pct,
+            jadedness,
+            self.load.recovery_debt,
+        );
 
         // Recovering from an injury: the body is healing, not adapting.
         // Mental skills (study video, learn the playbook) can still nudge
@@ -154,10 +205,15 @@ impl Player {
             let coach_mult = coach.for_category(cat);
             let youth_coach_mult = if age < 23 { coach.youth_bonus } else { 1.0 };
 
+            // Biological maturity gate — applies only to growth so that
+            // declines (negative base) at very young ages aren't a thing
+            // we have to reason about.
+            let maturity_mult = MaturityModel::biological_maturity_multiplier(age, cat);
+
             let change = if base > 0.0 {
-                // Growth: scale by all positive multipliers + position relevance + competition quality
-                base * personality
-                    * match_exp
+                let raw = base
+                    * personality
+                    * exposure_mult
                     * official_bonus
                     * rating_mult
                     * gap
@@ -168,6 +224,31 @@ impl Player {
                     * step_up_mult
                     * workload_growth
                     * readiness_mult
+                    * overload_mult
+                    * maturity_mult;
+                // Soft per-week, per-category cap on positive growth.
+                //
+                // Implemented as `cap * (1 - exp(-raw / cap))` rather than
+                // `raw.min(cap)` so that two stacks both above the cap
+                // still differentiate (elite coach > neutral coach,
+                // professional > slacker). A hard clip at the cap erases
+                // differential growth whenever both stacks happen to land
+                // in the saturation zone — which is exactly the zone the
+                // cap exists to bound.
+                //
+                // Saturation shape:
+                //   raw =   cap     → 0.63 * cap
+                //   raw = 2*cap     → 0.86 * cap
+                //   raw = 3*cap     → 0.95 * cap
+                //   raw → ∞         → cap
+                //
+                // The cap is scaled by `pos_rate_mult` so a position-key
+                // skill (forward finishing, weight 1.5) saturates higher
+                // than an irrelevant one (forward tackling, weight 0.35).
+                // This keeps the cap from flattening positional
+                // differentiation that the rest of the pipeline produces.
+                let cap = (MaturityModel::weekly_growth_cap(age, cat) * pos_rate_mult).max(0.001);
+                cap * (1.0 - (-raw / cap).exp())
             } else {
                 // Decline: position-irrelevant skills decline slightly faster;
                 // key skills are more "maintained" by regular use. Great
@@ -193,13 +274,15 @@ impl Player {
         // ── Recalculate current_ability from updated skills ───────────
 
         let position = self.position();
-        self.player_attributes.current_ability =
-            self.skills.calculate_ability_for_position(position);
+        let recomputed_ca = self.skills.calculate_ability_for_position(position);
 
-        // PA must never be lower than CA. Generation can occasionally produce
-        // CA > PA, which would otherwise crush all per-skill ceilings.
-        if self.player_attributes.potential_ability < self.player_attributes.current_ability {
-            self.player_attributes.potential_ability = self.player_attributes.current_ability;
-        }
+        // PA is the biological ceiling — never raised as a development
+        // side effect (a manager picking a kid for the first team must
+        // not bump his potential). If CA recomputation overshoots PA we
+        // clamp CA down instead of raising PA. Initialisation paths that
+        // legitimately need CA > PA must fix that at generation time,
+        // not via the weekly tick.
+        self.player_attributes.current_ability =
+            recomputed_ca.min(self.player_attributes.potential_ability);
     }
 }
