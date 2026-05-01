@@ -102,21 +102,25 @@ impl StateProcessingHandler for DefenderRunningState {
                 return Some(result);
             }
         } else {
-            // COUNTER-PRESS: Just lost possession — Primary role chases the
-            // ball carrier immediately; proximity override still fires if
-            // the ball is right in our face regardless of role.
-            if ctx.team().has_just_lost_possession() {
-                let counter_press = ctx.team().tactics().counter_press_intensity();
-                let ball_dist = ctx.ball().distance();
-                let counter_press_range = 40.0 + counter_press * 60.0;
-                if ball_dist < counter_press_range {
-                    if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                        let role = ctx.player().defensive().defensive_role_for_ball_carrier();
-                        if role == DefensiveRole::Primary || opponent.distance(ctx) < 30.0 {
-                            return Some(StateChangeResult::with_defender_state(
-                                DefenderState::Tackling,
-                            ));
-                        }
+            // COUNTER-PRESS: route through the team-shared
+            // counter-press window. `should_counterpress` already
+            // factors distance, work-rate, anticipation, condition,
+            // and the team's `press_intensity` floor — so a tired or
+            // game-managing team naturally drops more.
+            //
+            // We still keep a proximity override: the ball within ~30u
+            // forces an engagement regardless of the eligibility score
+            // (instinct beats math when the carrier is on top of you).
+            if ctx.team().counterpress_window() {
+                if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+                    let role = ctx.player().defensive().defensive_role_for_ball_carrier();
+                    let immediate = opponent.distance(ctx) < 30.0;
+                    let elected =
+                        role == DefensiveRole::Primary && ctx.player().pressure().should_counterpress();
+                    if immediate || elected {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Tackling,
+                        ));
                     }
                 }
             }

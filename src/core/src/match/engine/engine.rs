@@ -662,7 +662,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// `MatchContext`. `tick_interval` is how many ticks elapsed since
     /// the last refresh — rolling counters scale with it.
     fn refresh_tactical_states(field: &MatchField, context: &mut MatchContext, tick_interval: u32) {
-        use crate::r#match::CoachInstruction;
+        use crate::r#match::{CoachInstruction, TacticalRefreshInputs, TeamTacticalState};
         let home_high_press = matches!(
             context.coach_home.instruction,
             CoachInstruction::PushForward | CoachInstruction::AllOutAttack
@@ -672,46 +672,76 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             CoachInstruction::PushForward | CoachInstruction::AllOutAttack
         );
 
-        let (home_sum, home_count, away_sum, away_count) =
-            field
-                .players
-                .iter()
-                .fold((0u32, 0u32, 0u32, 0u32), |(hs, hc, as_, ac), p| {
+        // One pass over players collects ability + condition aggregates
+        // for both sides. Avoids walking the player list four times.
+        let (home_ca_sum, home_count, home_cond_sum, away_ca_sum, away_count, away_cond_sum) =
+            field.players.iter().fold(
+                (0u32, 0u32, 0.0f32, 0u32, 0u32, 0.0f32),
+                |(hca, hc, hcond, aca, ac, acond), p| {
                     let ca = p.player_attributes.current_ability as u32;
+                    let cond = p.player_attributes.condition as f32 / 10000.0;
                     if p.team_id == context.field_home_team_id {
-                        (hs + ca, hc + 1, as_, ac)
+                        (hca + ca, hc + 1, hcond + cond, aca, ac, acond)
                     } else {
-                        (hs, hc, as_ + ca, ac + 1)
+                        (hca, hc, hcond, aca + ca, ac + 1, acond + cond)
                     }
-                });
+                },
+            );
         let home_avg = if home_count > 0 {
-            (home_sum / home_count) as u16
+            (home_ca_sum / home_count) as u16
         } else {
             0
         };
         let away_avg = if away_count > 0 {
-            (away_sum / away_count) as u16
+            (away_ca_sum / away_count) as u16
         } else {
             0
+        };
+        let home_avg_cond = if home_count > 0 {
+            home_cond_sum / home_count as f32
+        } else {
+            0.5
+        };
+        let away_avg_cond = if away_count > 0 {
+            away_cond_sum / away_count as f32
+        } else {
+            0.5
         };
 
         let home_goals = context.score.home_team.get() as i16;
         let away_goals = context.score.away_team.get() as i16;
         let home_score_diff = (home_goals - away_goals).clamp(-100, 100) as i8;
 
-        crate::r#match::update_tactical_states(
-            &mut context.tactical_home,
-            &mut context.tactical_away,
+        // Tactics are stored on the field side-keyed (left/right). Map
+        // them to home/away by checking which side the home squad
+        // currently occupies — sides swap at half-time.
+        let home_is_left = field
+            .left_side_players
+            .as_ref()
+            .map(|s| s.team_id == context.field_home_team_id)
+            .unwrap_or(true);
+        let (home_tactics, away_tactics) = if home_is_left {
+            (&field.left_team_tactics, &field.right_team_tactics)
+        } else {
+            (&field.right_team_tactics, &field.left_team_tactics)
+        };
+
+        let inputs = TacticalRefreshInputs {
             field,
-            context.field_home_team_id,
+            home_team_id: context.field_home_team_id,
             tick_interval,
-            home_high_press,
-            away_high_press,
+            coach_wants_high_press_home: home_high_press,
+            coach_wants_high_press_away: away_high_press,
             home_score_diff,
-            context.total_match_time,
-            home_avg,
-            away_avg,
-        );
+            match_time_ms: context.total_match_time,
+            home_avg_ability: home_avg,
+            away_avg_ability: away_avg,
+            home_avg_condition: home_avg_cond,
+            away_avg_condition: away_avg_cond,
+            home_tactics,
+            away_tactics,
+        };
+        TeamTacticalState::refresh(&mut context.tactical_home, &mut context.tactical_away, &inputs);
     }
 
     // ───────────────────────────────────────────────────────────────────────

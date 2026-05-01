@@ -424,7 +424,16 @@ impl StateProcessingHandler for ForwardRunningState {
             //   xg ≤ 0.02  → quality_mult 0.15 (hopeful blasts discouraged)
             let exp_xg = ctx.player().shooting().expected_xg();
             let quality_mult = (0.15 + exp_xg * 4.25).clamp(0.15, 1.0);
-            let willingness = base_willingness * gm_suppression * quality_mult;
+
+            // Risk-appetite multiplier — chasing late raises the floor on
+            // hopeful shots (the team needs a goal NOW), leading-late
+            // suppresses them further. risk_appetite is in [0.05, 1.0].
+            // Centred around 0.5 so a "neutral" 0.0-0.0 minute-30 game
+            // sits roughly where the legacy curve put it.
+            let risk_appetite = ctx.team().risk_appetite();
+            let risk_mult = (0.65 + risk_appetite * 0.60).clamp(0.55, 1.20);
+
+            let willingness = base_willingness * gm_suppression * quality_mult * risk_mult;
             let shot_triggered = rand::random::<f32>() < willingness;
 
             // Gate waterfall instrumentation (match-logs only). Counts how
@@ -478,19 +487,65 @@ impl StateProcessingHandler for ForwardRunningState {
             // team in a 0-0 match flipped the coach to `SlowDown`, which
             // made `prefer_possession()` true and silently killed 94%
             // of the remaining shot pipeline.
-            // Hopeless-shot reject: expected xG < 0.04 means a 25-yard
-            // blast at a steep angle, marked, with low finishing — real
-            // strikers don't take this shot. They look for a pass or
-            // dribble. Tighter thresholds (0.06+) caused forwards to
-            // hold the ball forever waiting for box opportunities,
-            // accumulating into very-high-xG shots and blowing goals
-            // out of proportion. 0.04 is a "skip the worst quartile"
-            // filter — keeps medium-range attempts in the mix.
-            let viable_shot = exp_xg >= 0.04;
+            // Hopeless-shot reject. Modern football: a forward only
+            // pulls the trigger when the chance is genuinely there.
+            // We use a phase-aware threshold:
+            //   * baseline 0.08 — premium chance, anyone fires
+            //   * 0.04..0.075 — only if risk_appetite says we need a
+            //     goal NOW (chasing late, attacking tactic)
+            //   * point-blank (<28u) — always allowed, the older
+            //     branch above handled that mandatorily already
+            // Floor is 0.035 — below that the shot is hopeless under
+            // ANY game state (real strikers don't waste possession on
+            // it). The legacy single threshold of 0.04 let too many
+            // 0.04-0.05 xG hopefuls through under non-chasing states.
+            let min_xg: f32 = if risk_appetite >= 0.75 {
+                0.04
+            } else if risk_appetite >= 0.55 {
+                0.06
+            } else {
+                0.08
+            };
+            let min_xg = min_xg.max(0.035);
+            let viable_shot = exp_xg >= min_xg || distance_to_goal < 28.0;
+
+            // === PASS-vs-SHOT EXPECTED-VALUE COMPARISON ===
+            // Even with a viable shot, the right play is often a
+            // cutback or central feed. Compare best pass's expected
+            // value (success_probability × tactical_value, already
+            // computed by the evaluator) to current shot xG, with a
+            // skill-graded margin. High-teamwork strikers bias toward
+            // the pass; low-teamwork or "shoots-from-distance" types
+            // demand more pass upside before deferring.
+            let teamwork = ctx.player.skills.mental.teamwork / 20.0;
+            let prefers_shot = ctx
+                .player
+                .has_trait(crate::club::player::traits::PlayerTrait::ShootsFromDistance);
+            let pass_margin = if prefers_shot || teamwork < 0.4 {
+                0.14
+            } else if teamwork > 0.75 {
+                0.06
+            } else {
+                0.10
+            };
+            // Look ~80u for a better pass option — covers cutback /
+            // square / through-ball range without dragging in long
+            // diagonals.
+            let best_pass_ev = ctx
+                .player()
+                .passing()
+                .find_best_pass_option_with_distance(80.0)
+                .and_then(|(t, _)| {
+                    let eval = crate::r#match::PassEvaluator::evaluate_pass(ctx, ctx.player, &t);
+                    Some(eval.expected_value)
+                })
+                .unwrap_or(0.0);
+            let defer_to_pass = best_pass_ev > exp_xg + pass_margin;
 
             let shot_condition_met = has_settled
                 && can_shoot
                 && !defer_to_teammate
+                && !defer_to_pass
                 && distance_to_goal <= max_shot_distance
                 && viable_shot
                 && ctx.player().has_clear_shot();
@@ -544,9 +599,10 @@ impl StateProcessingHandler for ForwardRunningState {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
-            // If we deferred to a better-positioned teammate, route
-            // through Passing — the pass state will pick them as target.
-            if defer_to_teammate && has_settled {
+            // If we deferred to a better-positioned teammate OR the
+            // pass-EV check beat the shot xG, route through Passing —
+            // the pass state will pick the target.
+            if (defer_to_teammate || defer_to_pass) && has_settled {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 

@@ -108,6 +108,62 @@ pub enum PlayerSide {
     Right,
 }
 
+impl PlayerSide {
+    /// Forward direction along the pitch's x-axis: +1 toward larger x
+    /// for Left teams, -1 for Right. The math everywhere else in the
+    /// engine uses this — never write `match side { Left => 1.0, ... }`
+    /// inline or you'll inevitably miss a sign and produce the
+    /// "right-side never reaches attacking third" bug we hit before.
+    #[inline]
+    pub fn forward_dir_x(self) -> f32 {
+        match self {
+            PlayerSide::Left => 1.0,
+            PlayerSide::Right => -1.0,
+        }
+    }
+
+    /// Attacking progress for an x-coordinate, normalised to [0.0, 1.0]:
+    ///   0.0 = own goal line, 1.0 = opponent goal line.
+    /// Use this everywhere a "what fraction of the pitch have we
+    /// covered" check is needed (attacking third, defensive third,
+    /// halfway thresholds). Replaces the legacy
+    ///   `(x * forward_dir) / field_width`
+    /// formula, which produced NEGATIVE values for right-side teams —
+    /// that broke `> 0.66` (attacking third) tests by construction
+    /// while leaving `< 0.33` (defensive third) accidentally correct.
+    #[inline]
+    pub fn attacking_progress_x(self, x: f32, field_width: f32) -> f32 {
+        if field_width <= 0.0 {
+            return 0.0;
+        }
+        let raw = match self {
+            PlayerSide::Left => x / field_width,
+            PlayerSide::Right => (field_width - x) / field_width,
+        };
+        raw.clamp(0.0, 1.0)
+    }
+
+    /// Forward delta along x: positive = toward opponent goal, negative
+    /// = toward own goal. The right shape for "is this pass forward?",
+    /// "did this player advance?", and any signed forward-progress
+    /// arithmetic. Side-direction is baked in.
+    #[inline]
+    pub fn forward_delta(self, from_x: f32, to_x: f32) -> f32 {
+        (to_x - from_x) * self.forward_dir_x()
+    }
+
+    /// Same as `forward_delta` but normalised by field width — gives a
+    /// signed [-1.0, 1.0]-ish ratio for the cases that previously used
+    /// `((to.x - from.x) * dir) / field_width`.
+    #[inline]
+    pub fn forward_delta_norm(self, from_x: f32, to_x: f32, field_width: f32) -> f32 {
+        if field_width <= 0.0 {
+            return 0.0;
+        }
+        self.forward_delta(from_x, to_x) / field_width
+    }
+}
+
 impl MatchPlayer {
     pub fn from_player(
         team_id: u32,
