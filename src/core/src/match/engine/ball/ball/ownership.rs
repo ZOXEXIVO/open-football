@@ -54,11 +54,39 @@ impl Ball {
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_CLAIM_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
+                    // Receiver is becoming active. If we have an offside
+                    // snapshot for this receiver and it's offside per the
+                    // kick-time geometry, fire offside instead of a clean
+                    // claim. Set-piece-origin snapshots were never built
+                    // (exempt origins skip snapshot creation), so there's
+                    // no need to re-check the origin here.
+                    if let Some(snap) = self.offside_snapshot {
+                        if snap.receiver_id == target_id && snap.is_offside() {
+                            let restart_pos = nalgebra::Vector3::new(
+                                snap.receiver_x_at_kick.clamp(0.0, self.field_width),
+                                snap.receiver_y_at_kick.clamp(0.0, self.field_height),
+                                0.0,
+                            );
+                            self.offside_snapshot = None;
+                            self.pass_target_player_id = None;
+                            self.flags.in_flight_state = 0;
+                            self.cached_shot_target = None;
+                            self.pass_origin_restart =
+                                crate::r#match::PassOriginRestart::FreeKick;
+                            events.add_ball_event(BallEvent::Offside(target_id, restart_pos));
+                            return;
+                        }
+                    }
                     let passer_id = self.previous_owner;
+                    let target_team = target_player.team_id;
                     self.current_owner = Some(target_id);
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
                     self.flags.in_flight_state = 0;
+                    let tick = self.current_tick_cached;
+                    self.record_touch(target_id, target_team, tick, true);
+                    self.offside_snapshot = None;
+                    self.pass_origin_restart = crate::r#match::PassOriginRestart::OpenPlay;
                     // Post-receive possession protection. Real football:
                     // a player who controls a pass has ~1.5-2 s of settle
                     // time before a challenging defender arrives — they
@@ -101,11 +129,16 @@ impl Ball {
                                 + (self.velocity.y / ball_speed) * to_passer_y;
                             if dot > 0.3 {
                                 // Ball moving toward passer
+                                let passer_team = prev_player.team_id;
                                 self.current_owner = Some(prev_id);
                                 self.pass_target_player_id = None;
                                 self.ownership_duration = 0;
                                 self.flags.in_flight_state = 0;
                                 self.claim_cooldown = 15;
+                                let tick = self.current_tick_cached;
+                                self.record_touch(prev_id, passer_team, tick, true);
+                                self.offside_snapshot = None;
+                                self.pass_origin_restart = crate::r#match::PassOriginRestart::OpenPlay;
                                 events.add_ball_event(BallEvent::Claimed(prev_id));
                             }
                         }

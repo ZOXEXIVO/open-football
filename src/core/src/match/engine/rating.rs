@@ -178,6 +178,85 @@ pub fn calculate_match_rating(
         }
     }
 
+    // ── Modern build-up / chance creation contributions ──────────────────
+    //
+    // These are small per-event bonuses with caps so a midfielder racking up
+    // pressures + progressive passes + key passes lifts visibly above a
+    // teammate who only completed safe sideways passes. Damped for cameo
+    // appearances so a 12-minute sub doesn't post a 9.0 from one key pass.
+
+    let minute_damp = if stats.minutes_played < 15 {
+        0.0
+    } else if stats.minutes_played < 30 {
+        0.65
+    } else if stats.minutes_played < 60 {
+        0.85
+    } else {
+        1.0
+    };
+
+    rating += (stats.key_passes as f32 * 0.12).min(0.6) * minute_damp;
+    rating += (stats.progressive_passes as f32 * 0.025).min(0.35) * minute_damp;
+    rating += (stats.progressive_carries as f32 * 0.04).min(0.40) * minute_damp;
+
+    // Successful dribbles — modest bonus, scaled by position group.
+    let dribble_weight = match pos {
+        PlayerFieldPositionGroup::Forward | PlayerFieldPositionGroup::Midfielder => 0.08,
+        _ => 0.04,
+    };
+    rating += (stats.successful_dribbles as f32 * dribble_weight).min(0.45) * minute_damp;
+
+    // Failed dribbles — small penalty cap. Reduced for forwards / wide
+    // attackers because attempting take-ons is part of their job.
+    if stats.attempted_dribbles > stats.successful_dribbles {
+        let failed = (stats.attempted_dribbles - stats.successful_dribbles) as f32;
+        let fail_w = if pos == PlayerFieldPositionGroup::Forward {
+            0.025
+        } else {
+            0.04
+        };
+        rating -= (failed * fail_w).min(0.30) * minute_damp;
+    }
+
+    rating += (stats.successful_pressures as f32 * 0.035).min(0.35) * minute_damp;
+
+    // Blocks count more for defenders, less for attackers.
+    let block_w = match pos {
+        PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Goalkeeper => 0.10,
+        PlayerFieldPositionGroup::Midfielder => 0.07,
+        _ => 0.04,
+    };
+    rating += (stats.blocks as f32 * block_w).min(0.5) * minute_damp;
+
+    // Errors carry weight regardless of position. Errors-to-goal are the
+    // most damaging individual events in the rating, sitting just below a
+    // red card.
+    rating -= stats.errors_leading_to_shot as f32 * 0.35;
+    rating -= stats.errors_leading_to_goal as f32 * 0.90;
+
+    // Cards — applied here in the post-pass so they affect the final
+    // figure in the same place as errors.
+    rating -= stats.yellow_cards as f32 * 0.15;
+    rating -= stats.red_cards as f32 * 1.50;
+
+    // GK xG-prevented — positive means above-expectation shot stopping.
+    // Clamped so a single well-saved shot can't outweigh actual goals
+    // shipped.
+    if pos == PlayerFieldPositionGroup::Goalkeeper {
+        rating += (stats.xg_prevented * 0.45).clamp(-1.2, 1.4);
+    }
+
+    // Cameo bound: a player who came on for under 15 minutes can't post
+    // worse than 5.8 or better than 7.2 unless they did something
+    // exceptional (goal, red, error-to-goal). The exceptional-event
+    // exemption keeps a 90th-minute winner posting an 8+.
+    let exceptional = stats.goals > 0
+        || stats.red_cards > 0
+        || stats.errors_leading_to_goal > 0;
+    if stats.minutes_played < 15 && stats.minutes_played > 0 && !exceptional {
+        rating = rating.clamp(5.8, 7.2);
+    }
+
     rating.clamp(1.0, 10.0)
 }
 
@@ -215,6 +294,18 @@ mod tests {
             fouls: 0,
             yellow_cards: 0,
             red_cards: 0,
+            minutes_played: 90,
+            key_passes: 0,
+            progressive_passes: 0,
+            progressive_carries: 0,
+            successful_dribbles: 0,
+            attempted_dribbles: 0,
+            successful_pressures: 0,
+            blocks: 0,
+            clearances: 0,
+            errors_leading_to_shot: 0,
+            errors_leading_to_goal: 0,
+            xg_prevented: 0.0,
         }
     }
 

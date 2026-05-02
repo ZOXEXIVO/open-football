@@ -172,6 +172,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 fouls,
                 yellow_cards,
                 red_cards,
+                minutes_played: ((context.total_match_time / 60_000) as u16).min(120),
+                key_passes: player.statistics.key_passes,
+                progressive_passes: player.statistics.progressive_passes,
+                progressive_carries: player.statistics.progressive_carries,
+                successful_dribbles: player.statistics.successful_dribbles,
+                attempted_dribbles: player.statistics.attempted_dribbles,
+                successful_pressures: player.statistics.successful_pressures,
+                blocks: player.statistics.blocks,
+                clearances: player.statistics.clearances,
+                errors_leading_to_shot: player.statistics.errors_leading_to_shot,
+                errors_leading_to_goal: player.statistics.errors_leading_to_goal,
+                xg_prevented: player.statistics.xg_prevented,
             };
             stats.match_rating = calculate_match_rating(&stats, player_team_goals, opponent_goals);
 

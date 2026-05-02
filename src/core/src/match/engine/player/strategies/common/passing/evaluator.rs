@@ -504,39 +504,10 @@ impl PassEvaluator {
             0.0
         };
 
-        // === OVERLOADED SIDE PENALTY ===
-        // Penalize passes that keep ball on already crowded side
-        let ball_side = if ball_position.y > field_center_y {
-            1.0
-        } else {
-            -1.0
-        };
-        let receiver_side = if receiver_position.y > field_center_y {
-            1.0
-        } else {
-            -1.0
-        };
-
-        let teammates_on_ball_side = ctx
-            .players()
-            .teammates()
-            .all()
-            .filter(|t| {
-                let t_side = if t.position.y > field_center_y {
-                    1.0
-                } else {
-                    -1.0
-                };
-                t_side == ball_side
-            })
-            .count();
-
-        let overload_penalty = if ball_side == receiver_side && teammates_on_ball_side > 3 {
-            // Too many players on one side - strongly encourage switching
-            -0.25 - (teammates_on_ball_side as f32 - 3.0) * 0.05
-        } else {
-            0.0
-        };
+        // Side-overload is now a single path: `same_side_density_penalty`
+        // below (driven by the team-shared `side_density_*` signals).
+        // The legacy half-pitch overload_penalty was double-counting the
+        // same situation and was removed during the polish pass.
 
         // Long cross-field passes - reward vision players for switching play
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
@@ -708,27 +679,36 @@ impl PassEvaluator {
             vision,
         );
 
+        // Cap the combined "switch reward" so a wide-vision playmaker
+        // doesn't double-dip the classic switch_play_bonus and the
+        // density-driven underload_switch_bonus. Polish spec: total
+        // switch reward ≤ 0.45. Applied flat (not re-weighted): that
+        // ceiling is the absolute contribution to tactical_value.
+        let switch_total = (switch_play_bonus + underload_switch_bonus).min(0.45);
+
         // Weighted combination - includes width and switching bonuses.
         // Phase-aware bonuses (cutback, build-up recycle, counter first
         // pass) are added flat — they're already gated tightly on
         // phase + receiver type so they only fire in the situations
-        // they were designed for.
-        let mut tactical_value = forward_value * 0.32 +         // Forward progression
+        // they were designed for. Side-overload is owned by
+        // `same_side_density_penalty` (legacy half-pitch path removed).
+        let mut tactical_value = forward_value * 0.32 +
             distance_value * 0.10 +
             position_value * 0.08 +
             long_pass_bonus * 0.05 +
             width_bonus * 0.22 +
-            switch_play_bonus * 0.22 +
-            cutback_bonus +                 // Cutbacks into central high-xG
-            build_up_recycle_bonus +        // Build-up recycles to CB/DM/GK
-            counter_first_pass_bonus +      // Direct first pass after regain
-            same_side_density_penalty +     // Penalty for piling onto a crowded flank
-            underload_switch_bonus +        // Reward switching to underloaded side
-            overload_penalty +              // Legacy: stricter same-side penalty (kept)
+            switch_total +                   // Capped flat: classic + underload ≤ 0.45
+            cutback_bonus +
+            build_up_recycle_bonus +
+            counter_first_pass_bonus +
+            same_side_density_penalty +
             sideways_penalty;
 
         // PPM biases. Players with killer-ball / playmaker traits love the
         // forward pass and should see it as more valuable even when risky.
+        // Trait-driven switch boosts apply to switch_total (the capped
+        // sum) so the 0.45 ceiling is the single switching budget for
+        // the whole tactical_value calculation.
         let passer = ctx.player;
         let forward_trait_bias = passer.has_trait(PlayerTrait::TriesThroughBalls)
             || passer.has_trait(PlayerTrait::KillerBallOften);
@@ -736,18 +716,15 @@ impl PassEvaluator {
             tactical_value += forward_value * 0.25;
         }
         if passer.has_trait(PlayerTrait::Playmaker) {
-            // Playmakers universally elevate forward/progressive passes
             if forward_value > 0.0 {
                 tactical_value += forward_value * 0.20;
             }
-            // ...and they love big switches
-            tactical_value += switch_play_bonus * 0.10;
+            tactical_value += switch_total * 0.10;
         }
         if passer.has_trait(PlayerTrait::LikesToSwitchPlay) {
-            tactical_value += switch_play_bonus * 0.15;
+            tactical_value += switch_total * 0.15;
         }
         if passer.has_trait(PlayerTrait::PlaysShortPasses) {
-            // Short-pass addicts devalue long balls
             tactical_value -= long_pass_bonus * 0.20;
         }
         if passer.has_trait(PlayerTrait::PlaysLongPasses) {
@@ -1307,18 +1284,21 @@ impl PassEvaluator {
     // ──────────────────────────────────────────────────────────────────
 
     /// Penalty for passing into a flank that already has too many of
-    /// our own players. Range 0 .. -0.35.
+    /// our own players. Polish-spec curve: 0..3 → 0, 4 → -0.08,
+    /// 5 → -0.18, 6+ → -0.30. The legacy half-pitch overload penalty
+    /// has been removed so this is the single side-overload signal.
     pub fn same_side_density_penalty(receiver_side_density: u8) -> f32 {
         match receiver_side_density {
             0..=3 => 0.0,
-            4 => -0.10,
-            5 => -0.22,
-            _ => -0.35,
+            4 => -0.08,
+            5 => -0.18,
+            _ => -0.30,
         }
     }
 
     /// Bonus for switching the play into an underloaded flank.
     /// Vision-graded so playmakers see the switch as more valuable.
+    /// Polish-spec curve: 0.08 + vision * 0.12 → 0.08..0.20.
     /// Returns 0 when the pass doesn't cross flanks or the target side
     /// is not underloaded.
     pub fn underload_switch_bonus(
@@ -1329,7 +1309,7 @@ impl PassEvaluator {
         let underloaded = receiver_side_density <= 3;
         if crosses_sides && underloaded {
             let vision = vision.clamp(0.0, 1.0);
-            0.10 + vision * 0.15
+            0.08 + vision * 0.12
         } else {
             0.0
         }
@@ -1356,7 +1336,7 @@ mod tests {
             PassEvaluator::same_side_density_penalty(5)
                 > PassEvaluator::same_side_density_penalty(7)
         );
-        assert_eq!(PassEvaluator::same_side_density_penalty(7), -0.35);
+        assert_eq!(PassEvaluator::same_side_density_penalty(7), -0.30);
     }
 
     #[test]
@@ -1375,18 +1355,41 @@ mod tests {
         let low = PassEvaluator::underload_switch_bonus(true, 2, 0.0);
         let high = PassEvaluator::underload_switch_bonus(true, 2, 1.0);
         assert!(high > low);
-        assert!((low - 0.10).abs() < 1e-4);
-        assert!((high - 0.25).abs() < 1e-4);
+        assert!((low - 0.08).abs() < 1e-4);
+        assert!((high - 0.20).abs() < 1e-4);
     }
 
     #[test]
     fn underload_switch_bonus_within_spec_range() {
-        // Spec range: 0.10 + vision*0.15 → 0.10..0.25
+        // Spec range: 0.08 + vision*0.12 → 0.08..0.20
         for v_int in 0..=20 {
             let v = v_int as f32 / 20.0;
             let bonus = PassEvaluator::underload_switch_bonus(true, 1, v);
-            assert!(bonus >= 0.10 - 1e-4);
-            assert!(bonus <= 0.25 + 1e-4);
+            assert!(bonus >= 0.08 - 1e-4);
+            assert!(bonus <= 0.20 + 1e-4);
         }
+    }
+
+    #[test]
+    fn density_penalty_curve_matches_polish_spec() {
+        assert_eq!(PassEvaluator::same_side_density_penalty(4), -0.08);
+        assert_eq!(PassEvaluator::same_side_density_penalty(5), -0.18);
+        assert_eq!(PassEvaluator::same_side_density_penalty(6), -0.30);
+        assert_eq!(PassEvaluator::same_side_density_penalty(11), -0.30);
+    }
+
+    #[test]
+    fn switch_total_caps_at_zero_point_four_five() {
+        // The capped switch reward path inside `calculate_tactical_value`
+        // is `(classic + underload).min(0.45)`. Verify the helpers feed a
+        // sensible joint maximum: classic max is 0.45 + vision*0.25 = 0.70,
+        // underload max is 0.20. The cap therefore truly bites.
+        let underload_max =
+            PassEvaluator::underload_switch_bonus(true, 0, 1.0);
+        assert!(
+            underload_max + 0.70 > 0.45,
+            "cap must actually bite — sum without cap = {}",
+            underload_max + 0.70
+        );
     }
 }

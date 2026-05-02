@@ -176,14 +176,19 @@ impl Ball {
             self.velocity = Vector3::zeros();
 
             // Give ball to goalkeeper
-            self.current_owner = Some(gk.id);
+            let gk_id = gk.id;
+            let gk_team = gk.team_id;
+            self.current_owner = Some(gk_id);
             self.previous_owner = None;
             self.ownership_duration = 0;
             self.claim_cooldown = 30; // Protection so no one steals immediately
             self.flags.in_flight_state = 30;
             self.pass_target_player_id = None;
+            self.pass_origin_restart = crate::r#match::PassOriginRestart::GoalKick;
+            self.offside_snapshot = None;
+            self.record_touch(gk_id, gk_team, self.current_tick_cached, true);
 
-            events.add_ball_event(BallEvent::Claimed(gk.id));
+            events.add_ball_event(BallEvent::Claimed(gk_id));
         }
     }
 
@@ -281,6 +286,7 @@ impl Ball {
 
             if let Some(taker) = taker {
                 let taker_id = taker.id;
+                let taker_team = taker.team_id;
                 self.position.x = corner_x;
                 self.position.y = corner_y;
                 self.position.z = 0.0;
@@ -293,6 +299,9 @@ impl Ball {
                 self.flags.in_flight_state = 30;
                 self.pass_target_player_id = None;
                 self.recent_passers.clear();
+                self.pass_origin_restart = crate::r#match::PassOriginRestart::Corner;
+                self.offside_snapshot = None;
+                self.record_touch(taker_id, taker_team, self.current_tick_cached, true);
 
                 events.add_ball_event(BallEvent::Claimed(taker_id));
                 // Teleport the taker onto the ball so `move_to`'s
@@ -311,6 +320,7 @@ impl Ball {
             p.side == Some(defending_side) && p.tactical_position.current_position.is_goalkeeper()
         }) {
             let gk_id = gk.id;
+            let gk_team = gk.team_id;
             let goal_kick_x = match side {
                 GoalSide::Home => 50.0,
                 GoalSide::Away => field_width - 50.0,
@@ -328,6 +338,9 @@ impl Ball {
             self.flags.in_flight_state = 30;
             self.pass_target_player_id = None;
             self.recent_passers.clear();
+            self.pass_origin_restart = crate::r#match::PassOriginRestart::GoalKick;
+            self.offside_snapshot = None;
+            self.record_touch(gk_id, gk_team, self.current_tick_cached, true);
 
             events.add_ball_event(BallEvent::Claimed(gk_id));
             // Same as corner kick: put the GK onto the ball so the

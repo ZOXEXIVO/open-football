@@ -45,8 +45,10 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
-        // Scale max press time by tactical intensity (60-120 tick range)
-        let intensity = ctx.team().tactics().pressing_intensity();
+        // Scale max press time by the team-shared press intensity
+        // (60-120 tick range). Tired or game-managing sides therefore
+        // press for shorter bursts than fresh ones.
+        let intensity = ctx.team().press_intensity();
         let max_press_time = (60.0 + 60.0 * intensity) as u64;
         if ctx.in_state_time > max_press_time {
             return Some(StateChangeResult::with_midfielder_state(

@@ -4,11 +4,54 @@ pub const MIN_XG_THRESHOLD: f32 = 0.08;
 pub const GOOD_XG_THRESHOLD: f32 = 0.12;
 pub const EXCELLENT_XG_THRESHOLD: f32 = 0.25;
 
+/// Type of the shot being evaluated. Drives the per-type xG multiplier.
+/// Real-football xG models distinguish header from foot, free kick from
+/// open play, rebound from build-up — each has a meaningfully different
+/// conversion rate at the same distance/angle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShotType {
+    FootOpenPlay,
+    Header,
+    Volley,
+    OneVOne,
+    Cutback,
+    SetPieceHeader,
+    LongShot,
+    Rebound,
+    Penalty,
+    DirectFreeKick,
+}
+
+impl ShotType {
+    pub fn xg_multiplier(self) -> f32 {
+        match self {
+            ShotType::FootOpenPlay => 1.00,
+            ShotType::Header => 0.55,
+            ShotType::Volley => 0.75,
+            ShotType::OneVOne => 1.20,
+            ShotType::Cutback => 1.25,
+            ShotType::SetPieceHeader => 0.55,
+            ShotType::LongShot => 1.00,
+            ShotType::Rebound => 1.15,
+            ShotType::Penalty => 0.76,
+            ShotType::DirectFreeKick => 0.55,
+        }
+    }
+}
+
 pub struct ShotQualityEvaluator;
 
 impl ShotQualityEvaluator {
-    /// Evaluate shot quality and return an xG value (0.0 - 1.0)
+    /// Evaluate shot quality and return an xG value (0.0 - 1.0).
+    /// Calls into `evaluate_with_type` with FootOpenPlay default.
     pub fn evaluate(ctx: &StateProcessingContext) -> f32 {
+        Self::evaluate_with_type(ctx, ShotType::FootOpenPlay)
+    }
+
+    /// Evaluate shot quality for a specific shot type. Headers /
+    /// volleys / cutbacks / rebounds / set pieces all have different
+    /// conversion rates at the same geometry.
+    pub fn evaluate_with_type(ctx: &StateProcessingContext, shot_type: ShotType) -> f32 {
         let distance = ctx.player().goal_distance();
         let player_pos = ctx.player.position;
         let goal_pos = ctx.player().goal_position();
@@ -35,13 +78,36 @@ impl ShotQualityEvaluator {
         // 6. Player skill factor
         let skill_factor = Self::skill_factor(ctx, distance);
 
+        // 7. Shot-type multiplier
+        let type_factor = shot_type.xg_multiplier();
+
         // Combine all factors
-        let xg = distance_factor
+        let mut xg = distance_factor
             * angle_factor
             * gk_factor
             * pressure_factor
             * clear_factor
-            * skill_factor;
+            * skill_factor
+            * type_factor;
+
+        // Penalty has a fixed expected value regardless of the geometry
+        // factors (the kicker's only opponent is the keeper from 11m).
+        if shot_type == ShotType::Penalty {
+            xg = 0.76 * skill_factor.clamp(0.85, 1.10);
+        }
+
+        // Long-shot cap: anything over 120u with no special multiplier
+        // tops out at 0.06.
+        if shot_type == ShotType::LongShot && distance > 120.0 {
+            xg = xg.min(0.06);
+        }
+
+        // Direct free kick: 0.03-0.12 based on distance + skill.
+        if shot_type == ShotType::DirectFreeKick {
+            let dist_score = (1.0 - (distance.clamp(60.0, 200.0) - 60.0) / 140.0).clamp(0.0, 1.0);
+            let skill = (ctx.player.skills.technical.free_kicks / 20.0).clamp(0.0, 1.0);
+            xg = (0.03 + dist_score * 0.05 + skill * 0.04).clamp(0.03, 0.12);
+        }
 
         xg.clamp(0.0, 0.95)
     }
@@ -171,5 +237,33 @@ impl ShotQualityEvaluator {
 
         // Map skill (0.0-1.0) to multiplier (0.6-1.4)
         0.6 + skill * 0.8
+    }
+}
+
+#[allow(dead_code, unused_imports)]
+mod shot_type_tests {
+    use super::*;
+
+    #[test]
+    fn header_xg_is_lower_than_open_play() {
+        assert!(ShotType::Header.xg_multiplier() < ShotType::FootOpenPlay.xg_multiplier());
+    }
+
+    #[test]
+    fn cutback_xg_higher_than_one_v_one() {
+        // Cutbacks are the highest-quality chance type.
+        assert!(ShotType::Cutback.xg_multiplier() > ShotType::OneVOne.xg_multiplier());
+    }
+
+    #[test]
+    fn rebound_xg_above_open_play() {
+        assert!(ShotType::Rebound.xg_multiplier() > ShotType::FootOpenPlay.xg_multiplier());
+    }
+
+    #[test]
+    fn penalty_xg_close_to_real_world() {
+        // Real-world penalty conversion ~76%.
+        let m = ShotType::Penalty.xg_multiplier();
+        assert!((m - 0.76).abs() < 0.01);
     }
 }

@@ -2,6 +2,8 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
+use crate::r#match::player::strategies::common::passing::resolve_aerial_duel;
+use crate::r#match::player::strategies::players::ShotType;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -28,9 +30,42 @@ impl StateProcessingHandler for ForwardHeadingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        // Attempt the header
+        // Aerial duel against the closest defender first — losing the
+        // duel means no header attempt at all. Goalkeepers handle their
+        // own claim/punch in the GK state machine; we only resolve
+        // outfield markers here.
+        let attacker_full = ctx.context.players.by_id(ctx.player.id);
+        let defender_full = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opp| {
+                if let Some(full) = ctx.context.players.by_id(opp.id) {
+                    !full.tactical_position.current_position.is_goalkeeper()
+                } else {
+                    true
+                }
+            })
+            .min_by(|a, b| {
+                let da = (a.position - ctx.player.position).magnitude();
+                let db = (b.position - ctx.player.position).magnitude();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .and_then(|m| ctx.context.players.by_id(m.id));
+
+        let won_duel = match attacker_full {
+            Some(att) => resolve_aerial_duel(att, defender_full),
+            None => self.attempt_heading(ctx),
+        };
+
+        if !won_duel {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+        }
+
+        // Attempt the header — combine duel win with skill execution.
         if self.attempt_heading(ctx) {
-            // Success — shoot toward opponent goal
+            // Success — shoot toward opponent goal, marked as a Header
+            // for downstream xG.
             Some(StateChangeResult::with_forward_state_and_event(
                 ForwardState::Running,
                 Event::PlayerEvent(PlayerEvent::Shoot(
@@ -38,6 +73,7 @@ impl StateProcessingHandler for ForwardHeadingState {
                         .with_player_id(ctx.player.id)
                         .with_target(ctx.player().shooting_direction())
                         .with_reason("FWD_HEADING_ON_GOAL")
+                        .with_shot_type(ShotType::Header)
                         .build(ctx),
                 )),
             ))

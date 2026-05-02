@@ -1,13 +1,23 @@
 pub mod defensive;
+pub mod dribble_duel;
+pub mod effective_skill;
+pub mod first_touch;
 pub mod movement;
+pub mod panic;
 pub mod passing;
 pub mod pressure;
 pub mod shooting;
+pub mod traits_bias;
 pub mod xg;
 
 pub use defensive::*;
+pub use dribble_duel::*;
+pub use effective_skill::*;
+pub use first_touch::*;
 pub use movement::*;
+pub use panic::*;
 pub use passing::*;
 pub use pressure::*;
 pub use shooting::*;
+pub use traits_bias::*;
 pub use xg::*;

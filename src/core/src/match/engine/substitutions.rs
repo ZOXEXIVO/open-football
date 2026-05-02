@@ -498,6 +498,18 @@ impl Substitutions {
                     fouls: player_out.fouls_committed as u16,
                     yellow_cards: player_out.statistics.yellow_cards_count(),
                     red_cards: player_out.statistics.red_cards_count(),
+                    minutes_played: ((context.total_match_time / 60_000) as u16).min(120),
+                    key_passes: player_out.statistics.key_passes,
+                    progressive_passes: player_out.statistics.progressive_passes,
+                    progressive_carries: player_out.statistics.progressive_carries,
+                    successful_dribbles: player_out.statistics.successful_dribbles,
+                    attempted_dribbles: player_out.statistics.attempted_dribbles,
+                    successful_pressures: player_out.statistics.successful_pressures,
+                    blocks: player_out.statistics.blocks,
+                    clearances: player_out.statistics.clearances,
+                    errors_leading_to_shot: player_out.statistics.errors_leading_to_shot,
+                    errors_leading_to_goal: player_out.statistics.errors_leading_to_goal,
+                    xg_prevented: player_out.statistics.xg_prevented,
                 },
             ));
         }

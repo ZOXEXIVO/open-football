@@ -89,9 +89,9 @@ impl StateProcessingHandler for DefenderHoldingLineState {
                 ));
             }
 
-            let counter_press_active = ctx.team().has_just_lost_possession();
+            let counter_press_active = ctx.team().counterpress_window();
             let counter_press_range = if counter_press_active {
-                40.0 + ctx.team().tactics().counter_press_intensity() * 60.0
+                35.0 + ctx.team().press_intensity() * 55.0
             } else {
                 0.0
             };
@@ -309,8 +309,11 @@ impl DefenderHoldingLineState {
         };
 
         // LATERAL (Y) CALCULATION
-        // Compactness: higher = defenders squeeze toward center/ball side
-        let compactness = ctx.team().tactics().compactness();
+        // compactness_target is the team-shared signal (tactic + phase +
+        // game-management). Polish spec: shift = ball_offset * (0.08 +
+        // compactness_target * 0.18) so a fully-compact low-block
+        // squeezes harder toward the ball side than the legacy 0.12 cap.
+        let compactness = ctx.team().compactness_target();
 
         let target_y = if let Some(opponent) = nearest_opponent_in_zone {
             // Track opponent laterally but don't go too far from zone
@@ -319,9 +322,8 @@ impl DefenderHoldingLineState {
             let drift = (opponent_y - tactical_position.y).clamp(-max_drift, max_drift);
             tactical_position.y + drift
         } else {
-            // Shift toward ball side — compactness amplifies this shift
             let ball_offset = ball_position.y - field_center_y;
-            let shift = ball_offset * (0.08 + compactness * 0.12);
+            let shift = ball_offset * (0.08 + compactness * 0.18);
             tactical_position.y + shift
         };
 
@@ -344,18 +346,13 @@ impl DefenderHoldingLineState {
             ctx.player.position.x
         };
 
-        // Apply tactical bias: high line pushes defenders forward, deep block pulls them back
-        let line_height = ctx.team().tactics().defensive_line_height();
-        let own_goal = ctx.ball().direction_to_own_goal();
-        let field_width = ctx.context.field_size.width as f32;
-
-        // line_height 0.0 = stay near own goal, 1.0 = push toward halfway
-        // Bias range: ±40 units from average position
-        let halfway = field_width / 2.0;
-        let toward_halfway = (halfway - own_goal.x).signum();
-        let tactical_bias = (line_height - 0.5) * 80.0 * toward_halfway;
-
-        avg_x + tactical_bias
+        // Use the team-shared defensive_line_x — already phase-aware
+        // (high in Attack/HighPress, deep in LowBlock). Blend toward it
+        // rather than overwrite, so the live back-line average still
+        // matters (avoids teleporting one CB out of an organised line).
+        let target_line_x =
+            ctx.context.tactical_for_team(ctx.player.team_id).defensive_line_x;
+        avg_x * 0.6 + target_line_x * 0.4
     }
 
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.
