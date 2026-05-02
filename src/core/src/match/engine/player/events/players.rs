@@ -7,6 +7,95 @@ use log::debug;
 use nalgebra::Vector3;
 use rand::{Rng, RngExt};
 
+// ───────────────────────────────────────────────────────────────────────────
+// Save-accounting diagnostic counters. Trace each save event's credit pair
+// to find why `saves > shots_on_target` (the impossible 145% baseline).
+// Each save site increments both `saves_credited[site]` and
+// `on_target_paired[site]` — divergence pinpoints where on_target is
+// missed (shooter not found, etc.) or where saves are double-credited.
+// match-logs feature only.
+// ───────────────────────────────────────────────────────────────────────────
+#[cfg(feature = "match-logs")]
+pub mod save_accounting_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Index meaning: 0=parry 1=catch 2=clear
+    pub static SITE_LABELS: [&str; 3] = ["parry", "catch", "clear"];
+    pub static SAVES_CREDITED: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static SHOTS_FACED_INC: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static ON_TARGET_PAIRED: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    /// Site fired but the previous_owner / shooter could not be found in
+    /// the live players slice — save was credited but on_target was NOT.
+    /// This is the primary suspect for saves > on_target.
+    pub static SHOOTER_MISSING: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    /// Site fired but `previous_owner` itself was None.
+    pub static PREVIOUS_OWNER_NONE: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    /// On-goal credit (path 4): shot reached the net, scorer credited
+    /// with on_target. No save here.
+    pub static ON_TARGET_FROM_GOAL: AtomicU64 = AtomicU64::new(0);
+    // Save-pipeline visibility — how many shot ticks reach the save check
+    // (within reach window) and how often the keeper actually engages.
+    pub static SAVE_TICKS_REACHED: AtomicU64 = AtomicU64::new(0);
+    pub static SAVE_TICKS_OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
+    pub static SAVE_TICKS_PAST_GOAL_LINE: AtomicU64 = AtomicU64::new(0);
+    pub static SAVE_PHYSICS_FIRED: AtomicU64 = AtomicU64::new(0);
+    pub static SAVE_PHYSICS_PASSED: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for arr in [
+            &SAVES_CREDITED,
+            &SHOTS_FACED_INC,
+            &ON_TARGET_PAIRED,
+            &SHOOTER_MISSING,
+            &PREVIOUS_OWNER_NONE,
+        ] {
+            for a in arr.iter() {
+                a.store(0, Ordering::Relaxed);
+            }
+        }
+        ON_TARGET_FROM_GOAL.store(0, Ordering::Relaxed);
+    }
+
+    pub fn snapshot() -> Snapshot {
+        Snapshot {
+            saves: [
+                SAVES_CREDITED[0].load(Ordering::Relaxed),
+                SAVES_CREDITED[1].load(Ordering::Relaxed),
+                SAVES_CREDITED[2].load(Ordering::Relaxed),
+            ],
+            on_target: [
+                ON_TARGET_PAIRED[0].load(Ordering::Relaxed),
+                ON_TARGET_PAIRED[1].load(Ordering::Relaxed),
+                ON_TARGET_PAIRED[2].load(Ordering::Relaxed),
+            ],
+            shooter_missing: [
+                SHOOTER_MISSING[0].load(Ordering::Relaxed),
+                SHOOTER_MISSING[1].load(Ordering::Relaxed),
+                SHOOTER_MISSING[2].load(Ordering::Relaxed),
+            ],
+            prev_owner_none: [
+                PREVIOUS_OWNER_NONE[0].load(Ordering::Relaxed),
+                PREVIOUS_OWNER_NONE[1].load(Ordering::Relaxed),
+                PREVIOUS_OWNER_NONE[2].load(Ordering::Relaxed),
+            ],
+            on_target_goal: ON_TARGET_FROM_GOAL.load(Ordering::Relaxed),
+        }
+    }
+
+    pub struct Snapshot {
+        pub saves: [u64; 3],
+        pub on_target: [u64; 3],
+        pub shooter_missing: [u64; 3],
+        pub prev_owner_none: [u64; 3],
+        pub on_target_goal: u64,
+    }
+}
+
 /// Helper struct to encapsulate player passing skills and condition
 struct PassSkills {
     passing: f32,
@@ -330,6 +419,9 @@ impl PlayerEventDispatcher {
         // deflected the ball.
         if !is_auto_goal {
             player.memory.credit_shot_on_target();
+            #[cfg(feature = "match-logs")]
+            save_accounting_stats::ON_TARGET_FROM_GOAL
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Credit the conceding goalkeeper's `shots_faced` so the rating
@@ -1320,20 +1412,21 @@ impl PlayerEventDispatcher {
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        // Base error: elite close-range ±2-5 units, poor long-range ±20-40 units.
-        // Goal half-width is 29u — a y-error spread larger than that
-        // pushes most shots wide regardless of where they were aimed,
-        // so prior 50× multiplier (close avg-player ±20, long ±35)
-        // dominated the on-target outcome and held the rate at ~19%.
-        // Cut to 30× and tightened mins so accuracy → on-target rate
-        // tracks more linearly toward the real ~33%.
-        let base_position_error = 30.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        // Base error: elite close-range ±3-7 units, poor long-range ±25-55 units.
+        // After the upstream `has_clear_shot()` clarity gate filtered
+        // out blind shots, on-target % crept up to ~47% because the
+        // surviving shots were too well-aimed. Real Opta data shows
+        // ~33% on-target across the population. Bumping the multiplier
+        // 30 → 38 and the floor errors gives the surviving (filtered)
+        // shots a realistic accuracy spread without re-introducing
+        // hopeless blasts.
+        let base_position_error = 38.0 * distance_error_factor * (1.0 - adjusted_accuracy);
         let min_error = if horizontal_distance < 30.0 {
-            2.0
+            3.5
         } else if horizontal_distance < 60.0 {
-            4.0
+            6.0
         } else {
-            8.0
+            10.0
         };
         let max_y_error = base_position_error.clamp(min_error, 60.0);
 
@@ -1351,16 +1444,20 @@ impl PlayerEventDispatcher {
         // adding ~25-30% of misses on top. Halving bases again and
         // pulling scaling 0.22 → 0.14 should move on-target toward
         // 30%.
+        // Wide-miss baseline bumped to bring on-target % from ~47 toward
+        // the real 33-40% band. Most increase lands at medium range
+        // (30-60u, just outside the 18-yard box) where real strikers
+        // pull shots wide most often.
         let wide_miss_base = if horizontal_distance < 30.0 {
-            0.025
-        } else if horizontal_distance < 60.0 {
             0.05
+        } else if horizontal_distance < 60.0 {
+            0.10
         } else if horizontal_distance < 100.0 {
-            0.09
+            0.16
         } else {
-            0.14
+            0.22
         };
-        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.14 + wide_miss_base;
+        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.18 + wide_miss_base;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
             // Shot goes wide — force y outside goal posts
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
@@ -1591,6 +1688,28 @@ impl PlayerEventDispatcher {
     /// while `cached_shot_target` was set. The same `cached_shot_target`
     /// is then cleared so the eventual rest position (out of bounds,
     /// to a defender, or back into play) doesn't double-credit anyone.
+    #[cfg(feature = "match-logs")]
+    #[inline]
+    fn dbg_save_credit(
+        site: usize,
+        had_shooter: bool,
+        prev_owner_none: bool,
+        shooter_found: bool,
+    ) {
+        use std::sync::atomic::Ordering;
+        save_accounting_stats::SAVES_CREDITED[site].fetch_add(1, Ordering::Relaxed);
+        save_accounting_stats::SHOTS_FACED_INC[site].fetch_add(1, Ordering::Relaxed);
+        if shooter_found {
+            save_accounting_stats::ON_TARGET_PAIRED[site].fetch_add(1, Ordering::Relaxed);
+        }
+        if !had_shooter || prev_owner_none {
+            save_accounting_stats::PREVIOUS_OWNER_NONE[site].fetch_add(1, Ordering::Relaxed);
+        }
+        if had_shooter && !shooter_found {
+            save_accounting_stats::SHOOTER_MISSING[site].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     fn handle_parried_ball_event(player_id: u32, field: &mut MatchField) {
         // Only credit when the ball was a real shot — guards against
         // the diving state calling this when the GK gave up on a long
@@ -1607,11 +1726,16 @@ impl PlayerEventDispatcher {
         // Credit on-target to the shooter — a parry IS the keeper
         // touching a shot that reached the goal frame. Without this,
         // saves > on-target shots, an impossible ratio.
+        let mut shooter_found = false;
         if let Some(sid) = shooter_id {
             if let Some(shooter) = field.get_player_mut(sid) {
                 shooter.memory.credit_shot_on_target();
+                shooter_found = true;
             }
         }
+        #[cfg(feature = "match-logs")]
+        Self::dbg_save_credit(0, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
+        let _ = shooter_found;
         field.ball.cached_shot_target = None;
     }
 
@@ -1644,11 +1768,16 @@ impl PlayerEventDispatcher {
                     player.statistics.saves += 1;
                     player.statistics.shots_faced += 1;
                 }
+                let mut shooter_found = false;
                 if let Some(sid) = shooter_id {
                     if let Some(shooter) = field.get_player_mut(sid) {
                         shooter.memory.credit_shot_on_target();
+                        shooter_found = true;
                     }
                 }
+                #[cfg(feature = "match-logs")]
+                Self::dbg_save_credit(1, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
+                let _ = shooter_found;
             }
         }
 
@@ -2114,12 +2243,21 @@ impl PlayerEventDispatcher {
 
     /// Identify the goalkeeper who is about to clear a shot, if any.
     /// Returns `Some(gk_id)` when the current ball owner is a GK *and*
-    /// the ball is mid-flight from a real shot (`cached_shot_target` set).
-    /// Used to credit punches/parries as saves — the existing path only
-    /// credited catches via `handle_caught_ball_event`.
+    /// the ball is mid-flight from a real shot (`cached_shot_target` set)
+    /// *and* there is a real shooter to credit on-target to. Without the
+    /// shooter check, dead-ball restarts where `previous_owner` is None
+    /// (goal kicks, corners, kickoffs after goals) credit phantom saves
+    /// that have no paired on-target — pushing the saves/SOT ratio above
+    /// 100%.
     fn gk_clearing_shot(field: &MatchField) -> Option<u32> {
         let clearer_id = field.ball.current_owner?;
         if field.ball.cached_shot_target.is_none() {
+            return None;
+        }
+        // Real shot has a real shooter, otherwise this is residual cache
+        // state surviving a dead-ball restart and we must not credit.
+        let prev = field.ball.previous_owner?;
+        if prev == clearer_id {
             return None;
         }
         // Iterate directly because `MatchField::get_player` takes `&mut
@@ -2127,12 +2265,17 @@ impl PlayerEventDispatcher {
         // immutable so the caller can re-borrow `field` mutably afterward.
         let clearer = field.players.iter().find(|p| p.id == clearer_id)?;
         if clearer.tactical_position.current_position.position_group()
-            == PlayerFieldPositionGroup::Goalkeeper
+            != PlayerFieldPositionGroup::Goalkeeper
         {
-            Some(clearer_id)
-        } else {
-            None
+            return None;
         }
+        // Verify the shooter is from the OTHER team — otherwise this is
+        // a teammate clearance, not a save.
+        let shooter = field.players.iter().find(|p| p.id == prev)?;
+        if shooter.team_id == clearer.team_id {
+            return None;
+        }
+        Some(clearer_id)
     }
 
     fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
@@ -2150,11 +2293,16 @@ impl PlayerEventDispatcher {
                 gk.statistics.saves += 1;
                 gk.statistics.shots_faced += 1;
             }
+            let mut shooter_found = false;
             if let Some(sid) = shooter_id {
                 if let Some(shooter) = field.get_player_mut(sid) {
                     shooter.memory.credit_shot_on_target();
+                    shooter_found = true;
                 }
             }
+            #[cfg(feature = "match-logs")]
+            Self::dbg_save_credit(2, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
+            let _ = shooter_found;
             field.ball.cached_shot_target = None;
         }
 

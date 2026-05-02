@@ -289,25 +289,36 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 0: Point-blank range — MUST shoot to avoid running
-            // into the goalkeeper. Gated on both player AND team cooldown:
-            // without the team gate a chaotic box scramble produces
-            // "striker A shoots, rebounds to B, B shoots, rebounds to C, …"
-            // with each player having a fresh personal cooldown — four
-            // shots in two seconds from the same possession.
+            // Priority 0: Point-blank range (≤36u, inside the 18-yard box).
+            // Per-tick willingness check — real strikers in the box still
+            // sometimes square the ball or take a touch; they don't fire
+            // 100% of the time. The previous "MUST shoot" path produced
+            // every box entry as a guaranteed shot, which was the dominant
+            // path for unrealistic 100% box conversion. Per-tick rate
+            // ~0.07-0.16 with shot_clarity + skill modulation: ≈40-70%
+            // cumulative across the 5-10 ticks a forward spends in the
+            // box, matching real-football "fires roughly once per 1-2
+            // box entries" — sometimes the cutback is the right play.
             if distance_to_goal <= POINT_BLANK_DISTANCE {
                 if can_shoot {
-                    // Point-blank = mandatory shoot. The old poor-finisher
-                    // escape clause (finishing < 0.3 + teammates nearby)
-                    // routed the forward to Passing even when no pass was
-                    // viable, so a fin=5 striker in the 18-yard box would
-                    // walk into the keeper. Real football: at 18m out
-                    // with the keeper closing, EVERY forward strikes —
-                    // the shot might be a tame one but they attempt it.
-                    return Some(
-                        StateChangeResult::with_forward_state(ForwardState::Shooting)
-                            .with_shot_reason("FWD_RUN_POINT_BLANK"),
-                    );
+                    let pb_clarity = ctx.player().shot_clarity();
+                    let pb_fin = (ctx.player.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
+                    let pb_comp = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+                    let pb_willingness =
+                        (pb_fin * 0.06 + pb_comp * 0.02 + 0.025).clamp(0.025, 0.10)
+                            * (0.50 + pb_clarity * 0.50);
+                    if rand::random::<f32>() < pb_willingness {
+                        return Some(
+                            StateChangeResult::with_forward_state(ForwardState::Shooting)
+                                .with_shot_reason("FWD_RUN_POINT_BLANK"),
+                        );
+                    }
+                    // Hesitated this tick — stay in Running and re-roll
+                    // next tick. With cumulative 40-70% over 5-10 ticks,
+                    // most box entries do produce a shot, but not every
+                    // tick. Critically, this gives the keeper time to
+                    // close the angle.
+                    return None;
                 }
                 // Cooldown active — rebound scenario, don't chase the
                 // keeper. Lay the ball off via a pass instead.
@@ -369,32 +380,37 @@ impl StateProcessingHandler for ForwardRunningState {
             let _ = long_shots;
             let max_shot_distance = 90.0f32;
 
-            // Willingness: a hesitation die-roll per shot opportunity.
-            // Real football: low-finishing forwards pass more than they
-            // shoot, but they DO pull the trigger when the window opens —
-            // they don't watch opportunities roll past them tick after tick.
-            // Targeting ~65% per-tick base for average players so the
-            // clear-shot → fire conversion lands near real shot volume
-            // (~13 shots/team). The previous tighter curve (fin*0.65 +
-            // comp*0.15 + 0.10, clamp 0.25..0.95) averaged 0.50 for a
-            // median player and left the waterfall's willingness drop at
-            // 58.7% — the single biggest remaining shot-suppressor once
-            // the can_shoot contention-skip landed.
-            //   fin 5,  comp 8 : 0.55  (floor — hesitant but still fires)
-            //   fin 10, comp 10: 0.65
-            //   fin 14, comp 12: 0.77
-            //   fin 18, comp 15: 0.87
+            // Willingness: a per-tick trigger for "I shoot now."
+            //
+            // The willingness ROLL fires every tick a forward has the
+            // ball in shooting range and the structural gates pass. With
+            // base ~0.50/tick the cumulative chance over a 5-tick window
+            // is >97%, which is why historic populations ran at 50+
+            // shots/team. Real football: a striker carrying the ball in
+            // shooting range fires roughly once per ~1-2 seconds, NOT
+            // ~5x per second. Calibrated against the per-tick rate so
+            // the cumulative-over-100-ticks chance lands near 50-70%.
+            //
+            // Per-tick base (after gates): ~0.005 (poor) … ~0.030 (elite).
+            //   fin 5,  comp 8 : 0.013
+            //   fin 10, comp 10: 0.018
+            //   fin 14, comp 12: 0.024
+            //   fin 18, comp 15: 0.029
+            //
+            // The shot-clarity factor (from `has_clear_shot()`'s
+            // continuous model) further modulates this so an elite
+            // striker through a clogged-but-passable corridor fires far
+            // less often than the same striker with a yawning lane.
             let fin_factor = (finishing / 20.0).clamp(0.0, 1.0);
             let comp_factor = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-            // Pushed floor 0.55 → 0.70 and constant 0.35 → 0.45 — even
-            // poor finishers pull the trigger when given a clear shot
-            // in a tight, structured opportunity (the gates above already
-            // exclude long-range fliers, defended angles, and rushed
-            // possessions). The willingness gate was dropping 41% of
-            // qualified opportunities, the largest remaining post-gate
-            // shot-suppressor. Average player now fires ~0.80/tick.
+            let clarity = ctx.player().shot_clarity();
+            // Per-tick base 0.008 (poor) … 0.025 (elite). With shots
+            // landing in 11-16 / team band and on-target ~35%, the
+            // population-level conversion holds at ~30% of SOT —
+            // matching real Premier League aggregates.
             let base_willingness =
-                (fin_factor * 0.40 + comp_factor * 0.10 + 0.45).clamp(0.70, 0.95);
+                (fin_factor * 0.020 + comp_factor * 0.005 + 0.006).clamp(0.008, 0.025)
+                    * (0.40 + clarity * 0.60);
 
             // GAME-MANAGEMENT SHOT SUPPRESSION. When the team is protecting
             // a score (lead, late, underdog clinging to a draw) the coach

@@ -188,6 +188,19 @@ pub struct Ball {
     /// flight; cleared on catch, goal, or any ownership event.
     pub cached_shot_target: Option<ShotTarget>,
 
+    /// Per-shot lifecycle marker: when the physics-level `try_save_shot`
+    /// resolves a shot mid-flight (catch / parry / dangerous parry), it
+    /// stores `(keeper_id, shooter_id)` here so the post-tick stat
+    /// credit can fire saves and on-target without relying on the GK
+    /// state machine to also re-detect the same shot.
+    /// Consumed (cleared to `None`) by the event dispatcher once
+    /// stats have been credited. This makes saves-on-target match
+    /// physics-resolved saves 1:1 — the previous architecture had two
+    /// independent save systems (physics and state-machine) where one
+    /// changed ball state without crediting and the other rolled
+    /// independent saves that often missed.
+    pub pending_save_credit: Option<(u32, u32)>,
+
     /// Last meaningful touch on the ball. Drives restart resolution
     /// (throw-ins, corners, goal kicks) and pass-origin metadata. Updated
     /// from any path that hands ownership to a player (claim, intercept,
@@ -285,6 +298,7 @@ impl Ball {
             stall_anchor_pos: Vector3::new(x, y, 0.0),
             stall_anchor_tick: 0,
             cached_shot_target: None,
+            pending_save_credit: None,
             last_touch_player_id: None,
             last_touch_team_id: None,
             last_touch_tick: 0,
@@ -541,6 +555,7 @@ impl Ball {
         self.stall_anchor_pos = self.position;
         self.stall_anchor_tick = 0;
         self.cached_shot_target = None;
+        self.pending_save_credit = None;
         self.last_touch_player_id = None;
         self.last_touch_team_id = None;
         self.last_touch_tick = 0;

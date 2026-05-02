@@ -469,6 +469,9 @@ impl Ball {
             PlayerSide::Right => self.position.x > goal_x,
         };
         if past_goal_line {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.cached_shot_target = None;
             return;
         }
@@ -476,8 +479,14 @@ impl Ball {
         let dist_to_goal_x = (self.position.x - goal_x).abs();
         let ball_vx = self.velocity.x.abs().max(0.5);
         if dist_to_goal_x > ball_vx * 2.5 {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_TICKS_OUT_OF_REACH
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return;
         }
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_TICKS_REACHED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Ball must still be traveling toward that goal line.
         let moving_toward_goal = match shot_target.defending_side {
@@ -561,9 +570,16 @@ impl Ball {
         let skill_mult = 0.45 + skill * 0.35;
         let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.05, 0.55);
 
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_PHYSICS_FIRED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         if rand::random::<f32>() >= save_prob {
             return; // Keeper beaten — shot goes on.
         }
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_PHYSICS_PASSED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Save outcome distribution. Catch / safe parry / dangerous
         // parry / corner — the previous code always caught.
@@ -594,6 +610,16 @@ impl Ball {
         self.position.z = 0.0;
         self.previous_owner = self.current_owner.or(self.previous_owner);
         self.pass_target_player_id = None;
+        // Stage the save credit before clearing the shot target. This
+        // marker is consumed by the event-dispatch step so the GK earns
+        // a save in the stats sheet and the shooter's on-target count
+        // increments. Without this, the physics save changes ball state
+        // (catch/parry) but bypasses the state-machine save events that
+        // were the only path crediting saves — leaving ~90% of resolved
+        // shots stat-less.
+        if let Some(shooter_id) = self.previous_owner {
+            self.pending_save_credit = Some((keeper_id, shooter_id));
+        }
         self.cached_shot_target = None;
         let tick = self.current_tick_cached;
         self.offside_snapshot = None;
@@ -650,15 +676,34 @@ impl Ball {
             return;
         }
 
-        // Dangerous parry — ball drops 8-28u from goal, often central.
-        let drop_distance = 8.0 + rand::random::<f32>() * 20.0;
+        // Dangerous parry — ball spills off the keeper's hands.
+        // Real goalkeepers under pressure push the ball toward the side
+        // they're already diving, not back into the central goalmouth
+        // where the attacking team gets a free tap-in. The previous
+        // ±15u y-spread around the ball position landed ~50% of parries
+        // in the six-yard tap-in lane.
+        let drop_distance = 12.0 + rand::random::<f32>() * 18.0;
         let drop_x = match keeper_side {
             Some(crate::r#match::PlayerSide::Left) => keeper_pos.x + drop_distance,
             Some(crate::r#match::PlayerSide::Right) => keeper_pos.x - drop_distance,
             None => keeper_pos.x,
         };
-        let drop_y = self.position.y
-            + (rand::random::<f32>() - 0.5) * 30.0;
+        // Outward y-bias: push the ball *away* from the goal centre. If
+        // the ball was already lateral, push further laterally; for
+        // central shots, pick a random side and push 14-30u outward.
+        let goal_center_y = match keeper_side {
+            Some(crate::r#match::PlayerSide::Left) => context.goal_positions.left.y,
+            Some(crate::r#match::PlayerSide::Right) => context.goal_positions.right.y,
+            None => self.field_height * 0.5,
+        };
+        let outward_sign = if (self.position.y - goal_center_y).abs() < 1.0 {
+            if rand::random::<f32>() < 0.5 { -1.0 } else { 1.0 }
+        } else {
+            (self.position.y - goal_center_y).signum()
+        };
+        let outward_offset = (14.0 + rand::random::<f32>() * 16.0) * outward_sign;
+        let drop_y = self.position.y + outward_offset
+            + (rand::random::<f32>() - 0.5) * 10.0;
         let drop_y = drop_y.clamp(0.0, self.field_height);
         let drop_x = drop_x.clamp(0.0, self.field_width);
         let dx = drop_x - self.position.x;

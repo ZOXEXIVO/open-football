@@ -184,6 +184,13 @@ impl Ball {
             self.claim_cooldown = 30; // Protection so no one steals immediately
             self.flags.in_flight_state = 30;
             self.pass_target_player_id = None;
+            // Clear the shot target — the shot ended (above the bar) and
+            // is now resolved as a goal kick. Without this clear, the
+            // GK's eventual ClearBall event hits gk_clearing_shot with
+            // a stale `cached_shot_target=Some`, false-crediting a save
+            // for a shot that never reached the keeper.
+            self.cached_shot_target = None;
+            self.recent_passers.clear();
             self.pass_origin_restart = crate::r#match::PassOriginRestart::GoalKick;
             self.offside_snapshot = None;
             self.record_touch(gk_id, gk_team, self.current_tick_cached, true);
@@ -299,6 +306,11 @@ impl Ball {
                 self.flags.in_flight_state = 30;
                 self.pass_target_player_id = None;
                 self.recent_passers.clear();
+                // Same as goal-kick restart: clear stale shot target so
+                // the eventual clearance/distribution doesn't false-credit
+                // a phantom save (see check_over_goal for the full bug
+                // explanation).
+                self.cached_shot_target = None;
                 self.pass_origin_restart = crate::r#match::PassOriginRestart::Corner;
                 self.offside_snapshot = None;
                 self.record_touch(taker_id, taker_team, self.current_tick_cached, true);
@@ -338,6 +350,10 @@ impl Ball {
             self.flags.in_flight_state = 30;
             self.pass_target_player_id = None;
             self.recent_passers.clear();
+            // See check_over_goal for full rationale — clear the shot
+            // target so the eventual GK clearance can't false-credit a
+            // save for a shot that ended out of play.
+            self.cached_shot_target = None;
             self.pass_origin_restart = crate::r#match::PassOriginRestart::GoalKick;
             self.offside_snapshot = None;
             self.record_touch(gk_id, gk_team, self.current_tick_cached, true);

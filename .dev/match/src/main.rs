@@ -193,6 +193,7 @@ fn make_squad_viewer(
     (squad, players_json)
 }
 
+#[derive(Clone)]
 struct TeamStats {
     shots: u16,
     on_target: u16,
@@ -204,6 +205,21 @@ struct TeamStats {
     passes_completed: u32,
     interceptions: u32,
     xg: f32,
+}
+
+/// One match's row of output and aggregates. Produced inside the
+/// rayon parallel loop so the only synchronisation point is the
+/// global atomic counters inside `core` (shot/tackle/save accounting),
+/// which are already lock-free.
+#[derive(Clone)]
+struct MatchOutcome {
+    idx: usize,
+    level_a: u8,
+    level_b: u8,
+    home_goals: u8,
+    away_goals: u8,
+    home: TeamStats,
+    away: TeamStats,
 }
 
 fn team_stats(result: &core::r#match::MatchResultRaw, team_id: u32) -> TeamStats {
@@ -292,11 +308,15 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error"))
         .init();
 
+    let n_threads = rayon::current_num_threads();
     match (level_a, level_b) {
-        (Some(a), Some(b)) => println!("Running {} matches: level {} vs level {}", n_matches, a, b),
+        (Some(a), Some(b)) => println!(
+            "Running {} matches: level {} vs level {}  (parallel: {} threads)",
+            n_matches, a, b, n_threads
+        ),
         _ => println!(
-            "Running {} matches: random squad levels per match ({}–{})",
-            n_matches, RANDOM_LEVEL_MIN, RANDOM_LEVEL_MAX
+            "Running {} matches: random squad levels per match ({}–{})  (parallel: {} threads)",
+            n_matches, RANDOM_LEVEL_MIN, RANDOM_LEVEL_MAX, n_threads
         ),
     }
     println!();
@@ -304,6 +324,77 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
              "#", "lA", "lB", "H", "A",
              "H", "A", "H", "A", "H", "A", "H", "A", "H", "A", "H", "A", "H", "A", "H", "A");
 
+    // Reset the shot-gate waterfall counters once at run start. They
+    // accumulate across all matches (including across threads — the
+    // counters are AtomicU64) so we see which gate is suppressing shots
+    // at population scale, not match-to-match noise.
+    core::shot_gate_stats::reset();
+    core::tackle_stats::reset();
+    core::save_accounting_stats::reset();
+    {
+        use std::sync::atomic::Ordering;
+        core::save_accounting_stats::SAVE_TICKS_REACHED.store(0, Ordering::Relaxed);
+        core::save_accounting_stats::SAVE_TICKS_OUT_OF_REACH.store(0, Ordering::Relaxed);
+        core::save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE.store(0, Ordering::Relaxed);
+        core::save_accounting_stats::SAVE_PHYSICS_FIRED.store(0, Ordering::Relaxed);
+        core::save_accounting_stats::SAVE_PHYSICS_PASSED.store(0, Ordering::Relaxed);
+    }
+
+    // Pre-roll per-match levels so the parallel work below is a pure
+    // function of `i` and the work scheduler can dispatch in any order.
+    // (We can't call `random_level()` inside the parallel closure and
+    // still match the historical "i-th match's levels" reproducibility
+    // expectation if anyone later seeds the RNG — but we still want
+    // each level pair to be independent draws when no fixed levels
+    // were passed.)
+    let level_pairs: Vec<(u8, u8)> = (0..n_matches)
+        .map(|_| {
+            (
+                level_a.unwrap_or_else(random_level),
+                level_b.unwrap_or_else(random_level),
+            )
+        })
+        .collect();
+
+    let total_start = std::time::Instant::now();
+
+    // Run all matches in parallel. Rayon's `into_par_iter().map().collect()`
+    // preserves input order, so `outcomes` comes back sorted by match
+    // index — the per-match table below prints in the same order as
+    // the previous serial loop.
+    //
+    // Thread safety: each match builds its own squads, owns its own
+    // RNG state via `rand::rng()` (thread-local), and the engine's
+    // global counters (shot_gate / tackle / save_accounting / save
+    // pipeline) are all `AtomicU64` so increments compose correctly
+    // across threads.
+    let outcomes: Vec<MatchOutcome> = level_pairs
+        .par_iter()
+        .enumerate()
+        .map(|(i, &(match_level_a, match_level_b))| {
+            let home = make_squad_simple(1, match_level_a);
+            let away = make_squad_simple(2, match_level_b);
+            let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
+            let score = result.score.as_ref().unwrap();
+            let hg = score.home_team.get();
+            let ag = score.away_team.get();
+            let h = team_stats(&result, 1);
+            let a = team_stats(&result, 2);
+            MatchOutcome {
+                idx: i,
+                level_a: match_level_a,
+                level_b: match_level_b,
+                home_goals: hg,
+                away_goals: ag,
+                home: h,
+                away: a,
+            }
+        })
+        .collect();
+    let total_ms = total_start.elapsed().as_millis();
+
+    // Print per-match rows in match order (single-threaded, so the
+    // table is always coherent even though matches ran in parallel).
     let mut total_goals = 0u32;
     let mut total_shots = 0u32;
     let mut total_on_target = 0u32;
@@ -314,40 +405,49 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     let mut total_passes_completed = 0u32;
     let mut total_fouls = 0u32;
     let mut total_xg = 0.0f32;
-    let mut score_histogram: std::collections::BTreeMap<u8, u32> = std::collections::BTreeMap::new();
+    let mut score_histogram: std::collections::BTreeMap<u8, u32> =
+        std::collections::BTreeMap::new();
 
-    // Reset the shot-gate waterfall counters once at run start. They
-    // accumulate across all matches in the batch so we see which gate
-    // is suppressing shots at population scale, not match-to-match noise.
-    core::shot_gate_stats::reset();
-    core::tackle_stats::reset();
+    for o in &outcomes {
+        let h = &o.home;
+        let a = &o.away;
+        let h_acc = if h.passes_attempted > 0 {
+            h.passes_completed * 100 / h.passes_attempted
+        } else {
+            0
+        };
+        let a_acc = if a.passes_attempted > 0 {
+            a.passes_completed * 100 / a.passes_attempted
+        } else {
+            0
+        };
 
-    let total_start = std::time::Instant::now();
-    for i in 0..n_matches {
-        let match_level_a = level_a.unwrap_or_else(random_level);
-        let match_level_b = level_b.unwrap_or_else(random_level);
-        let home = make_squad_simple(1, match_level_a);
-        let away = make_squad_simple(2, match_level_b);
-        let _start = std::time::Instant::now();
-        let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
+        println!(
+            "{:>3} {:>3}v{:>3} {:>3}-{:>3} | {:>3}/{:>3}    {:>3}/{:>3}    {:>4.1}/{:>4.1}    {:>3}/{:>3}    {:>3}/{:>3}    {:>3}/{:>3}     {:>4}/{:>4}  {:>2}/{:>2}%",
+            o.idx + 1,
+            o.level_a,
+            o.level_b,
+            o.home_goals,
+            o.away_goals,
+            h.shots,
+            a.shots,
+            h.on_target,
+            a.on_target,
+            h.xg,
+            a.xg,
+            h.saves,
+            a.saves,
+            h.tackles,
+            a.tackles,
+            h.interceptions,
+            a.interceptions,
+            h.passes_attempted,
+            a.passes_attempted,
+            h_acc,
+            a_acc,
+        );
 
-        let score = result.score.as_ref().unwrap();
-        let hg = score.home_team.get();
-        let ag = score.away_team.get();
-        let h = team_stats(&result, 1);
-        let a = team_stats(&result, 2);
-
-        let h_acc = if h.passes_attempted > 0 { h.passes_completed * 100 / h.passes_attempted } else { 0 };
-        let a_acc = if a.passes_attempted > 0 { a.passes_completed * 100 / a.passes_attempted } else { 0 };
-
-        println!("{:>3} {:>3}v{:>3} {:>3}-{:>3} | {:>3}/{:>3}    {:>3}/{:>3}    {:>4.1}/{:>4.1}    {:>3}/{:>3}    {:>3}/{:>3}    {:>3}/{:>3}     {:>4}/{:>4}  {:>2}/{:>2}%",
-                 i + 1, match_level_a, match_level_b, hg, ag,
-                 h.shots, a.shots, h.on_target, a.on_target,
-                 h.xg, a.xg,
-                 h.saves, a.saves, h.tackles, a.tackles, h.interceptions, a.interceptions,
-                 h.passes_attempted, a.passes_attempted, h_acc, a_acc);
-
-        total_goals += hg as u32 + ag as u32;
+        total_goals += o.home_goals as u32 + o.away_goals as u32;
         total_shots += h.shots as u32 + a.shots as u32;
         total_on_target += h.on_target as u32 + a.on_target as u32;
         total_saves += h.saves as u32 + a.saves as u32;
@@ -357,9 +457,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         total_passes_completed += h.passes_completed + a.passes_completed;
         total_fouls += h.fouls as u32 + a.fouls as u32;
         total_xg += h.xg + a.xg;
-        *score_histogram.entry(hg + ag).or_default() += 1;
+        *score_histogram.entry(o.home_goals + o.away_goals).or_default() += 1;
     }
-    let total_ms = total_start.elapsed().as_millis();
 
     let n = n_matches as f32;
     println!();
@@ -465,6 +564,90 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     println!(
         "  per-match per-team successes: {:.1}  (real football ~18)",
         success_per_match_per_team
+    );
+
+    // Save-accounting forensics: the saves vs on-target invariant must
+    // hold (saves <= on_target). When it doesn't, this table tells us
+    // which credit site is dropping on_target while still crediting save.
+    let sa = core::save_accounting_stats::snapshot();
+    println!();
+    println!("--- SAVE ACCOUNTING per credit site (cumulative) ---");
+    println!(
+        "  {:<6}  {:>10}  {:>10}  {:>10}  {:>10}  {:>10}",
+        "site", "saves", "on_target", "shots_faced", "shooter_NF", "prev_None"
+    );
+    let labels = core::save_accounting_stats::SITE_LABELS;
+    let total_saves: u64 = sa.saves.iter().sum();
+    let total_paired: u64 = sa.on_target.iter().sum();
+    for (i, label) in labels.iter().enumerate() {
+        println!(
+            "  {:<6}  {:>10}  {:>10}  {:>10}  {:>10}  {:>10}",
+            label,
+            sa.saves[i],
+            sa.on_target[i],
+            sa.saves[i],
+            sa.shooter_missing[i],
+            sa.prev_owner_none[i],
+        );
+    }
+    println!(
+        "  {:<6}  {:>10}  {:>10}  {:>10}  {:>10}  {:>10}",
+        "ALL",
+        total_saves,
+        total_paired,
+        total_saves,
+        sa.shooter_missing.iter().sum::<u64>(),
+        sa.prev_owner_none.iter().sum::<u64>(),
+    );
+    println!(
+        "  on_target from goal-credit path: {}",
+        sa.on_target_goal
+    );
+    let expected_on_target = total_paired + sa.on_target_goal;
+    println!(
+        "  expected memory on_target total: saves_paired ({}) + goals_paired ({}) = {}",
+        total_paired, sa.on_target_goal, expected_on_target
+    );
+    let expected_saves_total = total_saves;
+    println!(
+        "  EXPECTED saves/on_target ratio = {:.1}%",
+        if expected_on_target > 0 {
+            expected_saves_total as f64 / expected_on_target as f64 * 100.0
+        } else {
+            0.0
+        }
+    );
+
+    // Save-pipeline diagnostics — shows exactly where shots in flight
+    // either reach the keeper for a save attempt, sail past, or fail to
+    // engage at all. Helps localize whether low save% comes from few
+    // attempts or low success-per-attempt.
+    use std::sync::atomic::Ordering;
+    let reached =
+        core::save_accounting_stats::SAVE_TICKS_REACHED.load(Ordering::Relaxed);
+    let oor =
+        core::save_accounting_stats::SAVE_TICKS_OUT_OF_REACH.load(Ordering::Relaxed);
+    let past =
+        core::save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE.load(Ordering::Relaxed);
+    let phys_fired =
+        core::save_accounting_stats::SAVE_PHYSICS_FIRED.load(Ordering::Relaxed);
+    let phys_passed =
+        core::save_accounting_stats::SAVE_PHYSICS_PASSED.load(Ordering::Relaxed);
+    println!();
+    println!("--- SAVE PIPELINE ---");
+    println!(
+        "  ticks within reach window:  {} (out_of_reach: {}, past_line: {})",
+        reached, oor, past
+    );
+    println!(
+        "  physics save attempted:     {}  passed: {}  hit-rate: {:.1}%",
+        phys_fired,
+        phys_passed,
+        if phys_fired > 0 {
+            phys_passed as f64 / phys_fired as f64 * 100.0
+        } else {
+            0.0
+        }
     );
 }
 

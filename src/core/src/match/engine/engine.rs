@@ -781,6 +781,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         field.ball.update_light(context, &field.players, events);
         Self::apply_pending_set_piece_teleport(field);
+        Self::apply_pending_save_credit(field);
 
         // Shot-flight GK reactivity: normally light ticks skip player
         // AI to save CPU, but during a shot the keeper needs continuous
@@ -822,6 +823,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         Self::play_ball(field, context, tick_ctx, events);
         Self::apply_pending_set_piece_teleport(field);
+        Self::apply_pending_save_credit(field);
         // Ownership may have changed inside play_ball (new claim, pass
         // target receive, etc.). Refresh the ball view so player state
         // dispatch sees the current owner — without this, the
@@ -851,6 +853,45 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 p.velocity = nalgebra::Vector3::zeros();
                 p.in_state_time = 0;
             }
+        }
+    }
+
+    /// Consume `Ball::pending_save_credit` left behind by the physics
+    /// save (`try_save_shot`). When the keeper actually changed ball
+    /// state mid-flight (catch, safe parry, dangerous parry), this fires
+    /// the save stat for the keeper and the on-target stat for the
+    /// shooter — matching the events the GK state machine would have
+    /// emitted if the physics save hadn't pre-empted it.
+    fn apply_pending_save_credit(field: &mut MatchField) {
+        let Some((keeper_id, shooter_id)) = field.ball.pending_save_credit.take() else {
+            return;
+        };
+        // Validate teams differ — defence in depth against any
+        // accidental same-team shooter (deflections that route through
+        // the save handler should already be filtered upstream).
+        let keeper_team = field.players.iter().find(|p| p.id == keeper_id).map(|p| p.team_id);
+        let shooter_team = field.players.iter().find(|p| p.id == shooter_id).map(|p| p.team_id);
+        if keeper_team.is_none() || shooter_team.is_none() || keeper_team == shooter_team {
+            return;
+        }
+        if let Some(gk) = field.players.iter_mut().find(|p| p.id == keeper_id) {
+            gk.statistics.saves += 1;
+            gk.statistics.shots_faced += 1;
+        }
+        if let Some(shooter) = field.players.iter_mut().find(|p| p.id == shooter_id) {
+            shooter.memory.credit_shot_on_target();
+        }
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            // Re-use the "catch" site bucket — physics-save outcomes are
+            // catches, parries, and dangerous parries indistinguishably
+            // from the stats viewpoint. The save_pipeline counters above
+            // already separate them at the physics layer.
+            crate::r#match::engine::player::events::players::save_accounting_stats::SAVES_CREDITED[1]
+                .fetch_add(1, Ordering::Relaxed);
+            crate::r#match::engine::player::events::players::save_accounting_stats::ON_TARGET_PAIRED[1]
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 
