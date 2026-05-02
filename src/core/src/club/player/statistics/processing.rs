@@ -2797,4 +2797,104 @@ mod tests {
         assert!(chaika_frozen.is_loan);
         assert_eq!(chaika_frozen.statistics.played, 10);
     }
+
+    /// Within a single season, parent (non-loan) row must render before the
+    /// same-season loan row when the player moved parent → loan. Across
+    /// seasons, newest season still comes first.
+    #[test]
+    fn view_items_orders_parent_before_loan_within_season() {
+        let mut player = make_player();
+
+        let river = TeamInfo {
+            name: "River Plate".to_string(),
+            slug: "river-plate".to_string(),
+            reputation: 600,
+            league_name: "Argentine Primera".to_string(),
+            league_slug: "argentine-primera".to_string(),
+        };
+        let rostov = TeamInfo {
+            name: "Rostov".to_string(),
+            slug: "rostov".to_string(),
+            reputation: 300,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+
+        // Frozen: 2025/26 loan spell at Rostov already in items.
+        player.statistics_history = crate::PlayerStatisticsHistory::from_items(vec![
+            PlayerStatisticsHistoryItem {
+                season: Season::new(2025),
+                team_name: "Rostov".to_string(),
+                team_slug: "rostov".to_string(),
+                team_reputation: 300,
+                league_name: "Russian Premier League".to_string(),
+                league_slug: "russian-premier-league".to_string(),
+                is_loan: true,
+                transfer_fee: Some(0.0),
+                statistics: make_stats(18, 3),
+                seq_id: 0,
+            },
+        ]);
+
+        // 2026/27: parent River Plate seeds first (0 apps), then loaned to Rostov.
+        player
+            .statistics_history
+            .seed_initial_team(&river, make_date(2026, 8, 1), false);
+
+        player.statistics = make_stats(0, 0);
+        player.on_loan(&river, &rostov, 0.0, make_date(2026, 8, 20));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
+        ));
+
+        // Live: 7 apps so far at Rostov.
+        player.statistics = make_stats(7, 1);
+        let view = player
+            .statistics_history
+            .view_items(Some(&player.statistics));
+
+        let positions: Vec<(u16, &str, bool)> = view
+            .iter()
+            .map(|e| (e.season.start_year, e.team_slug.as_str(), e.is_loan))
+            .collect();
+
+        let river_2026 = positions
+            .iter()
+            .position(|(y, s, _)| *y == 2026 && *s == "river-plate")
+            .expect("River Plate 2026/27 missing");
+        let rostov_2026 = positions
+            .iter()
+            .position(|(y, s, _)| *y == 2026 && *s == "rostov")
+            .expect("Rostov 2026/27 missing");
+        let rostov_2025 = positions
+            .iter()
+            .position(|(y, s, _)| *y == 2025 && *s == "rostov")
+            .expect("Rostov 2025/26 missing");
+
+        assert!(
+            river_2026 < rostov_2026,
+            "Parent River Plate 2026 must precede same-season Rostov loan. \
+             order: {positions:?}"
+        );
+        assert!(
+            rostov_2026 < rostov_2025,
+            "Newer 2026 season must come before older 2025. order: {positions:?}"
+        );
+
+        // Live stats still land on the active loan row, not the parent.
+        let river_row = &view[river_2026];
+        let rostov_row = &view[rostov_2026];
+        assert_eq!(river_row.statistics.played, 0);
+        assert!(!river_row.is_loan);
+        assert_eq!(rostov_row.statistics.played, 7);
+        assert!(rostov_row.is_loan);
+
+        // Career totals unchanged: parent 0 + 2026 loan 7 + 2025 loan 18 = 25.
+        let totals = crate::PlayerStatisticsHistory::career_totals(&view);
+        assert_eq!(totals.played, 25);
+    }
 }

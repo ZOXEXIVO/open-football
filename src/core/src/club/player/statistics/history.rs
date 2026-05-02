@@ -826,11 +826,15 @@ impl PlayerStatisticsHistory {
             });
         }
 
+        // Seasons descending (newest first), but within a season order by
+        // ascending seq_id so rows read in the chronological order the player
+        // actually moved/played — e.g. a parent-club row appears before the
+        // same-season loan row when the player was loaned out from there.
         result.sort_by(|a, b| {
             b.season
                 .start_year
                 .cmp(&a.season.start_year)
-                .then(b.seq_id.cmp(&a.seq_id))
+                .then(a.seq_id.cmp(&b.seq_id))
         });
 
         if let Some(max_seq) = result.iter().map(|i| i.seq_id).max() {
