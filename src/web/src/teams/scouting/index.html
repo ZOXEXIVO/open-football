@@ -427,7 +427,7 @@
                                 <td>{% if d.row.data_support %}✓{% else %}—{% endif %}</td>
                                 <td class="sc-num">{{ d.board_risk_display }}</td>
                                 <td class="sc-num">{{ d.budget_fit_display }}</td>
-                                <td class="sc-reason">{{ d.row.reason }}</td>
+                                <td class="sc-reason">{{ i18n.t(d.row.reason_key.as_str()) }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>

@@ -188,7 +188,7 @@ pub struct MeetingDecisionRow {
     pub data_support: bool,
     pub board_risk_score: f32,
     pub budget_fit: f32,
-    pub reason: String,
+    pub reason_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1234,6 +1234,19 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
         (String::new(), String::new())
     }
 
+    /// Like `resolve_player_link` but never returns an empty name. When
+    /// the player can't be located, falls back to `Player #{id}` with an
+    /// empty slug so the template renders plain text instead of a broken
+    /// link.
+    fn resolve_player_label(&self, player_id: u32) -> (String, String) {
+        let (name, slug) = self.resolve_player_link(player_id);
+        if name.is_empty() {
+            (format!("Player #{}", player_id), String::new())
+        } else {
+            (name, slug)
+        }
+    }
+
     fn staff_name(&self, staff_id: u32) -> String {
         self.data
             .staff_with_team(staff_id)
@@ -1659,7 +1672,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                     .decisions
                     .iter()
                     .map(|d| {
-                        let (name, slug) = self.resolve_player_link(d.player_id);
+                        let (name, slug) = self.resolve_player_label(d.player_id);
                         MeetingDecisionRow {
                             player_id: d.player_id,
                             player_slug: slug,
@@ -1671,7 +1684,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                             data_support: d.data_support,
                             board_risk_score: d.board_risk_score,
                             budget_fit: d.budget_fit,
-                            reason: d.reason.to_string(),
+                            reason_key: d.reason_key.to_string(),
                         }
                     })
                     .collect();
@@ -1679,7 +1692,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                     .player_votes
                     .iter()
                     .map(|v| {
-                        let (player_name, player_slug) = self.resolve_player_link(v.player_id);
+                        let (player_name, player_slug) = self.resolve_player_label(v.player_id);
                         MeetingVoteRow {
                             scout_id: v.scout_staff_id,
                             scout_name: self.staff_name(v.scout_staff_id),

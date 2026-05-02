@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use core::Player;
 use core::PlayerStatusType;
 use core::SimulatorData;
+use core::StaffPosition;
 use core::utils::FormattingUtils;
 use serde::Deserialize;
 
@@ -190,11 +191,12 @@ pub async fn player_personal_action(
         .to_string();
 
     let manager_relationship = team_opt
-        .map(|team| {
-            let head_coach = team.staffs.head_coach();
-            get_manager_relationship(player, head_coach, &i18n)
+        .and_then(|team| {
+            team.staffs
+                .manager()
+                .or_else(|| team.staffs.find_by_position(StaffPosition::AssistantManager))
         })
-        .flatten();
+        .and_then(|staff| get_manager_relationship(player, staff, &i18n));
 
     let favorite_clubs: Vec<FavoriteClubDto> = player
         .favorite_clubs

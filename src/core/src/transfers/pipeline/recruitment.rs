@@ -400,8 +400,9 @@ pub struct RecruitmentDecision {
     /// Estimated fee / budget allocation. Above 1.0 means the player's
     /// expected fee exceeds the allocated budget.
     pub budget_fit: f32,
-    /// Short reason shown in the UI / staff event log.
-    pub reason: &'static str,
+    /// i18n key describing the reason. Resolved by the UI / event log
+    /// against the active locale; never a raw display string.
+    pub reason_key: &'static str,
 }
 
 #[derive(Debug, Clone)]

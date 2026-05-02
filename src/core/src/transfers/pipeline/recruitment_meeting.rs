@@ -447,24 +447,24 @@ impl PipelineProcessor {
                     .unwrap_or(false);
 
                 let decision_type: RecruitmentDecisionType;
-                let reason_text: &'static str;
+                let reason_key: &'static str;
                 if consensus_score >= 1.8 && budget_fit <= 1.4 && risk_flag_count <= 2 {
                     if priority_critical && chief_scout_support && consensus_score >= 2.5 {
                         decision_type = RecruitmentDecisionType::StartNegotiation;
-                        reason_text = "critical need + strong consensus";
+                        reason_key = "meeting_reason_critical_need_strong_consensus";
                     } else {
                         decision_type = RecruitmentDecisionType::PromoteToShortlist;
-                        reason_text = "consensus signing";
+                        reason_key = "meeting_reason_consensus_signing";
                     }
                 } else if consensus_score >= 1.0 && (budget_fit > 1.4 || risk_flag_count >= 3) {
                     decision_type = RecruitmentDecisionType::AskBoardApproval;
-                    reason_text = "elevated risk — board to weigh in";
+                    reason_key = "meeting_reason_elevated_risk_board";
                 } else if consensus_score <= -1.5 || budget_fit > 2.0 {
                     decision_type = RecruitmentDecisionType::Reject;
-                    reason_text = "votes negative or budget out of reach";
+                    reason_key = "meeting_reason_votes_negative_or_budget";
                 } else {
                     decision_type = RecruitmentDecisionType::KeepMonitoring;
-                    reason_text = "split or insufficient confidence";
+                    reason_key = "meeting_reason_split_or_insufficient_confidence";
                 }
 
                 // For Reject decisions, push onto the rejection blocklist
@@ -514,7 +514,7 @@ impl PipelineProcessor {
                     data_support,
                     board_risk_score,
                     budget_fit,
-                    reason: reason_text,
+                    reason_key,
                 };
 
                 debug!(
