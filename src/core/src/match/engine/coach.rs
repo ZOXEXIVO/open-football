@@ -84,6 +84,82 @@ impl CoachInstruction {
     }
 }
 
+/// Coefficients applied by an instruction to player decision biases.
+/// All deltas are additive and the resulting bias is consumed by the
+/// passing / shooting / movement scorers. Centralised so the table can
+/// be edited in one place and the scorers stay readable.
+#[derive(Debug, Clone, Copy)]
+pub struct InstructionCoefficients {
+    pub risk_appetite: f32,
+    pub tempo: f32,
+    pub defensive_line_units: f32,
+    pub width_units: f32,
+}
+
+impl InstructionCoefficients {
+    pub fn for_instruction(i: CoachInstruction) -> Self {
+        match i {
+            CoachInstruction::Normal => Self {
+                risk_appetite: 0.0,
+                tempo: 0.0,
+                defensive_line_units: 0.0,
+                width_units: 0.0,
+            },
+            CoachInstruction::SlowDown => Self {
+                risk_appetite: -0.16,
+                tempo: -0.14,
+                defensive_line_units: -10.0,
+                width_units: -3.0,
+            },
+            CoachInstruction::PushForward => Self {
+                risk_appetite: 0.18,
+                tempo: 0.14,
+                defensive_line_units: 12.0,
+                width_units: 4.0,
+            },
+            CoachInstruction::AllOutAttack => Self {
+                risk_appetite: 0.34,
+                tempo: 0.22,
+                defensive_line_units: 24.0,
+                width_units: 8.0,
+            },
+            CoachInstruction::WasteTime => Self {
+                risk_appetite: -0.30,
+                tempo: -0.26,
+                defensive_line_units: -20.0,
+                width_units: -2.0,
+            },
+            CoachInstruction::ParkTheBus => Self {
+                risk_appetite: -0.24,
+                tempo: -0.10,
+                defensive_line_units: -35.0,
+                width_units: -5.0,
+            },
+        }
+    }
+}
+
+/// Rolling team metrics consumed by the smarter coach evaluator. The
+/// match loop is responsible for keeping these up to date (sliding
+/// window — minute-window data trimmed every tick).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RollingTeamMetrics {
+    pub xg_for_last_15: f32,
+    pub xg_against_last_15: f32,
+    pub shots_for_last_15: u16,
+    pub deep_entries_for_last_15: u16,
+    /// Possession-by-position metric (0.0..1.0): fraction of recent ticks
+    /// where the ball was in the opposition half.
+    pub field_tilt_last_10: f32,
+    pub possession_last_10: f32,
+    pub dangerous_turnovers_last_10: u16,
+    /// Successful pressures / total pressures in the last 10 minutes.
+    pub press_success_rate_last_10: f32,
+    /// Rolling average of how many times the opposition played through
+    /// our defensive line (per minute, last 10).
+    pub avg_defensive_line_breaks: f32,
+}
+
 /// Per-team coach state during a match
 #[derive(Debug, Clone)]
 pub struct MatchCoach {
@@ -104,6 +180,9 @@ pub struct MatchCoach {
     /// count as a new possession — the cap holds until the opposition
     /// touches the ball.
     pub shots_this_possession: u32,
+    /// Rolling tactical metrics — populated by the match loop and read
+    /// by `evaluate_with_metrics` for smarter instruction switches.
+    pub metrics: RollingTeamMetrics,
 }
 
 impl Default for MatchCoach {
@@ -114,6 +193,7 @@ impl Default for MatchCoach {
             last_shot_tick: 0,
             last_possession_gain_tick: 0,
             shots_this_possession: 0,
+            metrics: RollingTeamMetrics::default(),
         }
     }
 }
@@ -275,5 +355,140 @@ impl MatchCoach {
     pub fn record_shot(&mut self, current_tick: u64) {
         self.last_shot_tick = current_tick;
         self.shots_this_possession += 1;
+    }
+
+    /// Returns the active instruction's tactical coefficients (risk,
+    /// tempo, defensive-line, width). Consumers use these to bias
+    /// scoring decisions without needing to match on `CoachInstruction`
+    /// at every call site.
+    pub fn coefficients(&self) -> InstructionCoefficients {
+        InstructionCoefficients::for_instruction(self.instruction)
+    }
+
+    /// xG/territory-aware variant of `evaluate`. Falls back to the
+    /// classic score/time/condition logic and then upgrades or
+    /// downgrades the choice based on rolling metrics. Real football:
+    /// a 0-0 team dominating xG shouldn't go AllOutAttack; a leading
+    /// team being tilted should drop deeper rather than just slow down.
+    pub fn evaluate_with_metrics(
+        &mut self,
+        score_diff: i8,
+        match_progress: f32,
+        avg_team_condition: f32,
+        current_tick: u64,
+        metrics: RollingTeamMetrics,
+    ) {
+        self.evaluate(
+            score_diff,
+            match_progress,
+            avg_team_condition,
+            current_tick,
+        );
+        self.metrics = metrics;
+
+        let xg_diff_15 = metrics.xg_for_last_15 - metrics.xg_against_last_15;
+        let is_late = match_progress > 0.66;
+        let is_very_late = match_progress > 0.83;
+
+        // Drawing but dominating xG → don't blow the shape. Stay on
+        // PushForward (or Normal) instead of AllOutAttack.
+        if score_diff == 0 && is_late && xg_diff_15 >= 0.7 {
+            if matches!(self.instruction, CoachInstruction::AllOutAttack) {
+                self.instruction = CoachInstruction::PushForward;
+            }
+        }
+
+        // Drawing late and getting outxG'd badly → push harder than the
+        // base evaluator decided.
+        if score_diff == 0 && is_very_late && xg_diff_15 <= -0.5 {
+            self.instruction = CoachInstruction::AllOutAttack;
+        }
+
+        // Leading by 1 late but conceding heavy xG → switch from
+        // WasteTime/SlowDown to a compact mid/low block (we approximate
+        // "compact mid block" with ParkTheBus's posture but only after
+        // 75').
+        if score_diff == 1
+            && match_progress > 0.83
+            && metrics.xg_against_last_15 > 0.6
+            && matches!(
+                self.instruction,
+                CoachInstruction::WasteTime | CoachInstruction::SlowDown
+            )
+        {
+            self.instruction = CoachInstruction::ParkTheBus;
+        }
+
+        // Leading by 2+ but heavily field-tilted by opponent → don't be
+        // passive; hold ball with SlowDown (allow safer outlet passes)
+        // instead of WasteTime.
+        if score_diff >= 2
+            && metrics.field_tilt_last_10 > 0.65
+            && matches!(self.instruction, CoachInstruction::WasteTime)
+        {
+            self.instruction = CoachInstruction::SlowDown;
+        }
+
+        // Failing press → drop the line. Captured here as switching
+        // from PushForward / AllOutAttack to Normal when the pressing
+        // isn't producing turnovers and the team is tired.
+        if metrics.press_success_rate_last_10 < 0.35
+            && avg_team_condition < 0.55
+            && matches!(
+                self.instruction,
+                CoachInstruction::AllOutAttack | CoachInstruction::PushForward
+            )
+        {
+            self.instruction = CoachInstruction::Normal;
+        }
+    }
+}
+
+/// Substitution candidate scoring (Section 6). Lives here so the coach
+/// state is the single source of truth for "what does this team want
+/// right now". The substitutions module reads `tactical_need_for` to
+/// pick which position group to bring on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TacticalNeed {
+    /// Trailing late — bring on attackers for goals.
+    Chasing,
+    /// Leading and absorbing — bring on defenders / DM.
+    ProtectingLead,
+    /// Outpassed in midfield — bring on a CM/DM with passing/vision.
+    LosingMidfield,
+    /// Being pressed off the ball — composure / first touch / passing.
+    BeingPressed,
+    /// Need crosses / wing service.
+    NeedingCrosses,
+    /// No urgent need — fatigue rotation only.
+    Fatigue,
+}
+
+impl TacticalNeed {
+    /// Decide the most pressing tactical need for a team given match
+    /// state and rolling metrics. Order matters — the first match wins.
+    pub fn from_state(
+        score_diff: i8,
+        match_progress: f32,
+        avg_team_condition: f32,
+        metrics: RollingTeamMetrics,
+    ) -> Self {
+        let late = match_progress > 0.66;
+        if late && score_diff < 0 {
+            return TacticalNeed::Chasing;
+        }
+        if late && score_diff > 0 && metrics.field_tilt_last_10 > 0.55 {
+            return TacticalNeed::ProtectingLead;
+        }
+        if metrics.possession_last_10 < 0.42 && metrics.dangerous_turnovers_last_10 >= 3 {
+            return TacticalNeed::LosingMidfield;
+        }
+        if metrics.dangerous_turnovers_last_10 >= 4 || avg_team_condition < 0.40 {
+            return TacticalNeed::BeingPressed;
+        }
+        if score_diff <= 0 && match_progress > 0.55 && metrics.shots_for_last_15 < 2 {
+            return TacticalNeed::NeedingCrosses;
+        }
+        TacticalNeed::Fatigue
     }
 }

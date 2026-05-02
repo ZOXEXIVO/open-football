@@ -143,6 +143,16 @@ impl Ball {
                 // shot flag credits a phantom save and inflates the
                 // saves/on-target ratio above 100%.
                 self.cached_shot_target = None;
+                let interceptor_team = players
+                    .iter()
+                    .find(|p| p.id == interceptor_id)
+                    .map(|p| p.team_id)
+                    .unwrap_or(0);
+                let tick = self.current_tick_cached;
+                self.record_touch(interceptor_id, interceptor_team, tick, true);
+                self.offside_snapshot = None;
+                self.pass_origin_restart =
+                    crate::r#match::PassOriginRestart::OpenPlay;
                 events.add_ball_event(BallEvent::Intercepted(interceptor_id, self.previous_owner));
             }
         }
@@ -161,7 +171,7 @@ impl Ball {
     /// Both are scoped to unowned balls with `in_flight_state > 0`.
     pub fn try_block_shot(&mut self, players: &[MatchPlayer], events: &mut EventCollection) {
         // Only live shots — no cache means no shot in flight, no block.
-        let shot_target = match self.cached_shot_target {
+        let _shot_target = match self.cached_shot_target {
             Some(t) => t,
             None => return,
         };
@@ -281,56 +291,130 @@ impl Ball {
             }
         }
 
-        // Threshold lowered from 0.08 → 0.05 so partial-line defenders
-        // still occasionally block. A 5% per-attempt rate with ~13
-        // shots/team gives ~0.65 additional blocks/team/match from
-        // the tail — matches real football's "sliding block" variance.
-        if best_chance > 0.05 {
-            if let Some(blocker_id) = best_blocker {
-                // Ball deflects off the defender.
-                //
-                // Critical correction from the first version of this
-                // code: previously we just scaled velocity by 0.2 and
-                // made the blocker owner. That kept the ball moving
-                // toward the defender's own goal at ~1.1 u/tick — and
-                // since the ball owner can drift up to 15u from the
-                // ball before ownership drops, a block inside the
-                // penalty box would see the ball escape ownership and
-                // cross the goal line as an unowned ball → registered
-                // as a goal from the attacker's side. That produced
-                // matches like "9 goals from 6 shots" in real-data
-                // sims and was the source of the remaining blowout
-                // outliers.
-                //
-                // Fix: snap the ball to the blocker's position and
-                // reverse it along the shot direction. Real deflected
-                // shots rebound away from the defender's goal, not
-                // through it. Small random angle + outward component
-                // so the ball doesn't reliably come back on the same
-                // line.
-                if let Some(blocker) = players.iter().find(|p| p.id == blocker_id) {
-                    self.position = blocker.position;
-                    self.position.z = 0.0;
-                }
-                let reverse_speed = ball_velocity_2d * 0.25;
-                // Random deflection: ±45° off the reverse direction.
-                let angle: f32 = (rand::random::<f32>() - 0.5) * 1.56;
-                let rev_x = -shot_dir_x * angle.cos() - (-shot_dir_y) * angle.sin();
-                let rev_y = -shot_dir_x * angle.sin() + (-shot_dir_y) * angle.cos();
-                self.velocity.x = rev_x * reverse_speed;
-                self.velocity.y = rev_y * reverse_speed;
-                self.velocity.z = 0.0;
+        // RNG threshold instead of deterministic cutoff: a 30% block
+        // chance still allows the shot through 70% of the time, which
+        // is what we want — defenders block but don't always block.
+        let blocker_id = match best_blocker {
+            Some(id) if rand::random::<f32>() < best_chance.clamp(0.03, 0.38) => id,
+            _ => return,
+        };
 
-                self.previous_owner = self.current_owner.or(self.previous_owner);
-                self.current_owner = Some(blocker_id);
-                self.pass_target_player_id = None;
-                self.flags.in_flight_state = 0;
-                self.claim_cooldown = 20;
-                self.cached_shot_target = None;
-                events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
-                let _ = shot_target;
-            }
+        // Outcome distribution. Real blocks rarely produce clean
+        // possession — they produce loose balls, deflections wide for a
+        // corner, sideways skips, or (rarely) deflections back into
+        // danger. The previous deterministic ownership flow over-credited
+        // defenders.
+        let blocker = match players.iter().find(|p| p.id == blocker_id) {
+            Some(p) => p,
+            None => return,
+        };
+        let blocker_pos = blocker.position;
+        let blocker_team = blocker.team_id;
+        let blocker_side = blocker.side;
+        let composure = (blocker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+        let technique = (blocker.skills.technical.technique / 20.0).clamp(0.0, 1.0);
+        let ball_speed_low_bonus = if ball_velocity_2d < 2.0 { 0.06 } else { 0.0 };
+        let controlled_block_prob =
+            (0.06 + composure * 0.05 + technique * 0.04 + ball_speed_low_bonus).clamp(0.06, 0.30);
+
+        // Deflection direction: away from the shot line, with a random ±45° spread.
+        let angle: f32 = (rand::random::<f32>() - 0.5) * 1.56;
+        let rev_x = -shot_dir_x * angle.cos() - (-shot_dir_y) * angle.sin();
+        let rev_y = -shot_dir_x * angle.sin() + (-shot_dir_y) * angle.cos();
+        let tick = self.current_tick_cached;
+
+        let roll = rand::random::<f32>();
+        let p_controlled = controlled_block_prob;
+        let p_corner = p_controlled + 0.23;
+        let p_safe = p_corner + 0.23;
+        let p_loose = p_safe + 0.40; // ~40% loose central rebound
+        // remainder ~14% → unlucky deflection toward goal (slows but stays live)
+
+        self.position = blocker_pos;
+        self.position.z = 0.0;
+        self.previous_owner = self.current_owner.or(self.previous_owner);
+        self.pass_target_player_id = None;
+        self.cached_shot_target = None;
+        self.record_touch(blocker_id, blocker_team, tick, false);
+        self.offside_snapshot = None;
+        self.pass_origin_restart = crate::r#match::PassOriginRestart::OpenPlay;
+
+        if roll < p_controlled {
+            // Clean block — defender gets the ball at his feet.
+            self.velocity = Vector3::zeros();
+            self.current_owner = Some(blocker_id);
+            self.flags.in_flight_state = 0;
+            self.claim_cooldown = 25;
+            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
+            return;
         }
+
+        if roll < p_corner {
+            // Deflection wide — push the ball toward the defender's own
+            // endline so it crosses out of play. The endline resolver
+            // will then award a corner (defender = last toucher, side
+            // matches → corner for attackers).
+            let endline_x = match blocker_side {
+                Some(crate::r#match::PlayerSide::Left) => 0.0_f32,
+                Some(crate::r#match::PlayerSide::Right) => self.field_width,
+                None => self.position.x + rev_x * 8.0,
+            };
+            let dx = endline_x - self.position.x;
+            let dist = dx.abs().max(1.0);
+            let speed = (ball_velocity_2d * 0.6).clamp(2.0, 5.0);
+            self.velocity.x = (dx / dist) * speed;
+            // Slight outward y-component so the ball goes wide of the post.
+            self.velocity.y = if rand::random::<f32>() < 0.5 { -1.0 } else { 1.0 } * 1.2;
+            self.velocity.z = 0.0;
+            self.current_owner = None;
+            self.flags.in_flight_state = 30;
+            self.claim_cooldown = 0;
+            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
+            return;
+        }
+
+        if roll < p_safe {
+            // Safe sideways deflection — perpendicular skip away from
+            // both goals. Loose ball; either team can recover.
+            let safe_speed = (ball_velocity_2d * 0.35).clamp(1.5, 3.5);
+            // Rotate shot direction 90° (sign chosen by random) to skip sideways.
+            let sign = if rand::random::<f32>() < 0.5 { -1.0 } else { 1.0 };
+            self.velocity.x = -shot_dir_y * sign * safe_speed;
+            self.velocity.y = shot_dir_x * sign * safe_speed;
+            self.velocity.z = 0.0;
+            self.current_owner = None;
+            self.flags.in_flight_state = 25;
+            self.claim_cooldown = 0;
+            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
+            return;
+        }
+
+        if roll < p_loose {
+            // Loose central rebound — ball trickles in front of the
+            // defender, often producing a second-ball contest.
+            let loose_speed = (ball_velocity_2d * 0.30).clamp(1.0, 2.8);
+            self.velocity.x = rev_x * loose_speed;
+            self.velocity.y = rev_y * loose_speed;
+            self.velocity.z = 0.0;
+            self.current_owner = None;
+            self.flags.in_flight_state = 20;
+            self.claim_cooldown = 0;
+            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
+            return;
+        }
+
+        // Unlucky deflection: ball loses pace but keeps drifting toward
+        // goal. The shot flag is already cleared, so the keeper save
+        // pipeline won't credit a phantom save — but the ball is still
+        // live and can be a tap-in opportunity.
+        let unlucky_speed = (ball_velocity_2d * 0.50).clamp(1.5, 3.5);
+        self.velocity.x = shot_dir_x * unlucky_speed * 0.7;
+        self.velocity.y = shot_dir_y * unlucky_speed * 0.7;
+        self.velocity.z = 0.0;
+        self.current_owner = None;
+        self.flags.in_flight_state = 25;
+        self.claim_cooldown = 0;
+        events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
     }
 
     /// Goalkeeper save check. Runs during shot flight: when the ball
@@ -385,6 +469,9 @@ impl Ball {
             PlayerSide::Right => self.position.x > goal_x,
         };
         if past_goal_line {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.cached_shot_target = None;
             return;
         }
@@ -392,8 +479,14 @@ impl Ball {
         let dist_to_goal_x = (self.position.x - goal_x).abs();
         let ball_vx = self.velocity.x.abs().max(0.5);
         if dist_to_goal_x > ball_vx * 2.5 {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_TICKS_OUT_OF_REACH
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return;
         }
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_TICKS_REACHED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Ball must still be traveling toward that goal line.
         let moving_toward_goal = match shot_target.defending_side {
@@ -477,26 +570,153 @@ impl Ball {
         let skill_mult = 0.45 + skill * 0.35;
         let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.05, 0.55);
 
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_PHYSICS_FIRED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         if rand::random::<f32>() >= save_prob {
             return; // Keeper beaten — shot goes on.
         }
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_PHYSICS_PASSED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        // Save made. Stop the ball, hand it to the keeper, clear the
-        // shot flag, and emit BallEvent::Claimed. The save is silent
-        // at this layer — handle_caught_ball_event won't credit
-        // because cached_shot_target is gone — but the GK Catching
-        // state running a per-tick save roll BEFORE this physics-level
-        // save fires already credits saves through the gated handler.
-        // try_save_shot is the safety net that catches shots the
-        // state-machine catch missed.
+        // Save outcome distribution. Catch / safe parry / dangerous
+        // parry / corner — the previous code always caught.
+        //   catch_prob   = 0.12 + handling*0.28 + positioning*0.12
+        //                  - shot_power*0.18 - reach_stretch*0.18
+        //   safe_parry   = 0.20 + reflexes*0.12 + handling*0.08 + agility*0.05
+        //   dangerous    = remainder
+        let positioning = (keeper.skills.mental.positioning / 20.0).clamp(0.0, 1.0);
+        let shot_power_norm = (ball_speed / 8.0).clamp(0.0, 1.0);
+        let reach_stretch = reach_ratio;
+        let catch_prob = (0.12 + scaled_handling * 0.28 + positioning * 0.12
+            - shot_power_norm * 0.18
+            - reach_stretch * 0.18)
+            .clamp(0.04, 0.62);
+        let safe_parry_prob = (0.20 + scaled_reflexes * 0.12 + scaled_handling * 0.08
+            + scaled_agility * 0.05)
+            .clamp(0.12, 0.52);
+
+        let keeper_id = keeper.id;
+        let keeper_pos = keeper.position;
+        let keeper_team = keeper.team_id;
+        let keeper_side = keeper.side;
+
+        let outcome_roll = rand::random::<f32>();
+        let p_catch = catch_prob;
+        let p_safe = (catch_prob + safe_parry_prob).min(0.92);
+
         self.position.z = 0.0;
-        self.velocity = Vector3::zeros();
         self.previous_owner = self.current_owner.or(self.previous_owner);
-        self.current_owner = Some(keeper.id);
         self.pass_target_player_id = None;
-        self.flags.in_flight_state = 0;
+        // Stage the save credit before clearing the shot target. This
+        // marker is consumed by the event-dispatch step so the GK earns
+        // a save in the stats sheet and the shooter's on-target count
+        // increments. Without this, the physics save changes ball state
+        // (catch/parry) but bypasses the state-machine save events that
+        // were the only path crediting saves — leaving ~90% of resolved
+        // shots stat-less.
+        if let Some(shooter_id) = self.previous_owner {
+            self.pending_save_credit = Some((keeper_id, shooter_id));
+        }
         self.cached_shot_target = None;
-        self.claim_cooldown = 200;
-        events.add_ball_event(BallEvent::Claimed(keeper.id));
+        let tick = self.current_tick_cached;
+        self.offside_snapshot = None;
+        self.pass_origin_restart = crate::r#match::PassOriginRestart::OpenPlay;
+
+        if outcome_roll < p_catch {
+            // Clean catch — keeper holds.
+            self.position = keeper_pos;
+            self.position.z = 0.0;
+            self.velocity = Vector3::zeros();
+            self.current_owner = Some(keeper_id);
+            self.flags.in_flight_state = 0;
+            self.claim_cooldown = 200;
+            self.record_touch(keeper_id, keeper_team, tick, true);
+            events.add_ball_event(BallEvent::Claimed(keeper_id));
+            return;
+        }
+
+        if outcome_roll < p_safe {
+            // Safe parry — palmed wide for a corner OR over the bar.
+            // Push the ball toward the keeper's own endline outside the
+            // post so the endline resolver awards a corner.
+            let endline_x = match keeper_side {
+                Some(crate::r#match::PlayerSide::Left) => -1.0_f32,
+                Some(crate::r#match::PlayerSide::Right) => self.field_width + 1.0,
+                None => self.position.x,
+            };
+            let dx = endline_x - self.position.x;
+            let dist = dx.abs().max(1.0);
+            let parry_speed = 4.0_f32;
+            self.velocity.x = (dx / dist) * parry_speed;
+            // Sideways spread so it goes wide of the post.
+            let goal_y_for_side = match keeper_side {
+                Some(crate::r#match::PlayerSide::Left) => context.goal_positions.left.y,
+                Some(crate::r#match::PlayerSide::Right) => context.goal_positions.right.y,
+                None => self.position.y,
+            };
+            let sign = if self.position.y < goal_y_for_side {
+                -1.0
+            } else {
+                1.0
+            };
+            self.velocity.y = sign * 2.5;
+            self.velocity.z = 0.0;
+            self.current_owner = None;
+            self.flags.in_flight_state = 30;
+            self.claim_cooldown = 0;
+            self.record_touch(keeper_id, keeper_team, tick, false);
+            // Save was successful but ball is still loose — emit
+            // Intercepted so the rating helper still sees the keeper
+            // touched the ball, and the endline resolver awards the
+            // corner on the next tick.
+            events.add_ball_event(BallEvent::Intercepted(keeper_id, self.previous_owner));
+            return;
+        }
+
+        // Dangerous parry — ball spills off the keeper's hands.
+        // Real goalkeepers under pressure push the ball toward the side
+        // they're already diving, not back into the central goalmouth
+        // where the attacking team gets a free tap-in. The previous
+        // ±15u y-spread around the ball position landed ~50% of parries
+        // in the six-yard tap-in lane.
+        let drop_distance = 12.0 + rand::random::<f32>() * 18.0;
+        let drop_x = match keeper_side {
+            Some(crate::r#match::PlayerSide::Left) => keeper_pos.x + drop_distance,
+            Some(crate::r#match::PlayerSide::Right) => keeper_pos.x - drop_distance,
+            None => keeper_pos.x,
+        };
+        // Outward y-bias: push the ball *away* from the goal centre. If
+        // the ball was already lateral, push further laterally; for
+        // central shots, pick a random side and push 14-30u outward.
+        let goal_center_y = match keeper_side {
+            Some(crate::r#match::PlayerSide::Left) => context.goal_positions.left.y,
+            Some(crate::r#match::PlayerSide::Right) => context.goal_positions.right.y,
+            None => self.field_height * 0.5,
+        };
+        let outward_sign = if (self.position.y - goal_center_y).abs() < 1.0 {
+            if rand::random::<f32>() < 0.5 { -1.0 } else { 1.0 }
+        } else {
+            (self.position.y - goal_center_y).signum()
+        };
+        let outward_offset = (14.0 + rand::random::<f32>() * 16.0) * outward_sign;
+        let drop_y = self.position.y + outward_offset
+            + (rand::random::<f32>() - 0.5) * 10.0;
+        let drop_y = drop_y.clamp(0.0, self.field_height);
+        let drop_x = drop_x.clamp(0.0, self.field_width);
+        let dx = drop_x - self.position.x;
+        let dy = drop_y - self.position.y;
+        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+        let parry_speed = 3.5_f32;
+        self.velocity.x = (dx / dist) * parry_speed;
+        self.velocity.y = (dy / dist) * parry_speed;
+        self.velocity.z = 0.0;
+        self.current_owner = None;
+        self.flags.in_flight_state = 30;
+        self.claim_cooldown = 0;
+        self.record_touch(keeper_id, keeper_team, tick, false);
+        events.add_ball_event(BallEvent::Intercepted(keeper_id, self.previous_owner));
     }
 }

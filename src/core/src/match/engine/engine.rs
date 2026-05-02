@@ -172,6 +172,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 fouls,
                 yellow_cards,
                 red_cards,
+                minutes_played: ((context.total_match_time / 60_000) as u16).min(120),
+                key_passes: player.statistics.key_passes,
+                progressive_passes: player.statistics.progressive_passes,
+                progressive_carries: player.statistics.progressive_carries,
+                successful_dribbles: player.statistics.successful_dribbles,
+                attempted_dribbles: player.statistics.attempted_dribbles,
+                successful_pressures: player.statistics.successful_pressures,
+                blocks: player.statistics.blocks,
+                clearances: player.statistics.clearances,
+                errors_leading_to_shot: player.statistics.errors_leading_to_shot,
+                errors_leading_to_goal: player.statistics.errors_leading_to_goal,
+                xg_prevented: player.statistics.xg_prevented,
             };
             stats.match_rating = calculate_match_rating(&stats, player_team_goals, opponent_goals);
 
@@ -589,7 +601,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
                 let period_time = context.time.time;
                 if period_time >= next_sub_time_ms {
-                    process_substitutions(field, context, 2);
+                    // Wall-clock today — the engine doesn't track sim
+                    // date directly. Used only for the youth-protection
+                    // sub branch, where the comparison is age <= 17.
+                    let today = chrono::Utc::now().naive_utc().date();
+                    process_substitutions(field, context, 2, today);
                     let mut rng = rand::rng();
                     next_sub_time_ms = period_time + rng.random_range(5..15) * 60 * 1000;
                 }
@@ -658,7 +674,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// `MatchContext`. `tick_interval` is how many ticks elapsed since
     /// the last refresh — rolling counters scale with it.
     fn refresh_tactical_states(field: &MatchField, context: &mut MatchContext, tick_interval: u32) {
-        use crate::r#match::CoachInstruction;
+        use crate::r#match::{CoachInstruction, TacticalRefreshInputs, TeamTacticalState};
         let home_high_press = matches!(
             context.coach_home.instruction,
             CoachInstruction::PushForward | CoachInstruction::AllOutAttack
@@ -668,46 +684,76 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             CoachInstruction::PushForward | CoachInstruction::AllOutAttack
         );
 
-        let (home_sum, home_count, away_sum, away_count) =
-            field
-                .players
-                .iter()
-                .fold((0u32, 0u32, 0u32, 0u32), |(hs, hc, as_, ac), p| {
+        // One pass over players collects ability + condition aggregates
+        // for both sides. Avoids walking the player list four times.
+        let (home_ca_sum, home_count, home_cond_sum, away_ca_sum, away_count, away_cond_sum) =
+            field.players.iter().fold(
+                (0u32, 0u32, 0.0f32, 0u32, 0u32, 0.0f32),
+                |(hca, hc, hcond, aca, ac, acond), p| {
                     let ca = p.player_attributes.current_ability as u32;
+                    let cond = p.player_attributes.condition as f32 / 10000.0;
                     if p.team_id == context.field_home_team_id {
-                        (hs + ca, hc + 1, as_, ac)
+                        (hca + ca, hc + 1, hcond + cond, aca, ac, acond)
                     } else {
-                        (hs, hc, as_ + ca, ac + 1)
+                        (hca, hc, hcond, aca + ca, ac + 1, acond + cond)
                     }
-                });
+                },
+            );
         let home_avg = if home_count > 0 {
-            (home_sum / home_count) as u16
+            (home_ca_sum / home_count) as u16
         } else {
             0
         };
         let away_avg = if away_count > 0 {
-            (away_sum / away_count) as u16
+            (away_ca_sum / away_count) as u16
         } else {
             0
+        };
+        let home_avg_cond = if home_count > 0 {
+            home_cond_sum / home_count as f32
+        } else {
+            0.5
+        };
+        let away_avg_cond = if away_count > 0 {
+            away_cond_sum / away_count as f32
+        } else {
+            0.5
         };
 
         let home_goals = context.score.home_team.get() as i16;
         let away_goals = context.score.away_team.get() as i16;
         let home_score_diff = (home_goals - away_goals).clamp(-100, 100) as i8;
 
-        crate::r#match::update_tactical_states(
-            &mut context.tactical_home,
-            &mut context.tactical_away,
+        // Tactics are stored on the field side-keyed (left/right). Map
+        // them to home/away by checking which side the home squad
+        // currently occupies — sides swap at half-time.
+        let home_is_left = field
+            .left_side_players
+            .as_ref()
+            .map(|s| s.team_id == context.field_home_team_id)
+            .unwrap_or(true);
+        let (home_tactics, away_tactics) = if home_is_left {
+            (&field.left_team_tactics, &field.right_team_tactics)
+        } else {
+            (&field.right_team_tactics, &field.left_team_tactics)
+        };
+
+        let inputs = TacticalRefreshInputs {
             field,
-            context.field_home_team_id,
+            home_team_id: context.field_home_team_id,
             tick_interval,
-            home_high_press,
-            away_high_press,
+            coach_wants_high_press_home: home_high_press,
+            coach_wants_high_press_away: away_high_press,
             home_score_diff,
-            context.total_match_time,
-            home_avg,
-            away_avg,
-        );
+            match_time_ms: context.total_match_time,
+            home_avg_ability: home_avg,
+            away_avg_ability: away_avg,
+            home_avg_condition: home_avg_cond,
+            away_avg_condition: away_avg_cond,
+            home_tactics,
+            away_tactics,
+        };
+        TeamTacticalState::refresh(&mut context.tactical_home, &mut context.tactical_away, &inputs);
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -735,6 +781,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         field.ball.update_light(context, &field.players, events);
         Self::apply_pending_set_piece_teleport(field);
+        Self::apply_pending_save_credit(field);
 
         // Shot-flight GK reactivity: normally light ticks skip player
         // AI to save CPU, but during a shot the keeper needs continuous
@@ -776,6 +823,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         Self::play_ball(field, context, tick_ctx, events);
         Self::apply_pending_set_piece_teleport(field);
+        Self::apply_pending_save_credit(field);
         // Ownership may have changed inside play_ball (new claim, pass
         // target receive, etc.). Refresh the ball view so player state
         // dispatch sees the current owner — without this, the
@@ -805,6 +853,45 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 p.velocity = nalgebra::Vector3::zeros();
                 p.in_state_time = 0;
             }
+        }
+    }
+
+    /// Consume `Ball::pending_save_credit` left behind by the physics
+    /// save (`try_save_shot`). When the keeper actually changed ball
+    /// state mid-flight (catch, safe parry, dangerous parry), this fires
+    /// the save stat for the keeper and the on-target stat for the
+    /// shooter — matching the events the GK state machine would have
+    /// emitted if the physics save hadn't pre-empted it.
+    fn apply_pending_save_credit(field: &mut MatchField) {
+        let Some((keeper_id, shooter_id)) = field.ball.pending_save_credit.take() else {
+            return;
+        };
+        // Validate teams differ — defence in depth against any
+        // accidental same-team shooter (deflections that route through
+        // the save handler should already be filtered upstream).
+        let keeper_team = field.players.iter().find(|p| p.id == keeper_id).map(|p| p.team_id);
+        let shooter_team = field.players.iter().find(|p| p.id == shooter_id).map(|p| p.team_id);
+        if keeper_team.is_none() || shooter_team.is_none() || keeper_team == shooter_team {
+            return;
+        }
+        if let Some(gk) = field.players.iter_mut().find(|p| p.id == keeper_id) {
+            gk.statistics.saves += 1;
+            gk.statistics.shots_faced += 1;
+        }
+        if let Some(shooter) = field.players.iter_mut().find(|p| p.id == shooter_id) {
+            shooter.memory.credit_shot_on_target();
+        }
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            // Re-use the "catch" site bucket — physics-save outcomes are
+            // catches, parries, and dangerous parries indistinguishably
+            // from the stats viewpoint. The save_pipeline counters above
+            // already separate them at the physics layer.
+            crate::r#match::engine::player::events::players::save_accounting_stats::SAVES_CREDITED[1]
+                .fetch_add(1, Ordering::Relaxed);
+            crate::r#match::engine::player::events::players::save_accounting_stats::ON_TARGET_PAIRED[1]
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 

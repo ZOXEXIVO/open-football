@@ -15,12 +15,103 @@ mod goal;
 mod interactions;
 mod motion;
 mod ownership;
+mod restart;
 mod stall;
 
 use crate::r#match::events::EventCollection;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 use std::collections::VecDeque;
+
+/// Origin of the most recent live pass / restart. Read by the offside
+/// resolver: only goal kicks, throw-ins, and corners are exempt from
+/// offside; free kicks (direct/indirect) and penalties are not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassOriginRestart {
+    OpenPlay,
+    GoalKick,
+    Corner,
+    ThrowIn,
+    /// Generic free kick (legacy / offside fallback). Treated like a
+    /// direct free kick by the offside resolver.
+    FreeKick,
+    /// Foul outside the penalty area, severity Normal+: ball can be shot
+    /// at goal directly.
+    DirectFreeKick,
+    /// Offside or technical infringement: cannot be shot directly into
+    /// goal — needs a touch from a second player first.
+    IndirectFreeKick,
+    /// Foul inside defending penalty area: ball at penalty spot.
+    Penalty,
+}
+
+impl Default for PassOriginRestart {
+    fn default() -> Self {
+        PassOriginRestart::OpenPlay
+    }
+}
+
+impl PassOriginRestart {
+    /// Set-piece restarts that exempt the receiver from offside.
+    pub fn is_offside_exempt(self) -> bool {
+        matches!(
+            self,
+            PassOriginRestart::GoalKick
+                | PassOriginRestart::Corner
+                | PassOriginRestart::ThrowIn
+        )
+    }
+
+    /// True for any free-kick-style restart (direct/indirect/legacy).
+    /// Penalties and corners are NOT free kicks for routine selection.
+    pub fn is_free_kick(self) -> bool {
+        matches!(
+            self,
+            PassOriginRestart::FreeKick
+                | PassOriginRestart::DirectFreeKick
+                | PassOriginRestart::IndirectFreeKick
+        )
+    }
+}
+
+/// Snapshot of the offside-relevant geometry at the moment a pass is
+/// kicked. Stored on the ball for the duration of an in-flight pass so
+/// the offside check can fire on receiver involvement (touch / claim /
+/// active challenge) instead of at pass start.
+#[derive(Debug, Clone, Copy)]
+pub struct OffsideSnapshot {
+    pub origin: PassOriginRestart,
+    pub passer_id: u32,
+    pub passer_side: PlayerSide,
+    pub receiver_id: u32,
+    pub ball_x_at_kick: f32,
+    pub second_last_defender_x: f32,
+    pub receiver_x_at_kick: f32,
+    pub receiver_y_at_kick: f32,
+    pub set_tick: u64,
+}
+
+impl OffsideSnapshot {
+    /// Decide whether the snapshot represents an offside position.
+    /// Tolerance 1.5u absorbs foot-vs-shoulder ambiguity.
+    pub fn is_offside(&self) -> bool {
+        const TOLERANCE: f32 = 1.5;
+        match self.passer_side {
+            PlayerSide::Left => {
+                if self.receiver_x_at_kick <= self.ball_x_at_kick + TOLERANCE {
+                    return false;
+                }
+                self.receiver_x_at_kick > self.second_last_defender_x + TOLERANCE
+            }
+            PlayerSide::Right => {
+                if self.receiver_x_at_kick >= self.ball_x_at_kick - TOLERANCE {
+                    return false;
+                }
+                self.receiver_x_at_kick < self.second_last_defender_x - TOLERANCE
+            }
+        }
+    }
+}
 
 pub struct Ball {
     pub start_position: Vector3<f32>,
@@ -96,6 +187,44 @@ pub struct Ball {
     /// 5.6 u/tick shot). `None` whenever the ball isn't a shot in
     /// flight; cleared on catch, goal, or any ownership event.
     pub cached_shot_target: Option<ShotTarget>,
+
+    /// Per-shot lifecycle marker: when the physics-level `try_save_shot`
+    /// resolves a shot mid-flight (catch / parry / dangerous parry), it
+    /// stores `(keeper_id, shooter_id)` here so the post-tick stat
+    /// credit can fire saves and on-target without relying on the GK
+    /// state machine to also re-detect the same shot.
+    /// Consumed (cleared to `None`) by the event dispatcher once
+    /// stats have been credited. This makes saves-on-target match
+    /// physics-resolved saves 1:1 — the previous architecture had two
+    /// independent save systems (physics and state-machine) where one
+    /// changed ball state without crediting and the other rolled
+    /// independent saves that often missed.
+    pub pending_save_credit: Option<(u32, u32)>,
+
+    /// Last meaningful touch on the ball. Drives restart resolution
+    /// (throw-ins, corners, goal kicks) and pass-origin metadata. Updated
+    /// from any path that hands ownership to a player (claim, intercept,
+    /// block, save, pass) and from foot-deflections that don't transfer
+    /// ownership but still count as a touch for the dead-ball decision.
+    pub last_touch_player_id: Option<u32>,
+    pub last_touch_team_id: Option<u32>,
+    pub last_touch_tick: u64,
+    pub last_touch_was_controlled: bool,
+    /// Latest tick captured at update entry. Lets per-update helpers
+    /// (intercept, block, save, claim, throw-in) record_touch without
+    /// having to thread the tick through every signature.
+    pub current_tick_cached: u64,
+
+    /// Origin of the most recent live pass — set when a PassTo event
+    /// fires from a restart (goal kick, throw-in, corner, free kick).
+    /// Read by the delayed-offside resolver. Resets to OpenPlay on any
+    /// non-restart pass or once the pass-window expires.
+    pub pass_origin_restart: PassOriginRestart,
+    /// Set at pass-kick. Lives for the pass window (~220 ticks) and the
+    /// offside resolver fires the call only when the receiver becomes
+    /// active (touches the ball or claims). Cleared on resolution,
+    /// opponent touch, or expiry.
+    pub offside_snapshot: Option<OffsideSnapshot>,
 }
 
 /// Projection of a shot at the moment it's taken. The `PreparingForSave`
@@ -169,9 +298,89 @@ impl Ball {
             stall_anchor_pos: Vector3::new(x, y, 0.0),
             stall_anchor_tick: 0,
             cached_shot_target: None,
+            pending_save_credit: None,
+            last_touch_player_id: None,
+            last_touch_team_id: None,
+            last_touch_tick: 0,
+            last_touch_was_controlled: false,
+            current_tick_cached: 0,
+            pass_origin_restart: PassOriginRestart::OpenPlay,
+            offside_snapshot: None,
         }
     }
 
+    /// Record a meaningful touch. Drives restart resolution. `controlled`
+    /// distinguishes a clean reception from a deflection / failed save.
+    pub fn record_touch(
+        &mut self,
+        player_id: u32,
+        team_id: u32,
+        tick: u64,
+        controlled: bool,
+    ) {
+        self.last_touch_player_id = Some(player_id);
+        self.last_touch_team_id = Some(team_id);
+        self.last_touch_tick = tick;
+        self.last_touch_was_controlled = controlled;
+    }
+
+    /// Clear the offside snapshot. Called on opponent touch, claim, foul,
+    /// or pass expiry.
+    pub fn clear_offside_snapshot(&mut self) {
+        self.offside_snapshot = None;
+    }
+}
+
+#[allow(dead_code, unused_imports)]
+mod offside_snapshot_tests {
+    use super::*;
+
+    fn snap_left(receiver_x: f32, ball_x: f32, second_last: f32) -> OffsideSnapshot {
+        OffsideSnapshot {
+            origin: PassOriginRestart::OpenPlay,
+            passer_id: 1,
+            passer_side: PlayerSide::Left,
+            receiver_id: 2,
+            ball_x_at_kick: ball_x,
+            second_last_defender_x: second_last,
+            receiver_x_at_kick: receiver_x,
+            receiver_y_at_kick: 200.0,
+            set_tick: 0,
+        }
+    }
+
+    #[test]
+    fn left_attacker_beyond_second_last_is_offside() {
+        // Receiver ahead of ball AND past the second-last defender.
+        let snap = snap_left(700.0, 600.0, 680.0);
+        assert!(snap.is_offside());
+    }
+
+    #[test]
+    fn left_attacker_behind_ball_not_offside() {
+        // Receiver is behind the ball — offside cannot occur.
+        let snap = snap_left(500.0, 600.0, 680.0);
+        assert!(!snap.is_offside());
+    }
+
+    #[test]
+    fn left_attacker_level_with_defender_not_offside() {
+        // Within tolerance — onside.
+        let snap = snap_left(681.0, 600.0, 680.0);
+        assert!(!snap.is_offside());
+    }
+
+    #[test]
+    fn restart_origins_offside_exempt() {
+        assert!(PassOriginRestart::GoalKick.is_offside_exempt());
+        assert!(PassOriginRestart::Corner.is_offside_exempt());
+        assert!(PassOriginRestart::ThrowIn.is_offside_exempt());
+        assert!(!PassOriginRestart::OpenPlay.is_offside_exempt());
+        assert!(!PassOriginRestart::FreeKick.is_offside_exempt());
+    }
+}
+
+impl Ball {
     /// Update cached landing position. Call after physics changes position/velocity.
     #[inline]
     pub fn update_landing_cache(&mut self) {
@@ -185,6 +394,8 @@ impl Ball {
         tick_context: &GameTickContext,
         events: &mut EventCollection,
     ) {
+        self.current_tick_cached = context.current_tick();
+
         // Decrement claim cooldown
         if self.claim_cooldown > 0 {
             self.claim_cooldown -= 1;
@@ -216,7 +427,9 @@ impl Ball {
         self.check_goal(context, events);
         self.check_over_goal(context, players, events);
         self.check_wide_of_goal(context, players, events);
+        self.check_throw_in(context, players, events);
         self.check_boundary_collision(context);
+        self.expire_offside_snapshot(context);
         self.update_landing_cache();
     }
 
@@ -227,6 +440,8 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        self.current_tick_cached = context.current_tick();
+
         if self.claim_cooldown > 0 {
             self.claim_cooldown -= 1;
         }
@@ -242,7 +457,9 @@ impl Ball {
         self.check_goal(context, events);
         self.check_over_goal(context, players, events);
         self.check_wide_of_goal(context, players, events);
+        self.check_throw_in(context, players, events);
         self.check_boundary_collision(context);
+        self.expire_offside_snapshot(context);
         self.update_landing_cache();
     }
 
@@ -338,6 +555,13 @@ impl Ball {
         self.stall_anchor_pos = self.position;
         self.stall_anchor_tick = 0;
         self.cached_shot_target = None;
+        self.pending_save_credit = None;
+        self.last_touch_player_id = None;
+        self.last_touch_team_id = None;
+        self.last_touch_tick = 0;
+        self.last_touch_was_controlled = false;
+        self.pass_origin_restart = PassOriginRestart::OpenPlay;
+        self.offside_snapshot = None;
     }
 
     pub fn clear_player_reference(&mut self, player_id: u32) {

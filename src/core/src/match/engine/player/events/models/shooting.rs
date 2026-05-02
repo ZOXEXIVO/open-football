@@ -1,4 +1,5 @@
 use crate::r#match::StateProcessingContext;
+use crate::r#match::player::strategies::players::ShotType;
 use nalgebra::Vector3;
 
 #[derive(Debug, Clone)]
@@ -8,6 +9,7 @@ pub struct ShootingEventContext {
     pub force: f64,
     pub reason: &'static str,
     pub tick: u64,
+    pub shot_type: ShotType,
 }
 
 impl ShootingEventContext {
@@ -20,6 +22,7 @@ pub struct ShootingEventBuilder {
     from_player_id: Option<u32>,
     target: Option<Vector3<f32>>,
     reason: Option<&'static str>,
+    shot_type: Option<ShotType>,
 }
 
 impl Default for ShootingEventBuilder {
@@ -34,6 +37,7 @@ impl ShootingEventBuilder {
             from_player_id: None,
             target: None,
             reason: None,
+            shot_type: None,
         }
     }
 
@@ -52,6 +56,11 @@ impl ShootingEventBuilder {
         self
     }
 
+    pub fn with_shot_type(mut self, shot_type: ShotType) -> Self {
+        self.shot_type = Some(shot_type);
+        self
+    }
+
     pub fn build(self, ctx: &StateProcessingContext) -> ShootingEventContext {
         ShootingEventContext {
             from_player_id: self.from_player_id.unwrap(),
@@ -59,6 +68,7 @@ impl ShootingEventBuilder {
             force: ctx.player().shoot_goal_power(),
             reason: self.reason.unwrap_or("No reason specified"),
             tick: ctx.current_tick(),
+            shot_type: self.shot_type.unwrap_or(ShotType::FootOpenPlay),
         }
     }
 }

@@ -312,6 +312,17 @@ impl PlayerTraining {
         effects.technical_gains = Self::scale_technical(effects.technical_gains, potential_factor);
         effects.mental_gains = Self::scale_mental(effects.mental_gains, potential_factor);
 
+        // Physical maturity gate: applies *only* to physical_gains so a
+        // 14-year-old's strength/stamina session doesn't pour senior-grade
+        // physical CA onto an early-puberty body. Technical and mental
+        // training are unaffected — drilling ball control or video review
+        // remains useful at every age.
+        let physical_maturity = Self::calculate_physical_maturity_factor(player.age(date.date()));
+        if physical_maturity < 1.0 {
+            effects.physical_gains =
+                Self::scale_physical(effects.physical_gains, physical_maturity);
+        }
+
         // Calculate session performance score (1-20):
         // How well did the player actually execute this session?
         // Based on: gains achieved + effort + coach synergy + randomness
@@ -447,7 +458,15 @@ impl PlayerTraining {
     }
 
     fn calculate_age_training_factor(age: u8) -> f32 {
+        // Under-16 has its own band: technical/mental sessions still
+        // matter for a kid in the academy, but the multiplier is well
+        // below the 16-18 peak. The physical maturity gate (applied
+        // separately to physical_gains in `train`) keeps strength /
+        // stamina / pace work from running away even when the session
+        // type is technical.
         match age {
+            0..=13 => 0.4,
+            14..=15 => 0.7,
             16..=18 => 1.5, // Youth develop quickly
             19..=21 => 1.3,
             22..=24 => 1.1,
@@ -456,6 +475,25 @@ impl PlayerTraining {
             31..=33 => 0.5,
             34..=36 => 0.3,
             _ => 0.1, // Very old players barely improve
+        }
+    }
+
+    /// Physical maturity dampener for training. Applied *only* to
+    /// `physical_gains` so that strength/stamina/pace work doesn't
+    /// inflate adolescent CA. Technical and mental gains track the
+    /// regular age training factor.
+    ///
+    /// Football rationale: an academy kid can drill ball control all day
+    /// and improve, but bench-pressing him into a senior strength frame
+    /// is a multi-year process that no training program can shortcut.
+    fn calculate_physical_maturity_factor(age: u8) -> f32 {
+        match age {
+            0..=13 => 0.20,
+            14 => 0.30,
+            15 => 0.45,
+            16 => 0.70,
+            17 => 0.88,
+            _ => 1.0,
         }
     }
 
@@ -472,10 +510,16 @@ impl PlayerTraining {
         // Gap ratio: 0.0 (no gap) to 1.0 (CA=0, PA=max)
         let gap_ratio = (pa - ca) / pa;
 
-        // Age multiplier: young players benefit more from high potential
+        // Age multiplier. Under-16s deliberately get a *smaller* gap
+        // boost than 16-18s — the previous 1.5 lumped 14-year-olds in
+        // with 18-year-olds and let elite-PA kids accelerate at a peer
+        // 18yo's pace. The biological clock can't be shortcut by PA, so
+        // the under-16 multiplier sits below the developmental window.
         let age = player.age(sim_date);
         let age_mult = match age {
-            0..=18 => 1.5,
+            0..=13 => 0.4,
+            14..=15 => 0.7,
+            16..=18 => 1.5,
             19..=21 => 1.3,
             22..=24 => 1.0,
             25..=27 => 0.6,
@@ -542,12 +586,23 @@ mod training_load_tests {
     }
 
     fn build_player(pos: PlayerPositionType) -> Player {
+        build_player_with_birth(pos, NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(), 100)
+    }
+
+    fn build_player_with_birth(pos: PlayerPositionType, birth: NaiveDate, pa: u8) -> Player {
         let mut attrs = PlayerAttributes::default();
         attrs.condition = 9_000;
         attrs.fitness = 9_000;
+        attrs.potential_ability = pa;
+        attrs.current_ability = (pa as f32 * 0.5) as u8;
         let mut skills = PlayerSkills::default();
         skills.physical.natural_fitness = 14.0;
         skills.physical.match_readiness = 12.0;
+        skills.physical.strength = 10.0;
+        skills.physical.stamina = 10.0;
+        skills.physical.pace = 10.0;
+        skills.physical.agility = 10.0;
+        skills.physical.jumping = 10.0;
         skills.mental.work_rate = 10.0;
         skills.mental.determination = 10.0;
         let mut person = PersonAttributes::default();
@@ -556,7 +611,7 @@ mod training_load_tests {
         PlayerBuilder::new()
             .id(7)
             .full_name(FullName::new("T".to_string(), "P".to_string()))
-            .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+            .birth_date(birth)
             .country_id(1)
             .attributes(person)
             .skills(skills)
@@ -663,6 +718,82 @@ mod training_load_tests {
             "prep readiness {} vs rest readiness {}",
             prep.effects.readiness_change,
             rest.effects.readiness_change
+        );
+    }
+
+    // ── Maturity-aware training gates ────────────────────────────
+
+    #[test]
+    fn under_15_physical_session_caps_strength_gain_below_adult() {
+        // 14-year-old vs 22-year-old, identical PA, same Strength
+        // session. The physical maturity gate must drag the youth's
+        // strength gain materially below the adult's.
+        let coach = StaffStub::default();
+        let s = session(TrainingType::Strength, TrainingIntensity::High);
+        let date = d(2025, 9, 14);
+
+        let young = build_player_with_birth(
+            PlayerPositionType::ForwardLeft,
+            NaiveDate::from_ymd_opt(2011, 1, 1).unwrap(), // 14
+            150,
+        );
+        let adult = build_player_with_birth(
+            PlayerPositionType::ForwardLeft,
+            NaiveDate::from_ymd_opt(2003, 1, 1).unwrap(), // 22
+            150,
+        );
+
+        let young_r = PlayerTraining::train(&young, &coach, &s, date, 0.6);
+        let adult_r = PlayerTraining::train(&adult, &coach, &s, date, 0.6);
+
+        assert!(
+            young_r.effects.physical_gains.strength * 1.5 < adult_r.effects.physical_gains.strength,
+            "14yo strength gain {} too close to 22yo {} — physical maturity gate not biting",
+            young_r.effects.physical_gains.strength,
+            adult_r.effects.physical_gains.strength
+        );
+    }
+
+    #[test]
+    fn under_15_technical_session_not_dampened_below_adult_baseline() {
+        // The maturity gate is *physical-only*. A 14yo doing a passing
+        // session can still progress technically (Henry, Wenger drilled
+        // technique into 13yos profitably). The age training factor
+        // sits at 0.7 vs 1.1 for a 22yo, so the adult still gains more,
+        // but the youth value should be a meaningful fraction of it
+        // (not a near-zero like physical).
+        let coach = StaffStub::default();
+        let s = session(TrainingType::Passing, TrainingIntensity::Moderate);
+        let date = d(2025, 9, 14);
+
+        let young = build_player_with_birth(
+            PlayerPositionType::MidfielderCenter,
+            NaiveDate::from_ymd_opt(2011, 1, 1).unwrap(),
+            150,
+        );
+        let adult = build_player_with_birth(
+            PlayerPositionType::MidfielderCenter,
+            NaiveDate::from_ymd_opt(2003, 1, 1).unwrap(),
+            150,
+        );
+
+        let young_r = PlayerTraining::train(&young, &coach, &s, date, 0.6);
+        let adult_r = PlayerTraining::train(&adult, &coach, &s, date, 0.6);
+
+        let ratio = young_r.effects.technical_gains.passing
+            / adult_r.effects.technical_gains.passing.max(1e-6);
+        assert!(
+            ratio > 0.4,
+            "14yo passing gain {} too small relative to 22yo {} (ratio {})",
+            young_r.effects.technical_gains.passing,
+            adult_r.effects.technical_gains.passing,
+            ratio
+        );
+        assert!(
+            ratio < 1.0,
+            "14yo passing gain {} should still be below 22yo {}",
+            young_r.effects.technical_gains.passing,
+            adult_r.effects.technical_gains.passing
         );
     }
 }

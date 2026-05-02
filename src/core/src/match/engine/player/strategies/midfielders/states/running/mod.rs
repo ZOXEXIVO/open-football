@@ -38,18 +38,24 @@ impl StateProcessingHandler for MidfielderRunningState {
         // fires for the midfielder best positioned to chase (avoids
         // whole midfield collapsing on one runner).
         if !ctx.player.has_ball(ctx)
-            && ctx.team().has_just_lost_possession()
+            && ctx.team().counterpress_window()
             && !ctx.team().is_control_ball()
         {
             let ball_dist = ctx.ball().distance();
-            let intensity = ctx.team().tactics().counter_press_intensity();
-            let counter_press_range = 35.0 + intensity * 45.0;
-            if ball_dist < counter_press_range && ctx.team().is_best_player_to_chase_ball() {
-                if ball_dist < 25.0 {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Tackling,
-                    ));
-                }
+            // Use the per-player eligibility helper so only the
+            // best-positioned 2-3 midfielders engage. The ball-best
+            // chaser check (already enforced at squad level) layers on
+            // top so we don't double-up with a defender or forward who
+            // also won the eligibility roll.
+            let elected = ctx.player().pressure().should_counterpress()
+                && ctx.team().is_best_player_to_chase_ball();
+            let immediate = ball_dist < 25.0;
+            if immediate {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
+            }
+            if elected && ball_dist < 80.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));

@@ -51,6 +51,8 @@ pub fn match_engine_pool() -> &'static r#match::MatchPlayEnginePool {
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::shot_gate_stats;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::player::events::players::save_accounting_stats;
 
 pub mod config;
 pub mod simulator;

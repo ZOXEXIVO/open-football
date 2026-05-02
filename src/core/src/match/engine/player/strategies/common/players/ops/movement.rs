@@ -142,12 +142,21 @@ impl<'p> MovementOperationsImpl<'p> {
     fn calculate_wide_support_position(&self, holder_pos: Vector3<f32>) -> Vector3<f32> {
         let player_pos = self.ctx.player.position;
         let field_height = self.ctx.context.field_size.height as f32;
+        let center_y = field_height / 2.0;
 
-        // Stay wide and ahead of ball
-        let target_y = if player_pos.y < field_height / 2.0 {
-            field_height * 0.1 // Left wing
+        // Lateral target is driven by `team_width_target`: a wide-tactic
+        // attacking phase pushes wingers near the touchline, a compact
+        // low-block keeps them tucked. Polish-spec offset:
+        //   center_y ± field_height * (0.28 + team_width_target * 0.20)
+        // So the outermost target is 0.48 from centre (touchline-ish for
+        // a width 1.0 side) and the innermost is 0.28 for a fully
+        // compact side.
+        let width = self.ctx.team().team_width_target().clamp(0.0, 1.0);
+        let lateral_offset = field_height * (0.28 + width * 0.20);
+        let target_y = if player_pos.y < center_y {
+            center_y - lateral_offset
         } else {
-            field_height * 0.9 // Right wing
+            center_y + lateral_offset
         };
 
         // Stay ahead of ball carrier (increased distance to prevent clustering)

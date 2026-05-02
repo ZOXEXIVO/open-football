@@ -1,3 +1,8 @@
+use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
+use crate::r#match::engine::environment::MatchEnvironment;
+use crate::r#match::engine::psychology::PsychologyState;
+use crate::r#match::engine::referee::RefereeProfile;
+use crate::r#match::engine::set_pieces::SetPieceHistory;
 use crate::r#match::engine::result::{PenaltyShootoutKick, PlayerMatchEndStats};
 use crate::r#match::{
     GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach,
@@ -62,6 +67,32 @@ pub struct MatchContext {
     /// Knockout-format match — enables extra time + penalty shootout when
     /// the score is level at the end of regulation.
     pub is_knockout: bool,
+
+    /// Weather + pitch + crowd + importance. Defaults to a neutral
+    /// fixture; harnesses can override before kickoff.
+    pub environment: MatchEnvironment,
+
+    /// Referee strictness/leniency/card profile. Defaults to a balanced
+    /// referee.
+    pub referee: RefereeProfile,
+
+    /// Recent corner routine history per team — drives anti-repetition
+    /// blocking in `pick_corner_routine`.
+    pub set_piece_history: SetPieceHistory,
+
+    /// Match-time psychology — per-player confidence/nervousness +
+    /// per-team momentum. Lazily populated as players are touched by
+    /// goal/error/card events.
+    pub psychology: PsychologyState,
+
+    /// Pair-keyed teammate chemistry cache. Lazily populated by
+    /// callers that compute one-touch passing / handoff success.
+    pub chemistry: ChemistryMap,
+
+    /// Tactical familiarity per side (0..1) — drives press timing /
+    /// offside trap synchronisation.
+    pub tactical_familiarity_home: TacticalFamiliarity,
+    pub tactical_familiarity_away: TacticalFamiliarity,
 }
 
 impl MatchContext {
@@ -98,6 +129,13 @@ impl MatchContext {
             tactical_home: TeamTacticalState::initial(),
             tactical_away: TeamTacticalState::initial(),
             is_knockout,
+            environment: MatchEnvironment::default(),
+            referee: RefereeProfile::default(),
+            set_piece_history: SetPieceHistory::default(),
+            psychology: PsychologyState::default(),
+            chemistry: ChemistryMap::default(),
+            tactical_familiarity_home: TacticalFamiliarity::default(),
+            tactical_familiarity_away: TacticalFamiliarity::default(),
         }
     }
 

@@ -115,14 +115,24 @@ impl GoalkeeperTacklingState {
         let foul_chance = (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.05;
         let committed_foul = !tackle_success && rng.random::<f32>() < foul_chance;
 
-        // A keeper tackling outside the area nearly always means a
-        // last-man challenge — classify most fouls as Violent (straight red).
+        // GK fouls are usually reckless (last-man challenge / sliding
+        // out late), but the violent/direct-red rate previously sat at
+        // 65% — far higher than real football, where keeper red cards
+        // are rare even on goal-line errors. Spec calibration:
+        //   reckless 45-65% (most last-man fouls)
+        //   violent  8-15%  (genuine deliberate fouls)
+        //   normal   remainder
         let severity = if !committed_foul {
             FoulSeverity::Normal
-        } else if rng.random::<f32>() < 0.65 {
-            FoulSeverity::Violent
         } else {
-            FoulSeverity::Reckless
+            let r = rng.random::<f32>();
+            if r < 0.10 {
+                FoulSeverity::Violent
+            } else if r < 0.65 {
+                FoulSeverity::Reckless
+            } else {
+                FoulSeverity::Normal
+            }
         };
 
         (tackle_success, committed_foul, severity)

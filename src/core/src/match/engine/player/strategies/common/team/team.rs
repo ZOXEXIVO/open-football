@@ -136,6 +136,56 @@ impl<'b> TeamOperationsImpl<'b> {
         self.tactical().game_management_intensity
     }
 
+    /// Risk appetite — willingness to choose the forward / progressive
+    /// option over the safe one. High when chasing late; low when
+    /// leading or game-managing. Drives pass-evaluator forward bias and
+    /// the forward-shooting willingness floor.
+    pub fn risk_appetite(&self) -> f32 {
+        self.tactical().risk_appetite
+    }
+
+    /// Tempo — speed-of-play target. High in transitions, low in
+    /// settled possession or game management.
+    pub fn tempo(&self) -> f32 {
+        self.tactical().tempo
+    }
+
+    /// Build-up patience — how willing the team is to recycle when
+    /// progress is hard. High in possession styles + leads.
+    pub fn build_up_patience(&self) -> f32 {
+        self.tactical().build_up_patience
+    }
+
+    /// Press intensity — how aggressively the team hunts the ball when
+    /// out of possession. Used by defenders / midfielders to decide
+    /// step-up vs drop-off.
+    pub fn press_intensity(&self) -> f32 {
+        self.tactical().press_intensity
+    }
+
+    /// Compactness target — how tight the shape should be vertically
+    /// and horizontally.
+    pub fn compactness_target(&self) -> f32 {
+        self.tactical().compactness_target
+    }
+
+    /// Width target — how spread out laterally we want to be.
+    pub fn team_width_target(&self) -> f32 {
+        self.tactical().team_width_target
+    }
+
+    /// Rest-defence count — how many defenders to keep behind the ball
+    /// during sustained attack.
+    pub fn rest_defense_count(&self) -> u8 {
+        self.tactical().rest_defense_count
+    }
+
+    /// In the counter-press window: just lost the ball, the nearest 2-3
+    /// players should engage instead of falling back.
+    pub fn counterpress_window(&self) -> bool {
+        self.tactical().counterpress_window
+    }
+
     /// Whether the team's coach allows shooting right now (team-level cooldown)
     pub fn can_shoot(&self) -> bool {
         let current_tick = self.ctx.context.current_tick();

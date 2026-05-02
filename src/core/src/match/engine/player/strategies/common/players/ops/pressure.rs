@@ -105,4 +105,43 @@ impl<'p> PressureOperationsImpl<'p> {
     pub fn has_space_around(&self, min_distance: f32) -> bool {
         !self.ctx.players().opponents().exists(min_distance)
     }
+
+    /// Per-player counter-press eligibility. Real football: only the
+    /// nearest 2-3 players hunt the ball after a turnover; the rest
+    /// drop into shape. We pick by a single score combining
+    ///   * distance to the ball (45%)
+    ///   * work_rate    (25%)
+    ///   * anticipation (15%)
+    ///   * condition    (15%)
+    /// Returns true only when the team is in the counter-press window
+    /// AND this player scores above 0.55. The team-shared
+    /// `counterpress_window` flag is the gate; per-player score picks
+    /// who actually engages.
+    pub fn should_counterpress(&self) -> bool {
+        let team = self.ctx.team();
+        if !team.counterpress_window() {
+            return false;
+        }
+        // Press intensity check — a tired or game-managing team
+        // shouldn't even open the counter-press window in practice;
+        // the team layer already throttles `press_intensity`.
+        if team.press_intensity() < 0.20 {
+            return false;
+        }
+        self.counterpress_score() > 0.55
+    }
+
+    /// Raw counterpress score for diagnostics / tie-breaking. Independent
+    /// of the window flag so callers can see the underlying eligibility.
+    pub fn counterpress_score(&self) -> f32 {
+        let dist_to_ball = self.ctx.ball().distance();
+        let distance_score = 1.0 - (dist_to_ball / 120.0).clamp(0.0, 1.0);
+        let work = (self.ctx.player.skills.mental.work_rate / 20.0).clamp(0.0, 1.0);
+        let anticipation =
+            (self.ctx.player.skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
+        let condition =
+            (self.ctx.player.player_attributes.condition_percentage() as f32 / 100.0)
+                .clamp(0.0, 1.0);
+        distance_score * 0.45 + work * 0.25 + anticipation * 0.15 + condition * 0.15
+    }
 }

@@ -1,6 +1,7 @@
 #[macro_use]
 pub mod logs;
 
+pub mod calibration;
 pub mod engine;
 
 pub mod game;

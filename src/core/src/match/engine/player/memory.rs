@@ -43,6 +43,12 @@ pub struct PlayerMemory {
     pub last_shot_tick: u64,
     pub shots_taken: u32,
     pub shots_on_target: u32,
+    /// Tick of the last shot-vs-pass decision the player made, regardless
+    /// of whether a shot fired. Used by the shot-decision cadence so a
+    /// forward in shooting range doesn't roll a fresh willingness die
+    /// every tick — real strikers commit to one decision per ~half-second
+    /// of carrying the ball, not 100 decisions per second.
+    pub last_shot_decision_tick: u64,
 
     pub last_pass_tick: u64,
     pub pass_streak: u32,
@@ -62,6 +68,7 @@ impl PlayerMemory {
             last_shot_tick: 0,
             shots_taken: 0,
             shots_on_target: 0,
+            last_shot_decision_tick: 0,
             last_pass_tick: 0,
             pass_streak: 0,
             last_xg: 0.0,

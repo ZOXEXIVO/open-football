@@ -289,25 +289,36 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 0: Point-blank range — MUST shoot to avoid running
-            // into the goalkeeper. Gated on both player AND team cooldown:
-            // without the team gate a chaotic box scramble produces
-            // "striker A shoots, rebounds to B, B shoots, rebounds to C, …"
-            // with each player having a fresh personal cooldown — four
-            // shots in two seconds from the same possession.
+            // Priority 0: Point-blank range (≤36u, inside the 18-yard box).
+            // Per-tick willingness check — real strikers in the box still
+            // sometimes square the ball or take a touch; they don't fire
+            // 100% of the time. The previous "MUST shoot" path produced
+            // every box entry as a guaranteed shot, which was the dominant
+            // path for unrealistic 100% box conversion. Per-tick rate
+            // ~0.07-0.16 with shot_clarity + skill modulation: ≈40-70%
+            // cumulative across the 5-10 ticks a forward spends in the
+            // box, matching real-football "fires roughly once per 1-2
+            // box entries" — sometimes the cutback is the right play.
             if distance_to_goal <= POINT_BLANK_DISTANCE {
                 if can_shoot {
-                    // Point-blank = mandatory shoot. The old poor-finisher
-                    // escape clause (finishing < 0.3 + teammates nearby)
-                    // routed the forward to Passing even when no pass was
-                    // viable, so a fin=5 striker in the 18-yard box would
-                    // walk into the keeper. Real football: at 18m out
-                    // with the keeper closing, EVERY forward strikes —
-                    // the shot might be a tame one but they attempt it.
-                    return Some(
-                        StateChangeResult::with_forward_state(ForwardState::Shooting)
-                            .with_shot_reason("FWD_RUN_POINT_BLANK"),
-                    );
+                    let pb_clarity = ctx.player().shot_clarity();
+                    let pb_fin = (ctx.player.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
+                    let pb_comp = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+                    let pb_willingness =
+                        (pb_fin * 0.06 + pb_comp * 0.02 + 0.025).clamp(0.025, 0.10)
+                            * (0.50 + pb_clarity * 0.50);
+                    if rand::random::<f32>() < pb_willingness {
+                        return Some(
+                            StateChangeResult::with_forward_state(ForwardState::Shooting)
+                                .with_shot_reason("FWD_RUN_POINT_BLANK"),
+                        );
+                    }
+                    // Hesitated this tick — stay in Running and re-roll
+                    // next tick. With cumulative 40-70% over 5-10 ticks,
+                    // most box entries do produce a shot, but not every
+                    // tick. Critically, this gives the keeper time to
+                    // close the angle.
+                    return None;
                 }
                 // Cooldown active — rebound scenario, don't chase the
                 // keeper. Lay the ball off via a pass instead.
@@ -369,32 +380,37 @@ impl StateProcessingHandler for ForwardRunningState {
             let _ = long_shots;
             let max_shot_distance = 90.0f32;
 
-            // Willingness: a hesitation die-roll per shot opportunity.
-            // Real football: low-finishing forwards pass more than they
-            // shoot, but they DO pull the trigger when the window opens —
-            // they don't watch opportunities roll past them tick after tick.
-            // Targeting ~65% per-tick base for average players so the
-            // clear-shot → fire conversion lands near real shot volume
-            // (~13 shots/team). The previous tighter curve (fin*0.65 +
-            // comp*0.15 + 0.10, clamp 0.25..0.95) averaged 0.50 for a
-            // median player and left the waterfall's willingness drop at
-            // 58.7% — the single biggest remaining shot-suppressor once
-            // the can_shoot contention-skip landed.
-            //   fin 5,  comp 8 : 0.55  (floor — hesitant but still fires)
-            //   fin 10, comp 10: 0.65
-            //   fin 14, comp 12: 0.77
-            //   fin 18, comp 15: 0.87
+            // Willingness: a per-tick trigger for "I shoot now."
+            //
+            // The willingness ROLL fires every tick a forward has the
+            // ball in shooting range and the structural gates pass. With
+            // base ~0.50/tick the cumulative chance over a 5-tick window
+            // is >97%, which is why historic populations ran at 50+
+            // shots/team. Real football: a striker carrying the ball in
+            // shooting range fires roughly once per ~1-2 seconds, NOT
+            // ~5x per second. Calibrated against the per-tick rate so
+            // the cumulative-over-100-ticks chance lands near 50-70%.
+            //
+            // Per-tick base (after gates): ~0.005 (poor) … ~0.030 (elite).
+            //   fin 5,  comp 8 : 0.013
+            //   fin 10, comp 10: 0.018
+            //   fin 14, comp 12: 0.024
+            //   fin 18, comp 15: 0.029
+            //
+            // The shot-clarity factor (from `has_clear_shot()`'s
+            // continuous model) further modulates this so an elite
+            // striker through a clogged-but-passable corridor fires far
+            // less often than the same striker with a yawning lane.
             let fin_factor = (finishing / 20.0).clamp(0.0, 1.0);
             let comp_factor = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-            // Pushed floor 0.55 → 0.70 and constant 0.35 → 0.45 — even
-            // poor finishers pull the trigger when given a clear shot
-            // in a tight, structured opportunity (the gates above already
-            // exclude long-range fliers, defended angles, and rushed
-            // possessions). The willingness gate was dropping 41% of
-            // qualified opportunities, the largest remaining post-gate
-            // shot-suppressor. Average player now fires ~0.80/tick.
+            let clarity = ctx.player().shot_clarity();
+            // Per-tick base 0.008 (poor) … 0.025 (elite). With shots
+            // landing in 11-16 / team band and on-target ~35%, the
+            // population-level conversion holds at ~30% of SOT —
+            // matching real Premier League aggregates.
             let base_willingness =
-                (fin_factor * 0.40 + comp_factor * 0.10 + 0.45).clamp(0.70, 0.95);
+                (fin_factor * 0.020 + comp_factor * 0.005 + 0.006).clamp(0.008, 0.025)
+                    * (0.40 + clarity * 0.60);
 
             // GAME-MANAGEMENT SHOT SUPPRESSION. When the team is protecting
             // a score (lead, late, underdog clinging to a draw) the coach
@@ -424,7 +440,16 @@ impl StateProcessingHandler for ForwardRunningState {
             //   xg ≤ 0.02  → quality_mult 0.15 (hopeful blasts discouraged)
             let exp_xg = ctx.player().shooting().expected_xg();
             let quality_mult = (0.15 + exp_xg * 4.25).clamp(0.15, 1.0);
-            let willingness = base_willingness * gm_suppression * quality_mult;
+
+            // Risk-appetite multiplier — chasing late raises the floor on
+            // hopeful shots (the team needs a goal NOW), leading-late
+            // suppresses them further. risk_appetite is in [0.05, 1.0].
+            // Centred around 0.5 so a "neutral" 0.0-0.0 minute-30 game
+            // sits roughly where the legacy curve put it.
+            let risk_appetite = ctx.team().risk_appetite();
+            let risk_mult = (0.65 + risk_appetite * 0.60).clamp(0.55, 1.20);
+
+            let willingness = base_willingness * gm_suppression * quality_mult * risk_mult;
             let shot_triggered = rand::random::<f32>() < willingness;
 
             // Gate waterfall instrumentation (match-logs only). Counts how
@@ -478,19 +503,76 @@ impl StateProcessingHandler for ForwardRunningState {
             // team in a 0-0 match flipped the coach to `SlowDown`, which
             // made `prefer_possession()` true and silently killed 94%
             // of the remaining shot pipeline.
-            // Hopeless-shot reject: expected xG < 0.04 means a 25-yard
-            // blast at a steep angle, marked, with low finishing — real
-            // strikers don't take this shot. They look for a pass or
-            // dribble. Tighter thresholds (0.06+) caused forwards to
-            // hold the ball forever waiting for box opportunities,
-            // accumulating into very-high-xG shots and blowing goals
-            // out of proportion. 0.04 is a "skip the worst quartile"
-            // filter — keeps medium-range attempts in the mix.
-            let viable_shot = exp_xg >= 0.04;
+            // Hopeless-shot reject. Modern football: a forward only
+            // pulls the trigger when the chance is genuinely there.
+            // We use a phase-aware threshold:
+            //   * baseline 0.08 — premium chance, anyone fires
+            //   * 0.04..0.075 — only if risk_appetite says we need a
+            //     goal NOW (chasing late, attacking tactic)
+            //   * point-blank (<28u) — always allowed, the older
+            //     branch above handled that mandatorily already
+            // Floor is 0.035 — below that the shot is hopeless under
+            // ANY game state (real strikers don't waste possession on
+            // it). The legacy single threshold of 0.04 let too many
+            // 0.04-0.05 xG hopefuls through under non-chasing states.
+            let min_xg: f32 = if risk_appetite >= 0.75 {
+                0.04
+            } else if risk_appetite >= 0.55 {
+                0.06
+            } else {
+                0.08
+            };
+            let min_xg = min_xg.max(0.035);
+            let viable_shot = exp_xg >= min_xg || distance_to_goal < 28.0;
+
+            // === PASS-vs-SHOT EXPECTED-VALUE COMPARISON ===
+            // Even with a viable shot, the right play is often a
+            // cutback or central feed. Compare best pass's expected
+            // value (success_probability × tactical_value, already
+            // computed by the evaluator) to current shot xG, with a
+            // skill-graded margin. Polish-spec margins:
+            //   teamwork > 0.75 → 0.05  (unselfish ball-players)
+            //   normal          → 0.09
+            //   ShootsFromDistance OR teamwork < 0.4 → 0.14  (shoot-first)
+            let teamwork = ctx.player.skills.mental.teamwork / 20.0;
+            let prefers_shot = ctx
+                .player
+                .has_trait(crate::club::player::traits::PlayerTrait::ShootsFromDistance);
+            let pass_margin = pass_deferral_margin(teamwork, prefers_shot);
+
+            // Look ~80u for a better pass option — covers cutback /
+            // square / through-ball range without dragging in long
+            // diagonals. Two adjustments fold in here:
+            //   * If the candidate receiver is heavily marked
+            //     (≥2 opponents within 12u), the "pass" is mostly an
+            //     interception waiting to happen — halve its EV before
+            //     comparing against the shot.
+            //   * The deferral comparison caps pass EV at 0.55 so a
+            //     spectacular cutback EV doesn't override every viable
+            //     shot in the box.
+            let best_pass_ev = ctx
+                .player()
+                .passing()
+                .find_best_pass_option_with_distance(80.0)
+                .map(|(t, _)| {
+                    let eval = crate::r#match::PassEvaluator::evaluate_pass(ctx, ctx.player, &t);
+                    let receiver_opps =
+                        ctx.tick_context.grid.opponents(t.id, 12.0).count();
+                    apply_marked_pass_discount(eval.expected_value, receiver_opps)
+                })
+                .unwrap_or(0.0);
+
+            let defer_to_pass = should_defer_to_pass(
+                exp_xg,
+                best_pass_ev,
+                pass_margin,
+                distance_to_goal,
+            );
 
             let shot_condition_met = has_settled
                 && can_shoot
                 && !defer_to_teammate
+                && !defer_to_pass
                 && distance_to_goal <= max_shot_distance
                 && viable_shot
                 && ctx.player().has_clear_shot();
@@ -544,9 +626,10 @@ impl StateProcessingHandler for ForwardRunningState {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
-            // If we deferred to a better-positioned teammate, route
-            // through Passing — the pass state will pick them as target.
-            if defer_to_teammate && has_settled {
+            // If we deferred to a better-positioned teammate OR the
+            // pass-EV check beat the shot xG, route through Passing —
+            // the pass state will pick the target.
+            if (defer_to_teammate || defer_to_pass) && has_settled {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
@@ -1187,7 +1270,11 @@ impl ForwardRunningState {
 
         let stamina_level = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
         let work_rate = ctx.player.skills.mental.work_rate / 20.0;
-        let intensity = ctx.team().tactics().pressing_intensity();
+        // Team-shared press_intensity already accounts for tactic +
+        // counter-press + condition + game-management, so a tired
+        // late-leading forward stops chasing whether or not the
+        // formation tactic still says "press".
+        let intensity = ctx.team().press_intensity();
 
         // Pressing distance: 60u base (~30m) calibrated to real forward
         // press radii. Real forwards engage at 15-25m (30-50u), and a
@@ -2109,5 +2196,106 @@ impl ForwardRunningState {
 
         // If 3 or more players nearby (congestion), need to clear
         total_nearby >= 3
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Pure helpers extracted from the shot-vs-pass comparison so the polish
+// guards can be unit-tested without spinning up an engine fixture. Keep
+// them top-level + `pub(crate)` so the tests below cover the same code
+// paths the live state machine uses.
+// ──────────────────────────────────────────────────────────────────────
+
+/// Margin (in EV units) by which the best pass option must beat the
+/// current shot xG before a forward defers. Polish-spec curve:
+///   teamwork > 0.75            → 0.05
+///   ShootsFromDistance OR teamwork < 0.4 → 0.14
+///   otherwise                  → 0.09
+pub(crate) fn pass_deferral_margin(teamwork: f32, prefers_shot: bool) -> f32 {
+    if prefers_shot || teamwork < 0.4 {
+        0.14
+    } else if teamwork > 0.75 {
+        0.05
+    } else {
+        0.09
+    }
+}
+
+/// Apply the marked-receiver discount to a candidate pass's expected
+/// value. ≥2 opponents within 12u of the receiver halves the EV — a
+/// pass into that traffic is mostly an interception waiting to happen
+/// and shouldn't talk a forward out of a real shot.
+pub(crate) fn apply_marked_pass_discount(pass_ev: f32, receiver_opponents_within_12u: usize) -> f32 {
+    let marked_factor = if receiver_opponents_within_12u >= 2 { 0.5 } else { 1.0 };
+    pass_ev * marked_factor
+}
+
+/// Decide whether to defer a viable shot to a pass. Caps the pass EV
+/// used in the comparison at 0.55 (no spectacular cutback EV can talk
+/// a striker out of every shot) and never defers a real point-blank
+/// chance (`distance < 24` && `xg >= 0.18`).
+pub(crate) fn should_defer_to_pass(
+    shot_xg: f32,
+    raw_pass_ev: f32,
+    margin: f32,
+    distance_to_goal: f32,
+) -> bool {
+    let point_blank = distance_to_goal < 24.0 && shot_xg >= 0.18;
+    if point_blank {
+        return false;
+    }
+    let pass_ev_for_deferral = raw_pass_ev.min(0.55);
+    pass_ev_for_deferral > shot_xg + margin
+}
+
+#[cfg(test)]
+mod shot_pass_tests {
+    use super::*;
+
+    #[test]
+    fn point_blank_shot_is_never_deferred() {
+        // Even with an absurd 1.0 pass EV, a point-blank chance shoots.
+        assert!(!should_defer_to_pass(0.18, 1.0, 0.05, 23.9));
+        assert!(!should_defer_to_pass(0.20, 1.0, 0.14, 12.0));
+    }
+
+    #[test]
+    fn low_xg_shot_defers_to_clear_cutback() {
+        // 0.05 xG long shot, clean cutback at EV 0.30, normal margin.
+        assert!(should_defer_to_pass(0.05, 0.30, 0.09, 60.0));
+    }
+
+    #[test]
+    fn high_risk_marked_pass_does_not_suppress_good_shot() {
+        // Two markers → discounted pass EV. Even with raw EV 0.6, the
+        // discounted (0.30) doesn't beat a 0.25 shot by the 0.09 margin.
+        let discounted = apply_marked_pass_discount(0.6, 2);
+        assert_eq!(discounted, 0.30);
+        assert!(!should_defer_to_pass(0.25, discounted, 0.09, 35.0));
+    }
+
+    #[test]
+    fn marked_factor_applies_only_with_two_or_more_markers() {
+        assert_eq!(apply_marked_pass_discount(0.6, 0), 0.6);
+        assert_eq!(apply_marked_pass_discount(0.6, 1), 0.6);
+        assert_eq!(apply_marked_pass_discount(0.6, 2), 0.30);
+        assert_eq!(apply_marked_pass_discount(0.6, 3), 0.30);
+    }
+
+    #[test]
+    fn pass_ev_caps_at_zero_point_five_five_for_deferral() {
+        // Raw pass EV 1.5 is unrealistic but should still cap at 0.55,
+        // which doesn't beat a 0.55 xG by the 0.05 high-teamwork margin.
+        assert!(!should_defer_to_pass(0.55, 1.5, 0.05, 30.0));
+        // Same EV easily beats a 0.10 xG, however.
+        assert!(should_defer_to_pass(0.10, 1.5, 0.05, 30.0));
+    }
+
+    #[test]
+    fn margins_match_polish_spec() {
+        assert_eq!(pass_deferral_margin(0.80, false), 0.05);
+        assert_eq!(pass_deferral_margin(0.50, false), 0.09);
+        assert_eq!(pass_deferral_margin(0.30, false), 0.14);
+        assert_eq!(pass_deferral_margin(0.90, true), 0.14);
     }
 }

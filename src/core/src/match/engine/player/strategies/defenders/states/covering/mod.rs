@@ -71,12 +71,16 @@ impl StateProcessingHandler for DefenderCoveringState {
             ));
         }
 
-        // COUNTER-PRESS: Break from covering to press when possession just lost
-        if ctx.team().has_just_lost_possession() {
-            let counter_press = ctx.team().tactics().counter_press_intensity();
-            if counter_press > 0.4 {
+        // COUNTER-PRESS: break from cover into the press only inside
+        // the team-shared counterpress window. press_intensity already
+        // reflects counter-press tactic, defensive-transition state,
+        // condition, and game-management — so a tired late-leading team
+        // won't trigger here.
+        if ctx.team().counterpress_window() {
+            let press = ctx.team().press_intensity();
+            if press > 0.4 {
                 let ball_dist = ctx.ball().distance();
-                let counter_press_range = 30.0 + counter_press * 50.0;
+                let counter_press_range = 35.0 + press * 55.0;
                 if ball_dist < counter_press_range {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Pressing,

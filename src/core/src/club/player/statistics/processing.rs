@@ -363,7 +363,7 @@ mod tests {
         player.statistics = make_stats(15, 4);
 
         // Existing loan placeholder in current season
-        use crate::club::player::statistics::history::CurrentSeasonEntry;
+        use crate::club::player::statistics::history::{CurrentSeasonEntry, EntryKind};
         player.statistics_history.current.push(CurrentSeasonEntry {
             team_name: "Torino".to_string(),
             team_slug: "torino".to_string(),
@@ -376,6 +376,8 @@ mod tests {
             departed_date: None,
             joined_date: make_date(2032, 1, 15),
             seq_id: 0,
+            season_start_year: 2031,
+            kind: EntryKind::LoanIn,
         });
 
         let borrowing = make_team("Torino", "torino");
@@ -460,7 +462,7 @@ mod tests {
         player.statistics = make_stats(0, 0);
 
         // Simulate: loan entry + pre-loan entry already in current
-        use crate::club::player::statistics::history::CurrentSeasonEntry;
+        use crate::club::player::statistics::history::{CurrentSeasonEntry, EntryKind};
         player.statistics_history.current.push(CurrentSeasonEntry {
             team_name: "Torino".to_string(),
             team_slug: "torino".to_string(),
@@ -473,6 +475,8 @@ mod tests {
             departed_date: None,
             joined_date: make_date(2032, 1, 1),
             seq_id: 0,
+            season_start_year: 2031,
+            kind: EntryKind::LoanIn,
         });
         player.statistics_history.current.push(CurrentSeasonEntry {
             team_name: "Juventus".to_string(),
@@ -486,6 +490,8 @@ mod tests {
             departed_date: None,
             joined_date: make_date(2031, 8, 1),
             seq_id: 1,
+            season_start_year: 2031,
+            kind: EntryKind::SeasonSeed,
         });
 
         let team = make_team("Juventus", "juventus");
@@ -510,7 +516,7 @@ mod tests {
         player.statistics = make_stats(5, 2);
 
         // Two stints in current season
-        use crate::club::player::statistics::history::CurrentSeasonEntry;
+        use crate::club::player::statistics::history::{CurrentSeasonEntry, EntryKind};
         player.statistics_history.current.push(CurrentSeasonEntry {
             team_name: "Juventus".to_string(),
             team_slug: "juventus".to_string(),
@@ -523,6 +529,8 @@ mod tests {
             departed_date: None,
             joined_date: make_date(2031, 8, 1),
             seq_id: 0,
+            season_start_year: 2031,
+            kind: EntryKind::SeasonSeed,
         });
         player.statistics_history.current.push(CurrentSeasonEntry {
             team_name: "Torino".to_string(),
@@ -536,6 +544,8 @@ mod tests {
             departed_date: None,
             joined_date: make_date(2032, 1, 1),
             seq_id: 1,
+            season_start_year: 2031,
+            kind: EntryKind::LoanIn,
         });
 
         let team = make_team("Juventus", "juventus");
@@ -1896,11 +1906,11 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Loan return mid-season: no phantom parent entry after return
+    // Loan return mid-season: parent row is preserved across the loan
     // ---------------------------------------------------------------
 
     #[test]
-    fn loan_return_no_phantom_parent_entry() {
+    fn loan_return_preserves_parent_row_with_loan_peer() {
         let mut player = make_player();
 
         let floriana = make_team("Floriana", "floriana");
@@ -1951,7 +1961,7 @@ mod tests {
             "Zabbar 2028/29.\n{desc}"
         );
 
-        // 2029/30: Zabbar 20 apps (loan) — from loan_return snapshot
+        // 2029/30: Zabbar 20 apps (loan)
         let zabbar_2029 = history
             .iter()
             .find(|e| e.season.start_year == 2029 && e.team_slug == "zabbar");
@@ -1962,13 +1972,27 @@ mod tests {
             "Zabbar 2029/30.\n{desc}"
         );
 
-        // NO phantom Floriana 2029/30 — player only spent a few weeks there
+        // 2029/30: Floriana 0 apps — KEPT, because it's the parent club
+        // row for a season the player spent on loan at Zabbar. Career
+        // history must show both rows so the user can see who the player
+        // is contracted to.
         let floriana_2029 = history
             .iter()
             .find(|e| e.season.start_year == 2029 && e.team_slug == "floriana");
         assert!(
-            floriana_2029.is_none(),
-            "Phantom Floriana 2029/30 should be dropped (0 apps, arrived late).\n{desc}"
+            floriana_2029.is_some(),
+            "Parent Floriana 2029/30 must be preserved alongside the Zabbar loan.\n{desc}"
+        );
+        assert_eq!(floriana_2029.unwrap().statistics.played, 0);
+        assert!(!floriana_2029.unwrap().is_loan);
+
+        // 2028/29: Floriana 0 apps — same reasoning, parent of a loan season.
+        let floriana_2028 = history
+            .iter()
+            .find(|e| e.season.start_year == 2028 && e.team_slug == "floriana");
+        assert!(
+            floriana_2028.is_some(),
+            "Parent Floriana 2028/29 must be preserved alongside the Zabbar loan.\n{desc}"
         );
     }
 
@@ -2139,13 +2163,638 @@ mod tests {
             "Juve 2026/27 fee wrong.\n{desc}"
         );
 
-        // Napoli: should have the 12M fee (was in current when guard fired)
-        let napoli_entry = history
+        // Napoli: 12M fee must be preserved. The Aug 22 transfer falls in
+        // season 2027/28, so napoli stays in `current` during the second
+        // 2026 snapshot — the fee is visible via view_items, not via raw
+        // frozen items.
+        let view = player.statistics_history.view_items(None);
+        let napoli_entry = view
             .iter()
             .find(|e| e.team_slug == "napoli" && e.transfer_fee == Some(12_000_000.0));
         assert!(
             napoli_entry.is_some(),
             "Napoli entry with 12M fee must survive the duplicate season guard.\n{desc}"
         );
+        assert_eq!(
+            napoli_entry.unwrap().season.start_year,
+            2027,
+            "Napoli row should be season 2027/28.\n{desc}"
+        );
+    }
+
+    // ===================================================================
+    // Redesigned-invariants tests
+    // ===================================================================
+
+    /// 1. Free transfer after release: stats stay at the original club, the
+    ///    new club gets a 0-app row with `Some(0.0)` fee.
+    #[test]
+    fn release_then_free_agent_signing_keeps_stats_at_old_club() {
+        let mut player = make_player();
+        let club_a = make_team("Club A", "club-a");
+        let club_b = make_team("Club B", "club-b");
+
+        player
+            .statistics_history
+            .seed_initial_team(&club_a, make_date(2026, 8, 1), false);
+
+        // Twelve games at A, then released in January
+        player.statistics = make_stats(12, 2);
+        player.on_release(&club_a, make_date(2027, 1, 15));
+        assert_eq!(player.statistics.played, 0);
+
+        // Sit on the free pool for a few days, then sign B
+        player.on_free_agent_signing(&club_b, make_date(2027, 1, 20));
+        assert_eq!(player.statistics.played, 0);
+
+        // No frozen items yet — but the view should reflect both rows.
+        let view = player.statistics_history.view_items(None);
+        let a = view
+            .iter()
+            .find(|e| e.team_slug == "club-a")
+            .expect("Club A row missing from view");
+        assert_eq!(a.statistics.played, 12, "Club A apps should be preserved");
+        assert!(!a.is_loan);
+
+        let b = view
+            .iter()
+            .find(|e| e.team_slug == "club-b")
+            .expect("Club B row missing from view");
+        assert_eq!(b.transfer_fee, Some(0.0), "Free signing should mark fee=0");
+        assert_eq!(b.statistics.played, 0);
+
+        // No "Free Agent" row exists.
+        assert!(
+            !view
+                .iter()
+                .any(|e| e.team_slug == "free-agent"
+                    || e.team_name.eq_ignore_ascii_case("Free Agent")),
+            "Free-agent period must not produce a club row"
+        );
+
+        // Now end the season — both rows must materialise as separate items.
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &club_b, make_date(2027, 8, 1));
+
+        let items = &player.statistics_history.items;
+        let a_item = items.iter().find(|e| e.team_slug == "club-a");
+        assert!(a_item.is_some(), "Club A row must freeze");
+        assert_eq!(a_item.unwrap().statistics.played, 12);
+
+        let b_item = items.iter().find(|e| e.team_slug == "club-b");
+        assert!(b_item.is_some(), "Club B row must survive (free fee)");
+        assert_eq!(b_item.unwrap().transfer_fee, Some(0.0));
+    }
+
+    /// 2. Free-agent signing after a stale prior-season current entry that
+    ///    was never flushed: the prior season freezes correctly, the new
+    ///    signing creates a destination row in the *current* season.
+    #[test]
+    fn free_agent_signing_flushes_stale_prior_season() {
+        let mut player = make_player();
+        let club_a = make_team("Club A", "club-a");
+        let club_b = make_team("Club B", "club-b");
+
+        player
+            .statistics_history
+            .seed_initial_team(&club_a, make_date(2025, 8, 1), false);
+        player.statistics = make_stats(18, 4);
+        player.on_release(&club_a, make_date(2026, 5, 20));
+        // Stale entry sits in current with departed_date set, season=2025.
+
+        // Skip the country snapshot — sign a free agent in the new season.
+        player.on_free_agent_signing(&club_b, make_date(2026, 9, 1));
+
+        // Stale 2025 entry must have been frozen by flush_stale_entries.
+        let items = &player.statistics_history.items;
+        let a_item = items
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "club-a")
+            .expect("Stale Club A row must be frozen");
+        assert_eq!(a_item.statistics.played, 18);
+
+        // Destination is in the new season.
+        let view = player.statistics_history.view_items(None);
+        let b = view
+            .iter()
+            .find(|e| e.team_slug == "club-b")
+            .expect("Club B row missing");
+        assert_eq!(b.season.start_year, 2026);
+        assert_eq!(b.transfer_fee, Some(0.0));
+    }
+
+    /// 3. Same club two spells in one season: A → B (loan) → A (return).
+    ///    Loan stats stay at B; A's stats from before the loan are not
+    ///    overwritten by the post-return zero stats.
+    #[test]
+    fn same_club_two_spells_one_season_keeps_pre_loan_stats() {
+        let mut player = make_player();
+        let club_a = make_team("Club A", "club-a");
+        let club_b = make_team("Club B", "club-b");
+
+        player
+            .statistics_history
+            .seed_initial_team(&club_a, make_date(2026, 8, 1), false);
+
+        // Pre-loan: 8 games at A
+        player.statistics = make_stats(8, 1);
+        player.on_loan(&club_a, &club_b, 0.0, make_date(2027, 1, 15));
+
+        // 14 games at B on loan
+        player.statistics = make_stats(14, 3);
+        player.on_loan_return(&club_b, &club_a, make_date(2027, 5, 1));
+
+        // Zero post-return games
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &club_a, make_date(2027, 8, 1));
+
+        let items = &player.statistics_history.items;
+        let a_item = items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-a" && !e.is_loan)
+            .expect("Club A row missing");
+        assert_eq!(
+            a_item.statistics.played, 8,
+            "Pre-loan Club A stats must be preserved"
+        );
+
+        let b_item = items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-b" && e.is_loan)
+            .expect("Club B loan row missing");
+        assert_eq!(b_item.statistics.played, 14);
+    }
+
+    /// 4. View during active season: each frozen row keeps its own season
+    ///    label; live stats only land on the active current spell.
+    #[test]
+    fn view_uses_per_entry_season_and_only_active_gets_live_stats() {
+        let mut player = make_player();
+        let club_a = make_team("Club A", "club-a");
+        let club_b = make_team("Club B", "club-b");
+
+        player
+            .statistics_history
+            .seed_initial_team(&club_a, make_date(2025, 8, 1), false);
+        player.statistics = make_stats(20, 5);
+        player.on_season_end(Season::new(2025), &club_a, make_date(2026, 8, 1));
+
+        // Mid-season transfer to B
+        player.statistics = make_stats(4, 1);
+        player.on_transfer(&club_a, &club_b, 1_000_000.0, make_date(2026, 11, 1));
+
+        // Live: 11 games at B so far
+        let mut live = make_stats(11, 2);
+        live.average_rating = 7.4;
+        let view = player.statistics_history.view_items(Some(&live));
+
+        let a_2025 = view
+            .iter()
+            .find(|e| e.season.start_year == 2025 && e.team_slug == "club-a")
+            .expect("A 2025 missing");
+        assert_eq!(a_2025.statistics.played, 20);
+
+        // The in-current departed entry for A 2026 should appear with 4 apps,
+        // unaffected by the live B stats.
+        let a_2026_row = view
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-a")
+            .expect("A 2026 stint missing");
+        assert_eq!(
+            a_2026_row.statistics.played, 4,
+            "Pre-transfer A stint should keep its 4 apps, not get live stats"
+        );
+
+        let b_2026 = view
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-b")
+            .expect("B 2026 active missing");
+        assert_eq!(
+            b_2026.statistics.played, 11,
+            "Active row must receive live stats"
+        );
+        assert_eq!(b_2026.transfer_fee, Some(1_000_000.0));
+    }
+
+    /// 5. Loan return that snapshots stats even when the same-season
+    ///    borrowing entry was already frozen (cross-country calendar):
+    ///    the games still land at the borrowing club, never on the parent.
+    #[test]
+    fn loan_return_after_borrowing_snapshot_preserves_games() {
+        let mut player = make_player();
+        let parent = make_team("Parent FC", "parent-fc");
+        let borrow = make_team("Borrow FC", "borrow-fc");
+
+        player
+            .statistics_history
+            .seed_initial_team(&parent, make_date(2026, 8, 1), false);
+
+        // Loan in August
+        player.statistics = make_stats(0, 0);
+        player.on_loan(&parent, &borrow, 0.0, make_date(2026, 8, 6));
+
+        // 12 games at borrowing
+        player.statistics = make_stats(12, 2);
+
+        // Borrowing country snapshots first (early February)
+        player.on_season_end(Season::new(2026), &borrow, make_date(2027, 2, 1));
+
+        // 3 more games before loan ends in May (still season 2026 calendar-wise)
+        player.statistics = make_stats(3, 1);
+        player.on_loan_return(&borrow, &parent, make_date(2027, 5, 31));
+
+        let view = player.statistics_history.view_items(None);
+        let borrow_total: u16 = view
+            .iter()
+            .filter(|e| e.team_slug == "borrow-fc")
+            .map(|e| e.statistics.played)
+            .sum();
+        assert_eq!(
+            borrow_total, 15,
+            "All 15 games (12 frozen + 3 post-snapshot) should sit under borrow-fc"
+        );
+
+        let parent_games_in_2026: u16 = view
+            .iter()
+            .filter(|e| e.team_slug == "parent-fc" && e.season.start_year == 2026)
+            .map(|e| e.statistics.played)
+            .sum();
+        assert_eq!(
+            parent_games_in_2026, 0,
+            "No loan games may migrate onto the parent club"
+        );
+    }
+
+    /// 6. Cross-country loan calendar with fee preservation: borrowing-side
+    ///    snapshot freezes the loan early; later parent-side activity still
+    ///    leaves the loan row with its fee intact.
+    #[test]
+    fn cross_country_loan_fee_survives_borrowing_first_snapshot() {
+        let mut player = make_player();
+        let parent = TeamInfo {
+            name: "Parent".to_string(),
+            slug: "parent".to_string(),
+            reputation: 400,
+            league_name: "Parent League".to_string(),
+            league_slug: "parent-league".to_string(),
+        };
+        let borrow = TeamInfo {
+            name: "Borrow".to_string(),
+            slug: "borrow".to_string(),
+            reputation: 200,
+            league_name: "Borrow League".to_string(),
+            league_slug: "borrow-league".to_string(),
+        };
+
+        player
+            .statistics_history
+            .seed_initial_team(&parent, make_date(2026, 8, 1), false);
+        player.statistics = make_stats(2, 0);
+        player.on_loan(&parent, &borrow, 75_000.0, make_date(2026, 8, 10));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
+        ));
+        player.statistics = make_stats(8, 1);
+        player.on_season_end(Season::new(2026), &borrow, make_date(2027, 2, 5));
+
+        let frozen_loan = player
+            .statistics_history
+            .items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "borrow")
+            .expect("Borrow loan row missing");
+        assert_eq!(frozen_loan.transfer_fee, Some(75_000.0));
+        assert_eq!(frozen_loan.statistics.played, 8);
+        assert!(frozen_loan.is_loan);
+
+        let frozen_parent = player
+            .statistics_history
+            .items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "parent")
+            .expect("Parent row missing");
+        assert_eq!(frozen_parent.statistics.played, 2);
+    }
+
+    /// 7. Long 0-app stint: kept when ≥ 35% of season covered (no fee, no
+    ///    games), even when not the first career row.
+    #[test]
+    fn long_zero_app_stint_above_threshold_is_kept_even_for_non_first_row() {
+        let mut player = make_player();
+        let club_a = make_team("Club A", "club-a");
+        let club_b = make_team("Club B", "club-b");
+
+        player
+            .statistics_history
+            .seed_initial_team(&club_a, make_date(2025, 8, 1), false);
+        player.statistics = make_stats(20, 0);
+        player.on_season_end(Season::new(2025), &club_a, make_date(2026, 8, 1));
+
+        // Season 2026/27: stays at A through Aug→Mar (~50% of season), then
+        // transfers to B with 0 fee shown as paid in code below; no apps.
+        player.statistics = make_stats(0, 0);
+        player.on_transfer(&club_a, &club_b, 0.0, make_date(2027, 3, 15));
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &club_b, make_date(2027, 8, 1));
+
+        let items = &player.statistics_history.items;
+        let a_2026 = items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-a");
+        assert!(
+            a_2026.is_some(),
+            "Long 0-app A stint covering ≥35% of the season must be kept"
+        );
+    }
+
+    /// 8. First-career row must survive an immediate loan-out — even when
+    ///    the player never played a minute for the starting club and the
+    ///    pre-loan stint covers <35% of the season. The starting-club row
+    ///    is the player's career root and is never collapsed before it
+    ///    has been frozen at least once.
+    #[test]
+    fn initial_club_zero_game_record_survives_immediate_loan() {
+        let mut player = make_player();
+        let club_a = make_team("Club A", "club-a");
+        let club_b = make_team("Club B", "club-b");
+
+        // Generated player starts at Club A on the season opening date.
+        player
+            .statistics_history
+            .seed_initial_team(&club_a, make_date(2026, 8, 1), false);
+
+        // Loaned out two weeks later — far below the 35% season-share threshold.
+        // Player never made a competitive appearance for Club A.
+        player.statistics = make_stats(0, 0);
+        player.on_loan(&club_a, &club_b, 25_000.0, make_date(2026, 8, 15));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
+        ));
+
+        // Mid-season view (no frozen items yet) — the starting-club row must be
+        // visible and unaffected by live B stats on the active loan spell.
+        player.statistics = make_stats(7, 1);
+        let view = player
+            .statistics_history
+            .view_items(Some(&player.statistics));
+        let a_view = view
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-a")
+            .expect("Starting club must appear in view before any season-end snapshot");
+        assert!(
+            !a_view.is_loan,
+            "Starting Club A row is permanent, not loan"
+        );
+        assert_eq!(
+            a_view.statistics.played, 0,
+            "Starting club had no games — view must show 0, not live B stats"
+        );
+        assert!(
+            a_view.transfer_fee.is_none(),
+            "Starting Club A row has no transfer fee"
+        );
+
+        // Season-end snapshot: borrowing-side processes (player is on loan at B).
+        let final_stats = make_stats(13, 2);
+        player.statistics = final_stats.clone();
+        player.on_season_end(Season::new(2026), &club_b, make_date(2027, 8, 1));
+
+        let items = &player.statistics_history.items;
+        let desc = describe_history(items);
+
+        // Club A 2026: 0 apps, !is_loan, no fee — kept by ALWAYS_KEEP_FIRST_CAREER_ROW.
+        let a_item = items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-a")
+            .unwrap_or_else(|| {
+                panic!(
+                    "Starting Club A row was lost across immediate loan-out + season end.\n{desc}"
+                )
+            });
+        assert_eq!(
+            a_item.statistics.played, 0,
+            "Club A 0 apps must survive.\n{desc}"
+        );
+        assert_eq!(a_item.statistics.played_subs, 0);
+        assert!(
+            !a_item.is_loan,
+            "Starting Club A row must be permanent.\n{desc}"
+        );
+        assert!(
+            a_item.transfer_fee.is_none(),
+            "Starting Club A row carries no fee.\n{desc}"
+        );
+
+        // Club B 2026: kept because it has games AND a loan fee.
+        let b_item = items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-b")
+            .unwrap_or_else(|| panic!("Loan Club B row missing.\n{desc}"));
+        assert!(b_item.is_loan);
+        assert_eq!(b_item.transfer_fee, Some(25_000.0));
+        assert_eq!(b_item.statistics.played, 13);
+    }
+
+    /// 9. Same as #8 but Club B has 0 games and no fee — Club B should
+    ///    collapse as a stale loan seed, while Club A still survives.
+    #[test]
+    fn initial_club_zero_game_record_survives_when_loan_also_collapses() {
+        let mut player = make_player();
+        let club_a = make_team("Club A", "club-a");
+        let club_b = make_team("Club B", "club-b");
+
+        player
+            .statistics_history
+            .seed_initial_team(&club_a, make_date(2026, 8, 1), false);
+
+        // Free loan with no fee, no games — exactly the kind of "phantom"
+        // entry that gets dropped, except for the starting-club row that
+        // never gets dropped.
+        player.statistics = make_stats(0, 0);
+        player.on_loan(&club_a, &club_b, 0.0, make_date(2026, 8, 15));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
+        ));
+
+        // 0 games at Club B too.
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &club_b, make_date(2027, 8, 1));
+
+        let items = &player.statistics_history.items;
+        let desc = describe_history(items);
+
+        let a_item = items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-a");
+        assert!(
+            a_item.is_some(),
+            "Starting Club A row must survive even when Club B collapses.\n{desc}"
+        );
+        assert_eq!(a_item.unwrap().statistics.played, 0);
+
+        // Club B: free loan with 0 games is kept only because it still has
+        // Some(0.0) fee from `record_loan`. Verify it's there as a loan row.
+        let b_item = items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "club-b");
+        assert!(
+            b_item.is_some(),
+            "Club B with explicit fee must survive.\n{desc}"
+        );
+        assert!(b_item.unwrap().is_loan);
+    }
+
+    /// 10. Reproduces the user-reported regression: a player loaded with
+    ///     prior frozen history at Spartak Moscow is loaned to Chaika at
+    ///     the start of a new season. The parent (Spartak Moscow) row must
+    ///     remain visible in `view_items` for that season alongside the
+    ///     loan row, even though the player has 0 apps at parent and the
+    ///     pre-loan stint is below the 35% time-share threshold.
+    #[test]
+    fn loaned_player_view_shows_both_parent_and_loan_rows() {
+        let mut player = make_player();
+
+        let spartak = TeamInfo {
+            name: "Spartak Moscow".to_string(),
+            slug: "spartak-moscow".to_string(),
+            reputation: 500,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+        let chaika = TeamInfo {
+            name: "Chaika".to_string(),
+            slug: "chaika".to_string(),
+            reputation: 200,
+            league_name: "First Division".to_string(),
+            league_slug: "russian-first-division".to_string(),
+        };
+
+        // Player loaded from DB with several prior seasons at Spartak.
+        player.statistics_history = crate::PlayerStatisticsHistory::from_items(vec![
+            PlayerStatisticsHistoryItem {
+                season: Season::new(2023),
+                team_name: "Spartak Moscow".to_string(),
+                team_slug: "spartak-moscow".to_string(),
+                team_reputation: 500,
+                league_name: "Russian Premier League".to_string(),
+                league_slug: "russian-premier-league".to_string(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: make_stats(18, 3),
+                seq_id: 0,
+            },
+            PlayerStatisticsHistoryItem {
+                season: Season::new(2024),
+                team_name: "Spartak Moscow".to_string(),
+                team_slug: "spartak-moscow".to_string(),
+                team_reputation: 500,
+                league_name: "Russian Premier League".to_string(),
+                league_slug: "russian-premier-league".to_string(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: make_stats(22, 4),
+                seq_id: 1,
+            },
+            PlayerStatisticsHistoryItem {
+                season: Season::new(2025),
+                team_name: "Spartak Moscow".to_string(),
+                team_slug: "spartak-moscow".to_string(),
+                team_reputation: 500,
+                league_name: "Russian Premier League".to_string(),
+                league_slug: "russian-premier-league".to_string(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: make_stats(20, 2),
+                seq_id: 2,
+            },
+        ]);
+
+        // Engine seeds the new season's current entry at Spartak.
+        player
+            .statistics_history
+            .seed_initial_team(&spartak, make_date(2026, 8, 1), false);
+
+        // Player is loaned out two weeks later — never played for Spartak this season.
+        player.statistics = make_stats(0, 0);
+        player.on_loan(&spartak, &chaika, 0.0, make_date(2026, 8, 15));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
+        ));
+
+        // Live: 10 apps at Chaika.
+        player.statistics = make_stats(10, 0);
+        let view = player
+            .statistics_history
+            .view_items(Some(&player.statistics));
+
+        let spartak_2026 = view
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "spartak-moscow")
+            .unwrap_or_else(|| {
+                panic!(
+                    "Spartak Moscow 2026/27 row missing — career view must show both parent and loan rows.\nView: {}",
+                    view.iter()
+                        .map(|i| format!(
+                            "{} {} {} apps={} loan={}",
+                            i.season.display, i.team_slug, i.league_slug, i.statistics.played, i.is_loan
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                )
+            });
+        assert!(
+            !spartak_2026.is_loan,
+            "Spartak Moscow 2026/27 row should be permanent (parent club)"
+        );
+        assert_eq!(
+            spartak_2026.statistics.played, 0,
+            "Spartak Moscow 2026/27 has 0 apps — player was loaned out without playing"
+        );
+
+        let chaika_2026 = view
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "chaika")
+            .expect("Chaika 2026/27 loan row missing");
+        assert!(chaika_2026.is_loan, "Chaika 2026/27 row should be a loan");
+        assert_eq!(
+            chaika_2026.statistics.played, 10,
+            "Chaika row should reflect live stats from active spell"
+        );
+
+        // After season-end snapshot, BOTH rows must persist as frozen items.
+        player.on_season_end(Season::new(2026), &chaika, make_date(2027, 8, 1));
+
+        let items = &player.statistics_history.items;
+        let desc = describe_history(items);
+
+        let spartak_frozen = items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "spartak-moscow")
+            .unwrap_or_else(|| panic!("Spartak Moscow 2026/27 row dropped at season-end.\n{desc}"));
+        assert!(!spartak_frozen.is_loan);
+        assert_eq!(spartak_frozen.statistics.played, 0);
+
+        let chaika_frozen = items
+            .iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "chaika")
+            .unwrap_or_else(|| panic!("Chaika 2026/27 loan row missing.\n{desc}"));
+        assert!(chaika_frozen.is_loan);
+        assert_eq!(chaika_frozen.statistics.played, 10);
     }
 }

@@ -431,109 +431,153 @@ impl<'p> PlayerOperationsImpl<'p> {
             .can_shoot(self.ctx.context.current_tick())
     }
 
-    pub fn has_clear_shot(&self) -> bool {
+    /// Continuous shooting-corridor clarity score in `[0.0, 1.0]`.
+    ///
+    /// A single number combining four real footballing factors:
+    /// 1. **Angle** — the visible goal-opening half-angle (smaller when
+    ///    the shooter is wide). Below ~8° the shot is essentially blind.
+    /// 2. **Immediate pressure** — defenders within 5-12 u of the shooter
+    ///    close the back-swing window. Linear from 0 (defender at 0u) to
+    ///    1 (no defender within 12u).
+    /// 3. **Shot-lane corridor** — for every outfield defender along the
+    ///    shot line, contributes a soft clarity reduction based on their
+    ///    perpendicular distance to the line and how close they are to
+    ///    the shooter. Multiple corridor blockers compound.
+    /// 4. **Goalkeeper position** — keepers off the line widen the
+    ///    visible scoring window (or narrow it if they're well-placed).
+    ///
+    /// Used both as a gate (`has_clear_shot()` returns `clarity > 0.35`)
+    /// and as a multiplicative factor in shot-willingness and xG, so
+    /// "half-blocked" shots are rare *and* low quality.
+    pub fn shot_clarity(&self) -> f32 {
         let player_position = self.ctx.player.position;
         let goal_position = self.opponent_goal_position();
-        let direction_to_goal = (goal_position - player_position).normalize();
-        let distance_to_goal = self.goal_distance();
+        let dir_2d = goal_position - player_position;
+        let dir_norm = dir_2d.norm();
+        if dir_norm < 1.0 {
+            return 1.0; // Hard to even define clarity at zero distance — shot anyway.
+        }
+        let direction_to_goal = dir_2d / dir_norm;
+        let distance_to_goal = dir_norm;
 
-        // SHOOTING-ANGLE GATE. Real football: the angle the goal
-        // subtends from the shooter's position is the single best
-        // predictor of xG. From the edge of the 18-yard box at a
-        // steep diagonal, the visible goal opening is a few metres
-        // wide; forwards in that spot square the ball or cross,
-        // they don't shoot. Computed via the half-angle at which the
-        // shooter sees the goal: atan(goal_half_width / distance).
-        // Under 12° → pass or cross, not shoot. Matches real shot
-        // location data — almost no shots from Y>30m wide at <18m
-        // from the byline.
+        // 1) Angle clarity. A central shot at 30u sees ~85° of goal;
+        //    a shot from corner at 15u sees ~30°. We score ratio of
+        //    visible angle to the central-position maximum.
         const GOAL_HALF_WIDTH: f32 = 29.0;
-        let player_y = player_position.y;
-        let goal_y = goal_position.y;
-        let lateral_offset = (player_y - goal_y).abs();
+        let lateral_offset = (player_position.y - goal_position.y).abs();
         let x_offset = distance_to_goal.max(1.0);
-        // Effective opening: if the shooter is lateral, the goal
-        // opening they see shrinks. Use the narrower side.
         let near_post_offset = (lateral_offset - GOAL_HALF_WIDTH).max(0.0);
         let far_post_offset = lateral_offset + GOAL_HALF_WIDTH;
         let visible_opening =
             (far_post_offset.atan2(x_offset) - near_post_offset.atan2(x_offset)).abs();
-        const MIN_SHOOTING_ANGLE_RAD: f32 = 0.21; // ~12°
-        if visible_opening < MIN_SHOOTING_ANGLE_RAD {
-            return false;
+        // Cap at ~75° (1.31 rad) — ratio above that doesn't add quality.
+        const ANGLE_REFERENCE_RAD: f32 = 1.31;
+        let angle_clarity = (visible_opening / ANGLE_REFERENCE_RAD).clamp(0.0, 1.0);
+        // Below 8° (0.14 rad) → blind shot.
+        if visible_opening < 0.14 {
+            return 0.0;
         }
 
-        // Close-pressure check: a defender within 5u of the shooter
-        // closes the shooting angle regardless of where they stand
-        // relative to the direct line. 5u (~2.5 m) matches "defender
-        // breathing on you, but shot still possible"; 8u was
-        // shoulder-to-shoulder and rejected nearly every box shot.
-        let immediate_pressure = self
-            .ctx
-            .players()
-            .opponents()
-            .nearby(5.0)
-            .any(|opp| !opp.tactical_positions.is_goalkeeper());
-        if immediate_pressure {
-            return false;
+        // 2) Immediate-pressure clarity. Linear ramp: defender at 0u
+        //    contributes pressure 1.0 (full block), at 12u contributes
+        //    0. Use the *closest* defender — multiple defenders at the
+        //    same distance shouldn't multiply the penalty (you only need
+        //    to evade one of them with the back-swing).
+        let mut closest_pressure = 0.0_f32;
+        for opp in self.ctx.players().opponents().nearby(12.0) {
+            if opp.tactical_positions.is_goalkeeper() {
+                continue;
+            }
+            let d = (opp.position - player_position).norm();
+            let p = (1.0 - (d / 12.0)).clamp(0.0, 1.0);
+            if p > closest_pressure {
+                closest_pressure = p;
+            }
+        }
+        let pressure_clarity = (1.0 - closest_pressure).clamp(0.0, 1.0);
+        // Defender at point-blank (≤2u) blocks the strike physically.
+        if closest_pressure > 0.83 {
+            return 0.0;
         }
 
-        // Only check outfield defenders — the GK is handled by save
-        // mechanics. Skip the last 20% of distance to goal.
+        // 3) Corridor clarity. For each defender along the shot line
+        //    within `check_distance`, compute a soft penalty based on
+        //    perpendicular distance to the shot line and their
+        //    longitudinal proximity to the shooter (defenders right
+        //    next to the shooter block more than ones near the goal).
         let check_distance = distance_to_goal * 0.80;
-
-        // Count blockers along the shot path.
-        let blockers = self
-            .ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| {
-                if opp.tactical_positions.is_goalkeeper() {
-                    return false;
-                }
-
-                let to_opp = opp.position - player_position;
-                let projection = to_opp.x * direction_to_goal.x + to_opp.y * direction_to_goal.y;
-
-                if projection < 5.0 || projection > check_distance {
-                    return false;
-                }
-
-                let closest_point = player_position + direction_to_goal * projection;
-                let perp_distance = ((opp.position.x - closest_point.x).powi(2)
-                    + (opp.position.y - closest_point.y).powi(2))
-                .sqrt();
-
-                let opp_skills = self.skills(opp.id);
-                let def_quality = (opp_skills.technical.marking
-                    + opp_skills.technical.tackling
-                    + opp_skills.mental.positioning)
-                    / 60.0; // 0..1
-                let corridor_half_width = 4.0 + def_quality * 6.0; // 4..10
-
-                perp_distance < corridor_half_width
-            })
-            .count();
-
-        // DEFENDER-DENSITY GATE. Zero blockers = clearly clear. One
-        // blocker = contested — average forwards (fin ~9+) can still
-        // shoot through. Two or more = organised defence, needs a
-        // quality striker (fin ~14+). Real football defences pack the
-        // box but strikers still get shots away; the earlier 0.75 / 0.90
-        // thresholds meant only fin-15+ / fin-18+ forwards ever shot in
-        // traffic, which collapsed total shot volume.
-        match blockers {
-            0 => true,
-            1 => {
-                let finishing = self.ctx.player.skills.technical.finishing / 20.0;
-                finishing >= 0.45
+        let mut corridor_blockage: f32 = 0.0;
+        for opp in self.ctx.players().opponents().all() {
+            if opp.tactical_positions.is_goalkeeper() {
+                continue;
             }
-            _ => {
-                let finishing = self.ctx.player.skills.technical.finishing / 20.0;
-                finishing >= 0.70
+            let to_opp = opp.position - player_position;
+            let projection =
+                to_opp.x * direction_to_goal.x + to_opp.y * direction_to_goal.y;
+            if projection < 3.0 || projection > check_distance {
+                continue;
             }
+            let closest_point = player_position + direction_to_goal * projection;
+            let perp_distance = ((opp.position.x - closest_point.x).powi(2)
+                + (opp.position.y - closest_point.y).powi(2))
+            .sqrt();
+            let opp_skills = self.skills(opp.id);
+            let def_quality = (opp_skills.technical.marking
+                + opp_skills.technical.tackling
+                + opp_skills.mental.positioning)
+                / 60.0; // 0..1
+            // Effective corridor half-width: 5-11 u. Soft falloff:
+            // perp 0 = full block, perp = corridor → no block.
+            let corridor_half = 5.0 + def_quality * 6.0;
+            if perp_distance > corridor_half {
+                continue;
+            }
+            // Linear falloff with perpendicular distance.
+            let perp_factor = 1.0 - (perp_distance / corridor_half);
+            // Defenders near the shooter block more than ones near goal
+            // (less reaction time for the shot to bend around them).
+            let prox_factor = 1.0 - (projection / check_distance.max(1.0));
+            // Defender skill weights the block.
+            let block = perp_factor * (0.50 + 0.50 * prox_factor) * (0.50 + 0.50 * def_quality);
+            // Compound: each defender's block reduces remaining clarity.
+            // (1 - block_i) gives the fraction of clarity surviving that
+            // defender; products across defenders compound to total.
+            corridor_blockage = corridor_blockage + (1.0 - corridor_blockage) * block;
         }
+        let corridor_clarity = (1.0 - corridor_blockage).clamp(0.0, 1.0);
+
+        // GK position is intentionally NOT used as a clarity multiplier.
+        // Tying willingness to GK off-line incentivizes the model to
+        // fire only when the keeper is poorly positioned — which is a
+        // metagame for the shooting AI, not a footballing decision the
+        // forward should be aware of in the moment. The keeper's
+        // positioning influences the *result* (save success in
+        // try_save_shot / catching state), not the *decision to shoot*.
+
+        (angle_clarity * pressure_clarity * corridor_clarity).clamp(0.0, 1.0)
+    }
+
+    /// Boolean gate for shooting decisions. Built on top of
+    /// `shot_clarity()` so the "is this a shot?" answer is consistent
+    /// with the continuous clarity value used downstream.
+    ///
+    /// Threshold is skill-modulated and intentionally lenient: a real
+    /// match has many speculative shots that miss the target. The
+    /// `shot_clarity` value flows through to xG and willingness so
+    /// borderline-clarity shots get rolled less often AND tend to be
+    /// less accurate when fired — letting them through the gate
+    /// produces realistic on-target % (around 30-40%) without
+    /// flooding the population shot count.
+    pub fn has_clear_shot(&self) -> bool {
+        let clarity = self.shot_clarity();
+        let finishing = self.ctx.player.skills.technical.finishing / 20.0;
+        let composure = self.ctx.player.skills.mental.composure / 20.0;
+        // Threshold: 0.32 baseline, drops to 0.18 for elite players.
+        // An 18-finishing striker shoots through clarity ≥ 0.18 (heavy
+        // traffic but a sliver of angle). Average 10-finishing needs
+        // ≥ 0.27. Below ~0.18 the shot is hopeless even for elite.
+        let threshold = (0.36 - finishing * 0.15 - composure * 0.03).clamp(0.18, 0.36);
+        clarity >= threshold
     }
 
     pub fn separation_velocity(&self) -> Vector3<f32> {

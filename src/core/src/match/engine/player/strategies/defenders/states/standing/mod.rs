@@ -101,9 +101,13 @@ impl StateProcessingHandler for DefenderStandingState {
             // Counter-press window: we just lost the ball. Widen the
             // press engagement range — even Cover/Help roles become
             // Primary if the ball is within counter-press distance.
-            let counter_press_active = ctx.team().has_just_lost_possession();
+            // Counter-press range scales off the team-shared
+            // press_intensity (which already folds counter-press tactic,
+            // condition, game-management, and the defensive-transition
+            // window). Per the polish spec: 35 + press*55.
+            let counter_press_active = ctx.team().counterpress_window();
             let counter_press_range = if counter_press_active {
-                40.0 + ctx.team().tactics().counter_press_intensity() * 60.0
+                35.0 + ctx.team().press_intensity() * 55.0
             } else {
                 0.0
             };

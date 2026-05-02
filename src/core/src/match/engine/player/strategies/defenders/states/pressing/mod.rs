@@ -53,8 +53,9 @@ impl StateProcessingHandler for DefenderPressingState {
                 ));
             }
 
-            // Scale pressing distance by tactical intensity
-            let intensity = ctx.team().tactics().pressing_intensity();
+            // Scale pressing distance by the team-shared press intensity
+            // (folds tactic + counter-press + condition + game-management).
+            let intensity = ctx.team().press_intensity();
             let pressing_threshold = if ctx.ball().on_own_side()
                 && ctx.ball().distance_to_own_goal()
                     < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD

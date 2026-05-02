@@ -7,6 +7,95 @@ use log::debug;
 use nalgebra::Vector3;
 use rand::{Rng, RngExt};
 
+// ───────────────────────────────────────────────────────────────────────────
+// Save-accounting diagnostic counters. Trace each save event's credit pair
+// to find why `saves > shots_on_target` (the impossible 145% baseline).
+// Each save site increments both `saves_credited[site]` and
+// `on_target_paired[site]` — divergence pinpoints where on_target is
+// missed (shooter not found, etc.) or where saves are double-credited.
+// match-logs feature only.
+// ───────────────────────────────────────────────────────────────────────────
+#[cfg(feature = "match-logs")]
+pub mod save_accounting_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Index meaning: 0=parry 1=catch 2=clear
+    pub static SITE_LABELS: [&str; 3] = ["parry", "catch", "clear"];
+    pub static SAVES_CREDITED: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static SHOTS_FACED_INC: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static ON_TARGET_PAIRED: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    /// Site fired but the previous_owner / shooter could not be found in
+    /// the live players slice — save was credited but on_target was NOT.
+    /// This is the primary suspect for saves > on_target.
+    pub static SHOOTER_MISSING: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    /// Site fired but `previous_owner` itself was None.
+    pub static PREVIOUS_OWNER_NONE: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    /// On-goal credit (path 4): shot reached the net, scorer credited
+    /// with on_target. No save here.
+    pub static ON_TARGET_FROM_GOAL: AtomicU64 = AtomicU64::new(0);
+    // Save-pipeline visibility — how many shot ticks reach the save check
+    // (within reach window) and how often the keeper actually engages.
+    pub static SAVE_TICKS_REACHED: AtomicU64 = AtomicU64::new(0);
+    pub static SAVE_TICKS_OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
+    pub static SAVE_TICKS_PAST_GOAL_LINE: AtomicU64 = AtomicU64::new(0);
+    pub static SAVE_PHYSICS_FIRED: AtomicU64 = AtomicU64::new(0);
+    pub static SAVE_PHYSICS_PASSED: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for arr in [
+            &SAVES_CREDITED,
+            &SHOTS_FACED_INC,
+            &ON_TARGET_PAIRED,
+            &SHOOTER_MISSING,
+            &PREVIOUS_OWNER_NONE,
+        ] {
+            for a in arr.iter() {
+                a.store(0, Ordering::Relaxed);
+            }
+        }
+        ON_TARGET_FROM_GOAL.store(0, Ordering::Relaxed);
+    }
+
+    pub fn snapshot() -> Snapshot {
+        Snapshot {
+            saves: [
+                SAVES_CREDITED[0].load(Ordering::Relaxed),
+                SAVES_CREDITED[1].load(Ordering::Relaxed),
+                SAVES_CREDITED[2].load(Ordering::Relaxed),
+            ],
+            on_target: [
+                ON_TARGET_PAIRED[0].load(Ordering::Relaxed),
+                ON_TARGET_PAIRED[1].load(Ordering::Relaxed),
+                ON_TARGET_PAIRED[2].load(Ordering::Relaxed),
+            ],
+            shooter_missing: [
+                SHOOTER_MISSING[0].load(Ordering::Relaxed),
+                SHOOTER_MISSING[1].load(Ordering::Relaxed),
+                SHOOTER_MISSING[2].load(Ordering::Relaxed),
+            ],
+            prev_owner_none: [
+                PREVIOUS_OWNER_NONE[0].load(Ordering::Relaxed),
+                PREVIOUS_OWNER_NONE[1].load(Ordering::Relaxed),
+                PREVIOUS_OWNER_NONE[2].load(Ordering::Relaxed),
+            ],
+            on_target_goal: ON_TARGET_FROM_GOAL.load(Ordering::Relaxed),
+        }
+    }
+
+    pub struct Snapshot {
+        pub saves: [u64; 3],
+        pub on_target: [u64; 3],
+        pub shooter_missing: [u64; 3],
+        pub prev_owner_none: [u64; 3],
+        pub on_target_goal: u64,
+    }
+}
+
 /// Helper struct to encapsulate player passing skills and condition
 struct PassSkills {
     passing: f32,
@@ -174,57 +263,49 @@ impl PlayerEventDispatcher {
                 Self::handle_ball_owner_change_event(player_id, field);
             }
             PlayerEvent::PassTo(pass_event_model) => {
-                // Check offside before executing the pass
-                let is_gk = field
-                    .players
-                    .iter()
-                    .find(|p| p.id == pass_event_model.from_player_id)
-                    .map(|p| {
-                        p.tactical_position.current_position.position_group()
-                            == PlayerFieldPositionGroup::Goalkeeper
-                    })
-                    .unwrap_or(false);
-
-                if !is_gk
-                    && Self::is_receiver_offside(
-                        pass_event_model.to_player_id,
-                        pass_event_model.from_player_id,
-                        field,
-                    )
-                {
-                    let receiver_pos = field
-                        .players
-                        .iter()
-                        .find(|p| p.id == pass_event_model.to_player_id)
-                        .map(|p| p.position)
-                        .unwrap_or(field.ball.position);
-
-                    if context.logging_enabled {
-                        debug!(
-                            "Offside detected: player {} at position {:?}",
-                            pass_event_model.to_player_id, receiver_pos
-                        );
-                    }
-
-                    Self::handle_offside_event(pass_event_model.to_player_id, receiver_pos, field);
+                // Build (but don't yet fire) the offside snapshot. The
+                // resolver fires only when the receiver becomes active —
+                // touches the ball, claims, or actively challenges. This
+                // matches how offside is judged in real football: the
+                // referee waits to see if the receiver gets involved
+                // before raising the flag.
+                //
+                // Set-piece restarts (goal kicks, corners, throw-ins)
+                // are exempt by rule. Normal goalkeeper open-play passes
+                // are NOT exempt — the previous "exempt all GK passes"
+                // shortcut hid genuine offsides on long GK clearances.
+                let restart_origin = field.ball.pass_origin_restart;
+                let snapshot = if restart_origin.is_offside_exempt() {
+                    None
                 } else {
-                    // Record the pass event (only if tracking is enabled)
-                    if match_data.is_tracking_events() {
-                        match_data.add_pass_event(
-                            context.total_match_time,
-                            pass_event_model.from_player_id,
-                            pass_event_model.to_player_id,
-                        );
-                    }
-                    let passer_id = pass_event_model.from_player_id;
-                    Self::handle_pass_to_event(pass_event_model, field);
-                    // Tag the ball with the passer for pass-accuracy
-                    // accounting. Lives for a short window (150 ticks)
-                    // and is cleared on opponent touch — see ball.rs
-                    // `pending_pass_passer` docs.
-                    field.ball.pending_pass_passer = Some(passer_id);
-                    field.ball.pending_pass_set_tick = context.current_tick();
+                    Self::build_offside_snapshot(
+                        pass_event_model.from_player_id,
+                        pass_event_model.to_player_id,
+                        restart_origin,
+                        field,
+                        context.current_tick(),
+                    )
+                };
+
+                if match_data.is_tracking_events() {
+                    match_data.add_pass_event(
+                        context.total_match_time,
+                        pass_event_model.from_player_id,
+                        pass_event_model.to_player_id,
+                    );
                 }
+                let passer_id = pass_event_model.from_player_id;
+                Self::handle_pass_to_event(pass_event_model, field);
+                // Tag the ball with the passer for pass-accuracy
+                // accounting. Lives for a short window (150 ticks)
+                // and is cleared on opponent touch — see ball.rs
+                // `pending_pass_passer` docs.
+                field.ball.pending_pass_passer = Some(passer_id);
+                field.ball.pending_pass_set_tick = context.current_tick();
+                field.ball.offside_snapshot = snapshot;
+                // After the kick, restart context decays back to OpenPlay.
+                field.ball.pass_origin_restart =
+                    crate::r#match::PassOriginRestart::OpenPlay;
             }
             PlayerEvent::ClaimBall(player_id) => {
                 Self::record_team_possession_if_switch(player_id, field, context);
@@ -338,6 +419,9 @@ impl PlayerEventDispatcher {
         // deflected the ball.
         if !is_auto_goal {
             player.memory.credit_shot_on_target();
+            #[cfg(feature = "match-logs")]
+            save_accounting_stats::ON_TARGET_FROM_GOAL
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Credit the conceding goalkeeper's `shots_faced` so the rating
@@ -1328,20 +1412,21 @@ impl PlayerEventDispatcher {
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        // Base error: elite close-range ±2-5 units, poor long-range ±20-40 units.
-        // Goal half-width is 29u — a y-error spread larger than that
-        // pushes most shots wide regardless of where they were aimed,
-        // so prior 50× multiplier (close avg-player ±20, long ±35)
-        // dominated the on-target outcome and held the rate at ~19%.
-        // Cut to 30× and tightened mins so accuracy → on-target rate
-        // tracks more linearly toward the real ~33%.
-        let base_position_error = 30.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        // Base error: elite close-range ±3-7 units, poor long-range ±25-55 units.
+        // After the upstream `has_clear_shot()` clarity gate filtered
+        // out blind shots, on-target % crept up to ~47% because the
+        // surviving shots were too well-aimed. Real Opta data shows
+        // ~33% on-target across the population. Bumping the multiplier
+        // 30 → 38 and the floor errors gives the surviving (filtered)
+        // shots a realistic accuracy spread without re-introducing
+        // hopeless blasts.
+        let base_position_error = 38.0 * distance_error_factor * (1.0 - adjusted_accuracy);
         let min_error = if horizontal_distance < 30.0 {
-            2.0
+            3.5
         } else if horizontal_distance < 60.0 {
-            4.0
+            6.0
         } else {
-            8.0
+            10.0
         };
         let max_y_error = base_position_error.clamp(min_error, 60.0);
 
@@ -1359,16 +1444,20 @@ impl PlayerEventDispatcher {
         // adding ~25-30% of misses on top. Halving bases again and
         // pulling scaling 0.22 → 0.14 should move on-target toward
         // 30%.
+        // Wide-miss baseline bumped to bring on-target % from ~47 toward
+        // the real 33-40% band. Most increase lands at medium range
+        // (30-60u, just outside the 18-yard box) where real strikers
+        // pull shots wide most often.
         let wide_miss_base = if horizontal_distance < 30.0 {
-            0.025
-        } else if horizontal_distance < 60.0 {
             0.05
+        } else if horizontal_distance < 60.0 {
+            0.10
         } else if horizontal_distance < 100.0 {
-            0.09
+            0.16
         } else {
-            0.14
+            0.22
         };
-        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.14 + wide_miss_base;
+        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.18 + wide_miss_base;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
             // Shot goes wide — force y outside goal posts
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
@@ -1599,6 +1688,28 @@ impl PlayerEventDispatcher {
     /// while `cached_shot_target` was set. The same `cached_shot_target`
     /// is then cleared so the eventual rest position (out of bounds,
     /// to a defender, or back into play) doesn't double-credit anyone.
+    #[cfg(feature = "match-logs")]
+    #[inline]
+    fn dbg_save_credit(
+        site: usize,
+        had_shooter: bool,
+        prev_owner_none: bool,
+        shooter_found: bool,
+    ) {
+        use std::sync::atomic::Ordering;
+        save_accounting_stats::SAVES_CREDITED[site].fetch_add(1, Ordering::Relaxed);
+        save_accounting_stats::SHOTS_FACED_INC[site].fetch_add(1, Ordering::Relaxed);
+        if shooter_found {
+            save_accounting_stats::ON_TARGET_PAIRED[site].fetch_add(1, Ordering::Relaxed);
+        }
+        if !had_shooter || prev_owner_none {
+            save_accounting_stats::PREVIOUS_OWNER_NONE[site].fetch_add(1, Ordering::Relaxed);
+        }
+        if had_shooter && !shooter_found {
+            save_accounting_stats::SHOOTER_MISSING[site].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     fn handle_parried_ball_event(player_id: u32, field: &mut MatchField) {
         // Only credit when the ball was a real shot — guards against
         // the diving state calling this when the GK gave up on a long
@@ -1615,11 +1726,16 @@ impl PlayerEventDispatcher {
         // Credit on-target to the shooter — a parry IS the keeper
         // touching a shot that reached the goal frame. Without this,
         // saves > on-target shots, an impossible ratio.
+        let mut shooter_found = false;
         if let Some(sid) = shooter_id {
             if let Some(shooter) = field.get_player_mut(sid) {
                 shooter.memory.credit_shot_on_target();
+                shooter_found = true;
             }
         }
+        #[cfg(feature = "match-logs")]
+        Self::dbg_save_credit(0, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
+        let _ = shooter_found;
         field.ball.cached_shot_target = None;
     }
 
@@ -1652,11 +1768,16 @@ impl PlayerEventDispatcher {
                     player.statistics.saves += 1;
                     player.statistics.shots_faced += 1;
                 }
+                let mut shooter_found = false;
                 if let Some(sid) = shooter_id {
                     if let Some(shooter) = field.get_player_mut(sid) {
                         shooter.memory.credit_shot_on_target();
+                        shooter_found = true;
                     }
                 }
+                #[cfg(feature = "match-logs")]
+                Self::dbg_save_credit(1, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
+                let _ = shooter_found;
             }
         }
 
@@ -1728,6 +1849,12 @@ impl PlayerEventDispatcher {
             field.ball.contested_claim_count = 0;
         }
 
+        // Award the restart to the victim's team. Penalty if foul occurred
+        // inside the fouler's penalty area, otherwise direct free kick at
+        // ball position. Runs whether or not a card is given — most fouls
+        // produce a free kick without a booking.
+        Self::award_restart_for_foul(fouler_id, severity, field, context);
+
         let match_second = context.total_match_time;
 
         // Card decision — probability scales with severity and the fouler's
@@ -1770,16 +1897,24 @@ impl PlayerEventDispatcher {
                 - sportsmanship * 0.10)
                 .clamp(-0.25, 0.70);
 
+            // Card probabilities calibrated to spec ranges:
+            //   normal foul yellow  4-16%
+            //   reckless yellow    45-80%
+            //   reckless red       2-12%
+            //   violent red       70-100%
             match severity {
                 FoulSeverity::Normal => (
-                    (0.12 + aggressor_factor * 0.20 + persistent).clamp(0.02, 0.55),
+                    (0.04 + aggressor_factor * 0.18 + persistent * 0.6).clamp(0.02, 0.18),
                     0.0_f32,
                 ),
                 FoulSeverity::Reckless => (
-                    (0.55 + aggressor_factor * 0.25 + persistent).clamp(0.20, 0.92),
-                    (0.08 + aggressor_factor * 0.15).clamp(0.01, 0.40),
+                    (0.45 + aggressor_factor * 0.30 + persistent * 0.8).clamp(0.30, 0.85),
+                    (0.04 + aggressor_factor * 0.12 + persistent).clamp(0.01, 0.18),
                 ),
-                FoulSeverity::Violent => (0.0_f32, 1.0_f32),
+                FoulSeverity::Violent => (
+                    0.10_f32,
+                    (0.70 + aggressor_factor * 0.30).clamp(0.60, 1.0),
+                ),
             }
         };
 
@@ -1794,23 +1929,32 @@ impl PlayerEventDispatcher {
             return;
         }
 
-        // Red cards disabled: the tackle/foul pipeline currently fires
-        // far more often than real-world rates, which cascaded into
-        // multiple sent-off players per match and left the viewer with
-        // half-empty teams. Until foul frequency is properly calibrated,
-        // no player gets sent off — direct red or second yellow both
-        // degrade to a yellow caution. `is_sent_off` stays false so the
-        // position recorder keeps the player in the viewer.
+        // Re-enabled red cards. The unified foul model + GK violent
+        // recalibration brought foul frequency into the spec band, so
+        // sending players off no longer cascades into half-empty teams.
+        // Direct reds and second yellows both fully send the fouler off.
         let (second_yellow, ends_with_red) = {
             let player = match field.get_player_mut(fouler_id) {
                 Some(p) => p,
                 None => return,
             };
-            player.yellow_cards = player.yellow_cards.saturating_add(1);
-            player.statistics.add_yellow_card(match_second);
-            context.record_stoppage_time(15_000);
-            let _ = direct_red;
-            (false, false)
+            if direct_red {
+                player.statistics.add_red_card(match_second);
+                player.is_sent_off = true;
+                context.record_stoppage_time(45_000);
+                (false, true)
+            } else {
+                player.yellow_cards = player.yellow_cards.saturating_add(1);
+                player.statistics.add_yellow_card(match_second);
+                context.record_stoppage_time(15_000);
+                let promoted = player.yellow_cards >= 2;
+                if promoted {
+                    player.statistics.add_red_card(match_second);
+                    player.is_sent_off = true;
+                    context.record_stoppage_time(45_000);
+                }
+                (promoted, promoted)
+            }
         };
 
         if ends_with_red {
@@ -1860,11 +2004,107 @@ impl PlayerEventDispatcher {
         }
     }
 
-    /// Check if the receiver is in an offside position at the moment of the pass.
-    /// FIFA rules: a player is offside if they are
-    ///   1) in the opponent's half,
-    ///   2) ahead of the ball, and
-    ///   3) beyond the second-to-last opponent (including goalkeeper).
+    /// Build an offside snapshot at pass-kick. The actual offside call
+    /// fires later, when the receiver becomes active — see
+    /// `evaluate_offside_snapshot`.
+    fn build_offside_snapshot(
+        passer_id: u32,
+        receiver_id: u32,
+        origin: crate::r#match::PassOriginRestart,
+        field: &MatchField,
+        tick: u64,
+    ) -> Option<crate::r#match::OffsideSnapshot> {
+        let passer = field.players.iter().find(|p| p.id == passer_id)?;
+        let receiver = field.players.iter().find(|p| p.id == receiver_id)?;
+        let passer_side = passer.side?;
+        let receiver_side = receiver.side?;
+        // Passes between players on different sides shouldn't happen,
+        // but if it does (substitution race) skip the snapshot.
+        if passer_side != receiver_side {
+            return None;
+        }
+        let half_width = field.size.half_width as f32;
+        let in_opponent_half = match receiver_side {
+            PlayerSide::Left => receiver.position.x > half_width,
+            PlayerSide::Right => receiver.position.x < half_width,
+        };
+        if !in_opponent_half {
+            // Offside can only occur in the opponent half — no snapshot
+            // needed.
+            return None;
+        }
+
+        let opponent_xs: Vec<f32> = match receiver_side {
+            PlayerSide::Left => field
+                .players
+                .iter()
+                .filter(|p| p.side == Some(PlayerSide::Right))
+                .map(|p| p.position.x)
+                .collect(),
+            PlayerSide::Right => field
+                .players
+                .iter()
+                .filter(|p| p.side == Some(PlayerSide::Left))
+                .map(|p| p.position.x)
+                .collect(),
+        };
+        let mut sorted_xs = opponent_xs;
+        // For Left attackers, defenders' goal is at x=field_width — so
+        // sort DESCENDING (closest to their goal first). For Right
+        // attackers, ASCENDING.
+        match receiver_side {
+            PlayerSide::Left => sorted_xs.sort_by(|a, b| {
+                b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            PlayerSide::Right => sorted_xs.sort_by(|a, b| {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            }),
+        }
+        if sorted_xs.len() < 2 {
+            return None;
+        }
+        let second_last = sorted_xs[1];
+
+        Some(crate::r#match::OffsideSnapshot {
+            origin,
+            passer_id,
+            passer_side,
+            receiver_id,
+            ball_x_at_kick: field.ball.position.x,
+            second_last_defender_x: second_last,
+            receiver_x_at_kick: receiver.position.x,
+            receiver_y_at_kick: receiver.position.y,
+            set_tick: tick,
+        })
+    }
+
+    /// Decide whether the snapshot represents an offside position.
+    /// Tolerance 1.5u to absorb foot-vs-shoulder ambiguity. Kept for
+    /// callers that want a free function rather than the snapshot
+    /// method; the snapshot's `is_offside` is the canonical version.
+    #[allow(dead_code)]
+    pub(crate) fn snapshot_is_offside(snap: &crate::r#match::OffsideSnapshot) -> bool {
+        const TOLERANCE: f32 = 1.5;
+        match snap.passer_side {
+            PlayerSide::Left => {
+                if snap.receiver_x_at_kick <= snap.ball_x_at_kick + TOLERANCE {
+                    return false;
+                }
+                snap.receiver_x_at_kick > snap.second_last_defender_x + TOLERANCE
+            }
+            PlayerSide::Right => {
+                if snap.receiver_x_at_kick >= snap.ball_x_at_kick - TOLERANCE {
+                    return false;
+                }
+                snap.receiver_x_at_kick < snap.second_last_defender_x - TOLERANCE
+            }
+        }
+    }
+
+    /// Legacy direct check kept for any in-tree callers that still want
+    /// pass-creation-time offside (none should remain after the delayed
+    /// resolver).
+    #[allow(dead_code)]
     fn is_receiver_offside(receiver_id: u32, passer_id: u32, field: &MatchField) -> bool {
         let receiver = match field.players.iter().find(|p| p.id == receiver_id) {
             Some(p) => p,
@@ -2003,12 +2243,21 @@ impl PlayerEventDispatcher {
 
     /// Identify the goalkeeper who is about to clear a shot, if any.
     /// Returns `Some(gk_id)` when the current ball owner is a GK *and*
-    /// the ball is mid-flight from a real shot (`cached_shot_target` set).
-    /// Used to credit punches/parries as saves — the existing path only
-    /// credited catches via `handle_caught_ball_event`.
+    /// the ball is mid-flight from a real shot (`cached_shot_target` set)
+    /// *and* there is a real shooter to credit on-target to. Without the
+    /// shooter check, dead-ball restarts where `previous_owner` is None
+    /// (goal kicks, corners, kickoffs after goals) credit phantom saves
+    /// that have no paired on-target — pushing the saves/SOT ratio above
+    /// 100%.
     fn gk_clearing_shot(field: &MatchField) -> Option<u32> {
         let clearer_id = field.ball.current_owner?;
         if field.ball.cached_shot_target.is_none() {
+            return None;
+        }
+        // Real shot has a real shooter, otherwise this is residual cache
+        // state surviving a dead-ball restart and we must not credit.
+        let prev = field.ball.previous_owner?;
+        if prev == clearer_id {
             return None;
         }
         // Iterate directly because `MatchField::get_player` takes `&mut
@@ -2016,12 +2265,17 @@ impl PlayerEventDispatcher {
         // immutable so the caller can re-borrow `field` mutably afterward.
         let clearer = field.players.iter().find(|p| p.id == clearer_id)?;
         if clearer.tactical_position.current_position.position_group()
-            == PlayerFieldPositionGroup::Goalkeeper
+            != PlayerFieldPositionGroup::Goalkeeper
         {
-            Some(clearer_id)
-        } else {
-            None
+            return None;
         }
+        // Verify the shooter is from the OTHER team — otherwise this is
+        // a teammate clearance, not a save.
+        let shooter = field.players.iter().find(|p| p.id == prev)?;
+        if shooter.team_id == clearer.team_id {
+            return None;
+        }
+        Some(clearer_id)
     }
 
     fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
@@ -2039,11 +2293,16 @@ impl PlayerEventDispatcher {
                 gk.statistics.saves += 1;
                 gk.statistics.shots_faced += 1;
             }
+            let mut shooter_found = false;
             if let Some(sid) = shooter_id {
                 if let Some(shooter) = field.get_player_mut(sid) {
                     shooter.memory.credit_shot_on_target();
+                    shooter_found = true;
                 }
             }
+            #[cfg(feature = "match-logs")]
+            Self::dbg_save_credit(2, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
+            let _ = shooter_found;
             field.ball.cached_shot_target = None;
         }
 
@@ -2099,5 +2358,182 @@ impl PlayerEventDispatcher {
 
         // Set in-flight state to prevent immediate reclaim after clearance
         field.ball.flags.in_flight_state = 40;
+    }
+
+    /// Award a free-kick or penalty restart to the victim's team after a
+    /// foul. Penalty if the foul occurred inside the fouler's penalty
+    /// area, otherwise a direct free kick at the ball's current position.
+    /// Picks the taker dynamically by skill score (penalty: penalty_taking
+    /// composite; FK: free_kicks composite). Idempotent on missing data:
+    /// returns silently if fouler/victim team can't be resolved.
+    fn award_restart_for_foul(
+        fouler_id: u32,
+        _severity: crate::r#match::player::events::FoulSeverity,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        // Resolve fouler + side; the victim is everyone on the OTHER side.
+        let (fouler_side, fouler_team_id) = match field
+            .players
+            .iter()
+            .find(|p| p.id == fouler_id)
+            .and_then(|p| p.side.map(|s| (s, p.team_id)))
+        {
+            Some(x) => x,
+            None => return,
+        };
+        let victim_side = match fouler_side {
+            PlayerSide::Left => PlayerSide::Right,
+            PlayerSide::Right => PlayerSide::Left,
+        };
+
+        // Penalty if the foul (ball location) is inside the fouler's
+        // penalty area — i.e. the box defending the fouler's goal.
+        let pa = match fouler_side {
+            PlayerSide::Left => context.penalty_area(true),
+            PlayerSide::Right => context.penalty_area(false),
+        };
+        let foul_pos = field.ball.position;
+        let in_penalty_area = pa.contains(&foul_pos);
+
+        // Restart position: penalty spot vs foul spot. Penalty spot is
+        // 88u from the defending goal line on the centre y axis.
+        let field_w = context.field_size.width as f32;
+        let field_h = context.field_size.height as f32;
+        let restart_pos = if in_penalty_area {
+            let px = match fouler_side {
+                PlayerSide::Left => 88.0_f32.min(field_w * 0.5),
+                PlayerSide::Right => (field_w - 88.0_f32).max(field_w * 0.5),
+            };
+            Vector3::new(px, field_h * 0.5, 0.0)
+        } else {
+            // Tiny inset so the ball isn't sitting on a boundary.
+            let x = foul_pos.x.clamp(2.0, field_w - 2.0);
+            let y = foul_pos.y.clamp(2.0, field_h - 2.0);
+            Vector3::new(x, y, 0.0)
+        };
+
+        // Pick a taker from the victim's on-field players. Penalty uses
+        // penalty-taking composite; FK uses free-kick composite.
+        let taker_id = if in_penalty_area {
+            Self::pick_penalty_taker(field, victim_side)
+        } else {
+            Self::pick_free_kick_taker(field, victim_side, restart_pos)
+        };
+        let taker_id = match taker_id {
+            Some(id) => id,
+            None => return, // Whole team off the field — nothing to do.
+        };
+
+        // Tell the engine to teleport the taker onto the ball next tick.
+        let ball = &mut field.ball;
+        ball.position = restart_pos;
+        ball.velocity = Vector3::zeros();
+        ball.previous_owner = ball.current_owner;
+        ball.current_owner = Some(taker_id);
+        ball.ownership_duration = 0;
+        ball.claim_cooldown = if in_penalty_area { 200 } else { 90 };
+        ball.flags.in_flight_state = if in_penalty_area { 200 } else { 60 };
+        ball.contested_claim_count = 0;
+        ball.pass_target_player_id = None;
+        ball.recent_passers.clear();
+        ball.cached_shot_target = None;
+        ball.offside_snapshot = None;
+        ball.pass_origin_restart = if in_penalty_area {
+            crate::r#match::PassOriginRestart::Penalty
+        } else {
+            crate::r#match::PassOriginRestart::DirectFreeKick
+        };
+        let team_id = field
+            .players
+            .iter()
+            .find(|p| p.id == taker_id)
+            .map(|p| p.team_id)
+            .unwrap_or(0);
+        let _ = fouler_team_id; // Kept for future calibration hooks.
+        field
+            .ball
+            .record_touch(taker_id, team_id, context.current_tick(), true);
+        field.ball.pending_set_piece_teleport = Some((taker_id, restart_pos));
+    }
+
+    fn pick_penalty_taker(field: &MatchField, victim_side: PlayerSide) -> Option<u32> {
+        use crate::r#match::engine::set_pieces::{TakerScore, score_penalty_taker};
+        let candidates: Vec<TakerScore> = field
+            .players
+            .iter()
+            .filter(|p| {
+                p.side == Some(victim_side)
+                    && !p.is_sent_off
+                    && p.tactical_position.current_position.position_group()
+                        != PlayerFieldPositionGroup::Goalkeeper
+            })
+            .map(|p| TakerScore {
+                player_id: p.id,
+                score: score_penalty_taker(
+                    p.skills.technical.penalty_taking,
+                    p.skills.technical.finishing,
+                    p.skills.mental.composure,
+                    p.attributes.pressure,
+                    p.skills.technical.technique,
+                    0.0,
+                ),
+            })
+            .collect();
+        candidates
+            .iter()
+            .max_by(|a, b| {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|t| t.player_id)
+    }
+
+    fn pick_free_kick_taker(
+        field: &MatchField,
+        victim_side: PlayerSide,
+        restart_pos: Vector3<f32>,
+    ) -> Option<u32> {
+        use crate::r#match::engine::set_pieces::{TakerScore, score_free_kick_taker};
+        let candidates: Vec<TakerScore> = field
+            .players
+            .iter()
+            .filter(|p| {
+                p.side == Some(victim_side)
+                    && !p.is_sent_off
+                    && p.tactical_position.current_position.position_group()
+                        != PlayerFieldPositionGroup::Goalkeeper
+            })
+            .map(|p| {
+                let dx = p.position.x - restart_pos.x;
+                let dy = p.position.y - restart_pos.y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                // Distance penalty: a player 200u away isn't realistically
+                // walking over to take a quick free kick.
+                let dist_penalty = (dist / 200.0).clamp(0.0, 1.0) * 0.20;
+                let base = score_free_kick_taker(
+                    p.skills.technical.free_kicks,
+                    p.skills.technical.technique,
+                    p.skills.technical.long_shots,
+                    p.skills.technical.crossing,
+                    p.skills.mental.vision,
+                    p.skills.mental.composure,
+                    p.attributes.pressure,
+                );
+                TakerScore {
+                    player_id: p.id,
+                    score: base - dist_penalty,
+                }
+            })
+            .collect();
+        candidates
+            .iter()
+            .max_by(|a, b| {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|t| t.player_id)
     }
 }

@@ -2,6 +2,7 @@ use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{MatchContext, MatchField};
 use log::debug;
+use nalgebra::Vector3;
 
 #[derive(Copy, Clone, Debug)]
 pub enum BallEvent {
@@ -15,6 +16,11 @@ pub enum BallEvent {
     Intercepted(u32, Option<u32>),
     Gained(u32),
     TakeMe(u32),
+    /// Offside resolved on receiver involvement: (receiver_id,
+    /// free_kick_position). Translates to PlayerEvent::Offside in the
+    /// dispatcher so the player-event pipeline owns ball-stop / free-
+    /// kick award.
+    Offside(u32, Vector3<f32>),
 }
 
 #[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
@@ -117,6 +123,13 @@ impl BallEventDispatcher {
             }
             BallEvent::TakeMe(player_id) => {
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::TakeBall(player_id)));
+            }
+            BallEvent::Offside(receiver_id, position) => {
+                field.ball.pending_pass_passer = None;
+                remaining_events.push(Event::PlayerEvent(PlayerEvent::Offside(
+                    receiver_id,
+                    position,
+                )));
             }
         }
 

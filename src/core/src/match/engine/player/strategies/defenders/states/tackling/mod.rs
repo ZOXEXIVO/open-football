@@ -254,22 +254,19 @@ impl DefenderTacklingState {
 
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 
-        // Foul chance is skill-driven. Old formula produced 10-15% foul
-        // per tackle attempt, which combined with the engine's ~300+
-        // tackle-attempts-per-match rate meant 40+ fouls in the first
-        // five minutes (real football: ~12-14 fouls per team per whole
-        // match). New formula anchors at ~3-5% per attempt for average
-        // players, scaling up to ~10-12% for the most aggressive and
-        // down to <1% for composed, high-tackling defenders.
+        // Foul chance is skill-driven. Calibrated against real football
+        // foul rates: ~12-15 fouls per team per match, on top of a
+        // tackle-attempt rate of ~80-100 per team. That's ~8-10% per
+        // attempt for average players. The previous 3-5% baseline was
+        // calibrated when tackle attempts ran much higher (300+/match).
         //
         // Drivers (all 0..1 normalized):
         //   aggression   — dominant positive factor
         //   composure    — strong protective factor (picks the moment)
         //   tackling     — clean technical tackler doesn't need to foul
-        // Clamped to a 0.5% floor so even an elite defender has some
-        // risk on a 50/50 challenge.
-        let base_foul = 0.02 + aggression * 0.10 - composure * 0.05 - tackling_skill * 0.03;
-        let base_foul = base_foul.max(0.005);
+        // 1% floor so even an elite defender has some risk on a 50/50.
+        let base_foul = 0.05 + aggression * 0.14 - composure * 0.04 - tackling_skill * 0.04;
+        let base_foul = base_foul.max(0.010);
 
         // Clean successful tackles rarely foul — you won the ball
         // first. Missed tackles are the trailing-foot / mistimed-slide

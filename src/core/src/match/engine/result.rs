@@ -39,6 +39,24 @@ pub struct PlayerMatchEndStats {
     pub yellow_cards: u16,
     /// 1 if the player was sent off (either two yellows or direct red).
     pub red_cards: u16,
+    /// Match minutes played. Used by the rating helper to dampen event
+    /// bonuses for short cameos.
+    pub minutes_played: u16,
+    /// Modern build-up / chance-creation stats — feed the rating helper
+    /// and end-of-match calibration. All zero for legacy callers.
+    pub key_passes: u16,
+    pub progressive_passes: u16,
+    pub progressive_carries: u16,
+    pub successful_dribbles: u16,
+    pub attempted_dribbles: u16,
+    pub successful_pressures: u16,
+    pub blocks: u16,
+    pub clearances: u16,
+    pub errors_leading_to_shot: u16,
+    pub errors_leading_to_goal: u16,
+    /// (GK) Post-shot xG faced minus goals conceded. Positive values
+    /// indicate above-expectation shot-stopping.
+    pub xg_prevented: f32,
 }
 
 #[derive(Debug, Clone)]

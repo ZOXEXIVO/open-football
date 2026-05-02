@@ -165,6 +165,18 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
                 fouls: 0,
                 yellow_cards: 0,
                 red_cards: 0,
+                minutes_played: 90,
+                key_passes: 0,
+                progressive_passes: 0,
+                progressive_carries: 0,
+                successful_dribbles: 0,
+                attempted_dribbles: 0,
+                successful_pressures: 0,
+                blocks: 0,
+                clearances: 0,
+                errors_leading_to_shot: 0,
+                errors_leading_to_goal: 0,
+                xg_prevented: 0.0,
             },
         );
     }

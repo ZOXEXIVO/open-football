@@ -102,21 +102,25 @@ impl StateProcessingHandler for DefenderRunningState {
                 return Some(result);
             }
         } else {
-            // COUNTER-PRESS: Just lost possession — Primary role chases the
-            // ball carrier immediately; proximity override still fires if
-            // the ball is right in our face regardless of role.
-            if ctx.team().has_just_lost_possession() {
-                let counter_press = ctx.team().tactics().counter_press_intensity();
-                let ball_dist = ctx.ball().distance();
-                let counter_press_range = 40.0 + counter_press * 60.0;
-                if ball_dist < counter_press_range {
-                    if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                        let role = ctx.player().defensive().defensive_role_for_ball_carrier();
-                        if role == DefensiveRole::Primary || opponent.distance(ctx) < 30.0 {
-                            return Some(StateChangeResult::with_defender_state(
-                                DefenderState::Tackling,
-                            ));
-                        }
+            // COUNTER-PRESS: route through the team-shared
+            // counter-press window. `should_counterpress` already
+            // factors distance, work-rate, anticipation, condition,
+            // and the team's `press_intensity` floor — so a tired or
+            // game-managing team naturally drops more.
+            //
+            // We still keep a proximity override: the ball within ~30u
+            // forces an engagement regardless of the eligibility score
+            // (instinct beats math when the carrier is on top of you).
+            if ctx.team().counterpress_window() {
+                if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+                    let role = ctx.player().defensive().defensive_role_for_ball_carrier();
+                    let immediate = opponent.distance(ctx) < 30.0;
+                    let elected =
+                        role == DefensiveRole::Primary && ctx.player().pressure().should_counterpress();
+                    if immediate || elected {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Tackling,
+                        ));
                     }
                 }
             }
@@ -1070,9 +1074,18 @@ impl DefenderRunningState {
         best_target.map(|(t, _)| t)
     }
 
-    /// Check if this defender should make an overlapping run.
-    /// True when: wide defender, teammate has ball on same flank, space ahead,
-    /// and not the last defender.
+    /// Should this fullback push up on an overlapping run?
+    ///
+    /// Polish-spec gate. The classic checks (wide, ball on same flank,
+    /// behind carrier, space ahead) are still here, but the "is it safe
+    /// to leave shape?" question is now answered by the team-level
+    /// `rest_defense_count` rather than a bare "at least one CB
+    /// behind me" heuristic. Without the rest-defence gate, both
+    /// fullbacks would routinely vacate the back line on the same
+    /// possession, and a single counter-attack pass landed straight
+    /// behind the team. The gate also requires Attack/Progression phase,
+    /// healthy condition + work-rate, and a team_width_target above
+    /// 0.45 so a deliberately compact / low-block side never overlaps.
     fn should_overlap(&self, ctx: &StateProcessingContext) -> bool {
         // Must be a wide defender (starting position near touchline)
         let field_height = ctx.context.field_size.height as f32;
@@ -1084,6 +1097,29 @@ impl DefenderRunningState {
 
         // Team must control ball
         if !ctx.team().is_control_ball() {
+            return false;
+        }
+
+        // Phase gate: only overlap in established attacking phases.
+        // Transitions and build-up are too fragile — overlap during a
+        // counter break invites a 2v1 the other way the moment the move
+        // breaks down.
+        let phase = ctx.team().phase();
+        if !matches!(phase, GamePhase::Attack | GamePhase::Progression) {
+            return false;
+        }
+
+        // Width gate: a deliberately compact tactic (low block,
+        // possession through the middle) should not push fullbacks wide.
+        if ctx.team().team_width_target() <= 0.45 {
+            return false;
+        }
+
+        // Player must have the legs and willingness for a 50-60m sprint.
+        if ctx.player.player_attributes.condition_percentage() <= 55 {
+            return false;
+        }
+        if ctx.player.skills.mental.work_rate <= 10.0 {
             return false;
         }
 
@@ -1114,22 +1150,39 @@ impl DefenderRunningState {
         let to_goal = (goal_pos - ctx.player.position).normalize();
         let ball_ahead = (ball_pos - ctx.player.position).normalize().dot(&to_goal) > 0.0;
         if !ball_ahead {
-            return false; // Already ahead of ball carrier
+            return false;
         }
 
-        // Must not be the last defender (at least one CB between defender and own goal)
-        let own_goal = ctx.ball().direction_to_own_goal();
-        let own_dist = (ctx.player.position - own_goal).magnitude();
-        let defenders_behind = ctx
+        // Rest-defence gate: count teammates whose attacking_progress is
+        // strictly behind the ball (with a 0.03 deadband to avoid
+        // flapping on the line). Need at least `rest_defense_count + 1`
+        // back there before this fullback may advance. Late-lead game
+        // management adds one more required defender.
+        let side = match ctx.player.side {
+            Some(s) => s,
+            None => return false,
+        };
+        let field_width = ctx.context.field_size.width as f32;
+        let ball_progress = side.attacking_progress_x(ball_pos.x, field_width);
+        let behind_threshold = ball_progress - 0.03;
+        let behind_ball_count = ctx
             .players()
             .teammates()
-            .defenders()
-            .filter(|d| {
-                let d_dist = (d.position - own_goal).magnitude();
-                d_dist < own_dist && d.id != ctx.player.id
+            .all()
+            .filter(|t| {
+                if t.id == ctx.player.id {
+                    return false;
+                }
+                let progress = side.attacking_progress_x(t.position.x, field_width);
+                progress < behind_threshold
             })
             .count();
-        if defenders_behind < 1 {
+        let mut required_behind = ctx.team().rest_defense_count() as usize + 1;
+        let minute = (ctx.context.total_match_time as f32) / 60_000.0;
+        if minute > 75.0 && ctx.team().score_diff() > 0 {
+            required_behind += 1;
+        }
+        if behind_ball_count < required_behind {
             return false;
         }
 
@@ -1148,6 +1201,23 @@ impl DefenderRunningState {
             .count();
 
         opponents_blocking == 0
+    }
+
+    /// Pure helper: how many defenders we need behind the ball before
+    /// a fullback may overlap. Late-lead game management adds one more.
+    /// Exposed so tests can assert the gate's arithmetic directly,
+    /// without spinning up an engine fixture.
+    #[cfg(test)]
+    pub(crate) fn required_behind_ball(
+        rest_defense_count: u8,
+        minute: f32,
+        score_diff: i8,
+    ) -> usize {
+        let mut required = rest_defense_count as usize + 1;
+        if minute > 75.0 && score_diff > 0 {
+            required += 1;
+        }
+        required
     }
 
     /// Find a safe backward/lateral pass target for tempo control.
@@ -1237,5 +1307,41 @@ impl DefenderRunningState {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod overlap_gate_tests {
+    use super::DefenderRunningState;
+
+    #[test]
+    fn overlap_requires_rest_defense_plus_one() {
+        // Standard back four with 4 nominal rest defenders → need ≥5 behind.
+        assert_eq!(DefenderRunningState::required_behind_ball(4, 60.0, 0), 5);
+    }
+
+    #[test]
+    fn late_lead_adds_one_more_required_defender() {
+        let normal = DefenderRunningState::required_behind_ball(4, 60.0, 0);
+        let late_lead = DefenderRunningState::required_behind_ball(4, 80.0, 1);
+        assert_eq!(late_lead, normal + 1);
+    }
+
+    #[test]
+    fn early_lead_does_not_add_extra_defender() {
+        assert_eq!(
+            DefenderRunningState::required_behind_ball(4, 60.0, 1),
+            DefenderRunningState::required_behind_ball(4, 60.0, 0),
+        );
+    }
+
+    #[test]
+    fn late_chase_does_not_add_extra_defender() {
+        // Game management drops `rest_defense_count` upstream — the
+        // overlap gate doesn't pin extra defenders for a chasing side.
+        assert_eq!(
+            DefenderRunningState::required_behind_ball(4, 80.0, -1),
+            DefenderRunningState::required_behind_ball(4, 80.0, 0),
+        );
     }
 }
