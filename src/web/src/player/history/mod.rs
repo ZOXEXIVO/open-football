@@ -170,6 +170,11 @@ pub async fn player_history_action(
     } else {
         None
     };
+    log::info!(
+        "[history] player {} spells:\n{}",
+        player.id,
+        player.statistics_history.debug_spell_dump()
+    );
     let view = player.statistics_history.view_items(live_stats);
     let career_totals = core::PlayerStatisticsHistory::career_totals(&view);
 

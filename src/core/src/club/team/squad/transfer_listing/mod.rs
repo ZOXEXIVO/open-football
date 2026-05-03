@@ -581,8 +581,10 @@ fn is_protected_from_listing(teams: &[Team], indices: &[(usize, &str)], player_i
         if let Some(p) = teams[idx].players.find(player_id) {
             // Manager-pinned players are absolutely protected — even an
             // explicit player request to leave is overridden, since the
-            // flag's whole purpose is "do not move this player".
-            if p.is_force_match_selection {
+            // flag's whole purpose is "do not move this player". The pin
+            // is meaningful only while the player is on a contract; a
+            // free agent is no longer at the club to be pinned.
+            if p.is_force_match_selection && p.contract.is_some() {
                 return true;
             }
             let wants_out = p

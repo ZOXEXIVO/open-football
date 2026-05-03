@@ -888,8 +888,11 @@ impl PipelineProcessor {
                 }
                 // Manager-pinned players bypass the position-glut path:
                 // even at a positional surplus they don't get listed or
-                // loaned out — the pin is the whole point.
-                if player.is_force_match_selection {
+                // loaned out — the pin is the whole point. The pin only
+                // applies while the player is under contract; a free
+                // agent (contract=None) is a leftover pin from the prior
+                // contract and must not block the transfer pipeline.
+                if player.is_force_match_selection && player.contract.is_some() {
                     continue;
                 }
                 let statuses = player.statuses.get();
@@ -976,8 +979,10 @@ impl PipelineProcessor {
 
             // Manager-pinned: never propose a loan-out, regardless of
             // philosophy / playing-time / surplus signals. The pin is
-            // the manager's decision; the AI must respect it.
-            if player.is_force_match_selection {
+            // the manager's decision; the AI must respect it. A free
+            // agent (no contract) cannot be loaned anyway, but the pin
+            // must not block any future move either.
+            if player.is_force_match_selection && player.contract.is_some() {
                 continue;
             }
 

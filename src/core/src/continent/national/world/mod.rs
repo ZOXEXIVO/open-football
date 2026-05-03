@@ -4,7 +4,7 @@
 //! playing at a foreign club, and split the post-match write path
 //! between continental qualifiers and global tournaments. This module
 //! is the world-scope counterpart of
-//! [`super::national_team_competition`]: every helper here operates
+//! [`super::competition`]: every helper here operates
 //! on `&mut [Continent]` so foreign-based players are reachable and
 //! both flows funnel through one set of post-match writes.
 //!

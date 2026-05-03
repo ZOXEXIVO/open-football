@@ -1,12 +1,10 @@
 pub mod competition;
 pub mod config;
-pub mod national_team_competition;
 pub mod schedule;
 pub mod world;
 
 pub use competition::*;
 pub use config::*;
-pub use national_team_competition::*;
 
 use chrono::{Datelike, NaiveDate};
 

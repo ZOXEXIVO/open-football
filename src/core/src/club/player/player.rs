@@ -376,8 +376,11 @@ impl Player {
         // Manager has pinned this player to the squad — no outbound move
         // is acceptable, full stop. Same predicate the recommendation
         // pipeline, negotiation initiator, and seller-side offer
-        // evaluation all read, so every flow refuses uniformly.
-        if self.is_force_match_selection {
+        // evaluation all read, so every flow refuses uniformly. The pin
+        // applies only to contracted players: once the contract ends the
+        // player is a free agent and a stale pin must not block their
+        // ability to move to a new club.
+        if self.is_force_match_selection && self.contract.is_some() {
             return true;
         }
 

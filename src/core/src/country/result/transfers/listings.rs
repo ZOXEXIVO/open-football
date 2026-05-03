@@ -399,7 +399,9 @@ impl CountryResult {
         }
 
         // Manager has pinned this player to the squad — never auto-list.
-        if player.is_force_match_selection {
+        // The pin only protects contracted players; once the contract
+        // ends the player is a free agent and must be free to move.
+        if player.is_force_match_selection && player.contract.is_some() {
             return ListingDecision::Keep;
         }
 

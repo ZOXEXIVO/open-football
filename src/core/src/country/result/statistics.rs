@@ -239,9 +239,12 @@ mod tests {
 
         assert_eq!(player.statistics.played, 0);
         assert_eq!(player.statistics.goals, 0);
-        assert_eq!(player.statistics_history.items.len(), 1);
-        let entry = &player.statistics_history.items[0];
-        assert_eq!(entry.season.start_year, 2031);
+        let entry = player
+            .statistics_history
+            .items
+            .iter()
+            .find(|i| i.season.start_year == 2031)
+            .expect("Frozen 2031 row missing");
         assert_eq!(entry.team_slug, "inter");
         assert_eq!(entry.league_slug, "serie-a");
         assert_eq!(entry.statistics.played, 20);
