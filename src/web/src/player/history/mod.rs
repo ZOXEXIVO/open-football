@@ -170,7 +170,9 @@ pub async fn player_history_action(
     } else {
         None
     };
-    let view = player.statistics_history.view_items(live_stats);
+    let view = player
+        .statistics_history
+        .view_items(live_stats, simulator_data.date.date());
     let career_totals = core::PlayerStatisticsHistory::career_totals(&view);
 
     let mut location_cache: std::collections::HashMap<String, TeamLocationInfo> =

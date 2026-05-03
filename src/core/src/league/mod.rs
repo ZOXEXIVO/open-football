@@ -4,6 +4,7 @@ mod dynamics;
 mod league;
 mod matchday;
 mod milestones;
+pub mod player_of_week;
 mod processing;
 mod regulations;
 pub mod result;
@@ -19,6 +20,9 @@ pub use context::*;
 pub use dynamics::*;
 pub use league::*;
 pub use milestones::*;
+pub use player_of_week::{
+    PlayerOfTheWeekAward, PlayerOfTheWeekHistory, PlayerOfTheWeekSelector,
+};
 pub use regulations::*;
 pub use result::*;
 pub use schedule::*;

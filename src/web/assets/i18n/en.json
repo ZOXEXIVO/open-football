@@ -69,6 +69,7 @@
   "event_match_dropped": "Dropped from match squad",
   "event_playing_time_promise": "Promised playing time by manager",
   "event_player_of_the_match": "Named Player of the Match",
+  "event_player_of_the_week": "Named Player of the Week",
   "event_poor_training": "Performed poorly in training",
   "event_squad_status_change": "Squad status changed",
   "event_contract_renewal": "Signed a new contract",

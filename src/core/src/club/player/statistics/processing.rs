@@ -1838,7 +1838,7 @@ mod tests {
         // View during season: both seasons should be visible
         let view = player
             .statistics_history
-            .view_items(Some(&player.statistics));
+            .view_items(Some(&player.statistics), make_date(2028, 1, 15));
         let view_2026 = view
             .iter()
             .find(|e| e.season.start_year == 2026 && e.team_slug == "zabbar");

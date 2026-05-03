@@ -48,6 +48,15 @@ impl Player {
         self.on_team_season_event_with_prestige(event, cooldown_days, 1.0, now)
     }
 
+    /// React to being named the league's Player of the Week. Recorded as a
+    /// big career-visible event with a 6-day cooldown so the same player can
+    /// win consecutive weeks without the second emit being swallowed, but a
+    /// double-fire on the same Monday tick is still rejected.
+    pub fn on_player_of_the_week(&mut self) -> bool {
+        self.happiness
+            .add_event_default_with_cooldown(HappinessEventType::PlayerOfTheWeek, 6)
+    }
+
     /// Same as [`on_team_season_event`] with an explicit prestige multiplier
     /// applied to the magnitude. Use it for cup / continental events whose
     /// magnitude depends on competition tier — e.g. `0.7` for a domestic

@@ -7,13 +7,14 @@ use crate::config::SimulatorConfig;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::national::world as national_world;
 use crate::continent::{Continent, ContinentResult};
+use crate::league::player_of_week::{PlayerOfTheWeekAward, PlayerOfTheWeekSelector};
 use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
 use crate::utils::random::engine as rng_engine;
 use crate::{Player, Staff, TeamInfo};
-use chrono::{Datelike, Duration, NaiveDateTime};
+use chrono::{Datelike, Duration, NaiveDateTime, Weekday};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
@@ -205,6 +206,11 @@ impl FootballSimulator {
         if config.is_trim_day(current_date.date()) {
             data.match_store.trim(current_date.date());
         }
+
+        // Pick each league's Player of the Week. Runs every Monday after
+        // the matchday pipeline has flushed last week's results into each
+        // league's MatchStorage.
+        WeeklyAwardsTick::run(data);
 
         data.next_date();
 
@@ -706,6 +712,133 @@ fn settle_parent_residual_loan_wages(data: &mut SimulatorData) {
             club.finance.balance.push_expense_player_wages(amount);
         }
     }
+}
+
+/// Monday-only orchestration that walks every non-friendly league, picks
+/// its Player of the Week from last calendar week's matches, and applies
+/// the side effects (player happiness event + league archive). Two-pass
+/// design avoids overlapping `&` and `&mut` borrows of `SimulatorData`.
+struct WeeklyAwardsTick;
+
+impl WeeklyAwardsTick {
+    fn run(data: &mut SimulatorData) {
+        let today = data.date.date();
+        if today.weekday() != Weekday::Mon {
+            return;
+        }
+        let week_end = today;
+        let week_start = today - Duration::days(7);
+
+        let pending = Self::collect_pending(data, week_start, week_end);
+        Self::apply_pending(data, pending);
+    }
+
+    fn collect_pending(
+        data: &SimulatorData,
+        week_start: chrono::NaiveDate,
+        week_end: chrono::NaiveDate,
+    ) -> Vec<PendingWeeklyAward> {
+        let mut pending: Vec<PendingWeeklyAward> = Vec::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for league in &country.leagues.leagues {
+                    if league.friendly {
+                        continue;
+                    }
+                    if league.player_of_week.has_award_for_week(week_end) {
+                        continue;
+                    }
+
+                    let scores = PlayerOfTheWeekSelector::aggregate(
+                        league.matches.iter_in_range(week_start, week_end),
+                    );
+                    let Some((winner_id, agg)) = PlayerOfTheWeekSelector::pick_winner(&scores)
+                    else {
+                        continue;
+                    };
+
+                    let Some(player) = data.player(winner_id) else {
+                        continue;
+                    };
+                    let player_name = format!(
+                        "{} {}",
+                        player.full_name.display_first_name(),
+                        player.full_name.display_last_name()
+                    );
+                    let player_slug = player.slug();
+                    let (club_id, club_name, club_slug) =
+                        Self::resolve_club_card(data, winner_id);
+                    let average_rating = if agg.matches_played > 0 {
+                        agg.rating_sum / agg.matches_played as f32
+                    } else {
+                        0.0
+                    };
+
+                    pending.push(PendingWeeklyAward {
+                        league_id: league.id,
+                        winner_id,
+                        award: PlayerOfTheWeekAward {
+                            week_end_date: week_end,
+                            player_id: winner_id,
+                            player_name,
+                            player_slug,
+                            club_id,
+                            club_name,
+                            club_slug,
+                            score: agg.score,
+                            goals: agg.goals,
+                            assists: agg.assists,
+                            matches_played: agg.matches_played,
+                            average_rating,
+                        },
+                    });
+                }
+            }
+        }
+        pending
+    }
+
+    fn apply_pending(data: &mut SimulatorData, pending: Vec<PendingWeeklyAward>) {
+        for entry in pending {
+            if let Some(player) = data.player_mut(entry.winner_id) {
+                player.on_player_of_the_week();
+            }
+            if let Some(league) = data.league_mut(entry.league_id) {
+                league.player_of_week.record(entry.award);
+            }
+        }
+    }
+
+    /// Resolve the active-club card (id, display name, slug) for a
+    /// winning player. Falls back to empty values if the player isn't on
+    /// a roster (free agent at award time — extremely unlikely
+    /// Monday-morning, but guarded against).
+    fn resolve_club_card(data: &SimulatorData, player_id: u32) -> (u32, String, String) {
+        let location = data
+            .indexes
+            .as_ref()
+            .and_then(|i| i.get_player_location(player_id));
+        let Some((_, _, club_id, _)) = location else {
+            return (0, String::new(), String::new());
+        };
+        let Some(club) = data.club(club_id) else {
+            return (club_id, String::new(), String::new());
+        };
+        let main_team = club.teams.main();
+        let club_name = main_team
+            .map(|t| t.name.clone())
+            .unwrap_or_else(|| club.name.clone());
+        let club_slug = main_team
+            .map(|t| t.slug.clone())
+            .unwrap_or_else(String::new);
+        (club_id, club_name, club_slug)
+    }
+}
+
+struct PendingWeeklyAward {
+    league_id: u32,
+    winner_id: u32,
+    award: PlayerOfTheWeekAward,
 }
 
 // ============================================================

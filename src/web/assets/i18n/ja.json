@@ -251,6 +251,7 @@
   "event_national_team_callup": "代表チームに招集された",
   "event_national_team_dropped": "代表チームから外された",
   "event_player_of_the_match": "マン・オブ・ザ・マッチに選出",
+  "event_player_of_the_week": "週間最優秀選手に選出",
   "event_playing_time_promise": "監督から出場機会の約束",
   "event_poor_training": "練習で低パフォーマンス",
   "event_promise_broken": "監督が約束を破った",

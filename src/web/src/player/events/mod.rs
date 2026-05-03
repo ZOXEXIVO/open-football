@@ -227,6 +227,8 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             | HappinessEventType::Relegated
             | HappinessEventType::PromotionCelebration
             | HappinessEventType::CupFinalDefeat
+            // ── Awards ───────────────────────────────────────
+            | HappinessEventType::PlayerOfTheWeek
             // ── Status / role hand-overs ─────────────────────
             | HappinessEventType::CaptaincyAwarded
             | HappinessEventType::CaptaincyRemoved
@@ -274,6 +276,7 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::LackOfPlayingTime => "event_lack_of_playing_time",
         HappinessEventType::LoanListingAccepted => "event_loan_listing_accepted",
         HappinessEventType::PlayerOfTheMatch => "event_player_of_the_match",
+        HappinessEventType::PlayerOfTheWeek => "event_player_of_the_week",
         HappinessEventType::TeammateBonding => "event_teammate_bonding",
         HappinessEventType::ConflictWithTeammate => "event_conflict_with_teammate",
         HappinessEventType::DressingRoomSpeech => "event_dressing_room_speech",

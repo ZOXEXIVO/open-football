@@ -96,6 +96,10 @@ pub enum HappinessEventType {
     InjuryReturn,
     // Match performance
     PlayerOfTheMatch,
+    /// Named the league's Player of the Week — chosen Mondays based on the
+    /// previous calendar week's performances. Bigger than POM (which is one
+    /// match) and rarer (one player per league per week). Career-visible.
+    PlayerOfTheWeek,
     // Team/squad relationship
     TeammateBonding,
     ConflictWithTeammate,

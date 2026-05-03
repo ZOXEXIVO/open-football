@@ -441,6 +441,28 @@ impl PlayerStatisticsHistory {
                         && i.is_loan == entry.is_loan
                 });
                 if dominated_by_frozen {
+                    if entry.statistics.total_games() > 0 {
+                        if let Some(existing) = self.items.iter_mut().rev().find(|i| {
+                            i.season.start_year == season.start_year
+                                && i.team_slug == entry.team_slug
+                                && i.is_loan == entry.is_loan
+                        }) {
+                            let mut remaining = entry.statistics;
+                            remaining.played += remaining.played_subs;
+                            remaining.played_subs = 0;
+                            existing.statistics.merge_from(&remaining);
+                        }
+                    }
+                    if entry.transfer_fee.is_some() {
+                        if let Some(existing) = self.items.iter_mut().rev().find(|i| {
+                            i.season.start_year == season.start_year
+                                && i.team_slug == entry.team_slug
+                                && i.is_loan == entry.is_loan
+                                && i.transfer_fee.is_none()
+                        }) {
+                            existing.transfer_fee = entry.transfer_fee;
+                        }
+                    }
                     continue;
                 }
                 let games = entry.statistics.total_games();
@@ -574,15 +596,19 @@ impl PlayerStatisticsHistory {
     /// entry (the one without `departed_date`). This bridges the gap between
     /// `player.statistics` (continuously updated by matches) and the snapshot
     /// stored in `current` (only updated at event boundaries).
+    ///
+    /// `current_date` — today's game date. Used to label *active* current-season
+    /// entries with the correct season. Without this, the season label would
+    /// follow the entry's `joined_date`, which is set at the previous
+    /// season-end snapshot and goes stale if the next snapshot was delayed
+    /// (e.g. the league's new-season schedule hasn't been generated yet on
+    /// the date the page is rendered).
     pub fn view_items(
         &self,
         live_stats: Option<&PlayerStatistics>,
+        current_date: NaiveDate,
     ) -> Vec<PlayerStatisticsHistoryItem> {
-        let current_season = self
-            .current
-            .first()
-            .map(|e| Season::from_date(e.joined_date))
-            .unwrap_or_else(|| Season::new(0));
+        let today_season = Season::from_date(current_date);
 
         let mut result: Vec<PlayerStatisticsHistoryItem> = self.items.clone();
 
@@ -615,8 +641,23 @@ impl PlayerStatisticsHistory {
                 entry.statistics.clone()
             };
 
+            // Active rows track the actual game date so the player page shows
+            // "this is their current season" no matter how stale joined_date is.
+            // Departed rows keep their joined_date season — that's the spell
+            // they actually played, regardless of when we render the page.
+            let row_season = if is_active {
+                today_season.clone()
+            } else {
+                let joined_season = Season::from_date(entry.joined_date);
+                if joined_season.start_year > today_season.start_year {
+                    today_season.clone()
+                } else {
+                    joined_season
+                }
+            };
+
             result.push(PlayerStatisticsHistoryItem {
-                season: current_season.clone(),
+                season: row_season,
                 team_name: entry.team_name.clone(),
                 team_slug: entry.team_slug.clone(),
                 team_reputation: entry.team_reputation,
@@ -750,6 +791,16 @@ mod club_career_apps_tests {
         }
     }
 
+    fn team(slug: &str) -> TeamInfo {
+        TeamInfo {
+            name: slug.to_string(),
+            slug: slug.to_string(),
+            reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+        }
+    }
+
     #[test]
     fn club_career_apps_sums_history_at_current_club_plus_live() {
         // Player has 80 historical apps at "juventus" (split across two
@@ -787,5 +838,165 @@ mod club_career_apps_tests {
         let hist = PlayerStatisticsHistory::new();
         let apps = hist.current_club_career_apps(5, 2);
         assert_eq!(apps, 7);
+    }
+
+    #[test]
+    fn view_items_labels_active_entry_with_current_game_date_season() {
+        // Repro for: player history page shows the latest row stuck on a
+        // past season (e.g. "2026/27") even though the game date is well
+        // into a later season ("2027/28"). This happens when the next
+        // season-end snapshot has been delayed for that league, so the
+        // current-season entry's `joined_date` is still anchored to the
+        // previous season's start. The view must label the active row
+        // using today's game date, not the stale joined_date.
+        let mut hist = PlayerStatisticsHistory::from_items(vec![
+            frozen(2025, "spartak", 28, 0),
+            frozen(2026, "spartak", 30, 0),
+        ]);
+        // Stale current entry: joined_date is from the 2026/27 season
+        // start — the next snapshot never re-seeded it.
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "spartak".to_string(),
+            team_slug: "spartak".to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2026, 8, 1),
+            departed_date: None,
+            seq_id: 99,
+        });
+
+        let mut live = PlayerStatistics::default();
+        live.played = 18;
+
+        let view = hist.view_items(Some(&live), d(2028, 5, 14));
+
+        // Frozen rows kept as-is; the active row must surface as 2027/28
+        // (the season containing today's date), not duplicate 2026/27.
+        assert!(
+            view.iter()
+                .any(|i| i.season.start_year == 2027 && i.team_slug == "spartak"),
+            "expected a 2027/28 spartak row reflecting current game date,\
+             got seasons: {:?}",
+            view.iter().map(|i| i.season.start_year).collect::<Vec<_>>()
+        );
+        let active_row = view
+            .iter()
+            .find(|i| i.season.start_year == 2027 && i.team_slug == "spartak")
+            .unwrap();
+        assert_eq!(active_row.statistics.played, 18);
+        // Frozen 2026/27 row must remain untouched (single row, original 30 apps).
+        let frozen_2026: Vec<_> = view
+            .iter()
+            .filter(|i| i.season.start_year == 2026 && i.team_slug == "spartak")
+            .collect();
+        assert_eq!(frozen_2026.len(), 1);
+        assert_eq!(frozen_2026[0].statistics.played, 30);
+    }
+
+    #[test]
+    fn view_items_keeps_departed_entry_in_its_own_season() {
+        // A mid-season transfer leaves a *departed* current entry behind
+        // (e.g. spartak → cska in April 2028). The departed row must keep
+        // its joined_date season label, not adopt today's season —
+        // otherwise both spells would collapse into one row.
+        let mut hist = PlayerStatisticsHistory::from_items(vec![frozen(2025, "spartak", 28, 0)]);
+
+        let mut spartak_stats = PlayerStatistics::default();
+        spartak_stats.played = 22;
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "spartak".to_string(),
+            team_slug: "spartak".to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: spartak_stats,
+            joined_date: d(2026, 8, 1),
+            departed_date: Some(d(2027, 4, 1)),
+            seq_id: 10,
+        });
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "cska".to_string(),
+            team_slug: "cska".to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: Some(1_000_000.0),
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2027, 4, 1),
+            departed_date: None,
+            seq_id: 11,
+        });
+
+        let mut live = PlayerStatistics::default();
+        live.played = 5;
+        let view = hist.view_items(Some(&live), d(2028, 5, 14));
+
+        let spartak_row = view
+            .iter()
+            .find(|i| i.team_slug == "spartak" && i.seq_id == 10)
+            .unwrap();
+        assert_eq!(spartak_row.season.start_year, 2026);
+        assert_eq!(spartak_row.statistics.played, 22);
+
+        let cska_row = view.iter().find(|i| i.team_slug == "cska").unwrap();
+        assert_eq!(cska_row.season.start_year, 2027);
+        assert_eq!(cska_row.statistics.played, 5);
+    }
+
+    #[test]
+    fn duplicate_season_guard_merges_dominated_current_loan_stats() {
+        let mut frozen_stats = PlayerStatistics::default();
+        frozen_stats.played = 0;
+
+        let mut hist = PlayerStatisticsHistory::from_items(vec![PlayerStatisticsHistoryItem {
+            season: Season::new(2026),
+            team_name: "zabbar".to_string(),
+            team_slug: "zabbar".to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: frozen_stats,
+            seq_id: 1,
+        }]);
+
+        let mut current_stats = PlayerStatistics::default();
+        current_stats.played = 12;
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "zabbar".to_string(),
+            team_slug: "zabbar".to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: true,
+            transfer_fee: Some(0.0),
+            statistics: current_stats,
+            joined_date: d(2026, 9, 1),
+            departed_date: Some(d(2027, 5, 31)),
+            seq_id: 2,
+        });
+
+        hist.record_season_end(
+            Season::new(2026),
+            PlayerStatistics::default(),
+            &team("zabbar"),
+            true,
+            None,
+        );
+
+        let loan_row = hist
+            .items
+            .iter()
+            .find(|i| i.season.start_year == 2026 && i.team_slug == "zabbar" && i.is_loan)
+            .unwrap();
+        assert_eq!(loan_row.statistics.played, 12);
     }
 }

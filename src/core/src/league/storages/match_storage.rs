@@ -61,6 +61,21 @@ impl MatchStorage {
         self.results.is_empty()
     }
 
+    /// Iterate every result whose recording date falls in `[start, end)`.
+    /// Borrowed lookup so the per-week aggregator can score players without
+    /// cloning the underlying `MatchResult` (which carries position data
+    /// and player stats — non-trivial in size).
+    pub fn iter_in_range<'a>(
+        &'a self,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> impl Iterator<Item = &'a MatchResult> + 'a {
+        self.by_date
+            .range(start..end)
+            .flat_map(|(_, ids)| ids.iter())
+            .filter_map(move |id| self.results.get(id))
+    }
+
     /// Drop every match recorded before `today − retention_days`. O(K log N)
     /// in the number of evicted dates; cheap to call on season boundaries.
     pub fn trim(&mut self, today: NaiveDate) {

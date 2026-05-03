@@ -298,6 +298,7 @@ pub struct MoraleEventCatalog {
     pub injury_return: f32,
     // Match performance
     pub player_of_the_match: f32,
+    pub player_of_the_week: f32,
     // Squad relationships
     pub teammate_bonding: f32,
     pub conflict_with_teammate: f32,
@@ -384,6 +385,10 @@ impl Default for MoraleEventCatalog {
             loan_listing_accepted: -2.0,
             injury_return: 3.0,
             player_of_the_match: 4.0,
+            // Career-memory weekly award. Larger than POM because the
+            // recipient outperformed every other player in the league for
+            // a full week of fixtures, not just a single ninety minutes.
+            player_of_the_week: 6.0,
             teammate_bonding: 1.5,
             conflict_with_teammate: -2.0,
             dressing_room_speech: 1.5,
@@ -482,6 +487,7 @@ impl MoraleEventCatalog {
             LoanListingAccepted => self.loan_listing_accepted,
             InjuryReturn => self.injury_return,
             PlayerOfTheMatch => self.player_of_the_match,
+            PlayerOfTheWeek => self.player_of_the_week,
             TeammateBonding => self.teammate_bonding,
             ConflictWithTeammate => self.conflict_with_teammate,
             DressingRoomSpeech => self.dressing_room_speech,
