@@ -114,10 +114,28 @@ fn wall_size_decreases_with_distance_band() {
 fn fk_indirect_zero_shot_and_distance_zero_shot() {
     let env = MatchEnvironment::default();
     // Indirect — never a shot.
-    let s = score_free_kick_choices(FreeKickBand::Close, true, 18.0, 14.0, 0.5, false, false, &env);
+    let s = score_free_kick_choices(
+        FreeKickBand::Close,
+        true,
+        18.0,
+        14.0,
+        0.5,
+        false,
+        false,
+        &env,
+    );
     assert_eq!(s.direct_shot, 0.0);
     // Far distance — also no shot.
-    let s = score_free_kick_choices(FreeKickBand::Far, false, 18.0, 14.0, 0.5, false, false, &env);
+    let s = score_free_kick_choices(
+        FreeKickBand::Far,
+        false,
+        18.0,
+        14.0,
+        0.5,
+        false,
+        false,
+        &env,
+    );
     assert_eq!(s.direct_shot, 0.0);
 }
 
@@ -232,7 +250,10 @@ fn home_advantage_increases_with_crowd_but_stays_modest() {
 #[test]
 fn time_wasting_kicks_in_when_leading_late_and_can_book() {
     // No delay before 75'.
-    assert_eq!(time_wasting_delay_ms(1, 60, TimeWastingRestart::ThrowIn, 12.0), 0);
+    assert_eq!(
+        time_wasting_delay_ms(1, 60, TimeWastingRestart::ThrowIn, 12.0),
+        0
+    );
     // Substitution late while leading produces the longest delay.
     let sub = time_wasting_delay_ms(1, 88, TimeWastingRestart::Substitution, 12.0);
     let throw = time_wasting_delay_ms(1, 88, TimeWastingRestart::ThrowIn, 12.0);

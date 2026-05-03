@@ -576,9 +576,7 @@ impl PassEvaluator {
             };
             let decisions = (ctx.player.skills.mental.decisions / 20.0).clamp(0.0, 1.0);
             let teamwork = (ctx.player.skills.mental.teamwork / 20.0).clamp(0.0, 1.0);
-            (0.30 + receiver_space_factor * 0.10
-                + decisions * 0.05
-                + teamwork * 0.05)
+            (0.30 + receiver_space_factor * 0.10 + decisions * 0.05 + teamwork * 0.05)
                 .clamp(0.30, 0.50)
         } else {
             0.0
@@ -607,8 +605,7 @@ impl PassEvaluator {
             && pass_distance <= 65.0
             && receiver_is_recycle_target
         {
-            let under_press =
-                ctx.players().opponents().nearby(12.0).next().is_some();
+            let under_press = ctx.players().opponents().nearby(12.0).next().is_some();
             let patient = ctx.team().build_up_patience() > 0.65;
             if under_press || patient {
                 let mut bonus: f32 = 0.15;
@@ -658,26 +655,21 @@ impl PassEvaluator {
         // lateral third the ball is in (= the pass-source side, modulo
         // ball motion).
         let team_state = ctx.context.tactical_for_team(ctx.player.team_id);
-        let receiver_side_zone =
-            BallSideZone::for_y(field_height, receiver_position.y);
+        let receiver_side_zone = BallSideZone::for_y(field_height, receiver_position.y);
         let receiver_side_density = match receiver_side_zone {
             BallSideZone::Left => team_state.side_density_left,
             BallSideZone::Center => team_state.side_density_center,
             BallSideZone::Right => team_state.side_density_right,
         };
-        let same_side_density_penalty =
-            Self::same_side_density_penalty(receiver_side_density);
+        let same_side_density_penalty = Self::same_side_density_penalty(receiver_side_density);
         // Reward switches to underloaded sides with a vision-graded
         // bonus. Two-band threshold: any pass that crosses lateral
         // thirds and lands in a side with ≤3 own players counts.
         let passer_side_zone = BallSideZone::for_y(field_height, passer_position.y);
         let crosses_sides = passer_side_zone != receiver_side_zone;
         let vision = (ctx.player.skills.mental.vision / 20.0).clamp(0.0, 1.0);
-        let underload_switch_bonus = Self::underload_switch_bonus(
-            crosses_sides,
-            receiver_side_density,
-            vision,
-        );
+        let underload_switch_bonus =
+            Self::underload_switch_bonus(crosses_sides, receiver_side_density, vision);
 
         // Cap the combined "switch reward" so a wide-vision playmaker
         // doesn't double-dip the classic switch_play_bonus and the
@@ -1056,8 +1048,7 @@ impl PassEvaluator {
                     side.forward_delta(ctx.player.position.x, teammate.position.x) < 0.0;
 
                 let field_width = ctx.context.field_size.width as f32;
-                let player_progress =
-                    side.attacking_progress_x(ctx.player.position.x, field_width);
+                let player_progress = side.attacking_progress_x(ctx.player.position.x, field_width);
                 let in_attacking_third = player_progress > 0.66;
 
                 let phase_now = ctx.team().phase();
@@ -1071,8 +1062,10 @@ impl PassEvaluator {
                     // the legacy ~0.0001 ceiling) but only when the
                     // passer is genuinely under pressure or wants to
                     // recycle (low risk_appetite).
-                    let under_press =
-                        ctx.player().pressure().is_under_immediate_pressure_with_distance(8.0);
+                    let under_press = ctx
+                        .player()
+                        .pressure()
+                        .is_under_immediate_pressure_with_distance(8.0);
                     let recycle_intent = ctx.team().risk_appetite() < 0.45;
                     if under_press || recycle_intent {
                         // GK is a real option in build-up under press,
@@ -1215,8 +1208,7 @@ impl PassEvaluator {
                         .pressure()
                         .is_under_immediate_pressure_with_distance(8.0);
                     let recycle_intent = ctx.team().risk_appetite() < 0.45;
-                    evaluation.success_probability > 0.55
-                        && (under_press || recycle_intent)
+                    evaluation.success_probability > 0.55 && (under_press || recycle_intent)
                 } else {
                     evaluation.factors.pressure_factor < 0.2
                         && evaluation.success_probability > 0.85
@@ -1384,8 +1376,7 @@ mod tests {
         // is `(classic + underload).min(0.45)`. Verify the helpers feed a
         // sensible joint maximum: classic max is 0.45 + vision*0.25 = 0.70,
         // underload max is 0.20. The cap therefore truly bites.
-        let underload_max =
-            PassEvaluator::underload_switch_bonus(true, 0, 1.0);
+        let underload_max = PassEvaluator::underload_switch_bonus(true, 0, 1.0);
         assert!(
             underload_max + 0.70 > 0.45,
             "cap must actually bite — sum without cap = {}",

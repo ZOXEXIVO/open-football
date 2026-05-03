@@ -99,7 +99,11 @@ pub fn clearance_quality(player: &MatchPlayer, minute: u32) -> f32 {
     let tech_ctx = ActionContext::technical(minute);
     let mental_ctx = ActionContext::mental(minute);
     let s = &player.skills;
-    let kicking = effective_skill(player, s.goalkeeping.kicking.max(s.technical.passing), tech_ctx);
+    let kicking = effective_skill(
+        player,
+        s.goalkeeping.kicking.max(s.technical.passing),
+        tech_ctx,
+    );
     let passing = effective_skill(player, s.technical.passing, tech_ctx);
     let technique = effective_skill(player, s.technical.technique, tech_ctx);
     let decisions = effective_skill(player, s.mental.decisions, mental_ctx);

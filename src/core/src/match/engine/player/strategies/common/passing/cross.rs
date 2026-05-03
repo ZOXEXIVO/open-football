@@ -192,9 +192,7 @@ fn pick_cross_type(
 /// Returns true if the attacker wins the header.
 pub fn resolve_aerial_duel(attacker: &MatchPlayer, defender: Option<&MatchPlayer>) -> bool {
     let attacker_score = aerial_attacker_score(attacker);
-    let defender_score = defender
-        .map(aerial_defender_score)
-        .unwrap_or(0.40); // Empty box → easier for the attacker, but not a free win.
+    let defender_score = defender.map(aerial_defender_score).unwrap_or(0.40); // Empty box → easier for the attacker, but not a free win.
 
     let diff = attacker_score - defender_score;
     let win_prob = sigmoid(diff * 2.2).clamp(0.18, 0.82);

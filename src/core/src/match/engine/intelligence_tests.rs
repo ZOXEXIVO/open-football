@@ -14,6 +14,7 @@ use crate::club::player::traits::PlayerTrait;
 use crate::r#match::engine::coach::{
     CoachInstruction, MatchCoach, RollingTeamMetrics, TacticalNeed,
 };
+use crate::r#match::engine::sub_scoring::sub_in_score;
 use crate::r#match::player::strategies::players::ops::dribble_duel::{
     DuelContext, resolve_dribble_duel,
 };
@@ -23,10 +24,7 @@ use crate::r#match::player::strategies::players::ops::effective_skill::{
 use crate::r#match::player::strategies::players::ops::first_touch::{
     PassContext, ReceiverPressure, resolve_first_touch,
 };
-use crate::r#match::player::strategies::players::ops::traits_bias::{
-    movement_bias, passing_bias,
-};
-use crate::r#match::engine::sub_scoring::sub_in_score;
+use crate::r#match::player::strategies::players::ops::traits_bias::{movement_bias, passing_bias};
 use crate::r#match::{MatchPlayer, calculate_match_rating};
 use crate::shared::fullname::FullName;
 use crate::{

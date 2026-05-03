@@ -1,12 +1,13 @@
 use crate::IntegerUtils;
+use crate::club::player::traits::PlayerTrait;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
-    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
-    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, GamePhase, MatchPlayerLite, PassEvaluator, PlayerDistanceFromStartPosition,
+    PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -304,9 +305,9 @@ impl StateProcessingHandler for ForwardRunningState {
                     let pb_clarity = ctx.player().shot_clarity();
                     let pb_fin = (ctx.player.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
                     let pb_comp = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-                    let pb_willingness =
-                        (pb_fin * 0.06 + pb_comp * 0.02 + 0.025).clamp(0.025, 0.10)
-                            * (0.50 + pb_clarity * 0.50);
+                    let pb_willingness = (pb_fin * 0.06 + pb_comp * 0.02 + 0.025)
+                        .clamp(0.025, 0.10)
+                        * (0.50 + pb_clarity * 0.50);
                     if rand::random::<f32>() < pb_willingness {
                         return Some(
                             StateChangeResult::with_forward_state(ForwardState::Shooting)
@@ -408,9 +409,9 @@ impl StateProcessingHandler for ForwardRunningState {
             // landing in 11-16 / team band and on-target ~35%, the
             // population-level conversion holds at ~30% of SOT —
             // matching real Premier League aggregates.
-            let base_willingness =
-                (fin_factor * 0.020 + comp_factor * 0.005 + 0.006).clamp(0.008, 0.025)
-                    * (0.40 + clarity * 0.60);
+            let base_willingness = (fin_factor * 0.020 + comp_factor * 0.005 + 0.006)
+                .clamp(0.008, 0.025)
+                * (0.40 + clarity * 0.60);
 
             // GAME-MANAGEMENT SHOT SUPPRESSION. When the team is protecting
             // a score (lead, late, underdog clinging to a draw) the coach
@@ -537,7 +538,7 @@ impl StateProcessingHandler for ForwardRunningState {
             let teamwork = ctx.player.skills.mental.teamwork / 20.0;
             let prefers_shot = ctx
                 .player
-                .has_trait(crate::club::player::traits::PlayerTrait::ShootsFromDistance);
+                .has_trait(PlayerTrait::ShootsFromDistance);
             let pass_margin = pass_deferral_margin(teamwork, prefers_shot);
 
             // Look ~80u for a better pass option — covers cutback /
@@ -555,19 +556,14 @@ impl StateProcessingHandler for ForwardRunningState {
                 .passing()
                 .find_best_pass_option_with_distance(80.0)
                 .map(|(t, _)| {
-                    let eval = crate::r#match::PassEvaluator::evaluate_pass(ctx, ctx.player, &t);
-                    let receiver_opps =
-                        ctx.tick_context.grid.opponents(t.id, 12.0).count();
+                    let eval = PassEvaluator::evaluate_pass(ctx, ctx.player, &t);
+                    let receiver_opps = ctx.tick_context.grid.opponents(t.id, 12.0).count();
                     apply_marked_pass_discount(eval.expected_value, receiver_opps)
                 })
                 .unwrap_or(0.0);
 
-            let defer_to_pass = should_defer_to_pass(
-                exp_xg,
-                best_pass_ev,
-                pass_margin,
-                distance_to_goal,
-            );
+            let defer_to_pass =
+                should_defer_to_pass(exp_xg, best_pass_ev, pass_margin, distance_to_goal);
 
             let shot_condition_met = has_settled
                 && can_shoot
@@ -2225,8 +2221,15 @@ pub(crate) fn pass_deferral_margin(teamwork: f32, prefers_shot: bool) -> f32 {
 /// value. ≥2 opponents within 12u of the receiver halves the EV — a
 /// pass into that traffic is mostly an interception waiting to happen
 /// and shouldn't talk a forward out of a real shot.
-pub(crate) fn apply_marked_pass_discount(pass_ev: f32, receiver_opponents_within_12u: usize) -> f32 {
-    let marked_factor = if receiver_opponents_within_12u >= 2 { 0.5 } else { 1.0 };
+pub(crate) fn apply_marked_pass_discount(
+    pass_ev: f32,
+    receiver_opponents_within_12u: usize,
+) -> f32 {
+    let marked_factor = if receiver_opponents_within_12u >= 2 {
+        0.5
+    } else {
+        1.0
+    };
     pass_ev * marked_factor
 }
 

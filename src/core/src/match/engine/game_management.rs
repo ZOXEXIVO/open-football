@@ -53,7 +53,13 @@ pub fn professional_foul_prob(
         return 0.0;
     }
     let n = |x: f32| (x / 20.0).clamp(0.0, 1.0);
-    let late = if match_minute >= 75 { 1.0 } else if match_minute >= 60 { 0.5 } else { 0.0 };
+    let late = if match_minute >= 75 {
+        1.0
+    } else if match_minute >= 60 {
+        0.5
+    } else {
+        0.0
+    };
     let yellow_bias = if already_yellow { 0.12 } else { 0.0 };
 
     let raw = n(aggression_0_20) * 0.14
@@ -104,9 +110,9 @@ pub fn time_wasting_delay_ms(
     let aggressiveness = (team_aggression_0_20 / 20.0).clamp(0.0, 1.0);
     let scale = 0.75 + (1.0 - aggressiveness) * 0.50; // calmer/older players waste more
     let base_ms = match restart_kind {
-        TimeWastingRestart::ThrowIn => 9_000.0,        // 5–18s window centre
-        TimeWastingRestart::GoalKick => 14_000.0,      // 8–24s
-        TimeWastingRestart::Substitution => 28_000.0,  // 20–35s
+        TimeWastingRestart::ThrowIn => 9_000.0, // 5–18s window centre
+        TimeWastingRestart::GoalKick => 14_000.0, // 8–24s
+        TimeWastingRestart::Substitution => 28_000.0, // 20–35s
         TimeWastingRestart::FreeKick => 6_000.0,
     };
     (base_ms * scale) as u64
@@ -239,8 +245,7 @@ mod tests {
 
     #[test]
     fn time_wasting_zero_when_not_leading() {
-        let zero =
-            time_wasting_delay_ms(0, 80, TimeWastingRestart::ThrowIn, 12.0);
+        let zero = time_wasting_delay_ms(0, 80, TimeWastingRestart::ThrowIn, 12.0);
         assert_eq!(zero, 0);
         let losing = time_wasting_delay_ms(-1, 85, TimeWastingRestart::ThrowIn, 12.0);
         assert_eq!(losing, 0);

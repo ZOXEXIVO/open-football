@@ -5,7 +5,7 @@
 //! returned probabilities/scores into their own random rolls. Skill
 //! attributes are the 0–20 scale exposed by `PlayerSkills` / `PersonAttributes`.
 
-use crate::r#match::engine::environment::MatchEnvironment;
+use crate::r#match::engine::environment::{MatchEnvironment, Pitch, Weather};
 
 /// Distance band of a direct free kick from goal, in field units (where
 /// 1u ≈ 0.125m). 90u ≈ 11m, 130u ≈ 16m.
@@ -111,7 +111,10 @@ pub fn score_corner_taker(
     vision_0_20: f32,
 ) -> f32 {
     let n = |x: f32| (x / 20.0).clamp(0.0, 1.0);
-    n(corners_0_20) * 0.45 + n(crossing_0_20) * 0.30 + n(technique_0_20) * 0.15 + n(vision_0_20) * 0.10
+    n(corners_0_20) * 0.45
+        + n(crossing_0_20) * 0.30
+        + n(technique_0_20) * 0.15
+        + n(vision_0_20) * 0.10
 }
 
 /// Penalty conversion probability.
@@ -136,7 +139,8 @@ pub fn penalty_conversion_prob(
     let pressure = match_pressure_0_1.clamp(0.0, 1.0);
     let shootout_pressure = if is_shootout { 1.0 } else { 0.0 };
 
-    let raw = base + taker_delta * 0.16 - keeper_delta * 0.10
+    let raw = base + taker_delta * 0.16
+        - keeper_delta * 0.10
         - pressure * 0.04
         - shootout_pressure * 0.03;
     raw.clamp(0.58, 0.90)
@@ -289,16 +293,14 @@ pub fn score_free_kick_choices(
     }
 
     // Wind suppresses long deliveries and shifts to short.
-    if env.weather == crate::r#match::engine::environment::Weather::Wind {
+    if env.weather == Weather::Wind {
         delivery -= 0.10;
         short += 0.07;
         shot -= 0.03;
     }
 
     // Heavy rain / muddy pitch makes short routines safer.
-    if env.weather == crate::r#match::engine::environment::Weather::HeavyRain
-        || env.pitch == crate::r#match::engine::environment::Pitch::Muddy
-    {
+    if env.weather == Weather::HeavyRain || env.pitch == Pitch::Muddy {
         short += 0.05;
         delivery -= 0.03;
     }
@@ -438,13 +440,13 @@ pub fn score_corner_routines(
         near -= 0.02;
     }
 
-    if env.weather == crate::r#match::engine::environment::Weather::Wind {
+    if env.weather == Weather::Wind {
         short += 0.06;
         near += 0.06;
         far -= 0.10;
         spot -= 0.02;
     }
-    if env.weather == crate::r#match::engine::environment::Weather::HeavyRain {
+    if env.weather == Weather::HeavyRain {
         short += 0.04;
         spot -= 0.02;
         far -= 0.02;
@@ -575,7 +577,11 @@ pub fn pick_taker(
     }
     candidates
         .iter()
-        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .map(|t| t.player_id)
 }
 
@@ -633,9 +639,15 @@ mod tests {
 
     #[test]
     fn wall_size_scales_with_distance() {
-        assert!(wall_size_for(FreeKickBand::Close, false) >= wall_size_for(FreeKickBand::Mid, false));
-        assert!(wall_size_for(FreeKickBand::Mid, false) >= wall_size_for(FreeKickBand::Long, false));
-        assert!(wall_size_for(FreeKickBand::Long, false) >= wall_size_for(FreeKickBand::Far, false));
+        assert!(
+            wall_size_for(FreeKickBand::Close, false) >= wall_size_for(FreeKickBand::Mid, false)
+        );
+        assert!(
+            wall_size_for(FreeKickBand::Mid, false) >= wall_size_for(FreeKickBand::Long, false)
+        );
+        assert!(
+            wall_size_for(FreeKickBand::Long, false) >= wall_size_for(FreeKickBand::Far, false)
+        );
     }
 
     #[test]
@@ -726,8 +738,14 @@ mod tests {
     #[test]
     fn pick_taker_prefers_explicit_when_on_field() {
         let candidates = vec![
-            TakerScore { player_id: 1, score: 0.5 },
-            TakerScore { player_id: 2, score: 0.9 },
+            TakerScore {
+                player_id: 1,
+                score: 0.5,
+            },
+            TakerScore {
+                player_id: 2,
+                score: 0.9,
+            },
         ];
         // Explicit taker on field — wins regardless of score.
         let on_field = vec![1, 2, 3];

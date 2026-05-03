@@ -1,8 +1,13 @@
 use crate::PlayerFieldPositionGroup;
+#[cfg(feature = "match-logs")]
+use crate::match_log_info;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
-use crate::r#match::{GoalDetail, MatchContext, MatchField, MatchPlayer, PlayerSide, ShotTarget};
+use crate::r#match::{
+    GoalDetail, MatchContext, MatchField, MatchPlayer, OffsideSnapshot, PassOriginRestart,
+    PlayerSide, ResultMatchPositionData, ShotTarget,
+};
 use log::debug;
 use nalgebra::Vector3;
 use rand::{Rng, RngExt};
@@ -234,7 +239,7 @@ impl PlayerEventDispatcher {
         event: PlayerEvent,
         field: &mut MatchField,
         context: &mut MatchContext,
-        match_data: &mut crate::r#match::ResultMatchPositionData,
+        match_data: &mut ResultMatchPositionData,
     ) -> Vec<Event> {
         let remaining_events = Vec::new();
 
@@ -304,8 +309,7 @@ impl PlayerEventDispatcher {
                 field.ball.pending_pass_set_tick = context.current_tick();
                 field.ball.offside_snapshot = snapshot;
                 // After the kick, restart context decays back to OpenPlay.
-                field.ball.pass_origin_restart =
-                    crate::r#match::PassOriginRestart::OpenPlay;
+                field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
             }
             PlayerEvent::ClaimBall(player_id) => {
                 Self::record_team_possession_if_switch(player_id, field, context);
@@ -338,8 +342,8 @@ impl PlayerEventDispatcher {
                         let pos = player.position;
                         let goal_dist = if let Some(side) = player.side {
                             let goal_x = match side {
-                                crate::r#match::PlayerSide::Left => field_w,
-                                crate::r#match::PlayerSide::Right => 0.0,
+                                PlayerSide::Left => field_w,
+                                PlayerSide::Right => 0.0,
                             };
                             let goal_y = field_h / 2.0;
                             ((pos.x - goal_x).powi(2) + (pos.y - goal_y).powi(2)).sqrt()
@@ -353,7 +357,7 @@ impl PlayerEventDispatcher {
                                 PlayerFieldPositionGroup::Midfielder => "MID",
                                 PlayerFieldPositionGroup::Forward => "FWD",
                             };
-                        crate::match_log_info!(
+                        match_log_info!(
                             "SHOT team={} pos={} player={} state={} reason={} dist={:.1} tick={}",
                             team_id,
                             pos_tag,
@@ -1690,12 +1694,7 @@ impl PlayerEventDispatcher {
     /// to a defender, or back into play) doesn't double-credit anyone.
     #[cfg(feature = "match-logs")]
     #[inline]
-    fn dbg_save_credit(
-        site: usize,
-        had_shooter: bool,
-        prev_owner_none: bool,
-        shooter_found: bool,
-    ) {
+    fn dbg_save_credit(site: usize, had_shooter: bool, prev_owner_none: bool, shooter_found: bool) {
         use std::sync::atomic::Ordering;
         save_accounting_stats::SAVES_CREDITED[site].fetch_add(1, Ordering::Relaxed);
         save_accounting_stats::SHOTS_FACED_INC[site].fetch_add(1, Ordering::Relaxed);
@@ -1911,10 +1910,9 @@ impl PlayerEventDispatcher {
                     (0.45 + aggressor_factor * 0.30 + persistent * 0.8).clamp(0.30, 0.85),
                     (0.04 + aggressor_factor * 0.12 + persistent).clamp(0.01, 0.18),
                 ),
-                FoulSeverity::Violent => (
-                    0.10_f32,
-                    (0.70 + aggressor_factor * 0.30).clamp(0.60, 1.0),
-                ),
+                FoulSeverity::Violent => {
+                    (0.10_f32, (0.70 + aggressor_factor * 0.30).clamp(0.60, 1.0))
+                }
             }
         };
 
@@ -2010,10 +2008,10 @@ impl PlayerEventDispatcher {
     fn build_offside_snapshot(
         passer_id: u32,
         receiver_id: u32,
-        origin: crate::r#match::PassOriginRestart,
+        origin: PassOriginRestart,
         field: &MatchField,
         tick: u64,
-    ) -> Option<crate::r#match::OffsideSnapshot> {
+    ) -> Option<OffsideSnapshot> {
         let passer = field.players.iter().find(|p| p.id == passer_id)?;
         let receiver = field.players.iter().find(|p| p.id == receiver_id)?;
         let passer_side = passer.side?;
@@ -2053,19 +2051,19 @@ impl PlayerEventDispatcher {
         // sort DESCENDING (closest to their goal first). For Right
         // attackers, ASCENDING.
         match receiver_side {
-            PlayerSide::Left => sorted_xs.sort_by(|a, b| {
-                b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
-            }),
-            PlayerSide::Right => sorted_xs.sort_by(|a, b| {
-                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-            }),
+            PlayerSide::Left => {
+                sorted_xs.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal))
+            }
+            PlayerSide::Right => {
+                sorted_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            }
         }
         if sorted_xs.len() < 2 {
             return None;
         }
         let second_last = sorted_xs[1];
 
-        Some(crate::r#match::OffsideSnapshot {
+        Some(OffsideSnapshot {
             origin,
             passer_id,
             passer_side,
@@ -2083,7 +2081,7 @@ impl PlayerEventDispatcher {
     /// callers that want a free function rather than the snapshot
     /// method; the snapshot's `is_offside` is the canonical version.
     #[allow(dead_code)]
-    pub(crate) fn snapshot_is_offside(snap: &crate::r#match::OffsideSnapshot) -> bool {
+    pub(crate) fn snapshot_is_offside(snap: &OffsideSnapshot) -> bool {
         const TOLERANCE: f32 = 1.5;
         match snap.passer_side {
             PlayerSide::Left => {
@@ -2368,7 +2366,7 @@ impl PlayerEventDispatcher {
     /// returns silently if fouler/victim team can't be resolved.
     fn award_restart_for_foul(
         fouler_id: u32,
-        _severity: crate::r#match::player::events::FoulSeverity,
+        _severity: FoulSeverity,
         field: &mut MatchField,
         context: &mut MatchContext,
     ) {
@@ -2440,9 +2438,9 @@ impl PlayerEventDispatcher {
         ball.cached_shot_target = None;
         ball.offside_snapshot = None;
         ball.pass_origin_restart = if in_penalty_area {
-            crate::r#match::PassOriginRestart::Penalty
+            PassOriginRestart::Penalty
         } else {
-            crate::r#match::PassOriginRestart::DirectFreeKick
+            PassOriginRestart::DirectFreeKick
         };
         let team_id = field
             .players

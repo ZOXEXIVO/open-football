@@ -284,12 +284,8 @@ mod tests {
 
     #[test]
     fn fullback_winger_same_side_high() {
-        let same_side = initial_chemistry(inputs(
-            Role::FullBack,
-            Lane::Left,
-            Role::Winger,
-            Lane::Left,
-        ));
+        let same_side =
+            initial_chemistry(inputs(Role::FullBack, Lane::Left, Role::Winger, Lane::Left));
         let opposite = initial_chemistry(inputs(
             Role::FullBack,
             Lane::Left,
@@ -329,7 +325,12 @@ mod tests {
 
     #[test]
     fn newcomer_penalty() {
-        let mut x = inputs(Role::CentralMid, Lane::Center, Role::CentralMid, Lane::Center);
+        let mut x = inputs(
+            Role::CentralMid,
+            Lane::Center,
+            Role::CentralMid,
+            Lane::Center,
+        );
         let baseline = initial_chemistry(x);
         x.either_is_new = true;
         assert!(initial_chemistry(x) < baseline);
@@ -338,12 +339,7 @@ mod tests {
     #[test]
     fn chemistry_score_is_unit_clamped() {
         // High-bonus configuration shouldn't break 1.0.
-        let mut x = inputs(
-            Role::FullBack,
-            Lane::Left,
-            Role::Winger,
-            Lane::Left,
-        );
+        let mut x = inputs(Role::FullBack, Lane::Left, Role::Winger, Lane::Left);
         x.teamwork_a_0_20 = 20.0;
         x.teamwork_b_0_20 = 20.0;
         let s = initial_chemistry(x);

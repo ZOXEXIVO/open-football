@@ -7,7 +7,7 @@ use crate::r#match::{
     MatchPlayer, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateProcessingContext,
 };
-use crate::{PlayerAttributes, PlayerSkills};
+use crate::{PlayerAttributes, PlayerPositionType, PlayerSkills};
 use nalgebra::Vector3;
 use rand::RngExt;
 use std::sync::OnceLock;
@@ -58,7 +58,7 @@ impl<'p> PlayerOperationsImpl<'p> {
                     "get() lookup for unknown player_id={} — using default position",
                     player_id
                 );
-                crate::PlayerPositionType::Goalkeeper
+                PlayerPositionType::Goalkeeper
             });
         MatchPlayerLite {
             id: player_id,
@@ -512,8 +512,7 @@ impl<'p> PlayerOperationsImpl<'p> {
                 continue;
             }
             let to_opp = opp.position - player_position;
-            let projection =
-                to_opp.x * direction_to_goal.x + to_opp.y * direction_to_goal.y;
+            let projection = to_opp.x * direction_to_goal.x + to_opp.y * direction_to_goal.y;
             if projection < 3.0 || projection > check_distance {
                 continue;
             }

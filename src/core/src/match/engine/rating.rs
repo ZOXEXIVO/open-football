@@ -250,9 +250,7 @@ pub fn calculate_match_rating(
     // worse than 5.8 or better than 7.2 unless they did something
     // exceptional (goal, red, error-to-goal). The exceptional-event
     // exemption keeps a 90th-minute winner posting an 8+.
-    let exceptional = stats.goals > 0
-        || stats.red_cards > 0
-        || stats.errors_leading_to_goal > 0;
+    let exceptional = stats.goals > 0 || stats.red_cards > 0 || stats.errors_leading_to_goal > 0;
     if stats.minutes_played < 15 && stats.minutes_played > 0 && !exceptional {
         rating = rating.clamp(5.8, 7.2);
     }

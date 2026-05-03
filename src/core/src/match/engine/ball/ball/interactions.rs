@@ -6,9 +6,11 @@
 use super::Ball;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::player::events::players::save_accounting_stats;
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::events::EventCollection;
-use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
+use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart, PlayerSide};
 use nalgebra::Vector3;
 
 impl Ball {
@@ -151,8 +153,7 @@ impl Ball {
                 let tick = self.current_tick_cached;
                 self.record_touch(interceptor_id, interceptor_team, tick, true);
                 self.offside_snapshot = None;
-                self.pass_origin_restart =
-                    crate::r#match::PassOriginRestart::OpenPlay;
+                self.pass_origin_restart = PassOriginRestart::OpenPlay;
                 events.add_ball_event(BallEvent::Intercepted(interceptor_id, self.previous_owner));
             }
         }
@@ -337,7 +338,7 @@ impl Ball {
         self.cached_shot_target = None;
         self.record_touch(blocker_id, blocker_team, tick, false);
         self.offside_snapshot = None;
-        self.pass_origin_restart = crate::r#match::PassOriginRestart::OpenPlay;
+        self.pass_origin_restart = PassOriginRestart::OpenPlay;
 
         if roll < p_controlled {
             // Clean block — defender gets the ball at his feet.
@@ -355,8 +356,8 @@ impl Ball {
             // will then award a corner (defender = last toucher, side
             // matches → corner for attackers).
             let endline_x = match blocker_side {
-                Some(crate::r#match::PlayerSide::Left) => 0.0_f32,
-                Some(crate::r#match::PlayerSide::Right) => self.field_width,
+                Some(PlayerSide::Left) => 0.0_f32,
+                Some(PlayerSide::Right) => self.field_width,
                 None => self.position.x + rev_x * 8.0,
             };
             let dx = endline_x - self.position.x;
@@ -364,7 +365,11 @@ impl Ball {
             let speed = (ball_velocity_2d * 0.6).clamp(2.0, 5.0);
             self.velocity.x = (dx / dist) * speed;
             // Slight outward y-component so the ball goes wide of the post.
-            self.velocity.y = if rand::random::<f32>() < 0.5 { -1.0 } else { 1.0 } * 1.2;
+            self.velocity.y = if rand::random::<f32>() < 0.5 {
+                -1.0
+            } else {
+                1.0
+            } * 1.2;
             self.velocity.z = 0.0;
             self.current_owner = None;
             self.flags.in_flight_state = 30;
@@ -378,7 +383,11 @@ impl Ball {
             // both goals. Loose ball; either team can recover.
             let safe_speed = (ball_velocity_2d * 0.35).clamp(1.5, 3.5);
             // Rotate shot direction 90° (sign chosen by random) to skip sideways.
-            let sign = if rand::random::<f32>() < 0.5 { -1.0 } else { 1.0 };
+            let sign = if rand::random::<f32>() < 0.5 {
+                -1.0
+            } else {
+                1.0
+            };
             self.velocity.x = -shot_dir_y * sign * safe_speed;
             self.velocity.y = shot_dir_x * sign * safe_speed;
             self.velocity.z = 0.0;
@@ -470,7 +479,7 @@ impl Ball {
         };
         if past_goal_line {
             #[cfg(feature = "match-logs")]
-            crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE
+            save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.cached_shot_target = None;
             return;
@@ -480,12 +489,12 @@ impl Ball {
         let ball_vx = self.velocity.x.abs().max(0.5);
         if dist_to_goal_x > ball_vx * 2.5 {
             #[cfg(feature = "match-logs")]
-            crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_TICKS_OUT_OF_REACH
+            save_accounting_stats::SAVE_TICKS_OUT_OF_REACH
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return;
         }
         #[cfg(feature = "match-logs")]
-        crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_TICKS_REACHED
+        save_accounting_stats::SAVE_TICKS_REACHED
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Ball must still be traveling toward that goal line.
@@ -571,14 +580,14 @@ impl Ball {
         let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.05, 0.55);
 
         #[cfg(feature = "match-logs")]
-        crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_PHYSICS_FIRED
+        save_accounting_stats::SAVE_PHYSICS_FIRED
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if rand::random::<f32>() >= save_prob {
             return; // Keeper beaten — shot goes on.
         }
         #[cfg(feature = "match-logs")]
-        crate::r#match::engine::player::events::players::save_accounting_stats::SAVE_PHYSICS_PASSED
+        save_accounting_stats::SAVE_PHYSICS_PASSED
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Save outcome distribution. Catch / safe parry / dangerous
@@ -594,9 +603,9 @@ impl Ball {
             - shot_power_norm * 0.18
             - reach_stretch * 0.18)
             .clamp(0.04, 0.62);
-        let safe_parry_prob = (0.20 + scaled_reflexes * 0.12 + scaled_handling * 0.08
-            + scaled_agility * 0.05)
-            .clamp(0.12, 0.52);
+        let safe_parry_prob =
+            (0.20 + scaled_reflexes * 0.12 + scaled_handling * 0.08 + scaled_agility * 0.05)
+                .clamp(0.12, 0.52);
 
         let keeper_id = keeper.id;
         let keeper_pos = keeper.position;
@@ -623,7 +632,7 @@ impl Ball {
         self.cached_shot_target = None;
         let tick = self.current_tick_cached;
         self.offside_snapshot = None;
-        self.pass_origin_restart = crate::r#match::PassOriginRestart::OpenPlay;
+        self.pass_origin_restart = PassOriginRestart::OpenPlay;
 
         if outcome_roll < p_catch {
             // Clean catch — keeper holds.
@@ -643,8 +652,8 @@ impl Ball {
             // Push the ball toward the keeper's own endline outside the
             // post so the endline resolver awards a corner.
             let endline_x = match keeper_side {
-                Some(crate::r#match::PlayerSide::Left) => -1.0_f32,
-                Some(crate::r#match::PlayerSide::Right) => self.field_width + 1.0,
+                Some(PlayerSide::Left) => -1.0_f32,
+                Some(PlayerSide::Right) => self.field_width + 1.0,
                 None => self.position.x,
             };
             let dx = endline_x - self.position.x;
@@ -653,8 +662,8 @@ impl Ball {
             self.velocity.x = (dx / dist) * parry_speed;
             // Sideways spread so it goes wide of the post.
             let goal_y_for_side = match keeper_side {
-                Some(crate::r#match::PlayerSide::Left) => context.goal_positions.left.y,
-                Some(crate::r#match::PlayerSide::Right) => context.goal_positions.right.y,
+                Some(PlayerSide::Left) => context.goal_positions.left.y,
+                Some(PlayerSide::Right) => context.goal_positions.right.y,
                 None => self.position.y,
             };
             let sign = if self.position.y < goal_y_for_side {
@@ -684,26 +693,29 @@ impl Ball {
         // in the six-yard tap-in lane.
         let drop_distance = 12.0 + rand::random::<f32>() * 18.0;
         let drop_x = match keeper_side {
-            Some(crate::r#match::PlayerSide::Left) => keeper_pos.x + drop_distance,
-            Some(crate::r#match::PlayerSide::Right) => keeper_pos.x - drop_distance,
+            Some(PlayerSide::Left) => keeper_pos.x + drop_distance,
+            Some(PlayerSide::Right) => keeper_pos.x - drop_distance,
             None => keeper_pos.x,
         };
         // Outward y-bias: push the ball *away* from the goal centre. If
         // the ball was already lateral, push further laterally; for
         // central shots, pick a random side and push 14-30u outward.
         let goal_center_y = match keeper_side {
-            Some(crate::r#match::PlayerSide::Left) => context.goal_positions.left.y,
-            Some(crate::r#match::PlayerSide::Right) => context.goal_positions.right.y,
+            Some(PlayerSide::Left) => context.goal_positions.left.y,
+            Some(PlayerSide::Right) => context.goal_positions.right.y,
             None => self.field_height * 0.5,
         };
         let outward_sign = if (self.position.y - goal_center_y).abs() < 1.0 {
-            if rand::random::<f32>() < 0.5 { -1.0 } else { 1.0 }
+            if rand::random::<f32>() < 0.5 {
+                -1.0
+            } else {
+                1.0
+            }
         } else {
             (self.position.y - goal_center_y).signum()
         };
         let outward_offset = (14.0 + rand::random::<f32>() * 16.0) * outward_sign;
-        let drop_y = self.position.y + outward_offset
-            + (rand::random::<f32>() - 0.5) * 10.0;
+        let drop_y = self.position.y + outward_offset + (rand::random::<f32>() - 0.5) * 10.0;
         let drop_y = drop_y.clamp(0.0, self.field_height);
         let drop_x = drop_x.clamp(0.0, self.field_width);
         let dx = drop_x - self.position.x;

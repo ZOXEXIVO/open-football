@@ -4,6 +4,8 @@ use crate::r#match::PlayerSide;
 use crate::r#match::engine::context::SubstitutionRecord;
 use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::player::events::players::save_accounting_stats;
 use crate::r#match::engine::rating::calculate_match_rating;
 use crate::r#match::engine::substitutions::process_substitutions;
 use crate::r#match::events::EventDispatcher;
@@ -12,10 +14,12 @@ use crate::r#match::field::MatchField;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::{
-    GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Score,
-    StateManager, SubstitutionInfo,
+    GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState,
+    PenaltyShootoutKick, Score, StateManager, SubstitutionInfo,
 };
-use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics};
+use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics, is_match_events_mode};
+#[cfg(feature = "match-logs")]
+use crate::{match_log_debug, match_log_info};
 use rand::RngExt;
 use std::collections::HashMap;
 
@@ -49,7 +53,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut match_position_data = if !match_recordings {
             ResultMatchPositionData::empty()
-        } else if crate::is_match_events_mode() {
+        } else if is_match_events_mode() {
             ResultMatchPositionData::new_with_tracking()
         } else {
             ResultMatchPositionData::new()
@@ -59,7 +63,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut context = MatchContext::new(&field, players, score, is_friendly, is_knockout);
 
-        if crate::is_match_events_mode() {
+        if is_match_events_mode() {
             context.enable_logging();
         }
 
@@ -478,7 +482,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             )
         };
 
-        crate::match_log_info!(
+        match_log_info!(
             "BLOWOUT {}-{} (total {}g)",
             home_goals,
             away_goals,
@@ -494,7 +498,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         //   poss     share of total pass attempts (possession proxy)
         //   pass     completed / attempted (acc %)
         //   tck/int/sv/fl  tackles / interceptions / saves / fouls
-        crate::match_log_info!(
+        match_log_info!(
             "  {}",
             fmt_team(
                 "HOME",
@@ -506,7 +510,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 home_possession
             )
         );
-        crate::match_log_info!(
+        match_log_info!(
             "  {}",
             fmt_team(
                 "AWAY",
@@ -753,7 +757,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             home_tactics,
             away_tactics,
         };
-        TeamTacticalState::refresh(&mut context.tactical_home, &mut context.tactical_away, &inputs);
+        TeamTacticalState::refresh(
+            &mut context.tactical_home,
+            &mut context.tactical_away,
+            &inputs,
+        );
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -869,8 +877,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Validate teams differ — defence in depth against any
         // accidental same-team shooter (deflections that route through
         // the save handler should already be filtered upstream).
-        let keeper_team = field.players.iter().find(|p| p.id == keeper_id).map(|p| p.team_id);
-        let shooter_team = field.players.iter().find(|p| p.id == shooter_id).map(|p| p.team_id);
+        let keeper_team = field
+            .players
+            .iter()
+            .find(|p| p.id == keeper_id)
+            .map(|p| p.team_id);
+        let shooter_team = field
+            .players
+            .iter()
+            .find(|p| p.id == shooter_id)
+            .map(|p| p.team_id);
         if keeper_team.is_none() || shooter_team.is_none() || keeper_team == shooter_team {
             return;
         }
@@ -888,10 +904,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // catches, parries, and dangerous parries indistinguishably
             // from the stats viewpoint. The save_pipeline counters above
             // already separate them at the physics layer.
-            crate::r#match::engine::player::events::players::save_accounting_stats::SAVES_CREDITED[1]
-                .fetch_add(1, Ordering::Relaxed);
-            crate::r#match::engine::player::events::players::save_accounting_stats::ON_TARGET_PAIRED[1]
-                .fetch_add(1, Ordering::Relaxed);
+            save_accounting_stats::SAVES_CREDITED[1].fetch_add(1, Ordering::Relaxed);
+            save_accounting_stats::ON_TARGET_PAIRED[1].fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -937,7 +951,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if (near_left || near_right) && (near_top || near_bottom)
                 && timestamp % 30_000 < Self::POSITION_RECORD_INTERVAL_MS
             {
-                crate::match_log_debug!(
+                match_log_debug!(
                     "player at corner: t={}ms id={} team={} state={:?} tactical={:?} pos=({:.1}, {:.1}) velocity=({:.2}, {:.2})",
                     timestamp,
                     player.id,
@@ -1168,7 +1182,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 let scored = take_kick(id, away_keeper);
                 context
                     .penalty_shootout_kicks
-                    .push(crate::r#match::PenaltyShootoutKick {
+                    .push(PenaltyShootoutKick {
                         team_id: home_id,
                         taker_id: id,
                         goalkeeper_id: away_keeper,
@@ -1192,7 +1206,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 let scored = take_kick(id, home_keeper);
                 context
                     .penalty_shootout_kicks
-                    .push(crate::r#match::PenaltyShootoutKick {
+                    .push(PenaltyShootoutKick {
                         team_id: away_id,
                         taker_id: id,
                         goalkeeper_id: home_keeper,
@@ -1228,7 +1242,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let home_scored = take_kick(home_taker, away_keeper);
             context
                 .penalty_shootout_kicks
-                .push(crate::r#match::PenaltyShootoutKick {
+                .push(PenaltyShootoutKick {
                     team_id: home_id,
                     taker_id: home_taker,
                     goalkeeper_id: away_keeper,
@@ -1242,7 +1256,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let away_scored = take_kick(away_taker, home_keeper);
             context
                 .penalty_shootout_kicks
-                .push(crate::r#match::PenaltyShootoutKick {
+                .push(PenaltyShootoutKick {
                     team_id: away_id,
                     taker_id: away_taker,
                     goalkeeper_id: home_keeper,

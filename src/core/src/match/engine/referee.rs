@@ -3,7 +3,6 @@
 /// Pure scoring; no RNG. Callers fold these into their own random rolls.
 /// Inputs that come from match state (crowd, derby, match_temperature) are
 /// supplied per-call so the referee profile itself stays stable across the match.
-
 use crate::r#match::engine::environment::MatchEnvironment;
 
 #[derive(Debug, Clone, Copy)]
@@ -259,20 +258,24 @@ mod tests {
             home_bias: 0.08,
             ..Default::default()
         };
-        let home_fouled =
-            r.foul_call_prob(&big_crowd, FoulCallContext {
+        let home_fouled = r.foul_call_prob(
+            &big_crowd,
+            FoulCallContext {
                 contact_severity: 0.5,
                 match_temperature: 0.0,
                 fouled_team_is_home: true,
                 location: ContactLocation::Normal,
-            });
-        let away_fouled =
-            r.foul_call_prob(&big_crowd, FoulCallContext {
+            },
+        );
+        let away_fouled = r.foul_call_prob(
+            &big_crowd,
+            FoulCallContext {
                 contact_severity: 0.5,
                 match_temperature: 0.0,
                 fouled_team_is_home: false,
                 location: ContactLocation::Normal,
-            });
+            },
+        );
         assert!(home_fouled > away_fouled);
     }
 }

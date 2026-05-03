@@ -137,11 +137,9 @@ impl<'p> PressureOperationsImpl<'p> {
         let dist_to_ball = self.ctx.ball().distance();
         let distance_score = 1.0 - (dist_to_ball / 120.0).clamp(0.0, 1.0);
         let work = (self.ctx.player.skills.mental.work_rate / 20.0).clamp(0.0, 1.0);
-        let anticipation =
-            (self.ctx.player.skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
-        let condition =
-            (self.ctx.player.player_attributes.condition_percentage() as f32 / 100.0)
-                .clamp(0.0, 1.0);
+        let anticipation = (self.ctx.player.skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
+        let condition = (self.ctx.player.player_attributes.condition_percentage() as f32 / 100.0)
+            .clamp(0.0, 1.0);
         distance_score * 0.45 + work * 0.25 + anticipation * 0.15 + condition * 0.15
     }
 }

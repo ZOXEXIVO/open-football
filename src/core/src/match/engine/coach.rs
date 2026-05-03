@@ -378,12 +378,7 @@ impl MatchCoach {
         current_tick: u64,
         metrics: RollingTeamMetrics,
     ) {
-        self.evaluate(
-            score_diff,
-            match_progress,
-            avg_team_condition,
-            current_tick,
-        );
+        self.evaluate(score_diff, match_progress, avg_team_condition, current_tick);
         self.metrics = metrics;
 
         let xg_diff_15 = metrics.xg_for_last_15 - metrics.xg_against_last_15;

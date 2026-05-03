@@ -192,9 +192,10 @@ pub async fn player_personal_action(
 
     let manager_relationship = team_opt
         .and_then(|team| {
-            team.staffs
-                .manager()
-                .or_else(|| team.staffs.find_by_position(StaffPosition::AssistantManager))
+            team.staffs.manager().or_else(|| {
+                team.staffs
+                    .find_by_position(StaffPosition::AssistantManager)
+            })
         })
         .and_then(|staff| get_manager_relationship(player, staff, &i18n));
 

@@ -264,7 +264,10 @@ impl TeamTacticalState {
     /// True if this team is settled in attacking third with the ball
     /// (or in the immediate transition window into it).
     pub fn is_attacking(&self) -> bool {
-        matches!(self.phase, GamePhase::Attack | GamePhase::AttackingTransition)
+        matches!(
+            self.phase,
+            GamePhase::Attack | GamePhase::AttackingTransition
+        )
     }
 
     /// Recompute both teams' tactical state in-place. Called periodically
@@ -306,12 +309,14 @@ impl TeamTacticalState {
         home.ticks_since_turnover = if home_turned_over {
             0
         } else {
-            home.ticks_since_turnover.saturating_add(inputs.tick_interval)
+            home.ticks_since_turnover
+                .saturating_add(inputs.tick_interval)
         };
         away.ticks_since_turnover = if away_turned_over {
             0
         } else {
-            away.ticks_since_turnover.saturating_add(inputs.tick_interval)
+            away.ticks_since_turnover
+                .saturating_add(inputs.tick_interval)
         };
 
         home.possession_ticks = if home_now_has_ball {
@@ -387,14 +392,10 @@ impl TeamTacticalState {
         // ── Phase ────────────────────────────────────────────────────
         // Use per-team transition windows derived from the just-computed
         // patience and tactic signals.
-        let home_attack_window =
-            Self::attacking_transition_window_ticks(home.build_up_patience);
-        let away_attack_window =
-            Self::attacking_transition_window_ticks(away.build_up_patience);
-        let home_def_window =
-            Self::defensive_transition_window_ticks(home_counter_press);
-        let away_def_window =
-            Self::defensive_transition_window_ticks(away_counter_press);
+        let home_attack_window = Self::attacking_transition_window_ticks(home.build_up_patience);
+        let away_attack_window = Self::attacking_transition_window_ticks(away.build_up_patience);
+        let home_def_window = Self::defensive_transition_window_ticks(home_counter_press);
+        let away_def_window = Self::defensive_transition_window_ticks(away_counter_press);
 
         home.phase = Self::compute_phase(
             home.in_possession,
@@ -452,16 +453,10 @@ impl TeamTacticalState {
             away.is_defensive_transition(),
         );
 
-        home.compactness_target = Self::compute_compactness(
-            home_compact,
-            home.phase,
-            home.game_management_intensity,
-        );
-        away.compactness_target = Self::compute_compactness(
-            away_compact,
-            away.phase,
-            away.game_management_intensity,
-        );
+        home.compactness_target =
+            Self::compute_compactness(home_compact, home.phase, home.game_management_intensity);
+        away.compactness_target =
+            Self::compute_compactness(away_compact, away.phase, away.game_management_intensity);
 
         home.team_width_target = Self::compute_team_width(home_compact, home.phase);
         away.team_width_target = Self::compute_team_width(away_compact, away.phase);
@@ -585,8 +580,7 @@ impl TeamTacticalState {
             // shorter of the two clocks so a slow possession buildup
             // (high possession_ticks but stale turnover) doesn't get
             // mis-flagged as a counter window.
-            if ticks_since_turnover < attack_window_ticks
-                && possession_ticks < attack_window_ticks
+            if ticks_since_turnover < attack_window_ticks && possession_ticks < attack_window_ticks
             {
                 return GamePhase::AttackingTransition;
             }
@@ -1132,9 +1126,11 @@ mod tests {
     #[test]
     fn build_up_patience_higher_in_possession_style_with_lead() {
         let direct = TeamTacticalState::compute_build_up_patience(0.9, 0.4, 0.0, 0.6);
-        let possession_lead =
-            TeamTacticalState::compute_build_up_patience(0.4, 0.9, 0.7, 0.3);
-        assert!(possession_lead > direct, "poss_lead={possession_lead} direct={direct}");
+        let possession_lead = TeamTacticalState::compute_build_up_patience(0.4, 0.9, 0.7, 0.3);
+        assert!(
+            possession_lead > direct,
+            "poss_lead={possession_lead} direct={direct}"
+        );
     }
 
     // ──────────────────────────────────────────────────────────────────

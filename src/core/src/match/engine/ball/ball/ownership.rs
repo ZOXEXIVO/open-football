@@ -3,9 +3,11 @@
 //! ownership claim that decides who is on the ball.
 
 use super::Ball;
+#[cfg(feature = "match-logs")]
+use crate::match_log_debug;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::events::EventCollection;
-use crate::r#match::{MatchContext, MatchPlayer};
+use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 
 impl Ball {
     pub fn process_ownership(
@@ -71,8 +73,7 @@ impl Ball {
                             self.pass_target_player_id = None;
                             self.flags.in_flight_state = 0;
                             self.cached_shot_target = None;
-                            self.pass_origin_restart =
-                                crate::r#match::PassOriginRestart::FreeKick;
+                            self.pass_origin_restart = PassOriginRestart::FreeKick;
                             events.add_ball_event(BallEvent::Offside(target_id, restart_pos));
                             return;
                         }
@@ -86,7 +87,7 @@ impl Ball {
                     let tick = self.current_tick_cached;
                     self.record_touch(target_id, target_team, tick, true);
                     self.offside_snapshot = None;
-                    self.pass_origin_restart = crate::r#match::PassOriginRestart::OpenPlay;
+                    self.pass_origin_restart = PassOriginRestart::OpenPlay;
                     // Post-receive possession protection. Real football:
                     // a player who controls a pass has ~1.5-2 s of settle
                     // time before a challenging defender arrives — they
@@ -138,7 +139,7 @@ impl Ball {
                                 let tick = self.current_tick_cached;
                                 self.record_touch(prev_id, passer_team, tick, true);
                                 self.offside_snapshot = None;
-                                self.pass_origin_restart = crate::r#match::PassOriginRestart::OpenPlay;
+                                self.pass_origin_restart = PassOriginRestart::OpenPlay;
                                 events.add_ball_event(BallEvent::Claimed(prev_id));
                             }
                         }
@@ -406,7 +407,7 @@ impl Ball {
                         .stall_start_snapshot
                         .as_deref()
                         .unwrap_or("<no snapshot>");
-                    crate::match_log_debug!(
+                    match_log_debug!(
                         "ball stall resolved: uncontrolled for {} ticks, claimed by player {} at ({:.1}, {:.1})\n  [start of period]\n{}",
                         self.unowned_ticks,
                         claimed_by,

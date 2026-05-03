@@ -115,8 +115,8 @@ impl StateProcessingHandler for DefenderRunningState {
                 if let Some(opponent) = ctx.players().opponents().with_ball().next() {
                     let role = ctx.player().defensive().defensive_role_for_ball_carrier();
                     let immediate = opponent.distance(ctx) < 30.0;
-                    let elected =
-                        role == DefensiveRole::Primary && ctx.player().pressure().should_counterpress();
+                    let elected = role == DefensiveRole::Primary
+                        && ctx.player().pressure().should_counterpress();
                     if immediate || elected {
                         return Some(StateChangeResult::with_defender_state(
                             DefenderState::Tackling,

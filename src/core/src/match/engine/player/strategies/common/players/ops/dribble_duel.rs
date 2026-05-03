@@ -45,10 +45,7 @@ impl DribbleOutcome {
     }
 
     pub fn is_foul(self) -> bool {
-        matches!(
-            self,
-            DribbleOutcome::WinsFoul | DribbleOutcome::CommitsFoul
-        )
+        matches!(self, DribbleOutcome::WinsFoul | DribbleOutcome::CommitsFoul)
     }
 }
 

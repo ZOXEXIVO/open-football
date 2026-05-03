@@ -350,8 +350,10 @@ impl DefenderHoldingLineState {
         // (high in Attack/HighPress, deep in LowBlock). Blend toward it
         // rather than overwrite, so the live back-line average still
         // matters (avoids teleporting one CB out of an organised line).
-        let target_line_x =
-            ctx.context.tactical_for_team(ctx.player.team_id).defensive_line_x;
+        let target_line_x = ctx
+            .context
+            .tactical_for_team(ctx.player.team_id)
+            .defensive_line_x;
         avg_x * 0.6 + target_line_x * 0.4
     }
 

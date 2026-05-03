@@ -56,9 +56,7 @@ impl PassOriginRestart {
     pub fn is_offside_exempt(self) -> bool {
         matches!(
             self,
-            PassOriginRestart::GoalKick
-                | PassOriginRestart::Corner
-                | PassOriginRestart::ThrowIn
+            PassOriginRestart::GoalKick | PassOriginRestart::Corner | PassOriginRestart::ThrowIn
         )
     }
 
@@ -311,13 +309,7 @@ impl Ball {
 
     /// Record a meaningful touch. Drives restart resolution. `controlled`
     /// distinguishes a clean reception from a deflection / failed save.
-    pub fn record_touch(
-        &mut self,
-        player_id: u32,
-        team_id: u32,
-        tick: u64,
-        controlled: bool,
-    ) {
+    pub fn record_touch(&mut self, player_id: u32, team_id: u32, tick: u64, controlled: bool) {
         self.last_touch_player_id = Some(player_id);
         self.last_touch_team_id = Some(team_id);
         self.last_touch_tick = tick;
