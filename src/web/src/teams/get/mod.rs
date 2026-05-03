@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CSS_VERSION};
 use crate::player::PlayerStatusDto;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
@@ -27,6 +27,7 @@ pub struct TeamGetRequest {
 pub struct TeamGetTemplate {
     pub css_version: &'static str,
     pub computer_name: &'static str,
+    pub cpu_brand: &'static str,
     pub i18n: I18n,
     pub lang: String,
     pub title: String,
@@ -312,6 +313,7 @@ pub async fn team_get_action(
     Ok(TeamGetTemplate {
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
+        cpu_brand: &CPU_BRAND,
         i18n,
         lang: route_params.lang.clone(),
         title,

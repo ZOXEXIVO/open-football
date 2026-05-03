@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -19,6 +19,7 @@ pub struct EuropaLeagueGetRequest {
 pub struct EuropaLeagueGetTemplate {
     pub css_version: &'static str,
     pub computer_name: &'static str,
+    pub cpu_brand: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -162,6 +163,7 @@ pub async fn europa_league_get_action(
     Ok(EuropaLeagueGetTemplate {
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
+        cpu_brand: &CPU_BRAND,
         title: i18n.t("europa_league").to_string(),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

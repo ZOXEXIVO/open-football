@@ -3477,12 +3477,50 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-stats-bar {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: space-between;
+    gap: 12px;
     color: #7a8c98;
     font-size: 13px;
     padding: 8px 0;
     margin-bottom: 10px;
+}
+
+.fm-info-panel {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.fm-info-body {
+    padding: 8px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.fm-info-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.fm-info-label {
+    color: #546a78;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-size: 10.5px;
+    flex: 0 0 auto;
+}
+
+.fm-info-value {
+    color: #c8d6e0;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .fm-download-btn {

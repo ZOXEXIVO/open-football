@@ -23,3 +23,4 @@ ollama-rs = "0.3.4"
 rust-embed = "8.11"
 mime_guess = "2.0.5"
 hostname = "0.4.2"
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }

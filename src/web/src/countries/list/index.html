@@ -16,7 +16,21 @@
 {% block content %}
 <div class="fm-page">
     <div class="fm-stats-bar">
-        <span>{{ total_countries }} {{ i18n.t("stats_countries") }} · {{ total_clubs }} {{ i18n.t("stats_clubs") }} · {{ total_players }} {{ i18n.t("stats_players") }}</span>
+        <section class="fm-panel fm-info-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("info_panel_title") }}</h3>
+            </div>
+            <div class="fm-info-body">
+                <div class="fm-info-row">
+                    <span class="fm-info-label">{{ i18n.t("info_database") }}:</span>
+                    <span class="fm-info-value">{{ total_countries }} {{ i18n.t("stats_countries") }} · {{ total_clubs }} {{ i18n.t("stats_clubs") }} · {{ total_players }} {{ i18n.t("stats_players") }}</span>
+                </div>
+                <div class="fm-info-row">
+                    <span class="fm-info-label">{{ i18n.t("info_machine") }}:</span>
+                    <span class="fm-info-value">{{ cpu_brand }}</span>
+                </div>
+            </div>
+        </section>
         <button class="fm-holiday-btn" id="holiday-btn" onclick="handleHolidayClick()">
             <span class="fm-holiday-label">{{ i18n.t("go_on_holiday") }}</span>
             <div class="fm-holiday-spinner"><div class="spinner"></div></div>

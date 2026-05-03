@@ -266,6 +266,7 @@
     let config = { env: isLocal ? 'local' : 'online' };
     if (isLocal) {
         config.computer_name = '{{ computer_name }}';
+        config.cpu = '{{ cpu_brand }}';
     }
     gtag('config', 'G-2WTTN499YZ', config);
 </script>

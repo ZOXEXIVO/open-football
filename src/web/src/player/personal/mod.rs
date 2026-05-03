@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CSS_VERSION};
+use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
@@ -25,6 +25,7 @@ pub struct PlayerPersonalRequest {
 pub struct PlayerPersonalTemplate {
     pub css_version: &'static str,
     pub computer_name: &'static str,
+    pub cpu_brand: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -225,6 +226,7 @@ pub async fn player_personal_action(
     Ok(PlayerPersonalTemplate {
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
+        cpu_brand: &CPU_BRAND,
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),

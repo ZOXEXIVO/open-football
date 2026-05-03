@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Redirect};
 
 use rust_embed::RustEmbed;
 use std::sync::LazyLock;
+use sysinfo::{CpuRefreshKind, RefreshKind, System};
 
 // Include the CSS hash to force recompilation when CSS files change
 // This ensures rust-embed picks up the updated styles.min.css
@@ -19,6 +20,18 @@ pub static COMPUTER_NAME: LazyLock<String> = LazyLock::new(|| {
         .map(|n| n.get())
         .unwrap_or(1);
     format!("{name} (CPU: {cpus})")
+});
+
+/// CPU brand string (e.g. "AMD Ryzen 9 7950X 16-Core Processor"), resolved once at startup.
+pub static CPU_BRAND: LazyLock<String> = LazyLock::new(|| {
+    let sys = System::new_with_specifics(
+        RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing()),
+    );
+    sys.cpus()
+        .first()
+        .map(|c| c.brand().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Unknown CPU".to_string())
 });
 
 #[derive(RustEmbed)]
