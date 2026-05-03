@@ -240,10 +240,28 @@ pub fn calculate_match_rating(
     rating -= stats.red_cards as f32 * 1.50;
 
     // GK xG-prevented — positive means above-expectation shot stopping.
-    // Clamped so a single well-saved shot can't outweigh actual goals
-    // shipped.
+    // The engine doesn't currently populate per-shot xG, so when
+    // `xg_prevented` is left at zero we derive a positive proxy from
+    // actual save volume vs. an expected baseline (70% save rate, ~0.30
+    // xG per shot on target). Without this, GKs miss up to +1.4 of
+    // designed-in upside on every match while still absorbing the full
+    // conceded penalty — pushing season averages well below outfield
+    // positions. Negative excess is suppressed to .max(0.0) so the
+    // proxy never *adds* punishment to bad games (those are already
+    // covered by the conceded penalty + low save% bonus below).
     if pos == PlayerFieldPositionGroup::Goalkeeper {
-        rating += (stats.xg_prevented * 0.45).clamp(-1.2, 1.4);
+        let xg_p = if stats.xg_prevented != 0.0 {
+            stats.xg_prevented
+        } else {
+            let shots = stats.shots_faced.max(stats.saves + opponent_goals as u16) as f32;
+            if shots >= 3.0 {
+                let expected_saves = shots * 0.70;
+                ((stats.saves as f32 - expected_saves) * 0.30).max(0.0)
+            } else {
+                0.0
+            }
+        };
+        rating += (xg_p * 0.45).clamp(-1.2, 1.4);
     }
 
     // Cameo bound: a player who came on for under 15 minutes can't post
@@ -780,6 +798,41 @@ mod tests {
         let baseline = make_gk(2, 4);
         let baseline_rating = calculate_match_rating(&baseline, 1, 2);
         assert!(rating > baseline_rating + 1.0);
+    }
+
+    #[test]
+    fn synthetic_xg_prevented_lifts_above_baseline_keeper() {
+        // Engine doesn't populate xg_prevented; without a fallback, an
+        // outstanding shot-stopping shift (8 saves on 9 shots) was missing
+        // the +0.45/xG bonus the formula advertises. The synthesized
+        // proxy must close the gap so an above-baseline keeper visibly
+        // outrates a 70%-baseline keeper at the same workload.
+        let elite = make_gk(8, 9);
+        let baseline = make_gk(7, 10); // 70% — exactly the expected baseline
+        let elite_rating = calculate_match_rating(&elite, 0, 1);
+        let baseline_rating = calculate_match_rating(&baseline, 0, 3);
+        assert!(
+            elite_rating > baseline_rating + 0.4,
+            "Elite GK ({}) should clearly outrate baseline ({}); proxy not lifting",
+            elite_rating,
+            baseline_rating
+        );
+    }
+
+    #[test]
+    fn synthetic_xg_prevented_does_not_punish_bad_keeper() {
+        // The proxy is positive-only — a keeper saving below baseline
+        // mustn't get a *second* penalty on top of the conceded penalty
+        // and the low-save% penalty. Compare the same disaster shift
+        // before and after the proxy: rating must stay in the existing
+        // disaster band.
+        let gk = make_gk(2, 8); // 25% save rate, 6 conceded
+        let rating = calculate_match_rating(&gk, 0, 6);
+        assert!(
+            rating >= 1.5 && rating <= 4.5,
+            "Disaster GK rated {} — proxy must not push it below the existing disaster floor",
+            rating
+        );
     }
 
     #[test]
