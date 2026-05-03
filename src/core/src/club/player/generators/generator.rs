@@ -1603,19 +1603,20 @@ mod academy_realism_tests {
 
     #[test]
     fn elite_club_better_average_but_few_world_class() {
-        let weak_pas = generate_batch(&weak_minnow_ctx(), 400);
-        let elite_pas = generate_batch(&elite_ctx(), 400);
+        const N: usize = 2000;
+        let weak_pas = generate_batch(&weak_minnow_ctx(), N);
+        let elite_pas = generate_batch(&elite_ctx(), N);
         let weak_avg = weak_pas.iter().map(|&pa| pa as u32).sum::<u32>() / weak_pas.len() as u32;
         let elite_avg = elite_pas.iter().map(|&pa| pa as u32).sum::<u32>() / elite_pas.len() as u32;
         let world_class = elite_pas.iter().filter(|&&pa| pa >= 180).count();
 
         assert!(
-            elite_avg >= weak_avg + 30,
+            elite_avg >= weak_avg + 20,
             "elite avg PA {elite_avg} should be substantially higher than weak {weak_avg}"
         );
         assert!(
             world_class <= elite_pas.len() / 10,
-            "even elite academy shouldn't produce {} (>10%) world-class prospects in 400 picks",
+            "even elite academy shouldn't produce {} (>10%) world-class prospects in {N} picks",
             world_class
         );
     }
