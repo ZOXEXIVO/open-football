@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CSS_VERSION};
+use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -58,6 +58,7 @@ pub struct WatchlistPageTemplate {
     pub css_version: &'static str,
     pub computer_name: &'static str,
     pub cpu_brand: &'static str,
+    pub cores_count: usize,
     pub i18n: I18n,
     pub lang: String,
     pub title: String,
@@ -153,6 +154,7 @@ pub async fn watchlist_page_action(
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
         cpu_brand: &CPU_BRAND,
+        cores_count: *CPU_CORES,
         i18n,
         lang: route_params.lang.clone(),
         title: "Watch List".to_string(),

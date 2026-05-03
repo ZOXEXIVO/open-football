@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CSS_VERSION};
+use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -22,6 +22,7 @@ pub struct CountryStaffTemplate {
     pub css_version: &'static str,
     pub computer_name: &'static str,
     pub cpu_brand: &'static str,
+    pub cores_count: usize,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -130,6 +131,7 @@ pub async fn country_staff_action(
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
         cpu_brand: &CPU_BRAND,
+        cores_count: *CPU_CORES,
         title: country.name.clone(),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

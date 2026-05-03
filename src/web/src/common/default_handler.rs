@@ -11,15 +11,18 @@ use sysinfo::{CpuRefreshKind, RefreshKind, System};
 // Also provides CSS_VERSION for cache-busting query params
 include!(concat!(env!("OUT_DIR"), "/css_hash.rs"));
 
-/// Machine hostname with CPU info, resolved once at startup.
+/// Machine hostname, resolved once at startup.
 pub static COMPUTER_NAME: LazyLock<String> = LazyLock::new(|| {
-    let name = hostname::get()
+    hostname::get()
         .map(|h| h.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "unknown".to_string());
-    let cpus = std::thread::available_parallelism()
+        .unwrap_or_else(|_| "unknown".to_string())
+});
+
+/// Logical CPU thread count, resolved once at startup.
+pub static CPU_CORES: LazyLock<usize> = LazyLock::new(|| {
+    std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(1);
-    format!("{name} (CPU: {cpus})")
+        .unwrap_or(1)
 });
 
 /// CPU brand string (e.g. "AMD Ryzen 9 7950X 16-Core Processor"), resolved once at startup.
