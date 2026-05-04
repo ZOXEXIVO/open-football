@@ -72,6 +72,22 @@ pub fn calculate_match_rating(
     };
     rating += (stats.interceptions as f32 * interception_weight).min(0.8);
 
+    // Clearances — last-ditch defending. Heavily weighted for back-line
+    // players (a CB clearing 8 set-pieces under pressure is the marker
+    // of a strong outing); midfielders get a smaller share for tracking
+    // back; forwards basically don't clear.
+    let clearance_weight = match pos {
+        PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Goalkeeper => 0.07,
+        PlayerFieldPositionGroup::Midfielder => 0.04,
+        _ => 0.02,
+    };
+    let clearance_cap = match pos {
+        PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Goalkeeper => 0.45,
+        PlayerFieldPositionGroup::Midfielder => 0.25,
+        _ => 0.15,
+    };
+    rating += (stats.clearances as f32 * clearance_weight).min(clearance_cap);
+
     // ── Goalkeeper saves ─────────────────────────────────────────────────
 
     if pos == PlayerFieldPositionGroup::Goalkeeper {
@@ -220,6 +236,13 @@ pub fn calculate_match_rating(
 
     rating += (stats.successful_pressures as f32 * 0.035).min(0.35) * minute_damp;
 
+    // Raw pressing volume — applying pressure even when it doesn't
+    // immediately force a turnover is still graft. Worth a third of a
+    // successful pressure each, with a tight cap so a high-volume
+    // presser doesn't outscore a creative midfielder by spamming.
+    let raw_pressure_volume = stats.pressures.saturating_sub(stats.successful_pressures);
+    rating += (raw_pressure_volume as f32 * 0.012).min(0.20) * minute_damp;
+
     // Blocks count more for defenders, less for attackers.
     let block_w = match pos {
         PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Goalkeeper => 0.10,
@@ -227,6 +250,71 @@ pub fn calculate_match_rating(
         _ => 0.04,
     };
     rating += (stats.blocks as f32 * block_w).min(0.5) * minute_damp;
+
+    // ── Crossing (position-aware accuracy reward) ───────────────────────
+    //
+    // Reward completed crosses, mildly punish spam from attempts that
+    // didn't reach a teammate. Caps small so a winger can't post a 9.0
+    // from crossing volume alone. Centre-backs / GKs barely benefit.
+    if stats.crosses_attempted > 0 {
+        let completed = stats.crosses_completed as f32;
+        let failed = stats
+            .crosses_attempted
+            .saturating_sub(stats.crosses_completed) as f32;
+        let (cross_cap, miss_cap) = match pos {
+            PlayerFieldPositionGroup::Midfielder
+            | PlayerFieldPositionGroup::Forward
+            | PlayerFieldPositionGroup::Defender => (0.30, 0.20),
+            _ => (0.12, 0.08),
+        };
+        rating += (completed * 0.08).min(cross_cap) * minute_damp;
+        rating -= (failed * 0.012).min(miss_cap) * minute_damp;
+    }
+
+    // ── Passes into box ─────────────────────────────────────────────────
+    //
+    // Chance-creation indicator independent of whether the ball ended
+    // in a shot (so it's not subsumed by `key_passes`). Caps small —
+    // moving the ball into the box matters but should not dominate.
+    let pib_w = match pos {
+        PlayerFieldPositionGroup::Midfielder | PlayerFieldPositionGroup::Forward => 0.06,
+        PlayerFieldPositionGroup::Defender => 0.04,
+        _ => 0.02,
+    };
+    rating += (stats.passes_into_box as f32 * pib_w).min(0.30) * minute_damp;
+
+    // ── xG buildup credit ───────────────────────────────────────────────
+    //
+    // `xg_buildup` excludes the player's own shots and direct assists,
+    // so it's a clean "made the chance happen up the chain" signal.
+    // Midfielders/defenders weighted higher: for a forward, most of
+    // their xG involvement is the shot itself, already rewarded.
+    if stats.xg_buildup > 0.1 {
+        let buildup_w = match pos {
+            PlayerFieldPositionGroup::Midfielder => 0.30,
+            PlayerFieldPositionGroup::Defender => 0.22,
+            PlayerFieldPositionGroup::Forward => 0.10,
+            _ => 0.05,
+        };
+        rating += (stats.xg_buildup * buildup_w).min(0.30) * minute_damp;
+    }
+
+    // ── Carry distance (tie-breaker) ────────────────────────────────────
+    //
+    // Per progressive carry is already rewarded above; this is a small
+    // top-up for a player who genuinely broke ground over the match.
+    // 1000 units of cumulative carry → +0.10. Cap tight.
+    let carry_bonus = ((stats.carry_distance as f32 / 1000.0) - 0.05).max(0.0);
+    rating += carry_bonus.min(0.15) * minute_damp;
+
+    // ── Possession-quality penalties ────────────────────────────────────
+    //
+    // Miscontrols and heavy touches make a player visibly worse on the
+    // ball. Damped for cameos so a 12-minute sub doesn't get hammered
+    // for one bad first touch. Caps small — these shouldn't override a
+    // strong defensive / creative shift.
+    rating -= (stats.miscontrols as f32 * 0.03).min(0.22) * minute_damp;
+    rating -= (stats.heavy_touches as f32 * 0.015).min(0.18) * minute_damp;
 
     // Errors carry weight regardless of position. Errors-to-goal are the
     // most damaging individual events in the rating, sitting just below a
@@ -317,8 +405,17 @@ mod tests {
             successful_dribbles: 0,
             attempted_dribbles: 0,
             successful_pressures: 0,
+            pressures: 0,
             blocks: 0,
             clearances: 0,
+            passes_into_box: 0,
+            crosses_attempted: 0,
+            crosses_completed: 0,
+            xg_chain: 0.0,
+            xg_buildup: 0.0,
+            miscontrols: 0,
+            heavy_touches: 0,
+            carry_distance: 0,
             errors_leading_to_shot: 0,
             errors_leading_to_goal: 0,
             xg_prevented: 0.0,
@@ -870,5 +967,260 @@ mod tests {
         let many_rating = calculate_match_rating(&many, 1, 1);
 
         assert!(many_rating > few_rating);
+    }
+
+    #[test]
+    fn defender_clean_sheet_with_clearances_outranks_passive() {
+        // Two CS defenders side by side: the active one made 8
+        // clearances and 4 interceptions; the passive one was anonymous.
+        // Both win 1-0 with 20/16 passing.
+        let passive = make_stats(
+            0,
+            0,
+            20,
+            16,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        let mut active = make_stats(
+            0,
+            0,
+            20,
+            16,
+            0,
+            0,
+            2,
+            4,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        active.clearances = 8;
+        active.blocks = 1;
+
+        let passive_rating = calculate_match_rating(&passive, 1, 0);
+        let active_rating = calculate_match_rating(&active, 1, 0);
+        // Active CB clearly above the passive one and into the 7+ band.
+        assert!(
+            active_rating >= 7.0,
+            "active CB clean sheet rated {} — should reach 7.0+",
+            active_rating
+        );
+        assert!(
+            active_rating - passive_rating >= 0.7,
+            "active ({}) - passive ({}) gap too small",
+            active_rating,
+            passive_rating
+        );
+    }
+
+    #[test]
+    fn midfielder_buildup_outranks_sideways_passing() {
+        // Both MIDs played 90 with similar pass volume + accuracy. The
+        // creative one chained xG buildup, played key passes, made
+        // progressive carries; the safe one only completed sideways.
+        let safe = make_stats(
+            0,
+            0,
+            60,
+            55,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        let mut creative = make_stats(
+            0,
+            0,
+            55,
+            48,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        creative.key_passes = 3;
+        creative.progressive_passes = 6;
+        creative.progressive_carries = 4;
+        creative.passes_into_box = 4;
+        creative.xg_buildup = 0.8;
+
+        let safe_rating = calculate_match_rating(&safe, 1, 1);
+        let creative_rating = calculate_match_rating(&creative, 1, 1);
+        assert!(
+            creative_rating > safe_rating + 0.6,
+            "creative MID ({}) should clearly outrate safe-passer MID ({})",
+            creative_rating,
+            safe_rating
+        );
+    }
+
+    #[test]
+    fn winger_completed_crosses_help_failed_spam_does_not() {
+        // Two wide MIDs, same baseline. One completed 4 of 6 crosses
+        // and 3 passes_into_box; the other spammed 12 crosses with only
+        // 1 completed. The accurate winger should rate higher despite
+        // lower volume.
+        let mut accurate = make_stats(
+            0,
+            0,
+            30,
+            24,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        accurate.crosses_attempted = 6;
+        accurate.crosses_completed = 4;
+        accurate.passes_into_box = 3;
+
+        let mut spam = make_stats(
+            0,
+            0,
+            30,
+            24,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        spam.crosses_attempted = 12;
+        spam.crosses_completed = 1;
+
+        let accurate_rating = calculate_match_rating(&accurate, 1, 1);
+        let spam_rating = calculate_match_rating(&spam, 1, 1);
+        assert!(
+            accurate_rating > spam_rating,
+            "accurate crosser ({}) should outrate cross-spammer ({})",
+            accurate_rating,
+            spam_rating
+        );
+    }
+
+    #[test]
+    fn miscontrols_reduce_rating_but_dont_overpunish_cameo() {
+        // Sub on for 25 minutes who fluffed two touches: rating drops
+        // a little but stays in a sensible band — the minute damp keeps
+        // the penalty from compounding with every event the cameo did.
+        let mut clean = make_stats(
+            0,
+            0,
+            12,
+            10,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        clean.minutes_played = 25;
+        let mut sloppy = clean.clone();
+        sloppy.miscontrols = 2;
+        sloppy.heavy_touches = 2;
+
+        let clean_rating = calculate_match_rating(&clean, 1, 1);
+        let sloppy_rating = calculate_match_rating(&sloppy, 1, 1);
+        assert!(
+            sloppy_rating < clean_rating,
+            "sloppy cameo ({}) should rate below clean cameo ({})",
+            sloppy_rating,
+            clean_rating
+        );
+        // But not below the cameo bound — the damp prevents overpunishment.
+        assert!(
+            sloppy_rating >= 5.5,
+            "sloppy cameo over-punished: {}",
+            sloppy_rating
+        );
+    }
+
+    #[test]
+    fn striker_high_xg_no_goals_does_not_outrate_clinical() {
+        // High xG, no goals (wasteful) vs low xG, two goals (clinical).
+        // Both 2-0 wins, 20/15 passing, 2 SoT / 3 shots.
+        let mut wasteful = make_stats(
+            0,
+            0,
+            20,
+            15,
+            2,
+            6,
+            0,
+            0,
+            0,
+            2.5,
+            PlayerFieldPositionGroup::Forward,
+        );
+        wasteful.miscontrols = 0;
+        let clinical = make_stats(
+            2,
+            0,
+            20,
+            15,
+            2,
+            3,
+            0,
+            0,
+            0,
+            0.6,
+            PlayerFieldPositionGroup::Forward,
+        );
+        let wasteful_rating = calculate_match_rating(&wasteful, 2, 0);
+        let clinical_rating = calculate_match_rating(&clinical, 2, 0);
+        assert!(
+            clinical_rating > wasteful_rating + 1.0,
+            "clinical ({}) should clearly outrate wasteful ({}) — got delta {}",
+            clinical_rating,
+            wasteful_rating,
+            clinical_rating - wasteful_rating
+        );
+    }
+
+    #[test]
+    fn defender_can_reach_seven_without_goals_or_assists() {
+        // A complete defensive shift: 4 tackles, 5 interceptions, 7
+        // clearances, 2 blocks, clean sheet. No goals, no assists, no
+        // possession risk. Should clear 7.0.
+        let mut anchor = make_stats(
+            0,
+            0,
+            30,
+            25,
+            0,
+            0,
+            4,
+            5,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        anchor.clearances = 7;
+        anchor.blocks = 2;
+        let rating = calculate_match_rating(&anchor, 1, 0);
+        assert!(
+            rating >= 7.0,
+            "anchor CB rated {} — should reach 7.0+ on defensive work alone",
+            rating
+        );
     }
 }

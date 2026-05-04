@@ -50,8 +50,30 @@ pub struct PlayerMatchEndStats {
     pub successful_dribbles: u16,
     pub attempted_dribbles: u16,
     pub successful_pressures: u16,
+    /// Total close-range pressures applied — superset of
+    /// `successful_pressures`. Used for a small "pressing volume" credit
+    /// that's worth less per event than a successful pressure.
+    pub pressures: u16,
     pub blocks: u16,
     pub clearances: u16,
+    /// Completed passes finishing inside the opposition penalty area —
+    /// chance-creation indicator independent of the eventual shot.
+    pub passes_into_box: u16,
+    pub crosses_attempted: u16,
+    pub crosses_completed: u16,
+    /// xG of all shots in possessions this player participated in. Used
+    /// for build-up credit (small) without double-counting goals.
+    pub xg_chain: f32,
+    /// xG of build-up chains excluding the player's own shots / assists.
+    /// Pure "made the chance happen" signal.
+    pub xg_buildup: f32,
+    /// First-touch resolutions that fluffed the ball.
+    pub miscontrols: u16,
+    /// First-touch resolutions in the heavy-touch band — kept the ball
+    /// alive but gave it away in tempo.
+    pub heavy_touches: u16,
+    /// Cumulative pitch-units carried under control. Tie-breaker only.
+    pub carry_distance: u32,
     pub errors_leading_to_shot: u16,
     pub errors_leading_to_goal: u16,
     /// (GK) Post-shot xG faced minus goals conceded. Positive values
