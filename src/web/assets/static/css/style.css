@@ -7428,7 +7428,7 @@ a:link, a:visited, a:hover, a:active {
     flex-wrap: nowrap;
     align-items: baseline;
     justify-content: center;
-    gap: 6px;
+    gap: 3px;
     max-width: 176px;
     overflow: hidden;
 }
@@ -7450,11 +7450,11 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-aw-pitch-firstname {
-    font-size: 11px;
-    font-weight: 500;
-    color: #d8dee5;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
     letter-spacing: 0.2px;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.5);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.6);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

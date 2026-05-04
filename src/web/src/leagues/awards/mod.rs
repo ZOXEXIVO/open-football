@@ -556,10 +556,9 @@ fn build_totw_slot(
 
 /// Split a denormalised "First Last" string (as built by the simulator's
 /// `format!("{} {}", display_first_name, display_last_name)`) back into
-/// (first, last). For Brazilian-style single-word display names — nickname
-/// (`Ronaldinho`) or mononym (`Bremer`) — return (`name`, ``) so the
-/// pitch label renders the name in the smaller "first-name" font instead
-/// of the bold "last-name" font.
+/// (first, last). Mononym / nickname players (`Batxi`, `Ronaldinho`,
+/// `Bremer`) flow into the last-name slot so the pitch label renders
+/// them in the bold "last-name" font.
 fn split_full_name(full: &str) -> (String, String) {
     let trimmed = full.trim();
     if let Some(idx) = trimmed.rfind(' ') {
@@ -569,20 +568,17 @@ fn split_full_name(full: &str) -> (String, String) {
             return (first, last);
         }
     }
-    (trimmed.to_string(), String::new())
+    (String::new(), trimmed.to_string())
 }
 
 /// Split a structured `FullName` for the pitch label, mirroring
-/// `split_full_name` for the recorded path: nickname / mononym players
-/// flow into the small "first-name" slot, regular players keep their
-/// first/last split.
+/// `split_full_name`: nickname / mononym players flow into the bold
+/// "last-name" slot, regular players keep their first/last split.
 fn split_display_name(name: &FullName) -> (String, String) {
-    let display_first = name.display_first_name();
-    let display_last = name.display_last_name();
-    if display_first.is_empty() {
-        return (display_last.to_string(), String::new());
-    }
-    (display_first.to_string(), display_last.to_string())
+    (
+        name.display_first_name().to_string(),
+        name.display_last_name().to_string(),
+    )
 }
 
 fn build_season_highlight(
