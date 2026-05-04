@@ -758,6 +758,56 @@ impl PipelineProcessor {
         }
     }
 
+    /// Global post-success cleanup invoked after a successful transfer,
+    /// loan, or free-agent signing. Walks every country and:
+    ///   - clears scouting / shortlist / monitoring / known-player rows
+    ///     for the moved player (`clear_player_interest`),
+    ///   - completes any open listings for the player anywhere,
+    ///   - rejects active (Pending / Countered) negotiations for the
+    ///     player anywhere,
+    ///   - syncs the `Wnt` status so the player is no longer flagged
+    ///     "wanted" once no real interest remains.
+    ///
+    /// Completed transfer history is intentionally left untouched so the
+    /// player's career page still shows the move on record.
+    ///
+    /// `clear_player_interest(country)` is per-country and was already
+    /// being called at negotiation acceptance time, but only on the
+    /// negotiation's owning country — clubs in other countries that had
+    /// scout monitoring or shortlist rows kept their stale interest. This
+    /// helper closes that gap by sweeping the whole world after the move
+    /// actually completes.
+    pub fn cleanup_player_transfer_interest(data: &mut SimulatorData, player_id: u32) {
+        use crate::transfers::market::TransferListingStatus;
+        use crate::transfers::negotiation::NegotiationStatus;
+
+        for continent in data.continents.iter_mut() {
+            for country in continent.countries.iter_mut() {
+                Self::clear_player_interest(country, player_id);
+
+                for listing in country.transfer_market.listings.iter_mut() {
+                    if listing.player_id == player_id
+                        && listing.status != TransferListingStatus::Completed
+                        && listing.status != TransferListingStatus::Cancelled
+                    {
+                        listing.status = TransferListingStatus::Completed;
+                    }
+                }
+
+                for negotiation in country.transfer_market.negotiations.values_mut() {
+                    if negotiation.player_id == player_id
+                        && (negotiation.status == NegotiationStatus::Pending
+                            || negotiation.status == NegotiationStatus::Countered)
+                    {
+                        negotiation.status = NegotiationStatus::Rejected;
+                    }
+                }
+
+                Self::sync_wanted_status(country);
+            }
+        }
+    }
+
     /// Reconcile `Wnt` statuses with actual interest. `Wnt` is added during
     /// scouting but has no intrinsic expiry — when window resets wipe all
     /// interest tracking, the status lingers and players appear "Wanted"
@@ -1210,5 +1260,408 @@ impl PipelineProcessor {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::market::{
+        TransferListing, TransferListingStatus, TransferListingType,
+    };
+    use crate::transfers::negotiation::{NegotiationStatus, TransferNegotiation};
+    use crate::transfers::offer::TransferOffer;
+    use crate::transfers::pipeline::recruitment::{
+        ScoutMonitoringSource, ScoutMonitoringStatus, ScoutPlayerMonitoring,
+    };
+    use crate::transfers::pipeline::{ShortlistCandidate, ShortlistCandidateStatus, TransferShortlist};
+    use crate::club::academy::ClubAcademy;
+    use crate::transfers::{CompletedTransfer, TransferType};
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, TeamCollection,
+    };
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn make_club(id: u32, name: &str) -> Club {
+        Club::new(
+            id,
+            name.to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(Vec::new()),
+            ClubFacilities::default(),
+        )
+    }
+
+    fn make_league(id: u32, slug: &str) -> League {
+        League::new(
+            id,
+            "L".to_string(),
+            slug.to_string(),
+            1,
+            500,
+            LeagueSettings {
+                season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                tier: 1,
+                promotion_spots: 0,
+                relegation_spots: 0,
+                league_group: None,
+            },
+            false,
+        )
+    }
+
+    fn make_country(id: u32, code: &str, slug: &str, clubs: Vec<Club>) -> Country {
+        Country::builder()
+            .id(id)
+            .code(code.to_string())
+            .slug(slug.to_string())
+            .name(slug.to_string())
+            .continent_id(1)
+            .leagues(LeagueCollection::new(vec![make_league(id, slug)]))
+            .clubs(clubs)
+            .build()
+            .unwrap()
+    }
+
+    fn make_simulator(date: NaiveDate, countries: Vec<Country>) -> SimulatorData {
+        let continent = Continent::new(1, "Europe".to_string(), countries, Vec::new());
+        SimulatorData::new(
+            date.and_hms_opt(12, 0, 0).unwrap(),
+            vec![continent],
+            GlobalCompetitions::new(Vec::new()),
+        )
+    }
+
+    fn put_monitoring(club: &mut Club, scout_id: u32, player_id: u32, status: ScoutMonitoringStatus) {
+        let id = club.transfer_plan.next_monitoring_id();
+        let mut row = ScoutPlayerMonitoring::new(
+            id,
+            scout_id,
+            player_id,
+            ScoutMonitoringSource::TransferRequest,
+            d(2026, 6, 1),
+        );
+        row.status = status;
+        club.transfer_plan.scout_monitoring.push(row);
+    }
+
+    fn put_shortlist_candidate(club: &mut Club, request_id: u32, player_id: u32) {
+        let mut sl = TransferShortlist::new(request_id, 0.0);
+        sl.candidates.push(ShortlistCandidate {
+            player_id,
+            score: 0.5,
+            estimated_fee: 0.0,
+            status: ShortlistCandidateStatus::Available,
+        });
+        club.transfer_plan.shortlists.push(sl);
+    }
+
+    fn put_listing(country: &mut Country, player_id: u32, club_id: u32, status: TransferListingStatus) {
+        let mut listing = TransferListing::new(
+            player_id,
+            club_id,
+            0,
+            CurrencyValue::new(1_000_000.0, Currency::Usd),
+            d(2026, 6, 1),
+            TransferListingType::Transfer,
+        );
+        listing.status = status;
+        country.transfer_market.listings.push(listing);
+    }
+
+    fn put_negotiation(
+        country: &mut Country,
+        neg_id: u32,
+        player_id: u32,
+        buying_club_id: u32,
+        selling_club_id: u32,
+        status: NegotiationStatus,
+    ) {
+        let offer = TransferOffer::new(
+            CurrencyValue::new(1_000_000.0, Currency::Usd),
+            buying_club_id,
+            d(2026, 6, 1),
+        );
+        let mut neg = TransferNegotiation::new(
+            neg_id,
+            player_id,
+            0,
+            selling_club_id,
+            buying_club_id,
+            offer,
+            d(2026, 6, 1),
+            500.0,
+            500.0,
+            25,
+            10.0,
+        );
+        neg.status = status;
+        country.transfer_market.negotiations.insert(neg_id, neg);
+    }
+
+    fn put_history(country: &mut Country, player_id: u32, from_club_id: u32, to_club_id: u32) {
+        country.transfer_market.transfer_history.push(CompletedTransfer::new(
+            player_id,
+            "Player".to_string(),
+            from_club_id,
+            0,
+            "From".to_string(),
+            to_club_id,
+            "To".to_string(),
+            d(2026, 6, 5),
+            CurrencyValue::new(2_000_000.0, Currency::Usd),
+            TransferType::Permanent,
+        ));
+    }
+
+    #[test]
+    fn cleanup_clears_active_monitoring_and_shortlist() {
+        // Buying club has a Negotiating-state monitoring row plus a
+        // shortlist entry for the player. After the centralized cleanup
+        // both should be gone — the UI should not surface the player as
+        // actively monitored.
+        let player_id: u32 = 100;
+        let buyer_club_id: u32 = 1;
+        let other_club_id: u32 = 2;
+        let mut buyer = make_club(buyer_club_id, "Buyer");
+        put_monitoring(&mut buyer, 11, player_id, ScoutMonitoringStatus::Negotiating);
+        put_shortlist_candidate(&mut buyer, 1, player_id);
+
+        // A second domestic club had the player on its scouting radar.
+        let mut other = make_club(other_club_id, "Other");
+        put_monitoring(&mut other, 12, player_id, ScoutMonitoringStatus::Active);
+
+        let country = make_country(1, "UR", "uruguay", vec![buyer, other]);
+        let mut data = make_simulator(d(2026, 6, 5), vec![country]);
+
+        PipelineProcessor::cleanup_player_transfer_interest(&mut data, player_id);
+
+        let country = data.country(1).unwrap();
+        for club in &country.clubs {
+            assert!(
+                club.transfer_plan
+                    .scout_monitoring
+                    .iter()
+                    .all(|m| m.player_id != player_id),
+                "club {} still has stale monitoring rows for player {}",
+                club.id,
+                player_id
+            );
+            for sl in &club.transfer_plan.shortlists {
+                assert!(
+                    sl.candidates.iter().all(|c| c.player_id != player_id),
+                    "club {} still has shortlist candidate for player {}",
+                    club.id,
+                    player_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_completes_listings_and_rejects_active_negotiations() {
+        let player_id: u32 = 200;
+        let selling_club_id: u32 = 3;
+        let buying_club_id: u32 = 4;
+        let losing_club_id: u32 = 5;
+
+        let buyer = make_club(buying_club_id, "Buyer");
+        let seller = make_club(selling_club_id, "Seller");
+        let losing_bidder = make_club(losing_club_id, "Loser");
+        let mut country = make_country(1, "EN", "england", vec![buyer, seller, losing_bidder]);
+
+        // An open listing — must be marked Completed.
+        put_listing(&mut country, player_id, selling_club_id, TransferListingStatus::Available);
+        // The buyer's negotiation got accepted — leave Accepted alone but
+        // a parallel bid from the losing club is still Pending and must
+        // be rejected.
+        put_negotiation(
+            &mut country,
+            10,
+            player_id,
+            buying_club_id,
+            selling_club_id,
+            NegotiationStatus::Accepted,
+        );
+        put_negotiation(
+            &mut country,
+            11,
+            player_id,
+            losing_club_id,
+            selling_club_id,
+            NegotiationStatus::Pending,
+        );
+        put_history(&mut country, player_id, selling_club_id, buying_club_id);
+
+        let mut data = make_simulator(d(2026, 6, 5), vec![country]);
+
+        PipelineProcessor::cleanup_player_transfer_interest(&mut data, player_id);
+
+        let country = data.country(1).unwrap();
+        // All listings for the player are Completed.
+        for listing in &country.transfer_market.listings {
+            if listing.player_id == player_id {
+                assert_eq!(
+                    listing.status,
+                    TransferListingStatus::Completed,
+                    "listing for player {} not completed",
+                    player_id
+                );
+            }
+        }
+        // Pending negotiation is now Rejected; Accepted stays Accepted.
+        let losing = &country.transfer_market.negotiations[&11];
+        assert_eq!(losing.status, NegotiationStatus::Rejected);
+        let winning = &country.transfer_market.negotiations[&10];
+        assert_eq!(winning.status, NegotiationStatus::Accepted);
+        // Transfer history must NOT be deleted.
+        assert!(
+            country
+                .transfer_market
+                .transfer_history
+                .iter()
+                .any(|t| t.player_id == player_id),
+            "completed transfer history for player {} was deleted",
+            player_id
+        );
+    }
+
+    #[test]
+    fn cross_country_cleanup_clears_both_sides() {
+        let player_id: u32 = 300;
+        let selling_club_id: u32 = 6;
+        let buying_club_id: u32 = 7;
+        let third_party_club_id: u32 = 8;
+
+        let mut seller = make_club(selling_club_id, "Seller");
+        // Seller's home country had an open listing for the player.
+        let mut buyer = make_club(buying_club_id, "Buyer");
+        put_monitoring(
+            &mut buyer,
+            21,
+            player_id,
+            ScoutMonitoringStatus::Negotiating,
+        );
+        put_shortlist_candidate(&mut buyer, 1, player_id);
+
+        // A club in a third country scouted the same player — its
+        // monitoring row must be cleared too.
+        let mut third_party = make_club(third_party_club_id, "ThirdParty");
+        put_monitoring(&mut third_party, 31, player_id, ScoutMonitoringStatus::Active);
+        // Selling-side staff also had an internal monitoring (e.g. their
+        // own academy DoF flagged the player on the way out).
+        put_monitoring(&mut seller, 41, player_id, ScoutMonitoringStatus::Active);
+
+        let mut selling_country = make_country(1, "AR", "argentina", vec![seller]);
+        // Selling country listing pre-completion.
+        put_listing(
+            &mut selling_country,
+            player_id,
+            selling_club_id,
+            TransferListingStatus::InNegotiation,
+        );
+        let buying_country = make_country(2, "ES", "spain", vec![buyer]);
+        let third_country = make_country(3, "PT", "portugal", vec![third_party]);
+
+        let mut data = make_simulator(
+            d(2026, 6, 5),
+            vec![selling_country, buying_country, third_country],
+        );
+
+        PipelineProcessor::cleanup_player_transfer_interest(&mut data, player_id);
+
+        // Verify each country has been swept clean.
+        for cont in &data.continents {
+            for country in &cont.countries {
+                for club in &country.clubs {
+                    assert!(
+                        club.transfer_plan
+                            .scout_monitoring
+                            .iter()
+                            .all(|m| m.player_id != player_id),
+                        "country {} club {} still has monitoring for player {}",
+                        country.id,
+                        club.id,
+                        player_id
+                    );
+                    for sl in &club.transfer_plan.shortlists {
+                        assert!(
+                            sl.candidates.iter().all(|c| c.player_id != player_id),
+                            "country {} club {} still has shortlist candidate",
+                            country.id,
+                            club.id
+                        );
+                    }
+                }
+                for listing in &country.transfer_market.listings {
+                    if listing.player_id == player_id {
+                        assert_eq!(
+                            listing.status,
+                            TransferListingStatus::Completed,
+                            "country {} listing for player {} not completed",
+                            country.id,
+                            player_id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_preserves_unrelated_player_interest() {
+        // Two players: 400 has been signed; 500 is unrelated. The sweep
+        // for 400 must NOT touch 500's monitoring / shortlist entries.
+        let signed_id: u32 = 400;
+        let other_id: u32 = 500;
+
+        let mut buyer = make_club(1, "Buyer");
+        put_monitoring(&mut buyer, 11, signed_id, ScoutMonitoringStatus::Negotiating);
+        put_monitoring(&mut buyer, 12, other_id, ScoutMonitoringStatus::Active);
+        put_shortlist_candidate(&mut buyer, 1, signed_id);
+        put_shortlist_candidate(&mut buyer, 2, other_id);
+
+        let country = make_country(1, "FR", "france", vec![buyer]);
+        let mut data = make_simulator(d(2026, 6, 5), vec![country]);
+
+        PipelineProcessor::cleanup_player_transfer_interest(&mut data, signed_id);
+
+        let buyer = &data.country(1).unwrap().clubs[0];
+        // Signed player interest is gone.
+        assert!(
+            buyer
+                .transfer_plan
+                .scout_monitoring
+                .iter()
+                .all(|m| m.player_id != signed_id)
+        );
+        // Other player interest survives.
+        assert!(
+            buyer
+                .transfer_plan
+                .scout_monitoring
+                .iter()
+                .any(|m| m.player_id == other_id),
+            "monitoring for unrelated player wiped"
+        );
+        let still_shortlisted = buyer
+            .transfer_plan
+            .shortlists
+            .iter()
+            .any(|s| s.candidates.iter().any(|c| c.player_id == other_id));
+        assert!(still_shortlisted, "unrelated player removed from shortlist");
     }
 }

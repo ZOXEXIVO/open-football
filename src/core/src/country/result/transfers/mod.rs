@@ -60,6 +60,7 @@ impl CountryResult {
 
         // Phase 1: Negotiations & pipeline (per-country)
         let mut global_signings: Vec<GlobalFreeAgentSigning> = Vec::new();
+        let mut domestic_signed_ids: Vec<u32> = Vec::new();
         let deferred_transfers = if let Some(country) = data.country_mut(country_id) {
             // Sync market's window flag. On open→closed transitions this cancels
             // any stranded listings and expires pending negotiations.
@@ -88,6 +89,7 @@ impl CountryResult {
                 &mut summary,
                 &global_free_agents,
                 &config,
+                &mut domestic_signed_ids,
             );
 
             if window_open {
@@ -147,6 +149,14 @@ impl CountryResult {
         } else {
             Vec::new()
         };
+
+        // Cross-country interest sweep for the in-country free-agent
+        // signings that just executed: their per-country cleanup ran
+        // inside `handle_free_agents`, but clubs in OTHER countries may
+        // still have the player on a shortlist or in scout monitoring.
+        for signed_id in &domestic_signed_ids {
+            PipelineProcessor::cleanup_player_transfer_interest(data, *signed_id);
+        }
 
         // Execute any deferred global free-agent signings (players from
         // `data.free_agents`, populated by the "Move on Free" UI action).

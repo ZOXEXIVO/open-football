@@ -3,6 +3,7 @@ use crate::club::Person;
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
 use crate::simulator::SimulatorData;
+use crate::transfers::pipeline::PipelineProcessor;
 use crate::{Country, Player, PlayerClubContract, TeamInfo, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
@@ -78,7 +79,7 @@ pub(crate) fn execute_transfer(
             return false;
         }
     }
-    if selling_country_id == buying_country_id {
+    let success = if selling_country_id == buying_country_id {
         // Domestic — work within a single country
         if let Some(country) = data.country_mut(selling_country_id) {
             if is_loan {
@@ -96,7 +97,17 @@ pub(crate) fn execute_transfer(
         } else {
             execute_transfer_across_countries(data, transfer, date)
         }
+    };
+
+    // Once the player has actually moved, sweep stale transfer interest
+    // (scouting, shortlists, monitoring, listings, pending negotiations)
+    // across every country — not just the buying country. The negotiation
+    // acceptance path already calls `clear_player_interest` on the owning
+    // country, but clubs elsewhere keep stale rows until this cleanup.
+    if success {
+        PipelineProcessor::cleanup_player_transfer_interest(data, player_id);
     }
+    success
 }
 
 // ============================================================

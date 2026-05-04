@@ -67,6 +67,7 @@ impl CountryResult {
         summary: &mut TransferActivitySummary,
         global_pool: &[GlobalFreeAgentSummary],
         config: &TransferConfig,
+        domestic_signed_ids: &mut Vec<u32>,
     ) -> Vec<GlobalFreeAgentSigning> {
         #[allow(dead_code)]
         struct FreeAgentCandidate {
@@ -448,6 +449,10 @@ impl CountryResult {
             );
 
             PipelineProcessor::clear_player_interest(country, signing.player_id);
+            // Surface the signed id so the caller (which holds the full
+            // simulator) can run the cross-country interest sweep once
+            // the country mutable borrow ends.
+            domestic_signed_ids.push(signing.player_id);
             summary.completed_transfers += 1;
 
             debug!(
@@ -649,6 +654,11 @@ pub(crate) fn execute_global_free_agent_signing(
     );
 
     PipelineProcessor::clear_player_interest(buying_country, signing.player_id);
+
+    // Sweep stale interest in every country — clubs in other leagues may
+    // have monitoring or shortlist rows that survived the local clear.
+    let player_id = signing.player_id;
+    PipelineProcessor::cleanup_player_transfer_interest(data, player_id);
 
     debug!(
         "Free agent signing (global pool): player {} → club {} in country {}",
