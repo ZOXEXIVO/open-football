@@ -6,9 +6,7 @@
 //! `Player` and `MatchOutcome` data — splitting fixtures per domain
 //! would duplicate ~50 lines of boilerplate per file with no payoff.
 
-use super::scaling::*;
 use super::types::{MatchOutcome, MatchParticipation};
-use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::player::Player;
 use crate::r#match::engine::result::PlayerMatchEndStats;
@@ -2060,4 +2058,492 @@ fn youth_competitive_full_match_higher_load_and_debt_than_adult() {
         youth.load.recovery_debt,
         adult.load.recovery_debt
     );
+}
+
+// ── Hat-trick / assist hat-trick ─────────────────────────────
+
+#[test]
+fn hat_trick_fires_for_three_goals() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(7.5, 3, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        7.5,
+        false,
+        false,
+        false,
+        false,
+        3,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::HatTrick), 1);
+}
+
+#[test]
+fn hat_trick_silent_for_two_goals() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(7.5, 2, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        7.5,
+        false,
+        false,
+        false,
+        false,
+        3,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::HatTrick), 0);
+}
+
+#[test]
+fn hat_trick_silent_in_friendly() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(7.5, 3, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        7.5,
+        true,
+        false,
+        false,
+        false,
+        3,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::HatTrick), 0);
+}
+
+#[test]
+fn hat_trick_cooldown_blocks_repeat() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(7.5, 3, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        7.5,
+        false,
+        false,
+        false,
+        false,
+        3,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::HatTrick), 1);
+}
+
+#[test]
+fn assist_hat_trick_fires_for_three_assists() {
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
+    let s = stats(7.5, 0, 3, 0, PlayerFieldPositionGroup::Midfielder);
+    let o = outcome(
+        &s,
+        7.5,
+        false,
+        false,
+        false,
+        false,
+        3,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::AssistHatTrick), 1);
+}
+
+// ── Drought ──────────────────────────────────────────────────
+
+#[test]
+fn drought_concern_silent_for_first_match() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        6.5,
+        false,
+        false,
+        false,
+        false,
+        0,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::ScoringDroughtConcern),
+        0
+    );
+}
+
+#[test]
+fn drought_concern_fires_after_six_goalless_apps() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    for _ in 0..7 {
+        let o = outcome(
+            &s,
+            6.5,
+            false,
+            false,
+            false,
+            false,
+            1,
+            0,
+            MatchParticipation::Starter,
+        );
+        p.on_match_played(&o);
+    }
+    assert!(
+        count_events(&p, &HappinessEventType::ScoringDroughtConcern) >= 1,
+        "expected ScoringDroughtConcern after sustained drought"
+    );
+}
+
+#[test]
+fn drought_ended_and_concern_do_not_co_fire() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let goalless = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    for _ in 0..9 {
+        let o = outcome(
+            &goalless,
+            6.5,
+            false,
+            false,
+            false,
+            false,
+            1,
+            1,
+            MatchParticipation::Starter,
+        );
+        p.on_match_played(&o);
+    }
+    let scoring = stats(7.0, 1, 0, 0, PlayerFieldPositionGroup::Forward);
+    let win = outcome(
+        &scoring,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        2,
+        1,
+        MatchParticipation::Starter,
+    );
+    let concern_before = count_events(&p, &HappinessEventType::ScoringDroughtConcern);
+    p.on_match_played(&win);
+    assert!(count_events(&p, &HappinessEventType::GoalDroughtEnded) >= 1);
+    let concern_after = count_events(&p, &HappinessEventType::ScoringDroughtConcern);
+    assert_eq!(
+        concern_after, concern_before,
+        "drought-ended match should not co-fire ScoringDroughtConcern"
+    );
+}
+
+// ── Senior debut ─────────────────────────────────────────────
+
+#[test]
+fn senior_debut_fires_on_first_competitive_app() {
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
+    let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
+    let o = outcome(
+        &s,
+        6.5,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::SeniorDebut), 1);
+}
+
+#[test]
+fn senior_debut_silent_in_friendly() {
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
+    let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
+    let o = outcome(
+        &s,
+        6.5,
+        true,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::SeniorDebut), 0);
+}
+
+// ── Milestones ───────────────────────────────────────────────
+
+#[test]
+fn appearance_milestone_fires_at_threshold_only_once() {
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
+    p.statistics.played = 49; // about to cross 50 with this match.
+    let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
+    let o = outcome(
+        &s,
+        6.5,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::AppearanceMilestone),
+        1
+    );
+    // Next match (51 apps) — no further milestone fire.
+    let o2 = outcome(
+        &s,
+        6.5,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o2);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::AppearanceMilestone),
+        1
+    );
+}
+
+#[test]
+fn goal_milestone_fires_when_threshold_crossed() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.statistics.played = 100;
+    p.statistics.goals = 24; // hits 25 with one more goal this match.
+    let s = stats(7.0, 1, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::GoalMilestone), 1);
+}
+
+// ── Catalog handles every variant ───────────────────────────
+
+#[test]
+fn catalog_handles_every_new_variant() {
+    let cat = crate::club::player::behaviour_config::MoraleEventCatalog::default();
+    // Spec defaults — exhaustive checks for the new variants.
+    assert_eq!(cat.magnitude(HappinessEventType::PlayerOfTheMonth), 8.0);
+    assert_eq!(
+        cat.magnitude(HappinessEventType::YoungPlayerOfTheMonth),
+        7.0
+    );
+    assert_eq!(
+        cat.magnitude(HappinessEventType::TeamOfTheWeekSelection),
+        3.0
+    );
+    assert_eq!(
+        cat.magnitude(HappinessEventType::TeamOfTheSeasonSelection),
+        9.0
+    );
+    assert_eq!(cat.magnitude(HappinessEventType::PlayerOfTheSeason), 12.0);
+    assert_eq!(
+        cat.magnitude(HappinessEventType::YoungPlayerOfTheSeason),
+        10.0
+    );
+    assert_eq!(cat.magnitude(HappinessEventType::LeagueTopScorer), 10.0);
+    assert_eq!(cat.magnitude(HappinessEventType::LeagueTopAssists), 8.0);
+    assert_eq!(cat.magnitude(HappinessEventType::LeagueGoldenGlove), 8.0);
+    assert_eq!(cat.magnitude(HappinessEventType::ContinentalPlayerOfYear), 14.0);
+    assert_eq!(cat.magnitude(HappinessEventType::WorldPlayerOfYear), 18.0);
+    assert_eq!(cat.magnitude(HappinessEventType::SeniorDebut), 6.0);
+    assert_eq!(cat.magnitude(HappinessEventType::NationalTeamDebut), 8.0);
+    assert_eq!(cat.magnitude(HappinessEventType::HatTrick), 7.0);
+    assert_eq!(cat.magnitude(HappinessEventType::GoalDroughtEnded), 3.5);
+    assert_eq!(cat.magnitude(HappinessEventType::ScoringDroughtConcern), -3.0);
+    assert_eq!(cat.magnitude(HappinessEventType::AppearanceMilestone), 5.0);
+    assert_eq!(cat.magnitude(HappinessEventType::GoalMilestone), 5.0);
+    assert_eq!(cat.magnitude(HappinessEventType::CleanSheetMilestone), 5.0);
+    assert_eq!(cat.magnitude(HappinessEventType::TrainingGroundBustUp), -4.0);
+    assert_eq!(cat.magnitude(HappinessEventType::PublicApology), 1.0);
+    assert_eq!(cat.magnitude(HappinessEventType::FansChantPlayerName), 3.0);
+    assert_eq!(cat.magnitude(HappinessEventType::MediaPressureMounting), -3.5);
+    assert_eq!(cat.magnitude(HappinessEventType::LeadershipEmergence), 4.0);
+}
+
+#[test]
+fn catalog_polarity_for_new_variants() {
+    let cat = crate::club::player::behaviour_config::MoraleEventCatalog::default();
+    let positives = [
+        HappinessEventType::PlayerOfTheMonth,
+        HappinessEventType::TeamOfTheWeekSelection,
+        HappinessEventType::PlayerOfTheSeason,
+        HappinessEventType::LeagueTopScorer,
+        HappinessEventType::ContinentalPlayerOfYearNomination,
+        HappinessEventType::WorldPlayerOfYear,
+        HappinessEventType::SeniorDebut,
+        HappinessEventType::NationalTeamDebut,
+        HappinessEventType::HatTrick,
+        HappinessEventType::GoalDroughtEnded,
+        HappinessEventType::AppearanceMilestone,
+        HappinessEventType::PublicApology,
+        HappinessEventType::FansChantPlayerName,
+        HappinessEventType::LeadershipEmergence,
+    ];
+    for p in positives {
+        assert!(cat.magnitude(p.clone()) > 0.0, "{:?} should be positive", p);
+    }
+    let negatives = [
+        HappinessEventType::ScoringDroughtConcern,
+        HappinessEventType::TrainingGroundBustUp,
+        HappinessEventType::MediaPressureMounting,
+    ];
+    for n in negatives {
+        assert!(cat.magnitude(n.clone()) < 0.0, "{:?} should be negative", n);
+    }
+}
+
+// ── MediaPressureMounting sliding window ────────────────────
+
+fn play_match_with_rating(p: &mut Player, rating: f32) {
+    let s = stats(rating, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        rating,
+        false,
+        false,
+        false,
+        false,
+        1,
+        1,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+}
+
+#[test]
+fn media_pressure_silent_before_window_fills() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.player_attributes.current_reputation = 7000;
+    // Two consecutive poor games but only 2 apps — window not full yet.
+    play_match_with_rating(&mut p, 5.5);
+    play_match_with_rating(&mut p, 5.5);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::MediaPressureMounting),
+        0,
+        "window not full yet — should be silent"
+    );
+}
+
+#[test]
+fn media_pressure_fires_with_poor_apps_split_across_block_boundary() {
+    // Poor apps on appearances 2 and 6 — under the old block-reset
+    // logic these split across the boundary and never co-trigger.
+    // With a sliding window they remain inside the last 5 at app 6.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.player_attributes.current_reputation = 7000;
+    let ratings = [7.5, 5.5, 7.5, 7.5, 7.5, 5.5];
+    for r in ratings {
+        play_match_with_rating(&mut p, r);
+    }
+    assert!(
+        count_events(&p, &HappinessEventType::MediaPressureMounting) >= 1,
+        "sliding window should keep both poor apps in view at app 6"
+    );
+}
+
+#[test]
+fn media_pressure_silent_for_low_profile_player() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.player_attributes.current_reputation = 2000;
+    let ratings = [5.5, 5.5, 7.5, 7.5, 7.5];
+    for r in ratings {
+        play_match_with_rating(&mut p, r);
+    }
+    assert_eq!(
+        count_events(&p, &HappinessEventType::MediaPressureMounting),
+        0,
+        "low-profile player below the reputation gate should not trigger"
+    );
+}
+
+#[test]
+fn media_pressure_old_lows_age_out_of_sliding_window() {
+    // Two poor apps in apps 1-2, then 5 good apps — both lows fall
+    // off the 5-app window. No trigger should fire on the 5th good app
+    // even though there were 2 lows in the player's full history.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.player_attributes.current_reputation = 7000;
+    let ratings = [5.5, 5.5, 7.5, 7.5, 7.5, 7.5, 7.5, 7.5];
+    let mut last_count = 0;
+    for r in ratings {
+        play_match_with_rating(&mut p, r);
+        last_count = count_events(&p, &HappinessEventType::MediaPressureMounting);
+    }
+    // Some triggers may have fired earlier when both lows were in the
+    // window. The test focuses on the *final* state: after enough good
+    // appearances the lows have rolled out, so no fresh trigger fires
+    // on the latest match alone (cooldown aside, count shouldn't grow
+    // beyond what fired within-window).
+    let _ = last_count; // assertion below: nothing else can fire here.
+    // After the window clears, trigger should not still be "armed":
+    // the mask popcount is 0.
+    assert_eq!(
+        p.happiness.recent_low_rating_mask.count_ones(),
+        0,
+        "old lows must have rolled off the sliding window"
+    );
+}
+
+// ── Recent_events_cap respected for award flood ─────────────
+
+#[test]
+fn award_emissions_respect_recent_events_cap() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+    let cap = cfg.recent_events_cap;
+    // Fire many bursty events of varied types. The cap enforces bound.
+    for i in 0..(cap + 50) {
+        let event = if i % 2 == 0 {
+            HappinessEventType::TeamOfTheWeekSelection
+        } else {
+            HappinessEventType::HatTrick
+        };
+        p.happiness.add_event_default(event);
+    }
+    assert!(p.happiness.recent_events.len() <= cap);
 }

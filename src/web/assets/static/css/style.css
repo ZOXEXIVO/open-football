@@ -3476,10 +3476,6 @@ a:link, a:visited, a:hover, a:active {
    ============================================ */
 
 .fm-stats-bar {
-    display: flex;
-    align-items: stretch;
-    justify-content: space-between;
-    gap: 12px;
     color: #7a8c98;
     font-size: 13px;
     padding: 8px 0;
@@ -3487,7 +3483,6 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-info-panel {
-    flex: 1 1 auto;
     min-width: 0;
 }
 
@@ -3589,10 +3584,12 @@ a:link, a:visited, a:hover, a:active {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 5px 14px;
-    font-size: 11px;
+    padding: 2px 10px;
+    height: 20px;
+    font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.5px;
+    line-height: 1;
     text-transform: uppercase;
     color: #c8d6e0;
     background: linear-gradient(180deg, #2a3a46 0%, #223038 100%);
@@ -3616,8 +3613,8 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-holiday-spinner .spinner {
-    width: 14px;
-    height: 14px;
+    width: 10px;
+    height: 10px;
     border-top-color: #e8c46a;
 }
 
@@ -4849,6 +4846,17 @@ a:link, a:visited, a:hover, a:active {
 .fm-pitch-player.pos-st {
     left: 50%;
     bottom: 86%;
+}
+
+/* Row 8b: Striker pair (4-4-2) */
+.fm-pitch-player.pos-stl {
+    left: 36%;
+    bottom: 72%;
+}
+
+.fm-pitch-player.pos-str {
+    left: 64%;
+    bottom: 72%;
 }
 
 /* Compact pitch variant */
@@ -7161,4 +7169,470 @@ a:link, a:visited, a:hover, a:active {
         font-size: 9px;
         letter-spacing: 0.5px;
     }
+}
+
+/* ============================================
+   FM AWARDS — league awards page
+   ============================================ */
+
+.fm-aw-feature {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid #263340;
+}
+
+.fm-aw-feature-photo {
+    width: 64px;
+    height: 80px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #1a2530;
+    border: 1px solid #2a3a48;
+    flex-shrink: 0;
+    display: block;
+}
+
+.fm-aw-feature-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 22%;
+}
+
+.fm-aw-feature-id {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.fm-aw-feature-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #d8dee5;
+    line-height: 1.15;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fm-aw-feature-name:hover {
+    color: #4a9eff;
+}
+
+.fm-aw-feature-club {
+    font-size: 11px;
+    color: #7b8893;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fm-aw-feature-club:hover {
+    color: #4a9eff;
+}
+
+.fm-aw-stats-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.fm-aw-stats-table tr {
+    border-bottom: 1px solid #1f2a32;
+}
+
+.fm-aw-stats-table tr:last-child {
+    border-bottom: none;
+}
+
+.fm-aw-stats-table td {
+    padding: 7px 14px;
+    font-size: 12px;
+    color: #8a949c;
+}
+
+.fm-aw-stats-table td.fm-aw-val {
+    text-align: right;
+    color: #d0d6dc;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.fm-aw-stats-table td.fm-aw-val-accent {
+    color: #d4a341;
+}
+
+.fm-aw-subtabs {
+    margin-bottom: 0;
+}
+
+.fm-aw-tab {
+    padding: 16px 18px 18px;
+}
+
+.fm-aw-tab-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) 1fr;
+    gap: 18px;
+    align-items: start;
+}
+
+@media (max-width: 900px) {
+    .fm-aw-tab-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.fm-aw-tab-card,
+.fm-aw-tab-pitch-wrap {
+    background: linear-gradient(180deg, #1a242c 0%, #161e25 100%);
+    border: 1px solid #263340;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.fm-aw-tab-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 14px;
+    background: linear-gradient(180deg, #20292f 0%, #1b242a 100%);
+    border-bottom: 1px solid #263340;
+}
+
+.fm-aw-tab-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: #546a78;
+}
+
+.fm-aw-tab-date {
+    font-size: 11px;
+    font-weight: 600;
+    color: #4e5a63;
+}
+
+.fm-aw-history-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 18px;
+}
+
+@media (max-width: 900px) {
+    .fm-aw-history-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.fm-aw-history-col {
+    background: linear-gradient(180deg, #1a242c 0%, #161e25 100%);
+    border: 1px solid #263340;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.fm-aw-totw-pitch {
+    padding: 18px;
+}
+
+.fm-aw-totw-pitch .fm-pitch-surface {
+    aspect-ratio: 0.78;
+    width: 100%;
+    max-width: 560px;
+    margin: 0 auto;
+}
+
+.fm-aw-pitch-player {
+    text-decoration: none;
+    width: 64px;
+    align-items: stretch;
+    gap: 0;
+}
+
+.fm-aw-pitch-player .fm-pitch-player-dot {
+    display: none;
+}
+
+.fm-aw-pitch-photo {
+    position: relative;
+    width: 70px;
+    height: 88px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #1a2530;
+    border: 2px solid rgba(255, 255, 255, 0.75);
+    box-shadow: 0 0 14px rgba(74, 200, 90, 0.5),
+        0 0 6px rgba(74, 200, 90, 0.3),
+        0 3px 10px rgba(0, 0, 0, 0.5);
+    transition: transform 0.18s, box-shadow 0.18s;
+}
+
+.fm-aw-pitch-player:hover .fm-aw-pitch-photo {
+    transform: scale(1.08);
+    box-shadow: 0 0 20px rgba(74, 200, 90, 0.7),
+        0 0 6px rgba(74, 200, 90, 0.45),
+        0 6px 14px rgba(0, 0, 0, 0.6);
+}
+
+.fm-aw-pitch-player.pos-gk .fm-aw-pitch-photo {
+    border-color: rgba(255, 230, 130, 0.9);
+    box-shadow: 0 0 14px rgba(232, 200, 48, 0.55),
+        0 0 6px rgba(232, 200, 48, 0.3),
+        0 3px 10px rgba(0, 0, 0, 0.5);
+}
+
+.fm-aw-pitch-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 22%;
+}
+
+.fm-aw-pitch-rating {
+    position: absolute;
+    bottom: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    font-weight: 700;
+    background: linear-gradient(180deg, #f1d271, #d4a341);
+    color: #1a1308;
+    padding: 1px 6px;
+    border-radius: 2px;
+    letter-spacing: 0.1px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.fm-aw-pitch-label {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 5px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 154px;
+    pointer-events: auto;
+}
+
+.fm-aw-pitch-namerow {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: baseline;
+    justify-content: center;
+    gap: 6px;
+    max-width: 176px;
+    overflow: hidden;
+}
+
+.fm-aw-pitch-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.2px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.6);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-decoration: none;
+}
+
+.fm-aw-pitch-name:hover {
+    color: #f1d271;
+}
+
+.fm-aw-pitch-firstname {
+    font-size: 11px;
+    font-weight: 500;
+    color: #d8dee5;
+    letter-spacing: 0.2px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.5);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-decoration: none;
+}
+
+.fm-aw-pitch-firstname:hover {
+    color: #f1d271;
+}
+
+.fm-aw-pitch-club {
+    font-size: 10px;
+    font-weight: 500;
+    color: #d8dee5;
+    letter-spacing: 0.2px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.5);
+    white-space: nowrap;
+    max-width: 154px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-decoration: none;
+}
+
+.fm-aw-pitch-club:hover {
+    color: #f1d271;
+}
+
+/* Awards 4-4-2: align lanes to common vertical columns
+   so defender/mid/striker stack in straight lines, and lift each
+   row ~1.5em so labels fit below every photo (incl. GK).
+   Inner columns at 36/64 keep enough horizontal gap from the
+   wings (10/90) so the wider name labels don't overlap. */
+.fm-aw-pitch-player.pos-gk  { left: 50%; bottom: 7%; }
+.fm-aw-pitch-player.pos-dl  { left: 12%; bottom: 28%; }
+.fm-aw-pitch-player.pos-dcl { left: 36%; bottom: 28%; }
+.fm-aw-pitch-player.pos-dcr { left: 64%; bottom: 28%; }
+.fm-aw-pitch-player.pos-dr  { left: 88%; bottom: 28%; }
+.fm-aw-pitch-player.pos-ml  { left: 12%; bottom: 53%; }
+.fm-aw-pitch-player.pos-mcl { left: 36%; bottom: 53%; }
+.fm-aw-pitch-player.pos-mcr { left: 64%; bottom: 53%; }
+.fm-aw-pitch-player.pos-mr  { left: 88%; bottom: 53%; }
+.fm-aw-pitch-player.pos-stl { left: 36%; bottom: 77%; }
+.fm-aw-pitch-player.pos-str { left: 64%; bottom: 77%; }
+
+.fm-aw-history-table,
+.fm-aw-season-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.fm-aw-history-table thead th {
+    padding: 8px 10px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #546a78;
+    background: #1a2530;
+    border-bottom: 1px solid #263340;
+    text-align: left;
+}
+
+.fm-aw-history-table tbody td,
+.fm-aw-season-table tbody td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #1f2a32;
+    color: #c0c8d0;
+    vertical-align: middle;
+}
+
+.fm-aw-history-table tbody tr:last-child td,
+.fm-aw-season-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.fm-aw-history-table tbody tr:hover td,
+.fm-aw-season-table tbody tr:hover td {
+    background: #1f2a32;
+}
+
+.fm-aw-history-table .aw-name a,
+.fm-aw-season-table .aw-name a {
+    color: #d0d6dc;
+    font-weight: 500;
+}
+
+.fm-aw-history-table .aw-name a:hover,
+.fm-aw-season-table .aw-name a:hover {
+    color: #4a9eff;
+}
+
+.fm-aw-history-table .aw-club a {
+    color: #8a949c;
+}
+
+.fm-aw-history-table .aw-club a:hover {
+    color: #4a9eff;
+}
+
+.fm-aw-history-table .aw-stat {
+    width: 56px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    color: #d0d6dc;
+}
+
+.fm-aw-history-table .aw-date {
+    width: 100px;
+    color: #8a949c;
+    font-size: 11px;
+}
+
+.fm-aw-history-table th.aw-date {
+    width: 100px;
+}
+
+.fm-aw-history-table th.aw-stat {
+    text-align: center;
+}
+
+.aw-portrait {
+    width: 36px;
+    padding-left: 0 !important;
+    padding-right: 4px !important;
+}
+
+.fm-aw-mini-portrait {
+    display: block;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: #1a2530;
+    border: 1px solid #2a3a48;
+}
+
+.fm-aw-mini-portrait img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 22%;
+}
+
+.fm-aw-row-sub {
+    display: block;
+    font-size: 10px;
+    color: #6b7580;
+    margin-top: 1px;
+}
+
+.fm-aw-row-sub a {
+    color: #6b7580;
+}
+
+.fm-aw-row-sub a:hover {
+    color: #4a9eff;
+}
+
+.fm-aw-kind {
+    display: block;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #4a9d5b;
+    margin-top: 2px;
+}
+
+.fm-aw-row-young .fm-aw-kind {
+    color: #5cc99a;
+}
+
+.fm-aw-season-table .aw-key {
+    width: 42%;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #546a78;
+    font-weight: 600;
 }

@@ -117,6 +117,17 @@ impl Player {
             return;
         }
 
+        // Senior debut, drought tracking, milestones — derived purely
+        // from the post-match competitive totals so we don't add a
+        // per-match history Vec. Cooldowns gate against duplicate fires
+        // when the simulator re-enters this path on the same day.
+        self.record_senior_debut(o);
+        self.record_drought_signals(o);
+        self.record_milestones(o);
+        self.record_hat_tricks(o);
+        self.record_fans_chant_and_media_pressure(o);
+        self.record_leadership_emergence(o);
+
         // Sent off — embarrassing, plus the suspension fallout. Flat hit.
         if o.stats.red_cards > 0 {
             self.happiness
@@ -298,6 +309,233 @@ impl Player {
                 );
             }
         }
+    }
+
+    fn record_senior_debut(&mut self, _o: &MatchOutcome<'_>) {
+        let total_competitive_apps = self.statistics.played
+            + self.statistics.played_subs
+            + self.cup_statistics.played
+            + self.cup_statistics.played_subs;
+        if total_competitive_apps == 1 {
+            self.happiness.add_event_default_with_cooldown(
+                HappinessEventType::SeniorDebut,
+                3650,
+            );
+        }
+    }
+
+    /// Track competitive scoring drought for forwards/midfielders. Updates
+    /// the per-player `apps_since_last_competitive_goal` counter and
+    /// emits at most one drought-related event per match (mutually
+    /// exclusive — a goal that ends a drought never co-fires the
+    /// concern).
+    fn record_drought_signals(&mut self, o: &MatchOutcome<'_>) {
+        let pos = self.position();
+        let is_attacker = pos.is_forward() || pos.is_midfielder();
+        if !is_attacker {
+            return;
+        }
+
+        let drought_apps = self.happiness.apps_since_last_competitive_goal;
+        if o.stats.goals > 0 {
+            if drought_apps >= 8 {
+                let extra = (((drought_apps as i32 - 8) as f32) * 0.25).clamp(0.0, 3.0);
+                let mag = 3.5 + extra;
+                self.happiness.add_event_with_cooldown(
+                    HappinessEventType::GoalDroughtEnded,
+                    mag,
+                    21,
+                );
+            }
+            self.happiness.apps_since_last_competitive_goal = 0;
+        } else {
+            self.happiness.apps_since_last_competitive_goal =
+                self.happiness.apps_since_last_competitive_goal.saturating_add(1);
+            // ScoringDroughtConcern is forward-only: midfielder drought
+            // is real but doesn't carry the "what's wrong with our striker"
+            // narrative.
+            if pos.is_forward()
+                && self.happiness.apps_since_last_competitive_goal >= 6
+                && o.effective_rating < 6.8
+            {
+                let cfg = HappinessConfig::default();
+                let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+                let amb_amp = scaling::ambition_amplifier(self.attributes.ambition);
+                let mag = cfg.catalog.scoring_drought_concern * prof_dampen * amb_amp;
+                self.happiness.add_event_with_cooldown(
+                    HappinessEventType::ScoringDroughtConcern,
+                    mag,
+                    30,
+                );
+            }
+        }
+    }
+
+    /// Single-fire milestone events when competitive totals cross fixed
+    /// thresholds in this match. Stats have already been updated, so the
+    /// crossing is detected by inspecting `total_after` against the
+    /// per-match contribution.
+    fn record_milestones(&mut self, o: &MatchOutcome<'_>) {
+        let games_after = self.statistics.played
+            + self.statistics.played_subs
+            + self.cup_statistics.played
+            + self.cup_statistics.played_subs;
+        // Apps ladder: this match contributed exactly +1 appearance.
+        for &(threshold, mul) in &[
+            (50u16, 0.8f32),
+            (100, 1.0),
+            (250, 1.25),
+            (500, 1.6),
+            (750, 2.0),
+        ] {
+            if games_after == threshold {
+                let cfg = HappinessConfig::default();
+                let mag = cfg.catalog.appearance_milestone * mul;
+                self.happiness.add_event_with_cooldown(
+                    HappinessEventType::AppearanceMilestone,
+                    mag,
+                    365,
+                );
+            }
+        }
+
+        let goals_after = self.statistics.goals + self.cup_statistics.goals;
+        let goals_before = goals_after.saturating_sub(o.stats.goals);
+        for &(threshold, mul) in &[
+            (25u16, 0.8f32),
+            (50, 1.0),
+            (100, 1.25),
+            (200, 1.6),
+            (400, 2.0),
+        ] {
+            if goals_before < threshold && goals_after >= threshold {
+                let cfg = HappinessConfig::default();
+                let mag = cfg.catalog.goal_milestone * mul;
+                self.happiness.add_event_with_cooldown(
+                    HappinessEventType::GoalMilestone,
+                    mag,
+                    365,
+                );
+            }
+        }
+
+        if self.position().is_goalkeeper()
+            && matches!(o.participation, MatchParticipation::Starter)
+            && o.team_goals_against == 0
+        {
+            let cs_after = self.statistics.clean_sheets + self.cup_statistics.clean_sheets;
+            let cs_before = cs_after.saturating_sub(1);
+            for &(threshold, mul) in &[
+                (25u16, 0.8f32),
+                (50, 1.0),
+                (100, 1.25),
+                (200, 1.6),
+            ] {
+                if cs_before < threshold && cs_after >= threshold {
+                    let cfg = HappinessConfig::default();
+                    let mag = cfg.catalog.clean_sheet_milestone * mul;
+                    self.happiness.add_event_with_cooldown(
+                        HappinessEventType::CleanSheetMilestone,
+                        mag,
+                        365,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Hat-trick and assist hat-trick events. Reputation- and scene-amplified
+    /// (cup / derby outings carry more narrative weight). Cooldown 30 days
+    /// stops a freak two-hat-trick week from saturating the morale buffer.
+    fn record_hat_tricks(&mut self, o: &MatchOutcome<'_>) {
+        let cfg = HappinessConfig::default();
+        let scene_mul = if o.is_cup || o.is_derby { 1.35 } else { 1.0 };
+        let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
+
+        if o.stats.goals >= 3 {
+            let mag = cfg.catalog.hat_trick * scene_mul * rep_mul;
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::HatTrick, mag, 30);
+        }
+        if o.stats.assists >= 3 {
+            let base = cfg.catalog.assist_hat_trick;
+            let mag = base * scene_mul * rep_mul;
+            self.happiness
+                .add_event_with_cooldown(HappinessEventType::AssistHatTrick, mag, 30);
+        }
+    }
+
+    /// `FansChantPlayerName` — joyous moment after a standout home shift.
+    /// `MediaPressureMounting` — high-profile player accumulating poor
+    /// performances or a red-card disgrace in a marquee fixture.
+    fn record_fans_chant_and_media_pressure(&mut self, o: &MatchOutcome<'_>) {
+        let cfg = HappinessConfig::default();
+        let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
+        let scene_mul = if o.is_cup || o.is_derby { 1.35 } else { 1.0 };
+
+        let derby_hero_now = o.is_derby
+            && o.team_won
+            && (o.stats.goals > 0 || o.is_motm || o.effective_rating >= 7.5);
+        let chant_trigger = o.team_won
+            && (o.effective_rating >= 8.2 || o.stats.goals >= 3 || derby_hero_now);
+        if chant_trigger {
+            let mag = cfg.catalog.fans_chant_player_name * rep_mul * scene_mul;
+            self.happiness.add_event_with_cooldown(
+                HappinessEventType::FansChantPlayerName,
+                mag,
+                45,
+            );
+        }
+
+        // Sliding 5-bit window of "this match's rating was poor". Bit 0
+        // is the most recent appearance, so a poor showing N matches ago
+        // falls off naturally instead of waiting for a block boundary.
+        const MEDIA_WINDOW: u8 = 5;
+        const WINDOW_MASK: u8 = (1 << MEDIA_WINDOW) - 1; // 0b11111
+        let poor_bit: u8 = if o.effective_rating < 6.0 { 1 } else { 0 };
+        self.happiness.recent_low_rating_mask =
+            ((self.happiness.recent_low_rating_mask << 1) | poor_bit) & WINDOW_MASK;
+        self.happiness.recent_low_rating_len =
+            (self.happiness.recent_low_rating_len + 1).min(MEDIA_WINDOW);
+
+        let high_profile = self.player_attributes.current_reputation >= 5000;
+        let poor_marquee = (o.is_cup || o.is_derby) && o.stats.red_cards > 0;
+        let two_of_five = self.happiness.recent_low_rating_len >= MEDIA_WINDOW
+            && self.happiness.recent_low_rating_mask.count_ones() >= 2;
+
+        if high_profile && (two_of_five || poor_marquee) {
+            let provoke_mul = scaling::criticism_amplifier(
+                self.attributes.controversy,
+                self.attributes.temperament,
+            );
+            let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
+            let mag = cfg.catalog.media_pressure_mounting * provoke_mul * prof_dampen;
+            self.happiness.add_event_with_cooldown(
+                HappinessEventType::MediaPressureMounting,
+                mag,
+                45,
+            );
+        }
+    }
+
+    /// `LeadershipEmergence` — senior, professional, high-leadership
+    /// players step up after a heavy defeat (margin ≤ -3). Long
+    /// cooldown so it stays a meaningful career marker, not a
+    /// per-bad-result tag.
+    fn record_leadership_emergence(&mut self, o: &MatchOutcome<'_>) {
+        if !o.team_lost || o.goal_margin() > -3 {
+            return;
+        }
+        let leadership = self.skills.mental.leadership;
+        let prof = self.attributes.professionalism;
+        if leadership < 16.0 || prof < 14.0 {
+            return;
+        }
+        let cfg = HappinessConfig::default();
+        let mag = cfg.catalog.leadership_emergence
+            * scaling::loyalty_amplifier(self.attributes.loyalty);
+        self.happiness
+            .add_event_with_cooldown(HappinessEventType::LeadershipEmergence, mag, 120);
     }
 
     fn record_match_reputation(&mut self, o: &MatchOutcome<'_>) {

@@ -237,6 +237,34 @@ impl TeamBehaviour {
                 offender
                     .happiness
                     .add_event(HappinessEventType::ControversyIncident, magnitude);
+
+                // Bigger incidents (training-ground bust-ups) — only the
+                // hottest combinations trigger them, never every routine
+                // controversy. Cooldown 60d so a recurring offender's
+                // history is layered, not flooded.
+                let bust_up_eligible = controversy >= 15.0
+                    && offender.attributes.temperament <= 8.0;
+                if bust_up_eligible {
+                    let prof_dampen = crate::club::player::events::scaling::criticism_dampener(
+                        offender.attributes.professionalism,
+                    );
+                    let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+                    let mag = cfg.catalog.training_ground_bust_up * prof_dampen;
+                    offender.happiness.add_event_with_cooldown(
+                        HappinessEventType::TrainingGroundBustUp,
+                        mag,
+                        60,
+                    );
+                }
+
+                // Public apology — well-adjusted controversial players walk
+                // back the worst of the fallout. Soft positive (+1.0).
+                if offender.attributes.professionalism >= 14.0 && controversy <= 12.0 {
+                    offender.happiness.add_event_default_with_cooldown(
+                        HappinessEventType::PublicApology,
+                        90,
+                    );
+                }
             }
             // And a smaller ripple on the teammate (if one was found).
             // ConflictWithTeammate must carry the partner id — the events

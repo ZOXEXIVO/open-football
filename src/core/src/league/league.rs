@@ -1,7 +1,8 @@
 use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{
-    LeagueDynamics, LeagueMilestones, LeagueRegulations, LeagueResult, LeagueStatistics,
-    LeagueTable, LeagueTableRow, MatchStorage, PlayerOfTheWeekHistory, Schedule, ScheduleItem,
+    LeagueAwards, LeagueDynamics, LeagueMilestones, LeagueRegulations, LeagueResult,
+    LeagueStatistics, LeagueTable, LeagueTableRow, MatchStorage, PlayerOfTheWeekHistory, Schedule,
+    ScheduleItem,
 };
 use crate::{Club, Team};
 use chrono::{Datelike, NaiveDate};
@@ -27,6 +28,7 @@ pub struct League {
     pub is_cup: bool,
     pub financials: LeagueFinancials,
     pub player_of_week: PlayerOfTheWeekHistory,
+    pub awards: LeagueAwards,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -90,6 +92,7 @@ impl League {
             is_cup: false,
             financials,
             player_of_week: PlayerOfTheWeekHistory::new(),
+            awards: LeagueAwards::default(),
         }
     }
 

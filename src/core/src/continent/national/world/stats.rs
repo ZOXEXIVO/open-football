@@ -8,14 +8,19 @@
 //! national-team match".
 
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::lookups::world_country_elo;
+use crate::HappinessEventType;
 use crate::continent::Continent;
 use crate::country::national::{NationalTeamFixture, NationalTeamMatchResult};
 
-/// Update apps/goals/reputation for every player on either side's
-/// squad, no matter which continent their club sits on.
+/// Update apps/goals/reputation for every player who actually appeared
+/// in the match, no matter which continent their club sits on.
+/// `appearance_ids` is the on-pitch appearance set (starters + subs
+/// used) — squad members who didn't play are skipped here so they
+/// don't get a fake cap or a fake `NationalTeamDebut` event. Caller
+/// derives this from the raw match's `player_stats` keys.
 ///
 /// Country-weighted reputation gains: stronger nations push the
 /// reputation needle further (a goal at a World Cup for Brazil counts
@@ -26,8 +31,8 @@ pub fn apply_world_international_stats(
     home_country_id: u32,
     away_country_id: u32,
     player_goals: &HashMap<u32, u16>,
+    appearance_ids: &HashSet<u32>,
 ) {
-    let mut squad_player_ids: Vec<u32> = Vec::new();
     let mut country_weights: HashMap<u32, f32> = HashMap::new();
 
     for continent in continents.iter() {
@@ -38,7 +43,6 @@ pub fn apply_world_international_stats(
             let country_rep = country.reputation as f32;
             let country_weight = (country_rep / 500.0).clamp(0.5, 2.0);
             for s in &country.national_team.squad {
-                squad_player_ids.push(s.player_id);
                 country_weights.insert(s.player_id, country_weight);
             }
         }
@@ -49,12 +53,13 @@ pub fn apply_world_international_stats(
             for club in country.clubs.iter_mut() {
                 for team in club.teams.iter_mut() {
                     for player in team.players.iter_mut() {
-                        if !squad_player_ids.contains(&player.id) {
+                        if !appearance_ids.contains(&player.id) {
                             continue;
                         }
                         let country_weight =
                             country_weights.get(&player.id).copied().unwrap_or(1.0);
 
+                        let was_uncapped = player.player_attributes.international_apps == 0;
                         player.player_attributes.international_apps += 1;
 
                         let mut goal_bonus: f32 = 0.0;
@@ -74,6 +79,15 @@ pub fn apply_world_international_stats(
                             home_delta,
                             world_delta,
                         );
+
+                        if was_uncapped {
+                            // First international cap — fires on the
+                            // actual on-pitch appearance, not call-up.
+                            player.happiness.add_event_default_with_cooldown(
+                                HappinessEventType::NationalTeamDebut,
+                                3650,
+                            );
+                        }
                     }
                 }
             }

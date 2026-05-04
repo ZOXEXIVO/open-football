@@ -1,0 +1,22 @@
+<div class="fm-aw-feature">
+    <a class="fm-aw-feature-photo" href="/{{ lang }}/players/{{ card.player_slug }}">
+        {% if card.player_generated %}
+        <img src="/api/players/{{ card.player_id }}/face.svg" alt="{{ card.player_name }}">
+        {% else %}
+        <img src="https://open-football.org/player/{{ card.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ card.player_id }}/face.svg';" alt="{{ card.player_name }}">
+        {% endif %}
+    </a>
+    <div class="fm-aw-feature-id">
+        <a class="fm-aw-feature-name" href="/{{ lang }}/players/{{ card.player_slug }}">{{ card.player_name }}</a>
+        <a class="fm-aw-feature-club" href="/{{ lang }}/teams/{{ card.club_slug }}">{{ card.club_name }}</a>
+    </div>
+</div>
+<table class="fm-aw-stats-table">
+    <tbody>
+        <tr><td>{{ i18n.t("rating") }}</td><td class="fm-aw-val">{{ card.average_rating }}</td></tr>
+        <tr><td>{{ i18n.t("apps") }}</td><td class="fm-aw-val">{{ card.matches_played }}</td></tr>
+        <tr><td>{{ i18n.t("goals") }}</td><td class="fm-aw-val">{{ card.goals }}</td></tr>
+        <tr><td>{{ i18n.t("assists") }}</td><td class="fm-aw-val">{{ card.assists }}</td></tr>
+        <tr><td>{{ i18n.t("performance_index") }}</td><td class="fm-aw-val fm-aw-val-accent">{{ card.score }}</td></tr>
+    </tbody>
+</table>

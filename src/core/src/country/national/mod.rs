@@ -132,18 +132,34 @@ impl NationalTeam {
             opponent_country_id: opponent_id,
         };
 
-        // Update player stats
-        let squad_player_ids: Vec<u32> = self.squad.iter().map(|s| s.player_id).collect();
+        // Update player stats — only the players who actually appeared
+        // in the match (starters + subs used) get an international cap
+        // bumped and the debut transition. Squad members who travelled
+        // but didn't get on the pitch are not "capped" — call-up alone
+        // already emits `NationalTeamCallup`.
+        let appearance_ids: std::collections::HashSet<u32> =
+            match_result.player_stats.keys().copied().collect();
 
         for club in clubs.iter_mut() {
             for team in club.teams.iter_mut() {
                 for player in team.players.iter_mut() {
-                    if squad_player_ids.contains(&player.id) {
-                        player.player_attributes.international_apps += 1;
+                    if !appearance_ids.contains(&player.id) {
+                        continue;
+                    }
+                    let was_uncapped = player.player_attributes.international_apps == 0;
+                    player.player_attributes.international_apps += 1;
 
-                        if let Some(stats) = match_result.player_stats.get(&player.id) {
-                            player.player_attributes.international_goals += stats.goals as u16;
-                        }
+                    if let Some(stats) = match_result.player_stats.get(&player.id) {
+                        player.player_attributes.international_goals += stats.goals as u16;
+                    }
+
+                    if was_uncapped {
+                        // First international cap — the actual on-pitch
+                        // appearance, not selection.
+                        player.happiness.add_event_default_with_cooldown(
+                            crate::HappinessEventType::NationalTeamDebut,
+                            3650,
+                        );
                     }
                 }
             }

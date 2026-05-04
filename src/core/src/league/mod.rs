@@ -1,3 +1,4 @@
+pub mod awards;
 mod collection;
 mod context;
 mod dynamics;
@@ -15,6 +16,11 @@ mod statistics;
 pub mod storages;
 pub mod table;
 
+pub use awards::{
+    AwardAggregator, CandidateAggregate, LeagueAwards, MonthlyAwardSelector, MonthlyPlayerAward,
+    SeasonAwardSelector, SeasonAwardsSnapshot, TeamOfTheWeekAward, TeamOfTheWeekSelector,
+    TeamOfTheWeekSlot,
+};
 pub use collection::*;
 pub use context::*;
 pub use dynamics::*;

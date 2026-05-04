@@ -1,3 +1,4 @@
+pub mod awards;
 pub mod get;
 pub mod transfers;
 
@@ -8,4 +9,5 @@ pub fn league_routes() -> Router<GameAppData> {
     Router::new()
         .merge(get::routes::routes())
         .merge(transfers::routes::routes())
+        .merge(awards::routes::routes())
 }

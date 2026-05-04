@@ -214,6 +214,7 @@ pub fn league_menu(
     country_leagues: &[(&str, &str)],
 ) -> Vec<MenuSection> {
     let transfers_url = format!("/{}/leagues/{}/transfers", p.lang, league_slug);
+    let awards_url = format!("/{}/leagues/{}/awards", p.lang, league_slug);
     let mut sections = p.home_and_country_sections();
 
     sections.push(MenuSection {
@@ -234,12 +235,20 @@ pub fn league_menu(
     });
 
     sections.push(MenuSection {
-        items: vec![MenuItem {
-            active: p.current_path == transfers_url,
-            title: p.i18n.t("transfers").to_string(),
-            url: transfers_url,
-            icon: "fa-exchange".to_string(),
-        }],
+        items: vec![
+            MenuItem {
+                active: p.current_path == transfers_url,
+                title: p.i18n.t("transfers").to_string(),
+                url: transfers_url,
+                icon: "fa-exchange".to_string(),
+            },
+            MenuItem {
+                active: p.current_path == awards_url,
+                title: p.i18n.t("awards").to_string(),
+                url: awards_url,
+                icon: "fa-medal".to_string(),
+            },
+        ],
     });
 
     sections.push(continental_section(p.i18n, p.lang, p.current_path));

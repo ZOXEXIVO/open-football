@@ -264,7 +264,9 @@ fn world_stats_update_reaches_foreign_based_player() {
 
     let mut goals = HashMap::new();
     goals.insert(101_u32, 2_u16);
-    apply_world_international_stats(&mut continents, 1, 99, &goals);
+    let mut appearances = std::collections::HashSet::new();
+    appearances.insert(101_u32);
+    apply_world_international_stats(&mut continents, 1, 99, &goals, &appearances);
 
     let player_attrs = continents
         .iter()
@@ -327,7 +329,44 @@ fn global_tournament_result_updates_caps_schedule_and_match_result() {
         group_idx: 0,
         fixture_idx: 0,
     };
-    let raw = synth_match_result(2, 1, Some(101));
+    let mut raw = synth_match_result(2, 1, Some(101));
+    // Inject the opposing player as a non-scoring appearance so the
+    // appearance-only cap pipeline still credits him with a cap. Squad
+    // selection alone no longer triggers caps — only on-pitch
+    // appearances do (mirrors `apply_friendly_result`).
+    raw.player_stats.insert(
+        202,
+        PlayerMatchEndStats {
+            shots_on_target: 0,
+            shots_total: 0,
+            passes_attempted: 0,
+            passes_completed: 0,
+            tackles: 0,
+            interceptions: 0,
+            saves: 0,
+            shots_faced: 0,
+            goals: 0,
+            assists: 0,
+            match_rating: 6.5,
+            xg: 0.0,
+            position_group: PlayerFieldPositionGroup::Forward,
+            fouls: 0,
+            yellow_cards: 0,
+            red_cards: 0,
+            minutes_played: 90,
+            key_passes: 0,
+            progressive_passes: 0,
+            progressive_carries: 0,
+            successful_dribbles: 0,
+            attempted_dribbles: 0,
+            successful_pressures: 0,
+            blocks: 0,
+            clearances: 0,
+            errors_leading_to_shot: 0,
+            errors_leading_to_goal: 0,
+            xg_prevented: 0.0,
+        },
+    );
     let date = d(2026, 6, 20);
 
     let match_result =

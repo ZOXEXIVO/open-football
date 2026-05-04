@@ -1,0 +1,299 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/leagues/{{ league_slug }}/awards">{{ i18n.t("awards") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("awards") }}</h3>
+        </div>
+        <div class="fm-transfer-tabs fm-aw-subtabs">
+            <button class="fm-ttab active" onclick="switchAwardTab(this, 'week')">{{ i18n.t("weekly") }}</button>
+            <button class="fm-ttab" onclick="switchAwardTab(this, 'month')">{{ i18n.t("monthly") }}</button>
+            <button class="fm-ttab" onclick="switchAwardTab(this, 'young')">{{ i18n.t("young") }}</button>
+            <button class="fm-ttab" onclick="switchAwardTab(this, 'history')">{{ i18n.t("previous_winners") }}</button>
+        </div>
+
+        <div class="fm-ttab-content fm-aw-tab" id="aw-tab-week">
+            <div class="fm-aw-tab-grid">
+                <div class="fm-aw-tab-card">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("player_of_the_week") }}</span>
+                        {% if let Some(card) = hero_player %}<span class="fm-aw-tab-date">{{ card.date_label }}</span>{% endif %}
+                    </div>
+                    {% if let Some(card) = hero_player %}
+                    {% include "leagues/awards/_feature_card.html" %}
+                    {% else %}
+                    <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+                    {% endif %}
+                </div>
+                <div class="fm-aw-tab-pitch-wrap">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("team_of_the_week") }}</span>
+                        {% if let Some(totw) = team_of_week %}<span class="fm-aw-tab-date">{{ totw.date_label }}</span>{% endif %}
+                    </div>
+                    {% if let Some(totw) = team_of_week %}
+                    {% include "leagues/awards/_pitch.html" %}
+                    {% else %}
+                    <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="fm-ttab-content fm-aw-tab" id="aw-tab-month" style="display:none">
+            <div class="fm-aw-tab-grid">
+                <div class="fm-aw-tab-card">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("player_of_month") }}</span>
+                        {% if let Some(card) = player_of_month %}<span class="fm-aw-tab-date">{{ card.date_label }}</span>{% endif %}
+                    </div>
+                    {% if let Some(card) = player_of_month %}
+                    {% include "leagues/awards/_feature_card.html" %}
+                    {% else %}
+                    <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+                    {% endif %}
+                </div>
+                <div class="fm-aw-tab-pitch-wrap">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("team_of_the_month") }}</span>
+                        {% if let Some(totw) = team_of_month %}<span class="fm-aw-tab-date">{{ totw.date_label }}</span>{% endif %}
+                    </div>
+                    {% if let Some(totw) = team_of_month %}
+                    {% include "leagues/awards/_pitch.html" %}
+                    {% else %}
+                    <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="fm-ttab-content fm-aw-tab" id="aw-tab-young" style="display:none">
+            <div class="fm-aw-tab-grid">
+                <div class="fm-aw-tab-card">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("young_player_of_month") }}</span>
+                        {% if let Some(card) = young_player_of_month %}<span class="fm-aw-tab-date">{{ card.date_label }}</span>{% endif %}
+                    </div>
+                    {% if let Some(card) = young_player_of_month %}
+                    {% include "leagues/awards/_feature_card.html" %}
+                    {% else %}
+                    <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+                    {% endif %}
+                </div>
+                <div class="fm-aw-tab-pitch-wrap">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("young_team_of_the_month") }}</span>
+                        {% if let Some(totw) = young_team_of_month %}<span class="fm-aw-tab-date">{{ totw.date_label }}</span>{% endif %}
+                    </div>
+                    {% if let Some(totw) = young_team_of_month %}
+                    {% include "leagues/awards/_pitch.html" %}
+                    {% else %}
+                    <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="fm-ttab-content fm-aw-tab" id="aw-tab-history" style="display:none">
+            <div class="fm-aw-history-grid">
+                <div class="fm-aw-history-col">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("previous_winners") }}</span>
+                        <span class="fm-aw-tab-date">{{ i18n.t("weekly") }}</span>
+                    </div>
+                    {% if recent_weeks.is_empty() %}
+                    <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+                    {% else %}
+                    <table class="fm-aw-history-table">
+                        <thead>
+                            <tr>
+                                <th class="aw-date">{{ i18n.t("date") }}</th>
+                                <th></th>
+                                <th class="aw-name">{{ i18n.t("player") }}</th>
+                                <th class="aw-club">{{ i18n.t("club") }}</th>
+                                <th class="aw-stat">{{ i18n.t("av_rat") }}</th>
+                                <th class="aw-stat">{{ i18n.t("gls") }}</th>
+                                <th class="aw-stat">{{ i18n.t("ast") }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for w in recent_weeks %}
+                            <tr>
+                                <td class="aw-date">{{ w.date_label }}</td>
+                                <td class="aw-portrait">
+                                    <a href="/{{ lang }}/players/{{ w.player_slug }}" class="fm-aw-mini-portrait">
+                                        {% if w.player_generated %}
+                                        <img src="/api/players/{{ w.player_id }}/face.svg" alt="">
+                                        {% else %}
+                                        <img src="https://open-football.org/player/{{ w.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ w.player_id }}/face.svg';" alt="">
+                                        {% endif %}
+                                    </a>
+                                </td>
+                                <td class="aw-name"><a href="/{{ lang }}/players/{{ w.player_slug }}">{{ w.player_name }}</a></td>
+                                <td class="aw-club"><a href="/{{ lang }}/teams/{{ w.club_slug }}">{{ w.club_name }}</a></td>
+                                <td class="aw-stat">{{ w.average_rating }}</td>
+                                <td class="aw-stat">{{ w.goals }}</td>
+                                <td class="aw-stat">{{ w.assists }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% endif %}
+                </div>
+                <div class="fm-aw-history-col">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("monthly_archive") }}</span>
+                    </div>
+                    {% if recent_months.is_empty() %}
+                    <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+                    {% else %}
+                    <table class="fm-aw-history-table">
+                        <thead>
+                            <tr>
+                                <th class="aw-date">{{ i18n.t("date") }}</th>
+                                <th></th>
+                                <th class="aw-name">{{ i18n.t("player") }}</th>
+                                <th class="aw-stat">{{ i18n.t("av_rat") }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for m in recent_months %}
+                            <tr class="{% if m.is_young %}fm-aw-row-young{% endif %}">
+                                <td class="aw-date">
+                                    {{ m.date_label }}
+                                    <span class="fm-aw-kind">{{ m.kind_label }}</span>
+                                </td>
+                                <td class="aw-portrait">
+                                    <a href="/{{ lang }}/players/{{ m.player_slug }}" class="fm-aw-mini-portrait">
+                                        {% if m.player_generated %}
+                                        <img src="/api/players/{{ m.player_id }}/face.svg" alt="">
+                                        {% else %}
+                                        <img src="https://open-football.org/player/{{ m.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ m.player_id }}/face.svg';" alt="">
+                                        {% endif %}
+                                    </a>
+                                </td>
+                                <td class="aw-name">
+                                    <a href="/{{ lang }}/players/{{ m.player_slug }}">{{ m.player_name }}</a>
+                                    <span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ m.club_slug }}">{{ m.club_name }}</a></span>
+                                </td>
+                                <td class="aw-stat">
+                                    {{ m.average_rating }}
+                                    <span class="fm-aw-row-sub">{{ m.matches_played }}{{ i18n.t("apps") }} · {{ m.goals }}{{ i18n.t("g") }} {{ m.assists }}{{ i18n.t("a") }}</span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <script>
+        function switchAwardTab(btn, tab) {
+            document.querySelectorAll('.fm-aw-subtabs .fm-ttab').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.fm-aw-tab').forEach(c => c.style.display = 'none');
+            btn.classList.add('active');
+            document.getElementById('aw-tab-' + tab).style.display = '';
+        }
+        </script>
+    </section>
+
+    {% if !season_highlights.is_empty() %}
+    <div class="row g-3 mt-0">
+        {% for s in season_highlights %}
+        <div class="col-md-6 col-lg-4">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("season_honours") }}</h3>
+                    <span class="fm-panel-count">{{ s.season_label }}</span>
+                </div>
+                <table class="fm-aw-season-table">
+                    <tbody>
+                        {% if let Some(po) = s.player_of_season %}
+                        <tr>
+                            <td class="aw-key">{{ i18n.t("player_of_the_season") }}</td>
+                            <td class="aw-portrait">
+                                <a href="/{{ lang }}/players/{{ po.player_slug }}" class="fm-aw-mini-portrait">
+                                    {% if po.player_generated %}<img src="/api/players/{{ po.player_id }}/face.svg" alt="">{% else %}<img src="https://open-football.org/player/{{ po.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ po.player_id }}/face.svg';" alt="">{% endif %}
+                                </a>
+                            </td>
+                            <td class="aw-name">
+                                <a href="/{{ lang }}/players/{{ po.player_slug }}">{{ po.player_name }}</a>
+                                {% if !po.club_name.is_empty() %}<span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ po.club_slug }}">{{ po.club_name }}</a></span>{% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% if let Some(yo) = s.young_player_of_season %}
+                        <tr>
+                            <td class="aw-key">{{ i18n.t("young_player_of_the_season") }}</td>
+                            <td class="aw-portrait">
+                                <a href="/{{ lang }}/players/{{ yo.player_slug }}" class="fm-aw-mini-portrait">
+                                    {% if yo.player_generated %}<img src="/api/players/{{ yo.player_id }}/face.svg" alt="">{% else %}<img src="https://open-football.org/player/{{ yo.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ yo.player_id }}/face.svg';" alt="">{% endif %}
+                                </a>
+                            </td>
+                            <td class="aw-name">
+                                <a href="/{{ lang }}/players/{{ yo.player_slug }}">{{ yo.player_name }}</a>
+                                {% if !yo.club_name.is_empty() %}<span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ yo.club_slug }}">{{ yo.club_name }}</a></span>{% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% if let Some(ts) = s.top_scorer %}
+                        <tr>
+                            <td class="aw-key">{{ i18n.t("top_scorer") }}</td>
+                            <td class="aw-portrait">
+                                <a href="/{{ lang }}/players/{{ ts.player_slug }}" class="fm-aw-mini-portrait">
+                                    {% if ts.player_generated %}<img src="/api/players/{{ ts.player_id }}/face.svg" alt="">{% else %}<img src="https://open-football.org/player/{{ ts.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ ts.player_id }}/face.svg';" alt="">{% endif %}
+                                </a>
+                            </td>
+                            <td class="aw-name">
+                                <a href="/{{ lang }}/players/{{ ts.player_slug }}">{{ ts.player_name }}</a>
+                                {% if !ts.club_name.is_empty() %}<span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ ts.club_slug }}">{{ ts.club_name }}</a></span>{% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% if let Some(ta) = s.top_assists %}
+                        <tr>
+                            <td class="aw-key">{{ i18n.t("top_assists_award") }}</td>
+                            <td class="aw-portrait">
+                                <a href="/{{ lang }}/players/{{ ta.player_slug }}" class="fm-aw-mini-portrait">
+                                    {% if ta.player_generated %}<img src="/api/players/{{ ta.player_id }}/face.svg" alt="">{% else %}<img src="https://open-football.org/player/{{ ta.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ ta.player_id }}/face.svg';" alt="">{% endif %}
+                                </a>
+                            </td>
+                            <td class="aw-name">
+                                <a href="/{{ lang }}/players/{{ ta.player_slug }}">{{ ta.player_name }}</a>
+                                {% if !ta.club_name.is_empty() %}<span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ ta.club_slug }}">{{ ta.club_name }}</a></span>{% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% if let Some(gg) = s.golden_glove %}
+                        <tr>
+                            <td class="aw-key">{{ i18n.t("golden_glove") }}</td>
+                            <td class="aw-portrait">
+                                <a href="/{{ lang }}/players/{{ gg.player_slug }}" class="fm-aw-mini-portrait">
+                                    {% if gg.player_generated %}<img src="/api/players/{{ gg.player_id }}/face.svg" alt="">{% else %}<img src="https://open-football.org/player/{{ gg.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ gg.player_id }}/face.svg';" alt="">{% endif %}
+                                </a>
+                            </td>
+                            <td class="aw-name">
+                                <a href="/{{ lang }}/players/{{ gg.player_slug }}">{{ gg.player_name }}</a>
+                                {% if !gg.club_name.is_empty() %}<span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ gg.club_slug }}">{{ gg.club_name }}</a></span>{% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </section>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

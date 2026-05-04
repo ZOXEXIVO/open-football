@@ -203,8 +203,16 @@ fn apply_match_outcome(
         .filter(|(_, stats)| stats.goals > 0)
         .map(|(&id, stats)| (id, stats.goals))
         .collect();
+    let appearance_ids: std::collections::HashSet<u32> =
+        raw.player_stats.keys().copied().collect();
 
-    apply_world_international_stats(continents, home_country_id, away_country_id, &player_goals);
+    apply_world_international_stats(
+        continents,
+        home_country_id,
+        away_country_id,
+        &player_goals,
+        &appearance_ids,
+    );
     apply_world_elo(
         continents,
         home_country_id,

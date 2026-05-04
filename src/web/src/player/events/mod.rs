@@ -136,7 +136,17 @@ pub async fn player_events_action(
         player.full_name.display_last_name()
     );
 
-    let events = build_events(player, &i18n, simulator_data);
+    let league_slug = team_opt
+        .and_then(|t| t.league_id)
+        .and_then(|id| simulator_data.league(id))
+        .map(|l| l.slug.clone());
+    let events = build_events(
+        player,
+        &i18n,
+        simulator_data,
+        &route_params.lang,
+        league_slug.as_deref(),
+    );
 
     Ok(PlayerEventsTemplate {
         css_version: CSS_VERSION,
@@ -259,6 +269,27 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             // ── Dressing-room ──────────────────────────────
             | HappinessEventType::CloseFriendSold
             | HappinessEventType::MentorDeparted
+            // ── Awards / nominations ─────────────────────────
+            | HappinessEventType::PlayerOfTheMonth
+            | HappinessEventType::YoungPlayerOfTheMonth
+            | HappinessEventType::TeamOfTheSeasonSelection
+            | HappinessEventType::PlayerOfTheSeason
+            | HappinessEventType::YoungPlayerOfTheSeason
+            | HappinessEventType::LeagueTopScorer
+            | HappinessEventType::LeagueTopAssists
+            | HappinessEventType::LeagueGoldenGlove
+            | HappinessEventType::ContinentalPlayerOfYearNomination
+            | HappinessEventType::ContinentalPlayerOfYear
+            | HappinessEventType::WorldPlayerOfYearNomination
+            | HappinessEventType::WorldPlayerOfYear
+            // ── Real-life football milestones ────────────────
+            | HappinessEventType::SeniorDebut
+            | HappinessEventType::NationalTeamDebut
+            | HappinessEventType::HatTrick
+            | HappinessEventType::AppearanceMilestone
+            | HappinessEventType::GoalMilestone
+            | HappinessEventType::CleanSheetMilestone
+            | HappinessEventType::LeadershipEmergence
     )
 }
 
@@ -333,6 +364,37 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::CompatriotJoined => "event_compatriot_joined",
         HappinessEventType::MentorDeparted => "event_mentor_departed",
         HappinessEventType::LanguageProgress => "event_language_progress",
+        HappinessEventType::PlayerOfTheMonth => "event_player_of_the_month",
+        HappinessEventType::YoungPlayerOfTheMonth => "event_young_player_of_the_month",
+        HappinessEventType::TeamOfTheWeekSelection => "event_team_of_the_week_selection",
+        HappinessEventType::TeamOfTheSeasonSelection => "event_team_of_the_season_selection",
+        HappinessEventType::PlayerOfTheSeason => "event_player_of_the_season",
+        HappinessEventType::YoungPlayerOfTheSeason => "event_young_player_of_the_season",
+        HappinessEventType::LeagueTopScorer => "event_league_top_scorer",
+        HappinessEventType::LeagueTopAssists => "event_league_top_assists",
+        HappinessEventType::LeagueGoldenGlove => "event_league_golden_glove",
+        HappinessEventType::ContinentalPlayerOfYearNomination => {
+            "event_continental_player_of_year_nomination"
+        }
+        HappinessEventType::ContinentalPlayerOfYear => "event_continental_player_of_year",
+        HappinessEventType::WorldPlayerOfYearNomination => {
+            "event_world_player_of_year_nomination"
+        }
+        HappinessEventType::WorldPlayerOfYear => "event_world_player_of_year",
+        HappinessEventType::SeniorDebut => "event_senior_debut",
+        HappinessEventType::NationalTeamDebut => "event_national_team_debut",
+        HappinessEventType::HatTrick => "event_hat_trick",
+        HappinessEventType::AssistHatTrick => "event_assist_hat_trick",
+        HappinessEventType::GoalDroughtEnded => "event_goal_drought_ended",
+        HappinessEventType::ScoringDroughtConcern => "event_scoring_drought_concern",
+        HappinessEventType::AppearanceMilestone => "event_appearance_milestone",
+        HappinessEventType::GoalMilestone => "event_goal_milestone",
+        HappinessEventType::CleanSheetMilestone => "event_clean_sheet_milestone",
+        HappinessEventType::TrainingGroundBustUp => "event_training_ground_bust_up",
+        HappinessEventType::PublicApology => "event_public_apology",
+        HappinessEventType::FansChantPlayerName => "event_fans_chant_player_name",
+        HappinessEventType::MediaPressureMounting => "event_media_pressure_mounting",
+        HappinessEventType::LeadershipEmergence => "event_leadership_emergence",
     }
 }
 
@@ -340,6 +402,8 @@ fn build_events(
     player: &core::Player,
     i18n: &I18n,
     simulator_data: &SimulatorData,
+    lang: &str,
+    league_slug: Option<&str>,
 ) -> Vec<PlayerEventDto> {
     let mut events: Vec<_> = player
         .happiness
@@ -352,13 +416,15 @@ fn build_events(
         .take(100)
         .map(|e| {
             let key = event_type_to_i18n_key(&e.event_type);
+            let raw = i18n.t(key);
+            let description = render_event_description(&e.event_type, raw, i18n, lang, league_slug);
             let (partner_name, partner_slug) = e
                 .partner_player_id
                 .and_then(|pid| resolve_partner(simulator_data, pid))
                 .map(|(n, s)| (Some(n), Some(s)))
                 .unwrap_or((None, None));
             PlayerEventDto {
-                description: i18n.t(key).to_string(),
+                description,
                 is_positive: e.magnitude > 0.0,
                 is_negative: e.magnitude < 0.0,
                 is_big: is_big_event(&e.event_type),
@@ -373,13 +439,48 @@ fn build_events(
     events
 }
 
+/// Substitute event-specific placeholders in the i18n description with HTML
+/// (currently only `{tow}` for the Team of the Week selection event, which
+/// links to the player's league awards page). The returned string is rendered
+/// via askama's `|safe` filter, so this is the only point where event copy
+/// crosses into HTML — keep substitutions to controlled values.
+fn render_event_description(
+    event_type: &HappinessEventType,
+    raw: &str,
+    i18n: &I18n,
+    lang: &str,
+    league_slug: Option<&str>,
+) -> String {
+    if matches!(event_type, HappinessEventType::TeamOfTheWeekSelection) {
+        if let Some(slug) = league_slug {
+            let url = format!("/{}/leagues/{}/awards", lang, slug);
+            let link = format!(
+                r#"<a href="{}">{}</a>"#,
+                url,
+                i18n.t("team_of_the_week")
+            );
+            return raw.replace("{tow}", &link);
+        }
+        // No league slug (free agent / retired) — just inline the phrase
+        // without a link so the sentence still reads correctly.
+        return raw.replace("{tow}", i18n.t("team_of_the_week"));
+    }
+    raw.to_string()
+}
+
 /// Events that don't make sense without a named partner. If the event was
 /// emitted without a partner id (legacy data, generic emit site), it gets
-/// filtered out of the player's history view.
+/// filtered out of the player's history view. Mirrors the core
+/// `requires_partner_id` enforcement gate: every type listed here MUST be
+/// emitted with a `Some(_)` partner id at the source.
 fn is_partner_required(event_type: &HappinessEventType) -> bool {
     matches!(
         event_type,
-        HappinessEventType::TeammateBonding | HappinessEventType::ConflictWithTeammate
+        HappinessEventType::TeammateBonding
+            | HappinessEventType::ConflictWithTeammate
+            | HappinessEventType::CloseFriendSold
+            | HappinessEventType::MentorDeparted
+            | HappinessEventType::CompatriotJoined
     )
 }
 

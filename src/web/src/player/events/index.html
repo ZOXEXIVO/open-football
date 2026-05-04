@@ -17,7 +17,7 @@
                 <div class="fm-evt-dot"></div>
                 <div class="fm-evt-body">
                     <span class="fm-evt-text">
-                        {{ event.description }}
+                        {{ event.description|safe }}
                         {% if let Some(partner_slug) = event.partner_slug %}{% if let Some(partner_name) = event.partner_name %}
                         — <a href="/{{ lang }}/players/{{ partner_slug }}">{{ partner_name }}</a>
                         {% endif %}{% endif %}

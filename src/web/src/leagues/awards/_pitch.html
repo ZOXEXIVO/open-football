@@ -1,0 +1,40 @@
+<div class="fm-pitch fm-pitch-compact fm-aw-totw-pitch">
+    <div class="fm-pitch-surface">
+        <div class="fm-pitch-half-line"></div>
+        <div class="fm-pitch-center-circle"></div>
+        <div class="fm-pitch-center-dot"></div>
+        <div class="fm-pitch-box-top"></div>
+        <div class="fm-pitch-box-bottom"></div>
+        <div class="fm-pitch-goal-top"></div>
+        <div class="fm-pitch-goal-bottom"></div>
+        <div class="fm-pitch-arc-top"></div>
+        <div class="fm-pitch-arc-bottom"></div>
+        <div class="fm-pitch-corner-tl"></div>
+        <div class="fm-pitch-corner-tr"></div>
+        <div class="fm-pitch-corner-bl"></div>
+        <div class="fm-pitch-corner-br"></div>
+        {% for slot in totw.all_slots %}
+        <div class="fm-pitch-player fm-aw-pitch-player {{ slot.position_class }}" title="{{ slot.player_name }} — {{ slot.club_name }}">
+            <a class="fm-aw-pitch-photo" href="/{{ lang }}/players/{{ slot.player_slug }}">
+                {% if slot.player_generated %}
+                <img src="/api/players/{{ slot.player_id }}/face.svg" alt="">
+                {% else %}
+                <img src="https://open-football.org/player/{{ slot.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ slot.player_id }}/face.svg';" alt="">
+                {% endif %}
+                <span class="fm-aw-pitch-rating">{{ slot.average_rating }}</span>
+            </a>
+            <div class="fm-aw-pitch-label">
+                <div class="fm-aw-pitch-namerow">
+                    {% if !slot.player_last_name.is_empty() %}
+                    <a class="fm-aw-pitch-name" href="/{{ lang }}/players/{{ slot.player_slug }}">{{ slot.player_last_name }}</a>
+                    {% endif %}
+                    {% if !slot.player_first_name.is_empty() %}
+                    <a class="fm-aw-pitch-firstname" href="/{{ lang }}/players/{{ slot.player_slug }}">{{ slot.player_first_name }}</a>
+                    {% endif %}
+                </div>
+                <a class="fm-aw-pitch-club" href="/{{ lang }}/teams/{{ slot.club_slug }}">{{ slot.club_name }}</a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>

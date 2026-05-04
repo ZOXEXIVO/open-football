@@ -19,6 +19,10 @@
         <section class="fm-panel fm-info-panel">
             <div class="fm-panel-head">
                 <h3>{{ i18n.t("info_panel_title") }}</h3>
+                <button class="fm-holiday-btn" id="holiday-btn" onclick="handleHolidayClick()">
+                    <span class="fm-holiday-label">{{ i18n.t("go_on_holiday") }}</span>
+                    <div class="fm-holiday-spinner"><div class="spinner"></div></div>
+                </button>
             </div>
             <div class="fm-info-body">
                 <div class="fm-info-row">
@@ -31,10 +35,6 @@
                 </div>
             </div>
         </section>
-        <button class="fm-holiday-btn" id="holiday-btn" onclick="handleHolidayClick()">
-            <span class="fm-holiday-label">{{ i18n.t("go_on_holiday") }}</span>
-            <div class="fm-holiday-spinner"><div class="spinner"></div></div>
-        </button>
     </div>
     <script>
     var _holidayTexts = {

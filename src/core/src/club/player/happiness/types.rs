@@ -21,6 +21,20 @@ pub struct PlayerHappiness {
     /// threshold. Used to emit one-shot WonStartingPlace / LostStartingPlace
     /// events on the crossing rather than every matchday in range.
     pub is_established_starter: bool,
+    /// Competitive appearances since the player's last competitive goal.
+    /// Drives `GoalDroughtEnded` / `ScoringDroughtConcern` without an
+    /// unbounded per-match history. Saturates at u8::MAX.
+    pub apps_since_last_competitive_goal: u8,
+    /// Bit-ring of the last 5 competitive appearances: 1 = rating < 6.0,
+    /// 0 otherwise. Bit 0 is the most recent appearance. Drives the
+    /// "two of the last five" trigger for `MediaPressureMounting` as a
+    /// true sliding window — bad games never fall off a block boundary.
+    pub recent_low_rating_mask: u8,
+    /// Number of appearances currently encoded in `recent_low_rating_mask`,
+    /// capped at 5. The trigger only fires once the mask is full, so a
+    /// player who has just made his second poor appearance after one good
+    /// one doesn't fire on a 1-of-2 ratio.
+    pub recent_low_rating_len: u8,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -264,6 +278,52 @@ pub enum HappinessEventType {
     /// Made meaningful progress with the local language. Self-reinforcing
     /// integration milestone, only fires for foreign players.
     LanguageProgress,
+
+    // ── Awards / nominations ────────────────────────────────────
+    PlayerOfTheMonth,
+    YoungPlayerOfTheMonth,
+    TeamOfTheWeekSelection,
+    TeamOfTheSeasonSelection,
+    PlayerOfTheSeason,
+    YoungPlayerOfTheSeason,
+    LeagueTopScorer,
+    LeagueTopAssists,
+    LeagueGoldenGlove,
+    ContinentalPlayerOfYearNomination,
+    ContinentalPlayerOfYear,
+    WorldPlayerOfYearNomination,
+    WorldPlayerOfYear,
+
+    // ── Real-life football events ────────────────────────────────
+    /// First competitive senior appearance for the current club.
+    SeniorDebut,
+    /// First international appearance after being capped (transitions
+    /// from 0 to >0 international apps).
+    NationalTeamDebut,
+    /// Three or more goals in a non-friendly match.
+    HatTrick,
+    /// Three or more assists in a non-friendly match.
+    AssistHatTrick,
+    /// Returned to scoring after a long competitive drought.
+    GoalDroughtEnded,
+    /// Forward facing a sustained scoring drought.
+    ScoringDroughtConcern,
+    /// Reached a competitive appearances milestone.
+    AppearanceMilestone,
+    /// Reached a competitive goals milestone.
+    GoalMilestone,
+    /// Reached a competitive clean sheets milestone (GK only).
+    CleanSheetMilestone,
+    /// High-controversy / low-temperament training-ground confrontation.
+    TrainingGroundBustUp,
+    /// Public apology following a controversy / bust-up.
+    PublicApology,
+    /// Supporters chanted the player's name in a strong performance.
+    FansChantPlayerName,
+    /// Sustained negative media coverage at high-profile reputation.
+    MediaPressureMounting,
+    /// Veteran captain / senior pro stepping up as dressing-room leader.
+    LeadershipEmergence,
 }
 
 impl PlayerHappiness {
@@ -277,6 +337,9 @@ impl PlayerHappiness {
             starter_ratio: 0.5,
             appearances_tracked: 0,
             is_established_starter: false,
+            apps_since_last_competitive_goal: 0,
+            recent_low_rating_mask: 0,
+            recent_low_rating_len: 0,
         }
     }
 
@@ -487,6 +550,9 @@ impl PlayerHappiness {
         self.starter_ratio = 0.5;
         self.appearances_tracked = 0;
         self.is_established_starter = false;
+        self.apps_since_last_competitive_goal = 0;
+        self.recent_low_rating_mask = 0;
+        self.recent_low_rating_len = 0;
     }
 
     /// Backward compatible: morale >= happy_threshold means happy.
