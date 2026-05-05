@@ -7,15 +7,12 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use chrono::Datelike;
-use core::Person;
 use core::PlayerFieldPositionGroup;
 use core::SimulatorData;
 use core::league::{
-    AwardAggregator, CandidateAggregate, MonthlyPlayerAward, PlayerOfTheWeekAward,
-    SeasonAwardsSnapshot, TeamOfTheWeekAward, TeamOfTheWeekSelector, TeamOfTheWeekSlot,
+    MonthlyAwardsSnapshot, MonthlyPlayerAward, MonthlyStatLeader, PlayerOfTheWeekAward,
+    SeasonAwardsSnapshot, TeamOfTheWeekAward, TeamOfTheWeekSlot,
 };
-use core::shared::FullName;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -50,8 +47,13 @@ pub struct LeagueAwardsTemplate {
     pub team_of_week: Option<TeamOfWeekView>,
     pub team_of_month: Option<TeamOfWeekView>,
     pub young_team_of_month: Option<TeamOfWeekView>,
+    pub monthly_label: String,
+    pub monthly_matches_count: u32,
+    pub monthly_top_scorers: Vec<StatLeaderItem>,
+    pub monthly_top_assists: Vec<StatLeaderItem>,
+    pub monthly_best_ratings: Vec<StatLeaderItem>,
     pub recent_weeks: Vec<RecentWeekItem>,
-    pub recent_months: Vec<RecentMonthItem>,
+    pub monthly_archive: Vec<MonthlyArchiveItem>,
     pub season_highlights: Vec<SeasonHighlightItem>,
 }
 
@@ -101,20 +103,38 @@ pub struct RecentWeekItem {
     pub average_rating: String,
 }
 
-pub struct RecentMonthItem {
+/// One row in the top-scorers / top-assists / best-ratings tables
+/// shown on the Monthly tab.
+pub struct StatLeaderItem {
     pub player_id: u32,
     pub player_slug: String,
     pub player_name: String,
     pub player_generated: bool,
     pub club_name: String,
     pub club_slug: String,
-    pub date_label: String,
     pub matches_played: u8,
     pub goals: u8,
     pub assists: u8,
     pub average_rating: String,
-    pub kind_label: String,
-    pub is_young: bool,
+}
+
+/// Compact summary of one archived month (PoM + Young PoM + top
+/// stat leaders + match count) for the Monthly Archive table.
+pub struct MonthlyArchiveItem {
+    pub month_label: String,
+    pub matches_count: u32,
+    pub player_of_month: Option<MonthlyNamedAward>,
+    pub young_player_of_month: Option<MonthlyNamedAward>,
+    pub top_scorer: Option<StatLeaderItem>,
+    pub top_assist: Option<StatLeaderItem>,
+    pub best_rating: Option<StatLeaderItem>,
+}
+
+pub struct MonthlyNamedAward {
+    pub player_slug: String,
+    pub player_name: String,
+    pub club_name: String,
+    pub club_slug: String,
 }
 
 pub struct SeasonHighlightItem {
@@ -173,54 +193,72 @@ pub async fn league_awards_action(
         .latest()
         .map(|a| build_player_card_from_pow(simulator_data, a));
 
-    let player_of_month = league
-        .awards
-        .player_of_month
-        .last()
-        .map(|a| build_player_card_from_monthly(simulator_data, a));
-
-    let young_player_of_month = league
-        .awards
-        .young_player_of_month
-        .last()
-        .map(|a| build_player_card_from_monthly(simulator_data, a));
-
     let team_of_week = league
         .awards
         .team_of_week
         .last()
         .map(|t| build_team_of_week(simulator_data, t));
 
-    let now = simulator_data.date.date();
-    let month_start = now
-        .with_day(1)
-        .unwrap_or(now)
-        .checked_sub_months(chrono::Months::new(1))
-        .unwrap_or(now);
-    let month_end = now;
-    let month_aggregate = AwardAggregator::aggregate(
-        league.matches.iter_in_range(month_start, month_end),
-    );
-    let month_label = month_start.format("%B %Y").to_string();
+    // Monthly tab is driven entirely by the most recent archived
+    // snapshot (built in `MonthlyAwardsTick`). Empty months are not
+    // recorded so this is automatically the latest meaningful month
+    // — works for winter-break leagues, split seasons, and summer
+    // calendars without any per-league special-casing.
+    let snapshot = league.awards.latest_monthly_snapshot();
 
-    let team_of_month = build_pitch_view_from_aggregate(
-        simulator_data,
-        &month_aggregate,
-        |_id| true,
-        month_label.clone(),
-    );
+    let monthly_label = snapshot
+        .map(|s| s.month_start_date.format("%B %Y").to_string())
+        .unwrap_or_default();
+    let monthly_matches_count = snapshot.map(|s| s.matches_count).unwrap_or(0);
 
-    let young_team_of_month = build_pitch_view_from_aggregate(
-        simulator_data,
-        &month_aggregate,
-        |id| {
-            simulator_data
-                .player(id)
-                .map(|p| p.age(now) <= 21)
-                .unwrap_or(false)
-        },
-        month_label,
-    );
+    let player_of_month = snapshot
+        .and_then(|s| s.player_of_month.as_ref())
+        .map(|a| build_player_card_from_monthly(simulator_data, a));
+
+    let young_player_of_month = snapshot
+        .and_then(|s| s.young_player_of_month.as_ref())
+        .map(|a| build_player_card_from_monthly(simulator_data, a));
+
+    let team_of_month = snapshot.and_then(|s| {
+        build_team_view_from_slots(
+            simulator_data,
+            &s.team_of_month,
+            monthly_label.clone(),
+        )
+    });
+
+    let young_team_of_month = snapshot.and_then(|s| {
+        build_team_view_from_slots(
+            simulator_data,
+            &s.young_team_of_month,
+            monthly_label.clone(),
+        )
+    });
+
+    let monthly_top_scorers: Vec<StatLeaderItem> = snapshot
+        .map(|s| {
+            s.top_scorers
+                .iter()
+                .map(|l| build_stat_leader_item(simulator_data, l))
+                .collect()
+        })
+        .unwrap_or_default();
+    let monthly_top_assists: Vec<StatLeaderItem> = snapshot
+        .map(|s| {
+            s.top_assists
+                .iter()
+                .map(|l| build_stat_leader_item(simulator_data, l))
+                .collect()
+        })
+        .unwrap_or_default();
+    let monthly_best_ratings: Vec<StatLeaderItem> = snapshot
+        .map(|s| {
+            s.best_ratings
+                .iter()
+                .map(|l| build_stat_leader_item(simulator_data, l))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut recent_weeks: Vec<RecentWeekItem> = league
         .player_of_week
@@ -233,32 +271,15 @@ pub async fn league_awards_action(
         .collect();
     recent_weeks.reserve(0);
 
-    let recent_months: Vec<RecentMonthItem> = {
-        let mut combined: Vec<(&MonthlyPlayerAward, bool)> = league
-            .awards
-            .player_of_month
-            .iter()
-            .rev()
-            .skip(1)
-            .take(6)
-            .map(|a| (a, false))
-            .chain(
-                league
-                    .awards
-                    .young_player_of_month
-                    .iter()
-                    .rev()
-                    .take(4)
-                    .map(|a| (a, true)),
-            )
-            .collect();
-        combined.sort_by(|a, b| b.0.month_end_date.cmp(&a.0.month_end_date));
-        combined
-            .into_iter()
-            .take(8)
-            .map(|(a, is_young)| build_recent_month_item(simulator_data, &i18n, a, is_young))
-            .collect()
-    };
+    let monthly_archive: Vec<MonthlyArchiveItem> = league
+        .awards
+        .monthly_awards
+        .iter()
+        .rev()
+        .skip(1) // first is shown in the Monthly tab
+        .take(8)
+        .map(|s| build_monthly_archive_item(simulator_data, s))
+        .collect();
 
     let season_highlights: Vec<SeasonHighlightItem> = league
         .awards
@@ -310,8 +331,13 @@ pub async fn league_awards_action(
         team_of_week,
         team_of_month,
         young_team_of_month,
+        monthly_label,
+        monthly_matches_count,
+        monthly_top_scorers,
+        monthly_top_assists,
+        monthly_best_ratings,
         recent_weeks,
-        recent_months,
+        monthly_archive,
         season_highlights,
         lang: route_params.lang,
         i18n,
@@ -383,31 +409,63 @@ fn build_recent_week_item(data: &SimulatorData, award: &PlayerOfTheWeekAward) ->
     }
 }
 
-fn build_recent_month_item(
+fn build_stat_leader_item(
     data: &SimulatorData,
-    i18n: &I18n,
+    leader: &MonthlyStatLeader,
+) -> StatLeaderItem {
+    StatLeaderItem {
+        player_id: leader.player_id,
+        player_slug: player_history_slug(data, leader.player_id, &leader.player_name),
+        player_name: leader.player_name.clone(),
+        player_generated: is_player_generated(data, leader.player_id),
+        club_name: leader.club_name.clone(),
+        club_slug: leader.club_slug.clone(),
+        matches_played: leader.matches_played,
+        goals: leader.goals,
+        assists: leader.assists,
+        average_rating: format!("{:.2}", leader.average_rating),
+    }
+}
+
+fn build_monthly_named_award(
+    data: &SimulatorData,
     award: &MonthlyPlayerAward,
-    is_young: bool,
-) -> RecentMonthItem {
-    let kind_label = if is_young {
-        i18n.t("young_player_of_month").to_string()
-    } else {
-        i18n.t("player_of_month").to_string()
-    };
-    RecentMonthItem {
-        player_id: award.player_id,
+) -> MonthlyNamedAward {
+    MonthlyNamedAward {
         player_slug: player_history_slug(data, award.player_id, &award.player_name),
         player_name: award.player_name.clone(),
-        player_generated: is_player_generated(data, award.player_id),
         club_name: award.club_name.clone(),
         club_slug: award.club_slug.clone(),
-        date_label: award.month_end_date.format("%b %Y").to_string(),
-        matches_played: award.matches_played,
-        goals: award.goals,
-        assists: award.assists,
-        average_rating: format!("{:.2}", award.average_rating),
-        kind_label,
-        is_young,
+    }
+}
+
+fn build_monthly_archive_item(
+    data: &SimulatorData,
+    snapshot: &MonthlyAwardsSnapshot,
+) -> MonthlyArchiveItem {
+    MonthlyArchiveItem {
+        month_label: snapshot.month_start_date.format("%b %Y").to_string(),
+        matches_count: snapshot.matches_count,
+        player_of_month: snapshot
+            .player_of_month
+            .as_ref()
+            .map(|a| build_monthly_named_award(data, a)),
+        young_player_of_month: snapshot
+            .young_player_of_month
+            .as_ref()
+            .map(|a| build_monthly_named_award(data, a)),
+        top_scorer: snapshot
+            .top_scorers
+            .first()
+            .map(|l| build_stat_leader_item(data, l)),
+        top_assist: snapshot
+            .top_assists
+            .first()
+            .map(|l| build_stat_leader_item(data, l)),
+        best_rating: snapshot
+            .best_ratings
+            .first()
+            .map(|l| build_stat_leader_item(data, l)),
     }
 }
 
@@ -455,82 +513,40 @@ fn build_team_of_week(
     }
 }
 
-/// Pick an XI from a window aggregate (e.g. past month). `eligibility`
-/// gates which player ids are considered (used by Young Team of the Month
-/// to enforce age <= 21). Returns `None` if no valid XI can be assembled.
-fn build_pitch_view_from_aggregate(
+/// Build the Team-of-Month pitch view from an archived slot list.
+/// Returns `None` for empty slot lists so the template can render the
+/// "no awards yet" placeholder instead of an empty pitch.
+fn build_team_view_from_slots(
     data: &SimulatorData,
-    aggregate: &HashMap<u32, CandidateAggregate>,
-    eligibility: impl Fn(u32) -> bool,
+    slots: &[TeamOfTheWeekSlot],
     date_label: String,
 ) -> Option<TeamOfWeekView> {
-    let filtered: HashMap<u32, CandidateAggregate> = aggregate
-        .iter()
-        .filter(|(id, _)| eligibility(**id))
-        .map(|(id, agg)| (*id, *agg))
-        .collect();
-    if filtered.is_empty() {
+    if slots.is_empty() {
         return None;
     }
-    // Min two appearances filters out one-match wonders for a monthly XI.
-    let picks = TeamOfTheWeekSelector::pick_with_min_apps(&filtered, 2);
-    if picks.is_empty() {
-        return None;
+    let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<&TeamOfTheWeekSlot>> = HashMap::new();
+    for s in slots {
+        by_group.entry(s.position_group).or_default().push(s);
     }
-
-    let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<&(u32, PlayerFieldPositionGroup, f32, CandidateAggregate)>> =
-        HashMap::new();
-    for p in &picks {
-        by_group.entry(p.1).or_default().push(p);
-    }
-
     let mut all_slots: Vec<TeamOfWeekSlotView> = Vec::new();
     for (group, position_classes) in FORMATION_442 {
-        if let Some(group_picks) = by_group.get(group) {
-            for (idx, pick) in group_picks.iter().enumerate() {
+        if let Some(group_slots) = by_group.get(group) {
+            for (idx, slot) in group_slots.iter().enumerate() {
                 let pos_class = position_classes
                     .get(idx)
                     .copied()
                     .unwrap_or("")
                     .to_string();
-                let (player_id, _, _, agg) = **pick;
-                if let Some(slot) = build_totw_slot_from_pick(data, player_id, agg, pos_class) {
-                    all_slots.push(slot);
-                }
+                all_slots.push(build_totw_slot(data, slot, pos_class));
             }
         }
     }
-
     if all_slots.is_empty() {
         return None;
     }
-
     Some(TeamOfWeekView {
         date_label,
         all_slots,
-    })
-}
-
-fn build_totw_slot_from_pick(
-    data: &SimulatorData,
-    player_id: u32,
-    agg: CandidateAggregate,
-    position_class: String,
-) -> Option<TeamOfWeekSlotView> {
-    let (player, team) = data.player_with_team(player_id)?;
-    let full_name = player.full_name.to_string();
-    let (first_name, last_name) = split_display_name(&player.full_name);
-    Some(TeamOfWeekSlotView {
-        player_id,
-        player_slug: player.slug(),
-        player_name: full_name,
-        player_first_name: first_name,
-        player_last_name: last_name,
-        player_generated: player.is_generated(),
-        club_name: team.name.clone(),
-        club_slug: team.slug.clone(),
-        average_rating: format!("{:.2}", agg.average_rating()),
-        position_class,
     })
 }
 
@@ -569,16 +585,6 @@ fn split_full_name(full: &str) -> (String, String) {
         }
     }
     (String::new(), trimmed.to_string())
-}
-
-/// Split a structured `FullName` for the pitch label, mirroring
-/// `split_full_name`: nickname / mononym players flow into the bold
-/// "last-name" slot, regular players keep their first/last split.
-fn split_display_name(name: &FullName) -> (String, String) {
-    (
-        name.display_first_name().to_string(),
-        name.display_last_name().to_string(),
-    )
 }
 
 fn build_season_highlight(

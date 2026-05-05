@@ -8,9 +8,11 @@ use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::national::world as national_world;
 use crate::continent::{Continent, ContinentResult};
 use crate::league::awards::{
-    AwardAggregator, MonthlyAwardSelector, MonthlyPlayerAward, SeasonAwardsSnapshot,
-    TeamOfTheWeekAward, TeamOfTheWeekSelector, TeamOfTheWeekSlot,
+    AwardAggregator, CandidateAggregate, MonthlyAwardSelector, MonthlyAwardsSnapshot,
+    MonthlyPlayerAward, MonthlyStatLeader, SeasonAwardsSnapshot, TeamOfTheWeekAward,
+    TeamOfTheWeekSelector, TeamOfTheWeekSlot,
 };
+use crate::PlayerFieldPositionGroup;
 use crate::league::player_of_week::{PlayerOfTheWeekAward, PlayerOfTheWeekSelector};
 use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
@@ -959,15 +961,28 @@ impl TeamOfTheWeekTick {
     }
 }
 
-/// Monthly awards — POM and Young POM per league. Runs on the 1st of
-/// each calendar month, awarding the *previous* calendar month.
+/// Monthly awards — POM and Young POM per league plus a frozen
+/// per-league `MonthlyAwardsSnapshot` (Team of Month, Young Team of
+/// Month, top scorers / assists / ratings). Runs on the 1st of each
+/// calendar month, awarding the *previous* calendar month.
+///
+/// Empty months (no non-friendly matches with stats) are skipped
+/// entirely — no PoM, no snapshot, no `last_monthly_award` bump — so
+/// the web layer's "latest monthly" view always shows the most recent
+/// month that actually had fixtures (winter break / split-season /
+/// summer-calendar leagues all behave correctly without any
+/// per-league special-casing).
 struct MonthlyAwardsTick;
 
 struct PendingMonthlyAward {
     league_id: u32,
     pom: Option<MonthlyPlayerAward>,
     young: Option<MonthlyPlayerAward>,
+    snapshot: MonthlyAwardsSnapshot,
 }
+
+const MONTHLY_TOP_N: usize = 5;
+const MONTHLY_RATING_MIN_APPS: u8 = 2;
 
 impl MonthlyAwardsTick {
     fn run(data: &mut SimulatorData) {
@@ -1014,83 +1029,268 @@ impl MonthlyAwardsTick {
                     if league.awards.has_monthly_award_for(month_end) {
                         continue;
                     }
+
+                    // Count non-friendly matches that produced stats. If
+                    // the previous calendar month had none (winter break,
+                    // off-season gap, league not started yet), skip the
+                    // league entirely — no snapshot, no last_monthly_award
+                    // bump — so the web view keeps showing the previously
+                    // archived month.
+                    let matches_count = league
+                        .matches
+                        .iter_in_range(start, end)
+                        .filter(|m| !m.friendly && m.details.is_some())
+                        .count() as u32;
+                    if matches_count == 0 {
+                        continue;
+                    }
+
                     let scores =
                         AwardAggregator::aggregate(league.matches.iter_in_range(start, end));
 
-                    let pom = MonthlyAwardSelector::pick_best(&scores, league.reputation, 3, |_| {
-                        true
-                    })
-                    .and_then(|(id, agg, score)| {
-                        let player = data.player(id)?;
-                        let (club_id, club_name, club_slug) =
-                            WeeklyAwardsTick::resolve_club_card(data, id);
-                        Some(MonthlyPlayerAward {
-                            month_end_date: month_end,
-                            player_id: id,
-                            player_name: format!(
-                                "{} {}",
-                                player.full_name.display_first_name(),
-                                player.full_name.display_last_name()
-                            ),
-                            player_slug: player.slug(),
-                            club_id,
-                            club_name,
-                            club_slug,
-                            matches_played: agg.matches_played,
-                            goals: agg.goals,
-                            assists: agg.assists,
-                            average_rating: agg.average_rating(),
-                            score,
-                        })
+                    let pom = Self::pick_pom(data, &scores, league.reputation, month_end);
+                    let young =
+                        Self::pick_young_pom(data, &scores, league.reputation, today, month_end);
+
+                    let team_of_month = Self::build_team(data, &scores, |_| true);
+                    let young_team_of_month = Self::build_team(data, &scores, |id| {
+                        data.player(id)
+                            .map(|p| DateUtils::age(p.birth_date, today) <= 21)
+                            .unwrap_or(false)
                     });
 
-                    let data_ref = data;
-                    let young = MonthlyAwardSelector::pick_best(
-                        &scores,
-                        league.reputation,
-                        2,
-                        |id| {
-                            data_ref
-                                .player(id)
-                                .map(|p| DateUtils::age(p.birth_date, today) <= 21)
-                                .unwrap_or(false)
-                        },
-                    )
-                    .and_then(|(id, agg, score)| {
-                        let player = data.player(id)?;
-                        let (club_id, club_name, club_slug) =
-                            WeeklyAwardsTick::resolve_club_card(data, id);
-                        Some(MonthlyPlayerAward {
-                            month_end_date: month_end,
-                            player_id: id,
-                            player_name: format!(
-                                "{} {}",
-                                player.full_name.display_first_name(),
-                                player.full_name.display_last_name()
-                            ),
-                            player_slug: player.slug(),
-                            club_id,
-                            club_name,
-                            club_slug,
-                            matches_played: agg.matches_played,
-                            goals: agg.goals,
-                            assists: agg.assists,
-                            average_rating: agg.average_rating(),
-                            score,
-                        })
-                    });
+                    let top_scorers = Self::top_scorers(data, &scores);
+                    let top_assists = Self::top_assists(data, &scores);
+                    let best_ratings = Self::best_ratings(data, &scores);
 
-                    if pom.is_some() || young.is_some() {
-                        pending.push(PendingMonthlyAward {
-                            league_id: league.id,
-                            pom,
-                            young,
-                        });
-                    }
+                    let snapshot = MonthlyAwardsSnapshot {
+                        month_start_date: start,
+                        month_end_date: month_end,
+                        matches_count,
+                        player_of_month: pom.clone(),
+                        young_player_of_month: young.clone(),
+                        team_of_month,
+                        young_team_of_month,
+                        top_scorers,
+                        top_assists,
+                        best_ratings,
+                    };
+
+                    pending.push(PendingMonthlyAward {
+                        league_id: league.id,
+                        pom,
+                        young,
+                        snapshot,
+                    });
                 }
             }
         }
         pending
+    }
+
+    fn pick_pom(
+        data: &SimulatorData,
+        scores: &HashMap<u32, CandidateAggregate>,
+        league_reputation: u16,
+        month_end: chrono::NaiveDate,
+    ) -> Option<MonthlyPlayerAward> {
+        let (id, agg, score) =
+            MonthlyAwardSelector::pick_best(scores, league_reputation, 3, |_| true)?;
+        Self::monthly_award(data, id, agg, score, month_end)
+    }
+
+    fn pick_young_pom(
+        data: &SimulatorData,
+        scores: &HashMap<u32, CandidateAggregate>,
+        league_reputation: u16,
+        today: chrono::NaiveDate,
+        month_end: chrono::NaiveDate,
+    ) -> Option<MonthlyPlayerAward> {
+        let (id, agg, score) = MonthlyAwardSelector::pick_best(scores, league_reputation, 2, |id| {
+            data.player(id)
+                .map(|p| DateUtils::age(p.birth_date, today) <= 21)
+                .unwrap_or(false)
+        })?;
+        Self::monthly_award(data, id, agg, score, month_end)
+    }
+
+    fn monthly_award(
+        data: &SimulatorData,
+        id: u32,
+        agg: CandidateAggregate,
+        score: f32,
+        month_end: chrono::NaiveDate,
+    ) -> Option<MonthlyPlayerAward> {
+        let player = data.player(id)?;
+        let (club_id, club_name, club_slug) = WeeklyAwardsTick::resolve_club_card(data, id);
+        Some(MonthlyPlayerAward {
+            month_end_date: month_end,
+            player_id: id,
+            player_name: format!(
+                "{} {}",
+                player.full_name.display_first_name(),
+                player.full_name.display_last_name()
+            ),
+            player_slug: player.slug(),
+            club_id,
+            club_name,
+            club_slug,
+            matches_played: agg.matches_played,
+            goals: agg.goals,
+            assists: agg.assists,
+            average_rating: agg.average_rating(),
+            score,
+        })
+    }
+
+    /// Pick a Team of Month (1-4-3-3 quotas, min 2 apps) from the
+    /// passed aggregate, restricted to ids passing `eligibility`. Used
+    /// for both the open and Young (≤21) variants.
+    fn build_team(
+        data: &SimulatorData,
+        scores: &HashMap<u32, CandidateAggregate>,
+        eligibility: impl Fn(u32) -> bool,
+    ) -> Vec<TeamOfTheWeekSlot> {
+        let filtered: HashMap<u32, CandidateAggregate> = scores
+            .iter()
+            .filter(|(id, _)| eligibility(**id))
+            .map(|(id, a)| (*id, *a))
+            .collect();
+        if filtered.is_empty() {
+            return Vec::new();
+        }
+        let team = TeamOfTheWeekSelector::pick_with_min_apps(&filtered, 2);
+        let mut slots: Vec<TeamOfTheWeekSlot> = Vec::with_capacity(team.len());
+        for (pid, pos, score, agg) in team {
+            let Some(player) = data.player(pid) else {
+                continue;
+            };
+            let player_name = format!(
+                "{} {}",
+                player.full_name.display_first_name(),
+                player.full_name.display_last_name()
+            );
+            let player_slug = player.slug();
+            let (club_id, club_name, club_slug) = WeeklyAwardsTick::resolve_club_card(data, pid);
+            slots.push(TeamOfTheWeekSlot {
+                player_id: pid,
+                player_name,
+                player_slug,
+                club_id,
+                club_name,
+                club_slug,
+                position_group: pos,
+                score,
+                matches_played: agg.matches_played,
+                goals: agg.goals,
+                assists: agg.assists,
+                average_rating: agg.average_rating(),
+            });
+        }
+        slots
+    }
+
+    fn top_scorers(
+        data: &SimulatorData,
+        scores: &HashMap<u32, CandidateAggregate>,
+    ) -> Vec<MonthlyStatLeader> {
+        let mut all: Vec<(u32, CandidateAggregate)> = scores
+            .iter()
+            .filter(|(_, a)| a.goals > 0)
+            .map(|(id, a)| (*id, *a))
+            .collect();
+        all.sort_by(|(la, aa), (lb, ab)| {
+            ab.goals
+                .cmp(&aa.goals)
+                .then(ab.assists.cmp(&aa.assists))
+                .then(
+                    ab.average_rating()
+                        .partial_cmp(&aa.average_rating())
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+                .then(la.cmp(lb))
+        });
+        all.into_iter()
+            .take(MONTHLY_TOP_N)
+            .filter_map(|(id, agg)| Self::stat_leader(data, id, agg))
+            .collect()
+    }
+
+    fn top_assists(
+        data: &SimulatorData,
+        scores: &HashMap<u32, CandidateAggregate>,
+    ) -> Vec<MonthlyStatLeader> {
+        let mut all: Vec<(u32, CandidateAggregate)> = scores
+            .iter()
+            .filter(|(_, a)| a.assists > 0)
+            .map(|(id, a)| (*id, *a))
+            .collect();
+        all.sort_by(|(la, aa), (lb, ab)| {
+            ab.assists
+                .cmp(&aa.assists)
+                .then(ab.goals.cmp(&aa.goals))
+                .then(
+                    ab.average_rating()
+                        .partial_cmp(&aa.average_rating())
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+                .then(la.cmp(lb))
+        });
+        all.into_iter()
+            .take(MONTHLY_TOP_N)
+            .filter_map(|(id, agg)| Self::stat_leader(data, id, agg))
+            .collect()
+    }
+
+    fn best_ratings(
+        data: &SimulatorData,
+        scores: &HashMap<u32, CandidateAggregate>,
+    ) -> Vec<MonthlyStatLeader> {
+        let mut all: Vec<(u32, CandidateAggregate)> = scores
+            .iter()
+            .filter(|(_, a)| a.matches_played >= MONTHLY_RATING_MIN_APPS)
+            .map(|(id, a)| (*id, *a))
+            .collect();
+        all.sort_by(|(la, aa), (lb, ab)| {
+            ab.average_rating()
+                .partial_cmp(&aa.average_rating())
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(ab.matches_played.cmp(&aa.matches_played))
+                .then(ab.goals.cmp(&aa.goals))
+                .then(la.cmp(lb))
+        });
+        all.into_iter()
+            .take(MONTHLY_TOP_N)
+            .filter_map(|(id, agg)| Self::stat_leader(data, id, agg))
+            .collect()
+    }
+
+    fn stat_leader(
+        data: &SimulatorData,
+        id: u32,
+        agg: CandidateAggregate,
+    ) -> Option<MonthlyStatLeader> {
+        let player = data.player(id)?;
+        let (club_id, club_name, club_slug) = WeeklyAwardsTick::resolve_club_card(data, id);
+        Some(MonthlyStatLeader {
+            player_id: id,
+            player_name: format!(
+                "{} {}",
+                player.full_name.display_first_name(),
+                player.full_name.display_last_name()
+            ),
+            player_slug: player.slug(),
+            club_id,
+            club_name,
+            club_slug,
+            position_group: agg
+                .primary_position
+                .unwrap_or(PlayerFieldPositionGroup::Midfielder),
+            matches_played: agg.matches_played,
+            goals: agg.goals,
+            assists: agg.assists,
+            average_rating: agg.average_rating(),
+        })
     }
 
     fn apply(data: &mut SimulatorData, pending: Vec<PendingMonthlyAward>) {
@@ -1118,6 +1318,7 @@ impl MonthlyAwardsTick {
                 if let Some(a) = entry.young {
                     league.awards.record_young_player_of_month(a);
                 }
+                league.awards.record_monthly_snapshot(entry.snapshot);
             }
         }
     }

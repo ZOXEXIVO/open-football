@@ -49,6 +49,13 @@
         </div>
 
         <div class="fm-ttab-content fm-aw-tab" id="aw-tab-month" style="display:none">
+            {% if monthly_label.is_empty() %}
+            <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+            {% else %}
+            <div class="fm-aw-month-head">
+                <span class="fm-aw-month-label">{{ monthly_label }}</span>
+                <span class="fm-aw-month-count">{{ monthly_matches_count }} {{ i18n.t("matches") }}</span>
+            </div>
             <div class="fm-aw-tab-grid">
                 <div class="fm-aw-tab-card">
                     <div class="fm-aw-tab-card-head">
@@ -73,6 +80,114 @@
                     {% endif %}
                 </div>
             </div>
+
+            <div class="fm-aw-stat-grid">
+                {% if !monthly_top_scorers.is_empty() %}
+                <div class="fm-aw-stat-col">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("top_scorers") }}</span>
+                    </div>
+                    <table class="fm-aw-history-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th class="aw-name">{{ i18n.t("player") }}</th>
+                                <th class="aw-stat">{{ i18n.t("gls") }}</th>
+                                <th class="aw-stat">{{ i18n.t("ast") }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for l in monthly_top_scorers %}
+                            <tr>
+                                <td class="aw-portrait">
+                                    <a href="/{{ lang }}/players/{{ l.player_slug }}" class="fm-aw-mini-portrait">
+                                        {% if l.player_generated %}<img src="/api/players/{{ l.player_id }}/face.svg" alt="">{% else %}<img src="https://open-football.org/player/{{ l.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ l.player_id }}/face.svg';" alt="">{% endif %}
+                                    </a>
+                                </td>
+                                <td class="aw-name">
+                                    <a href="/{{ lang }}/players/{{ l.player_slug }}">{{ l.player_name }}</a>
+                                    <span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ l.club_slug }}">{{ l.club_name }}</a></span>
+                                </td>
+                                <td class="aw-stat">{{ l.goals }}</td>
+                                <td class="aw-stat">{{ l.assists }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+
+                {% if !monthly_top_assists.is_empty() %}
+                <div class="fm-aw-stat-col">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("top_assisters") }}</span>
+                    </div>
+                    <table class="fm-aw-history-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th class="aw-name">{{ i18n.t("player") }}</th>
+                                <th class="aw-stat">{{ i18n.t("ast") }}</th>
+                                <th class="aw-stat">{{ i18n.t("gls") }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for l in monthly_top_assists %}
+                            <tr>
+                                <td class="aw-portrait">
+                                    <a href="/{{ lang }}/players/{{ l.player_slug }}" class="fm-aw-mini-portrait">
+                                        {% if l.player_generated %}<img src="/api/players/{{ l.player_id }}/face.svg" alt="">{% else %}<img src="https://open-football.org/player/{{ l.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ l.player_id }}/face.svg';" alt="">{% endif %}
+                                    </a>
+                                </td>
+                                <td class="aw-name">
+                                    <a href="/{{ lang }}/players/{{ l.player_slug }}">{{ l.player_name }}</a>
+                                    <span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ l.club_slug }}">{{ l.club_name }}</a></span>
+                                </td>
+                                <td class="aw-stat">{{ l.assists }}</td>
+                                <td class="aw-stat">{{ l.goals }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+
+                {% if !monthly_best_ratings.is_empty() %}
+                <div class="fm-aw-stat-col">
+                    <div class="fm-aw-tab-card-head">
+                        <span class="fm-aw-tab-title">{{ i18n.t("top_rated") }}</span>
+                    </div>
+                    <table class="fm-aw-history-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th class="aw-name">{{ i18n.t("player") }}</th>
+                                <th class="aw-stat">{{ i18n.t("av_rat") }}</th>
+                                <th class="aw-stat">{{ i18n.t("apps") }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for l in monthly_best_ratings %}
+                            <tr>
+                                <td class="aw-portrait">
+                                    <a href="/{{ lang }}/players/{{ l.player_slug }}" class="fm-aw-mini-portrait">
+                                        {% if l.player_generated %}<img src="/api/players/{{ l.player_id }}/face.svg" alt="">{% else %}<img src="https://open-football.org/player/{{ l.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ l.player_id }}/face.svg';" alt="">{% endif %}
+                                    </a>
+                                </td>
+                                <td class="aw-name">
+                                    <a href="/{{ lang }}/players/{{ l.player_slug }}">{{ l.player_name }}</a>
+                                    <span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ l.club_slug }}">{{ l.club_name }}</a></span>
+                                </td>
+                                <td class="aw-stat">{{ l.average_rating }}</td>
+                                <td class="aw-stat">{{ l.matches_played }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
 
         <div class="fm-ttab-content fm-aw-tab" id="aw-tab-young" style="display:none">
@@ -152,41 +267,65 @@
                     <div class="fm-aw-tab-card-head">
                         <span class="fm-aw-tab-title">{{ i18n.t("monthly_archive") }}</span>
                     </div>
-                    {% if recent_months.is_empty() %}
+                    {% if monthly_archive.is_empty() %}
                     <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
                     {% else %}
                     <table class="fm-aw-history-table">
                         <thead>
                             <tr>
                                 <th class="aw-date">{{ i18n.t("date") }}</th>
-                                <th></th>
-                                <th class="aw-name">{{ i18n.t("player") }}</th>
-                                <th class="aw-stat">{{ i18n.t("av_rat") }}</th>
+                                <th class="aw-stat">{{ i18n.t("matches") }}</th>
+                                <th class="aw-name">{{ i18n.t("player_of_month") }}</th>
+                                <th class="aw-name">{{ i18n.t("young_player_of_month") }}</th>
+                                <th class="aw-name">{{ i18n.t("top_scorer") }}</th>
+                                <th class="aw-name">{{ i18n.t("top_assisters") }}</th>
+                                <th class="aw-name">{{ i18n.t("top_rated") }}</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for m in recent_months %}
-                            <tr class="{% if m.is_young %}fm-aw-row-young{% endif %}">
-                                <td class="aw-date">
-                                    {{ m.date_label }}
-                                    <span class="fm-aw-kind">{{ m.kind_label }}</span>
-                                </td>
-                                <td class="aw-portrait">
-                                    <a href="/{{ lang }}/players/{{ m.player_slug }}" class="fm-aw-mini-portrait">
-                                        {% if m.player_generated %}
-                                        <img src="/api/players/{{ m.player_id }}/face.svg" alt="">
-                                        {% else %}
-                                        <img src="https://open-football.org/player/{{ m.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ m.player_id }}/face.svg';" alt="">
-                                        {% endif %}
-                                    </a>
+                            {% for m in monthly_archive %}
+                            <tr>
+                                <td class="aw-date">{{ m.month_label }}</td>
+                                <td class="aw-stat">{{ m.matches_count }}</td>
+                                <td class="aw-name">
+                                    {% if let Some(p) = m.player_of_month %}
+                                    <a href="/{{ lang }}/players/{{ p.player_slug }}">{{ p.player_name }}</a>
+                                    <span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ p.club_slug }}">{{ p.club_name }}</a></span>
+                                    {% else %}
+                                    <span class="fm-aw-row-sub">—</span>
+                                    {% endif %}
                                 </td>
                                 <td class="aw-name">
-                                    <a href="/{{ lang }}/players/{{ m.player_slug }}">{{ m.player_name }}</a>
-                                    <span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ m.club_slug }}">{{ m.club_name }}</a></span>
+                                    {% if let Some(p) = m.young_player_of_month %}
+                                    <a href="/{{ lang }}/players/{{ p.player_slug }}">{{ p.player_name }}</a>
+                                    <span class="fm-aw-row-sub"><a href="/{{ lang }}/teams/{{ p.club_slug }}">{{ p.club_name }}</a></span>
+                                    {% else %}
+                                    <span class="fm-aw-row-sub">—</span>
+                                    {% endif %}
                                 </td>
-                                <td class="aw-stat">
-                                    {{ m.average_rating }}
-                                    <span class="fm-aw-row-sub">{{ m.matches_played }}{{ i18n.t("apps") }} · {{ m.goals }}{{ i18n.t("g") }} {{ m.assists }}{{ i18n.t("a") }}</span>
+                                <td class="aw-name">
+                                    {% if let Some(s) = m.top_scorer %}
+                                    <a href="/{{ lang }}/players/{{ s.player_slug }}">{{ s.player_name }}</a>
+                                    <span class="fm-aw-row-sub">{{ s.goals }}{{ i18n.t("g") }} {{ s.assists }}{{ i18n.t("a") }}</span>
+                                    {% else %}
+                                    <span class="fm-aw-row-sub">—</span>
+                                    {% endif %}
+                                </td>
+                                <td class="aw-name">
+                                    {% if let Some(s) = m.top_assist %}
+                                    <a href="/{{ lang }}/players/{{ s.player_slug }}">{{ s.player_name }}</a>
+                                    <span class="fm-aw-row-sub">{{ s.assists }}{{ i18n.t("a") }} {{ s.goals }}{{ i18n.t("g") }}</span>
+                                    {% else %}
+                                    <span class="fm-aw-row-sub">—</span>
+                                    {% endif %}
+                                </td>
+                                <td class="aw-name">
+                                    {% if let Some(r) = m.best_rating %}
+                                    <a href="/{{ lang }}/players/{{ r.player_slug }}">{{ r.player_name }}</a>
+                                    <span class="fm-aw-row-sub">{{ r.average_rating }} · {{ r.matches_played }}{{ i18n.t("apps") }}</span>
+                                    {% else %}
+                                    <span class="fm-aw-row-sub">—</span>
+                                    {% endif %}
                                 </td>
                             </tr>
                             {% endfor %}

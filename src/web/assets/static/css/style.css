@@ -7335,6 +7335,55 @@ a:link, a:visited, a:hover, a:active {
     }
 }
 
+.fm-aw-month-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 6px 4px 14px;
+    gap: 12px;
+}
+
+.fm-aw-month-label {
+    font-size: 16px;
+    font-weight: 700;
+    color: #d0d6dc;
+    letter-spacing: 0.3px;
+}
+
+.fm-aw-month-count {
+    font-size: 11px;
+    font-weight: 600;
+    color: #6b7580;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+}
+
+.fm-aw-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-top: 18px;
+}
+
+.fm-aw-stat-col {
+    background: linear-gradient(180deg, #1a242c 0%, #161e25 100%);
+    border: 1px solid #263340;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+@media (max-width: 1100px) {
+    .fm-aw-stat-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 700px) {
+    .fm-aw-stat-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 .fm-aw-tab-card,
 .fm-aw-tab-pitch-wrap {
     background: linear-gradient(180deg, #1a242c 0%, #161e25 100%);
