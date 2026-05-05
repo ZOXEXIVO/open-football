@@ -168,9 +168,9 @@ impl FootballSimulator {
         }
 
         // Phase D: world-level manager market. Order is load-bearing —
-        // see `manager_market::tick_daily` for the dependency rationale.
+        // see `ManagerMarketTick::run` for the dependency rationale.
         let today = data.date.date();
-        manager_market::tick_daily(data, today);
+        manager_market::ManagerMarketTick::run(data, today);
 
         // Phase D2: parent-side loan wage settlement. Per-club monthly
         // finance runs inside Phase A and bills the borrower for the

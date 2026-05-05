@@ -1,7 +1,7 @@
+use crate::club::StaffPosition;
 use crate::club::board::BoardMoodState;
 use crate::club::board::manager_market;
 use crate::club::staff::free_pool;
-use crate::club::{StaffClubContract, StaffPosition, StaffStatus};
 use crate::simulator::SimulatorData;
 use crate::{StaffEventType, TeamType};
 use chrono::Datelike;
@@ -208,42 +208,13 @@ impl BoardResult {
                         sacked_staff = Some(staff);
                     }
 
-                    // Promote best existing coaching-staff member to Caretaker.
-                    // Score: tactical + man_management + motivating + coaching.mental.
-                    let caretaker_id = main_team.staffs.best_coach_id(|s| {
-                        s.staff_attributes.coaching.tactical as u32
-                            + s.staff_attributes.mental.man_management as u32
-                            + s.staff_attributes.mental.motivating as u32
-                            + s.staff_attributes.coaching.mental as u32
-                    });
-
-                    if let Some(id) = caretaker_id {
-                        if let Some(staff) = main_team.staffs.find_mut(id) {
-                            // Caretaker deal: 60 days at max(current, half of sacked).
-                            let current_salary =
-                                staff.contract.as_ref().map(|c| c.salary).unwrap_or(0);
-                            let salary = current_salary.max(sacked_salary / 2);
-                            let expires = today
-                                .checked_add_signed(chrono::Duration::days(60))
-                                .unwrap_or_else(|| {
-                                    chrono::NaiveDate::from_ymd_opt(
-                                        today.year() + 1,
-                                        today.month(),
-                                        1,
-                                    )
-                                    .unwrap()
-                                });
-                            staff.contract = Some(StaffClubContract::new(
-                                salary,
-                                expires,
-                                StaffPosition::CaretakerManager,
-                                StaffStatus::Active,
-                            ));
-                            info!(
-                                "Promoted staff {} to caretaker manager at {}",
-                                id, club_name
-                            );
-                        }
+                    let installed = manager_market::ManagerSeat::promote_best_caretaker(
+                        main_team,
+                        sacked_salary,
+                        today,
+                    );
+                    if installed {
+                        debug!("Caretaker promoted at {} after sacking", club_name);
                     }
                 }
 
@@ -257,7 +228,7 @@ impl BoardResult {
                     .find(|t| matches!(t.team_type, TeamType::Main))
                     .map(|t| t.reputation.world)
                     .unwrap_or(0);
-                manager_market::open_manager_search(&mut club.board, today, club_rep);
+                manager_market::ManagerSearch::open(&mut club.board, today, club_rep);
             }
         } // end of `club` mutable-borrow scope
 
@@ -272,7 +243,7 @@ impl BoardResult {
         // because it needs to weave between the global pool and the
         // club's staff collection across multiple short borrows.
         if do_confirm {
-            manager_market::execute_appointment(data, self.club_id, today);
+            manager_market::ManagerMarketTick::execute_appointment(data, self.club_id, today);
         }
     }
 }

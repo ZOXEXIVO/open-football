@@ -80,9 +80,13 @@ finances, and match engine can turn it into success.
 
 ## Screenshots
 
-[Player page example](https://open-football.org/en/teams/napoli)
+[Player page example](https://open-football.org/en/players/43274977-moise-kean)
 
 ![Player page](.docs/images/player.jpg "Player page")
+
+[Tactics page example](https://open-football.org/en/teams/napoli)
+
+![Player page](.docs/images/tactics.jpg "Player page")
 
 [Club page example](https://open-football.org/en/teams/napoli)
 
@@ -90,19 +94,23 @@ finances, and match engine can turn it into success.
 
 ![Player personal page](.docs/images/player_personal.jpg "Player personal page")
 
-[Mobile view example](https://open-football.org/en/leagues/italian-serie-a)
-
-<img src=".docs/images/mobile.png?v=1" alt="Mobile team page" width="300">
-
-[League page example](https://open-football.org/en/leagues/italian-serie-a)
-
-![League page](.docs/images/league.jpg "League page")
 
 [Match example](https://open-football.org/en/leagues/italian-serie-a)
 
 ![Match page](.docs/images/match.jpg "Match page")
 
 ![Match event view](.docs/images/match.avif "Match event view")
+
+
+[League page example](https://open-football.org/en/leagues/italian-serie-a)
+
+![League page](.docs/images/league.jpg "League page")
+
+
+[Mobile view example](https://open-football.org/en/leagues/italian-serie-a)
+
+<img src=".docs/images/mobile.png?v=1" alt="Mobile team page" width="300">
+
 
 ### Single binary with full-functional simulator
 

@@ -9,7 +9,7 @@
             <h3>{{ i18n.t("formation") }}</h3>
             <span class="fm-panel-action">{{ formation_name }}</span>
         </div>
-        <div class="fm-pitch fm-pitch-compact">
+        <div class="fm-pitch fm-tac-pitch">
             <div class="fm-pitch-surface">
                 <div class="fm-pitch-half-line"></div>
                 <div class="fm-pitch-center-circle"></div>
@@ -25,10 +25,21 @@
                 <div class="fm-pitch-corner-bl"></div>
                 <div class="fm-pitch-corner-br"></div>
                 {% for fp in formation_players %}
-                <a class="fm-pitch-player {{ fp.css_class }}" href="/{{ lang }}/players/{{ fp.slug }}">
-                    <div class="fm-pitch-player-dot"></div>
-                    <div class="fm-pitch-player-name">{{ fp.last_name }}</div>
-                </a>
+                <div class="fm-pitch-player fm-aw-pitch-player {{ fp.css_class }}" title="{{ fp.last_name }}">
+                    <a class="fm-aw-pitch-photo" href="/{{ lang }}/players/{{ fp.slug }}">
+                        {% if fp.is_generated %}
+                        <img src="/api/players/{{ fp.player_id }}/face.svg" alt="{{ fp.last_name }}">
+                        {% else %}
+                        <img src="https://open-football.org/player/{{ fp.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ fp.player_id }}/face.svg';" alt="{{ fp.last_name }}">
+                        {% endif %}
+                        <span class="fm-aw-pitch-rating">{{ fp.rating }}</span>
+                    </a>
+                    <div class="fm-aw-pitch-label">
+                        <a class="fm-aw-pitch-namerow fm-aw-pitch-name" href="/{{ lang }}/players/{{ fp.slug }}">
+                            <span class="fm-aw-pitch-lastname">{{ fp.last_name }}</span>
+                        </a>
+                    </div>
+                </div>
                 {% endfor %}
             </div>
         </div>

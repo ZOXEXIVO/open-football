@@ -98,6 +98,56 @@
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
+/* cyrillic */
+@font-face {
+    font-family: 'Outfit';
+    font-style: normal;
+    font-weight: 300;
+    font-display: swap;
+    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+/* cyrillic */
+@font-face {
+    font-family: 'Outfit';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+/* cyrillic */
+@font-face {
+    font-family: 'Outfit';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+/* cyrillic */
+@font-face {
+    font-family: 'Outfit';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+/* cyrillic */
+@font-face {
+    font-family: 'Outfit';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
 /* ============================================
    OPEN FOOTBALL - FM2017 STYLE
    ============================================ */
@@ -7342,7 +7392,7 @@ a:link, a:visited, a:hover, a:active {
 .fm-aw-totw-pitch .fm-pitch-surface {
     aspect-ratio: 0.78;
     width: 100%;
-    max-width: 560px;
+    max-width: 616px;
     margin: 0 auto;
 }
 
@@ -7474,18 +7524,159 @@ a:link, a:visited, a:hover, a:active {
    so defender/mid/striker stack in straight lines, and lift each
    row ~1.5em so labels fit below every photo (incl. GK).
    Inner columns at 36/64 keep enough horizontal gap from the
-   wings (10/90) so the wider name labels don't overlap. */
-.fm-aw-pitch-player.pos-gk  { left: 50%; bottom: 7%; }
-.fm-aw-pitch-player.pos-dl  { left: 12%; bottom: 28%; }
-.fm-aw-pitch-player.pos-dcl { left: 36%; bottom: 28%; }
-.fm-aw-pitch-player.pos-dcr { left: 64%; bottom: 28%; }
-.fm-aw-pitch-player.pos-dr  { left: 88%; bottom: 28%; }
-.fm-aw-pitch-player.pos-ml  { left: 12%; bottom: 53%; }
-.fm-aw-pitch-player.pos-mcl { left: 36%; bottom: 53%; }
-.fm-aw-pitch-player.pos-mcr { left: 64%; bottom: 53%; }
-.fm-aw-pitch-player.pos-mr  { left: 88%; bottom: 53%; }
-.fm-aw-pitch-player.pos-stl { left: 36%; bottom: 77%; }
-.fm-aw-pitch-player.pos-str { left: 64%; bottom: 77%; }
+   wings (10/90) so the wider name labels don't overlap.
+   Scoped to .fm-aw-totw-pitch so the same .fm-aw-pitch-player photo
+   styling can be reused in tactics with the default tactics
+   position bands. */
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-gk  { left: 50%; bottom: 7%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dl  { left: 12%; bottom: 28%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dcl { left: 36%; bottom: 28%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dcr { left: 64%; bottom: 28%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dr  { left: 88%; bottom: 28%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-ml  { left: 12%; bottom: 53%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-mcl { left: 36%; bottom: 53%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-mcr { left: 64%; bottom: 53%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-mr  { left: 88%; bottom: 53%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-stl { left: 36%; bottom: 77%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-str { left: 64%; bottom: 77%; }
+
+/* Tactics pitch: same photo + font size and aspect (0.78, max 616)
+   as the awards Team-of-the-Week so the field reads identically
+   across both pages. Label width stays narrower than awards (no club
+   row, single team) so the label fits within the tightest column
+   gap (17% in 3-5-2, 1-3-3-3). Formations with 5+ vertical bands
+   (4-2-3-1, diamond, 1-3-3-3) have row gaps of 13-14% × 790 ≈ 103px
+   which is just under the photo+label height — minor overlap there
+   is accepted as a trade for matching the awards proportions. */
+.fm-tac-pitch {
+    padding: 16px;
+}
+
+.fm-tac-pitch .fm-pitch-surface {
+    aspect-ratio: 0.78;
+    width: 100%;
+    max-width: 616px;
+    margin: 0 auto;
+}
+
+.fm-tac-pitch .fm-aw-pitch-player {
+    width: 64px;
+}
+
+.fm-tac-pitch .fm-aw-pitch-photo {
+    width: 70px;
+    height: 88px;
+}
+
+.fm-tac-pitch .fm-aw-pitch-rating {
+    font-size: 12px;
+    padding: 1px 6px;
+    bottom: 5px;
+}
+
+.fm-tac-pitch .fm-aw-pitch-label {
+    width: 100px;
+    margin-top: 5px;
+}
+
+.fm-tac-pitch .fm-aw-pitch-namerow {
+    max-width: 100px;
+}
+
+.fm-tac-pitch .fm-aw-pitch-name {
+    font-size: 13px;
+}
+
+@media (max-width: 767.98px) {
+    .fm-tac-pitch {
+        padding: 12px 6px;
+    }
+
+    .fm-tac-pitch .fm-aw-pitch-player {
+        width: 48px;
+    }
+
+    .fm-tac-pitch .fm-aw-pitch-photo {
+        width: 52px;
+        height: 64px;
+    }
+
+    .fm-tac-pitch .fm-aw-pitch-rating {
+        font-size: 10px;
+        padding: 0 4px;
+        bottom: 3px;
+    }
+
+    .fm-tac-pitch .fm-aw-pitch-label {
+        width: 76px;
+        margin-top: 3px;
+    }
+
+    .fm-tac-pitch .fm-aw-pitch-namerow {
+        max-width: 76px;
+    }
+
+    .fm-tac-pitch .fm-aw-pitch-name {
+        font-size: 10px;
+    }
+}
+
+/* On the smallest phones the row gap (~10% of pitch height) drops
+   below photo+label height; drop the label and rely on the title
+   attribute for the player name. */
+@media (max-width: 575.98px) {
+    .fm-tac-pitch .fm-aw-pitch-label {
+        display: none;
+    }
+}
+
+/* Small screens: the column gap (24% of pitch width) shrinks below
+   the default 154px label width, and the row gap (~21% of pitch
+   height) shrinks below photo+label height. Tighten both dimensions
+   so labels fit between adjacent columns AND between rows. */
+@media (max-width: 767.98px) {
+    .fm-aw-totw-pitch {
+        padding: 12px 6px;
+    }
+
+    .fm-aw-pitch-player {
+        width: 44px;
+    }
+
+    .fm-aw-pitch-photo {
+        width: 48px;
+        height: 56px;
+    }
+
+    .fm-aw-pitch-rating {
+        font-size: 10px;
+        padding: 0 4px;
+        bottom: 3px;
+    }
+
+    .fm-aw-pitch-label {
+        width: 76px;
+        margin-top: 3px;
+    }
+
+    .fm-aw-pitch-namerow {
+        max-width: 76px;
+        gap: 2px;
+    }
+
+    .fm-aw-pitch-name {
+        font-size: 10px;
+    }
+
+    .fm-aw-pitch-firstname {
+        display: none;
+    }
+
+    .fm-aw-pitch-club {
+        font-size: 9px;
+        max-width: 76px;
+    }
+}
 
 .fm-aw-history-table,
 .fm-aw-season-table {

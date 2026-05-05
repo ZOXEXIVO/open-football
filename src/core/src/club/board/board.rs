@@ -307,7 +307,7 @@ pub struct ClubBoard {
     /// while a search is open. Front of vec = top choice.
     pub manager_shortlist: Vec<ManagerCandidate>,
     /// Day the current shortlist was built. Used to decide when it's
-    /// stale enough to rebuild — see `manager_market::SHORTLIST_REFRESH_DAYS`.
+    /// stale enough to rebuild — see `ManagerShortlist::REFRESH_DAYS`.
     pub shortlist_built_at: Option<NaiveDate>,
     /// How long the search may run before the board commits to a
     /// hire. Locked in when `manager_search_since` is set so it stays

@@ -43,8 +43,11 @@ pub struct TeamTacticsTemplate {
 }
 
 pub struct FormationPlayer {
+    pub player_id: u32,
     pub slug: String,
     pub last_name: String,
+    pub is_generated: bool,
+    pub rating: String,
     pub css_class: String,
 }
 
@@ -99,9 +102,13 @@ pub async fn team_tactics_get_action(
 
         if let Some(player) = best_player {
             used_player_ids.push(player.id);
+            let ca = player.player_attributes.current_ability as f32 / 20.0;
             formation_players.push(FormationPlayer {
+                player_id: player.id,
                 slug: player.slug(),
                 last_name: player.full_name.display_last_name().to_string(),
+                is_generated: player.is_generated(),
+                rating: format!("{:.1}", ca.min(10.0)),
                 css_class: position_to_css_class(required_pos),
             });
         }
