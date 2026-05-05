@@ -565,6 +565,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if coach_eval_counter >= 500 {
                 coach_eval_counter = 0;
                 Self::evaluate_coaches(field, context);
+                // Once every coach-eval slice, also probe for situational
+                // formation overrides — the manager swap to a chasing /
+                // protecting shape based on score and minute. Cheap: a
+                // single match arm and an equality check against the
+                // current type per side.
+                Self::evaluate_situational_shape(field, context);
             }
 
             // Team-level tactical state (phase, possession timers, line
@@ -596,8 +602,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             );
 
             if subs_enabled {
-                // Grant the ET bonus once — bumps the cap from 5 → 6 for both sides.
-                if context.state.match_state == MatchState::ExtraTime && !et_bonus_granted {
+                // Grant the ET bonus once — bumps the cap by 1 for both
+                // sides — but only when the active rule set allows it.
+                // Friendlies (cap = usize::MAX) skip the increment.
+                if context.state.match_state == MatchState::ExtraTime
+                    && !et_bonus_granted
+                    && context.allow_extra_time_extra_sub
+                {
                     if context.max_substitutions_per_team < usize::MAX {
                         context.max_substitutions_per_team += 1;
                     }
@@ -618,7 +629,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     // date directly. Used only for the youth-protection
                     // sub branch, where the comparison is age <= 17.
                     let today = chrono::Utc::now().naive_utc().date();
-                    process_substitutions(field, context, 2, today);
+                    let per_pass_cap = context.max_substitutions_per_pass;
+                    process_substitutions(field, context, per_pass_cap, today);
                     let mut rng = rand::rng();
                     next_sub_time_ms = period_time + rng.random_range(5..15) * 60 * 1000;
                 }
@@ -631,6 +643,53 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
     // Coach evaluation
     // ───────────────────────────────────────────────────────────────────────
+
+    /// In-match shape change. Probes `TacticsSelector::situational_shape`
+    /// for both sides; if the helper returns a new formation different
+    /// from the side's current `tactic_type`, the side's `Tactics`
+    /// struct is rebuilt around the new shape. The team-tactical refresh
+    /// pipeline picks the new shape up on its next pass — pressing /
+    /// line height / mentality already key off `tactical_style()`.
+    fn evaluate_situational_shape(field: &mut MatchField, context: &MatchContext) {
+        use crate::club::team::tactics::tactics::TacticsSelector;
+        let minutes = (context.total_match_time / 60_000).min(120) as u8;
+        let home_diff =
+            (context.score.home_team.get() as i16 - context.score.away_team.get() as i16)
+                .clamp(-100, 100) as i8;
+        let away_diff = -home_diff;
+
+        // Map left/right squad → home/away by checking which side the
+        // home squad currently occupies. Sides swap at half-time so we
+        // can't hardcode left=home.
+        let home_is_left = field
+            .left_side_players
+            .as_ref()
+            .map(|s| s.team_id == context.field_home_team_id)
+            .unwrap_or(true);
+
+        let probe = |side_tactics: &mut crate::Tactics, is_home: bool, score_diff: i8| {
+            if let Some(new_shape) = TacticsSelector::situational_shape(
+                side_tactics.tactic_type,
+                is_home,
+                score_diff,
+                minutes,
+            ) {
+                *side_tactics = crate::Tactics::with_reason(
+                    new_shape,
+                    crate::TacticSelectionReason::GameSituation,
+                    side_tactics.formation_strength,
+                );
+            }
+        };
+
+        if home_is_left {
+            probe(&mut field.left_team_tactics, true, home_diff);
+            probe(&mut field.right_team_tactics, false, away_diff);
+        } else {
+            probe(&mut field.right_team_tactics, true, home_diff);
+            probe(&mut field.left_team_tactics, false, away_diff);
+        }
+    }
 
     fn evaluate_coaches(field: &MatchField, context: &mut MatchContext) {
         let home_goals = context.score.home_team.get() as i8;

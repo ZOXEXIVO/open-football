@@ -24,14 +24,14 @@
                 <span class="fm-aw-pitch-rating">{{ slot.average_rating }}</span>
             </a>
             <div class="fm-aw-pitch-label">
-                <div class="fm-aw-pitch-namerow">
+                <a class="fm-aw-pitch-namerow fm-aw-pitch-name" href="/{{ lang }}/players/{{ slot.player_slug }}">
                     {% if !slot.player_last_name.is_empty() %}
-                    <a class="fm-aw-pitch-name" href="/{{ lang }}/players/{{ slot.player_slug }}">{{ slot.player_last_name }}</a>
+                    <span class="fm-aw-pitch-lastname">{{ slot.player_last_name }}</span>
                     {% endif %}
                     {% if !slot.player_first_name.is_empty() %}
-                    <a class="fm-aw-pitch-firstname" href="/{{ lang }}/players/{{ slot.player_slug }}">{{ slot.player_first_name }}</a>
+                    <span class="fm-aw-pitch-firstname">{{ slot.player_first_name }}</span>
                     {% endif %}
-                </div>
+                </a>
                 <a class="fm-aw-pitch-club" href="/{{ lang }}/teams/{{ slot.club_slug }}">{{ slot.club_name }}</a>
             </div>
         </div>

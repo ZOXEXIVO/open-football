@@ -23,6 +23,7 @@
 //! re-exports below — no caller changes needed.
 
 pub mod career;
+pub mod discipline;
 pub mod match_exertion;
 pub mod match_play;
 pub mod role;

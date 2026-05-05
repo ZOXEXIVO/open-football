@@ -4,6 +4,7 @@ use crate::r#match::engine::psychology::PsychologyState;
 use crate::r#match::engine::referee::RefereeProfile;
 use crate::r#match::engine::result::{PenaltyShootoutKick, PlayerMatchEndStats};
 use crate::r#match::engine::set_pieces::SetPieceHistory;
+use crate::r#match::rules::MatchRules;
 use crate::r#match::{
     GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach,
     MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score,
@@ -41,6 +42,13 @@ pub struct MatchContext {
 
     pub substitutions: Vec<SubstitutionRecord>,
     pub max_substitutions_per_team: usize,
+    /// Per-stoppage cap. The substitutions pass runs every 5–15 in-match
+    /// minutes and is allowed to make at most this many subs per call.
+    /// Sourced from `MatchRules.max_substitutions_per_pass`.
+    pub max_substitutions_per_pass: usize,
+    /// Whether the knockout-tie ET bonus substitution is allowed for
+    /// this match. Mirrors `MatchRules.allow_extra_time_extra_sub`.
+    pub allow_extra_time_extra_sub: bool,
     pub additional_time_ms: u64,
     pub period_stoppage_time_ms: u64,
     pub penalty_shootout_kicks: Vec<PenaltyShootoutKick>,
@@ -103,6 +111,24 @@ impl MatchContext {
         is_friendly: bool,
         is_knockout: bool,
     ) -> Self {
+        Self::new_with_rules(
+            field,
+            players,
+            score,
+            is_friendly,
+            is_knockout,
+            MatchRules::resolve_default(is_friendly, is_knockout),
+        )
+    }
+
+    pub fn new_with_rules(
+        field: &MatchField,
+        players: MatchPlayerCollection,
+        score: Score,
+        _is_friendly: bool,
+        is_knockout: bool,
+        rules: MatchRules,
+    ) -> Self {
         MatchContext {
             state: GameState::new(),
             time: MatchTime::new(),
@@ -116,9 +142,13 @@ impl MatchContext {
             logging_enabled: false,
             total_match_time: 0,
             substitutions: Vec::new(),
-            // Knockout ties get one extra substitution once ET begins (FIFA rule).
-            // Represented here as a flat limit; ET bonus applied on entry.
-            max_substitutions_per_team: if is_friendly { usize::MAX } else { 5 },
+            // Total substitution budget is sourced from the competition
+            // rule set. Friendlies pass `usize::MAX` to waive the cap.
+            // Knockout ties may add one more on entering ET — the
+            // engine handles that bump independently.
+            max_substitutions_per_team: rules.max_substitutions_per_team,
+            max_substitutions_per_pass: rules.max_substitutions_per_pass,
+            allow_extra_time_extra_sub: rules.allow_extra_time_extra_sub,
             additional_time_ms: 0,
             period_stoppage_time_ms: 0,
             penalty_shootout_kicks: Vec::new(),

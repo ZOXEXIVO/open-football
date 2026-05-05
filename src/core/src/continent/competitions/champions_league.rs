@@ -250,14 +250,35 @@ impl ChampionsLeague {
                     cm.away_team
                 );
 
-                Some(Match::make(
-                    match_id,
-                    CHAMPIONS_LEAGUE_ID,
-                    CHAMPIONS_LEAGUE_SLUG,
-                    home_squad,
-                    away_squad,
-                    false, // not friendly -- competitive
-                ))
+                // Knockout legs need penalties for the second leg if
+                // aggregate ends level. Group games use the regular
+                // (non-knockout) constructor — a draw is a valid group
+                // outcome.
+                let is_knockout_stage = matches!(
+                    cm.stage,
+                    CompetitionStage::RoundOf16
+                        | CompetitionStage::QuarterFinals
+                        | CompetitionStage::SemiFinals
+                        | CompetitionStage::Final
+                );
+                Some(if is_knockout_stage {
+                    Match::make_knockout(
+                        match_id,
+                        CHAMPIONS_LEAGUE_ID,
+                        CHAMPIONS_LEAGUE_SLUG,
+                        home_squad,
+                        away_squad,
+                    )
+                } else {
+                    Match::make(
+                        match_id,
+                        CHAMPIONS_LEAGUE_ID,
+                        CHAMPIONS_LEAGUE_SLUG,
+                        home_squad,
+                        away_squad,
+                        false, // not friendly -- competitive
+                    )
+                })
             })
             .collect();
 
@@ -300,6 +321,11 @@ impl ChampionsLeague {
                 CompetitionStage::RoundOf16
                 | CompetitionStage::QuarterFinals
                 | CompetitionStage::SemiFinals => {
+                    let shootout = if result.score.had_shootout() {
+                        Some((result.score.home_shootout, result.score.away_shootout))
+                    } else {
+                        None
+                    };
                     for tie in &mut self.knockout_round {
                         if tie.home_team == cm.home_team && tie.away_team == cm.away_team {
                             if tie.leg1_score.is_none() {
@@ -307,7 +333,7 @@ impl ChampionsLeague {
                             }
                         } else if tie.home_team == cm.away_team && tie.away_team == cm.home_team {
                             if tie.leg2_score.is_none() {
-                                tie.record_leg2(home_goals, away_goals);
+                                tie.record_leg2_with_shootout(home_goals, away_goals, shootout);
                             }
                         }
                     }

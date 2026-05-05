@@ -21,7 +21,7 @@ impl GlobalCompetitionSimulator {
             return;
         }
 
-        let prepared: Vec<(usize, MatchSquad, MatchSquad)> = todays_matches
+        let prepared: Vec<(usize, MatchSquad, MatchSquad, bool)> = todays_matches
             .iter()
             .enumerate()
             .filter_map(|(idx, fixture)| {
@@ -35,11 +35,11 @@ impl GlobalCompetitionSimulator {
                     fixture.away_country_id,
                     date,
                 )?;
-                Some((idx, home, away))
+                Some((idx, home, away, fixture.phase.is_knockout()))
             })
             .collect();
 
-        let engine_results = crate::match_engine_pool().play_squads(prepared);
+        let engine_results = crate::match_engine_pool().play_squads_with_knockout(prepared);
 
         for (fixture_idx, raw_result) in engine_results {
             let fixture = &todays_matches[fixture_idx];
@@ -47,8 +47,17 @@ impl GlobalCompetitionSimulator {
             let home_score = score.home_team.get();
             let away_score = score.away_team.get();
 
-            let penalty_winner =
-                Self::penalty_winner(&data.continents, fixture, home_score, away_score);
+            // Knockout draws use the engine's penalty shootout result.
+            // Falls back to a reputation-weighted coin flip only if a
+            // knockout fixture somehow finishes level without a
+            // shootout being played (engine bug / data anomaly).
+            let penalty_winner = Self::resolve_knockout_winner(
+                &data.continents,
+                fixture,
+                score,
+                home_score,
+                away_score,
+            );
 
             data.global_competitions
                 .record_result(fixture, home_score, away_score, penalty_winner);
@@ -73,19 +82,45 @@ impl GlobalCompetitionSimulator {
         }
     }
 
-    /// Penalty shootout winner for knockout draws. Reputation nudges the
-    /// baseline a little (capped at ±0.15 — i.e. 35/65 in the most
-    /// lopsided matchup) and is then rolled — shootouts are coin-flippy
-    /// in reality.
-    fn penalty_winner(
+    /// Resolve who advances when a knockout fixture finishes level in
+    /// regulation. Prefers the engine's penalty shootout result; falls
+    /// back to a reputation-weighted draw only when the engine didn't
+    /// run a shootout (e.g. group-stage games that allow draws should
+    /// never enter this branch — `phase.is_knockout()` filters them).
+    fn resolve_knockout_winner(
         continents: &[Continent],
         fixture: &GlobalCompetitionFixture,
+        score: &crate::r#match::Score,
         home_score: u8,
         away_score: u8,
     ) -> Option<u32> {
         if !fixture.phase.is_knockout() || home_score != away_score {
             return None;
         }
+        // Engine-played shootout — read the winner directly.
+        if score.had_shootout() {
+            return Some(if score.home_shootout > score.away_shootout {
+                fixture.home_country_id
+            } else if score.away_shootout > score.home_shootout {
+                fixture.away_country_id
+            } else {
+                // Defensive: shootouts cannot end tied, but if they do
+                // (data anomaly), prefer the home side rather than
+                // panicking.
+                fixture.home_country_id
+            });
+        }
+        // Last-resort reputation fallback. Should not fire in practice
+        // because the play pipeline routes `is_knockout = true` to the
+        // engine's shootout resolver, but kept so an engine quirk
+        // doesn't stall tournament progression.
+        Self::reputation_weighted_winner(continents, fixture)
+    }
+
+    fn reputation_weighted_winner(
+        continents: &[Continent],
+        fixture: &GlobalCompetitionFixture,
+    ) -> Option<u32> {
         let home_rep =
             national_world::world_country_reputation(continents, fixture.home_country_id) as f32;
         let away_rep =

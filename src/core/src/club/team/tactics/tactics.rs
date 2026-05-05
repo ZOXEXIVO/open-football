@@ -39,12 +39,24 @@ impl Tactics {
     }
 
     pub fn positions(&self) -> &[PlayerPositionType; 11] {
-        let (_, positions) = TACTICS_POSITIONS
+        match TACTICS_POSITIONS
             .iter()
             .find(|(positioning, _)| *positioning == self.tactic_type)
-            .unwrap_or(&TACTICS_POSITIONS[0]);
-
-        positions
+        {
+            Some((_, positions)) => positions,
+            None => {
+                debug_assert!(
+                    false,
+                    "TACTICS_POSITIONS missing entry for {:?} — add slot list",
+                    self.tactic_type
+                );
+                log::warn!(
+                    "TACTICS_POSITIONS missing entry for {:?}, falling back to T442",
+                    self.tactic_type
+                );
+                &TACTICS_POSITIONS[0].1
+            }
+        }
     }
 
     pub fn defender_count(&self) -> usize {
@@ -214,7 +226,15 @@ pub enum TacticalStyle {
     Experimental,
 }
 
-// Include the TACTICS_POSITIONS array from the previous implementation
+/// Canonical formation → 11 player slots.
+///
+/// **Invariant:** every variant returned by `MatchTacticType::all()` has
+/// an entry here. The static assertion in the tests guarantees we never
+/// silently fall back to T442 because a formation was added to the enum
+/// without a matching slot list. Using `Tactics::positions()` for an
+/// unmapped formation triggers a debug panic in development builds —
+/// release builds fall back to T442 with a warning so a save file
+/// authored against a future formation set still loads.
 pub const TACTICS_POSITIONS: &[(MatchTacticType, [PlayerPositionType; 11])] = &[
     (
         MatchTacticType::T442,
@@ -296,7 +316,164 @@ pub const TACTICS_POSITIONS: &[(MatchTacticType, [PlayerPositionType; 11])] = &[
             PlayerPositionType::ForwardRight,
         ],
     ),
-    // Add more formations as needed...
+    // Diamond midfield — narrow 4-4-2 with a defensive and attacking
+    // midfielder behind a forward pair.
+    (
+        MatchTacticType::T442Diamond,
+        [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::DefensiveMidfielder,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::AttackingMidfielderCenter,
+            PlayerPositionType::ForwardLeft,
+            PlayerPositionType::ForwardRight,
+        ],
+    ),
+    // Wide diamond — same shape but the central pair pushes out to the
+    // wings to stretch the pitch.
+    (
+        MatchTacticType::T442DiamondWide,
+        [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::DefensiveMidfielder,
+            PlayerPositionType::MidfielderLeft,
+            PlayerPositionType::MidfielderRight,
+            PlayerPositionType::AttackingMidfielderCenter,
+            PlayerPositionType::ForwardLeft,
+            PlayerPositionType::ForwardRight,
+        ],
+    ),
+    // Narrow 4-4-2 — central two pair playing inside, no real wide
+    // outlet (overlapping fullbacks expected).
+    (
+        MatchTacticType::T442Narrow,
+        [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenter,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::AttackingMidfielderCenter,
+            PlayerPositionType::ForwardCenter,
+            PlayerPositionType::Striker,
+        ],
+    ),
+    // 4-1-4-1 — single pivot with an industrious midfield band.
+    (
+        MatchTacticType::T4141,
+        [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::DefensiveMidfielder,
+            PlayerPositionType::MidfielderLeft,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::MidfielderRight,
+            PlayerPositionType::Striker,
+        ],
+    ),
+    // 4-4-1-1 — counter-attacking shape with a deep-lying second
+    // striker behind the lone forward.
+    (
+        MatchTacticType::T4411,
+        [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::MidfielderLeft,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::MidfielderRight,
+            PlayerPositionType::AttackingMidfielderCenter,
+            PlayerPositionType::Striker,
+        ],
+    ),
+    // 3-4-3 — back three, attacking front three.
+    (
+        MatchTacticType::T343,
+        [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenter,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::WingbackLeft,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::WingbackRight,
+            PlayerPositionType::ForwardLeft,
+            PlayerPositionType::ForwardCenter,
+            PlayerPositionType::ForwardRight,
+        ],
+    ),
+    // 1-3-3-3 — a sweeper-led pyramid; experimental shape.
+    (
+        MatchTacticType::T1333,
+        [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::Sweeper,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenter,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenter,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::ForwardLeft,
+            PlayerPositionType::ForwardCenter,
+            PlayerPositionType::ForwardRight,
+        ],
+    ),
+    // 4-3-1-2 — strikers' shape, narrow midfield with a number 10.
+    (
+        MatchTacticType::T4312,
+        [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenter,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::AttackingMidfielderCenter,
+            PlayerPositionType::ForwardCenter,
+            PlayerPositionType::Striker,
+        ],
+    ),
+    // 4-2-2-2 — Brazilian "magic square" with two wide attacking
+    // midfielders supporting a strike pair.
+    (
+        MatchTacticType::T4222,
+        [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::DefensiveMidfielder,
+            PlayerPositionType::MidfielderCenter,
+            PlayerPositionType::AttackingMidfielderLeft,
+            PlayerPositionType::AttackingMidfielderRight,
+            PlayerPositionType::ForwardCenter,
+            PlayerPositionType::Striker,
+        ],
+    ),
 ];
 
 #[derive(Copy, Debug, Eq, PartialEq, PartialOrd, Clone, Hash)]
@@ -640,6 +817,34 @@ impl TacticsSelector {
         minutes_played: u8,
         players: &[&Player],
     ) -> Option<Tactics> {
+        let tactic_type = Self::situational_shape(
+            *current_tactic,
+            is_home,
+            score_difference,
+            minutes_played,
+        )?;
+        let tactic = Tactics::new(tactic_type);
+        let strength = tactic.calculate_formation_fitness(players) * 0.8; // Penalty for mid-game change
+        Some(Tactics::with_reason(
+            tactic_type,
+            TacticSelectionReason::GameSituation,
+            strength,
+        ))
+    }
+
+    /// Shape-only variant — returns just the tactical shape change
+    /// without computing formation fitness. Used by the match engine,
+    /// which only has `MatchPlayer` (not full `Player`) access at the
+    /// hot tick path; the engine can apply the shape change to its
+    /// per-side `Tactics` field without paying the fitness cost.
+    /// Returns `None` when no situational override is warranted or
+    /// when the new shape matches the current one.
+    pub fn situational_shape(
+        current_tactic: MatchTacticType,
+        _is_home: bool,
+        score_difference: i8,
+        minutes_played: u8,
+    ) -> Option<MatchTacticType> {
         let new_tactic = match (score_difference, minutes_played) {
             // Desperately need goals
             (diff, min) if diff < -1 && min > 75 => Some(MatchTacticType::T343),
@@ -649,25 +854,13 @@ impl TacticsSelector {
             (diff, min) if diff > 1 && min > 80 => Some(MatchTacticType::T451),
             (diff, min) if diff > 0 && min > 75 => Some(MatchTacticType::T4141),
 
-            // First half adjustments
-            (diff, min) if diff < -1 && min < 30 && is_home => Some(MatchTacticType::T4231),
+            // First half adjustments — chasing at home
+            (diff, min) if diff < -1 && min < 30 && _is_home => Some(MatchTacticType::T4231),
 
             _ => None,
         };
 
-        if let Some(tactic_type) = new_tactic {
-            if tactic_type != *current_tactic {
-                let tactic = Tactics::new(tactic_type);
-                let strength = tactic.calculate_formation_fitness(players) * 0.8; // Penalty for mid-game change
-                return Some(Tactics::with_reason(
-                    tactic_type,
-                    TacticSelectionReason::GameSituation,
-                    strength,
-                ));
-            }
-        }
-
-        None
+        new_tactic.filter(|t| *t != current_tactic)
     }
 
     fn coach_confidence_multiplier(coach: &Staff) -> f32 {
@@ -789,5 +982,94 @@ mod tests {
             counter.selected_reason,
             TacticSelectionReason::OpponentCounter
         );
+    }
+
+    #[test]
+    fn every_match_tactic_has_a_position_layout() {
+        // Without this guarantee `Tactics::positions` silently falls back
+        // to T442 — the original bug we set out to fix in Phase 7.
+        for tactic in MatchTacticType::all() {
+            let found = TACTICS_POSITIONS.iter().any(|(t, _)| *t == tactic);
+            assert!(
+                found,
+                "TACTICS_POSITIONS missing slot list for {:?}",
+                tactic
+            );
+        }
+    }
+
+    #[test]
+    fn every_layout_starts_with_a_goalkeeper_and_has_eleven_slots() {
+        for (tactic, slots) in TACTICS_POSITIONS {
+            assert_eq!(slots.len(), 11, "{:?} has != 11 slots", tactic);
+            assert_eq!(
+                slots[0],
+                PlayerPositionType::Goalkeeper,
+                "{:?} slot 0 must be Goalkeeper",
+                tactic
+            );
+        }
+    }
+
+    #[test]
+    fn situational_tactic_returns_attacking_when_chasing_late() {
+        let players: Vec<Player> = (1..=11)
+            .map(|i| create_test_player(i, PlayerPositionType::ForwardCenter, 150))
+            .collect();
+        let player_refs: Vec<&Player> = players.iter().collect();
+        let new_tactic = TacticsSelector::select_situational_tactic(
+            &MatchTacticType::T442,
+            true, // is_home
+            -2,   // 2-goal deficit
+            80,   // late game
+            &player_refs,
+        );
+        assert!(new_tactic.is_some());
+        let chosen = new_tactic.unwrap();
+        assert!(
+            chosen.is_attacking(),
+            "expected attacking shape, got {:?}",
+            chosen.tactic_type
+        );
+        assert_eq!(chosen.selected_reason, TacticSelectionReason::GameSituation);
+    }
+
+    #[test]
+    fn situational_tactic_returns_defensive_when_protecting_lead() {
+        let players: Vec<Player> = (1..=11)
+            .map(|i| create_test_player(i, PlayerPositionType::DefenderCenter, 150))
+            .collect();
+        let player_refs: Vec<&Player> = players.iter().collect();
+        let new_tactic = TacticsSelector::select_situational_tactic(
+            &MatchTacticType::T442,
+            true, // is_home
+            2,    // 2-goal lead
+            85,   // late game
+            &player_refs,
+        );
+        assert!(new_tactic.is_some());
+        let chosen = new_tactic.unwrap();
+        assert!(
+            chosen.is_defensive() || chosen.tactic_type == MatchTacticType::T451,
+            "expected defensive shape, got {:?}",
+            chosen.tactic_type
+        );
+    }
+
+    #[test]
+    fn situational_tactic_returns_none_when_no_change_warranted() {
+        let players: Vec<Player> = (1..=11)
+            .map(|i| create_test_player(i, PlayerPositionType::MidfielderCenter, 150))
+            .collect();
+        let player_refs: Vec<&Player> = players.iter().collect();
+        // Drawing in the first half, no dramatic situation.
+        let new_tactic = TacticsSelector::select_situational_tactic(
+            &MatchTacticType::T442,
+            true,
+            0,
+            40,
+            &player_refs,
+        );
+        assert!(new_tactic.is_none());
     }
 }

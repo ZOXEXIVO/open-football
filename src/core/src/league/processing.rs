@@ -154,16 +154,27 @@ impl League {
     }
 
     fn apply_regulatory_actions(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {
+        let today = ctx.simulation.date.date();
+        // FFP is opt-in via the country regulations. We don't have a
+        // direct handle to the country here (`clubs` is the league's
+        // own roster), but the country flag is mirrored on the
+        // continent.regulations during the simulator wiring; for the
+        // moment we always-evaluate cases and let the country gate
+        // happen at the result-handling layer. Cases are still
+        // throttled by the per-club open / cooldown checks inside
+        // `maybe_open_ffp_case`.
         for club in clubs {
-            if self.regulations.check_ffp_violation(club) {
-                debug!("⚠️ FFP violation detected for club: {}", club.name);
-                self.regulations
-                    .apply_ffp_sanctions(club.id, &mut self.table);
-            }
+            self.regulations.maybe_open_ffp_case(club, today);
         }
 
-        self.regulations
-            .process_pending_cases(ctx.simulation.date.date());
+        // Resolve any cases whose hearing landed in the past — applies
+        // point deductions to the live table and archives the case
+        // exactly once.
+        let _ = self
+            .regulations
+            .resolve_due_ffp_cases(today, &mut self.table);
+
+        self.regulations.process_pending_cases(today);
     }
 
     pub(super) fn process_non_matchday(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {

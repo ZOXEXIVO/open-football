@@ -340,6 +340,18 @@ impl CountryResult {
         for (team_id, event, prestige) in player_team_events {
             Self::apply_team_squad_event(country, team_id, event, 365, prestige, date);
         }
+
+        // Reset the per-player disciplinary running counter (yellow-
+        // card tally). Active suspensions are preserved — a player
+        // who picked up a red on the final matchday still serves it
+        // in the new season, matching real FA / FIFA conventions.
+        for club in &mut country.clubs {
+            for team in club.teams.iter_mut() {
+                for player in team.players.iter_mut() {
+                    player.reset_season_disciplinary_state();
+                }
+            }
+        }
     }
 
     /// Emit a team-level happiness event to every player on `team_id`,
@@ -1217,6 +1229,7 @@ mod tests {
                 goal_scored: 0,
                 goal_concerned: 0,
                 points,
+                points_deduction: 0,
             })
             .collect();
         league
@@ -1489,5 +1502,172 @@ mod tests {
             happiness_event_count(player, &HappinessEventType::RelegationFear),
             1
         );
+    }
+
+    fn make_league_with_settings(
+        id: u32,
+        tier: u8,
+        promo: u8,
+        rel: u8,
+        rows: Vec<(u32, u8, u8)>,
+    ) -> League {
+        let mut league = League::new(
+            id,
+            format!("League{}", id),
+            format!("league{}", id),
+            1,
+            5000,
+            LeagueSettings {
+                season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                tier,
+                promotion_spots: promo,
+                relegation_spots: rel,
+                league_group: None,
+            },
+            false,
+        );
+        let table_rows: Vec<LeagueTableRow> = rows
+            .into_iter()
+            .map(|(team_id, played, points)| LeagueTableRow {
+                team_id,
+                played,
+                win: 0,
+                draft: 0,
+                lost: 0,
+                goal_scored: 0,
+                goal_concerned: 0,
+                points,
+                points_deduction: 0,
+            })
+            .collect();
+        league.table.rows = table_rows.clone();
+        league.final_table = Some(table_rows);
+        league
+    }
+
+    fn make_simple_team(id: u32, club_id: u32, league_id: u32) -> crate::Team {
+        TeamBuilder::new()
+            .id(id)
+            .league_id(Some(league_id))
+            .club_id(club_id)
+            .name(format!("Team{}", id))
+            .slug(format!("team{}", id))
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(Vec::new()))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(make_training_schedule())
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn promotion_relegation_swaps_teams_between_adjacent_tiers() {
+        // Tier 1 has 4 teams (10..=13), bottom 2 relegate.
+        // Tier 2 has 4 teams (20..=23), top 2 promote.
+        let tier1_clubs: Vec<Club> = (10..=13)
+            .map(|id| make_club(id as u32, vec![make_simple_team(id as u32, id as u32, 1)]))
+            .collect();
+        let tier2_clubs: Vec<Club> = (20..=23)
+            .map(|id| make_club(id as u32, vec![make_simple_team(id as u32, id as u32, 2)]))
+            .collect();
+        let tier1 = make_league_with_settings(
+            1,
+            1,
+            0,
+            2,
+            vec![(10, 30, 70), (11, 30, 60), (12, 30, 30), (13, 30, 20)],
+        );
+        let tier2 = make_league_with_settings(
+            2,
+            2,
+            2,
+            0,
+            vec![(20, 30, 80), (21, 30, 70), (22, 30, 40), (23, 30, 25)],
+        );
+
+        let mut all_clubs = tier1_clubs;
+        all_clubs.extend(tier2_clubs);
+        let mut country = build_country(all_clubs, vec![tier1, tier2]);
+
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        // Bottom-2 of tier 1 (12, 13) drop to tier 2.
+        let team_12_league = country
+            .clubs
+            .iter()
+            .find(|c| c.id == 12)
+            .and_then(|c| c.teams.iter().next())
+            .map(|t| t.league_id);
+        assert_eq!(team_12_league, Some(Some(2)));
+        let team_13_league = country
+            .clubs
+            .iter()
+            .find(|c| c.id == 13)
+            .and_then(|c| c.teams.iter().next())
+            .map(|t| t.league_id);
+        assert_eq!(team_13_league, Some(Some(2)));
+
+        // Top-2 of tier 2 (20, 21) rise to tier 1.
+        let team_20_league = country
+            .clubs
+            .iter()
+            .find(|c| c.id == 20)
+            .and_then(|c| c.teams.iter().next())
+            .map(|t| t.league_id);
+        assert_eq!(team_20_league, Some(Some(1)));
+        let team_21_league = country
+            .clubs
+            .iter()
+            .find(|c| c.id == 21)
+            .and_then(|c| c.teams.iter().next())
+            .map(|t| t.league_id);
+        assert_eq!(team_21_league, Some(Some(1)));
+
+        // Mid-table teams stay put — stable team IDs verification.
+        let team_10_league = country
+            .clubs
+            .iter()
+            .find(|c| c.id == 10)
+            .and_then(|c| c.teams.iter().next())
+            .map(|t| t.league_id);
+        assert_eq!(team_10_league, Some(Some(1)));
+        let team_22_league = country
+            .clubs
+            .iter()
+            .find(|c| c.id == 22)
+            .and_then(|c| c.teams.iter().next())
+            .map(|t| t.league_id);
+        assert_eq!(team_22_league, Some(Some(2)));
+
+        // final_table is cleared after processing so the next season
+        // doesn't double-apply.
+        assert!(country.leagues.leagues.iter().all(|l| l.final_table.is_none()));
+    }
+
+    #[test]
+    fn promotion_relegation_is_a_noop_when_no_adjacent_tier_exists() {
+        // Single tier-1 league with relegation_spots > 0 but no tier-2
+        // counterpart — must not mutate any team's league_id.
+        let clubs: Vec<Club> = (10..=12)
+            .map(|id| make_club(id as u32, vec![make_simple_team(id as u32, id as u32, 1)]))
+            .collect();
+        let tier1 = make_league_with_settings(
+            1,
+            1,
+            0,
+            1,
+            vec![(10, 30, 70), (11, 30, 50), (12, 30, 20)],
+        );
+        let mut country = build_country(clubs, vec![tier1]);
+
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        for club in &country.clubs {
+            for team in &club.teams.teams {
+                assert_eq!(team.league_id, Some(1));
+            }
+        }
     }
 }

@@ -1,5 +1,6 @@
 mod end_of_period;
 mod preseason;
+mod regulations;
 mod reputation;
 mod statistics;
 mod transfers;
@@ -55,6 +56,13 @@ impl CountryResult {
             Self::process_loan_returns(data, country_id, current_date);
             // Retirement already runs inside process_end_of_period above,
             // via Self::process_player_retirements when the season ends.
+
+            // Apply per-country squad-registration rules — foreign-player
+            // limits drop the weakest non-domestic surplus, and the
+            // omitted players receive the SquadRegistrationOmitted
+            // happiness event. Runs once on the season-start tick so
+            // the registration is stable for the rest of the campaign.
+            Self::enforce_squad_registration(data, self.country_id, current_date);
         }
 
         // Phase 2: Process club results (morale, training use post-match state)

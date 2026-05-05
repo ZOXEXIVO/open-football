@@ -7431,6 +7431,7 @@ a:link, a:visited, a:hover, a:active {
     gap: 3px;
     max-width: 176px;
     overflow: hidden;
+    text-decoration: none;
 }
 
 .fm-aw-pitch-name {
@@ -7439,30 +7440,17 @@ a:link, a:visited, a:hover, a:active {
     color: #fff;
     letter-spacing: 0.2px;
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.6);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    text-decoration: none;
 }
 
 .fm-aw-pitch-name:hover {
     color: #f1d271;
 }
 
+.fm-aw-pitch-lastname,
 .fm-aw-pitch-firstname {
-    font-size: 13px;
-    font-weight: 700;
-    color: #fff;
-    letter-spacing: 0.2px;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.6);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-decoration: none;
-}
-
-.fm-aw-pitch-firstname:hover {
-    color: #f1d271;
 }
 
 .fm-aw-pitch-club {

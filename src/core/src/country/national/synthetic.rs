@@ -182,6 +182,8 @@ impl NationalTeam {
                 last_injury_body_part: 0,
                 injury_count: 0,
                 days_since_last_match: 0,
+                suspension_matches: 0,
+                yellow_card_running: 0,
             },
             mailbox: PlayerMailbox::new(),
             training: PlayerTraining::new(),

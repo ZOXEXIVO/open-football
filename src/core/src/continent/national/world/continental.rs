@@ -59,7 +59,7 @@ pub fn simulate_world_national_competitions(
     }
 
     let prepared = build_squads(continents, &stamped, date);
-    let engine_results = crate::match_engine_pool().play_squads(prepared);
+    let engine_results = crate::match_engine_pool().play_squads_with_knockout(prepared);
 
     let mut collected: Vec<MatchResult> = Vec::with_capacity(engine_results.len());
     for (stamp_idx, raw) in engine_results {
@@ -118,14 +118,14 @@ fn build_squads(
     continents: &mut [Continent],
     stamped: &[StampedFixture],
     date: NaiveDate,
-) -> Vec<(usize, MatchSquad, MatchSquad)> {
+) -> Vec<(usize, MatchSquad, MatchSquad, bool)> {
     stamped
         .iter()
         .enumerate()
         .filter_map(|(stamp_idx, stamp)| {
             let home = build_world_match_squad(continents, stamp.fixture.home_country_id, date)?;
             let away = build_world_match_squad(continents, stamp.fixture.away_country_id, date)?;
-            Some((stamp_idx, home, away))
+            Some((stamp_idx, home, away, stamp.fixture.phase.is_knockout()))
         })
         .collect()
 }
@@ -166,14 +166,32 @@ fn apply_match_outcome(
         away_country_id
     );
 
+    // Knockout draws read the winner straight from the engine-played
+    // shootout. Reputation comparison was wrong: the lower-rep side
+    // can win on penalties, and the engine actually models the kicks.
     let penalty_winner = if fixture.phase.is_knockout() && home_score == away_score {
-        let home_rep = world_country_reputation(continents, home_country_id);
-        let away_rep = world_country_reputation(continents, away_country_id);
-        Some(if home_rep >= away_rep {
-            home_country_id
+        if score.had_shootout() {
+            Some(if score.home_shootout > score.away_shootout {
+                home_country_id
+            } else if score.away_shootout > score.home_shootout {
+                away_country_id
+            } else {
+                // Shootout tied — defensive fallback.
+                home_country_id
+            })
         } else {
-            away_country_id
-        })
+            // No shootout was run (engine didn't recognise this as a
+            // knockout, or fixture data was inconsistent). Last-resort
+            // reputation-weighted resolution to keep the tournament
+            // moving.
+            let home_rep = world_country_reputation(continents, home_country_id);
+            let away_rep = world_country_reputation(continents, away_country_id);
+            Some(if home_rep >= away_rep {
+                home_country_id
+            } else {
+                away_country_id
+            })
+        }
     } else {
         None
     };

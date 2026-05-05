@@ -1,6 +1,7 @@
 use super::LeagueResult;
 use crate::club::StaffPosition;
 use crate::club::player::contract::ContractBonusType;
+use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
 use crate::club::player::events::{MatchOutcome, MatchParticipation};
 use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
@@ -126,6 +127,14 @@ impl LeagueResult {
         Self::apply_full_time_team_talks(result, details, data);
         Self::apply_post_match_physical_effects(details, data, is_friendly);
         Self::apply_post_match_reputation(result, data, is_friendly, is_cup);
+
+        // Disciplinary fallout — apply yellow / red card stats to each
+        // player who featured, and serve a match for any banned player
+        // on either side who didn't appear (their team played without
+        // them, so the suspension counter ticks down).
+        if !is_friendly {
+            Self::apply_post_match_discipline(result, details, data);
+        }
 
         if let Some(details_mut) = &mut result.details {
             details_mut.player_of_the_match_id = best_player_id;
@@ -988,6 +997,97 @@ impl LeagueResult {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Apply card / suspension consequences from a finished competitive
+    /// match. Walks every featuring player and updates their per-player
+    /// suspension counter; then serves one match against any player on
+    /// either team who carried a ban into this fixture and did not
+    /// appear (i.e. they sat out — the ban ticks down). Friendlies are
+    /// excluded by the caller — friendly cards don't ban a player from
+    /// the next competitive match in this model.
+    fn apply_post_match_discipline(
+        result: &MatchResult,
+        details: &MatchResultRaw,
+        data: &mut SimulatorData,
+    ) {
+        // Pull the league's accumulation threshold up-front so we don't
+        // hold a borrow on `data` while mutating players. Continental
+        // and friendly leagues fall back to the standard FIFA rule.
+        let yellow_threshold = data
+            .league(result.league_id)
+            .map(|l| l.regulations.yellow_card_ban_threshold)
+            .unwrap_or(YELLOW_CARD_BAN_THRESHOLD);
+
+        // 1) Process cards for every player who has stats this match.
+        let card_entries: Vec<(u32, u8, u8)> = details
+            .player_stats
+            .iter()
+            .filter(|(_, s)| s.yellow_cards > 0 || s.red_cards > 0)
+            .map(|(pid, s)| (*pid, s.yellow_cards as u8, s.red_cards as u8))
+            .collect();
+
+        let mut new_suspensions: Vec<u32> = Vec::new();
+        for (pid, yellows, reds) in card_entries {
+            if let Some(player) = data.player_mut(pid) {
+                let added = player.on_match_disciplinary_result(yellows, reds, yellow_threshold);
+                if added > 0 {
+                    new_suspensions.push(pid);
+                }
+            }
+        }
+
+        // 2) Decrement existing bans for absent players. "Absent" means
+        // the player is on either team but does NOT appear in the
+        // FieldSquad of their side this match. The card pass above
+        // sets `is_banned = true` *for this match* if a red happened —
+        // those players are not absent (they were on the field), so we
+        // exclude them via `new_suspensions` to avoid immediately
+        // serving the suspension they just earned.
+        let teams = [
+            (
+                details.left_team_players.team_id,
+                &details.left_team_players,
+            ),
+            (
+                details.right_team_players.team_id,
+                &details.right_team_players,
+            ),
+        ];
+
+        // Collect banned-player ids per team without holding a borrow
+        // across the mutation pass.
+        let mut absent_banned: Vec<u32> = Vec::new();
+        for (team_id, side) in teams {
+            let Some(team) = data.team(team_id) else {
+                continue;
+            };
+            for player in &team.players.players {
+                if !player.player_attributes.is_banned {
+                    continue;
+                }
+                if new_suspensions.contains(&player.id) {
+                    continue;
+                }
+                if side.main.contains(&player.id)
+                    || side.substitutes.contains(&player.id)
+                    || side.substitutes_used.contains(&player.id)
+                {
+                    continue;
+                }
+                absent_banned.push(player.id);
+            }
+        }
+
+        for pid in absent_banned {
+            if let Some(player) = data.player_mut(pid) {
+                player.serve_suspension_match();
+            }
+            // Mirror on the league-side analytics record.
+            if let Some(league) = data.league_mut(result.league_id) {
+                let _ = league.regulations.record_suspension_served(pid);
             }
         }
     }

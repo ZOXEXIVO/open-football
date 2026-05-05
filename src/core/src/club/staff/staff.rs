@@ -357,22 +357,33 @@ impl StaffCollection {
             .unwrap_or(0)
     }
 
+    /// Find the most relevant contracted staff member for `position`.
+    /// "Relevant" is computed by `Staff::relevance_score_for` — a
+    /// per-position blend of coaching / knowledge / medical attributes
+    /// (e.g. Manager rewards tactical_knowledge + man_management;
+    /// GoalkeeperCoach rewards goalkeeping skills; Physio rewards
+    /// physiotherapy + sports_science). Falls back to the stub only
+    /// when no contracted staff hold the role.
     fn get_by_position(&self, position: StaffPosition) -> &Staff {
-        let staffs: Vec<&Staff> = self
-            .staffs
-            .iter()
-            .filter(|staff| {
-                staff.contract.is_some() && staff.contract.as_ref().unwrap().position == position
-            })
-            .collect();
-
-        if staffs.is_empty() {
-            return &self.stub;
+        let mut best: Option<(&Staff, u32)> = None;
+        for staff in &self.staffs {
+            let Some(contract) = staff.contract.as_ref() else {
+                continue;
+            };
+            if contract.position != position {
+                continue;
+            }
+            let score = staff.relevance_score_for(&position);
+            best = match best {
+                None => Some((staff, score)),
+                Some((_, prev)) if score > prev => Some((staff, score)),
+                Some(prev) => Some(prev),
+            };
         }
-
-        //TODO most relevant
-
-        staffs.first().unwrap()
+        match best {
+            Some((staff, _)) => staff,
+            None => &self.stub,
+        }
     }
 
     fn get_by_id(&self, id: u32) -> &Staff {
@@ -429,6 +440,129 @@ impl Staff {
             training_schedule: Vec::new(),
             recent_events: Vec::new(),
             specialization_days: [0; 4],
+        }
+    }
+
+    /// Score this staff member's fit for a specific role. The blend
+    /// per role is hand-tuned from the FM-style heuristic: each
+    /// "important" attribute counts at full weight (10), with one or
+    /// two "secondary" attributes at half weight (5). The result is a
+    /// dimensionless u32 used by `StaffCollection::get_by_position` to
+    /// pick the most relevant candidate among all who hold the role.
+    /// Score scales with attribute values (0..20) so a 20-rated coach
+    /// always outranks a 10-rated coach in the same seat.
+    pub fn relevance_score_for(&self, position: &StaffPosition) -> u32 {
+        let coaching = &self.staff_attributes.coaching;
+        let knowledge = &self.staff_attributes.knowledge;
+        let mental = &self.staff_attributes.mental;
+        let medical = &self.staff_attributes.medical;
+        let goalkeeping = &self.staff_attributes.goalkeeping;
+        let data = &self.staff_attributes.data_analysis;
+
+        // Helper: weighted attribute sum.
+        let s = |w: u32, a: u8| w * a as u32;
+
+        match position {
+            StaffPosition::Manager
+            | StaffPosition::CaretakerManager
+            | StaffPosition::AssistantManager => {
+                // Tactical brain + man management + ability to read the room.
+                s(10, knowledge.tactical_knowledge)
+                    + s(10, mental.man_management)
+                    + s(8, mental.motivating)
+                    + s(7, mental.discipline)
+                    + s(5, knowledge.judging_player_ability)
+                    + s(4, mental.adaptability)
+                    + s(3, mental.determination)
+            }
+            StaffPosition::Coach | StaffPosition::FirstTeamCoach => {
+                // Generalist outfield coach — technical / tactical / mental
+                // weighted equally, with fitness as a secondary contributor.
+                s(8, coaching.technical)
+                    + s(8, coaching.tactical)
+                    + s(8, coaching.mental)
+                    + s(5, coaching.attacking)
+                    + s(5, coaching.defending)
+                    + s(4, coaching.fitness)
+            }
+            StaffPosition::FitnessCoach => {
+                // Fitness specialism + sports science cross-talk.
+                s(10, coaching.fitness)
+                    + s(6, medical.sports_science)
+                    + s(4, coaching.mental)
+            }
+            StaffPosition::GoalkeeperCoach => {
+                // GK technical specialism dominates; coaching.technical is
+                // the outfield analogue and only counts a little.
+                s(8, goalkeeping.shot_stopping)
+                    + s(8, goalkeeping.handling)
+                    + s(6, goalkeeping.distribution)
+                    + s(3, coaching.technical)
+            }
+            StaffPosition::YouthCoach => {
+                // Working with youngsters is the killer attribute here.
+                s(10, coaching.working_with_youngsters)
+                    + s(6, coaching.technical)
+                    + s(6, coaching.tactical)
+                    + s(4, coaching.mental)
+            }
+            StaffPosition::U21Manager | StaffPosition::U19Manager => {
+                s(10, coaching.working_with_youngsters)
+                    + s(8, knowledge.tactical_knowledge)
+                    + s(6, mental.man_management)
+                    + s(4, mental.motivating)
+            }
+            StaffPosition::HeadOfYouthDevelopment => {
+                s(10, coaching.working_with_youngsters)
+                    + s(7, knowledge.judging_player_potential)
+                    + s(5, mental.man_management)
+            }
+            StaffPosition::Physio => {
+                s(10, medical.physiotherapy) + s(6, medical.sports_science)
+            }
+            StaffPosition::HeadOfPhysio => {
+                s(10, medical.physiotherapy)
+                    + s(8, medical.sports_science)
+                    + s(4, mental.man_management)
+            }
+            StaffPosition::Scout => {
+                s(8, knowledge.judging_player_ability)
+                    + s(8, knowledge.judging_player_potential)
+                    + s(5, mental.adaptability)
+                    + s(4, knowledge.tactical_knowledge)
+            }
+            StaffPosition::ChiefScout | StaffPosition::HeadOfRecruitment => {
+                s(10, knowledge.judging_player_ability)
+                    + s(10, knowledge.judging_player_potential)
+                    + s(6, mental.adaptability)
+                    + s(5, mental.man_management)
+                    + s(4, knowledge.tactical_knowledge)
+            }
+            StaffPosition::DataAnalyst => {
+                s(10, data.judging_player_data)
+                    + s(8, data.judging_team_data)
+                    + s(6, data.presenting_data)
+            }
+            StaffPosition::DirectorOfFootball => {
+                // Strategic role — knowledge of squad construction, plus
+                // soft skills to manage the manager.
+                s(8, knowledge.judging_player_ability)
+                    + s(8, knowledge.judging_player_potential)
+                    + s(6, mental.man_management)
+                    + s(4, knowledge.tactical_knowledge)
+            }
+            // Executive / non-coaching roles — very few discriminating
+            // attributes; fall back to determination + adaptability so a
+            // candidate with usable mental traits still ranks above an
+            // empty profile.
+            StaffPosition::Chairman
+            | StaffPosition::Director
+            | StaffPosition::ManagingDirector
+            | StaffPosition::GeneralManager
+            | StaffPosition::MediaPundit
+            | StaffPosition::Free => {
+                s(5, mental.determination) + s(4, mental.adaptability)
+            }
         }
     }
 
@@ -1221,5 +1355,115 @@ pub struct StaffTrainingSession {
 impl StaffClubContract {
     pub fn days_to_expiration(&self, now: NaiveDateTime) -> i64 {
         (self.expired - now.date()).num_days()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StaffStatus;
+
+    fn make_contracted_staff(id: u32, position: StaffPosition) -> Staff {
+        let mut staff = StaffStub::default();
+        staff.id = id;
+        staff.contract = Some(StaffClubContract::new(
+            50_000,
+            chrono::NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+            position,
+            StaffStatus::Active,
+        ));
+        staff
+    }
+
+    #[test]
+    fn manager_selection_picks_highest_tactical_man_management() {
+        let mut weak = make_contracted_staff(1, StaffPosition::Manager);
+        let mut strong = make_contracted_staff(2, StaffPosition::Manager);
+        weak.staff_attributes.knowledge.tactical_knowledge = 5;
+        weak.staff_attributes.mental.man_management = 5;
+        strong.staff_attributes.knowledge.tactical_knowledge = 18;
+        strong.staff_attributes.mental.man_management = 17;
+        // Insert "weak" first so the old "first match" logic would pick it.
+        let collection = StaffCollection::new(vec![weak, strong]);
+        // get_by_position is the routing-by-relevance entry point; the
+        // separate `manager()` helper uses `find_by_any_position` which
+        // is intentionally first-match for the seat-filling check.
+        let chosen = collection.get_by_position(StaffPosition::Manager);
+        assert_eq!(chosen.id, 2);
+    }
+
+    #[test]
+    fn goalkeeper_coach_selection_prefers_gk_specialism_over_outfield_skills() {
+        // Both are GoalkeeperCoaches. One is a strong outfield coach but
+        // mediocre GK specialist; the other is a weak outfield coach but
+        // strong GK specialist. Selection must follow the GK signal.
+        let mut outfield_strong = make_contracted_staff(1, StaffPosition::GoalkeeperCoach);
+        outfield_strong.staff_attributes.coaching.technical = 18;
+        outfield_strong.staff_attributes.goalkeeping.shot_stopping = 5;
+        outfield_strong.staff_attributes.goalkeeping.handling = 5;
+        outfield_strong.staff_attributes.goalkeeping.distribution = 5;
+
+        let mut gk_specialist = make_contracted_staff(2, StaffPosition::GoalkeeperCoach);
+        gk_specialist.staff_attributes.coaching.technical = 5;
+        gk_specialist.staff_attributes.goalkeeping.shot_stopping = 18;
+        gk_specialist.staff_attributes.goalkeeping.handling = 17;
+        gk_specialist.staff_attributes.goalkeeping.distribution = 16;
+
+        let collection = StaffCollection::new(vec![outfield_strong, gk_specialist]);
+        let chosen = collection.get_by_position(StaffPosition::GoalkeeperCoach);
+        assert_eq!(chosen.id, 2);
+    }
+
+    #[test]
+    fn physio_selection_prefers_physiotherapy_and_sports_science() {
+        let mut weak = make_contracted_staff(1, StaffPosition::Physio);
+        weak.staff_attributes.medical.physiotherapy = 5;
+        weak.staff_attributes.medical.sports_science = 5;
+        let mut strong = make_contracted_staff(2, StaffPosition::Physio);
+        strong.staff_attributes.medical.physiotherapy = 18;
+        strong.staff_attributes.medical.sports_science = 16;
+        let collection = StaffCollection::new(vec![weak, strong]);
+        let chosen = collection.get_by_position(StaffPosition::Physio);
+        assert_eq!(chosen.id, 2);
+    }
+
+    #[test]
+    fn scout_selection_prefers_judging_attributes() {
+        let mut generalist = make_contracted_staff(1, StaffPosition::Scout);
+        generalist.staff_attributes.knowledge.judging_player_ability = 6;
+        generalist.staff_attributes.knowledge.judging_player_potential = 6;
+        generalist.staff_attributes.mental.adaptability = 18;
+        let mut specialist = make_contracted_staff(2, StaffPosition::Scout);
+        specialist.staff_attributes.knowledge.judging_player_ability = 17;
+        specialist.staff_attributes.knowledge.judging_player_potential = 18;
+        specialist.staff_attributes.mental.adaptability = 8;
+        let collection = StaffCollection::new(vec![generalist, specialist]);
+        let chosen = collection.get_by_position(StaffPosition::Scout);
+        assert_eq!(chosen.id, 2);
+    }
+
+    #[test]
+    fn youth_coach_selection_prefers_working_with_youngsters() {
+        let mut technical = make_contracted_staff(1, StaffPosition::YouthCoach);
+        technical.staff_attributes.coaching.working_with_youngsters = 5;
+        technical.staff_attributes.coaching.technical = 18;
+        technical.staff_attributes.coaching.tactical = 18;
+        let mut youth_focus = make_contracted_staff(2, StaffPosition::YouthCoach);
+        youth_focus.staff_attributes.coaching.working_with_youngsters = 18;
+        youth_focus.staff_attributes.coaching.technical = 8;
+        youth_focus.staff_attributes.coaching.tactical = 8;
+        let collection = StaffCollection::new(vec![technical, youth_focus]);
+        let chosen = collection.get_by_position(StaffPosition::YouthCoach);
+        assert_eq!(chosen.id, 2);
+    }
+
+    #[test]
+    fn empty_position_falls_back_to_stub() {
+        // Collection has no managers — a Manager lookup should return
+        // the stub (id 0), not panic.
+        let coach = make_contracted_staff(1, StaffPosition::Coach);
+        let collection = StaffCollection::new(vec![coach]);
+        let chosen = collection.get_by_position(StaffPosition::Manager);
+        assert_eq!(chosen.id, 0);
     }
 }
