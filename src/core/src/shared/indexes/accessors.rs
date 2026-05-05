@@ -766,18 +766,14 @@ impl SimulatorData {
                     // Accepted ones have already produced a completed
                     // transfer (and would otherwise keep the buying club
                     // showing as "Negotiating" forever after the move).
-                    let in_negotiation = country
-                        .transfer_market
-                        .negotiations
-                        .values()
-                        .any(|n| {
-                            n.player_id == player_id
-                                && n.buying_club_id == club.id
-                                && matches!(
-                                    n.status,
-                                    NegotiationStatus::Pending | NegotiationStatus::Countered
-                                )
-                        });
+                    let in_negotiation = country.transfer_market.negotiations.values().any(|n| {
+                        n.player_id == player_id
+                            && n.buying_club_id == club.id
+                            && matches!(
+                                n.status,
+                                NegotiationStatus::Pending | NegotiationStatus::Countered
+                            )
+                    });
                     let recommended_by_staff: Vec<u32> = plan
                         .staff_recommendations
                         .iter()

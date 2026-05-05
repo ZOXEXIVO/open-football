@@ -15,6 +15,19 @@ impl Player {
         self.last_transfer_date = Some(date);
     }
 
+    /// Player reassigned across teams of the same club (Main ↔ B / Second /
+    /// Reserve / youth). Closes the previous spell and opens a new one on
+    /// the destination so future match stats accumulate against the team
+    /// the player actually plays for. No fee, no `last_transfer_date`
+    /// touch — this isn't a market move.
+    pub fn on_intra_club_move(&mut self, from: &TeamInfo, to: &TeamInfo, date: NaiveDate) {
+        let stats = std::mem::take(&mut self.statistics);
+        self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
+        self.statistics_history
+            .record_intra_club_move(stats, from, to, date);
+    }
+
     /// Record a loan move (called by loan execution).
     /// Resets stats, saves history for parent + loan club, sets transfer date.
     pub fn on_loan(&mut self, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {

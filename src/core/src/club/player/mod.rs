@@ -1,40 +1,29 @@
-pub mod adaptation;
-pub mod agent;
-pub mod attributes;
-pub mod behaviour_config;
-pub mod builder;
+pub mod ability;
 pub mod calculators;
-pub mod collection;
 pub mod condition;
-pub mod context;
 pub mod contract;
-pub mod decisions;
+pub mod core;
 pub mod development;
-mod display;
 pub mod events;
 pub mod generators;
 pub mod happiness;
 pub mod injury;
-pub mod interaction;
-pub mod language;
-pub mod load;
 pub mod mailbox;
-pub mod plan;
-pub mod player;
-pub mod position;
-pub mod position_weights;
-pub mod rapport;
-pub mod registry;
-pub mod result;
-pub mod skills;
+pub mod personality;
+pub mod squad;
 pub mod statistics;
-pub mod status;
 pub mod training;
-pub mod traits;
 pub mod transfer;
-pub mod utils;
 
-pub use agent::*;
+// Preserve `crate::club::player::{module}` paths for files that moved into
+// the new grouping folders.
+pub use ability::{attributes, position, position_weights, registry, skills, traits};
+pub use condition::load;
+pub use contract::agent;
+pub use core::{builder, collection, context, player, result, utils};
+pub use personality::{adaptation, behaviour_config, decisions, interaction, language, rapport};
+pub use squad::{plan, status};
+
 pub use attributes::*;
 pub use builder::*;
 pub use calculators::*;

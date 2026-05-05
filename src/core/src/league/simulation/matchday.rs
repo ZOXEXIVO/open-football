@@ -1,14 +1,12 @@
 use crate::context::GlobalContext;
-use crate::league::{LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable};
+use crate::league::{League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable};
 use crate::r#match::{Match, MatchResult, SelectionContext};
 use crate::{Club, Person, Player, PlayerStatusType, Team, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
-use super::League;
-
 impl League {
-    pub(super) fn prepare_matchday(&mut self, ctx: &GlobalContext<'_>, clubs: &[Club]) {
+    pub(in crate::league) fn prepare_matchday(&mut self, ctx: &GlobalContext<'_>, clubs: &[Club]) {
         debug!("Preparing matchday for {}", self.name);
 
         let current_date = ctx.simulation.date.date();
@@ -41,7 +39,7 @@ impl League {
         }
     }
 
-    pub(super) fn play_scheduled_matches(
+    pub(in crate::league) fn play_scheduled_matches(
         &mut self,
         scheduled_matches: &mut [LeagueMatch],
         clubs: &[Club],
@@ -509,7 +507,7 @@ impl League {
         true
     }
 
-    pub(super) fn calculate_match_pressures_static(
+    pub(in crate::league) fn calculate_match_pressures_static(
         home_team: &Team,
         away_team: &Team,
         current_date: NaiveDate,

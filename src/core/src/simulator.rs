@@ -1,3 +1,4 @@
+use crate::PlayerFieldPositionGroup;
 use crate::ai::{Ai, AiBatchProcessor};
 use crate::club::ai::apply_ai_responses;
 use crate::club::board::manager_market;
@@ -12,7 +13,6 @@ use crate::league::awards::{
     MonthlyPlayerAward, MonthlyStatLeader, SeasonAwardsSnapshot, TeamOfTheWeekAward,
     TeamOfTheWeekSelector, TeamOfTheWeekSlot,
 };
-use crate::PlayerFieldPositionGroup;
 use crate::league::player_of_week::{PlayerOfTheWeekAward, PlayerOfTheWeekSelector};
 use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
@@ -785,8 +785,7 @@ impl WeeklyAwardsTick {
                         player.full_name.display_last_name()
                     );
                     let player_slug = player.slug();
-                    let (club_id, club_name, club_slug) =
-                        Self::resolve_club_card(data, winner_id);
+                    let (club_id, club_name, club_slug) = Self::resolve_club_card(data, winner_id);
                     let average_rating = if agg.matches_played > 0 {
                         agg.rating_sum / agg.matches_played as f32
                     } else {
@@ -897,8 +896,9 @@ impl TeamOfTheWeekTick {
                     if league.awards.has_team_of_week_for(week_end) {
                         continue;
                     }
-                    let scores =
-                        AwardAggregator::aggregate(league.matches.iter_in_range(week_start, week_end));
+                    let scores = AwardAggregator::aggregate(
+                        league.matches.iter_in_range(week_start, week_end),
+                    );
                     let team = TeamOfTheWeekSelector::pick(&scores);
                     if team.is_empty() {
                         continue;
@@ -915,7 +915,8 @@ impl TeamOfTheWeekTick {
                             player.full_name.display_last_name()
                         );
                         let player_slug = player.slug();
-                        let (club_id, club_name, club_slug) = WeeklyAwardsTick::resolve_club_card(data, pid);
+                        let (club_id, club_name, club_slug) =
+                            WeeklyAwardsTick::resolve_club_card(data, pid);
                         slots.push(TeamOfTheWeekSlot {
                             player_id: pid,
                             player_name,
@@ -1001,7 +1002,9 @@ impl MonthlyAwardsTick {
 
     /// First-of-month → start = first of previous month, end = first of
     /// this month (exclusive in `iter_in_range`).
-    fn previous_month_window(today: chrono::NaiveDate) -> Option<(chrono::NaiveDate, chrono::NaiveDate)> {
+    fn previous_month_window(
+        today: chrono::NaiveDate,
+    ) -> Option<(chrono::NaiveDate, chrono::NaiveDate)> {
         let first_this_month = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)?;
         let prev_month = if today.month() == 1 {
             chrono::NaiveDate::from_ymd_opt(today.year() - 1, 12, 1)?
@@ -1106,11 +1109,12 @@ impl MonthlyAwardsTick {
         today: chrono::NaiveDate,
         month_end: chrono::NaiveDate,
     ) -> Option<MonthlyPlayerAward> {
-        let (id, agg, score) = MonthlyAwardSelector::pick_best(scores, league_reputation, 2, |id| {
-            data.player(id)
-                .map(|p| DateUtils::age(p.birth_date, today) <= 21)
-                .unwrap_or(false)
-        })?;
+        let (id, agg, score) =
+            MonthlyAwardSelector::pick_best(scores, league_reputation, 2, |id| {
+                data.player(id)
+                    .map(|p| DateUtils::age(p.birth_date, today) <= 21)
+                    .unwrap_or(false)
+            })?;
         Self::monthly_award(data, id, agg, score, month_end)
     }
 
@@ -1297,10 +1301,9 @@ impl MonthlyAwardsTick {
         for entry in pending {
             if let Some(award) = &entry.pom {
                 if let Some(player) = data.player_mut(award.player_id) {
-                    player.happiness.add_event_default_with_cooldown(
-                        HappinessEventType::PlayerOfTheMonth,
-                        28,
-                    );
+                    player
+                        .happiness
+                        .add_event_default_with_cooldown(HappinessEventType::PlayerOfTheMonth, 28);
                 }
             }
             if let Some(award) = &entry.young {
@@ -1336,23 +1339,14 @@ impl SeasonAwardsTick {
             .iter_mut()
             .flat_map(|c| c.countries.iter_mut())
             .flat_map(|c| c.leagues.leagues.iter_mut())
-            .filter_map(|l| {
-                l.awards
-                    .pending_season_awards
-                    .take()
-                    .map(|s| (l.id, s))
-            })
+            .filter_map(|l| l.awards.pending_season_awards.take().map(|s| (l.id, s)))
             .collect();
 
         for (league_id, snapshot) in pending {
-            if let Some(player) = snapshot
-                .player_of_season
-                .and_then(|id| data.player_mut(id))
-            {
-                player.happiness.add_event_default_with_cooldown(
-                    HappinessEventType::PlayerOfTheSeason,
-                    330,
-                );
+            if let Some(player) = snapshot.player_of_season.and_then(|id| data.player_mut(id)) {
+                player
+                    .happiness
+                    .add_event_default_with_cooldown(HappinessEventType::PlayerOfTheSeason, 330);
             }
             if let Some(player) = snapshot
                 .young_player_of_season
@@ -1372,22 +1366,19 @@ impl SeasonAwardsTick {
                 }
             }
             if let Some(player) = snapshot.top_scorer.and_then(|id| data.player_mut(id)) {
-                player.happiness.add_event_default_with_cooldown(
-                    HappinessEventType::LeagueTopScorer,
-                    330,
-                );
+                player
+                    .happiness
+                    .add_event_default_with_cooldown(HappinessEventType::LeagueTopScorer, 330);
             }
             if let Some(player) = snapshot.top_assists.and_then(|id| data.player_mut(id)) {
-                player.happiness.add_event_default_with_cooldown(
-                    HappinessEventType::LeagueTopAssists,
-                    330,
-                );
+                player
+                    .happiness
+                    .add_event_default_with_cooldown(HappinessEventType::LeagueTopAssists, 330);
             }
             if let Some(player) = snapshot.golden_glove.and_then(|id| data.player_mut(id)) {
-                player.happiness.add_event_default_with_cooldown(
-                    HappinessEventType::LeagueGoldenGlove,
-                    330,
-                );
+                player
+                    .happiness
+                    .add_event_default_with_cooldown(HappinessEventType::LeagueGoldenGlove, 330);
             }
             // Archive the snapshot once events have been applied.
             let mut snapshot = snapshot;
@@ -1415,9 +1406,7 @@ impl WorldPlayerOfYearTick {
         let mut combined: Vec<(u32, f32)> = data
             .continents
             .iter()
-            .flat_map(|c| {
-                crate::continent::ContinentResult::rank_continent(c, today)
-            })
+            .flat_map(|c| crate::continent::ContinentResult::rank_continent(c, today))
             .collect();
         combined.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
@@ -1438,10 +1427,9 @@ impl WorldPlayerOfYearTick {
         }
         if let Some(id) = winner {
             if let Some(player) = data.player_mut(id) {
-                player.happiness.add_event_default_with_cooldown(
-                    HappinessEventType::WorldPlayerOfYear,
-                    330,
-                );
+                player
+                    .happiness
+                    .add_event_default_with_cooldown(HappinessEventType::WorldPlayerOfYear, 330);
                 let cur = player.player_attributes.current_reputation;
                 let home = player.player_attributes.home_reputation;
                 let world = player.player_attributes.world_reputation;

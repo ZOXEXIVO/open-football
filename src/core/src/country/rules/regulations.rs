@@ -38,11 +38,7 @@ impl CountryRegulations {
     /// `club_country_id` is the home country of the club; players
     /// matching this are treated as domestic. Returns the player ids
     /// that are NOT registered.
-    pub fn omitted_for_foreign_limit(
-        &self,
-        players: &[&Player],
-        club_country_id: u32,
-    ) -> Vec<u32> {
+    pub fn omitted_for_foreign_limit(&self, players: &[&Player], club_country_id: u32) -> Vec<u32> {
         let limit = match self.foreign_player_limit {
             Some(n) => n as usize,
             None => return Vec::new(),
@@ -93,9 +89,7 @@ mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
-    use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills,
-    };
+    use crate::{PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills};
     use chrono::NaiveDate;
 
     fn make_player(id: u32, country_id: u32, ability: u8) -> Player {

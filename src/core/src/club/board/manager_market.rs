@@ -143,11 +143,7 @@ impl ManagerSeat {
     /// paid like one who steps up after a sacking. Returns `true` if a
     /// caretaker was installed; `false` when no coaching staff are on
     /// the books (small clubs, dev fixtures).
-    pub fn promote_best_caretaker(
-        team: &mut Team,
-        prior_salary: u32,
-        today: NaiveDate,
-    ) -> bool {
+    pub fn promote_best_caretaker(team: &mut Team, prior_salary: u32, today: NaiveDate) -> bool {
         let caretaker_id = team.staffs.best_coach_id(|s| {
             s.staff_attributes.coaching.tactical as u32
                 + s.staff_attributes.mental.man_management as u32
@@ -181,12 +177,7 @@ impl ManagerSeat {
     /// term, salary as agreed. Status is `Active`.
     pub fn build_manager_contract(salary: u32, today: NaiveDate) -> StaffClubContract {
         let expires = today.with_year(today.year() + 3).unwrap_or(today);
-        StaffClubContract::new(
-            salary,
-            expires,
-            StaffPosition::Manager,
-            StaffStatus::Active,
-        )
+        StaffClubContract::new(salary, expires, StaffPosition::Manager, StaffStatus::Active)
     }
 }
 
@@ -382,10 +373,7 @@ impl ManagerCandidateScorer {
     /// Whether the source club refuses to even talk. Reads source-club
     /// confidence and form: clubs whose manager is over-delivering
     /// protect their guy harder.
-    pub fn source_refuses_outright(
-        source_confidence: i32,
-        source_overperforming: bool,
-    ) -> bool {
+    pub fn source_refuses_outright(source_confidence: i32, source_overperforming: bool) -> bool {
         // Strong confidence + overperforming = ironclad refusal.
         // Otherwise they'll engage and try to extract compensation.
         source_confidence >= 80 && source_overperforming
@@ -394,10 +382,7 @@ impl ManagerCandidateScorer {
     /// Personal-terms acceptance check. The candidate accepts if
     /// EITHER the offered salary is materially above their current pay
     /// OR the requesting club is materially more prestigious.
-    pub fn candidate_accepts_terms(
-        data: &SimulatorData,
-        approach: &ManagerApproach,
-    ) -> bool {
+    pub fn candidate_accepts_terms(data: &SimulatorData, approach: &ManagerApproach) -> bool {
         let Some(src) = data.club(approach.source_club_id) else {
             return false;
         };
@@ -425,8 +410,7 @@ impl ManagerCandidateScorer {
             .map(|t| t.reputation.world)
             .unwrap_or(0);
 
-        let salary_uplift =
-            (approach.offered_salary as f32) >= (current_salary as f32) * 1.20;
+        let salary_uplift = (approach.offered_salary as f32) >= (current_salary as f32) * 1.20;
         let prestige_uplift = (req_rep as f32) >= (current_rep as f32) * 1.30;
 
         // Ambitious coaches accept smaller prestige gaps; loyal
@@ -465,8 +449,7 @@ impl ManagerShortlist {
             .iter()
             .filter_map(|s| {
                 let fit = ManagerCandidateScorer::score_free_agent(s, club_rep, today)?;
-                let target_salary =
-                    ManagerCandidateScorer::target_salary(s, club_rep, today);
+                let target_salary = ManagerCandidateScorer::target_salary(s, club_rep, today);
                 Some(ManagerCandidate {
                     staff_id: s.id,
                     fit_score: fit,
@@ -527,23 +510,17 @@ impl ManagerShortlist {
                     }
                     let _ = targets; // future: finer filtering
 
-                    let Some(manager) =
-                        main_team.staffs.find_by_position(StaffPosition::Manager)
+                    let Some(manager) = main_team.staffs.find_by_position(StaffPosition::Manager)
                     else {
                         continue;
                     };
-                    let Some(score) = ManagerCandidateScorer::score_employed(
-                        manager,
-                        requesting_rep,
-                        today,
-                    ) else {
+                    let Some(score) =
+                        ManagerCandidateScorer::score_employed(manager, requesting_rep, today)
+                    else {
                         continue;
                     };
-                    let target_salary = ManagerCandidateScorer::target_salary(
-                        manager,
-                        requesting_rep,
-                        today,
-                    );
+                    let target_salary =
+                        ManagerCandidateScorer::target_salary(manager, requesting_rep, today);
                     out.push(ManagerCandidate {
                         staff_id: manager.id,
                         fit_score: score,
@@ -685,8 +662,7 @@ impl ManagerMarketTick {
         // write back. Reads from the pool AND from every other club's
         // main team (for employed-target enumeration in slice C) — so
         // this is a read-only sweep over `data` before the write phase.
-        let mut updates: Vec<(u32, Vec<ManagerCandidate>)> =
-            Vec::with_capacity(to_refresh.len());
+        let mut updates: Vec<(u32, Vec<ManagerCandidate>)> = Vec::with_capacity(to_refresh.len());
         for (club_id, club_rep) in to_refresh {
             let shortlist = ManagerShortlist::combined(data, club_id, club_rep, today);
             updates.push((club_id, shortlist));
@@ -911,9 +887,7 @@ impl ManagerMarketTick {
                 // The board takes the conservative option when no
                 // realistic free agent stepped up during the search
                 // window.
-                if let Some(staff) =
-                    main_team.staffs.find_mut_by_position(StaffPosition::Coach)
-                {
+                if let Some(staff) = main_team.staffs.find_mut_by_position(StaffPosition::Coach) {
                     let salary = staff.contract.as_ref().map(|c| c.salary).unwrap_or(0);
                     let id = staff.id;
                     staff.contract = Some(ManagerSeat::build_manager_contract(salary, today));
@@ -1023,8 +997,7 @@ impl ManagerApproach {
                     else {
                         return Some(Rejected);
                     };
-                    let Some(mgr) = main.staffs.find_by_position(StaffPosition::Manager)
-                    else {
+                    let Some(mgr) = main.staffs.find_by_position(StaffPosition::Manager) else {
                         return Some(Rejected);
                     };
                     let Some(contract) = mgr.contract.as_ref() else {
@@ -1204,7 +1177,10 @@ impl ManagerApproach {
         // relations so the new manager doesn't carry stale player
         // rapport from the old squad.
         let new_id = staff.id;
-        staff.contract = Some(ManagerSeat::build_manager_contract(self.offered_salary, today));
+        staff.contract = Some(ManagerSeat::build_manager_contract(
+            self.offered_salary,
+            today,
+        ));
         staff.relations = crate::Relations::new();
         staff.fatigue = 0.0;
         staff.job_satisfaction = 75.0; // Fresh job: optimistic.
@@ -1307,8 +1283,7 @@ mod tests {
         let strong = coach(2, 45, today, 16);
 
         let weak_score = ManagerCandidateScorer::score_free_agent(&weak, 5000, today).unwrap();
-        let strong_score =
-            ManagerCandidateScorer::score_free_agent(&strong, 5000, today).unwrap();
+        let strong_score = ManagerCandidateScorer::score_free_agent(&strong, 5000, today).unwrap();
 
         assert!(strong_score > weak_score);
     }
@@ -1545,8 +1520,7 @@ mod tests {
         data.free_agent_staff.push(candidate);
 
         if let Some(club) = data.club_mut(1) {
-            club.board.manager_search_since =
-                Some(NaiveDate::from_ymd_opt(2030, 4, 1).unwrap());
+            club.board.manager_search_since = Some(NaiveDate::from_ymd_opt(2030, 4, 1).unwrap());
             club.board.search_window_days = 30;
             club.board.manager_shortlist = vec![ManagerCandidate {
                 staff_id: 42,
@@ -1558,7 +1532,11 @@ mod tests {
 
         ManagerMarketTick::execute_appointment(&mut data, 1, today);
 
-        assert_eq!(count_managers(&data, 1), 1, "must still have exactly one permanent manager");
+        assert_eq!(
+            count_managers(&data, 1),
+            1,
+            "must still have exactly one permanent manager"
+        );
         assert_eq!(count_head_coaches(&data, 1), 1, "head-coach seat is unique");
         assert!(
             data.free_agent_staff.iter().any(|s| s.id == 42),
@@ -1572,8 +1550,7 @@ mod tests {
     #[test]
     fn execute_appointment_replaces_caretaker_with_permanent_manager() {
         let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
-        let caretaker =
-            coach_with_contract(50, today, StaffPosition::CaretakerManager, 80_000);
+        let caretaker = coach_with_contract(50, today, StaffPosition::CaretakerManager, 80_000);
         let club = make_club_with_main(1, vec![caretaker]);
         let mut data = make_data(today, vec![club]);
 
@@ -1581,8 +1558,7 @@ mod tests {
         data.free_agent_staff.push(candidate);
 
         if let Some(club) = data.club_mut(1) {
-            club.board.manager_search_since =
-                Some(NaiveDate::from_ymd_opt(2030, 4, 1).unwrap());
+            club.board.manager_search_since = Some(NaiveDate::from_ymd_opt(2030, 4, 1).unwrap());
             club.board.search_window_days = 30;
             club.board.manager_shortlist = vec![ManagerCandidate {
                 staff_id: 42,
@@ -1629,7 +1605,11 @@ mod tests {
 
         ManagerMarketTick::tick_approaches(&mut data);
 
-        assert_eq!(count_managers(&data, 2), 1, "source manager must not be removed");
+        assert_eq!(
+            count_managers(&data, 2),
+            1,
+            "source manager must not be removed"
+        );
         let src_club = data.club(2).unwrap();
         let src_main = src_club.teams.main().unwrap();
         assert!(
@@ -1648,14 +1628,12 @@ mod tests {
         let source_mgr = coach_with_contract(200, today, StaffPosition::Manager, 300_000);
         let source_coach = coach_with_contract(201, today, StaffPosition::Coach, 60_000);
         let source = make_club_with_main(2, vec![source_mgr, source_coach]);
-        let caretaker =
-            coach_with_contract(50, today, StaffPosition::CaretakerManager, 80_000);
+        let caretaker = coach_with_contract(50, today, StaffPosition::CaretakerManager, 80_000);
         let requesting = make_club_with_main(1, vec![caretaker]);
         let mut data = make_data(today, vec![requesting, source]);
 
         if let Some(req) = data.club_mut(1) {
-            req.board.manager_search_since =
-                Some(NaiveDate::from_ymd_opt(2030, 5, 1).unwrap());
+            req.board.manager_search_since = Some(NaiveDate::from_ymd_opt(2030, 5, 1).unwrap());
             req.board.search_window_days = 30;
         }
 
@@ -1673,31 +1651,43 @@ mod tests {
         ManagerMarketTick::tick_approaches(&mut data);
 
         assert_eq!(count_managers(&data, 1), 1);
-        assert_eq!(count_caretakers(&data, 1), 0, "old caretaker must be demoted");
+        assert_eq!(
+            count_caretakers(&data, 1),
+            0,
+            "old caretaker must be demoted"
+        );
         assert_eq!(count_head_coaches(&data, 1), 1);
         let req_club = data.club(1).unwrap();
         assert!(req_club.board.manager_search_since.is_none());
-        assert!(req_club
-            .teams
-            .main()
-            .unwrap()
-            .staffs
-            .iter()
-            .any(|s| s.id == 200));
+        assert!(
+            req_club
+                .teams
+                .main()
+                .unwrap()
+                .staffs
+                .iter()
+                .any(|s| s.id == 200)
+        );
 
         let src_club = data.club(2).unwrap();
         assert_eq!(src_club.board.manager_search_since, Some(today));
         assert!(src_club.board.search_window_days > 0);
         assert_eq!(count_managers(&data, 2), 0);
-        assert_eq!(count_caretakers(&data, 2), 1, "source must get an interim caretaker");
+        assert_eq!(
+            count_caretakers(&data, 2),
+            1,
+            "source must get an interim caretaker"
+        );
         assert_eq!(count_head_coaches(&data, 2), 1);
-        assert!(src_club
-            .teams
-            .main()
-            .unwrap()
-            .staffs
-            .iter()
-            .all(|s| s.id != 200));
+        assert!(
+            src_club
+                .teams
+                .main()
+                .unwrap()
+                .staffs
+                .iter()
+                .all(|s| s.id != 200)
+        );
     }
 
     #[test]
@@ -1767,14 +1757,12 @@ mod tests {
         let demoted = coach_with_contract(200, today, StaffPosition::Coach, 60_000);
         let real_mgr = coach_with_contract(201, today, StaffPosition::Manager, 280_000);
         let source = make_club_with_main(2, vec![demoted, real_mgr]);
-        let caretaker =
-            coach_with_contract(50, today, StaffPosition::CaretakerManager, 80_000);
+        let caretaker = coach_with_contract(50, today, StaffPosition::CaretakerManager, 80_000);
         let requesting = make_club_with_main(1, vec![caretaker]);
         let mut data = make_data(today, vec![requesting, source]);
 
         if let Some(req) = data.club_mut(1) {
-            req.board.manager_search_since =
-                Some(NaiveDate::from_ymd_opt(2030, 5, 1).unwrap());
+            req.board.manager_search_since = Some(NaiveDate::from_ymd_opt(2030, 5, 1).unwrap());
             req.board.search_window_days = 30;
         }
 
@@ -1795,13 +1783,19 @@ mod tests {
 
         assert_eq!(count_managers(&data, 2), 1);
         let src_club = data.club(2).unwrap();
-        assert!(src_club.board.manager_search_since.is_none(), "no cascade for a rejected approach");
+        assert!(
+            src_club.board.manager_search_since.is_none(),
+            "no cascade for a rejected approach"
+        );
         let src_main = src_club.teams.main().unwrap();
         assert!(src_main.staffs.iter().any(|s| s.id == 200));
         assert!(src_main.staffs.iter().any(|s| s.id == 201));
         assert_eq!(count_managers(&data, 1), 0);
         assert_eq!(count_caretakers(&data, 1), 1);
-        assert_eq!(data.club(1).unwrap().finance.balance.balance, starting_balance);
+        assert_eq!(
+            data.club(1).unwrap().finance.balance.balance,
+            starting_balance
+        );
         assert!(data.pending_manager_approaches.is_empty());
     }
 }

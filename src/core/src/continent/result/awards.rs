@@ -67,7 +67,10 @@ impl ContinentResult {
     /// continent. Scoring leans on real performance (rating, goals,
     /// assists, motm) with a league-reputation envelope; current
     /// reputation participates only as a tiebreak.
-    pub(crate) fn rank_continent(continent: &Continent, _date: chrono::NaiveDate) -> Vec<(u32, f32)> {
+    pub(crate) fn rank_continent(
+        continent: &Continent,
+        _date: chrono::NaiveDate,
+    ) -> Vec<(u32, f32)> {
         let mut out: Vec<(u32, f32)> = Vec::new();
         for country in &continent.countries {
             for league in &country.leagues.leagues {
@@ -90,8 +93,10 @@ impl ContinentResult {
                             let assists = player.statistics.assists as f32;
                             let avg = player.statistics.average_rating;
                             let motm = player.statistics.player_of_the_match as f32;
-                            let raw =
-                                (avg - 6.0).max(0.0) * 18.0 + goals * 1.6 + assists * 1.2 + motm * 3.0;
+                            let raw = (avg - 6.0).max(0.0) * 18.0
+                                + goals * 1.6
+                                + assists * 1.2
+                                + motm * 3.0;
                             // Cup statistics give a small bonus for
                             // continental cup engagement when available.
                             let cup_goals = player.cup_statistics.goals as f32;
@@ -171,5 +176,4 @@ impl ContinentResult {
             }
         }
     }
-
 }

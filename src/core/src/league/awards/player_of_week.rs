@@ -149,13 +149,8 @@ impl PlayerOfTheWeekSelector {
         is_starter: bool,
         team_goals_against: u8,
     ) {
-        let contribution = Self::score_one_match(
-            stats,
-            is_motm,
-            team_won,
-            is_starter,
-            team_goals_against,
-        );
+        let contribution =
+            Self::score_one_match(stats, is_motm, team_won, is_starter, team_goals_against);
 
         agg.matches_played = agg.matches_played.saturating_add(1);
         agg.goals = agg.goals.saturating_add(stats.goals as u8);
@@ -221,9 +216,7 @@ impl PlayerOfTheWeekSelector {
                     };
                     let is_motm = motm == Some(pid);
                     let agg = out.entry(pid).or_default();
-                    Self::fold_one_appearance(
-                        agg, stats, is_motm, team_won, is_starter, conceded,
-                    );
+                    Self::fold_one_appearance(agg, stats, is_motm, team_won, is_starter, conceded);
                 }
             }
         }
@@ -240,9 +233,7 @@ impl PlayerOfTheWeekSelector {
 
     /// Pick the top scorer. Ties broken by best single-match rating, then
     /// lowest player id (deterministic across ticks).
-    pub fn pick_winner(
-        scores: &HashMap<u32, WeeklyAggregate>,
-    ) -> Option<(u32, WeeklyAggregate)> {
+    pub fn pick_winner(scores: &HashMap<u32, WeeklyAggregate>) -> Option<(u32, WeeklyAggregate)> {
         scores
             .iter()
             .filter(|(_, a)| a.matches_played > 0 && a.score > 0.0)
@@ -393,17 +384,7 @@ mod tests {
         s.goals = 5;
         s.position_group = PlayerFieldPositionGroup::Forward;
 
-        let mut m = build_match(
-            "f1",
-            10,
-            20,
-            5,
-            0,
-            &[1],
-            &[],
-            vec![(1, s)],
-            Some(1),
-        );
+        let mut m = build_match("f1", 10, 20, 5, 0, &[1], &[], vec![(1, s)], Some(1));
         m.friendly = true;
 
         let agg = PlayerOfTheWeekSelector::aggregate([&m]);

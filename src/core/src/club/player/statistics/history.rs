@@ -237,6 +237,23 @@ impl PlayerStatisticsHistory {
         self.push_new_entry(to, PlayerStatistics::default(), false, Some(fee), date);
     }
 
+    /// Player reassigned across teams of the same club (Main ↔ B / Second /
+    /// Reserve / youth). Mirrors `record_transfer` but carries no fee, so
+    /// the destination row doesn't render as "Free" — this isn't a market
+    /// move. The previous spell is closed so future stats accumulate
+    /// against the destination team.
+    pub fn record_intra_club_move(
+        &mut self,
+        old_stats: PlayerStatistics,
+        from: &TeamInfo,
+        to: &TeamInfo,
+        date: NaiveDate,
+    ) {
+        self.upsert_current(from, old_stats, false, None, date);
+        self.mark_departed(&from.slug, false, date);
+        self.push_new_entry(to, PlayerStatistics::default(), false, None, date);
+    }
+
     pub fn record_loan(
         &mut self,
         old_stats: PlayerStatistics,

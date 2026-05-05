@@ -350,7 +350,9 @@ pub struct TeamOfTheWeekSelector;
 impl TeamOfTheWeekSelector {
     /// Compute one player's contribution score from their aggregate.
     pub fn candidate_score(agg: &CandidateAggregate) -> f32 {
-        let pos = agg.primary_position.unwrap_or(PlayerFieldPositionGroup::Midfielder);
+        let pos = agg
+            .primary_position
+            .unwrap_or(PlayerFieldPositionGroup::Midfielder);
         let avg = agg.average_rating();
         let rating_term = (avg - 6.0).max(0.0).min(4.0) * 2.0;
 
@@ -446,16 +448,17 @@ impl TeamOfTheWeekSelector {
             v.sort_by(cmp);
         }
         let mut out: Vec<(u32, PlayerFieldPositionGroup, f32, CandidateAggregate)> = Vec::new();
-        let pick_n = |grp: PlayerFieldPositionGroup,
-                      n: usize,
-                      pool: Option<&Vec<(u32, f32, CandidateAggregate)>>,
-                      out: &mut Vec<(u32, PlayerFieldPositionGroup, f32, CandidateAggregate)>| {
-            if let Some(v) = pool {
-                for (id, score, agg) in v.iter().take(n) {
-                    out.push((*id, grp, *score, *agg));
+        let pick_n =
+            |grp: PlayerFieldPositionGroup,
+             n: usize,
+             pool: Option<&Vec<(u32, f32, CandidateAggregate)>>,
+             out: &mut Vec<(u32, PlayerFieldPositionGroup, f32, CandidateAggregate)>| {
+                if let Some(v) = pool {
+                    for (id, score, agg) in v.iter().take(n) {
+                        out.push((*id, grp, *score, *agg));
+                    }
                 }
-            }
-        };
+            };
         pick_n(
             PlayerFieldPositionGroup::Goalkeeper,
             TOTW_GK,
@@ -586,8 +589,13 @@ impl SeasonAwardSelector {
         };
         let discipline = agg.yellow_cards as f32 * -0.15 + agg.red_cards as f32 * -2.0;
 
-        let raw =
-            avg_rating_score + goal_term + assist_term + motm_term + weekly_term + cs_term + discipline;
+        let raw = avg_rating_score
+            + goal_term
+            + assist_term
+            + motm_term
+            + weekly_term
+            + cs_term
+            + discipline;
 
         let league_rep_mul = 0.70 + (league_reputation as f32 / 10000.0) * 0.6;
         raw * league_rep_mul * team_finish_mul.max(0.0)
@@ -624,7 +632,14 @@ mod tests {
         for i in 1..=3u32 {
             scores.insert(
                 i,
-                make_agg(PlayerFieldPositionGroup::Goalkeeper, 1, 0, 0, 8.0 - i as f32 * 0.1, 1),
+                make_agg(
+                    PlayerFieldPositionGroup::Goalkeeper,
+                    1,
+                    0,
+                    0,
+                    8.0 - i as f32 * 0.1,
+                    1,
+                ),
             );
             // GKs need a clean sheet to show up in score; boost manually:
             let agg = scores.get_mut(&i).unwrap();

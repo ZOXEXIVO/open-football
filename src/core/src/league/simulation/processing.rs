@@ -1,5 +1,6 @@
 use crate::Club;
 use crate::context::GlobalContext;
+use crate::league::League;
 use crate::league::awards::{
     AwardAggregator, MonthlyAwardSelector, SeasonAwardSelector, SeasonAwardsSnapshot,
     TeamOfTheWeekSelector,
@@ -9,10 +10,8 @@ use crate::utils::DateUtils;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
-use super::League;
-
 impl League {
-    pub(super) fn process_match_day_results(
+    pub(in crate::league) fn process_match_day_results(
         &mut self,
         match_results: &[MatchResult],
         clubs: &[Club],
@@ -177,7 +176,11 @@ impl League {
         self.regulations.process_pending_cases(today);
     }
 
-    pub(super) fn process_non_matchday(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {
+    pub(in crate::league) fn process_non_matchday(
+        &mut self,
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+    ) {
         let current_date = ctx.simulation.date.date();
 
         if self.is_season_end(current_date) {
@@ -251,8 +254,7 @@ impl League {
         // Min apps gate: 15 apps OR 40% of league matches per team.
         let team_count = self.table.rows.len() as u32;
         let typical_matches_per_team = team_count.saturating_sub(1) * 2;
-        let pos_min_apps =
-            (typical_matches_per_team as f32 * 0.4).round() as u8;
+        let pos_min_apps = (typical_matches_per_team as f32 * 0.4).round() as u8;
         let min_apps_player = pos_min_apps.max(15);
         let min_apps_young = 10u8;
 
@@ -380,8 +382,7 @@ impl League {
                     }
                     let cs = player.statistics.clean_sheets;
                     if cs > best_cs
-                        || (cs == best_cs
-                            && golden_glove.map(|gg| player.id < gg).unwrap_or(false))
+                        || (cs == best_cs && golden_glove.map(|gg| player.id < gg).unwrap_or(false))
                     {
                         best_cs = cs;
                         golden_glove = Some(player.id);
@@ -410,7 +411,7 @@ impl League {
     }
 
     #[allow(dead_code)]
-    pub(super) fn calculate_matches_remaining(&self, team_id: u32) -> usize {
+    pub(in crate::league) fn calculate_matches_remaining(&self, team_id: u32) -> usize {
         self.schedule
             .tours
             .iter()

@@ -1,6 +1,6 @@
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
-use crate::country::builder::CountryBuilder;
+use crate::country::core::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
@@ -8,7 +8,7 @@ use crate::{Club, ClubResult, Player};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
-use super::{
+use crate::country::{
     CountryEconomicFactors, CountryGeneratorData, CountryRegulations, CountrySettings,
     InternationalCompetition, MediaCoverage,
 };

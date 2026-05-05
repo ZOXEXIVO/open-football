@@ -703,9 +703,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     fn evaluate_situational_shape(field: &mut MatchField, context: &mut MatchContext) {
         use crate::club::team::tactics::tactics::TacticsSelector;
         let minutes = (context.total_match_time / 60_000).min(120) as u8;
-        let home_diff =
-            (context.score.home_team.get() as i16 - context.score.away_team.get() as i16)
-                .clamp(-100, 100) as i8;
+        let home_diff = (context.score.home_team.get() as i16
+            - context.score.away_team.get() as i16)
+            .clamp(-100, 100) as i8;
         let away_diff = -home_diff;
 
         // Hysteresis: skip the probe entirely if the last shape change
@@ -927,12 +927,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         } else {
             0.5
         };
-        let deep_entries_for_last_15 = input
-            .cum_deep_entries
-            .saturating_sub(snap.deep_entries_for) as u16;
+        let deep_entries_for_last_15 =
+            input.cum_deep_entries.saturating_sub(snap.deep_entries_for) as u16;
         let dangerous_turnovers_last_10 = input
             .cum_dangerous_turnovers
-            .saturating_sub(snap.dangerous_turnovers) as u16;
+            .saturating_sub(snap.dangerous_turnovers)
+            as u16;
 
         // Possession + field-tilt run as cumulative tick counters on
         // the coach itself, updated by `refresh_tactical_states`. The
@@ -1078,21 +1078,29 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // re-derive them from scratch.
         use crate::r#match::BallZone;
         if context.tactical_home.in_possession {
-            context.coach_home.cum_possession_ticks =
-                context.coach_home.cum_possession_ticks.saturating_add(tick_interval);
+            context.coach_home.cum_possession_ticks = context
+                .coach_home
+                .cum_possession_ticks
+                .saturating_add(tick_interval);
         }
         if context.tactical_away.in_possession {
-            context.coach_away.cum_possession_ticks =
-                context.coach_away.cum_possession_ticks.saturating_add(tick_interval);
+            context.coach_away.cum_possession_ticks = context
+                .coach_away
+                .cum_possession_ticks
+                .saturating_add(tick_interval);
         }
         // Ball in *our* attacking third counts as field-tilt for us.
         if matches!(context.tactical_home.ball_zone, BallZone::AttackingThird) {
-            context.coach_home.cum_field_tilt_ticks =
-                context.coach_home.cum_field_tilt_ticks.saturating_add(tick_interval);
+            context.coach_home.cum_field_tilt_ticks = context
+                .coach_home
+                .cum_field_tilt_ticks
+                .saturating_add(tick_interval);
         }
         if matches!(context.tactical_away.ball_zone, BallZone::AttackingThird) {
-            context.coach_away.cum_field_tilt_ticks =
-                context.coach_away.cum_field_tilt_ticks.saturating_add(tick_interval);
+            context.coach_away.cum_field_tilt_ticks = context
+                .coach_away
+                .cum_field_tilt_ticks
+                .saturating_add(tick_interval);
         }
     }
 
@@ -1512,16 +1520,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Home kick.
             if let Some(id) = next_home_taker(&mut home_idx) {
                 let scored = take_kick(id, away_keeper);
-                context
-                    .penalty_shootout_kicks
-                    .push(PenaltyShootoutKick {
-                        team_id: home_id,
-                        taker_id: id,
-                        goalkeeper_id: away_keeper,
-                        round: round + 1,
-                        scored,
-                        sudden_death: false,
-                    });
+                context.penalty_shootout_kicks.push(PenaltyShootoutKick {
+                    team_id: home_id,
+                    taker_id: id,
+                    goalkeeper_id: away_keeper,
+                    round: round + 1,
+                    scored,
+                    sudden_death: false,
+                });
                 if scored {
                     home_score += 1;
                 }
@@ -1536,16 +1542,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Away kick.
             if let Some(id) = next_away_taker(&mut away_idx) {
                 let scored = take_kick(id, home_keeper);
-                context
-                    .penalty_shootout_kicks
-                    .push(PenaltyShootoutKick {
-                        team_id: away_id,
-                        taker_id: id,
-                        goalkeeper_id: home_keeper,
-                        round: round + 1,
-                        scored,
-                        sudden_death: false,
-                    });
+                context.penalty_shootout_kicks.push(PenaltyShootoutKick {
+                    team_id: away_id,
+                    taker_id: id,
+                    goalkeeper_id: home_keeper,
+                    round: round + 1,
+                    scored,
+                    sudden_death: false,
+                });
                 if scored {
                     away_score += 1;
                 }
@@ -1572,30 +1576,26 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let away_taker = a.unwrap();
             let round = 5 + sudden_rounds;
             let home_scored = take_kick(home_taker, away_keeper);
-            context
-                .penalty_shootout_kicks
-                .push(PenaltyShootoutKick {
-                    team_id: home_id,
-                    taker_id: home_taker,
-                    goalkeeper_id: away_keeper,
-                    round,
-                    scored: home_scored,
-                    sudden_death: true,
-                });
+            context.penalty_shootout_kicks.push(PenaltyShootoutKick {
+                team_id: home_id,
+                taker_id: home_taker,
+                goalkeeper_id: away_keeper,
+                round,
+                scored: home_scored,
+                sudden_death: true,
+            });
             if home_scored {
                 home_score += 1;
             }
             let away_scored = take_kick(away_taker, home_keeper);
-            context
-                .penalty_shootout_kicks
-                .push(PenaltyShootoutKick {
-                    team_id: away_id,
-                    taker_id: away_taker,
-                    goalkeeper_id: home_keeper,
-                    round,
-                    scored: away_scored,
-                    sudden_death: true,
-                });
+            context.penalty_shootout_kicks.push(PenaltyShootoutKick {
+                team_id: away_id,
+                taker_id: away_taker,
+                goalkeeper_id: home_keeper,
+                round,
+                scored: away_scored,
+                sudden_death: true,
+            });
             if away_scored {
                 away_score += 1;
             }

@@ -86,10 +86,13 @@ impl LeagueResult {
         // sheet.
         let final_home_tactic = result.details.as_ref().and_then(|d| d.final_home_tactic);
         let final_away_tactic = result.details.as_ref().and_then(|d| d.final_away_tactic);
-        let tactic_summary = result
-            .details
-            .as_ref()
-            .map(|d| (d.starting_home_tactic, d.starting_away_tactic, d.shape_change_minute));
+        let tactic_summary = result.details.as_ref().map(|d| {
+            (
+                d.starting_home_tactic,
+                d.starting_away_tactic,
+                d.shape_change_minute,
+            )
+        });
 
         let home_team = data
             .team_mut(home_team_id)

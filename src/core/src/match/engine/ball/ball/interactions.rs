@@ -6,9 +6,9 @@
 use super::Ball;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
+use crate::r#match::engine::goal::GOAL_WIDTH;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
-use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart, PlayerSide};
 use nalgebra::Vector3;

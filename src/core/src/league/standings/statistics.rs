@@ -194,9 +194,9 @@ mod tests {
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
-        ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
-        PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
-        StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes, PlayerCollection,
+        PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection,
+        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::{NaiveDate, NaiveTime};
 
@@ -227,7 +227,12 @@ mod tests {
         p
     }
 
-    fn make_team(id: u32, club_id: u32, league_id: u32, players: Vec<crate::Player>) -> crate::Team {
+    fn make_team(
+        id: u32,
+        club_id: u32,
+        league_id: u32,
+        players: Vec<crate::Player>,
+    ) -> crate::Team {
         TeamBuilder::new()
             .id(id)
             .league_id(Some(league_id))

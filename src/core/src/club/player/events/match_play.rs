@@ -317,10 +317,8 @@ impl Player {
             + self.cup_statistics.played
             + self.cup_statistics.played_subs;
         if total_competitive_apps == 1 {
-            self.happiness.add_event_default_with_cooldown(
-                HappinessEventType::SeniorDebut,
-                3650,
-            );
+            self.happiness
+                .add_event_default_with_cooldown(HappinessEventType::SeniorDebut, 3650);
         }
     }
 
@@ -349,8 +347,10 @@ impl Player {
             }
             self.happiness.apps_since_last_competitive_goal = 0;
         } else {
-            self.happiness.apps_since_last_competitive_goal =
-                self.happiness.apps_since_last_competitive_goal.saturating_add(1);
+            self.happiness.apps_since_last_competitive_goal = self
+                .happiness
+                .apps_since_last_competitive_goal
+                .saturating_add(1);
             // ScoringDroughtConcern is forward-only: midfielder drought
             // is real but doesn't carry the "what's wrong with our striker"
             // narrative.
@@ -411,11 +411,8 @@ impl Player {
             if goals_before < threshold && goals_after >= threshold {
                 let cfg = HappinessConfig::default();
                 let mag = cfg.catalog.goal_milestone * mul;
-                self.happiness.add_event_with_cooldown(
-                    HappinessEventType::GoalMilestone,
-                    mag,
-                    365,
-                );
+                self.happiness
+                    .add_event_with_cooldown(HappinessEventType::GoalMilestone, mag, 365);
             }
         }
 
@@ -425,12 +422,7 @@ impl Player {
         {
             let cs_after = self.statistics.clean_sheets + self.cup_statistics.clean_sheets;
             let cs_before = cs_after.saturating_sub(1);
-            for &(threshold, mul) in &[
-                (25u16, 0.8f32),
-                (50, 1.0),
-                (100, 1.25),
-                (200, 1.6),
-            ] {
+            for &(threshold, mul) in &[(25u16, 0.8f32), (50, 1.0), (100, 1.25), (200, 1.6)] {
                 if cs_before < threshold && cs_after >= threshold {
                     let cfg = HappinessConfig::default();
                     let mag = cfg.catalog.clean_sheet_milestone * mul;
@@ -476,8 +468,8 @@ impl Player {
         let derby_hero_now = o.is_derby
             && o.team_won
             && (o.stats.goals > 0 || o.is_motm || o.effective_rating >= 7.5);
-        let chant_trigger = o.team_won
-            && (o.effective_rating >= 8.2 || o.stats.goals >= 3 || derby_hero_now);
+        let chant_trigger =
+            o.team_won && (o.effective_rating >= 8.2 || o.stats.goals >= 3 || derby_hero_now);
         if chant_trigger {
             let mag = cfg.catalog.fans_chant_player_name * rep_mul * scene_mul;
             self.happiness.add_event_with_cooldown(
@@ -532,8 +524,8 @@ impl Player {
             return;
         }
         let cfg = HappinessConfig::default();
-        let mag = cfg.catalog.leadership_emergence
-            * scaling::loyalty_amplifier(self.attributes.loyalty);
+        let mag =
+            cfg.catalog.leadership_emergence * scaling::loyalty_amplifier(self.attributes.loyalty);
         self.happiness
             .add_event_with_cooldown(HappinessEventType::LeadershipEmergence, mag, 120);
     }

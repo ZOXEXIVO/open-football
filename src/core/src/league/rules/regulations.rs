@@ -97,10 +97,7 @@ impl LeagueRegulations {
     /// accumulate toward `yellow_card_ban_threshold`; crossing it
     /// triggers a 1-match ban and rolls the counter past the threshold.
     /// Returns the suspensions to apply to players.
-    pub fn process_disciplinary_actions(
-        &mut self,
-        result: &MatchResult,
-    ) -> DisciplinaryActions {
+    pub fn process_disciplinary_actions(&mut self, result: &MatchResult) -> DisciplinaryActions {
         let mut actions = DisciplinaryActions::default();
         let Some(details) = result.details.as_ref() else {
             return actions;
@@ -318,10 +315,10 @@ pub struct DisciplinaryCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PlayerFieldPositionGroup;
     use crate::r#match::engine::result::{FieldSquad, MatchResultRaw};
     use crate::r#match::result::ResultMatchPositionData;
     use crate::r#match::{PlayerMatchEndStats, Score, TeamScore};
-    use crate::PlayerFieldPositionGroup;
     use std::collections::HashMap;
 
     fn make_match_with_stats(stats: HashMap<u32, PlayerMatchEndStats>) -> MatchResult {
@@ -461,9 +458,7 @@ mod tests {
     fn make_club_with_deficit(deficit: i64) -> crate::Club {
         use crate::academy::ClubAcademy;
         use crate::shared::Location;
-        use crate::{
-            Club, ClubColors, ClubFinances, ClubFacilities, ClubStatus, TeamCollection,
-        };
+        use crate::{Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, TeamCollection};
         let mut club = Club::new(
             1,
             "Test".to_string(),

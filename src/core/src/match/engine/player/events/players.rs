@@ -1,6 +1,4 @@
 use crate::PlayerFieldPositionGroup;
-#[cfg(feature = "match-logs")]
-use crate::match_log_info;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
@@ -8,6 +6,8 @@ use crate::r#match::{
     GoalDetail, MatchContext, MatchField, MatchPlayer, OffsideSnapshot, PassOriginRestart,
     PlayerSide, ResultMatchPositionData, ShotTarget,
 };
+#[cfg(feature = "match-logs")]
+use crate::match_log_info;
 use log::debug;
 use nalgebra::Vector3;
 use rand::{Rng, RngExt};

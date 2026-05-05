@@ -352,7 +352,6 @@ impl SquadComposition {
     pub fn average_forward_quality(&self) -> f32 {
         self.avg_fwd_quality
     }
-
 }
 
 /// Coach tactical preferences

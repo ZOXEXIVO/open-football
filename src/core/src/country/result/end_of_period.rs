@@ -1643,7 +1643,13 @@ mod tests {
 
         // final_table is cleared after processing so the next season
         // doesn't double-apply.
-        assert!(country.leagues.leagues.iter().all(|l| l.final_table.is_none()));
+        assert!(
+            country
+                .leagues
+                .leagues
+                .iter()
+                .all(|l| l.final_table.is_none())
+        );
     }
 
     #[test]
@@ -1653,13 +1659,8 @@ mod tests {
         let clubs: Vec<Club> = (10..=12)
             .map(|id| make_club(id as u32, vec![make_simple_team(id as u32, id as u32, 1)]))
             .collect();
-        let tier1 = make_league_with_settings(
-            1,
-            1,
-            0,
-            1,
-            vec![(10, 30, 70), (11, 30, 50), (12, 30, 20)],
-        );
+        let tier1 =
+            make_league_with_settings(1, 1, 0, 1, vec![(10, 30, 70), (11, 30, 50), (12, 30, 20)]);
         let mut country = build_country(clubs, vec![tier1]);
 
         CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));

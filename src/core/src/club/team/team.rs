@@ -9,8 +9,8 @@ use crate::utils::DateUtils;
 use crate::{
     HappinessEventType, MatchHistory, MatchTacticType, Player, PlayerCollection,
     PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, StaffCollection, Tactics,
-    TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem,
-    Transfers,
+    TacticsSelector, TeamInfo, TeamReputation, TeamResult, TeamTraining, TrainingSchedule,
+    TransferItem, Transfers,
 };
 use chrono::NaiveDate;
 use std::borrow::Cow;
@@ -55,6 +55,20 @@ pub struct Team {
 impl Team {
     pub fn builder() -> TeamBuilder {
         TeamBuilder::new()
+    }
+
+    /// Lightweight `TeamInfo` for stats-history rows where the caller
+    /// has no league-lookup access. The web layer fills league info
+    /// back in by inspecting the team's current league at render time,
+    /// so leaving `league_name` / `league_slug` empty is correct.
+    pub fn history_info(&self) -> TeamInfo {
+        TeamInfo {
+            name: self.name.clone(),
+            slug: self.slug.clone(),
+            reputation: self.reputation.world,
+            league_name: String::new(),
+            league_slug: String::new(),
+        }
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {

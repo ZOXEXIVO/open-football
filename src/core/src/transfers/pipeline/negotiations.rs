@@ -1266,20 +1266,20 @@ impl PipelineProcessor {
 #[cfg(test)]
 mod cleanup_tests {
     use super::*;
+    use crate::club::academy::ClubAcademy;
     use crate::competitions::global::GlobalCompetitions;
     use crate::continent::Continent;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::{Currency, CurrencyValue, Location};
-    use crate::transfers::market::{
-        TransferListing, TransferListingStatus, TransferListingType,
-    };
+    use crate::transfers::market::{TransferListing, TransferListingStatus, TransferListingType};
     use crate::transfers::negotiation::{NegotiationStatus, TransferNegotiation};
     use crate::transfers::offer::TransferOffer;
     use crate::transfers::pipeline::recruitment::{
         ScoutMonitoringSource, ScoutMonitoringStatus, ScoutPlayerMonitoring,
     };
-    use crate::transfers::pipeline::{ShortlistCandidate, ShortlistCandidateStatus, TransferShortlist};
-    use crate::club::academy::ClubAcademy;
+    use crate::transfers::pipeline::{
+        ShortlistCandidate, ShortlistCandidateStatus, TransferShortlist,
+    };
     use crate::transfers::{CompletedTransfer, TransferType};
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, TeamCollection,
@@ -1345,7 +1345,12 @@ mod cleanup_tests {
         )
     }
 
-    fn put_monitoring(club: &mut Club, scout_id: u32, player_id: u32, status: ScoutMonitoringStatus) {
+    fn put_monitoring(
+        club: &mut Club,
+        scout_id: u32,
+        player_id: u32,
+        status: ScoutMonitoringStatus,
+    ) {
         let id = club.transfer_plan.next_monitoring_id();
         let mut row = ScoutPlayerMonitoring::new(
             id,
@@ -1369,7 +1374,12 @@ mod cleanup_tests {
         club.transfer_plan.shortlists.push(sl);
     }
 
-    fn put_listing(country: &mut Country, player_id: u32, club_id: u32, status: TransferListingStatus) {
+    fn put_listing(
+        country: &mut Country,
+        player_id: u32,
+        club_id: u32,
+        status: TransferListingStatus,
+    ) {
         let mut listing = TransferListing::new(
             player_id,
             club_id,
@@ -1413,18 +1423,21 @@ mod cleanup_tests {
     }
 
     fn put_history(country: &mut Country, player_id: u32, from_club_id: u32, to_club_id: u32) {
-        country.transfer_market.transfer_history.push(CompletedTransfer::new(
-            player_id,
-            "Player".to_string(),
-            from_club_id,
-            0,
-            "From".to_string(),
-            to_club_id,
-            "To".to_string(),
-            d(2026, 6, 5),
-            CurrencyValue::new(2_000_000.0, Currency::Usd),
-            TransferType::Permanent,
-        ));
+        country
+            .transfer_market
+            .transfer_history
+            .push(CompletedTransfer::new(
+                player_id,
+                "Player".to_string(),
+                from_club_id,
+                0,
+                "From".to_string(),
+                to_club_id,
+                "To".to_string(),
+                d(2026, 6, 5),
+                CurrencyValue::new(2_000_000.0, Currency::Usd),
+                TransferType::Permanent,
+            ));
     }
 
     #[test]
@@ -1437,7 +1450,12 @@ mod cleanup_tests {
         let buyer_club_id: u32 = 1;
         let other_club_id: u32 = 2;
         let mut buyer = make_club(buyer_club_id, "Buyer");
-        put_monitoring(&mut buyer, 11, player_id, ScoutMonitoringStatus::Negotiating);
+        put_monitoring(
+            &mut buyer,
+            11,
+            player_id,
+            ScoutMonitoringStatus::Negotiating,
+        );
         put_shortlist_candidate(&mut buyer, 1, player_id);
 
         // A second domestic club had the player on its scouting radar.
@@ -1484,7 +1502,12 @@ mod cleanup_tests {
         let mut country = make_country(1, "EN", "england", vec![buyer, seller, losing_bidder]);
 
         // An open listing — must be marked Completed.
-        put_listing(&mut country, player_id, selling_club_id, TransferListingStatus::Available);
+        put_listing(
+            &mut country,
+            player_id,
+            selling_club_id,
+            TransferListingStatus::Available,
+        );
         // The buyer's negotiation got accepted — leave Accepted alone but
         // a parallel bid from the losing club is still Pending and must
         // be rejected.
@@ -1560,7 +1583,12 @@ mod cleanup_tests {
         // A club in a third country scouted the same player — its
         // monitoring row must be cleared too.
         let mut third_party = make_club(third_party_club_id, "ThirdParty");
-        put_monitoring(&mut third_party, 31, player_id, ScoutMonitoringStatus::Active);
+        put_monitoring(
+            &mut third_party,
+            31,
+            player_id,
+            ScoutMonitoringStatus::Active,
+        );
         // Selling-side staff also had an internal monitoring (e.g. their
         // own academy DoF flagged the player on the way out).
         put_monitoring(&mut seller, 41, player_id, ScoutMonitoringStatus::Active);
@@ -1629,7 +1657,12 @@ mod cleanup_tests {
         let other_id: u32 = 500;
 
         let mut buyer = make_club(1, "Buyer");
-        put_monitoring(&mut buyer, 11, signed_id, ScoutMonitoringStatus::Negotiating);
+        put_monitoring(
+            &mut buyer,
+            11,
+            signed_id,
+            ScoutMonitoringStatus::Negotiating,
+        );
         put_monitoring(&mut buyer, 12, other_id, ScoutMonitoringStatus::Active);
         put_shortlist_candidate(&mut buyer, 1, signed_id);
         put_shortlist_candidate(&mut buyer, 2, other_id);

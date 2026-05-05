@@ -951,12 +951,8 @@ impl TacticsSelector {
         minutes_played: u8,
         players: &[&Player],
     ) -> Option<Tactics> {
-        let tactic_type = Self::situational_shape(
-            *current_tactic,
-            is_home,
-            score_difference,
-            minutes_played,
-        )?;
+        let tactic_type =
+            Self::situational_shape(*current_tactic, is_home, score_difference, minutes_played)?;
         let tactic = Tactics::new(tactic_type);
         let strength = tactic.calculate_formation_fitness(players) * 0.8; // Penalty for mid-game change
         Some(Tactics::with_reason(
@@ -1351,7 +1347,8 @@ mod tests {
         for tact in 12u8..=20 {
             for att in [10u8, 16] {
                 for def in [10u8, 16] {
-                    let pick = TacticsSelector::select_advanced_by_coaching_expertise(att, def, tact);
+                    let pick =
+                        TacticsSelector::select_advanced_by_coaching_expertise(att, def, tact);
                     assert_ne!(
                         pick,
                         MatchTacticType::T442,
@@ -1427,7 +1424,10 @@ mod tests {
                 "{:?} must not counter to itself",
                 opp
             );
-            assert_eq!(counter.selected_reason, TacticSelectionReason::OpponentCounter);
+            assert_eq!(
+                counter.selected_reason,
+                TacticSelectionReason::OpponentCounter
+            );
         }
     }
 

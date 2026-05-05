@@ -286,7 +286,12 @@ pub fn process_substitutions(
                 .filter(|p| p.team_id == team_id)
                 .map(|p| p.player_attributes.condition as f32 / 10000.0)
                 .sum::<f32>()
-                / field.players.iter().filter(|p| p.team_id == team_id).count().max(1) as f32;
+                / field
+                    .players
+                    .iter()
+                    .filter(|p| p.team_id == team_id)
+                    .count()
+                    .max(1) as f32;
             Some(TacticalNeed::from_state(
                 goal_diff as i8,
                 progress,

@@ -51,8 +51,7 @@ pub fn apply_global_tournament_result(
         .filter(|(_, stats)| stats.goals > 0)
         .map(|(&id, stats)| (id, stats.goals))
         .collect();
-    let appearance_ids: std::collections::HashSet<u32> =
-        raw.player_stats.keys().copied().collect();
+    let appearance_ids: std::collections::HashSet<u32> = raw.player_stats.keys().copied().collect();
 
     apply_world_international_stats(
         continents,

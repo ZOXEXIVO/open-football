@@ -55,10 +55,10 @@ impl CountryResult {
                 continue;
             };
             // Build a borrow of player references to feed the rule helper.
-            let player_refs: Vec<&crate::Player> =
-                main_team.players.players.iter().collect();
-            let omitted_ids =
-                country.regulations.omitted_for_foreign_limit(&player_refs, club_country_id);
+            let player_refs: Vec<&crate::Player> = main_team.players.players.iter().collect();
+            let omitted_ids = country
+                .regulations
+                .omitted_for_foreign_limit(&player_refs, club_country_id);
             drop(player_refs);
 
             if omitted_ids.is_empty() {
@@ -76,12 +76,10 @@ impl CountryResult {
                 if !player.statuses.get().contains(&PlayerStatusType::Unr) {
                     player.statuses.add(date, PlayerStatusType::Unr);
                 }
-                player
-                    .happiness
-                    .add_event_default_with_cooldown(
-                        HappinessEventType::SquadRegistrationOmitted,
-                        365,
-                    );
+                player.happiness.add_event_default_with_cooldown(
+                    HappinessEventType::SquadRegistrationOmitted,
+                    365,
+                );
             }
         }
         // Suppress unused-variable warning when the path stays generic.

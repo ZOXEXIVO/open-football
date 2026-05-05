@@ -487,9 +487,7 @@ impl Staff {
             }
             StaffPosition::FitnessCoach => {
                 // Fitness specialism + sports science cross-talk.
-                s(10, coaching.fitness)
-                    + s(6, medical.sports_science)
-                    + s(4, coaching.mental)
+                s(10, coaching.fitness) + s(6, medical.sports_science) + s(4, coaching.mental)
             }
             StaffPosition::GoalkeeperCoach => {
                 // GK technical specialism dominates; coaching.technical is
@@ -517,9 +515,7 @@ impl Staff {
                     + s(7, knowledge.judging_player_potential)
                     + s(5, mental.man_management)
             }
-            StaffPosition::Physio => {
-                s(10, medical.physiotherapy) + s(6, medical.sports_science)
-            }
+            StaffPosition::Physio => s(10, medical.physiotherapy) + s(6, medical.sports_science),
             StaffPosition::HeadOfPhysio => {
                 s(10, medical.physiotherapy)
                     + s(8, medical.sports_science)
@@ -560,9 +556,7 @@ impl Staff {
             | StaffPosition::ManagingDirector
             | StaffPosition::GeneralManager
             | StaffPosition::MediaPundit
-            | StaffPosition::Free => {
-                s(5, mental.determination) + s(4, mental.adaptability)
-            }
+            | StaffPosition::Free => s(5, mental.determination) + s(4, mental.adaptability),
         }
     }
 
@@ -1431,11 +1425,17 @@ mod tests {
     fn scout_selection_prefers_judging_attributes() {
         let mut generalist = make_contracted_staff(1, StaffPosition::Scout);
         generalist.staff_attributes.knowledge.judging_player_ability = 6;
-        generalist.staff_attributes.knowledge.judging_player_potential = 6;
+        generalist
+            .staff_attributes
+            .knowledge
+            .judging_player_potential = 6;
         generalist.staff_attributes.mental.adaptability = 18;
         let mut specialist = make_contracted_staff(2, StaffPosition::Scout);
         specialist.staff_attributes.knowledge.judging_player_ability = 17;
-        specialist.staff_attributes.knowledge.judging_player_potential = 18;
+        specialist
+            .staff_attributes
+            .knowledge
+            .judging_player_potential = 18;
         specialist.staff_attributes.mental.adaptability = 8;
         let collection = StaffCollection::new(vec![generalist, specialist]);
         let chosen = collection.get_by_position(StaffPosition::Scout);
@@ -1449,7 +1449,10 @@ mod tests {
         technical.staff_attributes.coaching.technical = 18;
         technical.staff_attributes.coaching.tactical = 18;
         let mut youth_focus = make_contracted_staff(2, StaffPosition::YouthCoach);
-        youth_focus.staff_attributes.coaching.working_with_youngsters = 18;
+        youth_focus
+            .staff_attributes
+            .coaching
+            .working_with_youngsters = 18;
         youth_focus.staff_attributes.coaching.technical = 8;
         youth_focus.staff_attributes.coaching.tactical = 8;
         let collection = StaffCollection::new(vec![technical, youth_focus]);

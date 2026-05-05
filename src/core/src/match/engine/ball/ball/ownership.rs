@@ -3,11 +3,11 @@
 //! ownership claim that decides who is on the ball.
 
 use super::Ball;
-#[cfg(feature = "match-logs")]
-use crate::match_log_debug;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
+#[cfg(feature = "match-logs")]
+use crate::match_log_debug;
 
 impl Ball {
     pub fn process_ownership(

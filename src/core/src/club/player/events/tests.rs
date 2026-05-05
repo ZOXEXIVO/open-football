@@ -2397,20 +2397,32 @@ fn catalog_handles_every_new_variant() {
     assert_eq!(cat.magnitude(HappinessEventType::LeagueTopScorer), 10.0);
     assert_eq!(cat.magnitude(HappinessEventType::LeagueTopAssists), 8.0);
     assert_eq!(cat.magnitude(HappinessEventType::LeagueGoldenGlove), 8.0);
-    assert_eq!(cat.magnitude(HappinessEventType::ContinentalPlayerOfYear), 14.0);
+    assert_eq!(
+        cat.magnitude(HappinessEventType::ContinentalPlayerOfYear),
+        14.0
+    );
     assert_eq!(cat.magnitude(HappinessEventType::WorldPlayerOfYear), 18.0);
     assert_eq!(cat.magnitude(HappinessEventType::SeniorDebut), 6.0);
     assert_eq!(cat.magnitude(HappinessEventType::NationalTeamDebut), 8.0);
     assert_eq!(cat.magnitude(HappinessEventType::HatTrick), 7.0);
     assert_eq!(cat.magnitude(HappinessEventType::GoalDroughtEnded), 3.5);
-    assert_eq!(cat.magnitude(HappinessEventType::ScoringDroughtConcern), -3.0);
+    assert_eq!(
+        cat.magnitude(HappinessEventType::ScoringDroughtConcern),
+        -3.0
+    );
     assert_eq!(cat.magnitude(HappinessEventType::AppearanceMilestone), 5.0);
     assert_eq!(cat.magnitude(HappinessEventType::GoalMilestone), 5.0);
     assert_eq!(cat.magnitude(HappinessEventType::CleanSheetMilestone), 5.0);
-    assert_eq!(cat.magnitude(HappinessEventType::TrainingGroundBustUp), -4.0);
+    assert_eq!(
+        cat.magnitude(HappinessEventType::TrainingGroundBustUp),
+        -4.0
+    );
     assert_eq!(cat.magnitude(HappinessEventType::PublicApology), 1.0);
     assert_eq!(cat.magnitude(HappinessEventType::FansChantPlayerName), 3.0);
-    assert_eq!(cat.magnitude(HappinessEventType::MediaPressureMounting), -3.5);
+    assert_eq!(
+        cat.magnitude(HappinessEventType::MediaPressureMounting),
+        -3.5
+    );
     assert_eq!(cat.magnitude(HappinessEventType::LeadershipEmergence), 4.0);
 }
 

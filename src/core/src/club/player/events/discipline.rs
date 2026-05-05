@@ -101,9 +101,7 @@ mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
-    use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills,
-    };
+    use crate::{PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills};
     use chrono::NaiveDate;
 
     fn make_player() -> Player {

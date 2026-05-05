@@ -260,6 +260,9 @@ impl Club {
                 continue;
             }
 
+            let from_info = self.teams.teams[m.from].history_info();
+            let to_info = self.teams.teams[m.to].history_info();
+
             if let Some(mut player) = self.teams.teams[m.from].players.take_player(&m.player_id) {
                 // Upgrade youth contract to full when promoting to main
                 if m.to == main_idx {
@@ -272,13 +275,19 @@ impl Club {
                     player.on_youth_breakthrough(date);
                 }
 
+                // Close the previous spell and open one on the destination
+                // team so future official matches accumulate against the
+                // team the player actually plays for. Without this, B-team
+                // appearances kept being recorded under the Main row.
+                player.on_intra_club_move(&from_info, &to_info, date);
+
                 debug!(
                     "squad rebalance: {} (CA={}, age={}) {} → {} ({})",
                     player.full_name,
                     player.player_attributes.current_ability,
                     player.age(date),
-                    self.teams.teams[m.from].name,
-                    self.teams.teams[m.to].name,
+                    from_info.name,
+                    to_info.name,
                     m.reason,
                 );
                 self.teams.teams[m.to].players.add(player);
@@ -318,16 +327,19 @@ impl Club {
             candidates.truncate(deficit);
 
             for (team_idx, player_id, _) in candidates {
+                let from_info = self.teams.teams[team_idx].history_info();
+                let to_info = self.teams.teams[main_idx].history_info();
                 if let Some(mut player) = self.teams.teams[team_idx].players.take_player(&player_id)
                 {
                     upgrade_contract_if_youth(&mut player, date, &self.teams.teams[main_idx]);
                     player.on_youth_breakthrough(date);
+                    player.on_intra_club_move(&from_info, &to_info, date);
                     debug!(
                         "backfill to main: {} (CA={}, age={}) from {}",
                         player.full_name,
                         player.player_attributes.current_ability,
                         player.age(date),
-                        self.teams.teams[team_idx].name
+                        from_info.name
                     );
                     self.teams.teams[main_idx].players.add(player);
                 }

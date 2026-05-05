@@ -97,6 +97,7 @@ pub async fn country_free_agents_action(
     let mut players: Vec<FreeAgentPlayerDto> = simulator_data
         .free_agents
         .iter()
+        .filter(|player| player.country_id == country.id)
         .map(|player| {
             let position = player.positions.display_positions_compact();
             FreeAgentPlayerDto {

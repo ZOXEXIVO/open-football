@@ -187,14 +187,36 @@ mod tests {
             .unwrap()
             .and_hms_opt(0, 0, 0)
             .unwrap();
-        let kept = MatchHistoryItem::new(date, 99, (TeamScore::new_with_score(1, 2), TeamScore::new_with_score(2, 1)))
-            .with_tactic_summary(Some(MatchTacticType::T4231), Some(MatchTacticType::T4231), Some(70));
+        let kept = MatchHistoryItem::new(
+            date,
+            99,
+            (
+                TeamScore::new_with_score(1, 2),
+                TeamScore::new_with_score(2, 1),
+            ),
+        )
+        .with_tactic_summary(
+            Some(MatchTacticType::T4231),
+            Some(MatchTacticType::T4231),
+            Some(70),
+        );
         assert!(!kept.shape_changed());
         // Plan kept → no minute stamp even when one was offered.
         assert!(kept.tactic_change_minute.is_none());
 
-        let shifted = MatchHistoryItem::new(date, 99, (TeamScore::new_with_score(1, 0), TeamScore::new_with_score(2, 1)))
-            .with_tactic_summary(Some(MatchTacticType::T442), Some(MatchTacticType::T433), Some(72));
+        let shifted = MatchHistoryItem::new(
+            date,
+            99,
+            (
+                TeamScore::new_with_score(1, 0),
+                TeamScore::new_with_score(2, 1),
+            ),
+        )
+        .with_tactic_summary(
+            Some(MatchTacticType::T442),
+            Some(MatchTacticType::T433),
+            Some(72),
+        );
         assert!(shifted.shape_changed());
         assert_eq!(shifted.tactic_change_minute, Some(72));
         assert_eq!(shifted.tactic_started, Some(MatchTacticType::T442));

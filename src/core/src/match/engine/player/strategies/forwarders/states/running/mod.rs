@@ -7,7 +7,8 @@ use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PassEvaluator, PlayerDistanceFromStartPosition,
-    PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -536,9 +537,7 @@ impl StateProcessingHandler for ForwardRunningState {
             //   normal          → 0.09
             //   ShootsFromDistance OR teamwork < 0.4 → 0.14  (shoot-first)
             let teamwork = ctx.player.skills.mental.teamwork / 20.0;
-            let prefers_shot = ctx
-                .player
-                .has_trait(PlayerTrait::ShootsFromDistance);
+            let prefers_shot = ctx.player.has_trait(PlayerTrait::ShootsFromDistance);
             let pass_margin = pass_deferral_margin(teamwork, prefers_shot);
 
             // Look ~80u for a better pass option — covers cutback /
