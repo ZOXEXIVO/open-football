@@ -336,6 +336,11 @@ mod tests {
             substitutions: Vec::new(),
             penalty_shootout: Vec::new(),
             player_of_the_match_id: None,
+            starting_home_tactic: None,
+            starting_away_tactic: None,
+            final_home_tactic: None,
+            final_away_tactic: None,
+            shape_change_minute: None,
         };
         MatchResult {
             id: "test".to_string(),

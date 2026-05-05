@@ -92,6 +92,9 @@ finances, and match engine can turn it into success.
 
 ![Club page](.docs/images/club.jpg "Club page")
 
+
+![League awards page](.docs/images/awards.jpg "League awards page")
+
 ![Player personal page](.docs/images/player_personal.jpg "Player personal page")
 
 

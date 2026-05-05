@@ -1,3 +1,4 @@
+use crate::MatchTacticType;
 use crate::r#match::TeamScore;
 use chrono::NaiveDateTime;
 
@@ -68,6 +69,21 @@ pub struct MatchHistoryItem {
     pub date: NaiveDateTime,
     pub rival_team_id: u32,
     pub score: (TeamScore, TeamScore),
+    /// The shape this team STARTED the match in (the team's pre-match
+    /// plan as captured at kickoff). Different from `tactic_used` only
+    /// when the in-match coach changed shape mid-match.
+    pub tactic_started: Option<MatchTacticType>,
+    /// The shape this team actually finished the match in. May differ
+    /// from the starting plan when the in-match coach switched to a
+    /// chase / protect / counter shape via
+    /// `evaluate_situational_shape`. Lets the web tactics view show
+    /// the planned formation alongside what the manager really used.
+    pub tactic_used: Option<MatchTacticType>,
+    /// Sim-minute at which the FIRST shape change fired (for either
+    /// side — the engine records a single minute per match). `None`
+    /// when neither side changed shape, which is the common case for
+    /// stable scorelines.
+    pub tactic_change_minute: Option<u8>,
 }
 
 impl MatchHistoryItem {
@@ -76,6 +92,46 @@ impl MatchHistoryItem {
             date,
             rival_team_id,
             score,
+            tactic_started: None,
+            tactic_used: None,
+            tactic_change_minute: None,
+        }
+    }
+
+    pub fn with_tactic(mut self, tactic: Option<MatchTacticType>) -> Self {
+        self.tactic_used = tactic;
+        self
+    }
+
+    /// Combined tactical summary: starting shape + final shape +
+    /// optional first-shape-change minute. When `started` and `final_`
+    /// match, the team kept its plan; otherwise the coach shifted.
+    pub fn with_tactic_summary(
+        mut self,
+        started: Option<MatchTacticType>,
+        final_: Option<MatchTacticType>,
+        change_minute: Option<u8>,
+    ) -> Self {
+        self.tactic_started = started;
+        self.tactic_used = final_;
+        // Only stamp the change minute when the shape actually
+        // shifted — otherwise a "minute X" label on a kept-plan row
+        // would be misleading.
+        if started != final_ {
+            self.tactic_change_minute = change_minute;
+        } else {
+            self.tactic_change_minute = None;
+        }
+        self
+    }
+
+    /// True if the team's final shape differed from what they kicked
+    /// off with — the canonical "did the manager actually shift?"
+    /// signal consumed by the web view and tests.
+    pub fn shape_changed(&self) -> bool {
+        match (self.tactic_started, self.tactic_used) {
+            (Some(a), Some(b)) => a != b,
+            _ => false,
         }
     }
 }
@@ -123,5 +179,25 @@ mod tests {
         h.add(item(0, 1)); // loss
         // Only 2 matches even though we asked for 5
         assert!((h.recent_wins_ratio(5) - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn shape_changed_reflects_starting_vs_final() {
+        let date = NaiveDate::from_ymd_opt(2025, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let kept = MatchHistoryItem::new(date, 99, (TeamScore::new_with_score(1, 2), TeamScore::new_with_score(2, 1)))
+            .with_tactic_summary(Some(MatchTacticType::T4231), Some(MatchTacticType::T4231), Some(70));
+        assert!(!kept.shape_changed());
+        // Plan kept → no minute stamp even when one was offered.
+        assert!(kept.tactic_change_minute.is_none());
+
+        let shifted = MatchHistoryItem::new(date, 99, (TeamScore::new_with_score(1, 0), TeamScore::new_with_score(2, 1)))
+            .with_tactic_summary(Some(MatchTacticType::T442), Some(MatchTacticType::T433), Some(72));
+        assert!(shifted.shape_changed());
+        assert_eq!(shifted.tactic_change_minute, Some(72));
+        assert_eq!(shifted.tactic_started, Some(MatchTacticType::T442));
+        assert_eq!(shifted.tactic_used, Some(MatchTacticType::T433));
     }
 }

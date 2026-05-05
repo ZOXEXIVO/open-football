@@ -160,6 +160,24 @@ pub struct RollingTeamMetrics {
     pub avg_defensive_line_breaks: f32,
 }
 
+/// Snapshot of cumulative match counters captured a window ago.
+/// `evaluate_coaches` rotates a fresh snapshot whenever the gap to
+/// `current_tick` exceeds the rolling-metrics window so the deltas
+/// always represent ~15 sim-minutes of play.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MetricSnapshot {
+    pub tick: u64,
+    pub xg_for: f32,
+    pub xg_against: f32,
+    pub shots_for: u32,
+    pub pressures: u32,
+    pub successful_pressures: u32,
+    pub deep_entries_for: u32,
+    pub dangerous_turnovers: u32,
+    pub possession_ticks: u32,
+    pub field_tilt_ticks: u32,
+}
+
 /// Per-team coach state during a match
 #[derive(Debug, Clone)]
 pub struct MatchCoach {
@@ -183,6 +201,13 @@ pub struct MatchCoach {
     /// Rolling tactical metrics — populated by the match loop and read
     /// by `evaluate_with_metrics` for smarter instruction switches.
     pub metrics: RollingTeamMetrics,
+    /// Cumulative possession + field-tilt counters, in ticks. Updated
+    /// every tactical refresh so the engine doesn't have to walk all
+    /// players on every coach eval.
+    pub cum_possession_ticks: u32,
+    pub cum_field_tilt_ticks: u32,
+    /// Rolling-window snapshot for delta computation.
+    pub metric_snapshot: MetricSnapshot,
 }
 
 impl Default for MatchCoach {
@@ -194,6 +219,9 @@ impl Default for MatchCoach {
             last_possession_gain_tick: 0,
             shots_this_possession: 0,
             metrics: RollingTeamMetrics::default(),
+            cum_possession_ticks: 0,
+            cum_field_tilt_ticks: 0,
+            metric_snapshot: MetricSnapshot::default(),
         }
     }
 }

@@ -1,6 +1,7 @@
 use chrono::NaiveDate;
 
 use crate::r#match::PlayerMatchEndStats;
+use crate::r#match::engine::coach::TacticalNeed;
 use crate::r#match::field::MatchField;
 use crate::r#match::{MatchContext, MatchPlayer};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
@@ -268,47 +269,125 @@ pub fn process_substitutions(
             }
         }
 
-        // Tactical subs — if we're chasing the game late and have bench
-        // options, bring on a fresh attacker for a tired defender/midfielder.
-        // If we're hanging on late, swap an attacker for a defender.
-        let chasing_late = goal_diff < 0 && match_minutes >= 65;
-        let hanging_on_late = goal_diff > 0 && match_minutes >= 75 && !comfortable_lead;
-
-        if (chasing_late || hanging_on_late)
-            && subs_made < max_subs_per_team
-            && context.can_substitute(team_id)
-        {
-            let need_group = if chasing_late {
-                PlayerFieldPositionGroup::Forward
-            } else {
-                PlayerFieldPositionGroup::Defender
-            };
-            let sacrifice_group = if chasing_late {
-                PlayerFieldPositionGroup::Defender
-            } else {
-                PlayerFieldPositionGroup::Forward
-            };
-
-            // Pick the fittest-but-non-critical bench player of need_group.
-            let sub_in: Option<u32> = field
-                .substitutes
+        // Tactical sub driven by `TacticalNeed::from_state` instead of a
+        // binary chasing/hanging-on flag. Each need maps to a target
+        // position group to bring on AND a sacrifice group to pull off,
+        // so the bench actually responds to *why* the team is
+        // struggling — not just the scoreline. The `Fatigue` need is
+        // skipped because the condition-based pass above already
+        // handles that case.
+        let need = if match_minutes >= 55 {
+            let progress =
+                (context.total_match_time as f32 / crate::r#match::MATCH_TIME_MS as f32).min(1.0);
+            let coach = context.coach_for_team(team_id);
+            let condition_avg = field
+                .players
                 .iter()
                 .filter(|p| p.team_id == team_id)
-                .filter(|p| p.tactical_position.current_position.position_group() == need_group)
-                .max_by_key(|p| p.player_attributes.current_ability)
-                .map(|p| p.id);
+                .map(|p| p.player_attributes.condition as f32 / 10000.0)
+                .sum::<f32>()
+                / field.players.iter().filter(|p| p.team_id == team_id).count().max(1) as f32;
+            Some(TacticalNeed::from_state(
+                goal_diff as i8,
+                progress,
+                condition_avg,
+                coach.metrics,
+            ))
+        } else {
+            None
+        };
 
-            // Pick the most tired on-field player of sacrifice_group still active.
-            let sub_out: Option<u32> = candidates
-                .iter()
-                .filter(|(id, _, _)| field.get_player(*id).is_some())
-                .filter(|(_, _, pos)| pos.position_group() == sacrifice_group)
-                .min_by_key(|(_, cond, _)| *cond)
-                .map(|(id, _, _)| *id);
+        if let Some(need) = need {
+            let (need_group, sacrifice_group) = match need {
+                TacticalNeed::Chasing => (
+                    PlayerFieldPositionGroup::Forward,
+                    PlayerFieldPositionGroup::Defender,
+                ),
+                TacticalNeed::ProtectingLead => (
+                    PlayerFieldPositionGroup::Defender,
+                    PlayerFieldPositionGroup::Forward,
+                ),
+                TacticalNeed::LosingMidfield | TacticalNeed::BeingPressed => (
+                    PlayerFieldPositionGroup::Midfielder,
+                    PlayerFieldPositionGroup::Forward,
+                ),
+                TacticalNeed::NeedingCrosses => (
+                    PlayerFieldPositionGroup::Midfielder,
+                    PlayerFieldPositionGroup::Defender,
+                ),
+                // Fatigue is owned by the condition-based pass above —
+                // no extra tactical sub here.
+                TacticalNeed::Fatigue => (
+                    PlayerFieldPositionGroup::Goalkeeper,
+                    PlayerFieldPositionGroup::Goalkeeper,
+                ),
+            };
+            let do_swap = !matches!(need, TacticalNeed::Fatigue);
 
-            if let (Some(in_id), Some(out_id)) = (sub_in, sub_out) {
-                if Substitutions::execute_substitution(field, context, team_id, out_id, in_id) {
-                    subs_made += 1;
+            if do_swap && subs_made < max_subs_per_team && context.can_substitute(team_id) {
+                // Coherence guard: don't pull a player from a group
+                // the live tactic only has one of (e.g. a 4-1-4-1
+                // protecting a lead has just ONE forward; sacrificing
+                // it leaves the side with no out-ball). When the
+                // chosen sacrifice group is too thin in the current
+                // shape, we either fall back to the next-thickest
+                // attacking-style group or skip the swap entirely.
+                //
+                // Limitation: this engine doesn't redraw shape on
+                // sub. The tactical-shape probe in
+                // `evaluate_situational_shape` and this position-
+                // group sub are independent — we keep them coherent
+                // by group, not by formation slot.
+                let count_in_group = |group: PlayerFieldPositionGroup| {
+                    field
+                        .players
+                        .iter()
+                        .filter(|p| p.team_id == team_id && !p.is_sent_off)
+                        .filter(|p| p.tactical_position.current_position.position_group() == group)
+                        .count()
+                };
+                let sacrifice_supply = count_in_group(sacrifice_group);
+                // Refuse to pull the last forward / last defender —
+                // sub_out_group must keep at least 1 in the group
+                // so the side stays balanced enough to play.
+                let effective_sacrifice = if sacrifice_supply > 1 {
+                    Some(sacrifice_group)
+                } else {
+                    // Try midfield as the fallback sacrifice group:
+                    // it's almost always the best-stocked area.
+                    let mid_supply = count_in_group(PlayerFieldPositionGroup::Midfielder);
+                    if mid_supply > 2 {
+                        Some(PlayerFieldPositionGroup::Midfielder)
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(actual_sacrifice) = effective_sacrifice {
+                    let sub_in: Option<u32> = field
+                        .substitutes
+                        .iter()
+                        .filter(|p| p.team_id == team_id)
+                        .filter(|p| {
+                            p.tactical_position.current_position.position_group() == need_group
+                        })
+                        .max_by_key(|p| Substitutions::role_score_for_need(p, need))
+                        .map(|p| p.id);
+
+                    let sub_out: Option<u32> = candidates
+                        .iter()
+                        .filter(|(id, _, _)| field.get_player(*id).is_some())
+                        .filter(|(_, _, pos)| pos.position_group() == actual_sacrifice)
+                        .min_by_key(|(_, cond, _)| *cond)
+                        .map(|(id, _, _)| *id);
+
+                    if let (Some(in_id), Some(out_id)) = (sub_in, sub_out) {
+                        if Substitutions::execute_substitution(
+                            field, context, team_id, out_id, in_id,
+                        ) {
+                            subs_made += 1;
+                        }
+                    }
                 }
             }
         }
@@ -556,6 +635,49 @@ impl Substitutions {
         }
 
         true
+    }
+
+    /// Per-need bench scoring. The legacy code picked the highest-CA
+    /// bench player of the position group; that ignored *why* the
+    /// coach wanted a sub. Now each `TacticalNeed` weights different
+    /// attributes — composure for "BeingPressed", crossing for
+    /// "NeedingCrosses", passing/vision for "LosingMidfield". Returns
+    /// an integer score so `max_by_key` stays valid.
+    pub(super) fn role_score_for_need(player: &MatchPlayer, need: TacticalNeed) -> u32 {
+        let ca = player.player_attributes.current_ability as u32;
+        let bonus = match need {
+            TacticalNeed::Chasing => {
+                let finishing = player.skills.technical.finishing as u32;
+                let pace = player.skills.physical.pace as u32;
+                finishing * 4 + pace * 3
+            }
+            TacticalNeed::ProtectingLead => {
+                let marking = player.skills.technical.marking as u32;
+                let tackling = player.skills.technical.tackling as u32;
+                let positioning = player.skills.mental.positioning as u32;
+                marking * 3 + tackling * 3 + positioning * 2
+            }
+            TacticalNeed::LosingMidfield => {
+                let passing = player.skills.technical.passing as u32;
+                let vision = player.skills.mental.vision as u32;
+                let work_rate = player.skills.mental.work_rate as u32;
+                passing * 3 + vision * 3 + work_rate * 2
+            }
+            TacticalNeed::BeingPressed => {
+                let composure = player.skills.mental.composure as u32;
+                let first_touch = player.skills.technical.first_touch as u32;
+                let passing = player.skills.technical.passing as u32;
+                composure * 4 + first_touch * 3 + passing * 2
+            }
+            TacticalNeed::NeedingCrosses => {
+                let crossing = player.skills.technical.crossing as u32;
+                let dribbling = player.skills.technical.dribbling as u32;
+                let pace = player.skills.physical.pace as u32;
+                crossing * 4 + dribbling * 2 + pace * 2
+            }
+            TacticalNeed::Fatigue => 0,
+        };
+        ca * 10 + bonus
     }
 
     fn find_best_substitute(

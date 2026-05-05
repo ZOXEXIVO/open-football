@@ -27,6 +27,22 @@ use std::collections::HashMap;
 // FootballEngine — match orchestration
 // ───────────────────────────────────────────────────────────────────────────────
 
+/// Cumulative-metric snapshot fed into `FootballEngine::build_rolling_metrics`.
+/// Bundling the seven inputs into a struct keeps the call signature
+/// stable as we add more counters and makes the `evaluate_coaches`
+/// site less error-prone (no positional confusion between xg_for /
+/// xg_against and the like).
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct RollingMetricsInput {
+    pub cum_xg_for: f32,
+    pub cum_xg_against: f32,
+    pub cum_shots_for: u32,
+    pub cum_pressures: u32,
+    pub cum_successful_pressures: u32,
+    pub cum_deep_entries: u32,
+    pub cum_dangerous_turnovers: u32,
+}
+
 pub struct FootballEngine<const W: usize, const H: usize> {}
 
 impl<const W: usize, const H: usize> Default for FootballEngine<W, H> {
@@ -49,6 +65,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     ) -> MatchResultRaw {
         let score = Score::new(left_squad.team_id, right_squad.team_id);
 
+        // Snapshot starting tactics by team-id BEFORE the squads move
+        // into `MatchField::new`. The first half always has the home
+        // team on the left side, so left == home / right == away here.
+        let starting_home_tactic = Some(left_squad.tactics.tactic_type);
+        let starting_away_tactic = Some(right_squad.tactics.tactic_type);
+
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
 
         let mut match_position_data = if !match_recordings {
@@ -62,6 +84,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut field = MatchField::new(W, H, left_squad, right_squad);
 
         let mut context = MatchContext::new(&field, players, score, is_friendly, is_knockout);
+        // Stash the starting tactics inside the context's match plan so
+        // `build_result` can read them — no extra parameters threaded
+        // through the state machine.
+        context.starting_home_tactic = starting_home_tactic;
+        context.starting_away_tactic = starting_away_tactic;
 
         if is_match_events_mode() {
             context.enable_logging();
@@ -109,13 +136,29 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let left_side_squad = field.left_side_players.expect("left team players");
         let right_side_squad = field.right_side_players.expect("right team players");
 
+        // The engine swaps `left_team_tactics` / `right_team_tactics` on
+        // every halftime swap, so at this point those fields track the
+        // tactic the team currently ON the left / right is using —
+        // including any mid-match shape change applied by
+        // `evaluate_situational_shape`. Map them back to home / away
+        // using the same team-id rule we use for player squads.
+        let left_team_tac = field.left_team_tactics.tactic_type;
+        let right_team_tac = field.right_team_tactics.tactic_type;
+
         if left_side_squad.team_id == field.home_team_id {
             result.left_team_players = left_side_squad;
             result.right_team_players = right_side_squad;
+            result.final_home_tactic = Some(left_team_tac);
+            result.final_away_tactic = Some(right_team_tac);
         } else {
             result.left_team_players = right_side_squad;
             result.right_team_players = left_side_squad;
+            result.final_home_tactic = Some(right_team_tac);
+            result.final_away_tactic = Some(left_team_tac);
         }
+        result.starting_home_tactic = context.starting_home_tactic;
+        result.starting_away_tactic = context.starting_away_tactic;
+        result.shape_change_minute = context.first_shape_change_minute;
 
         // Copy substitution records to result
         for sub_record in &context.substitutions {
@@ -570,7 +613,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // protecting shape based on score and minute. Cheap: a
                 // single match arm and an equality check against the
                 // current type per side.
-                Self::evaluate_situational_shape(field, context);
+                Self::evaluate_situational_shape(field, &mut *context);
             }
 
             // Team-level tactical state (phase, possession timers, line
@@ -644,19 +687,42 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // Coach evaluation
     // ───────────────────────────────────────────────────────────────────────
 
+    /// Minimum sim-minutes between successive shape changes for a
+    /// match. Stops the coach from flipping shape at every 5-second
+    /// eval slice when a goal arrives — real coaches give a setup at
+    /// least 10-15 minutes to settle before re-evaluating.
+    const SHAPE_CHANGE_MIN_MINUTES_GAP: u8 = 12;
+
     /// In-match shape change. Probes `TacticsSelector::situational_shape`
     /// for both sides; if the helper returns a new formation different
-    /// from the side's current `tactic_type`, the side's `Tactics`
-    /// struct is rebuilt around the new shape. The team-tactical refresh
-    /// pipeline picks the new shape up on its next pass — pressing /
-    /// line height / mentality already key off `tactical_style()`.
-    fn evaluate_situational_shape(field: &mut MatchField, context: &MatchContext) {
+    /// from the side's current `tactic_type` AND the hysteresis window
+    /// has elapsed, the side's `Tactics` struct is rebuilt around the
+    /// new shape. The team-tactical refresh pipeline picks the new
+    /// shape up on its next pass — pressing / line height / mentality
+    /// already key off `tactical_style()`.
+    fn evaluate_situational_shape(field: &mut MatchField, context: &mut MatchContext) {
         use crate::club::team::tactics::tactics::TacticsSelector;
         let minutes = (context.total_match_time / 60_000).min(120) as u8;
         let home_diff =
             (context.score.home_team.get() as i16 - context.score.away_team.get() as i16)
                 .clamp(-100, 100) as i8;
         let away_diff = -home_diff;
+
+        // Hysteresis: skip the probe entirely if the last shape change
+        // (any side) was within `SHAPE_CHANGE_MIN_MINUTES_GAP` minutes.
+        // First change is always allowed because `last_shape_change_tick`
+        // starts at u64::MAX.
+        let cooldown_active = if context.last_shape_change_tick == u64::MAX {
+            false
+        } else {
+            let elapsed_ms = context
+                .total_match_time
+                .saturating_sub(context.last_shape_change_tick);
+            elapsed_ms < (Self::SHAPE_CHANGE_MIN_MINUTES_GAP as u64) * 60_000
+        };
+        if cooldown_active {
+            return;
+        }
 
         // Map left/right squad → home/away by checking which side the
         // home squad currently occupies. Sides swap at half-time so we
@@ -667,27 +733,46 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .map(|s| s.team_id == context.field_home_team_id)
             .unwrap_or(true);
 
-        let probe = |side_tactics: &mut crate::Tactics, is_home: bool, score_diff: i8| {
-            if let Some(new_shape) = TacticsSelector::situational_shape(
-                side_tactics.tactic_type,
-                is_home,
-                score_diff,
-                minutes,
-            ) {
-                *side_tactics = crate::Tactics::with_reason(
-                    new_shape,
-                    crate::TacticSelectionReason::GameSituation,
-                    side_tactics.formation_strength,
-                );
-            }
+        // First-pass: figure out what each side WOULD change to,
+        // without mutating yet. Lets us stamp the change minute and
+        // last-change tick exactly once per probe even when both
+        // sides flip simultaneously.
+        let probe_target = |current: crate::MatchTacticType, is_home: bool, score_diff: i8| {
+            TacticsSelector::situational_shape(current, is_home, score_diff, minutes)
         };
 
-        if home_is_left {
-            probe(&mut field.left_team_tactics, true, home_diff);
-            probe(&mut field.right_team_tactics, false, away_diff);
+        let (home_tactics_ref, away_tactics_ref) = if home_is_left {
+            (&mut field.left_team_tactics, &mut field.right_team_tactics)
         } else {
-            probe(&mut field.right_team_tactics, true, home_diff);
-            probe(&mut field.left_team_tactics, false, away_diff);
+            (&mut field.right_team_tactics, &mut field.left_team_tactics)
+        };
+
+        let home_target = probe_target(home_tactics_ref.tactic_type, true, home_diff);
+        let away_target = probe_target(away_tactics_ref.tactic_type, false, away_diff);
+
+        let mut any_change = false;
+        if let Some(new_shape) = home_target {
+            *home_tactics_ref = crate::Tactics::with_reason(
+                new_shape,
+                crate::TacticSelectionReason::GameSituation,
+                home_tactics_ref.formation_strength,
+            );
+            any_change = true;
+        }
+        if let Some(new_shape) = away_target {
+            *away_tactics_ref = crate::Tactics::with_reason(
+                new_shape,
+                crate::TacticSelectionReason::GameSituation,
+                away_tactics_ref.formation_strength,
+            );
+            any_change = true;
+        }
+
+        if any_change {
+            context.last_shape_change_tick = context.total_match_time;
+            if context.first_shape_change_minute.is_none() {
+                context.first_shape_change_minute = Some(minutes);
+            }
         }
     }
 
@@ -702,42 +787,198 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // stale and the `match` branches misbehave for losing teams.
         let match_progress = (context.total_match_time as f32 / MATCH_TIME_MS as f32).min(1.0);
 
-        let (home_condition_sum, home_count, away_condition_sum, away_count) = field
-            .players
-            .iter()
-            .fold((0.0f32, 0u32, 0.0f32, 0u32), |(hc, hn, ac, an), player| {
-                let cond = player.player_attributes.condition as f32 / 10000.0;
-                if player.team_id == context.field_home_team_id {
-                    (hc + cond, hn + 1, ac, an)
-                } else {
-                    (hc, hn, ac + cond, an + 1)
-                }
-            });
+        // One pass over the player list collects condition + cumulative
+        // metric totals (xG, shots, press, deep entries, dangerous
+        // turnovers) for both sides. The smarter
+        // `evaluate_with_metrics` consumes the deltas vs a rolling
+        // 15-min snapshot we maintain on each coach state.
+        let mut home_cond_sum = 0.0f32;
+        let mut home_count = 0u32;
+        let mut away_cond_sum = 0.0f32;
+        let mut away_count = 0u32;
+        let mut home_xg = 0.0f32;
+        let mut away_xg = 0.0f32;
+        let mut home_shots = 0u32;
+        let mut away_shots = 0u32;
+        let mut home_pressures = 0u32;
+        let mut away_pressures = 0u32;
+        let mut home_successful_pressures = 0u32;
+        let mut away_successful_pressures = 0u32;
+        let mut home_deep_entries = 0u32;
+        let mut away_deep_entries = 0u32;
+        let mut home_dangerous_turnovers = 0u32;
+        let mut away_dangerous_turnovers = 0u32;
+
+        for p in field.players.iter() {
+            let cond = p.player_attributes.condition as f32 / 10000.0;
+            let xg = p.memory.xg_total;
+            let shots = p.memory.shots_taken as u32;
+            let pressures = p.statistics.pressures as u32;
+            let succ = p.statistics.successful_pressures as u32;
+            // Passes that arrived in the opponent's box. Our nearest
+            // proxy for "deep territorial entries" — every pass-into-
+            // box advances the team's threat into the danger zone.
+            let deep_entries = p.statistics.passes_into_box as u32;
+            // `errors_leading_to_shot` already counts turnovers /
+            // mistakes that produced an opposition shot — exactly the
+            // "dangerous turnovers" signal the smart coach evaluator
+            // uses to decide whether to drop the line / abandon the
+            // press.
+            let dangerous_turnovers = p.statistics.errors_leading_to_shot as u32;
+            if p.team_id == context.field_home_team_id {
+                home_cond_sum += cond;
+                home_count += 1;
+                home_xg += xg;
+                home_shots += shots;
+                home_pressures += pressures;
+                home_successful_pressures += succ;
+                home_deep_entries += deep_entries;
+                home_dangerous_turnovers += dangerous_turnovers;
+            } else {
+                away_cond_sum += cond;
+                away_count += 1;
+                away_xg += xg;
+                away_shots += shots;
+                away_pressures += pressures;
+                away_successful_pressures += succ;
+                away_deep_entries += deep_entries;
+                away_dangerous_turnovers += dangerous_turnovers;
+            }
+        }
 
         let home_avg_condition = if home_count > 0 {
-            home_condition_sum / home_count as f32
+            home_cond_sum / home_count as f32
         } else {
             0.5
         };
         let away_avg_condition = if away_count > 0 {
-            away_condition_sum / away_count as f32
+            away_cond_sum / away_count as f32
         } else {
             0.5
         };
 
-        context.coach_home.evaluate(
+        // Build per-side rolling metrics by diffing against a snapshot
+        // taken ~15 sim-minutes ago. After the window expires, advance
+        // the snapshot to the current totals so the next pass starts a
+        // fresh window. xG_against is the OTHER team's xG_for delta.
+        let home_input = RollingMetricsInput {
+            cum_xg_for: home_xg,
+            cum_xg_against: away_xg,
+            cum_shots_for: home_shots,
+            cum_pressures: home_pressures,
+            cum_successful_pressures: home_successful_pressures,
+            cum_deep_entries: home_deep_entries,
+            cum_dangerous_turnovers: home_dangerous_turnovers,
+        };
+        let away_input = RollingMetricsInput {
+            cum_xg_for: away_xg,
+            cum_xg_against: home_xg,
+            cum_shots_for: away_shots,
+            cum_pressures: away_pressures,
+            cum_successful_pressures: away_successful_pressures,
+            cum_deep_entries: away_deep_entries,
+            cum_dangerous_turnovers: away_dangerous_turnovers,
+        };
+        let home_metrics =
+            Self::build_rolling_metrics(&mut context.coach_home, current_tick, &home_input);
+        let away_metrics =
+            Self::build_rolling_metrics(&mut context.coach_away, current_tick, &away_input);
+
+        context.coach_home.evaluate_with_metrics(
             home_goals - away_goals,
             match_progress,
             home_avg_condition,
             current_tick,
+            home_metrics,
         );
-
-        context.coach_away.evaluate(
+        context.coach_away.evaluate_with_metrics(
             away_goals - home_goals,
             match_progress,
             away_avg_condition,
             current_tick,
+            away_metrics,
         );
+    }
+
+    /// Build a `RollingTeamMetrics` from current cumulative totals and
+    /// the per-coach snapshot. Window-rolls the snapshot when 15 sim
+    /// minutes (≈ 90 000 ticks) of play have elapsed since the last
+    /// rotation.
+    pub(super) fn build_rolling_metrics(
+        coach: &mut crate::r#match::MatchCoach,
+        current_tick: u64,
+        input: &RollingMetricsInput,
+    ) -> crate::r#match::RollingTeamMetrics {
+        use crate::r#match::engine::coach::MetricSnapshot;
+        const WINDOW_TICKS: u64 = 90_000; // 15 sim minutes
+        const POSSESSION_WINDOW_TICKS: u64 = 60_000; // 10 sim minutes
+        let snap = coach.metric_snapshot;
+        let elapsed = current_tick.saturating_sub(snap.tick);
+
+        let xg_for = (input.cum_xg_for - snap.xg_for).max(0.0);
+        let xg_against = (input.cum_xg_against - snap.xg_against).max(0.0);
+        let shots_for = input.cum_shots_for.saturating_sub(snap.shots_for) as u16;
+        let pressures = input.cum_pressures.saturating_sub(snap.pressures);
+        let successful_pressures = input
+            .cum_successful_pressures
+            .saturating_sub(snap.successful_pressures);
+        let press_success_rate = if pressures > 0 {
+            successful_pressures as f32 / pressures as f32
+        } else {
+            0.5
+        };
+        let deep_entries_for_last_15 = input
+            .cum_deep_entries
+            .saturating_sub(snap.deep_entries_for) as u16;
+        let dangerous_turnovers_last_10 = input
+            .cum_dangerous_turnovers
+            .saturating_sub(snap.dangerous_turnovers) as u16;
+
+        // Possession + field-tilt run as cumulative tick counters on
+        // the coach itself, updated by `refresh_tactical_states`. The
+        // delta over the snapshot window is the share-of-play we want.
+        let poss_delta = coach
+            .cum_possession_ticks
+            .saturating_sub(snap.possession_ticks) as u64;
+        let tilt_delta = coach
+            .cum_field_tilt_ticks
+            .saturating_sub(snap.field_tilt_ticks) as u64;
+        let possession_window = elapsed.min(POSSESSION_WINDOW_TICKS).max(1);
+        let possession_last_10 = (poss_delta as f32 / possession_window as f32).clamp(0.0, 1.0);
+        let field_tilt_last_10 = (tilt_delta as f32 / possession_window as f32).clamp(0.0, 1.0);
+
+        if elapsed >= WINDOW_TICKS {
+            coach.metric_snapshot = MetricSnapshot {
+                tick: current_tick,
+                xg_for: input.cum_xg_for,
+                xg_against: input.cum_xg_against,
+                shots_for: input.cum_shots_for,
+                pressures: input.cum_pressures,
+                successful_pressures: input.cum_successful_pressures,
+                deep_entries_for: input.cum_deep_entries,
+                dangerous_turnovers: input.cum_dangerous_turnovers,
+                possession_ticks: coach.cum_possession_ticks,
+                field_tilt_ticks: coach.cum_field_tilt_ticks,
+            };
+        }
+
+        let mut metrics = crate::r#match::RollingTeamMetrics::default();
+        metrics.xg_for_last_15 = xg_for;
+        metrics.xg_against_last_15 = xg_against;
+        metrics.shots_for_last_15 = shots_for;
+        metrics.deep_entries_for_last_15 = deep_entries_for_last_15;
+        metrics.field_tilt_last_10 = field_tilt_last_10;
+        metrics.possession_last_10 = possession_last_10;
+        metrics.dangerous_turnovers_last_10 = dangerous_turnovers_last_10;
+        metrics.press_success_rate_last_10 = press_success_rate;
+        // `avg_defensive_line_breaks` is intentionally left at 0 — the
+        // engine doesn't currently track per-side line-break events
+        // (would need to instrument the offside trap / through-ball
+        // resolver). The smart coach evaluator falls back gracefully
+        // when this is 0; remove or implement once the underlying
+        // signal exists.
+        metrics.avg_defensive_line_breaks = 0.0;
+        metrics
     }
 
     /// Refresh the team-level tactical state (phase, possession timers,
@@ -830,6 +1071,29 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             &mut context.tactical_away,
             &inputs,
         );
+
+        // Cumulative possession + field-tilt counters feed the rolling
+        // metrics consumed by the smart coach evaluator. Updated here
+        // (every ~10 ticks) so the per-coach-eval pass doesn't have to
+        // re-derive them from scratch.
+        use crate::r#match::BallZone;
+        if context.tactical_home.in_possession {
+            context.coach_home.cum_possession_ticks =
+                context.coach_home.cum_possession_ticks.saturating_add(tick_interval);
+        }
+        if context.tactical_away.in_possession {
+            context.coach_away.cum_possession_ticks =
+                context.coach_away.cum_possession_ticks.saturating_add(tick_interval);
+        }
+        // Ball in *our* attacking third counts as field-tilt for us.
+        if matches!(context.tactical_home.ball_zone, BallZone::AttackingThird) {
+            context.coach_home.cum_field_tilt_ticks =
+                context.coach_home.cum_field_tilt_ticks.saturating_add(tick_interval);
+        }
+        if matches!(context.tactical_away.ball_zone, BallZone::AttackingThird) {
+            context.coach_away.cum_field_tilt_ticks =
+                context.coach_away.cum_field_tilt_ticks.saturating_add(tick_interval);
+        }
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -1536,6 +1800,7 @@ pub struct PlayMatchStateResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::r#match::MatchCoach;
 
     #[test]
     fn test_initialization() {
@@ -1554,5 +1819,101 @@ mod tests {
         let incremented_time_again = match_time.increment(5);
         assert_eq!(match_time.time, 15);
         assert_eq!(incremented_time_again, 15);
+    }
+
+    fn make_input(
+        xg_for: f32,
+        xg_against: f32,
+        shots: u32,
+        pressures: u32,
+        succ: u32,
+        deep: u32,
+        turnovers: u32,
+    ) -> RollingMetricsInput {
+        RollingMetricsInput {
+            cum_xg_for: xg_for,
+            cum_xg_against: xg_against,
+            cum_shots_for: shots,
+            cum_pressures: pressures,
+            cum_successful_pressures: succ,
+            cum_deep_entries: deep,
+            cum_dangerous_turnovers: turnovers,
+        }
+    }
+
+    #[test]
+    fn rolling_metrics_first_call_diffs_from_zero() {
+        // First evaluate_coaches pass: snapshot tick is 0 (default),
+        // current_tick is well below the 90 000 window. The window is
+        // not rotated, so the snapshot stays at zero and the deltas
+        // equal the absolute current totals.
+        let mut coach = MatchCoach::new();
+        coach.cum_possession_ticks = 600; // 6 sim s
+        coach.cum_field_tilt_ticks = 300; // 3 sim s
+        let m = FootballEngine::<840, 545>::build_rolling_metrics(
+            &mut coach,
+            1_000,
+            &make_input(0.5, 0.2, 4, 30, 12, 7, 1),
+        );
+        assert!((m.xg_for_last_15 - 0.5).abs() < 1e-4);
+        assert!((m.xg_against_last_15 - 0.2).abs() < 1e-4);
+        assert_eq!(m.shots_for_last_15, 4);
+        assert_eq!(m.deep_entries_for_last_15, 7);
+        assert_eq!(m.dangerous_turnovers_last_10, 1);
+        // 30 pressures, 12 successful → 0.4
+        assert!((m.press_success_rate_last_10 - 0.40).abs() < 1e-4);
+        // possession 600 / window 1000 = 0.6 (window clamped to elapsed)
+        assert!((m.possession_last_10 - 0.6).abs() < 1e-4);
+        // Snapshot must NOT have rotated yet (elapsed << 90 000).
+        assert_eq!(coach.metric_snapshot.tick, 0);
+    }
+
+    #[test]
+    fn rolling_metrics_window_rotates_at_15_minutes() {
+        // After 15 sim minutes (≈ 90 000 ticks) the snapshot rotates
+        // forward; subsequent deltas are computed from the new
+        // baseline, not the start of the match.
+        let mut coach = MatchCoach::new();
+        // Pretend we already had 60 sim s of possession before the rotation.
+        coach.cum_possession_ticks = 6_000;
+        coach.cum_field_tilt_ticks = 0;
+
+        // First pass at exactly the window boundary — rotates.
+        let _ = FootballEngine::<840, 545>::build_rolling_metrics(
+            &mut coach,
+            90_000,
+            &make_input(1.5, 0.6, 12, 80, 30, 18, 3),
+        );
+        assert_eq!(coach.metric_snapshot.tick, 90_000);
+        assert!((coach.metric_snapshot.xg_for - 1.5).abs() < 1e-4);
+        assert_eq!(coach.metric_snapshot.shots_for, 12);
+        assert_eq!(coach.metric_snapshot.deep_entries_for, 18);
+        assert_eq!(coach.metric_snapshot.dangerous_turnovers, 3);
+
+        // Second pass shortly after rotation: deltas are vs the new
+        // baseline (1.5 xg, 12 shots, 18 deep, 3 turnovers).
+        let m = FootballEngine::<840, 545>::build_rolling_metrics(
+            &mut coach,
+            95_000,
+            &make_input(1.7, 0.6, 13, 82, 31, 19, 3),
+        );
+        assert!((m.xg_for_last_15 - 0.2).abs() < 1e-4);
+        assert_eq!(m.shots_for_last_15, 1);
+        assert_eq!(m.deep_entries_for_last_15, 1);
+        assert_eq!(m.dangerous_turnovers_last_10, 0);
+    }
+
+    #[test]
+    fn rolling_metrics_zero_pressures_returns_neutral_press_rate() {
+        // Press rate is undefined when no pressures occurred; we pin
+        // it to 0.5 so the smart coach evaluator's "failing press"
+        // branch doesn't fire spuriously.
+        let mut coach = MatchCoach::new();
+        let m = FootballEngine::<840, 545>::build_rolling_metrics(
+            &mut coach,
+            500,
+            &make_input(0.0, 0.0, 0, 0, 0, 0, 0),
+        );
+        assert!((m.press_success_rate_last_10 - 0.5).abs() < 1e-4);
     }
 }

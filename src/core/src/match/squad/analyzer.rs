@@ -2,7 +2,6 @@ use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::MatchResult;
 use crate::{MatchTacticType, Player, TacticSelectionReason, TacticalStyle, Tactics, Team};
 use log::info;
-use std::collections::HashMap;
 
 /// Enhanced tactical analysis for squad selection
 pub struct TacticalSquadAnalyzer;
@@ -24,8 +23,29 @@ impl TacticalSquadAnalyzer {
 
         let composition = Self::analyze_squad_composition(&available_players);
         let coach_preference = Self::analyze_coach_preferences(staff);
+        let top_players = Self::pick_top_players(&available_players, 14);
 
-        Self::determine_best_formation(composition, coach_preference)
+        Self::determine_best_formation(composition, coach_preference, &top_players)
+    }
+
+    /// Select the strongest `n` players from the available pool by raw
+    /// quality. Used as the input to `Tactics::calculate_formation_fitness`
+    /// inside the formation-scoring loop. Previously this was a
+    /// hard-coded `Vec::new()` on `SquadComposition`, which silently
+    /// zeroed out the dominant 0.4-weighted term and made formation
+    /// scoring decided entirely by complexity / preference biases —
+    /// part of the reason every league collapsed to T442.
+    fn pick_top_players<'a>(players: &[&'a Player], n: usize) -> Vec<&'a Player> {
+        let mut scored: Vec<(&'a Player, f32)> = players
+            .iter()
+            .map(|p| (*p, Self::calculate_player_quality(p)))
+            .collect();
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.id.cmp(&b.0.id))
+        });
+        scored.into_iter().take(n).map(|(p, _)| p).collect()
     }
 
     /// Analyze the strengths and weaknesses of available players
@@ -113,19 +133,27 @@ impl TacticalSquadAnalyzer {
     fn determine_best_formation(
         composition: SquadComposition,
         coach_prefs: CoachPreferences,
+        top_players: &[&Player],
     ) -> Option<MatchTacticType> {
-        let mut formation_scores = HashMap::new();
+        let mut formation_scores: Vec<(MatchTacticType, f32)> = Vec::new();
 
         // Score each formation based on squad composition
         for formation in MatchTacticType::all() {
-            let score = Self::score_formation_fit(&formation, &composition, &coach_prefs);
-            formation_scores.insert(formation, score);
+            let score =
+                Self::score_formation_fit(&formation, &composition, &coach_prefs, top_players);
+            formation_scores.push((formation, score));
         }
 
-        // Return the highest scoring formation
+        // Highest score wins, with deterministic tiebreak on the
+        // canonical enum order so two identical scores never pick
+        // randomly between runs.
         formation_scores
             .into_iter()
-            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|a, b| {
+                a.1.partial_cmp(&b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then((b.0 as u8).cmp(&(a.0 as u8)))
+            })
             .map(|(formation, _)| formation)
     }
 
@@ -134,12 +162,15 @@ impl TacticalSquadAnalyzer {
         formation: &MatchTacticType,
         composition: &SquadComposition,
         coach_prefs: &CoachPreferences,
+        top_players: &[&Player],
     ) -> f32 {
         let tactics = Tactics::new(*formation);
         let mut score = 0.0;
 
-        // Base fitness score (how well players fit positions)
-        score += tactics.calculate_formation_fitness(&composition.get_top_players()) * 0.4;
+        // Base fitness score (how well players fit positions). Now
+        // computed against the real top-N players instead of the empty
+        // vec the legacy code passed in.
+        score += tactics.calculate_formation_fitness(top_players) * 0.4;
 
         // Coach preference bonus
         score += Self::coach_formation_preference_bonus(formation, coach_prefs) * 0.3;
@@ -322,13 +353,6 @@ impl SquadComposition {
         self.avg_fwd_quality
     }
 
-    /// Get a representative set of top players for formation fitness calculation
-    fn get_top_players(&self) -> Vec<&Player> {
-        // This would need to be implemented to return actual player references
-        // For now, return empty vec as this is used in a fitness calculation that
-        // we're approximating with the averages above
-        Vec::new()
-    }
 }
 
 /// Coach tactical preferences

@@ -306,7 +306,7 @@
                                 <td class="aw-name">
                                     {% if let Some(s) = m.top_scorer %}
                                     <a href="/{{ lang }}/players/{{ s.player_slug }}">{{ s.player_name }}</a>
-                                    <span class="fm-aw-row-sub">{{ s.goals }}{{ i18n.t("g") }} {{ s.assists }}{{ i18n.t("a") }}</span>
+                                    <span class="fm-aw-row-sub">{{ s.goals }}</span>
                                     {% else %}
                                     <span class="fm-aw-row-sub">—</span>
                                     {% endif %}
@@ -314,7 +314,7 @@
                                 <td class="aw-name">
                                     {% if let Some(s) = m.top_assist %}
                                     <a href="/{{ lang }}/players/{{ s.player_slug }}">{{ s.player_name }}</a>
-                                    <span class="fm-aw-row-sub">{{ s.assists }}{{ i18n.t("a") }} {{ s.goals }}{{ i18n.t("g") }}</span>
+                                    <span class="fm-aw-row-sub">{{ s.assists }}</span>
                                     {% else %}
                                     <span class="fm-aw-row-sub">—</span>
                                     {% endif %}

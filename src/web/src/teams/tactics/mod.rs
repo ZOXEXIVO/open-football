@@ -40,6 +40,10 @@ pub struct TeamTacticsTemplate {
     pub show_academy_tab: bool,
     pub formation_name: String,
     pub formation_players: Vec<FormationPlayer>,
+    /// Most recent in-match shapes the team actually used. Lets the
+    /// view show "Plan: 4-3-3 — Last used: 4-5-1, 4-4-2, 4-4-2" so the
+    /// user can see when the coach is shifting shape mid-match.
+    pub recent_used_shapes: Vec<RecentUsedShape>,
 }
 
 pub struct FormationPlayer {
@@ -49,6 +53,23 @@ pub struct FormationPlayer {
     pub is_generated: bool,
     pub rating: String,
     pub css_class: String,
+}
+
+pub struct RecentUsedShape {
+    pub date_label: String,
+    pub formation_name: String,
+    /// Cheap rival display label ("vs Spurs"), or empty when the rival
+    /// id can't be resolved. Resolved at render time off the same
+    /// SimulatorData snapshot the rest of the page uses — no extra
+    /// lookups, no async fan-out.
+    pub opponent_label: String,
+    /// True when the team's final shape differed from what they
+    /// kicked off with. Drives the accent-coloured chip + "shift"
+    /// label so the user can see *when* the manager pivoted.
+    pub is_shift: bool,
+    /// Sim-minute the first shape change fired (only stamped when
+    /// `is_shift == true`). Empty string when no change.
+    pub change_minute_label: String,
 }
 
 pub async fn team_tactics_get_action(
@@ -88,12 +109,14 @@ pub async fn team_tactics_get_action(
     let mut used_player_ids: Vec<u32> = Vec::new();
 
     for required_pos in formation_positions.iter() {
+        let is_gk_slot = *required_pos == PlayerPositionType::Goalkeeper;
         // Find best available player for this position
         let players = team.players();
         let best_player = players
             .iter()
             .filter(|p| !used_player_ids.contains(&p.id))
             .filter(|p| p.is_ready_for_match())
+            .filter(|p| p.positions.is_goalkeeper() == is_gk_slot)
             .max_by_key(|p| {
                 let pos_level = p.positions.get_level(*required_pos) as i32;
                 let ability = p.player_attributes.current_ability as i32;
@@ -113,6 +136,48 @@ pub async fn team_tactics_get_action(
             });
         }
     }
+
+    // Pull the last few in-match shapes the team actually used so the
+    // tactics screen can show "Plan: 4-3-3 — Last used: 4-5-1 vs Spurs
+    // (shifted at min 72), 4-4-2, 4-3-3" instead of pretending the
+    // persistent plan was the only shape that ever ran. Each chip
+    // shows whether the shape was a kept plan or an in-match shift,
+    // and (when the rival id can be resolved cheaply) tags the
+    // opponent. Most-recent-first, capped at 5.
+    let recent_used_shapes: Vec<RecentUsedShape> = team
+        .match_history
+        .items()
+        .iter()
+        .rev()
+        .filter_map(|m| {
+            let final_tac = m.tactic_used?;
+            // Use the engine-recorded starting tactic when available
+            // (i.e. the team's actual plan at kickoff, regardless of
+            // what their *current* persistent plan happens to be —
+            // those can drift across weeks). Fall back to "shift only
+            // when the canonical history field disagrees with itself".
+            let is_shift = m.shape_changed();
+            let opponent_label = simulator_data
+                .team(m.rival_team_id)
+                .map(|t| format!("vs {}", t.name))
+                .unwrap_or_default();
+            let change_minute_label = if is_shift {
+                m.tactic_change_minute
+                    .map(|min| format!("min {}", min))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            Some(RecentUsedShape {
+                date_label: m.date.format("%d %b").to_string(),
+                formation_name: final_tac.display_name().to_string(),
+                opponent_label,
+                is_shift,
+                change_minute_label,
+            })
+        })
+        .take(5)
+        .collect();
 
     let (neighbor_teams, country_leagues) =
         get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
@@ -177,6 +242,7 @@ pub async fn team_tactics_get_action(
             || team.team_type == core::TeamType::U18,
         formation_name,
         formation_players,
+        recent_used_shapes,
     })
 }
 

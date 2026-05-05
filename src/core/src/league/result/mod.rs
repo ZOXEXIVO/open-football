@@ -67,6 +67,7 @@ impl LeagueResult {
         }
 
         let home_team_id = result.score.home_team.team_id;
+        let away_team_id = result.score.away_team.team_id;
         // Credit a home match against the club's matchday counter so the
         // monthly finance pass can scale the gate by actual fixtures
         // rather than a hardcoded `* 2`. Friendlies don't draw paying
@@ -79,30 +80,54 @@ impl LeagueResult {
                 }
             }
         }
+        // Pull the per-side final tactic the engine recorded — captures
+        // any in-match shape change so the team's match history mirrors
+        // what the coach really did, not just what was on the team
+        // sheet.
+        let final_home_tactic = result.details.as_ref().and_then(|d| d.final_home_tactic);
+        let final_away_tactic = result.details.as_ref().and_then(|d| d.final_away_tactic);
+        let tactic_summary = result
+            .details
+            .as_ref()
+            .map(|d| (d.starting_home_tactic, d.starting_away_tactic, d.shape_change_minute));
+
         let home_team = data
             .team_mut(home_team_id)
             .expect(&format!("home team not found: {}", home_team_id));
-        home_team.match_history.add(MatchHistoryItem::new(
+        let mut home_item = MatchHistoryItem::new(
             now,
-            home_team_id,
+            // rival is the OPPONENT, not us. The legacy code stored the
+            // team's own id here, which broke every consumer that read
+            // `rival_team_id` to find the opposing club (web tactics
+            // history, opponent-tactic feed, etc.).
+            away_team_id,
             (
                 TeamScore::from(&result.score.home_team),
                 TeamScore::from(&result.score.away_team),
             ),
-        ));
+        )
+        .with_tactic(final_home_tactic);
+        if let Some((start, _, change_minute)) = tactic_summary {
+            home_item = home_item.with_tactic_summary(start, final_home_tactic, change_minute);
+        }
+        home_team.match_history.add(home_item);
 
-        let away_team_id = result.score.away_team.team_id;
         let away_team = data
             .team_mut(away_team_id)
             .expect(&format!("away team not found: {}", away_team_id));
-        away_team.match_history.add(MatchHistoryItem::new(
+        let mut away_item = MatchHistoryItem::new(
             now,
-            away_team_id,
+            home_team_id,
             (
                 TeamScore::from(&result.score.away_team),
                 TeamScore::from(&result.score.home_team),
             ),
-        ));
+        )
+        .with_tactic(final_away_tactic);
+        if let Some((_, start, change_minute)) = tactic_summary {
+            away_item = away_item.with_tactic_summary(start, final_away_tactic, change_minute);
+        }
+        away_team.match_history.add(away_item);
 
         Self::process_match_events(result, data);
     }

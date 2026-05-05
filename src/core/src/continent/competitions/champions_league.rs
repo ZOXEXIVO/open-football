@@ -219,15 +219,12 @@ impl ChampionsLeague {
             return Vec::new();
         }
 
-        // Build Match objects (same pattern as League::build_match)
-        let selection_ctx = SelectionContext {
-            is_friendly: false,
-            date,
-            match_importance: 1.0,
-            philosophy: None,
-            opponent_tactic: None,
-        };
-
+        // Build Match objects (same pattern as League::build_match).
+        // Each side gets a `selection_ctx` carrying the OTHER side's
+        // baseline tactic so a tactically-aware coach can flip to a
+        // counter shape — without this every continental fixture
+        // resolved the counter branch with `opponent_tactic = None`
+        // and stayed on the persistent shape regardless of opponent.
         let engine_matches: Vec<Match> = todays_matches
             .iter()
             .filter_map(|cm| {
@@ -240,8 +237,26 @@ impl ChampionsLeague {
                 let home_force = home_club.get_force_selected_players();
                 let away_force = away_club.get_force_selected_players();
 
-                let home_squad = home_team.get_enhanced_match_squad(&home_force, &selection_ctx);
-                let away_squad = away_team.get_enhanced_match_squad(&away_force, &selection_ctx);
+                let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
+                let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
+
+                let home_ctx = SelectionContext {
+                    is_friendly: false,
+                    date,
+                    match_importance: 1.0,
+                    philosophy: None,
+                    opponent_tactic: away_baseline,
+                };
+                let away_ctx = SelectionContext {
+                    is_friendly: false,
+                    date,
+                    match_importance: 1.0,
+                    philosophy: None,
+                    opponent_tactic: home_baseline,
+                };
+
+                let home_squad = home_team.get_enhanced_match_squad(&home_force, &home_ctx);
+                let away_squad = away_team.get_enhanced_match_squad(&away_force, &away_ctx);
 
                 let match_id = format!(
                     "cl_{}_{}_{}",

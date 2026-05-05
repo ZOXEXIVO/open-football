@@ -200,6 +200,11 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
         substitutions: Vec::new(),
         penalty_shootout: Vec::new(),
         player_of_the_match_id: None,
+        starting_home_tactic: None,
+        starting_away_tactic: None,
+        final_home_tactic: None,
+        final_away_tactic: None,
+        shape_change_minute: None,
     }
 }
 

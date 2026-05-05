@@ -110,6 +110,28 @@ pub struct MatchResultRaw {
     pub penalty_shootout: Vec<PenaltyShootoutKick>,
 
     pub player_of_the_match_id: Option<u32>,
+
+    /// The shape each team STARTED the match in (taken from
+    /// `MatchSquad::tactics` at kickoff). Lets the result and the
+    /// downstream `MatchHistory` show a "starting → final" tactical
+    /// summary instead of just "what shape was on the pitch at the
+    /// final whistle".
+    pub starting_home_tactic: Option<crate::MatchTacticType>,
+    pub starting_away_tactic: Option<crate::MatchTacticType>,
+    /// The shape each team finished the match in. Differs from the
+    /// starting shape when the in-match coach probed a situational
+    /// override (`evaluate_situational_shape`) — e.g. 4-4-2 → 4-3-3
+    /// chasing a deficit, 4-4-2 → 4-5-1 protecting a lead. Surfaced so
+    /// the league pipeline can record it on `MatchHistory` and the
+    /// web tactics view can render "Plan: 4-4-2 — Last used: 4-3-3
+    /// (chase) vs Spurs".
+    pub final_home_tactic: Option<crate::MatchTacticType>,
+    pub final_away_tactic: Option<crate::MatchTacticType>,
+    /// Sim-minute at which the FIRST shape change fired for either
+    /// side (whichever came first). `None` when neither side changed
+    /// shape during the match. Stored as the marker the web view uses
+    /// to label a chip with "shifted at min X".
+    pub shape_change_minute: Option<u8>,
 }
 
 impl Clone for MatchResultRaw {
@@ -125,6 +147,11 @@ impl Clone for MatchResultRaw {
             substitutions: self.substitutions.clone(),
             penalty_shootout: self.penalty_shootout.clone(),
             player_of_the_match_id: self.player_of_the_match_id,
+            starting_home_tactic: self.starting_home_tactic,
+            starting_away_tactic: self.starting_away_tactic,
+            final_home_tactic: self.final_home_tactic,
+            final_away_tactic: self.final_away_tactic,
+            shape_change_minute: self.shape_change_minute,
         }
     }
 }
@@ -142,6 +169,11 @@ impl MatchResultRaw {
             substitutions: Vec::new(),
             penalty_shootout: Vec::new(),
             player_of_the_match_id: None,
+            starting_home_tactic: None,
+            starting_away_tactic: None,
+            final_home_tactic: None,
+            final_away_tactic: None,
+            shape_change_minute: None,
         }
     }
 
@@ -157,6 +189,11 @@ impl MatchResultRaw {
             substitutions: self.substitutions.clone(),
             penalty_shootout: self.penalty_shootout.clone(),
             player_of_the_match_id: self.player_of_the_match_id,
+            starting_home_tactic: self.starting_home_tactic,
+            starting_away_tactic: self.starting_away_tactic,
+            final_home_tactic: self.final_home_tactic,
+            final_away_tactic: self.final_away_tactic,
+            shape_change_minute: self.shape_change_minute,
         }
     }
 

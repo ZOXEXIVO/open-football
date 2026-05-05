@@ -2897,21 +2897,21 @@ a:link, a:visited, a:hover, a:active {
 /* Row 6: Attacking Midfielders */
 .fp-aml {
     left: 12%;
-    bottom: 62%;
+    bottom: 65%;
     top: auto;
     transform: translate(-50%, 0);
 }
 
 .fp-amc {
     left: 50%;
-    bottom: 62%;
+    bottom: 65%;
     top: auto;
     transform: translate(-50%, 0);
 }
 
 .fp-amr {
     left: 88%;
-    bottom: 62%;
+    bottom: 65%;
     top: auto;
     transform: translate(-50%, 0);
 }
@@ -3547,7 +3547,7 @@ a:link, a:visited, a:hover, a:active {
     display: flex;
     align-items: baseline;
     gap: 8px;
-    font-size: 12px;
+    font-size: 14px;
     line-height: 1.4;
 }
 
@@ -3566,6 +3566,30 @@ a:link, a:visited, a:hover, a:active {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.fm-info-row-stats {
+    font-size: 13px;
+    color: #c8d6e0;
+}
+
+.fm-info-stats {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+}
+
+.fm-stat-num {
+    font-size: 16px;
+    font-weight: 700;
+    color: #ffffff;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.2px;
+    margin-right: 1px;
+}
+
+.fm-stat-sep {
+    color: #3b4d58;
 }
 
 .fm-download-btn {
@@ -4826,7 +4850,7 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-pitch-player.pos-dm {
     left: 50%;
-    bottom: 35%;
+    bottom: 32%;
 }
 
 .fm-pitch-player.pos-wr {
@@ -4863,17 +4887,17 @@ a:link, a:visited, a:hover, a:active {
 /* Row 6: Attacking midfielders */
 .fm-pitch-player.pos-aml {
     left: 15%;
-    bottom: 62%;
+    bottom: 65%;
 }
 
 .fm-pitch-player.pos-amc {
     left: 50%;
-    bottom: 62%;
+    bottom: 65%;
 }
 
 .fm-pitch-player.pos-amr {
     left: 85%;
-    bottom: 62%;
+    bottom: 65%;
 }
 
 /* Row 7: Forwards */
@@ -7621,6 +7645,76 @@ a:link, a:visited, a:hover, a:active {
     font-size: 12px;
     padding: 1px 6px;
     bottom: 5px;
+}
+
+/* Recently-used shapes strip below the pitch. Shapes that match the
+   persistent plan render in the muted base colour; shapes that differ
+   (in-match shift, e.g. chase / protect) render in the accent colour
+   so the user can spot them at a glance. */
+.fm-tac-recent {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 18px 14px;
+    flex-wrap: wrap;
+}
+
+.fm-tac-recent-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #546a78;
+}
+
+.fm-tac-recent-list {
+    display: flex;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.fm-tac-recent-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 4px 8px;
+    background: #1a242c;
+    border: 1px solid #263340;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+.fm-tac-recent-item.fm-tac-recent-shift {
+    border-color: #4a3322;
+    background: #221b14;
+}
+
+.fm-tac-recent-date {
+    color: #6b7580;
+    font-size: 10px;
+}
+
+.fm-tac-recent-shape {
+    color: #d0d6dc;
+    font-weight: 600;
+}
+
+.fm-tac-recent-item.fm-tac-recent-shift .fm-tac-recent-shape {
+    color: #d4a341;
+}
+
+.fm-tac-recent-opp {
+    color: #6b7580;
+    font-size: 10px;
+}
+
+.fm-tac-recent-shift-min {
+    color: #d4a341;
+    font-size: 10px;
+    font-weight: 600;
 }
 
 .fm-tac-pitch .fm-aw-pitch-label {

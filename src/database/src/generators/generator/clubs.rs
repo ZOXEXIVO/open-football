@@ -8,8 +8,8 @@ use core::shared::Location;
 use core::transfers::pipeline::ClubTransferPlan;
 use core::{
     Club, ClubBoard, ClubColors, ClubFacilities, ClubFinances, ClubPhilosophy, ClubStatus,
-    FacilityLevel, Player, PlayerCollection, ReputationLevel, StaffCollection, Team,
-    TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    FacilityLevel, Player, PlayerCollection, ReputationLevel, StaffCollection, TacticsSelector,
+    Team, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
 };
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -160,7 +160,7 @@ impl DatabaseGenerator {
                                     &team_type,
                                 ));
 
-                                Team::builder()
+                                let mut team = Team::builder()
                                     .id(t.id)
                                     .league_id(t.league_id)
                                     .club_id(club.id)
@@ -179,7 +179,24 @@ impl DatabaseGenerator {
                                     .players(players)
                                     .staffs(staffs)
                                     .build()
-                                    .expect("Failed to build Team")
+                                    .expect("Failed to build Team");
+
+                                // Pre-select the persistent team tactic at
+                                // load time. Without this every team starts
+                                // at `tactics: None` and the web view falls
+                                // back to a hardcoded 4-4-2 until the season
+                                // tick first runs — and once that tick fires
+                                // the legacy selector locked the league at
+                                // T442 anyway. Pre-selecting on a properly
+                                // squad-aware scorer breaks that loop and
+                                // makes the tactics screen truthful from
+                                // the first request.
+                                let tactic = TacticsSelector::select(
+                                    &team,
+                                    team.staffs.head_coach(),
+                                );
+                                team.tactics = Some(tactic);
+                                team
                             })
                             .collect(),
                     ),

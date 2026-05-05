@@ -101,6 +101,25 @@ pub struct MatchContext {
     /// offside trap synchronisation.
     pub tactical_familiarity_home: TacticalFamiliarity,
     pub tactical_familiarity_away: TacticalFamiliarity,
+
+    /// Sim-tick at which the last shape change fired for either side.
+    /// Used by `evaluate_situational_shape` to enforce a hysteresis
+    /// window so coaches don't flip shape every 5-second eval slice
+    /// after a single goal. Initialised to `u64::MAX` so the first
+    /// change is always allowed.
+    pub last_shape_change_tick: u64,
+    /// Sim-minute at which the FIRST shape change fired in this match
+    /// (any side). Stamped once and never overwritten so the result
+    /// summary can show the moment the manager pivoted. `None` while
+    /// no shape change has happened yet.
+    pub first_shape_change_minute: Option<u8>,
+    /// Tactics each team started the match with. Captured by
+    /// `FootballEngine::play` from the kickoff `MatchSquad` so the
+    /// result can show "started 4-4-2 → finished 4-3-3" without the
+    /// engine needing to thread the squads through every state
+    /// transition.
+    pub starting_home_tactic: Option<crate::MatchTacticType>,
+    pub starting_away_tactic: Option<crate::MatchTacticType>,
 }
 
 impl MatchContext {
@@ -166,6 +185,10 @@ impl MatchContext {
             chemistry: ChemistryMap::default(),
             tactical_familiarity_home: TacticalFamiliarity::default(),
             tactical_familiarity_away: TacticalFamiliarity::default(),
+            last_shape_change_tick: u64::MAX,
+            first_shape_change_minute: None,
+            starting_home_tactic: None,
+            starting_away_tactic: None,
         }
     }
 

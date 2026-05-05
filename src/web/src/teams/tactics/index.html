@@ -43,6 +43,25 @@
                 {% endfor %}
             </div>
         </div>
+        {% if !recent_used_shapes.is_empty() %}
+        <div class="fm-tac-recent">
+            <span class="fm-tac-recent-label">{{ i18n.t("recently_used") }}</span>
+            <ul class="fm-tac-recent-list">
+                {% for r in recent_used_shapes %}
+                <li class="fm-tac-recent-item{% if r.is_shift %} fm-tac-recent-shift{% endif %}">
+                    <span class="fm-tac-recent-date">{{ r.date_label }}</span>
+                    <span class="fm-tac-recent-shape">{{ r.formation_name }}</span>
+                    {% if !r.opponent_label.is_empty() %}
+                    <span class="fm-tac-recent-opp">{{ r.opponent_label }}</span>
+                    {% endif %}
+                    {% if r.is_shift && !r.change_minute_label.is_empty() %}
+                    <span class="fm-tac-recent-shift-min">{{ r.change_minute_label }}</span>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
     </section>
 </div>
 {% endblock %}
