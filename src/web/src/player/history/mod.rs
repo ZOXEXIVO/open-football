@@ -2,6 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
+use crate::player::events::PlayerEventsCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -47,6 +48,7 @@ pub struct PlayerHistoryTemplate {
     pub is_unhappy: bool,
     pub is_force_match_selection: bool,
     pub is_on_watchlist: bool,
+    pub events_count: usize,
 }
 
 pub struct PlayerHistorySeasonItem {
@@ -279,6 +281,7 @@ pub async fn player_history_action(
             is_unhappy: false,
             is_force_match_selection: player.is_force_match_selection,
             is_on_watchlist: simulator_data.watchlist.contains(&player.id),
+            events_count: PlayerEventsCounter::count(player),
         }
         .into_response())
     } else {
@@ -335,6 +338,7 @@ pub async fn player_history_action(
             is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
             is_force_match_selection: player.is_force_match_selection,
             is_on_watchlist: simulator_data.watchlist.contains(&player.id),
+            events_count: PlayerEventsCounter::count(player),
         }
         .into_response())
     }

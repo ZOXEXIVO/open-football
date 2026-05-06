@@ -7,8 +7,8 @@ use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
-    HappinessEventScope, HappinessEventSeverity, HappinessEventType, PlayerCollection,
-    PlayerFieldPositionGroup, PlayerSquadStatus,
+    HappinessEventScope, HappinessEventSeverity, HappinessEventType, LoanEventContext,
+    LoanEventKind, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
 };
 use chrono::Datelike;
 use std::collections::HashMap;
@@ -164,9 +164,19 @@ impl TeamBehaviour {
             }
             // Morale hit scales with how badly we're trailing.
             let magnitude = -((deficit as f32 * 0.8).min(6.0) + 1.0);
-            player
-                .happiness
-                .add_event(HappinessEventType::LackOfPlayingTime, magnitude);
+            let lctx = LoanEventContext::new(LoanEventKind::LoanMinutesConcern);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::Boardroom,
+            )
+            .with_loan_context(lctx);
+            player.happiness.add_event_with_context(
+                HappinessEventType::LackOfPlayingTime,
+                magnitude,
+                None,
+                happiness_ctx,
+            );
         }
     }
 

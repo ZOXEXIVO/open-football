@@ -1,4 +1,10 @@
-use crate::HappinessEventType;
+use crate::club::player::behaviour_config::HappinessConfig;
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, ManagerInteractionEventContext, ManagerInteractionTone,
+    ManagerInteractionTopic, PersonalAdaptationEventContext, PersonalAdaptationKind,
+    PlayerAcceptance, PromiseKind,
+};
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::development::CoachingEffect;
@@ -678,16 +684,48 @@ impl Player {
 
         if kept_weight > 0.0 {
             let mag = (4.0 * kept_weight).clamp(1.0, 14.0);
-            self.happiness
-                .add_event(HappinessEventType::PromiseKept, mag);
+            let mctx = ManagerInteractionEventContext::new(
+                ManagerInteractionTopic::PromiseFollowUp,
+                ManagerInteractionTone::Honest,
+                PlayerAcceptance::Motivated,
+            )
+            .with_promise(PromiseKind::PlayingTime, 0.9);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::ManagerSupport,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::Personal,
+            )
+            .with_manager_interaction_context(mctx);
+            self.happiness.add_event_with_context(
+                HappinessEventType::PromiseKept,
+                mag,
+                None,
+                happiness_ctx,
+            );
             self.happiness.factors.manager_relationship =
                 (self.happiness.factors.manager_relationship + (2.0 * kept_weight).clamp(0.0, 6.0))
                     .clamp(-15.0, 15.0);
         }
         if broken_weight > 0.0 {
             let mag = -(8.0 * broken_weight).clamp(2.0, 24.0);
-            self.happiness
-                .add_event(HappinessEventType::PromiseBroken, mag);
+            let mctx = ManagerInteractionEventContext::new(
+                ManagerInteractionTopic::PromiseFollowUp,
+                ManagerInteractionTone::Honest,
+                PlayerAcceptance::Resented,
+            )
+            .with_promise(PromiseKind::PlayingTime, 0.4);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::Personal,
+            )
+            .with_manager_interaction_context(mctx);
+            self.happiness.add_event_with_context(
+                HappinessEventType::PromiseBroken,
+                mag,
+                None,
+                happiness_ctx,
+            );
             self.happiness.factors.manager_relationship =
                 (self.happiness.factors.manager_relationship
                     - (4.0 * broken_weight).clamp(0.0, 12.0))
@@ -975,13 +1013,26 @@ impl Player {
                     90 => 0.9,
                     _ => 1.0,
                 };
-                let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+                let cfg = HappinessConfig::default();
                 let mag = cfg.catalog.language_progress * factor;
+                let pactx = PersonalAdaptationEventContext::new(
+                    PersonalAdaptationKind::LanguageMilestone,
+                    0,
+                )
+                .with_local_language(true);
+                let happiness_ctx = HappinessEventContext::new(
+                    HappinessEventCause::NationalityIntegration,
+                    HappinessEventSeverity::from_magnitude(mag),
+                    HappinessEventScope::Personal,
+                )
+                .with_personal_adaptation_context(pactx);
                 // Cooldown 30d so two languages crossing thresholds in the
                 // same fortnight don't both fire (rare, but tidy).
-                self.happiness.add_event_with_cooldown(
-                    crate::HappinessEventType::LanguageProgress,
+                self.happiness.add_event_with_context_and_cooldown(
+                    HappinessEventType::LanguageProgress,
                     mag,
+                    None,
+                    happiness_ctx,
                     30,
                 );
             }

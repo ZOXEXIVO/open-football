@@ -2064,18 +2064,39 @@ fn match_dropped_friendly_dampens_magnitude_below_competitive() {
 }
 
 #[test]
-fn legacy_on_match_dropped_still_emits_no_context() {
+fn on_match_dropped_synthesises_a_default_selection_context() {
+    // The legacy contextless path is gone — `on_match_dropped()` now
+    // routes through `on_match_dropped_with_context` with a sensible
+    // default (UnusedSubstitute / BenchBalance) when the squad
+    // selector has no specific omission record. Every MatchDropped
+    // event therefore carries structured selection metadata, and the
+    // renderer never needs the bare "Dropped from match squad"
+    // fallback string.
     let mut p = build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
     p.on_match_dropped();
     let event = p
         .happiness
         .recent_events
         .last()
-        .expect("legacy emit must still land an event");
+        .expect("emit must land an event");
     assert_eq!(event.event_type, HappinessEventType::MatchDropped);
-    assert!(
-        event.context.is_none(),
-        "legacy path must not synthesise a selection context"
+    let ctx = event
+        .context
+        .as_ref()
+        .expect("on_match_dropped must attach a selection context");
+    let sel = ctx
+        .selection_context
+        .as_ref()
+        .expect("default path must populate selection_context");
+    assert_eq!(
+        sel.scope,
+        crate::SelectionDecisionScope::UnusedSubstitute,
+        "default scope is bench-warming"
+    );
+    assert_eq!(
+        sel.reason,
+        crate::SelectionOmissionReason::BenchBalance,
+        "default reason is bench-balance"
     );
 }
 

@@ -7,18 +7,29 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
+use core::ContractEventContext;
 use core::HappinessEvent;
 use core::HappinessEventContext;
 use core::HappinessEventEvidence;
 use core::HappinessEventSeverity;
 use core::HappinessEventType;
+use core::InjuryRecoveryEventContext;
+use core::LeadershipEventContext;
+use core::LoanEventContext;
+use core::ManagerInteractionEventContext;
+use core::MatchPerformanceEventContext;
 use core::MatchSelectionContext;
+use core::MediaFanEventContext;
+use core::NationalTeamEventContext;
+use core::PersonalAdaptationEventContext;
 use core::PlayerStatusType;
+use core::RoleStatusEventContext;
 use core::SelectionDecisionScope;
 use core::SelectionScoreFactor;
 use core::SimulatorData;
 use core::SupportEventContext;
 use core::SupportTrigger;
+use core::TrainingEventContext;
 use core::TransferInterestContext;
 use core::TransferInterestEvidence;
 use core::TransferInterestStage;
@@ -122,6 +133,7 @@ pub struct PlayerEventsTemplate {
     pub is_unhappy: bool,
     pub is_force_match_selection: bool,
     pub is_on_watchlist: bool,
+    pub events_count: usize,
     pub events: Vec<PlayerEventDto>,
 }
 
@@ -246,6 +258,7 @@ pub async fn player_events_action(
         is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
         is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
+        events_count: events.len(),
         events,
     }
     .into_response())
@@ -450,6 +463,40 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
     }
 }
 
+pub struct PlayerEventsCounter;
+
+impl PlayerEventsCounter {
+    pub fn count(player: &core::Player) -> usize {
+        Self::visible_iter(player).count()
+    }
+
+    fn visible_iter(player: &core::Player) -> impl Iterator<Item = &HappinessEvent> {
+        player
+            .happiness
+            .recent_events
+            .iter()
+            // Routine GoodTraining without context is hidden — it's noise.
+            // GoodTraining with a non-routine context (set standards, young
+            // impressing, returning from injury, extra work) is shown.
+            .filter(|e| {
+                if e.event_type != HappinessEventType::GoodTraining {
+                    return true;
+                }
+                match e.context.as_ref().and_then(|c| c.training_context.as_ref()) {
+                    Some(tc) => !matches!(
+                        tc.reason,
+                        core::TrainingEventReason::RoutineGoodSession
+                    ),
+                    None => false,
+                }
+            })
+            // Suppress partner-style events that lost track of the partner:
+            // showing "Bonded with a teammate" without naming who is confusing.
+            .filter(|e| !is_partner_required(&e.event_type) || e.partner_player_id.is_some())
+            .take(100)
+    }
+}
+
 fn build_events(
     player: &core::Player,
     i18n: &I18n,
@@ -457,15 +504,7 @@ fn build_events(
     lang: &str,
     league_slug: Option<&str>,
 ) -> Vec<PlayerEventDto> {
-    let mut events: Vec<_> = player
-        .happiness
-        .recent_events
-        .iter()
-        .filter(|e| e.event_type != HappinessEventType::GoodTraining)
-        // Suppress partner-style events that lost track of the partner:
-        // showing "Bonded with a teammate" without naming who is confusing.
-        .filter(|e| !is_partner_required(&e.event_type) || e.partner_player_id.is_some())
-        .take(100)
+    let mut events: Vec<_> = PlayerEventsCounter::visible_iter(player)
         .map(|e| {
             let resolved_partner = e
                 .partner_player_id
@@ -498,55 +537,20 @@ fn build_events(
                 .and_then(|sel| {
                     SelectionRender::comparison(sel, simulator_data, i18n, lang)
                 });
-            // Selection-aware events get a richer headline that names
-            // the chosen rival inline. Falls back to the generic
-            // "Dropped from match squad" line when no selection
-            // context was attached.
-            let (description_html, partner_in_headline) = if matches!(
-                e.event_type,
-                HappinessEventType::MatchDropped
-            ) {
-                if let Some(sel) = e
-                    .context
-                    .as_ref()
-                    .and_then(|c| c.selection_context.as_ref())
-                {
-                    let h = SelectionRender::headline(sel, simulator_data, i18n, lang);
-                    (h.html, h.partner_in_headline)
-                } else {
-                    (description.html, description.partner_in_headline)
-                }
-            } else if SupportRender::handles(&e.event_type) {
-                if let Some(support) = e
-                    .context
-                    .as_ref()
-                    .and_then(|c| c.support_context.as_ref())
-                {
-                    let html = SupportRender::headline(&e.event_type, support, i18n);
-                    (html, false)
-                } else {
-                    (description.html, description.partner_in_headline)
-                }
-            } else if TransferInterestRender::handles(&e.event_type) {
-                if let Some(tic) = e
-                    .context
-                    .as_ref()
-                    .and_then(|c| c.transfer_interest_context.as_ref())
-                {
-                    let (html, _named) = TransferInterestRender::headline(
-                        &e.event_type,
-                        tic,
-                        simulator_data,
-                        i18n,
-                        lang,
-                    );
-                    (html, false)
-                } else {
-                    (description.html, description.partner_in_headline)
-                }
-            } else {
-                (description.html, description.partner_in_headline)
+            // Context-aware headline routing. The dispatcher tries each
+            // registered renderer in order; the first whose `handles()`
+            // matches AND whose specialized context is attached produces
+            // the headline. Falls back to the legacy description when
+            // no renderer applies.
+            let dispatcher = HeadlineDispatcher {
+                event: e,
+                simulator_data,
+                i18n,
+                lang,
             };
+            let (description_html, partner_in_headline) = dispatcher
+                .try_render()
+                .unwrap_or((description.html, description.partner_in_headline));
 
             let (partner_name, partner_slug) = if partner_in_headline {
                 (None, None)
@@ -638,6 +642,48 @@ impl EventContextRenderer {
                 return None;
             }
             return Some(parts.join(" "));
+        }
+        if let Some(tc) = ctx.training_context.as_ref() {
+            return TrainingRender::reason_sentence(tc, i18n);
+        }
+        if let Some(mc) = ctx.manager_interaction_context.as_ref() {
+            return ManagerInteractionRender::reason_sentence(mc, i18n);
+        }
+        if let Some(cc) = ctx.contract_context.as_ref() {
+            return ContractRender::reason_sentence(cc, i18n);
+        }
+        if let Some(ic) = ctx.injury_context.as_ref() {
+            return InjuryRecoveryRender::reason_sentence(ic, i18n);
+        }
+        if let Some(mp) = ctx.match_performance_context.as_ref() {
+            return MatchPerformanceRender::reason_sentence(mp, i18n);
+        }
+        if let Some(rc) = ctx.role_status_context.as_ref() {
+            return RoleStatusRender::reason_sentence(rc, i18n);
+        }
+        if let Some(nt) = ctx.national_team_context.as_ref() {
+            return NationalTeamRender::reason_sentence(nt, i18n);
+        }
+        if let Some(lc) = ctx.leadership_context.as_ref() {
+            return LeadershipRender::reason_sentence(lc, i18n);
+        }
+        if let Some(mf) = ctx.media_fan_context.as_ref() {
+            return MediaFanRender::reason_sentence(mf, i18n);
+        }
+        if let Some(pa) = ctx.personal_adaptation_context.as_ref() {
+            return PersonalAdaptationRender::reason_sentence(pa, i18n);
+        }
+        if let Some(lc) = ctx.loan_context.as_ref() {
+            return LoanRender::reason_sentence(lc, i18n);
+        }
+        if let Some(rc) = ctx.recognition_context.as_ref() {
+            return RecognitionRender::reason_sentence(rc, i18n);
+        }
+        if let Some(sc) = ctx.season_outcome_context.as_ref() {
+            return SeasonOutcomeRender::reason_sentence(sc, i18n);
+        }
+        if let Some(rc) = ctx.regulation_context.as_ref() {
+            return RegulationRender::reason_sentence(rc, i18n);
         }
         let cause_key = format!("reason_main_{}", Self::cause_token(ctx));
         let main = i18n.t(&cause_key);
@@ -1439,6 +1485,836 @@ impl TransferInterestRender {
     }
 }
 
+/// Renderer for the Phase 1-11 structured context payloads. Each
+/// cluster (training, manager, contract, ...) picks a deterministic
+/// reason key from the stored context so the rendered headline + cause
+/// sentence is stable across reloads. Falls back to the legacy static
+/// line if no upgraded context was attached at the emit site.
+struct TrainingRender;
+
+impl TrainingRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::GoodTraining | HappinessEventType::PoorTraining
+        )
+    }
+
+    pub fn headline(ctx: &TrainingEventContext, i18n: &I18n) -> String {
+        let key = format!("training_headline_{}", Self::reason_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.reason.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &TrainingEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("training_reason_main_{}", Self::reason_token(ctx));
+        let main = i18n.t(&key);
+        if main == key {
+            return None;
+        }
+        Some(main.to_string())
+    }
+
+    fn reason_token(ctx: &TrainingEventContext) -> &'static str {
+        use core::TrainingEventReason as R;
+        match ctx.reason {
+            R::SharpAfterBeingLeftOut => "sharp_after_being_left_out",
+            R::RespondedToCriticism => "responded_to_criticism",
+            R::StruggledWithIntensity => "struggled_with_intensity",
+            R::DistractedByRumours => "distracted_by_rumours",
+            R::PoorAttitude => "poor_attitude",
+            R::ReturningFromInjuryNotSharp => "returning_from_injury_not_sharp",
+            R::YoungImpressedStaff => "young_impressed_staff",
+            R::SettingStandards => "setting_standards",
+            R::ExtraWorkAfterSession => "extra_work_after_session",
+            R::MatchPreparationFocus => "match_preparation_focus",
+            R::RoutineGoodSession => "routine_good_session",
+            R::RoutineBadSession => "routine_bad_session",
+        }
+    }
+}
+
+struct ManagerInteractionRender;
+
+impl ManagerInteractionRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::ManagerPraise
+                | HappinessEventType::ManagerDiscipline
+                | HappinessEventType::ManagerCriticism
+                | HappinessEventType::ManagerTacticalInstruction
+                | HappinessEventType::PromiseKept
+                | HappinessEventType::PromiseBroken
+                | HappinessEventType::ManagerPlayingTimePromise
+        )
+    }
+
+    pub fn headline(
+        event_type: &HappinessEventType,
+        ctx: &ManagerInteractionEventContext,
+        i18n: &I18n,
+    ) -> String {
+        let key = format!(
+            "manager_interaction_headline_{}_{}",
+            Self::event_token(event_type),
+            ctx.topic.as_i18n_key().trim_start_matches("manager_topic_")
+        );
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(event_type_to_i18n_key(event_type)).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(
+        ctx: &ManagerInteractionEventContext,
+        i18n: &I18n,
+    ) -> Option<String> {
+        let key = format!(
+            "manager_reason_{}_{}",
+            ctx.tone.as_i18n_key().trim_start_matches("manager_tone_"),
+            ctx.acceptance.as_i18n_key().trim_start_matches("manager_acceptance_")
+        );
+        let raw = i18n.t(&key);
+        if raw == key {
+            // Topic-only fallback
+            let topic_key = format!(
+                "manager_reason_topic_{}",
+                ctx.topic.as_i18n_key().trim_start_matches("manager_topic_")
+            );
+            let topic_raw = i18n.t(&topic_key);
+            if topic_raw == topic_key {
+                return None;
+            }
+            return Some(topic_raw.to_string());
+        }
+        Some(raw.to_string())
+    }
+
+    fn event_token(event_type: &HappinessEventType) -> &'static str {
+        match event_type {
+            HappinessEventType::ManagerPraise => "praise",
+            HappinessEventType::ManagerDiscipline => "discipline",
+            HappinessEventType::ManagerCriticism => "criticism",
+            HappinessEventType::ManagerTacticalInstruction => "tactical",
+            HappinessEventType::PromiseKept => "promise_kept",
+            HappinessEventType::PromiseBroken => "promise_broken",
+            HappinessEventType::ManagerPlayingTimePromise => "playing_time_promise",
+            _ => "other",
+        }
+    }
+}
+
+struct ContractRender;
+
+impl ContractRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::ContractOffer
+                | HappinessEventType::ContractRenewal
+                | HappinessEventType::ContractTerminated
+                | HappinessEventType::SalaryShock
+                | HappinessEventType::SalaryBoost
+                | HappinessEventType::SalaryGapNoticed
+        )
+    }
+
+    pub fn headline(ctx: &ContractEventContext, i18n: &I18n) -> String {
+        let key = format!("contract_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.kind.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &ContractEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("contract_reason_{}", Self::kind_token(ctx));
+        let main = i18n.t(&key);
+        if main == key {
+            return None;
+        }
+        Some(main.to_string())
+    }
+
+    fn kind_token(ctx: &ContractEventContext) -> &'static str {
+        use core::ContractEventKind as K;
+        match ctx.kind {
+            K::OfferReceived => "offer_received",
+            K::TalksOpened => "talks_opened",
+            K::TalksStalled => "talks_stalled",
+            K::Renewed => "renewed",
+            K::Terminated => "terminated",
+            K::SalaryShock => "salary_shock",
+            K::SalaryBoost => "salary_boost",
+            K::LoyaltyDiscountAccepted => "loyalty_discount",
+            K::AgentPushingForBetterTerms => "agent_pushing",
+            K::WagePromiseFrustration => "wage_promise_frustration",
+            K::AcceptedReducedRoleContract => "accepted_reduced_role",
+            K::RejectedLowStatusOffer => "rejected_low_status",
+        }
+    }
+}
+
+struct InjuryRecoveryRender;
+
+impl InjuryRecoveryRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(event_type, HappinessEventType::InjuryReturn)
+    }
+
+    pub fn headline(ctx: &InjuryRecoveryEventContext, i18n: &I18n) -> String {
+        let key = format!("injury_headline_{}", Self::stage_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.stage.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &InjuryRecoveryEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("injury_reason_{}", Self::stage_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+
+    fn stage_token(ctx: &InjuryRecoveryEventContext) -> &'static str {
+        use core::InjuryRecoveryStage as S;
+        match ctx.stage {
+            S::ReturnedToFullTraining => "returned_full_training",
+            S::FirstMinutesAfterInjury => "first_minutes",
+            S::RecoverySetback => "recovery_setback",
+            S::ProtectedByMedicalStaff => "protected",
+            S::InjuryRecurrenceConcern => "recurrence_concern",
+            S::FitnessConfidenceRestored => "confidence_restored",
+        }
+    }
+}
+
+struct MatchPerformanceRender;
+
+impl MatchPerformanceRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::FirstClubGoal
+                | HappinessEventType::DecisiveGoal
+                | HappinessEventType::SubstituteImpact
+                | HappinessEventType::CleanSheetPride
+                | HappinessEventType::CostlyMistake
+                | HappinessEventType::RedCardFallout
+                | HappinessEventType::HatTrick
+                | HappinessEventType::AssistHatTrick
+                | HappinessEventType::GoalDroughtEnded
+                | HappinessEventType::ScoringDroughtConcern
+                | HappinessEventType::PlayerOfTheMatch
+        )
+    }
+
+    pub fn headline(
+        event_type: &HappinessEventType,
+        ctx: &MatchPerformanceEventContext,
+        i18n: &I18n,
+    ) -> String {
+        let key = format!("match_perf_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(event_type_to_i18n_key(event_type)).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &MatchPerformanceEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("match_perf_reason_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+
+    fn kind_token(ctx: &MatchPerformanceEventContext) -> &'static str {
+        use core::MatchPerformanceKind as K;
+        match ctx.kind {
+            K::AnsweredCriticsWithPerformance => "answered_critics",
+            K::CostlyErrorUnderPressure => "costly_error_pressure",
+            K::SavedResultLate => "saved_result_late",
+            K::ChangedGameFromBench => "changed_game_from_bench",
+            K::DefensiveLeaderPerformance => "defensive_leader",
+            K::WastefulFinishingConcern => "wasteful_finishing",
+            K::ComposurePraised => "composure_praised",
+            K::BigMatchNerves => "big_match_nerves",
+            K::StandoutDisplay => "standout",
+            K::FirstClubGoalMoment => "first_club_goal",
+            K::DroughtEnded => "drought_ended",
+            K::HatTrickFire => "hat_trick",
+        }
+    }
+}
+
+struct RoleStatusRender;
+
+impl RoleStatusRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::SquadStatusChange
+                | HappinessEventType::LackOfPlayingTime
+                | HappinessEventType::RoleMismatch
+                | HappinessEventType::WonStartingPlace
+                | HappinessEventType::LostStartingPlace
+        )
+    }
+
+    pub fn headline(ctx: &RoleStatusEventContext, i18n: &I18n) -> String {
+        let key = format!("role_status_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.kind.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &RoleStatusEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("role_status_reason_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+
+    fn kind_token(ctx: &RoleStatusEventContext) -> &'static str {
+        use core::RoleStatusKind as K;
+        match ctx.kind {
+            K::RoleClarifiedByManager => "role_clarified",
+            K::RoleUnclear => "role_unclear",
+            K::DepthChartPressure => "depth_chart_pressure",
+            K::DirectRivalPreferred => "direct_rival_preferred",
+            K::TacticalRoleChanged => "tactical_role_changed",
+            K::BenchedForBalance => "benched_for_balance",
+            K::RestedForWorkload => "rested_for_workload",
+            K::SquadStatusUpgrade => "squad_status_upgrade",
+            K::SquadStatusDowngrade => "squad_status_downgrade",
+            K::NoNaturalRoleInFormation => "no_natural_role",
+            K::EstablishedStarter => "established_starter",
+            K::SlippedOutOfStartingXI => "slipped_out_xi",
+        }
+    }
+}
+
+struct NationalTeamRender;
+
+impl NationalTeamRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::NationalTeamCallup
+                | HappinessEventType::NationalTeamDropped
+                | HappinessEventType::NationalTeamDebut
+        )
+    }
+
+    pub fn headline(ctx: &NationalTeamEventContext, i18n: &I18n) -> String {
+        let key = format!("national_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.kind.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &NationalTeamEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("national_reason_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+
+    fn kind_token(ctx: &NationalTeamEventContext) -> &'static str {
+        use core::NationalTeamEventKind as K;
+        match ctx.kind {
+            K::FirstCallup => "first_callup",
+            K::Recall => "recall",
+            K::EmergencyCallup => "emergency_callup",
+            K::YouthToSeniorJump => "youth_to_senior",
+            K::DroppedDueToForm => "dropped_form",
+            K::DroppedDueToInjury => "dropped_injury",
+            K::DroppedDueToCompetition => "dropped_competition",
+            K::TournamentSquadOmitted => "tournament_squad_omitted",
+            K::InternationalPlaceUnderThreat => "place_under_threat",
+            K::FirstCapPride => "first_cap_pride",
+            K::NationalTeamRoleGrowing => "role_growing",
+        }
+    }
+}
+
+struct LeadershipRender;
+
+impl LeadershipRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::CaptaincyAwarded
+                | HappinessEventType::CaptaincyRemoved
+                | HappinessEventType::LeadershipEmergence
+        )
+    }
+
+    pub fn headline(ctx: &LeadershipEventContext, i18n: &I18n) -> String {
+        let key = format!("leadership_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.kind.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &LeadershipEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("leadership_reason_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+
+    fn kind_token(ctx: &LeadershipEventContext) -> &'static str {
+        use core::LeadershipEventKind as K;
+        match ctx.kind {
+            K::CaptaincyAwarded => "captaincy_awarded",
+            K::CaptaincyRemoved => "captaincy_removed",
+            K::LeadershipEmergence => "emergence",
+            K::SeniorPlayerMediates => "senior_mediates",
+            K::BackedBySeniorPlayers => "backed_seniors",
+            K::ChallengedTrainingStandards => "challenged_standards",
+            K::InfluenceInDressingRoomRising => "influence_rising",
+            K::InfluenceInDressingRoomFalling => "influence_falling",
+            K::MentorshipStarted => "mentorship_started",
+            K::MentorshipStrained => "mentorship_strained",
+            K::SquadLeadershipQuestioned => "squad_leadership_questioned",
+        }
+    }
+}
+
+struct MediaFanRender;
+
+impl MediaFanRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::FanCriticism
+                | HappinessEventType::MediaPraise
+                | HappinessEventType::MediaCriticism
+                | HappinessEventType::MediaPressureMounting
+                | HappinessEventType::PublicApology
+                | HappinessEventType::ControversyIncident
+        )
+    }
+
+    pub fn headline(ctx: &MediaFanEventContext, i18n: &I18n) -> String {
+        let key = format!("media_fan_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.kind.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &MediaFanEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("media_fan_reason_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+
+    fn kind_token(ctx: &MediaFanEventContext) -> &'static str {
+        use core::MediaFanEventKind as K;
+        match ctx.kind {
+            K::InterviewCalmsSpeculation => "interview_calms",
+            K::InterviewFuelsSpeculation => "interview_fuels",
+            K::FansSplitOverPlayer => "fans_split",
+            K::SupportersBackPlayerDuringSlump => "supporters_back",
+            K::PublicApologyAccepted => "apology_accepted",
+            K::PublicApologyRejected => "apology_rejected",
+            K::SocialMediaCriticism => "social_media_criticism",
+            K::MediaNarrativeChanged => "narrative_changed",
+            K::HomeFansApprove => "home_fans_approve",
+            K::AwayFansHostile => "away_fans_hostile",
+        }
+    }
+}
+
+struct PersonalAdaptationRender;
+
+impl PersonalAdaptationRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::SettledIntoSquad
+                | HappinessEventType::FeelingIsolated
+                | HappinessEventType::LanguageProgress
+        )
+    }
+
+    pub fn headline(ctx: &PersonalAdaptationEventContext, i18n: &I18n) -> String {
+        let key = format!("adaptation_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.kind.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &PersonalAdaptationEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("adaptation_reason_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+
+    fn kind_token(ctx: &PersonalAdaptationEventContext) -> &'static str {
+        use core::PersonalAdaptationKind as K;
+        match ctx.kind {
+            K::HomesicknessConcern => "homesickness",
+            K::FamilySettled => "family_settled",
+            K::FamilyUnsettled => "family_unsettled",
+            K::LifestyleAdaptation => "lifestyle",
+            K::LanguageBarrierConcern => "language_barrier",
+            K::LocalCultureSettling => "local_culture",
+            K::CompanionSupport => "companion_support",
+            K::AskedForPersonalLeave => "personal_leave",
+            K::LanguageMilestone => "language_milestone",
+            K::SettlingIntoSquad => "settling_squad",
+            K::StillStrugglingToSettle => "still_struggling",
+        }
+    }
+}
+
+struct LoanRender;
+
+impl LoanRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(event_type, HappinessEventType::LoanListingAccepted)
+    }
+
+    pub fn headline(ctx: &LoanEventContext, i18n: &I18n) -> String {
+        let key = format!("loan_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.kind.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &LoanEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("loan_reason_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+
+    fn kind_token(ctx: &LoanEventContext) -> &'static str {
+        use core::LoanEventKind as K;
+        match ctx.kind {
+            K::LoanListingAccepted => "listing_accepted",
+            K::LoanDevelopmentProgress => "development_progress",
+            K::LoanMinutesConcern => "minutes_concern",
+            K::LoanRecallDiscussed => "recall_discussed",
+            K::SettledOnLoan => "settled",
+            K::LoanMovePermanentInterest => "permanent_interest",
+            K::LoanRoleBroken => "role_broken",
+            K::ParentClubSatisfied => "parent_satisfied",
+            K::ParentClubConcerned => "parent_concerned",
+        }
+    }
+}
+
+/// Renders award / recognition events (POW, POM, POS, top scorer,
+/// world player of year, national-team debut). Reads season totals,
+/// margin, and runner-up off the [`RecognitionEventContext`] so the
+/// player feed can explain "named POM with 7 goals, 3 ahead of the
+/// runner-up" instead of bare "Named Player of the Month".
+struct RecognitionRender;
+
+impl RecognitionRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::PlayerOfTheWeek
+                | HappinessEventType::PlayerOfTheMonth
+                | HappinessEventType::YoungPlayerOfTheMonth
+                | HappinessEventType::PlayerOfTheSeason
+                | HappinessEventType::YoungPlayerOfTheSeason
+                | HappinessEventType::TeamOfTheSeasonSelection
+                | HappinessEventType::LeagueTopScorer
+                | HappinessEventType::LeagueTopAssists
+                | HappinessEventType::LeagueGoldenGlove
+                | HappinessEventType::WorldPlayerOfYear
+                | HappinessEventType::WorldPlayerOfYearNomination
+                | HappinessEventType::NationalTeamDebut
+        )
+    }
+
+    pub fn headline(
+        event_type: &HappinessEventType,
+        ctx: &core::RecognitionEventContext,
+        i18n: &I18n,
+    ) -> String {
+        let key = format!("recognition_headline_{}", ctx.kind.as_token());
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(event_type_to_i18n_key(event_type)).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &core::RecognitionEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("recognition_reason_{}", ctx.kind.as_token());
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+}
+
+/// Renders relegation / relegation-fear / survival events. Reads
+/// position, points, and gap-to-safety off the
+/// [`SeasonOutcomeContext`] so the renderer can describe the season
+/// trajectory rather than emitting a single generic verdict line.
+struct SeasonOutcomeRender;
+
+impl SeasonOutcomeRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::Relegated | HappinessEventType::RelegationFear
+        )
+    }
+
+    pub fn headline(ctx: &core::SeasonOutcomeContext, i18n: &I18n) -> String {
+        let key = format!("season_outcome_headline_{}", ctx.kind.as_token());
+        let raw = i18n.t(&key);
+        if raw == key {
+            String::new()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &core::SeasonOutcomeContext, i18n: &I18n) -> Option<String> {
+        let key = format!("season_outcome_reason_{}", ctx.kind.as_token());
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+}
+
+/// Renders squad-registration / regulation events (e.g.
+/// `SquadRegistrationOmitted`). Reads slot type and outcome off the
+/// [`RegulationEventContext`] so the renderer can describe "left out
+/// of the senior 25 to free a non-EU slot" rather than the bare
+/// "Squad registration omitted" line.
+struct RegulationRender;
+
+impl RegulationRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(event_type, HappinessEventType::SquadRegistrationOmitted)
+    }
+
+    pub fn headline(ctx: &core::RegulationEventContext, i18n: &I18n) -> String {
+        let key = format!(
+            "regulation_headline_{}_{}",
+            ctx.outcome.as_token(),
+            ctx.slot_kind.as_token()
+        );
+        let raw = i18n.t(&key);
+        if raw == key {
+            // Fall back to slot-only key, then to the legacy event-type
+            // line. Keeps short copy when the slot×outcome matrix is
+            // partially translated.
+            let slot_key = format!("regulation_headline_slot_{}", ctx.slot_kind.as_token());
+            let slot_raw = i18n.t(&slot_key);
+            if slot_raw == slot_key {
+                i18n.t(event_type_to_i18n_key(&HappinessEventType::SquadRegistrationOmitted))
+                    .to_string()
+            } else {
+                slot_raw.to_string()
+            }
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &core::RegulationEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("regulation_reason_{}", ctx.slot_kind.as_token());
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+}
+
+/// Single-entry dispatch for context-aware headlines. Replaces the long
+/// if/else chain in `build_events` — adding a new renderer is one new
+/// branch in [`HeadlineDispatcher::try_render`], and the order of
+/// branches encodes precedence when several renderers could handle the
+/// same event type. Returns `None` when no renderer matches or the
+/// matched renderer's specialized context is absent (caller falls back
+/// to the legacy description).
+struct HeadlineDispatcher<'a> {
+    event: &'a HappinessEvent,
+    simulator_data: &'a SimulatorData,
+    i18n: &'a I18n,
+    lang: &'a str,
+}
+
+impl<'a> HeadlineDispatcher<'a> {
+    fn try_render(&self) -> Option<(String, bool)> {
+        let ctx = self.event.context.as_ref()?;
+        let ev = &self.event.event_type;
+
+        // Selection comes first: MatchDropped's selection_context is the
+        // primary signal, but the event-type predicate is narrow so it
+        // wouldn't accidentally catch other dropped-from-squad cousins.
+        if matches!(ev, HappinessEventType::MatchDropped) {
+            if let Some(sel) = ctx.selection_context.as_ref() {
+                let h = SelectionRender::headline(sel, self.simulator_data, self.i18n, self.lang);
+                return Some((h.html, h.partner_in_headline));
+            }
+        }
+        if SupportRender::handles(ev) {
+            if let Some(s) = ctx.support_context.as_ref() {
+                return Some((SupportRender::headline(ev, s, self.i18n), false));
+            }
+        }
+        if TransferInterestRender::handles(ev) {
+            if let Some(tic) = ctx.transfer_interest_context.as_ref() {
+                let (html, _named) = TransferInterestRender::headline(
+                    ev,
+                    tic,
+                    self.simulator_data,
+                    self.i18n,
+                    self.lang,
+                );
+                return Some((html, false));
+            }
+        }
+        if TrainingRender::handles(ev) {
+            if let Some(tc) = ctx.training_context.as_ref() {
+                return Some((TrainingRender::headline(tc, self.i18n), false));
+            }
+        }
+        if ManagerInteractionRender::handles(ev) {
+            if let Some(mc) = ctx.manager_interaction_context.as_ref() {
+                return Some((
+                    ManagerInteractionRender::headline(ev, mc, self.i18n),
+                    false,
+                ));
+            }
+        }
+        if ContractRender::handles(ev) {
+            if let Some(cc) = ctx.contract_context.as_ref() {
+                return Some((ContractRender::headline(cc, self.i18n), false));
+            }
+        }
+        if InjuryRecoveryRender::handles(ev) {
+            if let Some(ic) = ctx.injury_context.as_ref() {
+                return Some((InjuryRecoveryRender::headline(ic, self.i18n), false));
+            }
+        }
+        if MatchPerformanceRender::handles(ev) {
+            if let Some(mp) = ctx.match_performance_context.as_ref() {
+                return Some((
+                    MatchPerformanceRender::headline(ev, mp, self.i18n),
+                    false,
+                ));
+            }
+        }
+        if RoleStatusRender::handles(ev) {
+            if let Some(rc) = ctx.role_status_context.as_ref() {
+                return Some((RoleStatusRender::headline(rc, self.i18n), false));
+            }
+        }
+        if NationalTeamRender::handles(ev) {
+            if let Some(nt) = ctx.national_team_context.as_ref() {
+                return Some((NationalTeamRender::headline(nt, self.i18n), false));
+            }
+        }
+        if LeadershipRender::handles(ev) {
+            if let Some(lc) = ctx.leadership_context.as_ref() {
+                return Some((LeadershipRender::headline(lc, self.i18n), false));
+            }
+        }
+        if MediaFanRender::handles(ev) {
+            if let Some(mf) = ctx.media_fan_context.as_ref() {
+                return Some((MediaFanRender::headline(mf, self.i18n), false));
+            }
+        }
+        if PersonalAdaptationRender::handles(ev) {
+            if let Some(pa) = ctx.personal_adaptation_context.as_ref() {
+                return Some((PersonalAdaptationRender::headline(pa, self.i18n), false));
+            }
+        }
+        if LoanRender::handles(ev) {
+            if let Some(lc) = ctx.loan_context.as_ref() {
+                return Some((LoanRender::headline(lc, self.i18n), false));
+            }
+        }
+        if RecognitionRender::handles(ev) {
+            if let Some(rc) = ctx.recognition_context.as_ref() {
+                return Some((RecognitionRender::headline(ev, rc, self.i18n), false));
+            }
+        }
+        if SeasonOutcomeRender::handles(ev) {
+            if let Some(sc) = ctx.season_outcome_context.as_ref() {
+                let h = SeasonOutcomeRender::headline(sc, self.i18n);
+                if !h.is_empty() {
+                    return Some((h, false));
+                }
+            }
+        }
+        if RegulationRender::handles(ev) {
+            if let Some(rc) = ctx.regulation_context.as_ref() {
+                return Some((RegulationRender::headline(rc, self.i18n), false));
+            }
+        }
+        None
+    }
+}
+
 /// Build the headline string for a single event. Substitutes the
 /// `{partner}` placeholder with a player link when the upgraded event
 /// type has a partner-aware key + a resolved partner; falls back to the
@@ -2012,6 +2888,450 @@ mod tests {
         assert!(!TransferInterestRender::handles(
             &HappinessEventType::ManagerPraise
         ));
+    }
+
+    #[test]
+    fn phase_1_to_11_context_keys_present_in_en_locale() {
+        // Locale audit: every new context-payload reason / headline key
+        // the Phase 1-11 renderers can resolve to MUST exist in the
+        // English bundle. Catches a new variant added to the core enum
+        // without a copy line.
+        let bytes = include_bytes!("../../../assets/i18n/en.json");
+        let raw = std::str::from_utf8(bytes).unwrap();
+        for key in [
+            // Phase 1
+            "training_headline_responded_to_criticism",
+            "training_reason_main_struggled_with_intensity",
+            "training_reason_main_routine_good_session",
+            // Phase 2
+            "manager_topic_playing_time",
+            "manager_acceptance_motivated",
+            "promise_kind_playing_time",
+            "manager_reason_topic_playing_time",
+            // Phase 3
+            "contract_kind_renewed",
+            "contract_headline_salary_shock",
+            "contract_reason_loyalty_discount",
+            // Phase 4
+            "injury_headline_returned_full_training",
+            "injury_reason_recovery_setback",
+            // Phase 5
+            "match_perf_headline_first_club_goal",
+            "match_perf_reason_changed_game_from_bench",
+            // Phase 6
+            "role_status_headline_squad_status_downgrade",
+            "role_status_reason_no_natural_role",
+            // Phase 7
+            "national_headline_recall",
+            "national_reason_first_callup",
+            // Phase 8
+            "leadership_headline_captaincy_awarded",
+            "leadership_reason_captaincy_removed",
+            // Phase 9
+            "media_fan_headline_supporters_back",
+            "media_fan_reason_social_media_criticism",
+            // Phase 10
+            "adaptation_headline_settling_squad",
+            "adaptation_reason_language_milestone",
+            // Phase 11
+            "loan_headline_listing_accepted",
+            "loan_reason_minutes_concern",
+        ] {
+            assert!(
+                raw.contains(key),
+                "en.json missing required Phase 1-11 key {}",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn phase_1_to_11_keys_present_in_every_locale() {
+        // Locale parity: a representative key from each phase must exist
+        // in every supported locale. Catches the case where the i18n
+        // injector ran on en.json but missed a translation file.
+        const LOCALES: &[&str] = &["en", "de", "es", "fr", "ja", "pt", "ru", "tr", "zh"];
+        const REPRESENTATIVES: &[&str] = &[
+            "training_headline_responded_to_criticism",
+            "manager_acceptance_motivated",
+            "contract_headline_renewed",
+            "injury_headline_returned_full_training",
+            "match_perf_headline_first_club_goal",
+            "role_status_headline_squad_status_downgrade",
+            "national_headline_recall",
+            "leadership_headline_captaincy_awarded",
+            "media_fan_headline_supporters_back",
+            "adaptation_headline_language_milestone",
+            "loan_headline_listing_accepted",
+        ];
+        for loc in LOCALES {
+            let path_full = format!(
+                "{}/assets/i18n/{}.json",
+                env!("CARGO_MANIFEST_DIR"),
+                loc
+            );
+            let raw = std::fs::read_to_string(&path_full)
+                .unwrap_or_else(|e| panic!("could not read {}: {}", path_full, e));
+            for key in REPRESENTATIVES {
+                assert!(
+                    raw.contains(key),
+                    "{}.json missing required Phase 1-11 key {}",
+                    loc,
+                    key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_dynamic_i18n_key_is_present_in_en_json() {
+        // Audits that every key the renderer can construct via
+        // `format!("..._{}", token)` exists in en.json. The token lists
+        // below mirror the exhaustive matches in each renderer's
+        // `_token()` function — adding a new variant to one of those
+        // enums forces a `_token()` arm (compile-time guard) and
+        // forces a token string here (this test, runtime guard). If
+        // either is forgotten, en.json is missing a key and the
+        // renderer falls back to the raw key string, which renders as
+        // ugly snake_case in the UI.
+        use std::collections::HashMap;
+
+        let bytes = include_bytes!("../../../assets/i18n/en.json");
+        let map: HashMap<String, String> =
+            serde_json::from_slice(bytes).expect("en.json is valid JSON");
+
+        const CAUSE_TOKENS: &[&str] = &[
+            "personality_clash",
+            "training_friction",
+            "positional_rivalry",
+            "wage_jealousy",
+            "poor_form_pressure",
+            "leadership_dispute",
+            "tactical_disagreement",
+            "adaptation_isolation",
+            "media_pressure",
+            "mentor_departure",
+            "friend_departure",
+            "match_cooperation",
+            "nationality_integration",
+            "training_partnership",
+            "reputation_tension",
+            "reputation_admiration",
+            "manager_support",
+            "supporter_appreciation",
+            "supporter_identification",
+            "dressing_room_lift",
+            "other",
+        ];
+        const EVIDENCE_TOKENS: &[&str] = &[
+            "strong_existing_bond",
+            "already_strained_relationship",
+            "weak_existing_bond",
+            "same_position_competition",
+            "similar_squad_status_competition",
+            "low_trust",
+            "low_friendship",
+            "low_professional_respect",
+            "high_professional_respect",
+            "high_ambition",
+            "low_temperament",
+            "high_controversy",
+            "low_sportsmanship",
+            "high_professionalism",
+            "new_signing_still_settling",
+            "language_barrier",
+            "shared_nationality",
+            "mentor_influence",
+            "match_cooperation",
+            "complementary_roles",
+            "training_standards_mismatch",
+            "repeated_incident",
+            "wage_gap",
+            "reputation_gap",
+            "no_inner_circle_yet",
+            "squad_turnover",
+            "media_incident",
+            "dressing_room_row",
+            "training_ground_incident",
+            "excellent_performance",
+            "player_of_the_match",
+            "goal_contribution",
+            "decisive_contribution",
+            "derby_performance",
+            "cup_performance",
+            "home_crowd_moment",
+            "poor_morale_before_talk",
+            "low_confidence",
+            "manager_trust",
+            "strong_coach_rapport",
+            "weak_coach_rapport",
+            "high_pressure_personality",
+            "low_pressure_personality",
+            "high_determination",
+            "important_match_temperament",
+            "repeated_talk_dampened",
+            "captain_or_leader_influence",
+            "young_player_needing_confidence",
+            "return_from_injury_boost",
+        ];
+        const SUPPORT_TRIGGERS: &[&str] = &[
+            "high_rating",
+            "pom",
+            "goal_contribution",
+            "decisive_moment",
+            "poor_morale",
+            "form_recovery",
+            "big_match",
+            "derby",
+            "cup_tie",
+            "leadership_moment",
+            "trailing_half_time",
+            "team_won",
+            "young_player_confidence",
+            "returning_from_injury",
+            "generic",
+        ];
+        const SUPPORT_SETTINGS: &[&str] = &[
+            "private",
+            "training_ground",
+            "dressing_room",
+            "touchline",
+            "home_crowd",
+            "away_end",
+            "post_match",
+        ];
+        const TRAINING_REASONS: &[&str] = &[
+            "sharp_after_being_left_out",
+            "responded_to_criticism",
+            "struggled_with_intensity",
+            "distracted_by_rumours",
+            "poor_attitude",
+            "returning_from_injury_not_sharp",
+            "young_impressed_staff",
+            "setting_standards",
+            "extra_work_after_session",
+            "match_preparation_focus",
+            "routine_good_session",
+            "routine_bad_session",
+        ];
+        const CONTRACT_KINDS: &[&str] = &[
+            "offer_received",
+            "talks_opened",
+            "talks_stalled",
+            "renewed",
+            "terminated",
+            "salary_shock",
+            "salary_boost",
+            "loyalty_discount",
+            "agent_pushing",
+            "wage_promise_frustration",
+            "accepted_reduced_role",
+            "rejected_low_status",
+        ];
+        const INJURY_STAGES: &[&str] = &[
+            "returned_full_training",
+            "first_minutes",
+            "recovery_setback",
+            "protected",
+            "recurrence_concern",
+            "confidence_restored",
+        ];
+        const MATCH_PERF_KINDS: &[&str] = &[
+            "answered_critics",
+            "costly_error_pressure",
+            "saved_result_late",
+            "changed_game_from_bench",
+            "defensive_leader",
+            "wasteful_finishing",
+            "composure_praised",
+            "big_match_nerves",
+            "standout",
+            "first_club_goal",
+            "drought_ended",
+            "hat_trick",
+        ];
+        const ROLE_STATUS_KINDS: &[&str] = &[
+            "role_clarified",
+            "role_unclear",
+            "depth_chart_pressure",
+            "direct_rival_preferred",
+            "tactical_role_changed",
+            "benched_for_balance",
+            "rested_for_workload",
+            "squad_status_upgrade",
+            "squad_status_downgrade",
+            "no_natural_role",
+            "established_starter",
+            "slipped_out_xi",
+        ];
+        const NATIONAL_KINDS: &[&str] = &[
+            "first_callup",
+            "recall",
+            "emergency_callup",
+            "youth_to_senior",
+            "dropped_form",
+            "dropped_injury",
+            "dropped_competition",
+            "tournament_squad_omitted",
+            "place_under_threat",
+            "first_cap_pride",
+            "role_growing",
+        ];
+        const LEADERSHIP_KINDS: &[&str] = &[
+            "captaincy_awarded",
+            "captaincy_removed",
+            "emergence",
+            "senior_mediates",
+            "backed_seniors",
+            "challenged_standards",
+            "influence_rising",
+            "influence_falling",
+            "mentorship_started",
+            "mentorship_strained",
+            "squad_leadership_questioned",
+        ];
+        const MEDIA_FAN_KINDS: &[&str] = &[
+            "interview_calms",
+            "interview_fuels",
+            "fans_split",
+            "supporters_back",
+            "apology_accepted",
+            "apology_rejected",
+            "social_media_criticism",
+            "narrative_changed",
+            "home_fans_approve",
+            "away_fans_hostile",
+        ];
+        const ADAPTATION_KINDS: &[&str] = &[
+            "homesickness",
+            "family_settled",
+            "family_unsettled",
+            "lifestyle",
+            "language_barrier",
+            "local_culture",
+            "companion_support",
+            "personal_leave",
+            "language_milestone",
+            "settling_squad",
+            "still_struggling",
+        ];
+        const LOAN_KINDS: &[&str] = &[
+            "listing_accepted",
+            "development_progress",
+            "minutes_concern",
+            "recall_discussed",
+            "settled",
+            "permanent_interest",
+            "role_broken",
+            "parent_satisfied",
+            "parent_concerned",
+        ];
+        const RECOGNITION_KINDS: &[&str] = &[
+            "player_of_the_week",
+            "player_of_the_month",
+            "young_player_of_the_month",
+            "player_of_the_season",
+            "young_player_of_the_season",
+            "team_of_the_season",
+            "league_top_scorer",
+            "league_top_assists",
+            "league_golden_glove",
+            "world_player_of_year",
+            "world_player_nominee",
+            "national_team_debut",
+        ];
+        const SEASON_OUTCOME_KINDS: &[&str] = &[
+            "relegated",
+            "relegation_fear",
+            "survived_relegation",
+        ];
+        const REGULATION_SLOTS: &[&str] = &[
+            "homegrown_quota",
+            "non_eu_quota",
+            "senior_squad_cap",
+            "youth_slot",
+            "international_registration",
+            "other",
+        ];
+
+        let mut missing: Vec<String> = Vec::new();
+        let mut check = |key: String| {
+            if !map.contains_key(&key) {
+                missing.push(key);
+            }
+        };
+
+        for t in CAUSE_TOKENS {
+            check(format!("reason_main_{}", t));
+        }
+        for t in EVIDENCE_TOKENS {
+            check(format!("reason_ev_{}", t));
+        }
+        for t in SUPPORT_TRIGGERS {
+            check(format!("support_reason_main_{}", t));
+        }
+        for t in SUPPORT_SETTINGS {
+            check(format!("support_reason_setting_{}", t));
+        }
+        for t in TRAINING_REASONS {
+            check(format!("training_headline_{}", t));
+            check(format!("training_reason_main_{}", t));
+        }
+        for t in CONTRACT_KINDS {
+            check(format!("contract_headline_{}", t));
+            check(format!("contract_reason_{}", t));
+        }
+        for t in INJURY_STAGES {
+            check(format!("injury_headline_{}", t));
+            check(format!("injury_reason_{}", t));
+        }
+        for t in MATCH_PERF_KINDS {
+            check(format!("match_perf_headline_{}", t));
+            check(format!("match_perf_reason_{}", t));
+        }
+        for t in ROLE_STATUS_KINDS {
+            check(format!("role_status_headline_{}", t));
+            check(format!("role_status_reason_{}", t));
+        }
+        for t in NATIONAL_KINDS {
+            check(format!("national_headline_{}", t));
+            check(format!("national_reason_{}", t));
+        }
+        for t in LEADERSHIP_KINDS {
+            check(format!("leadership_headline_{}", t));
+            check(format!("leadership_reason_{}", t));
+        }
+        for t in MEDIA_FAN_KINDS {
+            check(format!("media_fan_headline_{}", t));
+            check(format!("media_fan_reason_{}", t));
+        }
+        for t in ADAPTATION_KINDS {
+            check(format!("adaptation_headline_{}", t));
+            check(format!("adaptation_reason_{}", t));
+        }
+        for t in LOAN_KINDS {
+            check(format!("loan_headline_{}", t));
+            check(format!("loan_reason_{}", t));
+        }
+        for t in RECOGNITION_KINDS {
+            check(format!("recognition_headline_{}", t));
+            check(format!("recognition_reason_{}", t));
+        }
+        for t in SEASON_OUTCOME_KINDS {
+            check(format!("season_outcome_headline_{}", t));
+            check(format!("season_outcome_reason_{}", t));
+        }
+        for t in REGULATION_SLOTS {
+            check(format!("regulation_headline_slot_{}", t));
+            check(format!("regulation_reason_{}", t));
+        }
+
+        assert!(
+            missing.is_empty(),
+            "en.json is missing {} dynamic keys: {:#?}",
+            missing.len(),
+            missing
+        );
     }
 
     #[test]

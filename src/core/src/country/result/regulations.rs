@@ -13,9 +13,9 @@
 //! lifecycle, both of which live closer to the financial pipeline.
 
 use super::CountryResult;
-use crate::PlayerStatusType;
 use crate::club::HappinessEventType;
 use crate::simulator::SimulatorData;
+use crate::{PlayerStatusType, RegulationEventContext, RegulationOutcomeKind, RegulationSlotKind};
 use chrono::NaiveDate;
 use log::debug;
 
@@ -76,8 +76,13 @@ impl CountryResult {
                 if !player.statuses.get().contains(&PlayerStatusType::Unr) {
                     player.statuses.add(date, PlayerStatusType::Unr);
                 }
-                player.happiness.add_event_default_with_cooldown(
+                let ctx = RegulationEventContext::new(
+                    RegulationOutcomeKind::Omitted,
+                    RegulationSlotKind::NonEuQuota,
+                );
+                player.on_registration_event(
                     HappinessEventType::SquadRegistrationOmitted,
+                    ctx,
                     365,
                 );
             }

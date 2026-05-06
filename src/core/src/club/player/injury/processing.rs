@@ -2,6 +2,10 @@ use crate::HappinessEventType;
 use crate::club::player::injury::{BodyPart, InjuryType};
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage,
+};
 use chrono::NaiveDate;
 
 /// Additional factor tracking recovery acceleration.
@@ -87,8 +91,39 @@ impl Player {
                 } else {
                     1.5
                 };
-                self.happiness
-                    .add_event(HappinessEventType::InjuryReturn, magnitude);
+                let stage = if recovery_left >= 14.0 {
+                    InjuryRecoveryStage::ProtectedByMedicalStaff
+                } else {
+                    InjuryRecoveryStage::ReturnedToFullTraining
+                };
+                let mut ictx = InjuryRecoveryEventContext::new(
+                    stage,
+                    recovery_left as u16,
+                    self.skills.physical.match_readiness,
+                );
+                if recovery_left >= 30.0 {
+                    ictx = ictx.with_evidence(InjuryRecoveryEvidence::LongTermLayoff);
+                } else {
+                    ictx = ictx.with_evidence(InjuryRecoveryEvidence::ShortTermLayoff);
+                }
+                if self.skills.physical.match_readiness < 12.0 {
+                    ictx = ictx.with_evidence(InjuryRecoveryEvidence::MatchSharpnessLow);
+                }
+                if self.attributes.professionalism >= 15.0 {
+                    ictx = ictx.with_evidence(InjuryRecoveryEvidence::HighProfessionalism);
+                }
+                let happiness_ctx = HappinessEventContext::new(
+                    HappinessEventCause::Other,
+                    HappinessEventSeverity::from_magnitude(magnitude),
+                    HappinessEventScope::Personal,
+                )
+                .with_injury_context(ictx);
+                self.happiness.add_event_with_context(
+                    HappinessEventType::InjuryReturn,
+                    magnitude,
+                    None,
+                    happiness_ctx,
+                );
             }
         } else if self.player_attributes.is_in_recovery() {
             // Phase 2: Recovery — post-injury low match fitness phase.

@@ -13,9 +13,12 @@ use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
-    HappinessEventScope, HappinessEventSeverity, HappinessEventType, MatchSelectionContext,
-    PlayerSquadStatus, PlayerStatistics, SelectionDecisionScope, SelectionOmissionReason,
-    SupportEventContext, SupportSetting, SupportSource, SupportTrigger,
+    HappinessEventScope, HappinessEventSeverity, HappinessEventType, ManagerInteractionEventContext,
+    ManagerInteractionTone, ManagerInteractionTopic, MatchPerformanceEventContext,
+    MatchPerformanceEvidence, MatchPerformanceKind, MatchSelectionContext, MediaFanEventContext,
+    MediaFanEventKind, MediaFanSource, PlayerAcceptance, PlayerSquadStatus, PlayerStatistics,
+    SelectionDecisionScope, SelectionOmissionReason, SelectionRole, SupportEventContext, SupportSetting,
+    SupportSource, SupportTrigger,
 };
 
 impl Player {
@@ -29,22 +32,27 @@ impl Player {
         self.record_match_reputation(o);
     }
 
-    /// Named to a squad but never got off the bench. Small morale hit.
-    /// Legacy entry point: emits a generic MatchDropped event with no
-    /// structured selection explanation. Prefer
-    /// [`Self::on_match_dropped_with_context`] when the squad selector
-    /// has produced a `MatchSelectionContext` for this player so the UI
-    /// can describe who was preferred and why.
+    /// Named to a squad but never got off the bench. Synthesises a
+    /// minimal `MatchSelectionContext` (UnusedSubstitute / BenchBalance)
+    /// when the squad selector didn't record a specific omission reason
+    /// — the renderer still has scope to say "named to the bench but
+    /// never came on" instead of the bare "Dropped from match squad".
+    ///
+    /// Routes through [`Self::on_match_dropped_with_context`] so every
+    /// `MatchDropped` event carries structured selection metadata; the
+    /// payload-invariant guard in `add_event_full` keeps that contract
+    /// honest under tests.
     pub fn on_match_dropped(&mut self) {
-        self.happiness
-            .add_event_default(HappinessEventType::MatchDropped);
-
-        // Bench-only appearance: feeds the rolling starter ratio with a 0.0
-        // sample so chronic dropping eventually flips the role state.
-        const ALPHA: f32 = 0.25;
-        self.happiness.starter_ratio = self.happiness.starter_ratio * (1.0 - ALPHA);
-        self.happiness.appearances_tracked = self.happiness.appearances_tracked.saturating_add(1);
-        self.evaluate_role_transition();
+        let ctx = MatchSelectionContext {
+            scope: SelectionDecisionScope::UnusedSubstitute,
+            reason: SelectionOmissionReason::BenchBalance,
+            comparison: None,
+            role: SelectionRole::Other,
+            match_importance: 0.5,
+            repeated: false,
+            is_friendly: false,
+        };
+        self.on_match_dropped_with_context(ctx);
     }
 
     /// Same as [`Self::on_match_dropped`] but carries the structured
@@ -176,8 +184,22 @@ impl Player {
 
         // Sent off — embarrassing, plus the suspension fallout. Flat hit.
         if o.stats.red_cards > 0 {
-            self.happiness
-                .add_event_default(HappinessEventType::RedCardFallout);
+            let mp = MatchPerfContextBuilder::costly_error(self, o);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::PoorFormPressure,
+                HappinessEventSeverity::Serious,
+                HappinessEventScope::MatchDay,
+            )
+            .with_match_performance_context(mp);
+            let mag = HappinessConfig::default()
+                .catalog
+                .magnitude(HappinessEventType::RedCardFallout);
+            self.happiness.add_event_with_context(
+                HappinessEventType::RedCardFallout,
+                mag,
+                None,
+                happiness_ctx,
+            );
         }
 
         // First competitive goal at this club. Stats are reset on club
@@ -192,8 +214,26 @@ impl Player {
                     .happiness
                     .has_recent_event(&HappinessEventType::FirstClubGoal, 300)
             {
-                self.happiness
-                    .add_event_default(HappinessEventType::FirstClubGoal);
+                let mp = MatchPerfContextBuilder::standout(
+                    self,
+                    o,
+                    MatchPerformanceKind::FirstClubGoalMoment,
+                );
+                let happiness_ctx = HappinessEventContext::new(
+                    HappinessEventCause::Other,
+                    HappinessEventSeverity::Major,
+                    HappinessEventScope::MatchDay,
+                )
+                .with_match_performance_context(mp);
+                let mag = HappinessConfig::default()
+                    .catalog
+                    .magnitude(HappinessEventType::FirstClubGoal);
+                self.happiness.add_event_with_context(
+                    HappinessEventType::FirstClubGoal,
+                    mag,
+                    None,
+                    happiness_ctx,
+                );
             }
         }
 
@@ -203,8 +243,26 @@ impl Player {
             && o.participation == MatchParticipation::Substitute
             && (o.stats.goals > 0 || o.stats.assists > 0 || o.effective_rating >= 7.3)
         {
-            self.happiness
-                .add_event_default(HappinessEventType::SubstituteImpact);
+            let mp = MatchPerfContextBuilder::standout(
+                self,
+                o,
+                MatchPerformanceKind::ChangedGameFromBench,
+            );
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::Moderate,
+                HappinessEventScope::MatchDay,
+            )
+            .with_match_performance_context(mp);
+            let mag = HappinessConfig::default()
+                .catalog
+                .magnitude(HappinessEventType::SubstituteImpact);
+            self.happiness.add_event_with_context(
+                HappinessEventType::SubstituteImpact,
+                mag,
+                None,
+                happiness_ctx,
+            );
         }
 
         // Clean sheet pride for goalkeepers and defenders — both roles
@@ -214,8 +272,26 @@ impl Player {
         if o.team_goals_against == 0
             && (self.position().is_goalkeeper() || self.position().is_defender())
         {
-            self.happiness
-                .add_event_default(HappinessEventType::CleanSheetPride);
+            let mp = MatchPerfContextBuilder::standout(
+                self,
+                o,
+                MatchPerformanceKind::DefensiveLeaderPerformance,
+            );
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::Minor,
+                HappinessEventScope::MatchDay,
+            )
+            .with_match_performance_context(mp);
+            let mag = HappinessConfig::default()
+                .catalog
+                .magnitude(HappinessEventType::CleanSheetPride);
+            self.happiness.add_event_with_context(
+                HappinessEventType::CleanSheetPride,
+                mag,
+                None,
+                happiness_ctx,
+            );
         }
 
         // Match-rating debrief. The catastrophic floor is now its own event
@@ -226,12 +302,52 @@ impl Player {
         if o.stats.match_rating >= 1.0 {
             if o.effective_rating < 5.5 {
                 let extra = (5.5 - o.effective_rating).clamp(0.0, 2.0);
-                self.happiness
-                    .add_event(HappinessEventType::CostlyMistake, -(2.0 + extra));
+                let mut mp = MatchPerformanceEventContext::new(
+                    MatchPerformanceKind::CostlyErrorUnderPressure,
+                )
+                .with_rating(o.effective_rating)
+                .with_minutes(o.stats.minutes_played as u16)
+                .with_team_won(o.team_won)
+                .with_goal_margin(o.goal_margin() as i8)
+                .with_derby(o.is_derby)
+                .with_cup(o.is_cup)
+                .with_evidence(MatchPerformanceEvidence::LowRating);
+                if o.is_derby { mp = mp.with_evidence(MatchPerformanceEvidence::DerbyFixture); }
+                if o.is_cup { mp = mp.with_evidence(MatchPerformanceEvidence::CupTie); }
+                if self.attributes.pressure <= 7.0 {
+                    mp = mp.with_evidence(MatchPerformanceEvidence::LowPressurePersonality);
+                }
+                let happiness_ctx = HappinessEventContext::new(
+                    HappinessEventCause::PoorFormPressure,
+                    HappinessEventSeverity::from_magnitude(2.0 + extra),
+                    HappinessEventScope::MatchDay,
+                )
+                .with_match_performance_context(mp);
+                self.happiness.add_event_with_context(
+                    HappinessEventType::CostlyMistake,
+                    -(2.0 + extra),
+                    None,
+                    happiness_ctx,
+                );
             } else if o.effective_rating < 6.3 {
                 let mag = -(2.0 + (6.3 - o.effective_rating).clamp(0.0, 0.8));
-                self.happiness
-                    .add_event(HappinessEventType::ManagerCriticism, mag);
+                let mctx = ManagerInteractionEventContext::new(
+                    ManagerInteractionTopic::Performance,
+                    ManagerInteractionTone::Honest,
+                    PlayerAcceptance::Discouraged,
+                );
+                let happiness_ctx = HappinessEventContext::new(
+                    HappinessEventCause::PoorFormPressure,
+                    HappinessEventSeverity::from_magnitude(mag),
+                    HappinessEventScope::MatchDay,
+                )
+                .with_manager_interaction_context(mctx);
+                self.happiness.add_event_with_context(
+                    HappinessEventType::ManagerCriticism,
+                    mag,
+                    None,
+                    happiness_ctx,
+                );
             } else if o.effective_rating >= 7.5 {
                 let mag = 1.5 + (o.effective_rating - 7.5).clamp(0.0, 2.5);
                 let event_ctx = MatchSupportContextBuilder::manager_encouragement(self, o, mag);
@@ -299,8 +415,24 @@ impl Player {
             );
             let prof_dampen = scaling::criticism_dampener(self.attributes.professionalism);
             let mag = cfg.catalog.fan_criticism * rep_mul * provoke_mul * prof_dampen;
-            self.happiness
-                .add_event_with_cooldown(HappinessEventType::FanCriticism, mag, 21);
+            let mfctx = MediaFanEventContext::new(
+                MediaFanEventKind::AwayFansHostile,
+                MediaFanSource::HomeSupporters,
+            )
+            .with_form_trigger();
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::PoorFormPressure,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::Media,
+            )
+            .with_media_fan_context(mfctx);
+            self.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::FanCriticism,
+                mag,
+                None,
+                happiness_ctx,
+                21,
+            );
         }
 
         // MediaPraise — strictly rarer than fan reaction; only fires for
@@ -316,8 +448,24 @@ impl Player {
         if media_praise_trigger {
             let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let mag = cfg.catalog.media_praise * rep_mul;
-            self.happiness
-                .add_event_with_cooldown(HappinessEventType::MediaPraise, mag, 30);
+            let mfctx = MediaFanEventContext::new(
+                MediaFanEventKind::MediaNarrativeChanged,
+                MediaFanSource::NationalPress,
+            )
+            .with_big_match_trigger();
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::Media,
+            )
+            .with_media_fan_context(mfctx);
+            self.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::MediaPraise,
+                mag,
+                None,
+                happiness_ctx,
+                30,
+            );
         }
 
         // Derby outcome — proper rivalry-day events instead of recycled
@@ -963,5 +1111,72 @@ impl MatchSupportContextBuilder {
         ctx = ctx.with_evidence(HappinessEventEvidence::HomeCrowdMoment);
 
         ctx.with_follow_up(HappinessEventFollowUp::FanStandingRising)
+    }
+}
+
+struct MatchPerfContextBuilder;
+
+impl MatchPerfContextBuilder {
+    fn standout(
+        player: &Player,
+        o: &MatchOutcome<'_>,
+        kind: MatchPerformanceKind,
+    ) -> MatchPerformanceEventContext {
+        let mut mp = MatchPerformanceEventContext::new(kind)
+            .with_rating(o.effective_rating)
+            .with_minutes(o.stats.minutes_played as u16)
+            .with_goals(o.stats.goals as u8)
+            .with_assists(o.stats.assists as u8)
+            .with_team_won(o.team_won)
+            .with_goal_margin(o.goal_margin() as i8)
+            .with_derby(o.is_derby)
+            .with_cup(o.is_cup);
+        if o.effective_rating >= 7.5 {
+            mp = mp.with_evidence(MatchPerformanceEvidence::HighRating);
+        }
+        if o.stats.goals > 0 || o.stats.assists > 0 {
+            mp = mp.with_evidence(MatchPerformanceEvidence::GoalContribution);
+        }
+        if o.team_won && (o.stats.goals > 0 || o.stats.assists > 0) && o.goal_margin() == 1 {
+            mp = mp.with_evidence(MatchPerformanceEvidence::DecisiveContribution);
+        }
+        if o.is_derby {
+            mp = mp.with_evidence(MatchPerformanceEvidence::DerbyFixture);
+        }
+        if o.is_cup {
+            mp = mp.with_evidence(MatchPerformanceEvidence::CupTie);
+        }
+        if o.participation == MatchParticipation::Substitute {
+            mp = mp.with_evidence(MatchPerformanceEvidence::SubstituteAppearance);
+        }
+        if player.attributes.pressure >= 15.0 {
+            mp = mp.with_evidence(MatchPerformanceEvidence::HighPressurePersonality);
+        }
+        if player.attributes.important_matches >= 15.0 {
+            mp = mp.with_evidence(MatchPerformanceEvidence::ImportantMatchTemperament);
+        }
+        mp
+    }
+
+    fn costly_error(
+        player: &Player,
+        o: &MatchOutcome<'_>,
+    ) -> MatchPerformanceEventContext {
+        let mut mp = MatchPerformanceEventContext::new(
+            MatchPerformanceKind::CostlyErrorUnderPressure,
+        )
+        .with_rating(o.effective_rating)
+        .with_minutes(o.stats.minutes_played as u16)
+        .with_team_won(o.team_won)
+        .with_goal_margin(o.goal_margin() as i8)
+        .with_derby(o.is_derby)
+        .with_cup(o.is_cup)
+        .with_evidence(MatchPerformanceEvidence::LowRating);
+        if o.is_derby { mp = mp.with_evidence(MatchPerformanceEvidence::DerbyFixture); }
+        if o.is_cup { mp = mp.with_evidence(MatchPerformanceEvidence::CupTie); }
+        if player.attributes.pressure <= 7.0 {
+            mp = mp.with_evidence(MatchPerformanceEvidence::LowPressurePersonality);
+        }
+        mp
     }
 }

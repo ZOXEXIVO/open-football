@@ -6,7 +6,10 @@
 
 use super::NationalTeam;
 use crate::continent::Continent;
-use crate::{HappinessEventType, PlayerStatusType};
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, NationalTeamEventContext, NationalTeamEventKind, PlayerStatusType,
+};
 use chrono::NaiveDate;
 use std::collections::HashSet;
 
@@ -51,9 +54,25 @@ impl NationalTeam {
                                     } else {
                                         3.0
                                     };
-                                    player
-                                        .happiness
-                                        .add_event(HappinessEventType::NationalTeamCallup, mag);
+                                    let kind = if caps == 0 {
+                                        NationalTeamEventKind::FirstCallup
+                                    } else {
+                                        NationalTeamEventKind::Recall
+                                    };
+                                    let nctx = NationalTeamEventContext::new(kind)
+                                        .with_previous_caps(caps);
+                                    let happiness_ctx = HappinessEventContext::new(
+                                        HappinessEventCause::Other,
+                                        HappinessEventSeverity::from_magnitude(mag),
+                                        HappinessEventScope::Personal,
+                                    )
+                                    .with_national_team_context(nctx);
+                                    player.happiness.add_event_with_context(
+                                        HappinessEventType::NationalTeamCallup,
+                                        mag,
+                                        None,
+                                        happiness_ctx,
+                                    );
                                 }
                             } else if was_in {
                                 player.statuses.remove(PlayerStatusType::Int);
@@ -65,9 +84,22 @@ impl NationalTeam {
                                 } else {
                                     -2.0
                                 };
-                                player
-                                    .happiness
-                                    .add_event(HappinessEventType::NationalTeamDropped, mag);
+                                let nctx = NationalTeamEventContext::new(
+                                    NationalTeamEventKind::DroppedDueToCompetition,
+                                )
+                                .with_previous_caps(caps);
+                                let happiness_ctx = HappinessEventContext::new(
+                                    HappinessEventCause::Other,
+                                    HappinessEventSeverity::from_magnitude(mag),
+                                    HappinessEventScope::Personal,
+                                )
+                                .with_national_team_context(nctx);
+                                player.happiness.add_event_with_context(
+                                    HappinessEventType::NationalTeamDropped,
+                                    mag,
+                                    None,
+                                    happiness_ctx,
+                                );
                             }
                         }
                     }

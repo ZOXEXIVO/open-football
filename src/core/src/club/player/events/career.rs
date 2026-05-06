@@ -10,7 +10,11 @@ use chrono::NaiveDate;
 
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
-use crate::{HappinessEventType, Person};
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, Person, RecognitionEventContext, RecognitionEventKind,
+    RegulationEventContext, SeasonOutcomeContext,
+};
 
 impl Player {
     /// React to a promotion from a youth/reserve team to the senior side.
@@ -53,8 +57,105 @@ impl Player {
     /// win consecutive weeks without the second emit being swallowed, but a
     /// double-fire on the same Monday tick is still rejected.
     pub fn on_player_of_the_week(&mut self) -> bool {
-        self.happiness
-            .add_event_default_with_cooldown(HappinessEventType::PlayerOfTheWeek, 6)
+        self.on_recognition_award(
+            HappinessEventType::PlayerOfTheWeek,
+            RecognitionEventContext::new(RecognitionEventKind::PlayerOfTheWeek),
+            6,
+        )
+    }
+
+    /// Centralised entry point for award / recognition events. Wraps the
+    /// catalog-default magnitude path with a structured
+    /// [`RecognitionEventContext`] so the renderer can describe what was
+    /// won, the season totals or vote margin behind the award, and who
+    /// the closest contender was. Returns whether the event was recorded
+    /// (cooldown may have suppressed it).
+    pub fn on_recognition_award(
+        &mut self,
+        event: HappinessEventType,
+        context: RecognitionEventContext,
+        cooldown_days: u16,
+    ) -> bool {
+        let cfg = HappinessConfig::default();
+        let magnitude = cfg.catalog.magnitude(event.clone());
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::Media,
+        )
+        .with_recognition_context(context);
+        self.happiness.add_event_with_context_and_cooldown(
+            event,
+            magnitude,
+            None,
+            happiness_ctx,
+            cooldown_days,
+        )
+    }
+
+    /// Centralised entry point for season-outcome events (relegation,
+    /// relegation-fear, survival). Wraps `on_team_season_event` to also
+    /// attach a [`SeasonOutcomeContext`] so the renderer can explain
+    /// position, points, and gap-to-safety instead of a bare verdict.
+    pub fn on_season_outcome(
+        &mut self,
+        event: HappinessEventType,
+        cooldown_days: u16,
+        prestige: f32,
+        now: NaiveDate,
+        context: SeasonOutcomeContext,
+    ) -> bool {
+        if self.happiness.has_recent_event(&event, cooldown_days) {
+            return false;
+        }
+        let cfg = HappinessConfig::default();
+        let base = cfg.catalog.magnitude(event.clone());
+        let participation = self.season_participation_factor();
+        let age = self.age(now);
+        let personality = self.team_event_personality_factor(&event, age);
+        let role = self.season_event_role_factor(&event, age);
+        let mag = base * participation * personality * role * prestige.max(0.0);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Serious,
+            HappinessEventScope::Media,
+        )
+        .with_season_outcome_context(context);
+        self.happiness.add_event_with_context_and_cooldown(
+            event,
+            mag,
+            None,
+            happiness_ctx,
+            cooldown_days,
+        )
+    }
+
+    /// Centralised entry point for squad-registration / regulation
+    /// events (e.g. `SquadRegistrationOmitted`). Wraps the catalog
+    /// magnitude path with a structured [`RegulationEventContext`] so
+    /// the renderer can describe slot type, slot counts, and who took
+    /// the slot.
+    pub fn on_registration_event(
+        &mut self,
+        event: HappinessEventType,
+        context: RegulationEventContext,
+        cooldown_days: u16,
+    ) -> bool {
+        let cfg = HappinessConfig::default();
+        let magnitude = cfg.catalog.magnitude(event.clone());
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::Media,
+        )
+        .with_regulation_context(context);
+        self.happiness.add_event_with_context_and_cooldown(
+            event,
+            magnitude,
+            None,
+            happiness_ctx,
+            cooldown_days,
+        )
     }
 
     /// Same as [`on_team_season_event`] with an explicit prestige multiplier

@@ -13,8 +13,9 @@ use super::scaling;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
 use crate::{
-    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
-    HappinessEventScope, HappinessEventSeverity, HappinessEventType, PlayerStatusType,
+    ContractEventContext, ContractEventKind, HappinessEventCause, HappinessEventContext,
+    HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, MediaFanEventContext, MediaFanEventKind, MediaFanSource, PlayerStatusType,
     TransferInterestContext, TransferInterestEvidence, TransferInterestKind,
     TransferInterestReaction, TransferInterestSource, TransferInterestStage, TransferSportingFit,
 };
@@ -103,8 +104,24 @@ impl Player {
             // Settled player disrupted by headline-grabbing rumour —
             // tabloid drama, modelled as media noise.
             let mag = -(0.5 + (rep_diff - 0.1).clamp(0.0, 0.4) * 2.0);
-            self.happiness
-                .add_event_with_cooldown(HappinessEventType::MediaCriticism, mag, 14);
+            let mfctx = MediaFanEventContext::new(
+                MediaFanEventKind::SocialMediaCriticism,
+                MediaFanSource::SocialMedia,
+            )
+            .with_transfer_trigger();
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::MediaPressure,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::Media,
+            )
+            .with_media_fan_context(mfctx);
+            self.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::MediaCriticism,
+                mag,
+                None,
+                happiness_ctx,
+                14,
+            );
         }
     }
 
@@ -990,7 +1007,21 @@ impl Player {
         ] {
             self.statuses.remove(s);
         }
-        self.happiness
-            .add_event_default(HappinessEventType::ContractTerminated);
+        let cctx = ContractEventContext::new(ContractEventKind::Terminated);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::Boardroom,
+        )
+        .with_contract_context(cctx);
+        let mag = HappinessConfig::default()
+            .catalog
+            .magnitude(HappinessEventType::ContractTerminated);
+        self.happiness.add_event_with_context(
+            HappinessEventType::ContractTerminated,
+            mag,
+            None,
+            happiness_ctx,
+        );
     }
 }

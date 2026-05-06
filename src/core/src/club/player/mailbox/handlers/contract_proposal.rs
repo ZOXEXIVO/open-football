@@ -5,9 +5,12 @@ use crate::club::player::calculators::{
 use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
 use crate::handlers::AcceptContractHandler;
 use crate::utils::DateUtils;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::{
-    HappinessEventType, PersonBehaviourState, Player, PlayerContractProposal, PlayerResult,
-    PlayerSquadStatus, PlayerStatusType,
+    ContractEventContext, ContractEventEvidence, ContractEventKind, HappinessEventCause,
+    HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
+    PersonBehaviourState, Player, PlayerContractProposal, PlayerResult, PlayerSquadStatus,
+    PlayerStatusType,
 };
 use chrono::NaiveDate;
 
@@ -269,10 +272,33 @@ impl ProcessContractHandler {
                         log_rejection(player, &proposal, now);
                         return;
                     }
+                    let raise_ratio_now = proposal.salary as f32 / current_salary.max(1) as f32;
+                    let proposal_years = proposal.years;
                     accept_and_clear(player, proposal, now);
-                    player
-                        .happiness
-                        .add_event_default(HappinessEventType::ContractRenewal);
+                    let mut cctx = ContractEventContext::new(ContractEventKind::Renewed)
+                        .with_wage_vs_previous(raise_ratio_now)
+                        .with_years_remaining(proposal_years);
+                    if raise_ratio_now >= 1.20 {
+                        cctx = cctx.with_evidence(ContractEventEvidence::SquadStatusUpgrade);
+                    }
+                    if player.attributes.loyalty >= 15.0 {
+                        cctx = cctx.with_evidence(ContractEventEvidence::HighLoyalty);
+                    }
+                    let happiness_ctx = HappinessEventContext::new(
+                        HappinessEventCause::Other,
+                        HappinessEventSeverity::Moderate,
+                        HappinessEventScope::Boardroom,
+                    )
+                    .with_contract_context(cctx);
+                    let mag = HappinessConfig::default()
+                        .catalog
+                        .magnitude(HappinessEventType::ContractRenewal);
+                    player.happiness.add_event_with_context(
+                        HappinessEventType::ContractRenewal,
+                        mag,
+                        None,
+                        happiness_ctx,
+                    );
                     player.happiness.factors.salary_satisfaction = 0.0;
                     player.happiness.last_salary_negotiation = Some(now);
                 } else if proposal.salary >= player_contract.salary {
@@ -285,10 +311,23 @@ impl ProcessContractHandler {
                         + negotiation
                         + agent.renewal_delta_with(1.0, sweetener_ratio, has_clause);
                     if accept_score >= 20.0 || pkg_ratio >= 1.10 {
+                        let proposal_years = proposal.years;
                         accept_and_clear(player, proposal, now);
-                        player
-                            .happiness
-                            .add_event(HappinessEventType::ContractOffer, 2.0);
+                        let cctx = ContractEventContext::new(ContractEventKind::OfferReceived)
+                            .with_wage_vs_previous(1.0)
+                            .with_years_remaining(proposal_years);
+                        let happiness_ctx = HappinessEventContext::new(
+                            HappinessEventCause::Other,
+                            HappinessEventSeverity::Minor,
+                            HappinessEventScope::Boardroom,
+                        )
+                        .with_contract_context(cctx);
+                        player.happiness.add_event_with_context(
+                            HappinessEventType::ContractOffer,
+                            2.0,
+                            None,
+                            happiness_ctx,
+                        );
                     } else {
                         result.contract.contract_rejected = true;
                         let reason = if !has_clause && player.attributes.ambition >= 14.0 {
@@ -314,10 +353,29 @@ impl ProcessContractHandler {
                         salary_ratio >= 0.85 && loyalty >= 15.0 && negotiation >= 15.0
                     };
                     if eligible {
+                        let pay_cut_ratio = proposal.salary as f32 / current_salary.max(1) as f32;
+                        let proposal_years = proposal.years;
                         accept_and_clear(player, proposal, now);
-                        player
-                            .happiness
-                            .add_event(HappinessEventType::ContractOffer, 1.0);
+                        let mut cctx = ContractEventContext::new(
+                            ContractEventKind::LoyaltyDiscountAccepted,
+                        )
+                        .with_wage_vs_previous(pay_cut_ratio)
+                        .with_years_remaining(proposal_years);
+                        if player.attributes.loyalty >= 15.0 {
+                            cctx = cctx.with_evidence(ContractEventEvidence::HighLoyalty);
+                        }
+                        let happiness_ctx = HappinessEventContext::new(
+                            HappinessEventCause::Other,
+                            HappinessEventSeverity::Minor,
+                            HappinessEventScope::Boardroom,
+                        )
+                        .with_contract_context(cctx);
+                        player.happiness.add_event_with_context(
+                            HappinessEventType::ContractOffer,
+                            1.0,
+                            None,
+                            happiness_ctx,
+                        );
                     } else {
                         result.contract.contract_rejected = true;
                         record_counter_offer(

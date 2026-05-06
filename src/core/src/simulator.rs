@@ -20,7 +20,9 @@ use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
 use crate::utils::DateUtils;
 use crate::utils::random::engine as rng_engine;
-use crate::{HappinessEventType, Player, Staff, TeamInfo};
+use crate::{
+    HappinessEventType, Player, RecognitionEventContext, RecognitionEventKind, Staff, TeamInfo,
+};
 use chrono::{Datelike, Duration, NaiveDateTime, Weekday};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -1300,16 +1302,29 @@ impl MonthlyAwardsTick {
     fn apply(data: &mut SimulatorData, pending: Vec<PendingMonthlyAward>) {
         for entry in pending {
             if let Some(award) = &entry.pom {
+                let ctx = Self::pom_context(
+                    RecognitionEventKind::PlayerOfTheMonth,
+                    entry.league_id,
+                    award,
+                );
                 if let Some(player) = data.player_mut(award.player_id) {
-                    player
-                        .happiness
-                        .add_event_default_with_cooldown(HappinessEventType::PlayerOfTheMonth, 28);
+                    player.on_recognition_award(
+                        HappinessEventType::PlayerOfTheMonth,
+                        ctx,
+                        28,
+                    );
                 }
             }
             if let Some(award) = &entry.young {
+                let ctx = Self::pom_context(
+                    RecognitionEventKind::YoungPlayerOfTheMonth,
+                    entry.league_id,
+                    award,
+                );
                 if let Some(player) = data.player_mut(award.player_id) {
-                    player.happiness.add_event_default_with_cooldown(
+                    player.on_recognition_award(
                         HappinessEventType::YoungPlayerOfTheMonth,
+                        ctx,
                         28,
                     );
                 }
@@ -1324,6 +1339,19 @@ impl MonthlyAwardsTick {
                 league.awards.record_monthly_snapshot(entry.snapshot);
             }
         }
+    }
+
+    fn pom_context(
+        kind: RecognitionEventKind,
+        league_id: u32,
+        award: &MonthlyPlayerAward,
+    ) -> RecognitionEventContext {
+        RecognitionEventContext::new(kind)
+            .with_league(league_id)
+            .with_season_goals(award.goals as u16)
+            .with_season_assists(award.assists as u16)
+            .with_avg_rating(award.average_rating)
+            .with_matches_played(award.matches_played as u16)
     }
 }
 
@@ -1344,41 +1372,57 @@ impl SeasonAwardsTick {
 
         for (league_id, snapshot) in pending {
             if let Some(player) = snapshot.player_of_season.and_then(|id| data.player_mut(id)) {
-                player
-                    .happiness
-                    .add_event_default_with_cooldown(HappinessEventType::PlayerOfTheSeason, 330);
+                player.on_recognition_award(
+                    HappinessEventType::PlayerOfTheSeason,
+                    RecognitionEventContext::new(RecognitionEventKind::PlayerOfTheSeason)
+                        .with_league(league_id),
+                    330,
+                );
             }
             if let Some(player) = snapshot
                 .young_player_of_season
                 .and_then(|id| data.player_mut(id))
             {
-                player.happiness.add_event_default_with_cooldown(
+                player.on_recognition_award(
                     HappinessEventType::YoungPlayerOfTheSeason,
+                    RecognitionEventContext::new(RecognitionEventKind::YoungPlayerOfTheSeason)
+                        .with_league(league_id),
                     330,
                 );
             }
             for pid in &snapshot.team_of_season {
                 if let Some(player) = data.player_mut(*pid) {
-                    player.happiness.add_event_default_with_cooldown(
+                    player.on_recognition_award(
                         HappinessEventType::TeamOfTheSeasonSelection,
+                        RecognitionEventContext::new(RecognitionEventKind::TeamOfTheSeasonSelection)
+                            .with_league(league_id),
                         330,
                     );
                 }
             }
             if let Some(player) = snapshot.top_scorer.and_then(|id| data.player_mut(id)) {
-                player
-                    .happiness
-                    .add_event_default_with_cooldown(HappinessEventType::LeagueTopScorer, 330);
+                player.on_recognition_award(
+                    HappinessEventType::LeagueTopScorer,
+                    RecognitionEventContext::new(RecognitionEventKind::LeagueTopScorer)
+                        .with_league(league_id),
+                    330,
+                );
             }
             if let Some(player) = snapshot.top_assists.and_then(|id| data.player_mut(id)) {
-                player
-                    .happiness
-                    .add_event_default_with_cooldown(HappinessEventType::LeagueTopAssists, 330);
+                player.on_recognition_award(
+                    HappinessEventType::LeagueTopAssists,
+                    RecognitionEventContext::new(RecognitionEventKind::LeagueTopAssists)
+                        .with_league(league_id),
+                    330,
+                );
             }
             if let Some(player) = snapshot.golden_glove.and_then(|id| data.player_mut(id)) {
-                player
-                    .happiness
-                    .add_event_default_with_cooldown(HappinessEventType::LeagueGoldenGlove, 330);
+                player.on_recognition_award(
+                    HappinessEventType::LeagueGoldenGlove,
+                    RecognitionEventContext::new(RecognitionEventKind::LeagueGoldenGlove)
+                        .with_league(league_id),
+                    330,
+                );
             }
             // Archive the snapshot once events have been applied.
             let mut snapshot = snapshot;
@@ -1417,19 +1461,41 @@ impl WorldPlayerOfYearTick {
         let top_three: Vec<u32> = combined.iter().take(3).map(|(id, _)| *id).collect();
         let winner = combined.first().map(|(id, _)| *id);
 
-        for pid in top_three {
-            if let Some(player) = data.player_mut(pid) {
-                player.happiness.add_event_default_with_cooldown(
+        let runner_up_id = combined.get(1).map(|(id, _)| *id);
+        let winner_score = combined.first().map(|(_, score)| *score);
+        let winner_margin = combined
+            .first()
+            .zip(combined.get(1))
+            .map(|((_, w), (_, r))| (*w - *r).max(0.0));
+
+        for pid in &top_three {
+            if let Some(player) = data.player_mut(*pid) {
+                let mut ctx =
+                    RecognitionEventContext::new(RecognitionEventKind::WorldPlayerOfYearNomination);
+                if let Some(rup) = runner_up_id {
+                    ctx = ctx.with_runner_up(rup);
+                }
+                player.on_recognition_award(
                     HappinessEventType::WorldPlayerOfYearNomination,
+                    ctx,
                     330,
                 );
             }
         }
         if let Some(id) = winner {
             if let Some(player) = data.player_mut(id) {
-                player
-                    .happiness
-                    .add_event_default_with_cooldown(HappinessEventType::WorldPlayerOfYear, 330);
+                let mut ctx =
+                    RecognitionEventContext::new(RecognitionEventKind::WorldPlayerOfYear);
+                if let Some(rup) = runner_up_id {
+                    ctx = ctx.with_runner_up(rup);
+                }
+                if let Some(margin) = winner_margin {
+                    ctx = ctx.with_margin(margin);
+                }
+                if let Some(score) = winner_score {
+                    ctx = ctx.with_avg_rating(score);
+                }
+                player.on_recognition_award(HappinessEventType::WorldPlayerOfYear, ctx, 330);
                 let cur = player.player_attributes.current_reputation;
                 let home = player.player_attributes.home_reputation;
                 let world = player.player_attributes.world_reputation;

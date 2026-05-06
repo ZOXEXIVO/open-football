@@ -2,6 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
+use crate::player::events::PlayerEventsCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -43,6 +44,7 @@ pub struct PlayerDecisionsTemplate {
     pub is_unhappy: bool,
     pub is_force_match_selection: bool,
     pub is_on_watchlist: bool,
+    pub events_count: usize,
     pub decisions: Vec<PlayerDecisionItem>,
 }
 
@@ -177,6 +179,7 @@ pub async fn player_decisions_action(
         is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
         is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
+        events_count: PlayerEventsCounter::count(player),
         decisions,
     }
     .into_response())

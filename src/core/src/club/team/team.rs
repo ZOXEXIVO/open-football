@@ -7,10 +7,11 @@ use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
 use crate::utils::DateUtils;
 use crate::{
-    HappinessEventType, MatchHistory, MatchTacticType, Player, PlayerCollection,
-    PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, StaffCollection, Tactics,
-    TacticsSelector, TeamInfo, TeamReputation, TeamResult, TeamTraining, TrainingSchedule,
-    TransferItem, Transfers,
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, LeadershipEventContext, LeadershipEventKind, MatchHistory, MatchTacticType,
+    Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
+    StaffCollection, Tactics, TacticsSelector, TeamInfo, TeamReputation, TeamResult, TeamTraining,
+    TrainingSchedule, TransferItem, Transfers,
 };
 use chrono::NaiveDate;
 use std::borrow::Cow;
@@ -260,12 +261,22 @@ impl Team {
             if let Some(old_id) = self.captain_id {
                 if let Some(p) = self.players.players.iter_mut().find(|p| p.id == old_id) {
                     let mag = Self::captaincy_removed_magnitude(p);
+                    let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyRemoved)
+                        .with_leadership_attribute(p.skills.mental.leadership);
+                    let happiness_ctx = HappinessEventContext::new(
+                        HappinessEventCause::Other,
+                        HappinessEventSeverity::from_magnitude(mag),
+                        HappinessEventScope::DressingRoom,
+                    )
+                    .with_leadership_context(lctx);
                     // 120-day cooldown to absorb monthly recalculation
                     // oscillation around an evenly-matched leadership
                     // group (the kind of churn we don't want narrated).
-                    p.happiness.add_event_with_cooldown(
+                    p.happiness.add_event_with_context_and_cooldown(
                         HappinessEventType::CaptaincyRemoved,
                         mag,
+                        None,
+                        happiness_ctx,
                         120,
                     );
                 }
@@ -273,9 +284,19 @@ impl Team {
             if let Some(new_id) = new_captain {
                 if let Some(p) = self.players.players.iter_mut().find(|p| p.id == new_id) {
                     let mag = Self::captaincy_awarded_magnitude(p);
-                    p.happiness.add_event_with_cooldown(
+                    let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyAwarded)
+                        .with_leadership_attribute(p.skills.mental.leadership);
+                    let happiness_ctx = HappinessEventContext::new(
+                        HappinessEventCause::Other,
+                        HappinessEventSeverity::from_magnitude(mag),
+                        HappinessEventScope::DressingRoom,
+                    )
+                    .with_leadership_context(lctx);
+                    p.happiness.add_event_with_context_and_cooldown(
                         HappinessEventType::CaptaincyAwarded,
                         mag,
+                        None,
+                        happiness_ctx,
                         120,
                     );
                 }

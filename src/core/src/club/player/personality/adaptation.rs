@@ -4,8 +4,9 @@ use crate::club::player::language::Language;
 use crate::club::player::player::{ManagerPromiseKind, Player};
 use crate::club::{Person, PlayerPositionType};
 use crate::{
-    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
-    HappinessEventScope, HappinessEventSeverity,
+    ContractEventContext, ContractEventEvidence, ContractEventKind, HappinessEventCause,
+    HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
+    HappinessEventSeverity, RoleStatusEventContext, RoleStatusKind,
 };
 use chrono::NaiveDate;
 
@@ -490,8 +491,22 @@ impl Player {
             return;
         }
         let severity = ((cfg.salary_shock_ratio - ratio) / cfg.salary_shock_ratio).clamp(0.0, 1.0);
-        self.happiness
-            .add_event(HappinessEventType::SalaryShock, -6.0 - 6.0 * severity);
+        let mag = -6.0 - 6.0 * severity;
+        let cctx = ContractEventContext::new(ContractEventKind::SalaryShock)
+            .with_wage_vs_previous(ratio)
+            .with_evidence(ContractEventEvidence::SquadStatusDowngrade);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Boardroom,
+        )
+        .with_contract_context(cctx);
+        self.happiness.add_event_with_context(
+            HappinessEventType::SalaryShock,
+            mag,
+            None,
+            happiness_ctx,
+        );
     }
 
     fn emit_dream_move(&mut self, club_rep_0_to_1: f32, damp: f32, now: NaiveDate) {
@@ -569,8 +584,22 @@ impl Player {
             return;
         }
         let severity = ((ratio - cfg.salary_boost_ratio) / 2.0).clamp(0.0, 1.5);
-        self.happiness
-            .add_event(HappinessEventType::SalaryBoost, 4.0 + 4.0 * severity);
+        let mag = 4.0 + 4.0 * severity;
+        let cctx = ContractEventContext::new(ContractEventKind::SalaryBoost)
+            .with_wage_vs_previous(ratio)
+            .with_evidence(ContractEventEvidence::OverpaidVsExpectation);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Boardroom,
+        )
+        .with_contract_context(cctx);
+        self.happiness.add_event_with_context(
+            HappinessEventType::SalaryBoost,
+            mag,
+            None,
+            happiness_ctx,
+        );
     }
 
     fn emit_role_mismatch_if_unfit(&mut self, formation: &[PlayerPositionType; 11]) {
@@ -582,8 +611,19 @@ impl Player {
             .iter()
             .any(|p| p.position_group() == primary.position_group());
         let mag = if group_match { -4.0 } else { -8.0 };
-        self.happiness
-            .add_event(HappinessEventType::RoleMismatch, mag);
+        let rctx = RoleStatusEventContext::new(RoleStatusKind::NoNaturalRoleInFormation);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::TacticalDisagreement,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::MatchDay,
+        )
+        .with_role_status_context(rctx);
+        self.happiness.add_event_with_context(
+            HappinessEventType::RoleMismatch,
+            mag,
+            None,
+            happiness_ctx,
+        );
     }
 
     /// Development multiplier applied when a player has just stepped up to

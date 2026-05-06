@@ -6,8 +6,9 @@ use crate::club::player::interaction::{
 use crate::{
     ChangeType, HappinessEventCause, HappinessEventChangeKind, HappinessEventContext,
     HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
-    HappinessEventType, Player, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
-    RelationshipChange, SimulatorData,
+    HappinessEventType, LoanEventContext, LoanEventKind, ManagerInteractionEventContext,
+    ManagerInteractionTone, ManagerInteractionTopic, PlayerAcceptance, Player, PlayerPositionType,
+    PlayerSquadStatus, PlayerStatusType, PromiseKind, RelationshipChange, SimulatorData,
 };
 use chrono::{Duration, NaiveDate};
 
@@ -150,7 +151,33 @@ impl TeamBehaviourResult {
                         _ => HappinessEventType::PoorTraining,
                     }
                 };
-                player.happiness.add_event(event_type, talk.morale_change);
+                let topic = ManagerInteractionTopicMapper::from_talk(&talk.talk_type);
+                let tone = ManagerInteractionToneMapper::from_interaction(&talk.tone);
+                let acceptance = ManagerInteractionAcceptanceMapper::from_outcome(
+                    talk.success,
+                    talk.morale_change,
+                );
+                let mut mctx = ManagerInteractionEventContext::new(topic, tone, acceptance)
+                    .with_manager_staff_id(talk.staff_id);
+                if matches!(
+                    talk.talk_type,
+                    ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest
+                ) {
+                    let credibility = if talk.honest_framing { 0.9 } else { 0.55 };
+                    mctx = mctx.with_promise(PromiseKind::PlayingTime, credibility);
+                }
+                let happiness_ctx = HappinessEventContext::new(
+                    HappinessEventCause::Other,
+                    HappinessEventSeverity::from_magnitude(talk.morale_change),
+                    HappinessEventScope::DressingRoom,
+                )
+                .with_manager_interaction_context(mctx);
+                player.happiness.add_event_with_context(
+                    event_type,
+                    talk.morale_change,
+                    None,
+                    happiness_ctx,
+                );
 
                 let mut promise_created = false;
 
@@ -214,9 +241,19 @@ impl TeamBehaviourResult {
                             // nothing actually happens, the player stays.
                             if !player.is_force_match_selection {
                                 player.statuses.add(sim_date, PlayerStatusType::Loa);
-                                player
-                                    .happiness
-                                    .add_event(HappinessEventType::LoanListingAccepted, 5.0);
+                                let lctx = LoanEventContext::new(LoanEventKind::LoanListingAccepted);
+                                let happiness_ctx = HappinessEventContext::new(
+                                    HappinessEventCause::Other,
+                                    HappinessEventSeverity::Moderate,
+                                    HappinessEventScope::Boardroom,
+                                )
+                                .with_loan_context(lctx);
+                                player.happiness.add_event_with_context(
+                                    HappinessEventType::LoanListingAccepted,
+                                    5.0,
+                                    None,
+                                    happiness_ctx,
+                                );
                             }
                         }
                         _ => {}
@@ -756,6 +793,63 @@ pub(crate) fn topic_for_talk(talk: ManagerTalkType) -> InteractionTopic {
         ManagerTalkType::Discipline => InteractionTopic::Discipline,
         ManagerTalkType::TransferDiscussion => InteractionTopic::TransferRequest,
         ManagerTalkType::LoanRequest => InteractionTopic::LoanRequest,
+    }
+}
+
+struct ManagerInteractionTopicMapper;
+
+impl ManagerInteractionTopicMapper {
+    fn from_talk(talk: &ManagerTalkType) -> ManagerInteractionTopic {
+        match talk {
+            ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest => {
+                ManagerInteractionTopic::PlayingTime
+            }
+            ManagerTalkType::Praise | ManagerTalkType::MoraleTalk | ManagerTalkType::Motivational => {
+                ManagerInteractionTopic::Performance
+            }
+            ManagerTalkType::Discipline => ManagerInteractionTopic::Discipline,
+            ManagerTalkType::TransferDiscussion => ManagerInteractionTopic::Other,
+            ManagerTalkType::LoanRequest => ManagerInteractionTopic::Other,
+        }
+    }
+}
+
+struct ManagerInteractionToneMapper;
+
+impl ManagerInteractionToneMapper {
+    fn from_interaction(tone: &InteractionTone) -> ManagerInteractionTone {
+        match tone {
+            InteractionTone::Calm => ManagerInteractionTone::Calm,
+            InteractionTone::Honest => ManagerInteractionTone::Honest,
+            InteractionTone::Demanding | InteractionTone::Authoritarian => {
+                ManagerInteractionTone::Demanding
+            }
+            InteractionTone::Supportive => ManagerInteractionTone::Supportive,
+            InteractionTone::Apologetic => ManagerInteractionTone::Supportive,
+            InteractionTone::Evasive => ManagerInteractionTone::Calm,
+        }
+    }
+}
+
+struct ManagerInteractionAcceptanceMapper;
+
+impl ManagerInteractionAcceptanceMapper {
+    fn from_outcome(success: bool, morale_change: f32) -> PlayerAcceptance {
+        if success {
+            if morale_change >= 4.0 {
+                PlayerAcceptance::Motivated
+            } else if morale_change >= 1.0 {
+                PlayerAcceptance::Accepted
+            } else {
+                PlayerAcceptance::Ambivalent
+            }
+        } else if morale_change <= -4.0 {
+            PlayerAcceptance::Resented
+        } else if morale_change <= -1.0 {
+            PlayerAcceptance::Discouraged
+        } else {
+            PlayerAcceptance::Ambivalent
+        }
     }
 }
 

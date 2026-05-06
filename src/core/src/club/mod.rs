@@ -66,6 +66,22 @@ pub use player::{
     TransferInterestKind, TransferInterestReaction, TransferInterestSource,
     TransferInterestStage, TransferSportingFit, WageCalculator, next_player_id,
     seed_player_id_sequence,
+    // New context payloads (Phase 1-11 explanation upgrades)
+    TrainingEventContext, TrainingEventEvidence, TrainingEventReason,
+    ManagerInteractionEventContext, ManagerInteractionTopic, ManagerInteractionTone,
+    PlayerAcceptance, PromiseKind,
+    ContractEventContext, ContractEventEvidence, ContractEventKind,
+    InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage,
+    MatchPerformanceEventContext, MatchPerformanceEvidence, MatchPerformanceKind,
+    RoleStatusEventContext, RoleStatusKind,
+    NationalTeamEventContext, NationalTeamEventKind,
+    LeadershipEventContext, LeadershipEventKind,
+    MediaFanEventContext, MediaFanEventKind, MediaFanSource,
+    PersonalAdaptationEventContext, PersonalAdaptationKind,
+    LoanEventContext, LoanEventKind,
+    RecognitionEventContext, RecognitionEventKind,
+    SeasonOutcomeContext, SeasonOutcomeKind,
+    RegulationEventContext, RegulationOutcomeKind, RegulationSlotKind,
 };
 // Also export the missing types
 pub use player::mailbox::handlers::{AcceptContractHandler, ProcessContractHandler};

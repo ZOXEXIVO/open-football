@@ -4,7 +4,7 @@ use crate::simulator::SimulatorData;
 use crate::utils::{DateUtils, IntegerUtils};
 use crate::{
     ClubResult, Country, HappinessEventType, Person, Player, PlayerHappiness, PlayerStatusType,
-    StaffPosition, TeamInfo, TeamType,
+    SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, TeamInfo, TeamType,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
@@ -899,6 +899,37 @@ impl CountryResult {
             let promoted_team_ids: Vec<u32> =
                 promoted_candidates.into_iter().take(swap_count).collect();
 
+            // Snapshot per-team final standing so the per-player
+            // relegation event can carry SeasonOutcomeContext (final
+            // position, points, gap to safety) without re-borrowing
+            // the league inside the upcoming `&mut country.clubs` loop.
+            let relegation_outcome_by_team: HashMap<u32, (u8, u16, i16)> = country
+                .leagues
+                .leagues
+                .iter()
+                .find(|l| l.id == tier1_id)
+                .and_then(|l| l.final_table.as_ref())
+                .map(|table| {
+                    let total = table.len();
+                    let safety_idx = total.saturating_sub(swap_count);
+                    let safety_points: u16 = table
+                        .get(safety_idx.saturating_sub(1))
+                        .map(|r| r.effective_points() as u16)
+                        .unwrap_or(0);
+                    table
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, r)| relegated_team_ids.contains(&r.team_id))
+                        .map(|(idx, r)| {
+                            let pos = (idx + 1) as u8;
+                            let pts = r.effective_points() as u16;
+                            let gap = pts as i16 - safety_points as i16;
+                            (r.team_id, (pos, pts, gap))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
             // Build a tier-2 club expectation map: clubs that finished
             // inside the promotion window (top promotion_spots + a couple
             // of playoff places) "expected" promotion. NonPromotionRelease
@@ -939,8 +970,23 @@ impl CountryResult {
                         // Inline emit (we hold &mut to team here, so the
                         // Self::apply_team_squad_event helper which takes
                         // &mut country would conflict).
+                        let outcome = relegation_outcome_by_team.get(&team.id).copied();
                         for player in team.players.iter_mut() {
-                            player.on_team_season_event(HappinessEventType::Relegated, 365, date);
+                            let mut ctx = SeasonOutcomeContext::new(SeasonOutcomeKind::Relegated)
+                                .with_league(tier1_id);
+                            if let Some((pos, pts, gap)) = outcome {
+                                ctx = ctx
+                                    .with_final_position(pos)
+                                    .with_points(pts)
+                                    .with_points_to_safety(gap);
+                            }
+                            player.on_season_outcome(
+                                HappinessEventType::Relegated,
+                                365,
+                                1.0,
+                                date,
+                                ctx,
+                            );
                             // Activate any RelegationWageDecrease and
                             // RelegationFeeRelease clauses on the player's
                             // contract. Each helper consumes the matching
@@ -1073,7 +1119,7 @@ impl CountryResult {
         // Collect (team_id, in_zone, near_zone) from each non-friendly
         // league with a meaningful relegation slot count and enough
         // season progress to register pressure.
-        let mut at_risk_teams: Vec<u32> = Vec::new();
+        let mut at_risk_teams: HashMap<u32, (u32, u8, u16, i16, u8)> = HashMap::new();
 
         for league in &country.leagues.leagues {
             if league.friendly || league.settings.relegation_spots == 0 {
@@ -1099,13 +1145,28 @@ impl CountryResult {
                 continue;
             }
 
+            // Snapshot the league's current standings so per-team
+            // SeasonOutcomeContext can be built without re-borrowing.
+            let table = &league.table.rows;
+            let safety_idx = total_teams.saturating_sub(league.settings.relegation_spots as usize);
+            let safety_points: u16 = table
+                .get(safety_idx.saturating_sub(1))
+                .map(|r| r.effective_points() as u16)
+                .unwrap_or(0);
+            let matches_remaining = total_matches.saturating_sub(matches_played);
+
             // Bottom (relegation_spots + 1) teams: the in-zone clubs plus
             // the one immediately above. They're the squads doing the
             // morning newspaper math every week.
             let zone = league.settings.relegation_spots as usize + 1;
-            let table = &league.table.rows;
-            for row in table.iter().rev().take(zone) {
-                at_risk_teams.push(row.team_id);
+            for (idx, row) in table.iter().enumerate().rev().take(zone) {
+                let pos = (idx + 1) as u8;
+                let pts = row.effective_points() as u16;
+                let gap = pts as i16 - safety_points as i16;
+                at_risk_teams.insert(
+                    row.team_id,
+                    (league.id, pos, pts, gap, matches_remaining),
+                );
             }
         }
 
@@ -1115,11 +1176,24 @@ impl CountryResult {
 
         for club in &mut country.clubs {
             for team in club.teams.iter_mut() {
-                if !at_risk_teams.contains(&team.id) {
+                let Some(&(league_id, pos, pts, gap, remaining)) = at_risk_teams.get(&team.id)
+                else {
                     continue;
-                }
+                };
                 for player in team.players.iter_mut() {
-                    player.on_team_season_event(HappinessEventType::RelegationFear, 30, date);
+                    let ctx = SeasonOutcomeContext::new(SeasonOutcomeKind::RelegationFear)
+                        .with_league(league_id)
+                        .with_final_position(pos)
+                        .with_points(pts)
+                        .with_points_to_safety(gap)
+                        .with_matches_remaining(remaining);
+                    player.on_season_outcome(
+                        HappinessEventType::RelegationFear,
+                        30,
+                        1.0,
+                        date,
+                        ctx,
+                    );
                 }
             }
         }

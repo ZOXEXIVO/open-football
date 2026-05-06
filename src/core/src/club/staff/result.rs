@@ -1,8 +1,10 @@
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::simulator::SimulatorData;
 use crate::{
     ChangeType, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
     HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
-    HealthIssue, Player, RelationshipChange, RelationshipEvent, ResignationReason,
+    HealthIssue, ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic,
+    Player, PlayerAcceptance, RelationshipChange, RelationshipEvent, ResignationReason,
     StaffContractResult, StaffMoraleEvent, StaffTrainingResult, StaffWarning, SupportEventContext,
     SupportMatchPhase, SupportSetting, SupportSource, SupportTrigger,
 };
@@ -128,9 +130,24 @@ impl StaffResult {
                         player
                             .relations
                             .update_staff_relationship(self.staff_id, change, sim_date);
-                        player
-                            .happiness
-                            .add_event(HappinessEventType::ManagerCriticism, -2.0);
+                        let mctx = ManagerInteractionEventContext::new(
+                            ManagerInteractionTopic::Tactical,
+                            ManagerInteractionTone::Stern,
+                            PlayerAcceptance::Resented,
+                        )
+                        .with_manager_staff_id(self.staff_id);
+                        let ctx = HappinessEventContext::new(
+                            HappinessEventCause::TacticalDisagreement,
+                            HappinessEventSeverity::Moderate,
+                            HappinessEventScope::TrainingGround,
+                        )
+                        .with_manager_interaction_context(mctx);
+                        player.happiness.add_event_with_context(
+                            HappinessEventType::ManagerCriticism,
+                            -2.0,
+                            None,
+                            ctx,
+                        );
                     }
                 }
                 RelationshipEvent::MentorshipStarted => {
@@ -160,9 +177,27 @@ impl StaffResult {
                         player
                             .relations
                             .update_staff_relationship(self.staff_id, change, sim_date);
-                        player
-                            .happiness
-                            .add_event_default(HappinessEventType::ManagerTacticalInstruction);
+                        let mctx = ManagerInteractionEventContext::new(
+                            ManagerInteractionTopic::Tactical,
+                            ManagerInteractionTone::Calm,
+                            PlayerAcceptance::Motivated,
+                        )
+                        .with_manager_staff_id(self.staff_id);
+                        let ctx = HappinessEventContext::new(
+                            HappinessEventCause::ManagerSupport,
+                            HappinessEventSeverity::Minor,
+                            HappinessEventScope::TrainingGround,
+                        )
+                        .with_manager_interaction_context(mctx);
+                        let mag = HappinessConfig::default()
+                            .catalog
+                            .magnitude(HappinessEventType::ManagerTacticalInstruction);
+                        player.happiness.add_event_with_context(
+                            HappinessEventType::ManagerTacticalInstruction,
+                            mag,
+                            None,
+                            ctx,
+                        );
                     }
                 }
             }

@@ -21,7 +21,10 @@ pub use types::*;
 use crate::country::PeopleNameGeneratorData;
 use crate::r#match::{MatchPlayer, MatchResultRaw, MatchSquad};
 use crate::utils::IntegerUtils;
-use crate::{Club, MatchTacticType, Player, PlayerPositionType, Tactics};
+use crate::{
+    Club, MatchTacticType, Player, PlayerPositionType, RecognitionEventContext,
+    RecognitionEventKind, Tactics,
+};
 use chrono::NaiveDate;
 use log::debug;
 
@@ -156,8 +159,14 @@ impl NationalTeam {
                     if was_uncapped {
                         // First international cap — the actual on-pitch
                         // appearance, not selection.
-                        player.happiness.add_event_default_with_cooldown(
+                        let ctx =
+                            RecognitionEventContext::new(RecognitionEventKind::NationalTeamDebut)
+                                .with_country(self.country_id)
+                                .with_first_time(true)
+                                .with_previous_caps(0);
+                        player.on_recognition_award(
                             crate::HappinessEventType::NationalTeamDebut,
+                            ctx,
                             3650,
                         );
                     }

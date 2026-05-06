@@ -16,6 +16,10 @@ use super::types::{MatchOutcome, MatchParticipation};
 use crate::HappinessEventType;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    RoleStatusEventContext, RoleStatusKind,
+};
 
 impl Player {
     /// Update the rolling starter ratio on a competitive match and emit the
@@ -48,21 +52,40 @@ impl Player {
         }
         if !self.happiness.is_established_starter && self.happiness.starter_ratio >= STARTER_FLOOR {
             let mag = self.won_starting_place_magnitude();
-            // 90-day cooldown so a brief slump and recovery don't ping-pong
-            // the event once per fortnight.
-            if self
-                .happiness
-                .add_event_with_cooldown(HappinessEventType::WonStartingPlace, mag, 90)
-            {
+            let rctx = RoleStatusEventContext::new(RoleStatusKind::EstablishedStarter)
+                .with_starter_ratio(self.happiness.starter_ratio);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::MatchDay,
+            )
+            .with_role_status_context(rctx);
+            if self.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::WonStartingPlace,
+                mag,
+                None,
+                happiness_ctx,
+                90,
+            ) {
                 self.happiness.is_established_starter = true;
             }
         } else if self.happiness.is_established_starter
             && self.happiness.starter_ratio <= BENCHED_CEILING
         {
             let mag = self.lost_starting_place_magnitude();
-            if self.happiness.add_event_with_cooldown(
+            let rctx = RoleStatusEventContext::new(RoleStatusKind::SlippedOutOfStartingXI)
+                .with_starter_ratio(self.happiness.starter_ratio);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::MatchDay,
+            )
+            .with_role_status_context(rctx);
+            if self.happiness.add_event_with_context_and_cooldown(
                 HappinessEventType::LostStartingPlace,
                 mag,
+                None,
+                happiness_ctx,
                 90,
             ) {
                 self.happiness.is_established_starter = false;

@@ -1,7 +1,10 @@
 use crate::club::player::injury::InjuryType;
+use crate::utils::DateUtils;
 use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, MentalGains, PhysicalGains, PlayerStatusType, SimulatorData,
-    TechnicalGains, TrainingEffects,
+    TechnicalGains, TrainingEffects, TrainingEventContext, TrainingEventEvidence,
+    TrainingEventReason,
 };
 
 pub struct PlayerTrainingResult {
@@ -204,7 +207,7 @@ impl PlayerTrainingResult {
                     now: current_date,
                 });
             if rand::random::<f32>() < chance {
-                let age = crate::utils::DateUtils::age(player.birth_date, current_date);
+                let age = DateUtils::age(player.birth_date, current_date);
                 let condition_pct = player.player_attributes.condition_percentage();
                 let natural_fitness = player.skills.physical.natural_fitness;
                 let injury_proneness = player.player_attributes.injury_proneness;
@@ -239,25 +242,156 @@ impl PlayerTrainingResult {
 
             // Apply morale changes to happiness system
             if self.effects.morale_change.abs() > 0.001 {
-                let event_type = if self.effects.morale_change > 0.0 {
+                let positive = self.effects.morale_change > 0.0;
+                let event_type = if positive {
                     HappinessEventType::GoodTraining
                 } else {
                     HappinessEventType::PoorTraining
                 };
+                let context = TrainingContextBuilder {
+                    positive,
+                    session_performance: self.session_performance,
+                    training_performance_ema: player.training.training_performance,
+                    professionalism: player.attributes.professionalism,
+                    age: DateUtils::age(player.birth_date, current_date),
+                    in_recovery: player.player_attributes.is_in_recovery(),
+                    condition_pct: player.player_attributes.condition_percentage(),
+                    fatigue_change: self.effects.fatigue_change,
+                    has_recent_criticism: player.happiness.recent_events.iter().any(|e| {
+                        e.days_ago <= 14
+                            && (e.event_type == HappinessEventType::ManagerCriticism
+                                || e.event_type == HappinessEventType::ManagerDiscipline
+                                || e.event_type == HappinessEventType::MatchDropped)
+                    }),
+                    has_transfer_speculation: player.happiness.recent_events.iter().any(|e| {
+                        e.days_ago <= 21
+                            && matches!(
+                                e.event_type,
+                                HappinessEventType::TransferRumour
+                                    | HappinessEventType::AgentStirsInterest
+                                    | HappinessEventType::TransferSpeculationDistracts
+                                    | HappinessEventType::WantedByBiggerClub
+                                    | HappinessEventType::InterestFromBiggerClub
+                            )
+                    }),
+                    leadership: player.skills.mental.leadership,
+                }
+                .build();
+                let happiness_ctx = HappinessEventContext::new(
+                    HappinessEventCause::Other,
+                    HappinessEventSeverity::from_magnitude(self.effects.morale_change * 5.0),
+                    HappinessEventScope::TrainingGround,
+                )
+                .with_training_context(context);
                 player
                     .happiness
-                    .add_event(event_type, self.effects.morale_change * 5.0);
+                    .add_event_with_context(event_type, self.effects.morale_change * 5.0, None, happiness_ctx);
                 player
                     .happiness
                     .adjust_morale(self.effects.morale_change * 3.0);
 
                 // Good training still has a chance to improve behaviour
-                if self.effects.morale_change > 0.0
-                    && rand::random::<f32>() < self.effects.morale_change
-                {
+                if positive && rand::random::<f32>() < self.effects.morale_change {
                     player.behaviour.try_increase();
                 }
             }
+        }
+    }
+}
+
+struct TrainingContextBuilder {
+    positive: bool,
+    session_performance: f32,
+    training_performance_ema: f32,
+    professionalism: f32,
+    age: u8,
+    in_recovery: bool,
+    condition_pct: u32,
+    fatigue_change: f32,
+    has_recent_criticism: bool,
+    has_transfer_speculation: bool,
+    leadership: f32,
+}
+
+impl TrainingContextBuilder {
+    fn build(self) -> TrainingEventContext {
+        let reason = self.pick_reason();
+        let mut ctx = TrainingEventContext::new(
+            reason,
+            self.session_performance,
+            self.training_performance_ema,
+        );
+        if self.session_performance >= 14.0 {
+            ctx = ctx.with_evidence(TrainingEventEvidence::HighSessionPerformance);
+        }
+        if self.session_performance <= 6.0 {
+            ctx = ctx.with_evidence(TrainingEventEvidence::LowSessionPerformance);
+        }
+        if self.fatigue_change > 100.0 {
+            ctx = ctx.with_evidence(TrainingEventEvidence::HighWorkload);
+        }
+        if self.condition_pct < 60 {
+            ctx = ctx.with_evidence(TrainingEventEvidence::LowCondition);
+        }
+        if self.has_recent_criticism {
+            ctx = ctx.with_evidence(TrainingEventEvidence::RecentlyDropped);
+        }
+        if self.has_transfer_speculation {
+            ctx = ctx.with_evidence(TrainingEventEvidence::TransferSpeculation);
+        }
+        if self.in_recovery {
+            ctx = ctx.with_evidence(TrainingEventEvidence::InRecoveryPhase);
+        }
+        if self.professionalism >= 15.0 {
+            ctx = ctx.with_evidence(TrainingEventEvidence::HighProfessionalism);
+        }
+        if self.professionalism <= 7.0 {
+            ctx = ctx.with_evidence(TrainingEventEvidence::LowProfessionalism);
+        }
+        if self.age <= 21 {
+            ctx = ctx.with_evidence(TrainingEventEvidence::YouthDevelopmentTier);
+        }
+        if self.age >= 30 && self.leadership >= 14.0 {
+            ctx = ctx.with_evidence(TrainingEventEvidence::VeteranLeader);
+        }
+        ctx
+    }
+
+    fn pick_reason(&self) -> TrainingEventReason {
+        if self.positive {
+            if self.in_recovery {
+                return TrainingEventReason::ReturningFromInjuryNotSharp;
+            }
+            if self.has_recent_criticism {
+                return TrainingEventReason::RespondedToCriticism;
+            }
+            if self.age <= 21 && self.session_performance >= 14.0 {
+                return TrainingEventReason::YoungImpressedStaff;
+            }
+            if self.age >= 30 && self.leadership >= 14.0 && self.session_performance >= 13.0 {
+                return TrainingEventReason::SettingStandards;
+            }
+            if self.professionalism >= 15.0 && self.session_performance >= 14.0 {
+                return TrainingEventReason::ExtraWorkAfterSession;
+            }
+            TrainingEventReason::RoutineGoodSession
+        } else {
+            if self.in_recovery {
+                return TrainingEventReason::ReturningFromInjuryNotSharp;
+            }
+            if self.condition_pct < 60 || self.fatigue_change > 100.0 {
+                return TrainingEventReason::StruggledWithIntensity;
+            }
+            if self.has_transfer_speculation {
+                return TrainingEventReason::DistractedByRumours;
+            }
+            if self.has_recent_criticism && self.session_performance <= 6.0 {
+                return TrainingEventReason::SharpAfterBeingLeftOut;
+            }
+            if self.professionalism <= 7.0 {
+                return TrainingEventReason::PoorAttitude;
+            }
+            TrainingEventReason::RoutineBadSession
         }
     }
 }

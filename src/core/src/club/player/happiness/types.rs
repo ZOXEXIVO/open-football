@@ -285,6 +285,61 @@ pub struct HappinessEventContext {
     /// reactions tied to the interested club, stage, and player
     /// personality. `None` for non-interest events.
     pub transfer_interest_context: Option<TransferInterestContext>,
+    /// Training-session explanation payload. Populated for
+    /// `GoodTraining` / `PoorTraining` so the renderer can describe
+    /// why the session swung — fatigue, response to criticism, return
+    /// from injury, setting standards — instead of "Performed well /
+    /// poorly in training".
+    pub training_context: Option<TrainingEventContext>,
+    /// Manager-interaction explanation payload. Drives
+    /// `ManagerPraise` / `ManagerDiscipline` / `ManagerCriticism` /
+    /// `ManagerTacticalInstruction` / `PromiseKept` / `PromiseBroken`
+    /// rendering with topic + tone + trust state.
+    pub manager_interaction_context: Option<ManagerInteractionEventContext>,
+    /// Contract / agent explanation payload — wage delta, promised
+    /// status, agent pressure, loyalty discount. Drives
+    /// `ContractOffer` / `ContractRenewal` / `ContractTerminated` /
+    /// `SalaryShock` / `SalaryBoost` rendering.
+    pub contract_context: Option<ContractEventContext>,
+    /// Injury-recovery explanation payload — recovery length,
+    /// sharpness vs match readiness, setback flag, recurrence concern.
+    /// Drives `InjuryReturn` rendering.
+    pub injury_context: Option<InjuryRecoveryEventContext>,
+    /// Match-performance explanation payload — opponent context,
+    /// rating, goals/assists, derby/cup, drought-ending.
+    pub match_performance_context: Option<MatchPerformanceEventContext>,
+    /// Role / squad-status explanation payload — depth chart,
+    /// formation slot, rotation reason, role-clarity drift.
+    pub role_status_context: Option<RoleStatusEventContext>,
+    /// National-team explanation payload — first-cap vs recall,
+    /// emergency call-up, dropped reason, tournament squad.
+    pub national_team_context: Option<NationalTeamEventContext>,
+    /// Leadership / dressing-room explanation payload — captaincy,
+    /// emergence, mentorship, mediation.
+    pub leadership_context: Option<LeadershipEventContext>,
+    /// Media / fan / public-life explanation payload — narrative
+    /// direction, audience, source.
+    pub media_fan_context: Option<MediaFanEventContext>,
+    /// Personal adaptation payload — settling into a new club /
+    /// country, language progress, family / cultural cues.
+    pub personal_adaptation_context: Option<PersonalAdaptationEventContext>,
+    /// Loan-specific payload — parent-club view, minutes concern,
+    /// recall discussion.
+    pub loan_context: Option<LoanEventContext>,
+    /// Recognition / award explanation payload — POM, POS, top
+    /// scorer, world player of year, national-team debut. Lets the
+    /// renderer explain margin, season totals, and runner-up instead
+    /// of the bare award name.
+    pub recognition_context: Option<RecognitionEventContext>,
+    /// Season-outcome explanation payload for relegation /
+    /// relegation-fear events. Carries final position, points gap to
+    /// safety, and matches remaining at the moment the event fired.
+    pub season_outcome_context: Option<SeasonOutcomeContext>,
+    /// Regulation / squad-registration payload — slot type, slot
+    /// counts, replacement player. Lets the renderer explain "left
+    /// out to free a non-EU slot for the new signing" rather than a
+    /// generic "Squad registration omitted".
+    pub regulation_context: Option<RegulationEventContext>,
 }
 
 impl HappinessEventContext {
@@ -308,6 +363,20 @@ impl HappinessEventContext {
             selection_context: None,
             support_context: None,
             transfer_interest_context: None,
+            training_context: None,
+            manager_interaction_context: None,
+            contract_context: None,
+            injury_context: None,
+            match_performance_context: None,
+            role_status_context: None,
+            national_team_context: None,
+            leadership_context: None,
+            media_fan_context: None,
+            personal_adaptation_context: None,
+            loan_context: None,
+            recognition_context: None,
+            season_outcome_context: None,
+            regulation_context: None,
         }
     }
 
@@ -383,6 +452,103 @@ impl HappinessEventContext {
     pub fn with_transfer_interest_context(mut self, ctx: TransferInterestContext) -> Self {
         self.transfer_interest_context = Some(ctx);
         self
+    }
+
+    pub fn with_training_context(mut self, ctx: TrainingEventContext) -> Self {
+        self.training_context = Some(ctx);
+        self
+    }
+
+    pub fn with_manager_interaction_context(mut self, ctx: ManagerInteractionEventContext) -> Self {
+        self.manager_interaction_context = Some(ctx);
+        self
+    }
+
+    pub fn with_contract_context(mut self, ctx: ContractEventContext) -> Self {
+        self.contract_context = Some(ctx);
+        self
+    }
+
+    pub fn with_injury_context(mut self, ctx: InjuryRecoveryEventContext) -> Self {
+        self.injury_context = Some(ctx);
+        self
+    }
+
+    pub fn with_match_performance_context(mut self, ctx: MatchPerformanceEventContext) -> Self {
+        self.match_performance_context = Some(ctx);
+        self
+    }
+
+    pub fn with_role_status_context(mut self, ctx: RoleStatusEventContext) -> Self {
+        self.role_status_context = Some(ctx);
+        self
+    }
+
+    pub fn with_national_team_context(mut self, ctx: NationalTeamEventContext) -> Self {
+        self.national_team_context = Some(ctx);
+        self
+    }
+
+    pub fn with_leadership_context(mut self, ctx: LeadershipEventContext) -> Self {
+        self.leadership_context = Some(ctx);
+        self
+    }
+
+    pub fn with_media_fan_context(mut self, ctx: MediaFanEventContext) -> Self {
+        self.media_fan_context = Some(ctx);
+        self
+    }
+
+    pub fn with_personal_adaptation_context(mut self, ctx: PersonalAdaptationEventContext) -> Self {
+        self.personal_adaptation_context = Some(ctx);
+        self
+    }
+
+    pub fn with_loan_context(mut self, ctx: LoanEventContext) -> Self {
+        self.loan_context = Some(ctx);
+        self
+    }
+
+    pub fn with_recognition_context(mut self, ctx: RecognitionEventContext) -> Self {
+        self.recognition_context = Some(ctx);
+        self
+    }
+
+    pub fn with_season_outcome_context(mut self, ctx: SeasonOutcomeContext) -> Self {
+        self.season_outcome_context = Some(ctx);
+        self
+    }
+
+    pub fn with_regulation_context(mut self, ctx: RegulationEventContext) -> Self {
+        self.regulation_context = Some(ctx);
+        self
+    }
+
+    /// Returns the number of specialized payload contexts attached to
+    /// this event. Specialized payloads are mutually exclusive at the
+    /// modelling level — an event is *either* a selection event, *or*
+    /// a transfer-interest event, etc. — so this should never exceed 1.
+    /// Used by tests as a soft invariant on emit-site code.
+    pub fn specialized_payload_count(&self) -> usize {
+        let mut n = 0;
+        if self.selection_context.is_some() { n += 1; }
+        if self.support_context.is_some() { n += 1; }
+        if self.transfer_interest_context.is_some() { n += 1; }
+        if self.training_context.is_some() { n += 1; }
+        if self.manager_interaction_context.is_some() { n += 1; }
+        if self.contract_context.is_some() { n += 1; }
+        if self.injury_context.is_some() { n += 1; }
+        if self.match_performance_context.is_some() { n += 1; }
+        if self.role_status_context.is_some() { n += 1; }
+        if self.national_team_context.is_some() { n += 1; }
+        if self.leadership_context.is_some() { n += 1; }
+        if self.media_fan_context.is_some() { n += 1; }
+        if self.personal_adaptation_context.is_some() { n += 1; }
+        if self.loan_context.is_some() { n += 1; }
+        if self.recognition_context.is_some() { n += 1; }
+        if self.season_outcome_context.is_some() { n += 1; }
+        if self.regulation_context.is_some() { n += 1; }
+        n
     }
 }
 
@@ -1711,6 +1877,1215 @@ impl TransferInterestContext {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Training-event context
+// ─────────────────────────────────────────────────────────────────
+
+/// Football-realistic reason a training session swung positively or
+/// negatively. Closed enum so renderer copy stays bounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrainingEventReason {
+    SharpAfterBeingLeftOut,
+    RespondedToCriticism,
+    StruggledWithIntensity,
+    DistractedByRumours,
+    PoorAttitude,
+    ReturningFromInjuryNotSharp,
+    YoungImpressedStaff,
+    SettingStandards,
+    ExtraWorkAfterSession,
+    MatchPreparationFocus,
+    RoutineGoodSession,
+    RoutineBadSession,
+}
+
+impl TrainingEventReason {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TrainingEventReason::SharpAfterBeingLeftOut => "training_reason_sharp_after_being_left_out",
+            TrainingEventReason::RespondedToCriticism => "training_reason_responded_to_criticism",
+            TrainingEventReason::StruggledWithIntensity => "training_reason_struggled_with_intensity",
+            TrainingEventReason::DistractedByRumours => "training_reason_distracted_by_rumours",
+            TrainingEventReason::PoorAttitude => "training_reason_poor_attitude",
+            TrainingEventReason::ReturningFromInjuryNotSharp => "training_reason_returning_from_injury_not_sharp",
+            TrainingEventReason::YoungImpressedStaff => "training_reason_young_impressed_staff",
+            TrainingEventReason::SettingStandards => "training_reason_setting_standards",
+            TrainingEventReason::ExtraWorkAfterSession => "training_reason_extra_work_after_session",
+            TrainingEventReason::MatchPreparationFocus => "training_reason_match_preparation_focus",
+            TrainingEventReason::RoutineGoodSession => "training_reason_routine_good_session",
+            TrainingEventReason::RoutineBadSession => "training_reason_routine_bad_session",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrainingEventEvidence {
+    HighSessionPerformance,
+    LowSessionPerformance,
+    HighWorkload,
+    LowCondition,
+    RecentlyDropped,
+    TransferSpeculation,
+    InRecoveryPhase,
+    HighProfessionalism,
+    LowProfessionalism,
+    YouthDevelopmentTier,
+    VeteranLeader,
+    StrongRecentForm,
+    UpcomingBigMatch,
+}
+
+impl TrainingEventEvidence {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TrainingEventEvidence::HighSessionPerformance => "training_evidence_high_session_performance",
+            TrainingEventEvidence::LowSessionPerformance => "training_evidence_low_session_performance",
+            TrainingEventEvidence::HighWorkload => "training_evidence_high_workload",
+            TrainingEventEvidence::LowCondition => "training_evidence_low_condition",
+            TrainingEventEvidence::RecentlyDropped => "training_evidence_recently_dropped",
+            TrainingEventEvidence::TransferSpeculation => "training_evidence_transfer_speculation",
+            TrainingEventEvidence::InRecoveryPhase => "training_evidence_in_recovery_phase",
+            TrainingEventEvidence::HighProfessionalism => "training_evidence_high_professionalism",
+            TrainingEventEvidence::LowProfessionalism => "training_evidence_low_professionalism",
+            TrainingEventEvidence::YouthDevelopmentTier => "training_evidence_youth_development_tier",
+            TrainingEventEvidence::VeteranLeader => "training_evidence_veteran_leader",
+            TrainingEventEvidence::StrongRecentForm => "training_evidence_strong_recent_form",
+            TrainingEventEvidence::UpcomingBigMatch => "training_evidence_upcoming_big_match",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TrainingEventContext {
+    pub reason: TrainingEventReason,
+    pub session_performance: f32,
+    pub training_performance_ema: f32,
+    pub evidence: Vec<TrainingEventEvidence>,
+}
+
+impl TrainingEventContext {
+    pub fn new(reason: TrainingEventReason, session_performance: f32, training_performance_ema: f32) -> Self {
+        Self { reason, session_performance, training_performance_ema, evidence: Vec::new() }
+    }
+
+    pub fn with_evidence(mut self, evidence: TrainingEventEvidence) -> Self {
+        if !self.evidence.contains(&evidence) {
+            self.evidence.push(evidence);
+        }
+        self
+    }
+
+    pub fn with_evidence_iter<I>(mut self, iter: I) -> Self
+    where
+        I: IntoIterator<Item = TrainingEventEvidence>,
+    {
+        for ev in iter {
+            if !self.evidence.contains(&ev) {
+                self.evidence.push(ev);
+            }
+        }
+        self
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Manager-interaction context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagerInteractionTopic {
+    PlayingTime,
+    Performance,
+    Tactical,
+    Discipline,
+    Attitude,
+    PromiseFollowUp,
+    RoleClarification,
+    Other,
+}
+
+impl ManagerInteractionTopic {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            ManagerInteractionTopic::PlayingTime => "manager_topic_playing_time",
+            ManagerInteractionTopic::Performance => "manager_topic_performance",
+            ManagerInteractionTopic::Tactical => "manager_topic_tactical",
+            ManagerInteractionTopic::Discipline => "manager_topic_discipline",
+            ManagerInteractionTopic::Attitude => "manager_topic_attitude",
+            ManagerInteractionTopic::PromiseFollowUp => "manager_topic_promise_follow_up",
+            ManagerInteractionTopic::RoleClarification => "manager_topic_role_clarification",
+            ManagerInteractionTopic::Other => "manager_topic_other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagerInteractionTone {
+    Calm,
+    Honest,
+    Demanding,
+    Supportive,
+    Stern,
+    Praising,
+}
+
+impl ManagerInteractionTone {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            ManagerInteractionTone::Calm => "manager_tone_calm",
+            ManagerInteractionTone::Honest => "manager_tone_honest",
+            ManagerInteractionTone::Demanding => "manager_tone_demanding",
+            ManagerInteractionTone::Supportive => "manager_tone_supportive",
+            ManagerInteractionTone::Stern => "manager_tone_stern",
+            ManagerInteractionTone::Praising => "manager_tone_praising",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerAcceptance {
+    Accepted,
+    Resented,
+    Ambivalent,
+    Motivated,
+    Discouraged,
+}
+
+impl PlayerAcceptance {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            PlayerAcceptance::Accepted => "manager_acceptance_accepted",
+            PlayerAcceptance::Resented => "manager_acceptance_resented",
+            PlayerAcceptance::Ambivalent => "manager_acceptance_ambivalent",
+            PlayerAcceptance::Motivated => "manager_acceptance_motivated",
+            PlayerAcceptance::Discouraged => "manager_acceptance_discouraged",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromiseKind {
+    PlayingTime,
+    SquadStatus,
+    NewSigning,
+    ContractRenewal,
+    TacticalRole,
+    Other,
+}
+
+impl PromiseKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            PromiseKind::PlayingTime => "promise_kind_playing_time",
+            PromiseKind::SquadStatus => "promise_kind_squad_status",
+            PromiseKind::NewSigning => "promise_kind_new_signing",
+            PromiseKind::ContractRenewal => "promise_kind_contract_renewal",
+            PromiseKind::TacticalRole => "promise_kind_tactical_role",
+            PromiseKind::Other => "promise_kind_other",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ManagerInteractionEventContext {
+    pub topic: ManagerInteractionTopic,
+    pub tone: ManagerInteractionTone,
+    pub acceptance: PlayerAcceptance,
+    pub manager_staff_id: Option<u32>,
+    pub trust_in_manager: Option<f32>,
+    pub promise_kind: Option<PromiseKind>,
+    pub promise_credibility: Option<f32>,
+}
+
+impl ManagerInteractionEventContext {
+    pub fn new(topic: ManagerInteractionTopic, tone: ManagerInteractionTone, acceptance: PlayerAcceptance) -> Self {
+        Self {
+            topic,
+            tone,
+            acceptance,
+            manager_staff_id: None,
+            trust_in_manager: None,
+            promise_kind: None,
+            promise_credibility: None,
+        }
+    }
+
+    pub fn with_manager_staff_id(mut self, id: u32) -> Self { self.manager_staff_id = Some(id); self }
+    pub fn with_trust(mut self, trust: f32) -> Self { self.trust_in_manager = Some(trust); self }
+    pub fn with_promise(mut self, kind: PromiseKind, credibility: f32) -> Self {
+        self.promise_kind = Some(kind);
+        self.promise_credibility = Some(credibility);
+        self
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Contract / agent context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContractEventKind {
+    OfferReceived,
+    TalksOpened,
+    TalksStalled,
+    Renewed,
+    Terminated,
+    SalaryShock,
+    SalaryBoost,
+    LoyaltyDiscountAccepted,
+    AgentPushingForBetterTerms,
+    WagePromiseFrustration,
+    AcceptedReducedRoleContract,
+    RejectedLowStatusOffer,
+}
+
+impl ContractEventKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            ContractEventKind::OfferReceived => "contract_kind_offer_received",
+            ContractEventKind::TalksOpened => "contract_kind_talks_opened",
+            ContractEventKind::TalksStalled => "contract_kind_talks_stalled",
+            ContractEventKind::Renewed => "contract_kind_renewed",
+            ContractEventKind::Terminated => "contract_kind_terminated",
+            ContractEventKind::SalaryShock => "contract_kind_salary_shock",
+            ContractEventKind::SalaryBoost => "contract_kind_salary_boost",
+            ContractEventKind::LoyaltyDiscountAccepted => "contract_kind_loyalty_discount_accepted",
+            ContractEventKind::AgentPushingForBetterTerms => "contract_kind_agent_pushing",
+            ContractEventKind::WagePromiseFrustration => "contract_kind_wage_promise_frustration",
+            ContractEventKind::AcceptedReducedRoleContract => "contract_kind_accepted_reduced_role",
+            ContractEventKind::RejectedLowStatusOffer => "contract_kind_rejected_low_status",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContractEventEvidence {
+    AgentPressure,
+    HighLoyalty,
+    LowLoyalty,
+    HighAmbition,
+    UnderpaidVsPeers,
+    OverpaidVsExpectation,
+    SquadStatusUpgrade,
+    SquadStatusDowngrade,
+    UsedExternalInterestAsLeverage,
+    ContractExpiring,
+    HasOtherInterest,
+    ClubInFinancialDistress,
+}
+
+impl ContractEventEvidence {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            ContractEventEvidence::AgentPressure => "contract_evidence_agent_pressure",
+            ContractEventEvidence::HighLoyalty => "contract_evidence_high_loyalty",
+            ContractEventEvidence::LowLoyalty => "contract_evidence_low_loyalty",
+            ContractEventEvidence::HighAmbition => "contract_evidence_high_ambition",
+            ContractEventEvidence::UnderpaidVsPeers => "contract_evidence_underpaid_vs_peers",
+            ContractEventEvidence::OverpaidVsExpectation => "contract_evidence_overpaid_vs_expectation",
+            ContractEventEvidence::SquadStatusUpgrade => "contract_evidence_squad_status_upgrade",
+            ContractEventEvidence::SquadStatusDowngrade => "contract_evidence_squad_status_downgrade",
+            ContractEventEvidence::UsedExternalInterestAsLeverage => "contract_evidence_used_external_interest",
+            ContractEventEvidence::ContractExpiring => "contract_evidence_contract_expiring",
+            ContractEventEvidence::HasOtherInterest => "contract_evidence_has_other_interest",
+            ContractEventEvidence::ClubInFinancialDistress => "contract_evidence_club_financial_distress",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ContractEventContext {
+    pub kind: ContractEventKind,
+    pub interested_club_id: Option<u32>,
+    pub wage_ratio_vs_previous: Option<f32>,
+    pub wage_ratio_vs_peers: Option<f32>,
+    pub promised_status: Option<PlayerSquadStatus>,
+    pub agent_pressure: Option<f32>,
+    pub years_remaining: Option<u8>,
+    pub evidence: Vec<ContractEventEvidence>,
+}
+
+impl ContractEventContext {
+    pub fn new(kind: ContractEventKind) -> Self {
+        Self {
+            kind,
+            interested_club_id: None,
+            wage_ratio_vs_previous: None,
+            wage_ratio_vs_peers: None,
+            promised_status: None,
+            agent_pressure: None,
+            years_remaining: None,
+            evidence: Vec::new(),
+        }
+    }
+
+    pub fn with_wage_vs_previous(mut self, ratio: f32) -> Self { self.wage_ratio_vs_previous = Some(ratio); self }
+    pub fn with_wage_vs_peers(mut self, ratio: f32) -> Self { self.wage_ratio_vs_peers = Some(ratio); self }
+    pub fn with_promised_status(mut self, status: PlayerSquadStatus) -> Self { self.promised_status = Some(status); self }
+    pub fn with_agent_pressure(mut self, pressure: f32) -> Self { self.agent_pressure = Some(pressure); self }
+    pub fn with_years_remaining(mut self, years: u8) -> Self { self.years_remaining = Some(years); self }
+    pub fn with_interested_club(mut self, club_id: u32) -> Self { self.interested_club_id = Some(club_id); self }
+
+    pub fn with_evidence(mut self, evidence: ContractEventEvidence) -> Self {
+        if !self.evidence.contains(&evidence) {
+            self.evidence.push(evidence);
+        }
+        self
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Injury / fitness recovery context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjuryRecoveryStage {
+    ReturnedToFullTraining,
+    FirstMinutesAfterInjury,
+    RecoverySetback,
+    ProtectedByMedicalStaff,
+    InjuryRecurrenceConcern,
+    FitnessConfidenceRestored,
+}
+
+impl InjuryRecoveryStage {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            InjuryRecoveryStage::ReturnedToFullTraining => "injury_stage_returned_full_training",
+            InjuryRecoveryStage::FirstMinutesAfterInjury => "injury_stage_first_minutes",
+            InjuryRecoveryStage::RecoverySetback => "injury_stage_recovery_setback",
+            InjuryRecoveryStage::ProtectedByMedicalStaff => "injury_stage_protected",
+            InjuryRecoveryStage::InjuryRecurrenceConcern => "injury_stage_recurrence_concern",
+            InjuryRecoveryStage::FitnessConfidenceRestored => "injury_stage_confidence_restored",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjuryRecoveryEvidence {
+    LongTermLayoff,
+    ShortTermLayoff,
+    MatchSharpnessLow,
+    MatchSharpnessRecovering,
+    MultipleInjuriesThisSeason,
+    PriorRecurringIssue,
+    HighProfessionalism,
+    FearLosingPlace,
+}
+
+impl InjuryRecoveryEvidence {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            InjuryRecoveryEvidence::LongTermLayoff => "injury_evidence_long_term_layoff",
+            InjuryRecoveryEvidence::ShortTermLayoff => "injury_evidence_short_term_layoff",
+            InjuryRecoveryEvidence::MatchSharpnessLow => "injury_evidence_sharpness_low",
+            InjuryRecoveryEvidence::MatchSharpnessRecovering => "injury_evidence_sharpness_recovering",
+            InjuryRecoveryEvidence::MultipleInjuriesThisSeason => "injury_evidence_multiple_injuries_season",
+            InjuryRecoveryEvidence::PriorRecurringIssue => "injury_evidence_prior_recurring_issue",
+            InjuryRecoveryEvidence::HighProfessionalism => "injury_evidence_high_professionalism",
+            InjuryRecoveryEvidence::FearLosingPlace => "injury_evidence_fear_losing_place",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InjuryRecoveryEventContext {
+    pub stage: InjuryRecoveryStage,
+    pub recovery_days_total: u16,
+    pub match_readiness: f32,
+    pub evidence: Vec<InjuryRecoveryEvidence>,
+}
+
+impl InjuryRecoveryEventContext {
+    pub fn new(stage: InjuryRecoveryStage, recovery_days_total: u16, match_readiness: f32) -> Self {
+        Self { stage, recovery_days_total, match_readiness, evidence: Vec::new() }
+    }
+
+    pub fn with_evidence(mut self, evidence: InjuryRecoveryEvidence) -> Self {
+        if !self.evidence.contains(&evidence) {
+            self.evidence.push(evidence);
+        }
+        self
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Match-performance context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchPerformanceKind {
+    AnsweredCriticsWithPerformance,
+    CostlyErrorUnderPressure,
+    SavedResultLate,
+    ChangedGameFromBench,
+    DefensiveLeaderPerformance,
+    WastefulFinishingConcern,
+    ComposurePraised,
+    BigMatchNerves,
+    StandoutDisplay,
+    FirstClubGoalMoment,
+    DroughtEnded,
+    HatTrickFire,
+}
+
+impl MatchPerformanceKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            MatchPerformanceKind::AnsweredCriticsWithPerformance => "match_perf_kind_answered_critics",
+            MatchPerformanceKind::CostlyErrorUnderPressure => "match_perf_kind_costly_error_pressure",
+            MatchPerformanceKind::SavedResultLate => "match_perf_kind_saved_result_late",
+            MatchPerformanceKind::ChangedGameFromBench => "match_perf_kind_changed_game_from_bench",
+            MatchPerformanceKind::DefensiveLeaderPerformance => "match_perf_kind_defensive_leader",
+            MatchPerformanceKind::WastefulFinishingConcern => "match_perf_kind_wasteful_finishing",
+            MatchPerformanceKind::ComposurePraised => "match_perf_kind_composure_praised",
+            MatchPerformanceKind::BigMatchNerves => "match_perf_kind_big_match_nerves",
+            MatchPerformanceKind::StandoutDisplay => "match_perf_kind_standout",
+            MatchPerformanceKind::FirstClubGoalMoment => "match_perf_kind_first_club_goal",
+            MatchPerformanceKind::DroughtEnded => "match_perf_kind_drought_ended",
+            MatchPerformanceKind::HatTrickFire => "match_perf_kind_hat_trick",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchPerformanceEvidence {
+    HighRating,
+    LowRating,
+    GoalContribution,
+    DecisiveContribution,
+    DerbyFixture,
+    CupTie,
+    LeagueDecider,
+    SubstituteAppearance,
+    PlayedFullMinutes,
+    PlayedAfterCriticism,
+    HighPressurePersonality,
+    LowPressurePersonality,
+    ImportantMatchTemperament,
+}
+
+impl MatchPerformanceEvidence {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            MatchPerformanceEvidence::HighRating => "match_perf_evidence_high_rating",
+            MatchPerformanceEvidence::LowRating => "match_perf_evidence_low_rating",
+            MatchPerformanceEvidence::GoalContribution => "match_perf_evidence_goal_contribution",
+            MatchPerformanceEvidence::DecisiveContribution => "match_perf_evidence_decisive_contribution",
+            MatchPerformanceEvidence::DerbyFixture => "match_perf_evidence_derby",
+            MatchPerformanceEvidence::CupTie => "match_perf_evidence_cup_tie",
+            MatchPerformanceEvidence::LeagueDecider => "match_perf_evidence_league_decider",
+            MatchPerformanceEvidence::SubstituteAppearance => "match_perf_evidence_substitute",
+            MatchPerformanceEvidence::PlayedFullMinutes => "match_perf_evidence_full_minutes",
+            MatchPerformanceEvidence::PlayedAfterCriticism => "match_perf_evidence_after_criticism",
+            MatchPerformanceEvidence::HighPressurePersonality => "match_perf_evidence_high_pressure_personality",
+            MatchPerformanceEvidence::LowPressurePersonality => "match_perf_evidence_low_pressure_personality",
+            MatchPerformanceEvidence::ImportantMatchTemperament => "match_perf_evidence_important_match_temperament",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchPerformanceEventContext {
+    pub kind: MatchPerformanceKind,
+    pub rating: Option<f32>,
+    pub goals: u8,
+    pub assists: u8,
+    pub minutes: u16,
+    pub team_won: Option<bool>,
+    pub goal_margin: Option<i8>,
+    pub is_derby: bool,
+    pub is_cup: bool,
+    pub opponent_club_id: Option<u32>,
+    pub evidence: Vec<MatchPerformanceEvidence>,
+}
+
+impl MatchPerformanceEventContext {
+    pub fn new(kind: MatchPerformanceKind) -> Self {
+        Self {
+            kind,
+            rating: None,
+            goals: 0,
+            assists: 0,
+            minutes: 0,
+            team_won: None,
+            goal_margin: None,
+            is_derby: false,
+            is_cup: false,
+            opponent_club_id: None,
+            evidence: Vec::new(),
+        }
+    }
+
+    pub fn with_rating(mut self, rating: f32) -> Self { self.rating = Some(rating); self }
+    pub fn with_goals(mut self, goals: u8) -> Self { self.goals = goals; self }
+    pub fn with_assists(mut self, assists: u8) -> Self { self.assists = assists; self }
+    pub fn with_minutes(mut self, minutes: u16) -> Self { self.minutes = minutes; self }
+    pub fn with_team_won(mut self, won: bool) -> Self { self.team_won = Some(won); self }
+    pub fn with_goal_margin(mut self, margin: i8) -> Self { self.goal_margin = Some(margin); self }
+    pub fn with_derby(mut self, is_derby: bool) -> Self { self.is_derby = is_derby; self }
+    pub fn with_cup(mut self, is_cup: bool) -> Self { self.is_cup = is_cup; self }
+    pub fn with_opponent(mut self, club_id: u32) -> Self { self.opponent_club_id = Some(club_id); self }
+
+    pub fn with_evidence(mut self, evidence: MatchPerformanceEvidence) -> Self {
+        if !self.evidence.contains(&evidence) {
+            self.evidence.push(evidence);
+        }
+        self
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Role / squad-status context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleStatusKind {
+    RoleClarifiedByManager,
+    RoleUnclear,
+    DepthChartPressure,
+    DirectRivalPreferred,
+    TacticalRoleChanged,
+    BenchedForBalance,
+    RestedForWorkload,
+    SquadStatusUpgrade,
+    SquadStatusDowngrade,
+    NoNaturalRoleInFormation,
+    EstablishedStarter,
+    SlippedOutOfStartingXI,
+}
+
+impl RoleStatusKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            RoleStatusKind::RoleClarifiedByManager => "role_status_kind_role_clarified",
+            RoleStatusKind::RoleUnclear => "role_status_kind_role_unclear",
+            RoleStatusKind::DepthChartPressure => "role_status_kind_depth_chart_pressure",
+            RoleStatusKind::DirectRivalPreferred => "role_status_kind_direct_rival_preferred",
+            RoleStatusKind::TacticalRoleChanged => "role_status_kind_tactical_role_changed",
+            RoleStatusKind::BenchedForBalance => "role_status_kind_benched_for_balance",
+            RoleStatusKind::RestedForWorkload => "role_status_kind_rested_for_workload",
+            RoleStatusKind::SquadStatusUpgrade => "role_status_kind_squad_status_upgrade",
+            RoleStatusKind::SquadStatusDowngrade => "role_status_kind_squad_status_downgrade",
+            RoleStatusKind::NoNaturalRoleInFormation => "role_status_kind_no_natural_role",
+            RoleStatusKind::EstablishedStarter => "role_status_kind_established_starter",
+            RoleStatusKind::SlippedOutOfStartingXI => "role_status_kind_slipped_out_xi",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RoleStatusEventContext {
+    pub kind: RoleStatusKind,
+    pub previous_status: Option<PlayerSquadStatus>,
+    pub new_status: Option<PlayerSquadStatus>,
+    pub formation_slot: Option<SelectionRole>,
+    pub starter_ratio: Option<f32>,
+    pub repeated_omissions: u8,
+    pub direct_rival_id: Option<u32>,
+}
+
+impl RoleStatusEventContext {
+    pub fn new(kind: RoleStatusKind) -> Self {
+        Self {
+            kind,
+            previous_status: None,
+            new_status: None,
+            formation_slot: None,
+            starter_ratio: None,
+            repeated_omissions: 0,
+            direct_rival_id: None,
+        }
+    }
+
+    pub fn with_status_change(mut self, prev: PlayerSquadStatus, new: PlayerSquadStatus) -> Self {
+        self.previous_status = Some(prev);
+        self.new_status = Some(new);
+        self
+    }
+    pub fn with_formation_slot(mut self, slot: SelectionRole) -> Self { self.formation_slot = Some(slot); self }
+    pub fn with_starter_ratio(mut self, ratio: f32) -> Self { self.starter_ratio = Some(ratio); self }
+    pub fn with_repeated_omissions(mut self, n: u8) -> Self { self.repeated_omissions = n; self }
+    pub fn with_direct_rival(mut self, id: u32) -> Self { self.direct_rival_id = Some(id); self }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// National-team context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NationalTeamEventKind {
+    FirstCallup,
+    Recall,
+    EmergencyCallup,
+    YouthToSeniorJump,
+    DroppedDueToForm,
+    DroppedDueToInjury,
+    DroppedDueToCompetition,
+    TournamentSquadOmitted,
+    InternationalPlaceUnderThreat,
+    FirstCapPride,
+    NationalTeamRoleGrowing,
+}
+
+impl NationalTeamEventKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            NationalTeamEventKind::FirstCallup => "national_kind_first_callup",
+            NationalTeamEventKind::Recall => "national_kind_recall",
+            NationalTeamEventKind::EmergencyCallup => "national_kind_emergency_callup",
+            NationalTeamEventKind::YouthToSeniorJump => "national_kind_youth_to_senior",
+            NationalTeamEventKind::DroppedDueToForm => "national_kind_dropped_form",
+            NationalTeamEventKind::DroppedDueToInjury => "national_kind_dropped_injury",
+            NationalTeamEventKind::DroppedDueToCompetition => "national_kind_dropped_competition",
+            NationalTeamEventKind::TournamentSquadOmitted => "national_kind_tournament_squad_omitted",
+            NationalTeamEventKind::InternationalPlaceUnderThreat => "national_kind_place_under_threat",
+            NationalTeamEventKind::FirstCapPride => "national_kind_first_cap_pride",
+            NationalTeamEventKind::NationalTeamRoleGrowing => "national_kind_role_growing",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NationalTeamEventContext {
+    pub kind: NationalTeamEventKind,
+    pub country_id: Option<u32>,
+    pub previous_caps: u16,
+    pub recent_club_form: Option<f32>,
+    pub competition_window: bool,
+}
+
+impl NationalTeamEventContext {
+    pub fn new(kind: NationalTeamEventKind) -> Self {
+        Self {
+            kind,
+            country_id: None,
+            previous_caps: 0,
+            recent_club_form: None,
+            competition_window: false,
+        }
+    }
+
+    pub fn with_country(mut self, country_id: u32) -> Self { self.country_id = Some(country_id); self }
+    pub fn with_previous_caps(mut self, caps: u16) -> Self { self.previous_caps = caps; self }
+    pub fn with_recent_club_form(mut self, form: f32) -> Self { self.recent_club_form = Some(form); self }
+    pub fn with_competition_window(mut self, in_window: bool) -> Self { self.competition_window = in_window; self }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Leadership / dressing-room context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeadershipEventKind {
+    CaptaincyAwarded,
+    CaptaincyRemoved,
+    LeadershipEmergence,
+    SeniorPlayerMediates,
+    BackedBySeniorPlayers,
+    ChallengedTrainingStandards,
+    InfluenceInDressingRoomRising,
+    InfluenceInDressingRoomFalling,
+    MentorshipStarted,
+    MentorshipStrained,
+    SquadLeadershipQuestioned,
+}
+
+impl LeadershipEventKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            LeadershipEventKind::CaptaincyAwarded => "leadership_kind_captaincy_awarded",
+            LeadershipEventKind::CaptaincyRemoved => "leadership_kind_captaincy_removed",
+            LeadershipEventKind::LeadershipEmergence => "leadership_kind_emergence",
+            LeadershipEventKind::SeniorPlayerMediates => "leadership_kind_senior_mediates",
+            LeadershipEventKind::BackedBySeniorPlayers => "leadership_kind_backed_seniors",
+            LeadershipEventKind::ChallengedTrainingStandards => "leadership_kind_challenged_standards",
+            LeadershipEventKind::InfluenceInDressingRoomRising => "leadership_kind_influence_rising",
+            LeadershipEventKind::InfluenceInDressingRoomFalling => "leadership_kind_influence_falling",
+            LeadershipEventKind::MentorshipStarted => "leadership_kind_mentorship_started",
+            LeadershipEventKind::MentorshipStrained => "leadership_kind_mentorship_strained",
+            LeadershipEventKind::SquadLeadershipQuestioned => "leadership_kind_squad_leadership_questioned",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LeadershipEventContext {
+    pub kind: LeadershipEventKind,
+    pub partner_player_id: Option<u32>,
+    pub leadership_attribute: Option<f32>,
+    pub influence_change: Option<f32>,
+}
+
+impl LeadershipEventContext {
+    pub fn new(kind: LeadershipEventKind) -> Self {
+        Self {
+            kind,
+            partner_player_id: None,
+            leadership_attribute: None,
+            influence_change: None,
+        }
+    }
+
+    pub fn with_partner(mut self, id: u32) -> Self { self.partner_player_id = Some(id); self }
+    pub fn with_leadership_attribute(mut self, attr: f32) -> Self { self.leadership_attribute = Some(attr); self }
+    pub fn with_influence_change(mut self, change: f32) -> Self { self.influence_change = Some(change); self }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Media / fans context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaFanEventKind {
+    InterviewCalmsSpeculation,
+    InterviewFuelsSpeculation,
+    FansSplitOverPlayer,
+    SupportersBackPlayerDuringSlump,
+    PublicApologyAccepted,
+    PublicApologyRejected,
+    SocialMediaCriticism,
+    MediaNarrativeChanged,
+    HomeFansApprove,
+    AwayFansHostile,
+}
+
+impl MediaFanEventKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            MediaFanEventKind::InterviewCalmsSpeculation => "media_fan_kind_interview_calms",
+            MediaFanEventKind::InterviewFuelsSpeculation => "media_fan_kind_interview_fuels",
+            MediaFanEventKind::FansSplitOverPlayer => "media_fan_kind_fans_split",
+            MediaFanEventKind::SupportersBackPlayerDuringSlump => "media_fan_kind_supporters_back",
+            MediaFanEventKind::PublicApologyAccepted => "media_fan_kind_apology_accepted",
+            MediaFanEventKind::PublicApologyRejected => "media_fan_kind_apology_rejected",
+            MediaFanEventKind::SocialMediaCriticism => "media_fan_kind_social_media_criticism",
+            MediaFanEventKind::MediaNarrativeChanged => "media_fan_kind_narrative_changed",
+            MediaFanEventKind::HomeFansApprove => "media_fan_kind_home_fans_approve",
+            MediaFanEventKind::AwayFansHostile => "media_fan_kind_away_fans_hostile",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaFanSource {
+    LocalPress,
+    NationalPress,
+    SocialMedia,
+    HomeSupporters,
+    AwaySupporters,
+    Pundits,
+    PlayerInterview,
+}
+
+impl MediaFanSource {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            MediaFanSource::LocalPress => "media_fan_source_local_press",
+            MediaFanSource::NationalPress => "media_fan_source_national_press",
+            MediaFanSource::SocialMedia => "media_fan_source_social_media",
+            MediaFanSource::HomeSupporters => "media_fan_source_home_supporters",
+            MediaFanSource::AwaySupporters => "media_fan_source_away_supporters",
+            MediaFanSource::Pundits => "media_fan_source_pundits",
+            MediaFanSource::PlayerInterview => "media_fan_source_player_interview",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MediaFanEventContext {
+    pub kind: MediaFanEventKind,
+    pub source: MediaFanSource,
+    pub trigger_due_to_form: bool,
+    pub trigger_due_to_transfer: bool,
+    pub trigger_due_to_discipline: bool,
+    pub trigger_due_to_big_match: bool,
+}
+
+impl MediaFanEventContext {
+    pub fn new(kind: MediaFanEventKind, source: MediaFanSource) -> Self {
+        Self {
+            kind,
+            source,
+            trigger_due_to_form: false,
+            trigger_due_to_transfer: false,
+            trigger_due_to_discipline: false,
+            trigger_due_to_big_match: false,
+        }
+    }
+
+    pub fn with_form_trigger(mut self) -> Self { self.trigger_due_to_form = true; self }
+    pub fn with_transfer_trigger(mut self) -> Self { self.trigger_due_to_transfer = true; self }
+    pub fn with_discipline_trigger(mut self) -> Self { self.trigger_due_to_discipline = true; self }
+    pub fn with_big_match_trigger(mut self) -> Self { self.trigger_due_to_big_match = true; self }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Personal-adaptation context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonalAdaptationKind {
+    HomesicknessConcern,
+    FamilySettled,
+    FamilyUnsettled,
+    LifestyleAdaptation,
+    LanguageBarrierConcern,
+    LocalCultureSettling,
+    CompanionSupport,
+    AskedForPersonalLeave,
+    LanguageMilestone,
+    SettlingIntoSquad,
+    StillStrugglingToSettle,
+}
+
+impl PersonalAdaptationKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            PersonalAdaptationKind::HomesicknessConcern => "adaptation_kind_homesickness",
+            PersonalAdaptationKind::FamilySettled => "adaptation_kind_family_settled",
+            PersonalAdaptationKind::FamilyUnsettled => "adaptation_kind_family_unsettled",
+            PersonalAdaptationKind::LifestyleAdaptation => "adaptation_kind_lifestyle",
+            PersonalAdaptationKind::LanguageBarrierConcern => "adaptation_kind_language_barrier",
+            PersonalAdaptationKind::LocalCultureSettling => "adaptation_kind_local_culture",
+            PersonalAdaptationKind::CompanionSupport => "adaptation_kind_companion_support",
+            PersonalAdaptationKind::AskedForPersonalLeave => "adaptation_kind_personal_leave",
+            PersonalAdaptationKind::LanguageMilestone => "adaptation_kind_language_milestone",
+            PersonalAdaptationKind::SettlingIntoSquad => "adaptation_kind_settling_squad",
+            PersonalAdaptationKind::StillStrugglingToSettle => "adaptation_kind_still_struggling",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PersonalAdaptationEventContext {
+    pub kind: PersonalAdaptationKind,
+    pub days_at_club: u32,
+    pub adaptability: Option<f32>,
+    pub has_compatriot_in_squad: bool,
+    pub speaks_local_language: bool,
+}
+
+impl PersonalAdaptationEventContext {
+    pub fn new(kind: PersonalAdaptationKind, days_at_club: u32) -> Self {
+        Self {
+            kind,
+            days_at_club,
+            adaptability: None,
+            has_compatriot_in_squad: false,
+            speaks_local_language: false,
+        }
+    }
+
+    pub fn with_adaptability(mut self, attr: f32) -> Self { self.adaptability = Some(attr); self }
+    pub fn with_compatriot(mut self, has: bool) -> Self { self.has_compatriot_in_squad = has; self }
+    pub fn with_local_language(mut self, speaks: bool) -> Self { self.speaks_local_language = speaks; self }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Loan-specific context
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoanEventKind {
+    LoanListingAccepted,
+    LoanDevelopmentProgress,
+    LoanMinutesConcern,
+    LoanRecallDiscussed,
+    SettledOnLoan,
+    LoanMovePermanentInterest,
+    LoanRoleBroken,
+    ParentClubSatisfied,
+    ParentClubConcerned,
+}
+
+impl LoanEventKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            LoanEventKind::LoanListingAccepted => "loan_kind_listing_accepted",
+            LoanEventKind::LoanDevelopmentProgress => "loan_kind_development_progress",
+            LoanEventKind::LoanMinutesConcern => "loan_kind_minutes_concern",
+            LoanEventKind::LoanRecallDiscussed => "loan_kind_recall_discussed",
+            LoanEventKind::SettledOnLoan => "loan_kind_settled",
+            LoanEventKind::LoanMovePermanentInterest => "loan_kind_permanent_interest",
+            LoanEventKind::LoanRoleBroken => "loan_kind_role_broken",
+            LoanEventKind::ParentClubSatisfied => "loan_kind_parent_satisfied",
+            LoanEventKind::ParentClubConcerned => "loan_kind_parent_concerned",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LoanEventContext {
+    pub kind: LoanEventKind,
+    pub parent_club_id: Option<u32>,
+    pub loan_club_id: Option<u32>,
+    pub minutes_share: Option<f32>,
+    pub permanent_option_present: bool,
+}
+
+impl LoanEventContext {
+    pub fn new(kind: LoanEventKind) -> Self {
+        Self {
+            kind,
+            parent_club_id: None,
+            loan_club_id: None,
+            minutes_share: None,
+            permanent_option_present: false,
+        }
+    }
+
+    pub fn with_parent_club(mut self, id: u32) -> Self { self.parent_club_id = Some(id); self }
+    pub fn with_loan_club(mut self, id: u32) -> Self { self.loan_club_id = Some(id); self }
+    pub fn with_minutes_share(mut self, share: f32) -> Self { self.minutes_share = Some(share); self }
+    pub fn with_permanent_option(mut self, present: bool) -> Self { self.permanent_option_present = present; self }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Recognition / award context
+// ─────────────────────────────────────────────────────────────────
+
+/// Identifies which trophy / public recognition the event represents.
+/// Maps 1:1 to the relevant `HappinessEventType` award variants and lets
+/// the renderer pick recognition-specific copy without re-deriving the
+/// kind from the event-type enum at render time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecognitionEventKind {
+    PlayerOfTheWeek,
+    PlayerOfTheMonth,
+    YoungPlayerOfTheMonth,
+    PlayerOfTheSeason,
+    YoungPlayerOfTheSeason,
+    TeamOfTheSeasonSelection,
+    LeagueTopScorer,
+    LeagueTopAssists,
+    LeagueGoldenGlove,
+    WorldPlayerOfYear,
+    WorldPlayerOfYearNomination,
+    NationalTeamDebut,
+}
+
+impl RecognitionEventKind {
+    pub fn as_token(&self) -> &'static str {
+        match self {
+            RecognitionEventKind::PlayerOfTheWeek => "player_of_the_week",
+            RecognitionEventKind::PlayerOfTheMonth => "player_of_the_month",
+            RecognitionEventKind::YoungPlayerOfTheMonth => "young_player_of_the_month",
+            RecognitionEventKind::PlayerOfTheSeason => "player_of_the_season",
+            RecognitionEventKind::YoungPlayerOfTheSeason => "young_player_of_the_season",
+            RecognitionEventKind::TeamOfTheSeasonSelection => "team_of_the_season",
+            RecognitionEventKind::LeagueTopScorer => "league_top_scorer",
+            RecognitionEventKind::LeagueTopAssists => "league_top_assists",
+            RecognitionEventKind::LeagueGoldenGlove => "league_golden_glove",
+            RecognitionEventKind::WorldPlayerOfYear => "world_player_of_year",
+            RecognitionEventKind::WorldPlayerOfYearNomination => "world_player_nominee",
+            RecognitionEventKind::NationalTeamDebut => "national_team_debut",
+        }
+    }
+}
+
+/// Recognition / award explanation payload — captured at emit time so the
+/// renderer can describe what was won, the season totals or vote
+/// margin behind the award, and who the closest contender was.
+/// All quantitative fields are `Option` so emit sites can attach what's
+/// available without forcing missing-data placeholders.
+#[derive(Debug, Clone)]
+pub struct RecognitionEventContext {
+    pub kind: RecognitionEventKind,
+    pub league_id: Option<u32>,
+    pub country_id: Option<u32>,
+    pub season_goals: Option<u16>,
+    pub season_assists: Option<u16>,
+    pub season_clean_sheets: Option<u16>,
+    pub avg_rating: Option<f32>,
+    /// Quantitative gap to the closest contender — vote share for POM/POS,
+    /// goals lead for top scorer, ratings gap for season selections.
+    /// Renderer interprets this together with `kind` so the unit doesn't
+    /// have to be encoded in the type system.
+    pub margin: Option<f32>,
+    pub runner_up_player_id: Option<u32>,
+    pub matches_played: Option<u16>,
+    pub previous_caps: Option<u16>,
+    /// True for first-time achievements (first POM, first cap, etc.). Lets
+    /// the renderer surface "first" framing when relevant.
+    pub first_time: bool,
+}
+
+impl RecognitionEventContext {
+    pub fn new(kind: RecognitionEventKind) -> Self {
+        Self {
+            kind,
+            league_id: None,
+            country_id: None,
+            season_goals: None,
+            season_assists: None,
+            season_clean_sheets: None,
+            avg_rating: None,
+            margin: None,
+            runner_up_player_id: None,
+            matches_played: None,
+            previous_caps: None,
+            first_time: false,
+        }
+    }
+
+    pub fn with_league(mut self, id: u32) -> Self { self.league_id = Some(id); self }
+    pub fn with_country(mut self, id: u32) -> Self { self.country_id = Some(id); self }
+    pub fn with_season_goals(mut self, goals: u16) -> Self { self.season_goals = Some(goals); self }
+    pub fn with_season_assists(mut self, assists: u16) -> Self { self.season_assists = Some(assists); self }
+    pub fn with_clean_sheets(mut self, cs: u16) -> Self { self.season_clean_sheets = Some(cs); self }
+    pub fn with_avg_rating(mut self, rating: f32) -> Self { self.avg_rating = Some(rating); self }
+    pub fn with_margin(mut self, margin: f32) -> Self { self.margin = Some(margin); self }
+    pub fn with_runner_up(mut self, id: u32) -> Self { self.runner_up_player_id = Some(id); self }
+    pub fn with_matches_played(mut self, m: u16) -> Self { self.matches_played = Some(m); self }
+    pub fn with_previous_caps(mut self, caps: u16) -> Self { self.previous_caps = Some(caps); self }
+    pub fn with_first_time(mut self, first: bool) -> Self { self.first_time = first; self }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Season-outcome context — relegation / relegation-fear narrative
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeasonOutcomeKind {
+    Relegated,
+    RelegationFear,
+    SurvivedRelegation,
+}
+
+impl SeasonOutcomeKind {
+    pub fn as_token(&self) -> &'static str {
+        match self {
+            SeasonOutcomeKind::Relegated => "relegated",
+            SeasonOutcomeKind::RelegationFear => "relegation_fear",
+            SeasonOutcomeKind::SurvivedRelegation => "survived_relegation",
+        }
+    }
+}
+
+/// Season-outcome context for relegation-adjacent events. Carries the
+/// final / current league standing, points gap to safety, and matches
+/// remaining when the worry crystallised, so the renderer can describe
+/// "10th in the table, 4 points clear of the drop with 6 to play"
+/// instead of a generic "Relegation fear".
+#[derive(Debug, Clone)]
+pub struct SeasonOutcomeContext {
+    pub kind: SeasonOutcomeKind,
+    pub league_id: Option<u32>,
+    pub final_position: Option<u8>,
+    pub points: Option<u16>,
+    /// Points gap to the safety line (positive = clear of the drop,
+    /// negative = below it). For `Relegated`, captures how far short.
+    pub points_to_safety: Option<i16>,
+    pub matches_remaining: Option<u8>,
+    pub season_participation: Option<f32>,
+}
+
+impl SeasonOutcomeContext {
+    pub fn new(kind: SeasonOutcomeKind) -> Self {
+        Self {
+            kind,
+            league_id: None,
+            final_position: None,
+            points: None,
+            points_to_safety: None,
+            matches_remaining: None,
+            season_participation: None,
+        }
+    }
+
+    pub fn with_league(mut self, id: u32) -> Self { self.league_id = Some(id); self }
+    pub fn with_final_position(mut self, pos: u8) -> Self { self.final_position = Some(pos); self }
+    pub fn with_points(mut self, points: u16) -> Self { self.points = Some(points); self }
+    pub fn with_points_to_safety(mut self, gap: i16) -> Self { self.points_to_safety = Some(gap); self }
+    pub fn with_matches_remaining(mut self, n: u8) -> Self { self.matches_remaining = Some(n); self }
+    pub fn with_participation(mut self, p: f32) -> Self { self.season_participation = Some(p); self }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Regulation context — squad registration / paperwork outcomes
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegulationSlotKind {
+    HomegrownQuota,
+    NonEuQuota,
+    SeniorSquadCap,
+    YouthSlot,
+    InternationalRegistration,
+    Other,
+}
+
+impl RegulationSlotKind {
+    pub fn as_token(&self) -> &'static str {
+        match self {
+            RegulationSlotKind::HomegrownQuota => "homegrown_quota",
+            RegulationSlotKind::NonEuQuota => "non_eu_quota",
+            RegulationSlotKind::SeniorSquadCap => "senior_squad_cap",
+            RegulationSlotKind::YouthSlot => "youth_slot",
+            RegulationSlotKind::InternationalRegistration => "international_registration",
+            RegulationSlotKind::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegulationOutcomeKind {
+    Omitted,
+    Registered,
+    DowngradedToReserves,
+}
+
+impl RegulationOutcomeKind {
+    pub fn as_token(&self) -> &'static str {
+        match self {
+            RegulationOutcomeKind::Omitted => "omitted",
+            RegulationOutcomeKind::Registered => "registered",
+            RegulationOutcomeKind::DowngradedToReserves => "downgraded_reserves",
+        }
+    }
+}
+
+/// Regulation / squad-registration explanation payload. Captures which
+/// slot type was contested, who took it, and why this player was the
+/// odd one out — so the renderer can say "left out of the senior 25
+/// to free a non-EU slot for the new signing" rather than "Squad
+/// registration omitted".
+#[derive(Debug, Clone)]
+pub struct RegulationEventContext {
+    pub outcome: RegulationOutcomeKind,
+    pub slot_kind: RegulationSlotKind,
+    pub competition_name_key: Option<String>,
+    pub replacement_player_id: Option<u32>,
+    /// How many roster slots were available; renderers may say "1 of 4".
+    pub slots_total: Option<u8>,
+    pub slots_used: Option<u8>,
+}
+
+impl RegulationEventContext {
+    pub fn new(outcome: RegulationOutcomeKind, slot_kind: RegulationSlotKind) -> Self {
+        Self {
+            outcome,
+            slot_kind,
+            competition_name_key: None,
+            replacement_player_id: None,
+            slots_total: None,
+            slots_used: None,
+        }
+    }
+
+    pub fn with_competition(mut self, key: impl Into<String>) -> Self {
+        self.competition_name_key = Some(key.into());
+        self
+    }
+    pub fn with_replacement(mut self, id: u32) -> Self { self.replacement_player_id = Some(id); self }
+    pub fn with_slots(mut self, used: u8, total: u8) -> Self {
+        self.slots_used = Some(used);
+        self.slots_total = Some(total);
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HappinessEventType {
     // Manager interactions
@@ -2162,6 +3537,18 @@ impl PlayerHappiness {
             );
             return;
         }
+        if let Some(ctx) = context.as_ref() {
+            // Specialized payloads are mutually exclusive — an event is
+            // *either* a selection event, *or* a transfer-interest event,
+            // etc. Attaching two at the same emit site is a bug that would
+            // confuse the renderer's dispatch and produce mixed copy.
+            debug_assert!(
+                ctx.specialized_payload_count() <= 1,
+                "{:?} carries {} specialized payloads (max 1); emit site attached more than one with_*_context",
+                event_type,
+                ctx.specialized_payload_count()
+            );
+        }
         let cfg = HappinessConfig::default();
         self.recent_events.push(HappinessEvent {
             event_type,
@@ -2338,6 +3725,96 @@ pub struct NegativeHappiness {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_context_carries_no_specialized_payload() {
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::Personal,
+        );
+        assert_eq!(ctx.specialized_payload_count(), 0);
+    }
+
+    #[test]
+    fn each_with_specialized_context_yields_payload_count_one() {
+        // Spot-check several builders — the renderer dispatch trusts
+        // that exactly one specialized payload is set per event, so a
+        // single with_*_context call must produce count == 1 (and not,
+        // say, count == 2 due to a copy-paste bug in a future builder).
+        let base = || {
+            HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::Minor,
+                HappinessEventScope::Personal,
+            )
+        };
+        let recognition = base().with_recognition_context(RecognitionEventContext::new(
+            RecognitionEventKind::PlayerOfTheWeek,
+        ));
+        assert_eq!(recognition.specialized_payload_count(), 1);
+
+        let season = base().with_season_outcome_context(SeasonOutcomeContext::new(
+            SeasonOutcomeKind::Relegated,
+        ));
+        assert_eq!(season.specialized_payload_count(), 1);
+
+        let regulation = base().with_regulation_context(RegulationEventContext::new(
+            RegulationOutcomeKind::Omitted,
+            RegulationSlotKind::NonEuQuota,
+        ));
+        assert_eq!(regulation.specialized_payload_count(), 1);
+    }
+
+    #[test]
+    fn double_attached_specialized_payload_count_exceeds_one() {
+        // If a future emit site (or a careless refactor) attaches two
+        // specialized contexts, `specialized_payload_count` must return
+        // >1 so the debug_assert in `add_event_full` catches it. This
+        // test pins that the counter actually counts each payload, so
+        // the runtime guard remains effective.
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::Personal,
+        )
+        .with_recognition_context(RecognitionEventContext::new(
+            RecognitionEventKind::PlayerOfTheWeek,
+        ))
+        .with_season_outcome_context(SeasonOutcomeContext::new(
+            SeasonOutcomeKind::Relegated,
+        ));
+        assert_eq!(ctx.specialized_payload_count(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "specialized payloads")]
+    fn add_event_with_double_specialized_payload_panics_in_debug() {
+        // The debug_assert in add_event_full fires when an emit site
+        // attaches two specialized payloads. Tests run with
+        // debug_assertions enabled, so this should panic. In release
+        // builds the event is still recorded (best-effort), but the
+        // mutually-exclusive contract is enforced under tests.
+        let mut h = PlayerHappiness::new();
+        let bad_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::Media,
+        )
+        .with_recognition_context(RecognitionEventContext::new(
+            RecognitionEventKind::PlayerOfTheMonth,
+        ))
+        .with_regulation_context(RegulationEventContext::new(
+            RegulationOutcomeKind::Omitted,
+            RegulationSlotKind::Other,
+        ));
+        h.add_event_with_context(
+            HappinessEventType::PlayerOfTheMonth,
+            5.0,
+            None,
+            bad_ctx,
+        );
+    }
 
     #[test]
     fn cooldown_blocks_duplicate_event() {
