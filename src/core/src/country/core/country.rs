@@ -7,6 +7,8 @@ use crate::transfers::market::TransferMarket;
 use crate::{Club, ClubResult, Player};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
+use rayon::iter::ParallelIterator;
+use rayon::prelude::IntoParallelRefMutIterator;
 
 use crate::country::{
     CountryEconomicFactors, CountryGeneratorData, CountryRegulations, CountrySettings,
@@ -166,7 +168,7 @@ impl Country {
         let country_reputation = self.reputation;
 
         self.clubs
-            .iter_mut()
+            .par_iter_mut()
             .map(|club| {
                 let league_info = club
                     .teams

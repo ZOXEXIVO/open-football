@@ -27,6 +27,7 @@ use chrono::{Datelike, Duration, NaiveDateTime, Weekday};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Lightweight country info for nationality lookups.
@@ -478,8 +479,10 @@ impl SimulatorData {
     /// to zero when nothing needs seeding.
     pub fn seed_missing_player_histories(&mut self) {
         let date = self.date.date();
-        for continent in &mut self.continents {
-            for country in &mut continent.countries {
+        self.continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
                 let league_lookup = build_league_lookup(country);
                 for club in &mut country.clubs {
                     if !club_has_players_needing_seed(club) {
@@ -502,8 +505,7 @@ impl SimulatorData {
                         }
                     }
                 }
-            }
-        }
+            });
     }
 
     /// Move every team-attached player whose main-club contract is `None`
@@ -531,9 +533,12 @@ impl SimulatorData {
         use crate::transfers::{CompletedTransfer, TransferType};
 
         let date = self.date.date();
-        let mut released: Vec<Player> = Vec::new();
-        for continent in &mut self.continents {
-            for country in &mut continent.countries {
+        let released: Vec<Player> = self
+            .continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .flat_map_iter(|country| {
+                let mut released_in_country: Vec<Player> = Vec::new();
                 let mut new_history: Vec<CompletedTransfer> = Vec::new();
                 for club in &mut country.clubs {
                     let club_id = club.id;
@@ -573,14 +578,15 @@ impl SimulatorData {
                                     )
                                     .with_reason(reason),
                                 );
-                                released.push(p);
+                                released_in_country.push(p);
                             }
                         }
                     }
                 }
                 country.transfer_market.transfer_history.extend(new_history);
-            }
-        }
+                released_in_country
+            })
+            .collect();
         if !released.is_empty() {
             self.dirty_player_index = true;
             self.free_agents.extend(released);
@@ -605,7 +611,7 @@ impl SimulatorData {
         }
 
         // Build a global candidate pool from every club in every country.
-        let mut candidates_by_country = crate::NationalTeam::collect_all_candidates_by_country(
+        let candidates_by_country = crate::NationalTeam::collect_all_candidates_by_country(
             self.continents.iter().flat_map(|c| c.countries.iter()),
             date,
         );
@@ -619,19 +625,28 @@ impl SimulatorData {
             .map(|c| (c.id, c.name.clone()))
             .collect();
 
-        for continent in &mut self.continents {
-            for country in &mut continent.countries {
+        // The HashMap is shared across the parallel countries — guard it
+        // so each worker can `remove(&country.id)` race-free. The lock
+        // is held only for the brief lookup; `call_up_squad` runs
+        // unlocked.
+        let candidates_lock = Mutex::new(candidates_by_country);
+
+        self.continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
                 country.national_team.country_name = country.name.clone();
                 country.national_team.reputation = country.reputation;
-                let candidates = candidates_by_country
+                let candidates = candidates_lock
+                    .lock()
+                    .unwrap()
                     .remove(&country.id)
                     .unwrap_or_default();
                 let cid = country.id;
                 country
                     .national_team
                     .call_up_squad(candidates, date, cid, &country_ids);
-            }
-        }
+            });
 
         // Apply Int status across every club in every continent.
         crate::NationalTeam::apply_callup_statuses_across_world(&mut self.continents, date);
@@ -695,36 +710,41 @@ impl SimulationResult {
 /// credit the parent.
 fn settle_parent_residual_loan_wages(data: &mut SimulatorData) {
     // Pass 1 (read): collect (parent_club_id, monthly_residual) entries
-    // so we don't hold borrows across the credit pass.
-    let mut owed_by_parent: HashMap<u32, i64> = HashMap::new();
-    for continent in &data.continents {
-        for country in &continent.countries {
-            for club in &country.clubs {
-                for team in club.teams.teams.iter() {
-                    for player in team.players.players.iter() {
-                        let Some(loan) = player.contract_loan.as_ref() else {
-                            continue;
-                        };
-                        let Some(parent_id) = loan.loan_from_club_id else {
-                            continue;
-                        };
-                        let Some(parent_contract) = player.contract.as_ref() else {
-                            continue;
-                        };
+    // so we don't hold borrows across the credit pass. The world-wide
+    // walk parallelises across countries — every player is read-only
+    // here, the merge into the HashMap happens serially below.
+    let entries: Vec<(u32, i64)> = data
+        .continents
+        .par_iter()
+        .flat_map(|c| c.countries.par_iter())
+        .flat_map_iter(|country| {
+            country.clubs.iter().flat_map(|club| {
+                club.teams.teams.iter().flat_map(|team| {
+                    team.players.players.iter().filter_map(|player| {
+                        let loan = player.contract_loan.as_ref()?;
+                        let parent_id = loan.loan_from_club_id?;
+                        let parent_contract = player.contract.as_ref()?;
                         let parent_annual = parent_contract.salary;
                         let borrower_annual = loan.salary;
                         let residual_annual = parent_annual.saturating_sub(borrower_annual);
                         if residual_annual == 0 {
-                            continue;
+                            return None;
                         }
                         let monthly = (residual_annual / 12) as i64;
                         if monthly > 0 {
-                            *owed_by_parent.entry(parent_id).or_insert(0) += monthly;
+                            Some((parent_id, monthly))
+                        } else {
+                            None
                         }
-                    }
-                }
-            }
-        }
+                    })
+                })
+            })
+        })
+        .collect();
+
+    let mut owed_by_parent: HashMap<u32, i64> = HashMap::new();
+    for (parent_id, monthly) in entries {
+        *owed_by_parent.entry(parent_id).or_insert(0) += monthly;
     }
 
     // Pass 2 (write): charge each parent club once.
@@ -759,63 +779,57 @@ impl WeeklyAwardsTick {
         week_start: chrono::NaiveDate,
         week_end: chrono::NaiveDate,
     ) -> Vec<PendingWeeklyAward> {
-        let mut pending: Vec<PendingWeeklyAward> = Vec::new();
-        for continent in &data.continents {
-            for country in &continent.countries {
-                for league in &country.leagues.leagues {
-                    if league.friendly {
-                        continue;
-                    }
-                    if league.player_of_week.has_award_for_week(week_end) {
-                        continue;
-                    }
-
-                    let scores = PlayerOfTheWeekSelector::aggregate(
-                        league.matches.iter_in_range(week_start, week_end),
-                    );
-                    let Some((winner_id, agg)) = PlayerOfTheWeekSelector::pick_winner(&scores)
-                    else {
-                        continue;
-                    };
-
-                    let Some(player) = data.player(winner_id) else {
-                        continue;
-                    };
-                    let player_name = format!(
-                        "{} {}",
-                        player.full_name.display_first_name(),
-                        player.full_name.display_last_name()
-                    );
-                    let player_slug = player.slug();
-                    let (club_id, club_name, club_slug) = Self::resolve_club_card(data, winner_id);
-                    let average_rating = if agg.matches_played > 0 {
-                        agg.rating_sum / agg.matches_played as f32
-                    } else {
-                        0.0
-                    };
-
-                    pending.push(PendingWeeklyAward {
-                        league_id: league.id,
-                        winner_id,
-                        award: PlayerOfTheWeekAward {
-                            week_end_date: week_end,
-                            player_id: winner_id,
-                            player_name,
-                            player_slug,
-                            club_id,
-                            club_name,
-                            club_slug,
-                            score: agg.score,
-                            goals: agg.goals,
-                            assists: agg.assists,
-                            matches_played: agg.matches_played,
-                            average_rating,
-                        },
-                    });
+        data.continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.leagues.leagues.par_iter())
+            .filter_map(|league| {
+                if league.friendly {
+                    return None;
                 }
-            }
-        }
-        pending
+                if league.player_of_week.has_award_for_week(week_end) {
+                    return None;
+                }
+
+                let scores = PlayerOfTheWeekSelector::aggregate(
+                    league.matches.iter_in_range(week_start, week_end),
+                );
+                let (winner_id, agg) = PlayerOfTheWeekSelector::pick_winner(&scores)?;
+
+                let player = data.player(winner_id)?;
+                let player_name = format!(
+                    "{} {}",
+                    player.full_name.display_first_name(),
+                    player.full_name.display_last_name()
+                );
+                let player_slug = player.slug();
+                let (club_id, club_name, club_slug) = Self::resolve_club_card(data, winner_id);
+                let average_rating = if agg.matches_played > 0 {
+                    agg.rating_sum / agg.matches_played as f32
+                } else {
+                    0.0
+                };
+
+                Some(PendingWeeklyAward {
+                    league_id: league.id,
+                    winner_id,
+                    award: PlayerOfTheWeekAward {
+                        week_end_date: week_end,
+                        player_id: winner_id,
+                        player_name,
+                        player_slug,
+                        club_id,
+                        club_name,
+                        club_slug,
+                        score: agg.score,
+                        goals: agg.goals,
+                        assists: agg.assists,
+                        matches_played: agg.matches_played,
+                        average_rating,
+                    },
+                })
+            })
+            .collect()
     }
 
     fn apply_pending(data: &mut SimulatorData, pending: Vec<PendingWeeklyAward>) {
@@ -888,63 +902,62 @@ impl TeamOfTheWeekTick {
         week_start: chrono::NaiveDate,
         week_end: chrono::NaiveDate,
     ) -> Vec<PendingTeamOfWeek> {
-        let mut pending: Vec<PendingTeamOfWeek> = Vec::new();
-        for continent in &data.continents {
-            for country in &continent.countries {
-                for league in &country.leagues.leagues {
-                    if league.friendly {
-                        continue;
-                    }
-                    if league.awards.has_team_of_week_for(week_end) {
-                        continue;
-                    }
-                    let scores = AwardAggregator::aggregate(
-                        league.matches.iter_in_range(week_start, week_end),
-                    );
-                    let team = TeamOfTheWeekSelector::pick(&scores);
-                    if team.is_empty() {
-                        continue;
-                    }
+        data.continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.leagues.leagues.par_iter())
+            .filter_map(|league| {
+                if league.friendly {
+                    return None;
+                }
+                if league.awards.has_team_of_week_for(week_end) {
+                    return None;
+                }
+                let scores = AwardAggregator::aggregate(
+                    league.matches.iter_in_range(week_start, week_end),
+                );
+                let team = TeamOfTheWeekSelector::pick(&scores);
+                if team.is_empty() {
+                    return None;
+                }
 
-                    let mut slots: Vec<TeamOfTheWeekSlot> = Vec::with_capacity(team.len());
-                    for (pid, pos, score, agg) in team {
-                        let Some(player) = data.player(pid) else {
-                            continue;
-                        };
-                        let player_name = format!(
-                            "{} {}",
-                            player.full_name.display_first_name(),
-                            player.full_name.display_last_name()
-                        );
-                        let player_slug = player.slug();
-                        let (club_id, club_name, club_slug) =
-                            WeeklyAwardsTick::resolve_club_card(data, pid);
-                        slots.push(TeamOfTheWeekSlot {
-                            player_id: pid,
-                            player_name,
-                            player_slug,
-                            club_id,
-                            club_name,
-                            club_slug,
-                            position_group: pos,
-                            score,
-                            matches_played: agg.matches_played,
-                            goals: agg.goals,
-                            assists: agg.assists,
-                            average_rating: agg.average_rating(),
-                        });
-                    }
-                    pending.push(PendingTeamOfWeek {
-                        league_id: league.id,
-                        award: TeamOfTheWeekAward {
-                            week_end_date: week_end,
-                            slots,
-                        },
+                let mut slots: Vec<TeamOfTheWeekSlot> = Vec::with_capacity(team.len());
+                for (pid, pos, score, agg) in team {
+                    let Some(player) = data.player(pid) else {
+                        continue;
+                    };
+                    let player_name = format!(
+                        "{} {}",
+                        player.full_name.display_first_name(),
+                        player.full_name.display_last_name()
+                    );
+                    let player_slug = player.slug();
+                    let (club_id, club_name, club_slug) =
+                        WeeklyAwardsTick::resolve_club_card(data, pid);
+                    slots.push(TeamOfTheWeekSlot {
+                        player_id: pid,
+                        player_name,
+                        player_slug,
+                        club_id,
+                        club_name,
+                        club_slug,
+                        position_group: pos,
+                        score,
+                        matches_played: agg.matches_played,
+                        goals: agg.goals,
+                        assists: agg.assists,
+                        average_rating: agg.average_rating(),
                     });
                 }
-            }
-        }
-        pending
+                Some(PendingTeamOfWeek {
+                    league_id: league.id,
+                    award: TeamOfTheWeekAward {
+                        week_end_date: week_end,
+                        slots,
+                    },
+                })
+            })
+            .collect()
     }
 
     fn apply(data: &mut SimulatorData, pending: Vec<PendingTeamOfWeek>) {
@@ -1023,74 +1036,73 @@ impl MonthlyAwardsTick {
         end: chrono::NaiveDate,
     ) -> Vec<PendingMonthlyAward> {
         let month_end = end - Duration::days(1);
-        let mut pending: Vec<PendingMonthlyAward> = Vec::new();
 
-        for continent in &data.continents {
-            for country in &continent.countries {
-                for league in &country.leagues.leagues {
-                    if league.friendly {
-                        continue;
-                    }
-                    if league.awards.has_monthly_award_for(month_end) {
-                        continue;
-                    }
-
-                    // Count non-friendly matches that produced stats. If
-                    // the previous calendar month had none (winter break,
-                    // off-season gap, league not started yet), skip the
-                    // league entirely — no snapshot, no last_monthly_award
-                    // bump — so the web view keeps showing the previously
-                    // archived month.
-                    let matches_count = league
-                        .matches
-                        .iter_in_range(start, end)
-                        .filter(|m| !m.friendly && m.details.is_some())
-                        .count() as u32;
-                    if matches_count == 0 {
-                        continue;
-                    }
-
-                    let scores =
-                        AwardAggregator::aggregate(league.matches.iter_in_range(start, end));
-
-                    let pom = Self::pick_pom(data, &scores, league.reputation, month_end);
-                    let young =
-                        Self::pick_young_pom(data, &scores, league.reputation, today, month_end);
-
-                    let team_of_month = Self::build_team(data, &scores, |_| true);
-                    let young_team_of_month = Self::build_team(data, &scores, |id| {
-                        data.player(id)
-                            .map(|p| DateUtils::age(p.birth_date, today) <= 21)
-                            .unwrap_or(false)
-                    });
-
-                    let top_scorers = Self::top_scorers(data, &scores);
-                    let top_assists = Self::top_assists(data, &scores);
-                    let best_ratings = Self::best_ratings(data, &scores);
-
-                    let snapshot = MonthlyAwardsSnapshot {
-                        month_start_date: start,
-                        month_end_date: month_end,
-                        matches_count,
-                        player_of_month: pom.clone(),
-                        young_player_of_month: young.clone(),
-                        team_of_month,
-                        young_team_of_month,
-                        top_scorers,
-                        top_assists,
-                        best_ratings,
-                    };
-
-                    pending.push(PendingMonthlyAward {
-                        league_id: league.id,
-                        pom,
-                        young,
-                        snapshot,
-                    });
+        data.continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.leagues.leagues.par_iter())
+            .filter_map(|league| {
+                if league.friendly {
+                    return None;
                 }
-            }
-        }
-        pending
+                if league.awards.has_monthly_award_for(month_end) {
+                    return None;
+                }
+
+                // Count non-friendly matches that produced stats. If
+                // the previous calendar month had none (winter break,
+                // off-season gap, league not started yet), skip the
+                // league entirely — no snapshot, no last_monthly_award
+                // bump — so the web view keeps showing the previously
+                // archived month.
+                let matches_count = league
+                    .matches
+                    .iter_in_range(start, end)
+                    .filter(|m| !m.friendly && m.details.is_some())
+                    .count() as u32;
+                if matches_count == 0 {
+                    return None;
+                }
+
+                let scores =
+                    AwardAggregator::aggregate(league.matches.iter_in_range(start, end));
+
+                let pom = Self::pick_pom(data, &scores, league.reputation, month_end);
+                let young =
+                    Self::pick_young_pom(data, &scores, league.reputation, today, month_end);
+
+                let team_of_month = Self::build_team(data, &scores, |_| true);
+                let young_team_of_month = Self::build_team(data, &scores, |id| {
+                    data.player(id)
+                        .map(|p| DateUtils::age(p.birth_date, today) <= 21)
+                        .unwrap_or(false)
+                });
+
+                let top_scorers = Self::top_scorers(data, &scores);
+                let top_assists = Self::top_assists(data, &scores);
+                let best_ratings = Self::best_ratings(data, &scores);
+
+                let snapshot = MonthlyAwardsSnapshot {
+                    month_start_date: start,
+                    month_end_date: month_end,
+                    matches_count,
+                    player_of_month: pom.clone(),
+                    young_player_of_month: young.clone(),
+                    team_of_month,
+                    young_team_of_month,
+                    top_scorers,
+                    top_assists,
+                    best_ratings,
+                };
+
+                Some(PendingMonthlyAward {
+                    league_id: league.id,
+                    pom,
+                    young,
+                    snapshot,
+                })
+            })
+            .collect()
     }
 
     fn pick_pom(
@@ -1449,8 +1461,8 @@ impl WorldPlayerOfYearTick {
 
         let mut combined: Vec<(u32, f32)> = data
             .continents
-            .iter()
-            .flat_map(|c| crate::continent::ContinentResult::rank_continent(c, today))
+            .par_iter()
+            .flat_map_iter(|c| ContinentResult::rank_continent(c, today))
             .collect();
         combined.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)

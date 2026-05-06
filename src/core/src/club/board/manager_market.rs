@@ -27,6 +27,7 @@ use crate::utils::DateUtils;
 use crate::{SimulatorData, Staff, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
+use rayon::prelude::*;
 
 // ─── Shared types ──────────────────────────────────────────────────────
 
@@ -569,6 +570,15 @@ impl ManagerShortlist {
 
 // ─── ManagerMarketTick — daily orchestrator + appointment phase ────────
 
+/// Outcome of a single club's pass through `refresh_shortlists` —
+/// either the club's stale search must be cleared, or it needs a fresh
+/// candidate shortlist. Carrying both decisions in one parallel sweep
+/// keeps the world walk to a single pass.
+enum ShortlistDecision {
+    Refresh(u32, u16),
+    Clear(u32),
+}
+
 pub struct ManagerMarketTick;
 
 impl ManagerMarketTick {
@@ -611,40 +621,46 @@ impl ManagerMarketTick {
 
         // Snapshot pool by reference — we only need to read it. We
         // collect (club_id, club_rep) first to avoid holding an iter+mut
-        // borrow across the rebuild closure.
+        // borrow across the rebuild closure. The world walk runs across
+        // rayon so single-continent saves still light up every core.
+        let decisions: Vec<ShortlistDecision> = data
+            .continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.clubs.par_iter())
+            .filter_map(|club| {
+                club.board.manager_search_since?;
+                if !ManagerSeat::club_has_vacancy(club) {
+                    debug!(
+                        "Manager market: clearing stale search at club {} (permanent manager in post)",
+                        club.id
+                    );
+                    return Some(ShortlistDecision::Clear(club.id));
+                }
+                let stale = club
+                    .board
+                    .shortlist_built_at
+                    .map(|d| (today - d).num_days() >= ManagerShortlist::REFRESH_DAYS)
+                    .unwrap_or(true);
+                if !stale {
+                    return None;
+                }
+                let club_rep = club
+                    .teams
+                    .iter()
+                    .find(|t| matches!(t.team_type, TeamType::Main))
+                    .map(|t| t.reputation.world)
+                    .unwrap_or(0);
+                Some(ShortlistDecision::Refresh(club.id, club_rep))
+            })
+            .collect();
+
         let mut to_refresh: Vec<(u32, u16)> = Vec::new();
         let mut stale_to_clear: Vec<u32> = Vec::new();
-
-        for continent in &data.continents {
-            for country in &continent.countries {
-                for club in &country.clubs {
-                    let Some(_search_start) = club.board.manager_search_since else {
-                        continue;
-                    };
-                    if !ManagerSeat::club_has_vacancy(club) {
-                        debug!(
-                            "Manager market: clearing stale search at club {} (permanent manager in post)",
-                            club.id
-                        );
-                        stale_to_clear.push(club.id);
-                        continue;
-                    }
-                    let stale = club
-                        .board
-                        .shortlist_built_at
-                        .map(|d| (today - d).num_days() >= ManagerShortlist::REFRESH_DAYS)
-                        .unwrap_or(true);
-                    if !stale {
-                        continue;
-                    }
-                    let club_rep = club
-                        .teams
-                        .iter()
-                        .find(|t| matches!(t.team_type, TeamType::Main))
-                        .map(|t| t.reputation.world)
-                        .unwrap_or(0);
-                    to_refresh.push((club.id, club_rep));
-                }
+        for d in decisions {
+            match d {
+                ShortlistDecision::Refresh(id, rep) => to_refresh.push((id, rep)),
+                ShortlistDecision::Clear(id) => stale_to_clear.push(id),
             }
         }
 
@@ -662,11 +678,14 @@ impl ManagerMarketTick {
         // write back. Reads from the pool AND from every other club's
         // main team (for employed-target enumeration in slice C) — so
         // this is a read-only sweep over `data` before the write phase.
-        let mut updates: Vec<(u32, Vec<ManagerCandidate>)> = Vec::with_capacity(to_refresh.len());
-        for (club_id, club_rep) in to_refresh {
-            let shortlist = ManagerShortlist::combined(data, club_id, club_rep, today);
-            updates.push((club_id, shortlist));
-        }
+        // Each per-club shortlist build is independent → parallel.
+        let updates: Vec<(u32, Vec<ManagerCandidate>)> = to_refresh
+            .par_iter()
+            .map(|&(club_id, club_rep)| {
+                let shortlist = ManagerShortlist::combined(data, club_id, club_rep, today);
+                (club_id, shortlist)
+            })
+            .collect();
 
         for (club_id, shortlist) in updates {
             if let Some(club) = data.club_mut(club_id) {
@@ -688,51 +707,49 @@ impl ManagerMarketTick {
     /// avoids flood-spam of identical approaches.
     pub fn initiate_approaches(data: &mut SimulatorData) {
         let today = data.date.date();
-        let mut new_approaches: Vec<ManagerApproach> = Vec::new();
 
-        for continent in &data.continents {
-            for country in &continent.countries {
-                for club in &country.clubs {
-                    if club.board.manager_search_since.is_none() {
-                        continue;
-                    }
-                    // Vacancy invariant: never start an approach for a
-                    // club whose permanent manager is still in post
-                    // (stale search state). `refresh_shortlists` clears
-                    // such state on its next pass; until then, just skip.
-                    if !ManagerSeat::club_has_vacancy(club) {
-                        continue;
-                    }
-                    // Pick the top-ranked Employed candidate that isn't
-                    // already in an in-flight approach for this club.
-                    let already_pursuing: Vec<u32> = data
-                        .pending_manager_approaches
-                        .iter()
-                        .filter(|a| a.requesting_club_id == club.id)
-                        .map(|a| a.staff_id)
-                        .collect();
-                    let pick = club.board.manager_shortlist.iter().find(|c| {
-                        matches!(c.source, CandidateSource::Employed { .. })
-                            && !already_pursuing.contains(&c.staff_id)
-                    });
-                    let Some(pick) = pick else {
-                        continue;
-                    };
-                    let CandidateSource::Employed { current_club_id } = pick.source else {
-                        continue;
-                    };
-                    new_approaches.push(ManagerApproach {
-                        requesting_club_id: club.id,
-                        source_club_id: current_club_id,
-                        staff_id: pick.staff_id,
-                        state: ApproachState::Made,
-                        offered_salary: pick.target_salary,
-                        created_at: today,
-                        last_action: today,
-                    });
+        let new_approaches: Vec<ManagerApproach> = data
+            .continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.clubs.par_iter())
+            .filter_map(|club| {
+                if club.board.manager_search_since.is_none() {
+                    return None;
                 }
-            }
-        }
+                // Vacancy invariant: never start an approach for a
+                // club whose permanent manager is still in post
+                // (stale search state). `refresh_shortlists` clears
+                // such state on its next pass; until then, just skip.
+                if !ManagerSeat::club_has_vacancy(club) {
+                    return None;
+                }
+                // Pick the top-ranked Employed candidate that isn't
+                // already in an in-flight approach for this club.
+                let already_pursuing: Vec<u32> = data
+                    .pending_manager_approaches
+                    .iter()
+                    .filter(|a| a.requesting_club_id == club.id)
+                    .map(|a| a.staff_id)
+                    .collect();
+                let pick = club.board.manager_shortlist.iter().find(|c| {
+                    matches!(c.source, CandidateSource::Employed { .. })
+                        && !already_pursuing.contains(&c.staff_id)
+                })?;
+                let CandidateSource::Employed { current_club_id } = pick.source else {
+                    return None;
+                };
+                Some(ManagerApproach {
+                    requesting_club_id: club.id,
+                    source_club_id: current_club_id,
+                    staff_id: pick.staff_id,
+                    state: ApproachState::Made,
+                    offered_salary: pick.target_salary,
+                    created_at: today,
+                    last_action: today,
+                })
+            })
+            .collect();
 
         for a in new_approaches {
             debug!(

@@ -11,6 +11,8 @@ use crate::{
     HappinessEventType, NationalTeamEventContext, NationalTeamEventKind, PlayerStatusType,
 };
 use chrono::NaiveDate;
+use rayon::iter::ParallelIterator;
+use rayon::prelude::IntoParallelRefMutIterator;
 use std::collections::HashSet;
 
 impl NationalTeam {
@@ -35,8 +37,10 @@ impl NationalTeam {
             }
         }
 
-        for continent in continents.iter_mut() {
-            for country in continent.countries.iter_mut() {
+        continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
                 for club in country.clubs.iter_mut() {
                     for team in club.teams.iter_mut() {
                         for player in team.players.iter_mut() {
@@ -104,8 +108,7 @@ impl NationalTeam {
                         }
                     }
                 }
-            }
-        }
+            });
     }
 
     /// World-wide variant of `release_callup_statuses_across_continent`.
@@ -119,8 +122,10 @@ impl NationalTeam {
             }
         }
 
-        for continent in continents.iter_mut() {
-            for country in continent.countries.iter_mut() {
+        continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
                 for club in country.clubs.iter_mut() {
                     for team in club.teams.iter_mut() {
                         for player in team.players.iter_mut() {
@@ -130,7 +135,6 @@ impl NationalTeam {
                         }
                     }
                 }
-            }
-        }
+            });
     }
 }
