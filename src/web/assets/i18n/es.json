@@ -1406,5 +1406,14 @@
   "transfer_interest_headline_bid_rejected": "Frustrado tras el rechazo del club a una oferta",
   "transfer_interest_headline_bid_rejected_named": "Frustrado tras el rechazo del club a la oferta de {club}",
   "transfer_interest_headline_dream_collapsed": "Un traspaso por el que apostaba se ha caído",
-  "transfer_interest_headline_dream_collapsed_named": "Su traspaso al {club} se ha caído en el último momento"
+  "transfer_interest_headline_dream_collapsed_named": "Su traspaso al {club} se ha caído en el último momento",
+  "continent_africa": "África",
+  "continent_asia": "Asia",
+  "continent_europe": "Europa",
+  "continent_north_america": "Norteamérica",
+  "continent_south_america": "Sudamérica",
+  "continent_oceania": "Oceanía",
+  "continent_australia_and_oceania": "Australia y Oceanía",
+  "continent_australia": "Australia",
+  "continent_antarctica": "Antártida"
 }

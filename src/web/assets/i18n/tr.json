@@ -1406,5 +1406,14 @@
   "transfer_interest_headline_bid_rejected": "Kulübün başka bir teklifi reddetmesinden rahatsız",
   "transfer_interest_headline_bid_rejected_named": "Kulübün {club} teklifini reddetmesinden rahatsız",
   "transfer_interest_headline_dream_collapsed": "Beklediği transfer çöktü",
-  "transfer_interest_headline_dream_collapsed_named": "{club} transferi son anda çöktü"
+  "transfer_interest_headline_dream_collapsed_named": "{club} transferi son anda çöktü",
+  "continent_africa": "Afrika",
+  "continent_asia": "Asya",
+  "continent_europe": "Avrupa",
+  "continent_north_america": "Kuzey Amerika",
+  "continent_south_america": "Güney Amerika",
+  "continent_oceania": "Okyanusya",
+  "continent_australia_and_oceania": "Avustralya ve Okyanusya",
+  "continent_australia": "Avustralya",
+  "continent_antarctica": "Antarktika"
 }

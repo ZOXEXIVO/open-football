@@ -1406,5 +1406,14 @@
   "transfer_interest_headline_bid_rejected": "クラブが他クラブの関心を拒否したことに不満",
   "transfer_interest_headline_bid_rejected_named": "クラブが{club}の関心を拒否したことに不満",
   "transfer_interest_headline_dream_collapsed": "望んでいた移籍が破談に",
-  "transfer_interest_headline_dream_collapsed_named": "{club}への移籍が土壇場で破談に"
+  "transfer_interest_headline_dream_collapsed_named": "{club}への移籍が土壇場で破談に",
+  "continent_africa": "アフリカ",
+  "continent_asia": "アジア",
+  "continent_europe": "ヨーロッパ",
+  "continent_north_america": "北米",
+  "continent_south_america": "南米",
+  "continent_oceania": "オセアニア",
+  "continent_australia_and_oceania": "オーストラリア・オセアニア",
+  "continent_australia": "オーストラリア",
+  "continent_antarctica": "南極"
 }

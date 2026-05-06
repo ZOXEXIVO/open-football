@@ -46,6 +46,28 @@ pub struct ContinentDto {
     pub countries: Vec<CountryDto>,
 }
 
+/// Build the i18n key for a continent's display name. Lowercases, then
+/// folds non-alphanumeric runs into a single `_` (so "North America"
+/// becomes `continent_north_america`). The handler uses this with a
+/// fall-through to the raw English name when no translation exists,
+/// so an unrecognised continent never renders the bare key.
+fn continent_i18n_key(name: &str) -> String {
+    let mut out = String::from("continent_");
+    let mut prev_underscore = true;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            for lc in c.to_lowercase() {
+                out.push(lc);
+            }
+            prev_underscore = false;
+        } else if !prev_underscore {
+            out.push('_');
+            prev_underscore = true;
+        }
+    }
+    out.trim_end_matches('_').to_string()
+}
+
 pub struct CountryDto {
     pub slug: String,
     pub code: String,
@@ -79,8 +101,15 @@ pub async fn country_list_action(
                 })
                 .collect();
             countries.sort_by(|a, b| a.slug.cmp(&b.slug));
+            let key = continent_i18n_key(&continent.name);
+            let translated = i18n.t(&key);
+            let localized = if translated == key {
+                continent.name.clone()
+            } else {
+                translated.to_string()
+            };
             ContinentDto {
-                name: continent.name.clone(),
+                name: localized,
                 countries,
             }
         })

@@ -1406,5 +1406,14 @@
   "transfer_interest_headline_bid_rejected": "因俱乐部拒绝其他球队的兴趣而沮丧",
   "transfer_interest_headline_bid_rejected_named": "因俱乐部拒绝{club}的兴趣而沮丧",
   "transfer_interest_headline_dream_collapsed": "他期待的转会告吹",
-  "transfer_interest_headline_dream_collapsed_named": "他前往{club}的转会在最后时刻告吹"
+  "transfer_interest_headline_dream_collapsed_named": "他前往{club}的转会在最后时刻告吹",
+  "continent_africa": "非洲",
+  "continent_asia": "亚洲",
+  "continent_europe": "欧洲",
+  "continent_north_america": "北美洲",
+  "continent_south_america": "南美洲",
+  "continent_oceania": "大洋洲",
+  "continent_australia_and_oceania": "澳大利亚与大洋洲",
+  "continent_australia": "澳大利亚",
+  "continent_antarctica": "南极洲"
 }

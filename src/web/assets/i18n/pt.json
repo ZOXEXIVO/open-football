@@ -1406,5 +1406,14 @@
   "transfer_interest_headline_bid_rejected": "Frustrado depois do clube ter recusado uma proposta",
   "transfer_interest_headline_bid_rejected_named": "Frustrado depois do clube ter recusado a proposta do {club}",
   "transfer_interest_headline_dream_collapsed": "Uma transferência em que apostava caiu",
-  "transfer_interest_headline_dream_collapsed_named": "A transferência para o {club} caiu no último momento"
+  "transfer_interest_headline_dream_collapsed_named": "A transferência para o {club} caiu no último momento",
+  "continent_africa": "África",
+  "continent_asia": "Ásia",
+  "continent_europe": "Europa",
+  "continent_north_america": "América do Norte",
+  "continent_south_america": "América do Sul",
+  "continent_oceania": "Oceania",
+  "continent_australia_and_oceania": "Austrália e Oceania",
+  "continent_australia": "Austrália",
+  "continent_antarctica": "Antártida"
 }

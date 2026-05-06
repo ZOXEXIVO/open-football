@@ -1461,5 +1461,14 @@
   "transfer_interest_headline_bid_rejected": "Расстроен отказом клуба от чужого предложения",
   "transfer_interest_headline_bid_rejected_named": "Расстроен отказом клуба от предложения {club}",
   "transfer_interest_headline_dream_collapsed": "Переход, на который он рассчитывал, сорвался",
-  "transfer_interest_headline_dream_collapsed_named": "Его переход в {club} сорвался в последний момент"
+  "transfer_interest_headline_dream_collapsed_named": "Его переход в {club} сорвался в последний момент",
+  "continent_africa": "Африка",
+  "continent_asia": "Азия",
+  "continent_europe": "Европа",
+  "continent_north_america": "Северная Америка",
+  "continent_south_america": "Южная Америка",
+  "continent_oceania": "Океания",
+  "continent_australia_and_oceania": "Австралия и Океания",
+  "continent_australia": "Австралия",
+  "continent_antarctica": "Антарктида"
 }
