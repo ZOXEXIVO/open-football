@@ -1,7 +1,10 @@
 use crate::simulator::SimulatorData;
 use crate::{
-    ChangeType, HappinessEventType, HealthIssue, Player, RelationshipChange, RelationshipEvent,
-    ResignationReason, StaffContractResult, StaffMoraleEvent, StaffTrainingResult, StaffWarning,
+    ChangeType, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
+    HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
+    HealthIssue, Player, RelationshipChange, RelationshipEvent, ResignationReason,
+    StaffContractResult, StaffMoraleEvent, StaffTrainingResult, StaffWarning, SupportEventContext,
+    SupportMatchPhase, SupportSetting, SupportSource, SupportTrigger,
 };
 
 pub struct StaffCollectionResult {
@@ -103,9 +106,19 @@ impl StaffResult {
                         player
                             .relations
                             .update_staff_relationship(self.staff_id, change, sim_date);
-                        player
-                            .happiness
-                            .add_event(HappinessEventType::ManagerEncouragement, 1.5);
+                        let ctx = StaffSupportContextBuilder::manager_encouragement(
+                            self.staff_id,
+                            player,
+                            SupportTrigger::Generic,
+                            SupportSetting::PrivateTalk,
+                            1.5,
+                        );
+                        player.happiness.add_event_with_context(
+                            HappinessEventType::ManagerEncouragement,
+                            1.5,
+                            None,
+                            ctx,
+                        );
                     }
                 }
                 RelationshipEvent::Conflict => {
@@ -126,9 +139,19 @@ impl StaffResult {
                         player
                             .relations
                             .update_staff_relationship(self.staff_id, change, sim_date);
-                        player
-                            .happiness
-                            .add_event(HappinessEventType::ManagerEncouragement, 2.0);
+                        let ctx = StaffSupportContextBuilder::manager_encouragement(
+                            self.staff_id,
+                            player,
+                            SupportTrigger::LeadershipMoment,
+                            SupportSetting::TrainingGround,
+                            2.0,
+                        );
+                        player.happiness.add_event_with_context(
+                            HappinessEventType::ManagerEncouragement,
+                            2.0,
+                            None,
+                            ctx,
+                        );
                     }
                 }
                 RelationshipEvent::TrustBuilt => {
@@ -191,5 +214,60 @@ impl StaffResult {
         }
 
         None
+    }
+}
+
+/// Builder for the structured `HappinessEventContext` payloads attached
+/// to staff-driven `ManagerEncouragement` events (positive
+/// interactions, mentorship moments). Bundled under a named type so the
+/// processing branches in `StaffResult::process` read as thin
+/// orchestration of context construction.
+pub struct StaffSupportContextBuilder;
+
+impl StaffSupportContextBuilder {
+    /// Build a `HappinessEventContext` for a staff-driven manager
+    /// encouragement gesture. Captures the source/setting/trigger and a
+    /// small evidence list pulled from the player's current state so the
+    /// renderer can describe what the manager saw.
+    pub fn manager_encouragement(
+        staff_id: u32,
+        player: &Player,
+        trigger: SupportTrigger,
+        setting: SupportSetting,
+        magnitude: f32,
+    ) -> HappinessEventContext {
+        let mut support = SupportEventContext::new(SupportSource::Manager, setting, trigger)
+            .with_speaker_staff_id(staff_id);
+        if player.happiness.morale < 35.0 {
+            support = support.with_phase(SupportMatchPhase::InMatch);
+        }
+
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::ManagerSupport,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            match setting {
+                SupportSetting::TrainingGround => HappinessEventScope::TrainingGround,
+                SupportSetting::DressingRoom => HappinessEventScope::DressingRoom,
+                _ => HappinessEventScope::Personal,
+            },
+        )
+        .with_support_context(support);
+
+        if player.happiness.morale < 35.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::PoorMoraleBeforeTalk);
+        }
+        if player.attributes.professionalism >= 15.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::HighProfessionalism);
+        }
+        if let Some(rel) = player.relations.get_staff(staff_id) {
+            if rel.level >= 50.0 {
+                ctx = ctx.with_evidence(HappinessEventEvidence::ManagerTrust);
+                ctx = ctx.with_evidence(HappinessEventEvidence::StrongCoachRapport);
+            } else if rel.level <= -25.0 {
+                ctx = ctx.with_evidence(HappinessEventEvidence::WeakCoachRapport);
+            }
+        }
+
+        ctx.with_follow_up(HappinessEventFollowUp::ManagerTrustRising)
     }
 }

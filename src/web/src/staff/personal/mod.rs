@@ -110,6 +110,9 @@ pub struct StaffRecentEventDto {
     pub description: String,
     pub is_positive: bool,
     pub days_ago: u16,
+    /// Pre-formatted "time-ago" label. Renders as the localised "now"
+    /// for events emitted today, "{n}d ago" otherwise.
+    pub time_ago_label: String,
 }
 
 pub async fn staff_personal_action(
@@ -447,10 +450,16 @@ fn get_recent_events(staff: &Staff, i18n: &I18n) -> Vec<StaffRecentEventDto> {
                 StaffEventType::TargetRejected => ("staff_event_target_rejected", false),
                 StaffEventType::BoardPresentation => ("staff_event_board_presentation", true),
             };
+            let time_ago_label = if e.days_ago == 0 {
+                i18n.t("now").to_string()
+            } else {
+                format!("{}{}", e.days_ago, i18n.t("days_ago_short"))
+            };
             StaffRecentEventDto {
                 description: i18n.t(key).to_string(),
                 is_positive: positive,
                 days_ago: e.days_ago,
+                time_ago_label,
             }
         })
         .collect();

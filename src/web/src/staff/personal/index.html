@@ -151,7 +151,7 @@
                     {% for event in recent_events %}
                     <tr>
                         <td class="fm-event-desc{% if event.is_positive %} fm-event-pos{% else %} fm-event-neg{% endif %}">{{ event.description }}</td>
-                        <td class="fm-event-ago">{{ event.days_ago }}{{ i18n.t("days_ago_short") }}</td>
+                        <td class="fm-event-ago">{{ event.time_ago_label }}</td>
                     </tr>
                     {% endfor %}
                 </table>

@@ -12,7 +12,69 @@ use chrono::NaiveDate;
 use super::scaling;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
-use crate::{HappinessEventType, PlayerStatusType};
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
+    HappinessEventScope, HappinessEventSeverity, HappinessEventType, PlayerStatusType,
+    TransferInterestContext, TransferInterestEvidence, TransferInterestKind,
+    TransferInterestReaction, TransferInterestSource, TransferInterestStage, TransferSportingFit,
+};
+
+/// Inputs the transfer pipeline supplies when reporting any visible
+/// stage of an interest event. The Player owner picks the reaction,
+/// magnitude, evidence, and cooldown — the caller just states the
+/// fact.
+#[derive(Debug, Clone)]
+pub struct TransferInterestSignal {
+    pub interested_club_id: u32,
+    pub interested_league_id: Option<u32>,
+    /// Buyer reputation (0..1), as the negotiation pipeline already
+    /// carries it. Used to compute the rep gap.
+    pub buyer_rep: f32,
+    /// Seller reputation (0..1).
+    pub seller_rep: f32,
+    /// Buying league reputation (raw 0..20000 score). 0 when unknown.
+    pub buyer_league_rep: u16,
+    /// Selling league reputation. 0 when unknown.
+    pub seller_league_rep: u16,
+    pub stage: TransferInterestStage,
+    pub source: TransferInterestSource,
+    /// True when the interested club has been linked repeatedly enough
+    /// that the player's representatives have brought it up.
+    pub repeated_attention: bool,
+    /// True when the buyer is a known sporting rival of the seller.
+    pub is_rival: bool,
+    /// Domain meta — set when the buying club is in the player's home
+    /// country.
+    pub is_home_country: bool,
+    /// True when the buying club is a previous club of this player.
+    pub is_former_club: bool,
+}
+
+impl TransferInterestSignal {
+    pub fn rep_diff(&self) -> f32 {
+        self.buyer_rep - self.seller_rep
+    }
+
+    pub fn league_rep_diff(&self) -> i32 {
+        self.buyer_league_rep as i32 - self.seller_league_rep as i32
+    }
+}
+
+fn cause_for_interest_kind(kind: TransferInterestKind) -> HappinessEventCause {
+    match kind {
+        TransferInterestKind::FavoriteClubInterest
+        | TransferInterestKind::Homecoming
+        | TransferInterestKind::FormerClubReturn => HappinessEventCause::AdaptationIsolation,
+        TransferInterestKind::RivalMove => HappinessEventCause::ReputationTension,
+        TransferInterestKind::StepUp | TransferInterestKind::BigLeagueOpportunity => {
+            HappinessEventCause::ReputationAdmiration
+        }
+        TransferInterestKind::EscapeRoute | TransferInterestKind::StepDownWithMinutes => {
+            HappinessEventCause::PoorFormPressure
+        }
+        _ => HappinessEventCause::MediaPressure,
+    }
+}
 
 impl Player {
     /// An approach from `buyer_rep` has made it past the selling club's
@@ -154,10 +216,21 @@ impl Player {
             1.0
         };
         let mag = base * bond * nat_mul * rep_mul;
-        self.happiness.add_event_with_partner_and_cooldown(
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::FriendDeparture,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence(HappinessEventEvidence::StrongExistingBond)
+        .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+        if same_nationality {
+            ctx = ctx.with_evidence(HappinessEventEvidence::SharedNationality);
+        }
+        self.happiness.add_event_with_context_and_cooldown(
             HappinessEventType::CloseFriendSold,
             mag,
             Some(partner_player_id),
+            ctx,
             30,
         );
     }
@@ -176,10 +249,21 @@ impl Player {
         let bond = ((bond_friendship.clamp(0.0, 100.0)) / 100.0) * 0.5 + 0.75;
         let nat_mul = if same_nationality { 1.15 } else { 1.0 };
         let mag = base * bond * nat_mul;
-        self.happiness.add_event_with_partner_and_cooldown(
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::MentorDeparture,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence(HappinessEventEvidence::MentorInfluence)
+        .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+        if same_nationality {
+            ctx = ctx.with_evidence(HappinessEventEvidence::SharedNationality);
+        }
+        self.happiness.add_event_with_context_and_cooldown(
             HappinessEventType::MentorDeparted,
             mag,
             Some(partner_player_id),
+            ctx,
             60,
         );
     }
@@ -204,11 +288,689 @@ impl Player {
         // settled linguistically.
         let lang_mul = if lacks_local_language { 1.30 } else { 1.0 };
         let mag = base * lang_mul;
-        self.happiness.add_event_with_partner_and_cooldown(
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::NationalityIntegration,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence(HappinessEventEvidence::SharedNationality)
+        .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+        if lacks_local_language {
+            ctx = ctx.with_evidence(HappinessEventEvidence::LanguageBarrier);
+        }
+        self.happiness.add_event_with_context_and_cooldown(
             HappinessEventType::CompatriotJoined,
             mag,
             Some(partner_player_id),
+            ctx,
             30,
+        );
+    }
+
+    /// Report a visible transfer-interest moment and let the player react.
+    ///
+    /// The selector below is the single dispatch point for the rich
+    /// interest funnel: scout sightings, rumours, agent leaks, concrete
+    /// approaches from bigger / rival / favourite / former / homecoming
+    /// clubs, talks-expected, interest-cooled, and contract-leverage
+    /// moments. The pipeline states the *fact* (stage, source, club,
+    /// rep gaps, repeated-attention) and the player picks the reaction
+    /// and magnitude based on personality and current context.
+    ///
+    /// Returns `true` when the event landed (vs cooldown / threshold
+    /// suppression).
+    pub fn on_transfer_interest_signal(&mut self, sig: &TransferInterestSignal) -> bool {
+        let kind = self.classify_interest_kind(sig);
+
+        // Visible-event gate: a stray scout sighting is not surfaced to
+        // the player unless it actually means something — repeated
+        // attention, agent/media leak, big-club gap, or contract noise.
+        if !self.signal_should_surface(sig, kind) {
+            return false;
+        }
+
+        let (event_type, base_mag, cooldown_days) = self.event_for_signal(sig, kind);
+        let (reaction, fit, magnitude) =
+            self.reaction_for_signal(sig, kind, base_mag);
+        let evidence = self.evidence_for_signal(sig, kind);
+
+        let mut tic = TransferInterestContext::new(
+            sig.stage,
+            sig.source,
+            kind,
+            reaction,
+        )
+        .with_interested_club(sig.interested_club_id)
+        .with_reputation_gap((sig.rep_diff() * 100.0).round() as i32)
+        .with_league_reputation_gap(sig.league_rep_diff())
+        .with_rival(sig.is_rival)
+        .with_home_country(sig.is_home_country)
+        .with_former_club(sig.is_former_club)
+        .with_favorite_club(self.favorite_clubs.contains(&sig.interested_club_id));
+        if let Some(league_id) = sig.interested_league_id {
+            tic = tic.with_interested_league(league_id);
+        }
+        if let Some(f) = fit {
+            tic = tic.with_sporting_fit(f);
+        }
+        if let Some(c) = self.contract.as_ref() {
+            tic = tic.with_current_squad_status(c.squad_status.clone());
+        }
+        for ev in evidence {
+            tic = tic.with_evidence(ev);
+        }
+
+        let scope = match sig.source {
+            TransferInterestSource::LocalPress
+            | TransferInterestSource::NationalPress
+            | TransferInterestSource::FanSpeculation => HappinessEventScope::Media,
+            TransferInterestSource::ScoutAttendance => HappinessEventScope::MatchDay,
+            TransferInterestSource::ContractTalk => HappinessEventScope::Boardroom,
+            _ => HappinessEventScope::Personal,
+        };
+
+        let follow_up = self.follow_up_for_signal(sig, kind, reaction);
+        let mut ctx = HappinessEventContext::new(
+            cause_for_interest_kind(kind),
+            HappinessEventSeverity::from_magnitude(magnitude),
+            scope,
+        )
+        .with_transfer_interest_context(tic);
+        if let Some(fu) = follow_up {
+            ctx = ctx.with_follow_up(fu);
+        }
+
+        self.happiness.add_event_with_context_and_cooldown(
+            event_type,
+            magnitude,
+            None,
+            ctx,
+            cooldown_days,
+        )
+    }
+
+    fn classify_interest_kind(&self, sig: &TransferInterestSignal) -> TransferInterestKind {
+        if self.favorite_clubs.contains(&sig.interested_club_id) {
+            return TransferInterestKind::FavoriteClubInterest;
+        }
+        if sig.is_former_club {
+            return TransferInterestKind::FormerClubReturn;
+        }
+        if sig.is_home_country && sig.rep_diff().abs() < 0.10 {
+            return TransferInterestKind::Homecoming;
+        }
+        if sig.is_rival {
+            return TransferInterestKind::RivalMove;
+        }
+        if sig.rep_diff() >= 0.20 {
+            return TransferInterestKind::StepUp;
+        }
+        if sig.league_rep_diff() >= 2000 && sig.rep_diff() >= 0.05 {
+            return TransferInterestKind::BigLeagueOpportunity;
+        }
+        if sig.rep_diff() <= -0.15 {
+            // Smaller club: only meaningful as an escape route for a
+            // player who isn't getting minutes today.
+            if self.fringe_at_current_club() {
+                return TransferInterestKind::EscapeRoute;
+            }
+            return TransferInterestKind::StepDownWithMinutes;
+        }
+        if sig.rep_diff().abs() < 0.10 {
+            return TransferInterestKind::LateralMove;
+        }
+        TransferInterestKind::Speculative
+    }
+
+    fn fringe_at_current_club(&self) -> bool {
+        use crate::PlayerSquadStatus as S;
+        match self.contract.as_ref().map(|c| c.squad_status.clone()) {
+            Some(S::MainBackupPlayer)
+            | Some(S::FirstTeamSquadRotation)
+            | Some(S::DecentYoungster)
+            | Some(S::NotNeeded) => true,
+            _ => false,
+        }
+    }
+
+    fn signal_should_surface(
+        &self,
+        sig: &TransferInterestSignal,
+        kind: TransferInterestKind,
+    ) -> bool {
+        match sig.stage {
+            TransferInterestStage::ScoutWatched => {
+                // Scouts at matches are everyday — surface only for
+                // repeated attention, when the rep gap is meaningful, or
+                // for the player's home-country / favourite / former /
+                // rival club (emotional weight).
+                if sig.repeated_attention || sig.rep_diff() >= 0.15 {
+                    return true;
+                }
+                matches!(
+                    kind,
+                    TransferInterestKind::FavoriteClubInterest
+                        | TransferInterestKind::FormerClubReturn
+                        | TransferInterestKind::Homecoming
+                        | TransferInterestKind::RivalMove
+                )
+            }
+            TransferInterestStage::Shortlisted => {
+                // Shortlisting is invisible unless it's leaked / agent
+                // amplifies it, or a big-club gap exists.
+                sig.repeated_attention || sig.rep_diff() >= 0.10
+            }
+            TransferInterestStage::AgentSoundingOut => true,
+            TransferInterestStage::LooseRumour => sig.rep_diff() >= 0.05 || sig.is_rival,
+            TransferInterestStage::ConcreteInterest
+            | TransferInterestStage::BidExpected
+            | TransferInterestStage::BidSubmitted
+            | TransferInterestStage::BidRejected
+            | TransferInterestStage::NegotiationsOpened
+            | TransferInterestStage::NegotiationsStalled
+            | TransferInterestStage::MoveCollapsed
+            | TransferInterestStage::InterestCooled => true,
+        }
+    }
+
+    fn event_for_signal(
+        &self,
+        sig: &TransferInterestSignal,
+        kind: TransferInterestKind,
+    ) -> (HappinessEventType, f32, u16) {
+        let cfg = HappinessConfig::default();
+        let cat = &cfg.catalog;
+        match (sig.stage, kind) {
+            (TransferInterestStage::ScoutWatched, _) => {
+                (HappinessEventType::ScoutedByClub, cat.scouted_by_club, 45)
+            }
+            (TransferInterestStage::Shortlisted, _) => {
+                (HappinessEventType::TransferRumour, cat.transfer_rumour, 30)
+            }
+            (TransferInterestStage::AgentSoundingOut, _) => (
+                HappinessEventType::AgentStirsInterest,
+                cat.agent_stirs_interest,
+                45,
+            ),
+            (TransferInterestStage::LooseRumour, _) => {
+                (HappinessEventType::TransferRumour, cat.transfer_rumour, 30)
+            }
+            (
+                TransferInterestStage::ConcreteInterest
+                | TransferInterestStage::BidExpected
+                | TransferInterestStage::BidSubmitted,
+                kind,
+            ) => match kind {
+                TransferInterestKind::FavoriteClubInterest => (
+                    HappinessEventType::FavoriteClubInterest,
+                    cat.favorite_club_interest,
+                    14,
+                ),
+                TransferInterestKind::FormerClubReturn => (
+                    HappinessEventType::FormerClubInterest,
+                    cat.former_club_interest,
+                    14,
+                ),
+                TransferInterestKind::Homecoming => (
+                    HappinessEventType::HomecomingRumour,
+                    cat.homecoming_rumour,
+                    14,
+                ),
+                TransferInterestKind::RivalMove => (
+                    HappinessEventType::InterestFromRival,
+                    cat.interest_from_rival,
+                    14,
+                ),
+                TransferInterestKind::StepUp
+                | TransferInterestKind::BigLeagueOpportunity => (
+                    HappinessEventType::InterestFromBiggerClub,
+                    cat.interest_from_bigger_club,
+                    14,
+                ),
+                _ => (
+                    HappinessEventType::WantedByBiggerClub,
+                    cat.wanted_by_bigger_club,
+                    14,
+                ),
+            },
+            (TransferInterestStage::NegotiationsOpened, _) => (
+                HappinessEventType::TransferTalksExpected,
+                cat.transfer_talks_expected,
+                14,
+            ),
+            (TransferInterestStage::NegotiationsStalled, _)
+            | (TransferInterestStage::InterestCooled, _) => {
+                (HappinessEventType::InterestCooled, cat.interest_cooled, 30)
+            }
+            (TransferInterestStage::BidRejected, _) => (
+                HappinessEventType::TransferBidRejected,
+                cat.transfer_bid_rejected,
+                21,
+            ),
+            (TransferInterestStage::MoveCollapsed, _) => (
+                HappinessEventType::DreamMoveCollapsed,
+                cat.dream_move_collapsed,
+                30,
+            ),
+        }
+    }
+
+    fn reaction_for_signal(
+        &self,
+        sig: &TransferInterestSignal,
+        kind: TransferInterestKind,
+        base_mag: f32,
+    ) -> (
+        TransferInterestReaction,
+        Option<TransferSportingFit>,
+        f32,
+    ) {
+        let ambition = self.attributes.ambition;
+        let loyalty = self.attributes.loyalty;
+        let professionalism = self.attributes.professionalism;
+        let controversy = self.attributes.controversy;
+        let fringe = self.fringe_at_current_club();
+        let listed_or_unhappy = self.statuses.get().contains(&PlayerStatusType::Lst)
+            || self.statuses.get().contains(&PlayerStatusType::Req)
+            || self.statuses.get().contains(&PlayerStatusType::Unh)
+            || self.statuses.get().contains(&PlayerStatusType::Trn);
+
+        let (reaction, fit) = match kind {
+            TransferInterestKind::StepUp | TransferInterestKind::BigLeagueOpportunity => {
+                if ambition >= 14.0 {
+                    (
+                        TransferInterestReaction::Excited,
+                        Some(TransferSportingFit::ClearUpgrade),
+                    )
+                } else if loyalty >= 14.0 {
+                    (
+                        TransferInterestReaction::PubliclyCalmPrivatelyInterested,
+                        Some(TransferSportingFit::ClearUpgrade),
+                    )
+                } else if fringe {
+                    (
+                        TransferInterestReaction::WantsTalks,
+                        Some(TransferSportingFit::BiggerClubButHarderMinutes),
+                    )
+                } else {
+                    (
+                        TransferInterestReaction::Flattered,
+                        Some(TransferSportingFit::ClearUpgrade),
+                    )
+                }
+            }
+            TransferInterestKind::FavoriteClubInterest => (
+                TransferInterestReaction::Excited,
+                Some(TransferSportingFit::EmotionalFit),
+            ),
+            TransferInterestKind::FormerClubReturn => {
+                if loyalty >= 13.0 {
+                    (
+                        TransferInterestReaction::Cautious,
+                        Some(TransferSportingFit::EmotionalFit),
+                    )
+                } else {
+                    (
+                        TransferInterestReaction::Flattered,
+                        Some(TransferSportingFit::EmotionalFit),
+                    )
+                }
+            }
+            TransferInterestKind::Homecoming => (
+                TransferInterestReaction::Excited,
+                Some(TransferSportingFit::EmotionalFit),
+            ),
+            TransferInterestKind::RivalMove => {
+                if loyalty >= 13.0 {
+                    (
+                        TransferInterestReaction::LoyalToCurrentClub,
+                        Some(TransferSportingFit::TacticalFit),
+                    )
+                } else if professionalism >= 14.0 {
+                    (
+                        TransferInterestReaction::PubliclyCalmPrivatelyInterested,
+                        Some(TransferSportingFit::TacticalFit),
+                    )
+                } else {
+                    (
+                        TransferInterestReaction::AnnoyedBySpeculation,
+                        Some(TransferSportingFit::TacticalFit),
+                    )
+                }
+            }
+            TransferInterestKind::EscapeRoute => (
+                TransferInterestReaction::WantsTalks,
+                Some(TransferSportingFit::BetterPlayingTime),
+            ),
+            TransferInterestKind::StepDownWithMinutes => {
+                if fringe {
+                    (
+                        TransferInterestReaction::WantsTalks,
+                        Some(TransferSportingFit::BetterPlayingTime),
+                    )
+                } else {
+                    (
+                        TransferInterestReaction::Cautious,
+                        Some(TransferSportingFit::PoorRoleFit),
+                    )
+                }
+            }
+            TransferInterestKind::LateralMove => (
+                if professionalism >= 14.0 {
+                    TransferInterestReaction::Focused
+                } else {
+                    TransferInterestReaction::Distracted
+                },
+                None,
+            ),
+            TransferInterestKind::LoanDevelopment => (
+                TransferInterestReaction::Cautious,
+                Some(TransferSportingFit::BetterPlayingTime),
+            ),
+            TransferInterestKind::Speculative => (
+                if controversy >= 14.0 {
+                    TransferInterestReaction::AnnoyedBySpeculation
+                } else if professionalism >= 14.0 {
+                    TransferInterestReaction::Focused
+                } else {
+                    TransferInterestReaction::Distracted
+                },
+                None,
+            ),
+        };
+
+        // Magnitude — base scaled by personality + listed/unhappy + stage.
+        let amb_mul = scaling::ambition_amplifier(ambition);
+        let loy_mul = scaling::loyalty_amplifier(loyalty);
+        let prof_dampen = scaling::criticism_dampener(professionalism);
+
+        let stage_factor = match sig.stage {
+            TransferInterestStage::ScoutWatched => 0.7,
+            TransferInterestStage::Shortlisted | TransferInterestStage::LooseRumour => 0.85,
+            TransferInterestStage::AgentSoundingOut => 1.0,
+            TransferInterestStage::ConcreteInterest => 1.0,
+            TransferInterestStage::BidExpected | TransferInterestStage::BidSubmitted => 1.15,
+            TransferInterestStage::BidRejected => 1.0,
+            TransferInterestStage::NegotiationsOpened => 1.0,
+            TransferInterestStage::NegotiationsStalled => 0.8,
+            TransferInterestStage::MoveCollapsed => 1.0,
+            TransferInterestStage::InterestCooled => 0.8,
+        };
+
+        let mut mag = base_mag * stage_factor;
+        // Polarity of the catalog entry already encodes positive/negative.
+        if mag > 0.0 {
+            mag *= amb_mul;
+            // Loyal players experience positive interest as more
+            // measured — dampen a bit.
+            if loyalty >= 14.0 {
+                mag *= 0.65;
+            }
+        } else if mag < 0.0 {
+            // Negative effects (rival, cooled) dampened by professionalism.
+            mag *= prof_dampen;
+        }
+        // Listed/unhappy player: positive interest feels like an escape
+        // route — amplified.
+        if listed_or_unhappy && mag > 0.0 {
+            mag *= 1.2;
+        }
+        // Repeated speculation: pressure-load drag on settled players.
+        if sig.repeated_attention && mag.abs() < 0.5 {
+            mag = mag.min(-0.5);
+        }
+        let _ = loy_mul; // reserved for future fan-pressure ramp
+        (reaction, fit, mag)
+    }
+
+    fn evidence_for_signal(
+        &self,
+        sig: &TransferInterestSignal,
+        kind: TransferInterestKind,
+    ) -> Vec<TransferInterestEvidence> {
+        let mut out: Vec<TransferInterestEvidence> = Vec::new();
+        if sig.rep_diff() >= 0.15 {
+            out.push(TransferInterestEvidence::BiggerClub);
+        }
+        if sig.league_rep_diff() >= 1500 {
+            out.push(TransferInterestEvidence::BiggerLeague);
+        }
+        if sig.is_rival {
+            out.push(TransferInterestEvidence::RivalClub);
+        }
+        if sig.is_former_club {
+            out.push(TransferInterestEvidence::FormerClub);
+        }
+        if self.favorite_clubs.contains(&sig.interested_club_id) {
+            out.push(TransferInterestEvidence::FavoriteClub);
+        }
+        if sig.is_home_country {
+            out.push(TransferInterestEvidence::HomeCountry);
+        }
+        if sig.repeated_attention {
+            out.push(TransferInterestEvidence::RepeatedRumours);
+        }
+        if matches!(sig.source, TransferInterestSource::ScoutAttendance) {
+            out.push(TransferInterestEvidence::ScoutAtMatch);
+        }
+        if matches!(sig.source, TransferInterestSource::AgentLeak) {
+            out.push(TransferInterestEvidence::AgentPushing);
+        }
+        if matches!(
+            sig.source,
+            TransferInterestSource::LocalPress | TransferInterestSource::NationalPress
+        ) {
+            out.push(TransferInterestEvidence::MediaNoise);
+        }
+        if matches!(sig.source, TransferInterestSource::FanSpeculation) {
+            out.push(TransferInterestEvidence::FanPressure);
+        }
+        if matches!(sig.stage, TransferInterestStage::BidRejected) {
+            out.push(TransferInterestEvidence::RejectedBid);
+        }
+        if self.attributes.ambition >= 15.0 {
+            out.push(TransferInterestEvidence::HighAmbition);
+        } else if self.attributes.ambition <= 7.0 {
+            out.push(TransferInterestEvidence::LowAmbition);
+        }
+        if self.attributes.loyalty >= 15.0 {
+            out.push(TransferInterestEvidence::HighLoyalty);
+        } else if self.attributes.loyalty <= 7.0 {
+            out.push(TransferInterestEvidence::LowLoyalty);
+        }
+        if self.attributes.professionalism >= 16.0 {
+            out.push(TransferInterestEvidence::HighProfessionalism);
+        }
+        if self.attributes.controversy >= 15.0 {
+            out.push(TransferInterestEvidence::HighControversy);
+        }
+        if self.fringe_at_current_club()
+            && matches!(
+                kind,
+                TransferInterestKind::EscapeRoute
+                    | TransferInterestKind::StepDownWithMinutes
+                    | TransferInterestKind::StepUp
+            )
+        {
+            out.push(TransferInterestEvidence::CurrentPlayingTimeFrustration);
+            out.push(TransferInterestEvidence::MoreLikelyStarts);
+        }
+        // Contract context — within 12 months of expiry?
+        if let Some(c) = self.contract.as_ref() {
+            let expiry = c.expiration;
+            // Rough guard: if expiry is close (≤365 days) flag it.
+            // We don't have a date here, so the caller can supply via a
+            // future sig field; for now we flag when an active loan or
+            // listed/unhappy state hints contract pressure.
+            let _ = expiry;
+        }
+        if self.statuses.get().contains(&PlayerStatusType::Unh)
+            || self.statuses.get().contains(&PlayerStatusType::Req)
+        {
+            out.push(TransferInterestEvidence::CurrentClubAmbitionMismatch);
+        }
+        out
+    }
+
+    fn follow_up_for_signal(
+        &self,
+        sig: &TransferInterestSignal,
+        kind: TransferInterestKind,
+        reaction: TransferInterestReaction,
+    ) -> Option<HappinessEventFollowUp> {
+        match (sig.stage, kind, reaction) {
+            (TransferInterestStage::BidRejected, _, _) => {
+                Some(HappinessEventFollowUp::ContractRequestRisk)
+            }
+            (TransferInterestStage::MoveCollapsed, _, _) => {
+                Some(HappinessEventFollowUp::ManagerInterventionRisk)
+            }
+            (TransferInterestStage::InterestCooled, _, _) => {
+                Some(HappinessEventFollowUp::LikelyToSettle)
+            }
+            (_, _, TransferInterestReaction::WantsTalks) => {
+                Some(HappinessEventFollowUp::ContractRequestRisk)
+            }
+            (_, _, TransferInterestReaction::Excited)
+            | (_, _, TransferInterestReaction::Distracted) => {
+                Some(HappinessEventFollowUp::PressureBuilding)
+            }
+            (_, _, TransferInterestReaction::LoyalToCurrentClub) => {
+                Some(HappinessEventFollowUp::LikelyToSettle)
+            }
+            _ => None,
+        }
+    }
+
+    /// Player publicly dismissed the speculation. Small positive PR /
+    /// dressing-room note. Cooldown so the same player doesn't get a
+    /// dismissal headline every week of the same rumour cycle.
+    pub fn on_transfer_interest_dismissed(&mut self, interested_club_id: u32) {
+        let cfg = HappinessConfig::default();
+        let mag = cfg.catalog.transfer_interest_dismissed;
+        let tic = TransferInterestContext::new(
+            TransferInterestStage::InterestCooled,
+            TransferInterestSource::NationalPress,
+            TransferInterestKind::Speculative,
+            TransferInterestReaction::LoyalToCurrentClub,
+        )
+        .with_interested_club(interested_club_id);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Media,
+        )
+        .with_transfer_interest_context(tic)
+        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::TransferInterestDismissed,
+            mag,
+            None,
+            ctx,
+            21,
+        );
+    }
+
+    /// Player used external interest as leverage during a contract talk.
+    /// Sets `pending_signing`-style follow-up risk via FollowUp tag.
+    pub fn on_used_interest_for_contract_leverage(&mut self, interested_club_id: u32) {
+        let cfg = HappinessConfig::default();
+        let mag = cfg.catalog.used_interest_for_contract_leverage;
+        let tic = TransferInterestContext::new(
+            TransferInterestStage::ConcreteInterest,
+            TransferInterestSource::ContractTalk,
+            TransferInterestKind::Speculative,
+            TransferInterestReaction::UsesInterestForContractLeverage,
+        )
+        .with_interested_club(interested_club_id)
+        .with_evidence(TransferInterestEvidence::AgentPushing);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Boardroom,
+        )
+        .with_transfer_interest_context(tic)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::UsedInterestForContractLeverage,
+            mag,
+            None,
+            ctx,
+            45,
+        );
+    }
+
+    /// Count visible transfer-interest events emitted in the last `days`
+    /// days. Used by the weekly tick to apply background distraction
+    /// pressure for players whose situation hasn't been resolved.
+    pub fn count_recent_transfer_interest_events(&self, days: u16) -> u8 {
+        let mut n: u8 = 0;
+        for e in &self.happiness.recent_events {
+            if e.days_ago > days {
+                continue;
+            }
+            let is_interest = matches!(
+                e.event_type,
+                HappinessEventType::ScoutedByClub
+                    | HappinessEventType::TransferRumour
+                    | HappinessEventType::AgentStirsInterest
+                    | HappinessEventType::InterestFromBiggerClub
+                    | HappinessEventType::InterestFromRival
+                    | HappinessEventType::HomecomingRumour
+                    | HappinessEventType::FormerClubInterest
+                    | HappinessEventType::FavoriteClubInterest
+                    | HappinessEventType::TransferTalksExpected
+                    | HappinessEventType::WantedByBiggerClub
+            );
+            if is_interest {
+                n = n.saturating_add(1);
+            }
+        }
+        n
+    }
+
+    /// Weekly background drag from unresolved interest. The pipeline
+    /// passes in a count of recent visible interest events; this method
+    /// emits a `TransferSpeculationDistracts` event when the count plus
+    /// personality justify it.
+    pub fn on_unresolved_speculation_pressure(&mut self, recent_visible_events: u8) {
+        if recent_visible_events < 2 {
+            return;
+        }
+        let prof = self.attributes.professionalism;
+        if prof >= 16.0 {
+            return;
+        }
+        let cfg = HappinessConfig::default();
+        let base = cfg.catalog.transfer_speculation_distracts;
+        let mut mag = base;
+        if recent_visible_events >= 4 {
+            mag *= 1.5;
+        }
+        if self.attributes.controversy >= 14.0 {
+            mag *= 1.25;
+        }
+        let tic = TransferInterestContext::new(
+            TransferInterestStage::LooseRumour,
+            TransferInterestSource::NationalPress,
+            TransferInterestKind::Speculative,
+            TransferInterestReaction::Distracted,
+        )
+        .with_evidence(TransferInterestEvidence::RepeatedRumours)
+        .with_evidence(TransferInterestEvidence::MediaNoise);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::MediaPressure,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Media,
+        )
+        .with_transfer_interest_context(tic)
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::TransferSpeculationDistracts,
+            mag,
+            None,
+            ctx,
+            21,
         );
     }
 

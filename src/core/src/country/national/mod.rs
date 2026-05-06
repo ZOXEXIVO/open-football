@@ -374,6 +374,7 @@ impl NationalTeam {
             vice_captain_id: None,
             penalty_taker_id: None,
             free_kick_taker_id: None,
+            selection_omissions: Vec::new(),
         }
     }
 
@@ -467,6 +468,7 @@ impl NationalTeam {
             vice_captain_id: None,
             penalty_taker_id: None,
             free_kick_taker_id: None,
+            selection_omissions: Vec::new(),
         }
     }
 }

@@ -5,7 +5,11 @@
 use super::TeamBehaviour;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
-use crate::{HappinessEventType, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus};
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
+    HappinessEventScope, HappinessEventSeverity, HappinessEventType, PlayerCollection,
+    PlayerFieldPositionGroup, PlayerSquadStatus,
+};
 use chrono::Datelike;
 use std::collections::HashMap;
 
@@ -97,9 +101,18 @@ impl TeamBehaviour {
                 // 14-day jealousy window from the same signer.
                 let gap = (1.0 - ratio).clamp(0.25, 0.9);
                 let magnitude = -((gap - 0.25) * 6.0 + 1.5).min(5.0);
-                player.happiness.add_event_with_cooldown(
+                let context = HappinessEventContext::new(
+                    HappinessEventCause::WageJealousy,
+                    HappinessEventSeverity::from_magnitude(magnitude),
+                    HappinessEventScope::DressingRoom,
+                )
+                .with_evidence(HappinessEventEvidence::WageGap)
+                .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+                player.happiness.add_event_with_context_and_cooldown(
                     HappinessEventType::SalaryGapNoticed,
                     magnitude,
+                    None,
+                    context,
                     freshness_days as u16,
                 );
             }
@@ -234,25 +247,78 @@ impl TeamBehaviour {
             // Fire the incident event on the offender.
             if let Some(offender) = players.players.iter_mut().find(|p| p.id == offender_id) {
                 let magnitude = -(3.0 + ((controversy - 12.0) * 0.3).clamp(0.0, 4.0));
-                offender
-                    .happiness
-                    .add_event(HappinessEventType::ControversyIncident, magnitude);
+                let bust_up_eligible =
+                    controversy >= 15.0 && offender.attributes.temperament <= 8.0;
+                // Hot-tempered offenders → training-ground scope; calmer
+                // controversies still surface as media noise.
+                let scope = if bust_up_eligible {
+                    HappinessEventScope::TrainingGround
+                } else {
+                    HappinessEventScope::Media
+                };
+                let cause = if bust_up_eligible {
+                    HappinessEventCause::PersonalityClash
+                } else {
+                    HappinessEventCause::MediaPressure
+                };
+
+                // Personality-shaped evidence — the user reads "high
+                // controversy + low temperament" as the why, not the
+                // catch-all "controversy incident".
+                let mut offender_evidence: Vec<HappinessEventEvidence> = Vec::new();
+                if controversy >= 12.0 {
+                    offender_evidence.push(HappinessEventEvidence::HighControversy);
+                }
+                if offender.attributes.temperament <= 8.0 {
+                    offender_evidence.push(HappinessEventEvidence::LowTemperament);
+                }
+                if offender.attributes.sportsmanship <= 8.0 {
+                    offender_evidence.push(HappinessEventEvidence::LowSportsmanship);
+                }
+                offender_evidence.push(if bust_up_eligible {
+                    HappinessEventEvidence::TrainingGroundIncident
+                } else {
+                    HappinessEventEvidence::MediaIncident
+                });
+
+                let incident_ctx = HappinessEventContext::new(
+                    cause,
+                    HappinessEventSeverity::from_magnitude(magnitude),
+                    scope,
+                )
+                .with_evidence_iter(offender_evidence.iter().copied())
+                .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk);
+                offender.happiness.add_event_with_context(
+                    HappinessEventType::ControversyIncident,
+                    magnitude,
+                    None,
+                    incident_ctx,
+                );
 
                 // Bigger incidents (training-ground bust-ups) — only the
                 // hottest combinations trigger them, never every routine
                 // controversy. Cooldown 60d so a recurring offender's
                 // history is layered, not flooded.
-                let bust_up_eligible =
-                    controversy >= 15.0 && offender.attributes.temperament <= 8.0;
                 if bust_up_eligible {
                     let prof_dampen = crate::club::player::events::scaling::criticism_dampener(
                         offender.attributes.professionalism,
                     );
                     let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
                     let mag = cfg.catalog.training_ground_bust_up * prof_dampen;
-                    offender.happiness.add_event_with_cooldown(
+                    let bust_up_ctx = HappinessEventContext::new(
+                        HappinessEventCause::PersonalityClash,
+                        HappinessEventSeverity::from_magnitude(mag),
+                        HappinessEventScope::TrainingGround,
+                    )
+                    .with_evidence(HappinessEventEvidence::TrainingGroundIncident)
+                    .with_evidence(HappinessEventEvidence::HighControversy)
+                    .with_evidence(HappinessEventEvidence::LowTemperament)
+                    .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+                    offender.happiness.add_event_with_context_and_cooldown(
                         HappinessEventType::TrainingGroundBustUp,
                         mag,
+                        None,
+                        bust_up_ctx,
                         60,
                     );
                 }
@@ -265,17 +331,50 @@ impl TeamBehaviour {
                         .add_event_default_with_cooldown(HappinessEventType::PublicApology, 90);
                 }
             }
-            // And a smaller ripple on the teammate (if one was found).
-            // ConflictWithTeammate must carry the partner id — the events
-            // UI filters out partner-required events that can't name the
-            // teammate (otherwise "Argued with a teammate" reads as ghost
-            // text). The partner here is the offender, not the victim.
+            // Ripple on the teammate (if one was found). The victim was
+            // picked precisely because friendship was low — surface that
+            // as evidence so the UI explains why this teammate, not the
+            // generic "argued with a teammate".
             if let Some(vid) = victim_id {
                 if let Some(victim) = players.players.iter_mut().find(|p| p.id == vid) {
-                    victim.happiness.add_event_with_partner(
+                    let snapshot = victim
+                        .relations
+                        .get_player(offender_id)
+                        .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
+                    let mut victim_evidence: Vec<HappinessEventEvidence> =
+                        vec![HappinessEventEvidence::DressingRoomRow];
+                    if let Some((level, trust, friendship, prof)) = snapshot {
+                        if friendship <= 35.0 {
+                            victim_evidence.push(HappinessEventEvidence::LowFriendship);
+                        }
+                        if trust <= 35.0 {
+                            victim_evidence.push(HappinessEventEvidence::LowTrust);
+                        }
+                        if prof <= 35.0 {
+                            victim_evidence.push(HappinessEventEvidence::LowProfessionalRespect);
+                        }
+                        if level <= -25.0 {
+                            victim_evidence
+                                .push(HappinessEventEvidence::AlreadyStrainedRelationship);
+                        }
+                    }
+                    let mut conflict_ctx = HappinessEventContext::new(
+                        HappinessEventCause::PersonalityClash,
+                        HappinessEventSeverity::from_magnitude(-2.0),
+                        HappinessEventScope::DressingRoom,
+                    )
+                    .with_evidence_iter(victim_evidence.iter().copied())
+                    .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk);
+                    if let Some((level, trust, friendship, prof)) = snapshot {
+                        conflict_ctx = conflict_ctx
+                            .with_relationship_levels(level, level)
+                            .with_relationship_axes(trust, friendship, prof);
+                    }
+                    victim.happiness.add_event_with_context(
                         HappinessEventType::ConflictWithTeammate,
                         -2.0,
                         Some(offender_id),
+                        conflict_ctx,
                     );
                 }
             }
@@ -371,9 +470,18 @@ impl TeamBehaviour {
             // same player while last month's wage-envy event is still
             // visible in the history.
             let magnitude = -(((0.6 - ratio) * 10.0) + 1.5).min(5.0);
-            player.happiness.add_event_with_cooldown(
+            let context = HappinessEventContext::new(
+                HappinessEventCause::WageJealousy,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::DressingRoom,
+            )
+            .with_evidence(HappinessEventEvidence::WageGap)
+            .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+            player.happiness.add_event_with_context_and_cooldown(
                 HappinessEventType::SalaryGapNoticed,
                 magnitude,
+                None,
+                context,
                 28,
             );
         }

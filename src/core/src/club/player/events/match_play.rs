@@ -11,7 +11,12 @@ use super::scaling;
 use super::types::{MatchOutcome, MatchParticipation};
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
-use crate::{HappinessEventType, PlayerStatistics};
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
+    HappinessEventScope, HappinessEventSeverity, HappinessEventType, MatchSelectionContext,
+    PlayerSquadStatus, PlayerStatistics, SelectionDecisionScope, SelectionOmissionReason,
+    SupportEventContext, SupportSetting, SupportSource, SupportTrigger,
+};
 
 impl Player {
     /// React to finishing a match: stats bookkeeping, morale events,
@@ -25,12 +30,53 @@ impl Player {
     }
 
     /// Named to a squad but never got off the bench. Small morale hit.
+    /// Legacy entry point: emits a generic MatchDropped event with no
+    /// structured selection explanation. Prefer
+    /// [`Self::on_match_dropped_with_context`] when the squad selector
+    /// has produced a `MatchSelectionContext` for this player so the UI
+    /// can describe who was preferred and why.
     pub fn on_match_dropped(&mut self) {
         self.happiness
             .add_event_default(HappinessEventType::MatchDropped);
 
         // Bench-only appearance: feeds the rolling starter ratio with a 0.0
         // sample so chronic dropping eventually flips the role state.
+        const ALPHA: f32 = 0.25;
+        self.happiness.starter_ratio = self.happiness.starter_ratio * (1.0 - ALPHA);
+        self.happiness.appearances_tracked = self.happiness.appearances_tracked.saturating_add(1);
+        self.evaluate_role_transition();
+    }
+
+    /// Same as [`Self::on_match_dropped`] but carries the structured
+    /// selection-explanation payload built by the squad selector. The
+    /// stored event therefore knows the scope (left out / dropped to
+    /// bench / unused sub), the dominant football reason, and the
+    /// chosen replacement — the player-events renderer turns that into
+    /// the "Lost out to Marco Silva because he was sharper" line.
+    ///
+    /// The starter-ratio bookkeeping is identical to the legacy method
+    /// for `UnusedSubstitute` and `DroppedToBench` scopes — both still
+    /// represent a missed chance to start. `LeftOutOfMatchdaySquad`
+    /// also feeds the same EMA: the player wasn't in the matchday squad
+    /// at all, so it's a 0-share appearance just like an unused sub.
+    pub fn on_match_dropped_with_context(&mut self, ctx: MatchSelectionContext) {
+        let magnitude = compute_drop_magnitude(self, &ctx);
+        let severity = HappinessEventSeverity::from_magnitude(magnitude);
+        let cause = drop_cause(&ctx);
+        let follow_up = drop_follow_up(self, &ctx);
+        let mut event_ctx = HappinessEventContext::new(cause, severity, HappinessEventScope::MatchDay);
+        if let Some(fu) = follow_up {
+            event_ctx = event_ctx.with_follow_up(fu);
+        }
+        event_ctx = event_ctx.with_selection_context(ctx);
+
+        self.happiness.add_event_with_context(
+            HappinessEventType::MatchDropped,
+            magnitude,
+            None,
+            event_ctx,
+        );
+
         const ALPHA: f32 = 0.25;
         self.happiness.starter_ratio = self.happiness.starter_ratio * (1.0 - ALPHA);
         self.happiness.appearances_tracked = self.happiness.appearances_tracked.saturating_add(1);
@@ -188,8 +234,14 @@ impl Player {
                     .add_event(HappinessEventType::ManagerCriticism, mag);
             } else if o.effective_rating >= 7.5 {
                 let mag = 1.5 + (o.effective_rating - 7.5).clamp(0.0, 2.5);
-                self.happiness
-                    .add_event(HappinessEventType::ManagerEncouragement, mag);
+                let event_ctx = MatchSupportContextBuilder::manager_encouragement(self, o, mag);
+                self.happiness.add_event_with_context_and_cooldown(
+                    HappinessEventType::ManagerEncouragement,
+                    mag,
+                    None,
+                    event_ctx,
+                    14,
+                );
             }
         }
 
@@ -222,8 +274,15 @@ impl Player {
             let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let scene_mul = if o.is_cup || o.is_derby { 1.2 } else { 1.0 };
             let mag = cfg.catalog.fan_praise * rep_mul * scene_mul;
-            self.happiness
-                .add_event_with_cooldown(HappinessEventType::FanPraise, mag, 21);
+            let event_ctx =
+                MatchSupportContextBuilder::fan_praise(self, o, had_contribution, mag);
+            self.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::FanPraise,
+                mag,
+                None,
+                event_ctx,
+                21,
+            );
         }
 
         // FanCriticism — fans turn on a poor display, especially in
@@ -472,9 +531,13 @@ impl Player {
             o.team_won && (o.effective_rating >= 8.2 || o.stats.goals >= 3 || derby_hero_now);
         if chant_trigger {
             let mag = cfg.catalog.fans_chant_player_name * rep_mul * scene_mul;
-            self.happiness.add_event_with_cooldown(
+            let event_ctx =
+                MatchSupportContextBuilder::fans_chant(self, o, derby_hero_now, mag);
+            self.happiness.add_event_with_context_and_cooldown(
                 HappinessEventType::FansChantPlayerName,
                 mag,
+                None,
+                event_ctx,
                 45,
             );
         }
@@ -560,5 +623,345 @@ fn stats_bucket_mut(player: &mut Player, is_cup: bool, is_friendly: bool) -> &mu
         &mut player.friendly_statistics
     } else {
         &mut player.statistics
+    }
+}
+
+/// Magnitude scaling for `MatchDropped` events with structured
+/// context. The base hurts more for players who *expected* to feature
+/// (KeyPlayer / FirstTeamRegular), softens for protective scopes
+/// (rest, returning from injury, low-importance rotation), and bumps
+/// for repeated omissions. Friendlies always dampen — a missed
+/// pre-season run-out doesn't sting like a league snub.
+fn compute_drop_magnitude(player: &Player, ctx: &MatchSelectionContext) -> f32 {
+    let cfg = HappinessConfig::default();
+    let base = cfg.catalog.magnitude(HappinessEventType::MatchDropped);
+
+    let status = player
+        .contract
+        .as_ref()
+        .map(|c| c.squad_status.clone())
+        .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+    let status_mul = match status {
+        PlayerSquadStatus::KeyPlayer => 2.4,
+        PlayerSquadStatus::FirstTeamRegular => 1.7,
+        PlayerSquadStatus::FirstTeamSquadRotation => 1.0,
+        PlayerSquadStatus::HotProspectForTheFuture => 0.7,
+        PlayerSquadStatus::MainBackupPlayer => 0.6,
+        _ => 0.5,
+    };
+
+    let scope_mul = match ctx.scope {
+        SelectionDecisionScope::LeftOutOfMatchdaySquad => 1.4,
+        SelectionDecisionScope::DroppedToBench => 1.1,
+        SelectionDecisionScope::UnusedSubstitute => 0.7,
+        SelectionDecisionScope::Rested => 0.4,
+        SelectionDecisionScope::Rotation => 0.5,
+        SelectionDecisionScope::UnavailableButNotInjured => 0.8,
+    };
+
+    let reason_mul = match ctx.reason {
+        SelectionOmissionReason::FatigueManagement
+        | SelectionOmissionReason::FitnessProtection
+        | SelectionOmissionReason::ReturningFromInjury => 0.5,
+        SelectionOmissionReason::CupRotation
+        | SelectionOmissionReason::LowMatchImportanceRotation
+        | SelectionOmissionReason::YouthDevelopmentRotation => 0.6,
+        SelectionOmissionReason::TacticalMismatch
+        | SelectionOmissionReason::PositionFitIssue
+        | SelectionOmissionReason::NoNaturalRoleInFormation
+        | SelectionOmissionReason::TeammatePreferredForTacticalBalance => 1.0,
+        SelectionOmissionReason::PoorRecentForm
+        | SelectionOmissionReason::ManagerDoesNotTrustPlayer => 1.3,
+        SelectionOmissionReason::TeammatePreferredOnAbility
+        | SelectionOmissionReason::TeammatePreferredOnForm
+        | SelectionOmissionReason::TeammatePreferredOnFitness
+        | SelectionOmissionReason::TeammatePreferredOnTrust => 1.0,
+        SelectionOmissionReason::SquadStatusMismatch => 1.4,
+        SelectionOmissionReason::DisciplinarySelection => 1.2,
+        SelectionOmissionReason::NewcomerStillIntegrating => 0.7,
+        SelectionOmissionReason::BenchBalance => 0.6,
+        SelectionOmissionReason::LowerMatchReadiness => 0.8,
+    };
+
+    let repeat_mul = if ctx.repeated { 1.4 } else { 1.0 };
+    let friendly_mul = if ctx.is_friendly { 0.3 } else { 1.0 };
+    let importance_mul = (0.5_f32 + ctx.match_importance).clamp(0.5, 1.4);
+
+    base * status_mul * scope_mul * reason_mul * repeat_mul * friendly_mul * importance_mul
+}
+
+fn drop_cause(ctx: &MatchSelectionContext) -> HappinessEventCause {
+    match ctx.reason {
+        SelectionOmissionReason::TacticalMismatch
+        | SelectionOmissionReason::PositionFitIssue
+        | SelectionOmissionReason::NoNaturalRoleInFormation
+        | SelectionOmissionReason::TeammatePreferredForTacticalBalance => {
+            HappinessEventCause::TacticalDisagreement
+        }
+        SelectionOmissionReason::PoorRecentForm => HappinessEventCause::PoorFormPressure,
+        SelectionOmissionReason::TeammatePreferredOnAbility
+        | SelectionOmissionReason::TeammatePreferredOnForm
+        | SelectionOmissionReason::TeammatePreferredOnFitness
+        | SelectionOmissionReason::TeammatePreferredOnTrust => {
+            HappinessEventCause::PositionalRivalry
+        }
+        SelectionOmissionReason::ManagerDoesNotTrustPlayer => HappinessEventCause::LeadershipDispute,
+        SelectionOmissionReason::DisciplinarySelection => HappinessEventCause::PersonalityClash,
+        SelectionOmissionReason::NewcomerStillIntegrating => HappinessEventCause::AdaptationIsolation,
+        _ => HappinessEventCause::Other,
+    }
+}
+
+/// Pick the "what may happen next" hint that fits the scope. Repeated
+/// drops escalate to the dressing-room damage warning; one-off
+/// rotation calls keep the calmer "likely to settle" copy.
+fn drop_follow_up(player: &Player, ctx: &MatchSelectionContext) -> Option<HappinessEventFollowUp> {
+    if ctx.repeated {
+        return Some(HappinessEventFollowUp::DressingRoomDamageRisk);
+    }
+    if matches!(
+        ctx.scope,
+        SelectionDecisionScope::Rested | SelectionDecisionScope::Rotation
+    ) {
+        return Some(HappinessEventFollowUp::LikelyToSettle);
+    }
+    let status = player
+        .contract
+        .as_ref()
+        .map(|c| c.squad_status.clone())
+        .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+    if matches!(
+        status,
+        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+    ) {
+        return Some(HappinessEventFollowUp::ManagerInterventionRisk);
+    }
+    Some(HappinessEventFollowUp::LikelyToSettle)
+}
+
+/// Builder for the structured `HappinessEventContext` payloads that
+/// match-driven support events (`ManagerEncouragement`, `FanPraise`,
+/// `FansChantPlayerName`) attach at emit time. Bundled under a named
+/// type so the per-event constructors share a single namespace and the
+/// call sites in `record_match_events` read as thin orchestration.
+pub struct MatchSupportContextBuilder;
+
+impl MatchSupportContextBuilder {
+    /// Pick the dominant trigger for a manager-encouragement event from
+    /// a post-match outcome. Higher-signal triggers (POM, decisive
+    /// moment) beat lower-signal ones (high rating).
+    fn manager_encouragement_trigger(
+        player: &Player,
+        o: &MatchOutcome<'_>,
+        contributed: bool,
+    ) -> SupportTrigger {
+        if o.is_motm {
+            SupportTrigger::PlayerOfMatch
+        } else if contributed && o.team_won && o.goal_margin() == 1 {
+            SupportTrigger::DecisiveMoment
+        } else if contributed {
+            SupportTrigger::GoalContribution
+        } else if player.happiness.morale < 35.0 {
+            SupportTrigger::PoorMorale
+        } else if o.is_derby {
+            SupportTrigger::Derby
+        } else if o.is_cup {
+            SupportTrigger::CupTie
+        } else {
+            SupportTrigger::HighRating
+        }
+    }
+
+    /// Build the `HappinessEventContext` for a `ManagerEncouragement`
+    /// event fired after a high post-match rating. Captures rating /
+    /// contribution / setting so the renderer can describe what the
+    /// manager liked.
+    pub fn manager_encouragement(
+        player: &Player,
+        o: &MatchOutcome<'_>,
+        magnitude: f32,
+    ) -> HappinessEventContext {
+        let contributed = o.stats.goals > 0 || o.stats.assists > 0;
+        let trigger = Self::manager_encouragement_trigger(player, o, contributed);
+
+        let support = SupportEventContext::new(
+            SupportSource::Manager,
+            SupportSetting::PostMatch,
+            trigger,
+        )
+        .with_match_rating(o.effective_rating)
+        .with_goals(o.stats.goals as u8)
+        .with_assists(o.stats.assists as u8)
+        .with_team_won(o.team_won)
+        .with_derby(o.is_derby)
+        .with_cup(o.is_cup);
+
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::ManagerSupport,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::MatchDay,
+        )
+        .with_support_context(support);
+
+        if o.is_motm {
+            ctx = ctx.with_evidence(HappinessEventEvidence::PlayerOfTheMatch);
+        }
+        if contributed {
+            ctx = ctx.with_evidence(HappinessEventEvidence::GoalContribution);
+        }
+        if o.team_won && contributed && o.goal_margin() == 1 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::DecisiveContribution);
+        }
+        if o.effective_rating >= 7.5 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::ExcellentPerformance);
+        }
+        if o.is_derby {
+            ctx = ctx.with_evidence(HappinessEventEvidence::DerbyPerformance);
+        }
+        if o.is_cup {
+            ctx = ctx.with_evidence(HappinessEventEvidence::CupPerformance);
+        }
+        if player.happiness.morale < 35.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::PoorMoraleBeforeTalk);
+        }
+        if player.attributes.professionalism >= 15.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::HighProfessionalism);
+        }
+        if player.attributes.pressure >= 15.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::HighPressurePersonality);
+        } else if player.attributes.pressure <= 7.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::LowPressurePersonality);
+        }
+
+        ctx.with_follow_up(HappinessEventFollowUp::ManagerTrustRising)
+    }
+
+    /// Build the `HappinessEventContext` for a `FanPraise` event fired
+    /// after a stand-out display. Captures the trigger (POM /
+    /// contribution / high rating) plus scene flags.
+    pub fn fan_praise(
+        _player: &Player,
+        o: &MatchOutcome<'_>,
+        contributed: bool,
+        magnitude: f32,
+    ) -> HappinessEventContext {
+        let trigger = if o.is_motm {
+            SupportTrigger::PlayerOfMatch
+        } else if contributed && o.team_won && o.goal_margin() == 1 {
+            SupportTrigger::DecisiveMoment
+        } else if contributed && o.team_won {
+            SupportTrigger::GoalContribution
+        } else if o.is_derby {
+            SupportTrigger::Derby
+        } else if o.is_cup {
+            SupportTrigger::CupTie
+        } else {
+            SupportTrigger::HighRating
+        };
+
+        // The match-event pipeline does not surface home/away on
+        // `MatchOutcome`; default to `HomeCrowd` for the supporters-of-
+        // the-player-in-question — that's the side the renderer's
+        // headline / reason copy is targeted at.
+        let support = SupportEventContext::new(
+            SupportSource::Supporters,
+            SupportSetting::HomeCrowd,
+            trigger,
+        )
+        .with_match_rating(o.effective_rating)
+        .with_goals(o.stats.goals as u8)
+        .with_assists(o.stats.assists as u8)
+        .with_team_won(o.team_won)
+        .with_derby(o.is_derby)
+        .with_cup(o.is_cup);
+
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::SupporterAppreciation,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::MatchDay,
+        )
+        .with_support_context(support);
+
+        if o.is_motm {
+            ctx = ctx.with_evidence(HappinessEventEvidence::PlayerOfTheMatch);
+        }
+        if contributed {
+            ctx = ctx.with_evidence(HappinessEventEvidence::GoalContribution);
+        }
+        if o.team_won && contributed && o.goal_margin() == 1 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::DecisiveContribution);
+        }
+        if o.effective_rating >= 8.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::ExcellentPerformance);
+        }
+        if o.is_derby {
+            ctx = ctx.with_evidence(HappinessEventEvidence::DerbyPerformance);
+        }
+        if o.is_cup {
+            ctx = ctx.with_evidence(HappinessEventEvidence::CupPerformance);
+        }
+        ctx = ctx.with_evidence(HappinessEventEvidence::HomeCrowdMoment);
+
+        ctx.with_follow_up(HappinessEventFollowUp::FanStandingRising)
+    }
+
+    /// Build the `HappinessEventContext` for a `FansChantPlayerName`
+    /// event. More selective than `FanPraise`: only fires for moments
+    /// that change the match — the renderer should treat it as a
+    /// stronger signal.
+    pub fn fans_chant(
+        _player: &Player,
+        o: &MatchOutcome<'_>,
+        derby_hero_now: bool,
+        magnitude: f32,
+    ) -> HappinessEventContext {
+        let trigger = if o.stats.goals >= 3 {
+            SupportTrigger::DecisiveMoment
+        } else if derby_hero_now && o.is_derby {
+            SupportTrigger::Derby
+        } else if o.is_motm {
+            SupportTrigger::PlayerOfMatch
+        } else if o.is_cup {
+            SupportTrigger::CupTie
+        } else if o.stats.goals > 0 || o.stats.assists > 0 {
+            SupportTrigger::GoalContribution
+        } else {
+            SupportTrigger::DecisiveMoment
+        };
+
+        let support = SupportEventContext::new(
+            SupportSource::Supporters,
+            SupportSetting::HomeCrowd,
+            trigger,
+        )
+        .with_match_rating(o.effective_rating)
+        .with_goals(o.stats.goals as u8)
+        .with_assists(o.stats.assists as u8)
+        .with_team_won(o.team_won)
+        .with_derby(o.is_derby)
+        .with_cup(o.is_cup);
+
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::SupporterIdentification,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::MatchDay,
+        )
+        .with_support_context(support);
+
+        if o.stats.goals >= 3 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::DecisiveContribution);
+        }
+        if derby_hero_now {
+            ctx = ctx.with_evidence(HappinessEventEvidence::DerbyPerformance);
+        }
+        if o.is_motm {
+            ctx = ctx.with_evidence(HappinessEventEvidence::PlayerOfTheMatch);
+        }
+        if o.effective_rating >= 8.2 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::ExcellentPerformance);
+        }
+        ctx = ctx.with_evidence(HappinessEventEvidence::HomeCrowdMoment);
+
+        ctx.with_follow_up(HappinessEventFollowUp::FanStandingRising)
     }
 }

@@ -1,4 +1,5 @@
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::contract::PlayerSquadStatus;
 use chrono::NaiveDate;
 
 #[derive(Debug, Clone)]
@@ -84,6 +85,1630 @@ pub struct HappinessEvent {
     /// player bonded with, who the close friend was, who the mentor was).
     /// `None` for events that don't naturally involve a specific peer.
     pub partner_player_id: Option<u32>,
+    /// Structured cause/evidence/impact payload attached at emit time.
+    /// `None` for legacy events whose emit-site has not been upgraded yet
+    /// (renderer falls back to the i18n string for those).
+    pub context: Option<HappinessEventContext>,
+}
+
+/// Severity tier derived from applied magnitude. Renderers and tests treat
+/// these as ordinal — Minor < Moderate < Serious < Major.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HappinessEventSeverity {
+    Minor,
+    Moderate,
+    Serious,
+    Major,
+}
+
+impl HappinessEventSeverity {
+    /// Stable mapping from magnitude (absolute value) to severity.
+    /// Thresholds are deliberately conservative — most pair events sit
+    /// in [0.5, 3.0] (Minor / Moderate); Serious starts at 4 (training
+    /// bust-up scale); Major is reserved for headline blow-ups (≥6).
+    pub fn from_magnitude(magnitude: f32) -> Self {
+        let m = magnitude.abs();
+        if m >= 6.0 {
+            HappinessEventSeverity::Major
+        } else if m >= 4.0 {
+            HappinessEventSeverity::Serious
+        } else if m >= 2.0 {
+            HappinessEventSeverity::Moderate
+        } else {
+            HappinessEventSeverity::Minor
+        }
+    }
+
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            HappinessEventSeverity::Minor => "severity_minor",
+            HappinessEventSeverity::Moderate => "severity_moderate",
+            HappinessEventSeverity::Serious => "severity_serious",
+            HappinessEventSeverity::Major => "severity_major",
+        }
+    }
+}
+
+/// Cause category — the football-realistic reason behind the event.
+/// Renderer turns this into the "why" sentence; tests assert that emit
+/// sites pick the right category for a given `ChangeType` / situation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HappinessEventCause {
+    PersonalityClash,
+    TrainingFriction,
+    PositionalRivalry,
+    WageJealousy,
+    PoorFormPressure,
+    LeadershipDispute,
+    TacticalDisagreement,
+    AdaptationIsolation,
+    MediaPressure,
+    MentorDeparture,
+    FriendDeparture,
+    MatchCooperation,
+    NationalityIntegration,
+    /// Healthy training-ground partnership — paired bonding off the
+    /// pitch (drills, sessions) rather than a match-day moment.
+    TrainingPartnership,
+    /// Reputation tension: lower-rep player resents an established star
+    /// or the star creates friction by his bearing in the dressing room.
+    ReputationTension,
+    /// Mutual reputation respect — peer-level stars who recognise each
+    /// other professionally.
+    ReputationAdmiration,
+    /// Manager backing — encouragement, praise, public support after a
+    /// performance or in private. Used by `ManagerEncouragement` events.
+    ManagerSupport,
+    /// Supporter appreciation — applause, songs, fan-poll wins directed
+    /// at the player after a contribution. Used by `FanPraise` events.
+    SupporterAppreciation,
+    /// Stadium-wide identification with the player — chants, lasting
+    /// connection beyond a single performance. Used by
+    /// `FansChantPlayerName` events.
+    SupporterIdentification,
+    /// Dressing-room talk lift — manager team-talk that landed for this
+    /// player. Used by `DressingRoomSpeech` events.
+    DressingRoomLift,
+    /// Catch-all for unstructured causes; renderer falls back to the
+    /// generic i18n line. New emit sites should pick a real category.
+    Other,
+}
+
+impl HappinessEventCause {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            HappinessEventCause::PersonalityClash => "cause_personality_clash",
+            HappinessEventCause::TrainingFriction => "cause_training_friction",
+            HappinessEventCause::PositionalRivalry => "cause_positional_rivalry",
+            HappinessEventCause::WageJealousy => "cause_wage_jealousy",
+            HappinessEventCause::PoorFormPressure => "cause_poor_form_pressure",
+            HappinessEventCause::LeadershipDispute => "cause_leadership_dispute",
+            HappinessEventCause::TacticalDisagreement => "cause_tactical_disagreement",
+            HappinessEventCause::AdaptationIsolation => "cause_adaptation_isolation",
+            HappinessEventCause::MediaPressure => "cause_media_pressure",
+            HappinessEventCause::MentorDeparture => "cause_mentor_departure",
+            HappinessEventCause::FriendDeparture => "cause_friend_departure",
+            HappinessEventCause::MatchCooperation => "cause_match_cooperation",
+            HappinessEventCause::NationalityIntegration => "cause_nationality_integration",
+            HappinessEventCause::TrainingPartnership => "cause_training_partnership",
+            HappinessEventCause::ReputationTension => "cause_reputation_tension",
+            HappinessEventCause::ReputationAdmiration => "cause_reputation_admiration",
+            HappinessEventCause::ManagerSupport => "cause_manager_support",
+            HappinessEventCause::SupporterAppreciation => "cause_supporter_appreciation",
+            HappinessEventCause::SupporterIdentification => "cause_supporter_identification",
+            HappinessEventCause::DressingRoomLift => "cause_dressing_room_lift",
+            HappinessEventCause::Other => "cause_other",
+        }
+    }
+}
+
+/// Where the fallout lands — a single dressing-room incident, a wider
+/// squad-mood ripple, or a public-facing media moment. Used to colour
+/// the "what it affected" line in the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HappinessEventScope {
+    Personal,
+    DressingRoom,
+    TrainingGround,
+    MatchDay,
+    Media,
+    Boardroom,
+}
+
+impl HappinessEventScope {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            HappinessEventScope::Personal => "scope_personal",
+            HappinessEventScope::DressingRoom => "scope_dressing_room",
+            HappinessEventScope::TrainingGround => "scope_training_ground",
+            HappinessEventScope::MatchDay => "scope_match_day",
+            HappinessEventScope::Media => "scope_media",
+            HappinessEventScope::Boardroom => "scope_boardroom",
+        }
+    }
+}
+
+/// Structured explanation payload carried alongside a `HappinessEvent`.
+/// Filled in at emit time so the same simulation tick captures both the
+/// magnitude and the football-realistic context — renderers turn this
+/// into the "who / why / how serious / what it affected / what's next"
+/// sentences instead of guessing from the event type alone.
+///
+/// `None` evidence fields mean "the emit site didn't know" — the UI
+/// hides the corresponding sentence rather than fabricating one.
+#[derive(Debug, Clone)]
+pub struct HappinessEventContext {
+    pub cause: HappinessEventCause,
+    pub severity: HappinessEventSeverity,
+    pub scope: HappinessEventScope,
+    /// Relationship level on the partner side BEFORE the relation update
+    /// landed — captured by the emit site so the renderer can describe
+    /// the relationship as it existed when the event fired.
+    pub relationship_level_before: Option<f32>,
+    /// Relationship level AFTER the update — lets the renderer call out
+    /// trend direction without recomputing the delta.
+    pub relationship_level_after: Option<f32>,
+    /// Trust 0..100 at emit time, captured pre-update.
+    pub relationship_trust: Option<f32>,
+    /// Friendship 0..100 at emit time, captured pre-update.
+    pub relationship_friendship: Option<f32>,
+    /// Professional respect 0..100 at emit time, captured pre-update.
+    pub relationship_professional_respect: Option<f32>,
+    /// Render-safe mirror of the `ChangeType` that triggered the event.
+    /// Lets the renderer pick cause-specific reason copy without
+    /// importing the relations crate's type tree.
+    pub change_type: Option<HappinessEventChangeKind>,
+    /// Closed-set evidence list — concrete football reasons attached at
+    /// emit time so the renderer can produce evidence-driven, varied
+    /// explanations instead of one generic sentence per cause.
+    pub evidence: Vec<HappinessEventEvidence>,
+    /// Hint for the "what may happen next" sentence. The catalog is
+    /// closed so renderers can pick stable, translated copy.
+    pub follow_up: Option<HappinessEventFollowUp>,
+    /// Match-selection explanation payload. Populated by the squad
+    /// selector when a player was omitted (left out of XI, dropped to
+    /// bench, or off the matchday squad entirely) so the renderer can
+    /// describe who was preferred and why instead of falling back to a
+    /// generic "Dropped from match squad" line. `None` for non-selection
+    /// events.
+    pub selection_context: Option<MatchSelectionContext>,
+    /// Support / talk / supporter explanation payload. Populated by the
+    /// emit sites for `ManagerEncouragement`, `DressingRoomSpeech`,
+    /// `FanPraise`, and `FansChantPlayerName` so the renderer can
+    /// describe who reacted, where, why, and what may follow. `None` for
+    /// other event types.
+    pub support_context: Option<SupportEventContext>,
+    /// Transfer-interest explanation payload. Populated for events
+    /// covering scout attendance, rumours, agent leaks, concrete
+    /// interest, rejected bids, talks expected, and interest cooling.
+    /// Lets the renderer produce contextual headlines + reasons +
+    /// reactions tied to the interested club, stage, and player
+    /// personality. `None` for non-interest events.
+    pub transfer_interest_context: Option<TransferInterestContext>,
+}
+
+impl HappinessEventContext {
+    pub fn new(
+        cause: HappinessEventCause,
+        severity: HappinessEventSeverity,
+        scope: HappinessEventScope,
+    ) -> Self {
+        Self {
+            cause,
+            severity,
+            scope,
+            relationship_level_before: None,
+            relationship_level_after: None,
+            relationship_trust: None,
+            relationship_friendship: None,
+            relationship_professional_respect: None,
+            change_type: None,
+            evidence: Vec::new(),
+            follow_up: None,
+            selection_context: None,
+            support_context: None,
+            transfer_interest_context: None,
+        }
+    }
+
+    pub fn with_relationship_level(mut self, level: f32) -> Self {
+        self.relationship_level_before = Some(level);
+        self
+    }
+
+    /// Capture both the pre- and post-update relationship level. Use
+    /// this from emit sites that have access to a snapshot taken before
+    /// `Relations::update_with_type` was called.
+    pub fn with_relationship_levels(mut self, before: f32, after: f32) -> Self {
+        self.relationship_level_before = Some(before);
+        self.relationship_level_after = Some(after);
+        self
+    }
+
+    /// Attach the trust / friendship / professional-respect axes from
+    /// the partner relation at emit time. These drive the
+    /// `LowTrust` / `LowFriendship` / `LowProfessionalRespect` evidence
+    /// derivation.
+    pub fn with_relationship_axes(
+        mut self,
+        trust: f32,
+        friendship: f32,
+        professional_respect: f32,
+    ) -> Self {
+        self.relationship_trust = Some(trust);
+        self.relationship_friendship = Some(friendship);
+        self.relationship_professional_respect = Some(professional_respect);
+        self
+    }
+
+    pub fn with_change_kind(mut self, kind: HappinessEventChangeKind) -> Self {
+        self.change_type = Some(kind);
+        self
+    }
+
+    pub fn with_evidence(mut self, evidence: HappinessEventEvidence) -> Self {
+        if !self.evidence.contains(&evidence) {
+            self.evidence.push(evidence);
+        }
+        self
+    }
+
+    pub fn with_evidence_iter<I>(mut self, iter: I) -> Self
+    where
+        I: IntoIterator<Item = HappinessEventEvidence>,
+    {
+        for ev in iter {
+            if !self.evidence.contains(&ev) {
+                self.evidence.push(ev);
+            }
+        }
+        self
+    }
+
+    pub fn with_follow_up(mut self, follow_up: HappinessEventFollowUp) -> Self {
+        self.follow_up = Some(follow_up);
+        self
+    }
+
+    pub fn with_selection_context(mut self, ctx: MatchSelectionContext) -> Self {
+        self.selection_context = Some(ctx);
+        self
+    }
+
+    pub fn with_support_context(mut self, ctx: SupportEventContext) -> Self {
+        self.support_context = Some(ctx);
+        self
+    }
+
+    pub fn with_transfer_interest_context(mut self, ctx: TransferInterestContext) -> Self {
+        self.transfer_interest_context = Some(ctx);
+        self
+    }
+}
+
+/// Where the support / approval came from. Drives the renderer's
+/// "who reacted" line and the headline variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportSource {
+    Manager,
+    /// Reserved for future use — captain / senior pro speech moments.
+    DressingRoomLeader,
+    /// Reaction from the squad as a whole (post-match huddle, training
+    /// ground recognition).
+    Squad,
+    Supporters,
+    Media,
+}
+
+impl SupportSource {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            SupportSource::Manager => "support_source_manager",
+            SupportSource::DressingRoomLeader => "support_source_dressing_room_leader",
+            SupportSource::Squad => "support_source_squad",
+            SupportSource::Supporters => "support_source_supporters",
+            SupportSource::Media => "support_source_media",
+        }
+    }
+}
+
+/// Where the moment played out. Drives setting-aware copy ("private
+/// chat", "in front of the home crowd", "in the dressing room").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportSetting {
+    PrivateTalk,
+    TrainingGround,
+    DressingRoom,
+    Touchline,
+    HomeCrowd,
+    AwayEnd,
+    PostMatch,
+}
+
+impl SupportSetting {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            SupportSetting::PrivateTalk => "support_setting_private",
+            SupportSetting::TrainingGround => "support_setting_training_ground",
+            SupportSetting::DressingRoom => "support_setting_dressing_room",
+            SupportSetting::Touchline => "support_setting_touchline",
+            SupportSetting::HomeCrowd => "support_setting_home_crowd",
+            SupportSetting::AwayEnd => "support_setting_away_end",
+            SupportSetting::PostMatch => "support_setting_post_match",
+        }
+    }
+}
+
+/// Why the reaction happened. Closed enum — adding a new trigger means
+/// adding renderer copy in every locale, so we want the surface to stay
+/// finite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportTrigger {
+    HighRating,
+    PlayerOfMatch,
+    GoalContribution,
+    DecisiveMoment,
+    PoorMorale,
+    PoorFormRecovery,
+    BigMatch,
+    Derby,
+    CupTie,
+    LeadershipMoment,
+    TeamTrailingAtHalfTime,
+    TeamWon,
+    YoungPlayerConfidence,
+    ReturningFromInjury,
+    /// Generic / unknown trigger — renderer falls back to the default
+    /// headline copy.
+    Generic,
+}
+
+impl SupportTrigger {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            SupportTrigger::HighRating => "support_trigger_high_rating",
+            SupportTrigger::PlayerOfMatch => "support_trigger_pom",
+            SupportTrigger::GoalContribution => "support_trigger_goal_contribution",
+            SupportTrigger::DecisiveMoment => "support_trigger_decisive_moment",
+            SupportTrigger::PoorMorale => "support_trigger_poor_morale",
+            SupportTrigger::PoorFormRecovery => "support_trigger_form_recovery",
+            SupportTrigger::BigMatch => "support_trigger_big_match",
+            SupportTrigger::Derby => "support_trigger_derby",
+            SupportTrigger::CupTie => "support_trigger_cup_tie",
+            SupportTrigger::LeadershipMoment => "support_trigger_leadership_moment",
+            SupportTrigger::TeamTrailingAtHalfTime => "support_trigger_trailing_half_time",
+            SupportTrigger::TeamWon => "support_trigger_team_won",
+            SupportTrigger::YoungPlayerConfidence => "support_trigger_young_player_confidence",
+            SupportTrigger::ReturningFromInjury => "support_trigger_returning_from_injury",
+            SupportTrigger::Generic => "support_trigger_generic",
+        }
+    }
+}
+
+/// Render-safe mirror of `team_talks::MatchPhase` — kept here so the
+/// support context can carry the phase without dragging the team-talks
+/// module into the events / renderer crates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportMatchPhase {
+    PreMatch,
+    HalfTime,
+    FullTime,
+    InMatch,
+}
+
+impl SupportMatchPhase {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            SupportMatchPhase::PreMatch => "support_phase_pre_match",
+            SupportMatchPhase::HalfTime => "support_phase_half_time",
+            SupportMatchPhase::FullTime => "support_phase_full_time",
+            SupportMatchPhase::InMatch => "support_phase_in_match",
+        }
+    }
+}
+
+/// Render-safe mirror of `TeamTalkTone` / `InteractionTone`. Kept as a
+/// closed enum so the renderer can pick deterministic copy without
+/// importing the team-talks types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportTone {
+    Praise,
+    Criticise,
+    Encourage,
+    Passionate,
+    Calm,
+    Supportive,
+    Honest,
+    Demanding,
+}
+
+impl SupportTone {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            SupportTone::Praise => "support_tone_praise",
+            SupportTone::Criticise => "support_tone_criticise",
+            SupportTone::Encourage => "support_tone_encourage",
+            SupportTone::Passionate => "support_tone_passionate",
+            SupportTone::Calm => "support_tone_calm",
+            SupportTone::Supportive => "support_tone_supportive",
+            SupportTone::Honest => "support_tone_honest",
+            SupportTone::Demanding => "support_tone_demanding",
+        }
+    }
+}
+
+/// Structured payload for support / approval events
+/// (`ManagerEncouragement`, `DressingRoomSpeech`, `FanPraise`,
+/// `FansChantPlayerName`). The emit site fills in what it knows; the
+/// renderer turns that into a contextual headline + reason + outlook.
+///
+/// Every field is optional except the three classification axes
+/// (`source`, `setting`, `trigger`), so partial information is never a
+/// blocker — the renderer only references the fields it has.
+#[derive(Debug, Clone)]
+pub struct SupportEventContext {
+    pub source: SupportSource,
+    pub setting: SupportSetting,
+    pub trigger: SupportTrigger,
+    /// Staff id of the speaker (manager, coach), if known.
+    pub speaker_staff_id: Option<u32>,
+    /// Player id of the speaker (captain / senior pro), if known.
+    pub source_player_id: Option<u32>,
+    pub match_rating: Option<f32>,
+    pub goals: Option<u8>,
+    pub assists: Option<u8>,
+    pub team_won: Option<bool>,
+    pub is_derby: bool,
+    pub is_cup: bool,
+    pub phase: Option<SupportMatchPhase>,
+    pub tone: Option<SupportTone>,
+}
+
+impl SupportEventContext {
+    pub fn new(source: SupportSource, setting: SupportSetting, trigger: SupportTrigger) -> Self {
+        Self {
+            source,
+            setting,
+            trigger,
+            speaker_staff_id: None,
+            source_player_id: None,
+            match_rating: None,
+            goals: None,
+            assists: None,
+            team_won: None,
+            is_derby: false,
+            is_cup: false,
+            phase: None,
+            tone: None,
+        }
+    }
+
+    pub fn with_speaker_staff_id(mut self, id: u32) -> Self {
+        self.speaker_staff_id = Some(id);
+        self
+    }
+
+    pub fn with_source_player_id(mut self, id: u32) -> Self {
+        self.source_player_id = Some(id);
+        self
+    }
+
+    pub fn with_match_rating(mut self, rating: f32) -> Self {
+        self.match_rating = Some(rating);
+        self
+    }
+
+    pub fn with_goals(mut self, goals: u8) -> Self {
+        self.goals = Some(goals);
+        self
+    }
+
+    pub fn with_assists(mut self, assists: u8) -> Self {
+        self.assists = Some(assists);
+        self
+    }
+
+    pub fn with_team_won(mut self, team_won: bool) -> Self {
+        self.team_won = Some(team_won);
+        self
+    }
+
+    pub fn with_derby(mut self, is_derby: bool) -> Self {
+        self.is_derby = is_derby;
+        self
+    }
+
+    pub fn with_cup(mut self, is_cup: bool) -> Self {
+        self.is_cup = is_cup;
+        self
+    }
+
+    pub fn with_phase(mut self, phase: SupportMatchPhase) -> Self {
+        self.phase = Some(phase);
+        self
+    }
+
+    pub fn with_tone(mut self, tone: SupportTone) -> Self {
+        self.tone = Some(tone);
+        self
+    }
+}
+
+/// Why a player ended up off the team-sheet for a match. Passed in by
+/// the squad selector at emit time so the player-events renderer can
+/// describe the decision in football-realistic terms ("rested after
+/// heavy minutes", "lost out to a fitter teammate", "no natural role
+/// in the current shape") instead of a generic drop line.
+///
+/// Closed enum, mirrored by the renderer's i18n token list. Adding a
+/// new variant means adding a copy line in every locale and a renderer
+/// branch — fail loud at compile time rather than show the raw key.
+#[derive(Debug, Clone)]
+pub struct MatchSelectionContext {
+    /// Where in the matchday selection ladder the player ended up —
+    /// dropped from XI to bench, left off the matchday squad entirely,
+    /// or named to the bench but never came on.
+    pub scope: SelectionDecisionScope,
+    /// Football-realistic reason the manager picked the chosen player
+    /// over this one.
+    pub reason: SelectionOmissionReason,
+    /// Concrete comparison to the player who took the slot. `None`
+    /// when no direct counterpart exists (e.g. left out of squad with
+    /// no positional rival).
+    pub comparison: Option<SelectionComparison>,
+    /// Player's expected role given his squad status / promises. Drives
+    /// severity and copy variants — a `KeyPlayer` left out reads
+    /// differently from a fringe `MainBackupPlayer`.
+    pub role: SelectionRole,
+    /// Match importance the selection was made under (0.0–1.0). Lets
+    /// the renderer tag low-importance cup nights as "rotation" and
+    /// soften the impact line.
+    pub match_importance: f32,
+    /// True when the omission has happened in consecutive matches.
+    /// Drives the "if repeated" outlook and the severity bump.
+    pub repeated: bool,
+    /// True for friendlies / development matches. Renderer dampens the
+    /// outlook ("a friendly snub is rarely held against the manager").
+    pub is_friendly: bool,
+}
+
+/// Bucket the selection decision falls into. Distinct from
+/// `SelectionOmissionReason` (the *why*) — this is the *what*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionDecisionScope {
+    /// Named to the bench but never came on.
+    UnusedSubstitute,
+    /// Dropped from a starting role to the bench — did not start.
+    DroppedToBench,
+    /// Left out of the matchday squad entirely.
+    LeftOutOfMatchdaySquad,
+    /// Explicitly rested by the manager (load-management call).
+    Rested,
+    /// Available, but not picked for non-injury reasons (discipline,
+    /// personal). Distinct from full unavailability (suspension /
+    /// injury) which is filtered before selection.
+    UnavailableButNotInjured,
+    /// Cup / low-importance fixture rotation.
+    Rotation,
+}
+
+impl SelectionDecisionScope {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            SelectionDecisionScope::UnusedSubstitute => "selection_scope_unused_substitute",
+            SelectionDecisionScope::DroppedToBench => "selection_scope_dropped_to_bench",
+            SelectionDecisionScope::LeftOutOfMatchdaySquad => {
+                "selection_scope_left_out_of_matchday_squad"
+            }
+            SelectionDecisionScope::Rested => "selection_scope_rested",
+            SelectionDecisionScope::UnavailableButNotInjured => {
+                "selection_scope_unavailable_not_injured"
+            }
+            SelectionDecisionScope::Rotation => "selection_scope_rotation",
+        }
+    }
+}
+
+/// Football-realistic reason the manager picked someone else. Closed
+/// enum, every variant maps to a localised sentence the renderer turns
+/// into the "why" line. Multiple reasons can apply at once — the
+/// selector picks the dominant one (highest weight in the scoring
+/// breakdown).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionOmissionReason {
+    /// Chosen player was sharper / fresher.
+    LowerMatchReadiness,
+    /// Manager protected a fragile player (returning, accumulating risk).
+    FitnessProtection,
+    /// Recent workload drove rotation.
+    FatigueManagement,
+    /// Bad recent ratings cost the player his place.
+    PoorRecentForm,
+    /// Tactical shape demands a different profile.
+    TacticalMismatch,
+    /// Player's positions don't fit any open slot well.
+    PositionFitIssue,
+    /// Direct rival was preferred on perceived ability.
+    TeammatePreferredOnAbility,
+    /// Rival was preferred because his form was stronger.
+    TeammatePreferredOnForm,
+    /// Rival was preferred on physical readiness.
+    TeammatePreferredOnFitness,
+    /// Coach trusts the rival more (relationship / professional respect).
+    TeammatePreferredOnTrust,
+    /// Manager preferred the rival to balance the shape (eg. defensive
+    /// reliability against a tough opponent).
+    TeammatePreferredForTacticalBalance,
+    /// Manager promoted a youth player as part of development plan.
+    YouthDevelopmentRotation,
+    /// Cup / League Cup rotation call.
+    CupRotation,
+    /// Low-importance match — manager rotated for managed minutes.
+    LowMatchImportanceRotation,
+    /// Player's squad status doesn't match the moment (e.g. fringe
+    /// player overlooked when the manager could afford his best XI).
+    SquadStatusMismatch,
+    /// Coach has limited trust in the player despite squad-status label.
+    ManagerDoesNotTrustPlayer,
+    /// New signing still inside the integration window.
+    NewcomerStillIntegrating,
+    /// Returning from injury — protected start.
+    ReturningFromInjury,
+    /// Disciplinary call (training-ground row, public apology pending).
+    DisciplinarySelection,
+    /// Bench-balance call: the manager wanted a different option for
+    /// in-match flexibility.
+    BenchBalance,
+    /// Formation has no slot anywhere near the player's preferred role.
+    NoNaturalRoleInFormation,
+}
+
+impl SelectionOmissionReason {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            SelectionOmissionReason::LowerMatchReadiness => "selection_reason_lower_match_readiness",
+            SelectionOmissionReason::FitnessProtection => "selection_reason_fitness_protection",
+            SelectionOmissionReason::FatigueManagement => "selection_reason_fatigue_management",
+            SelectionOmissionReason::PoorRecentForm => "selection_reason_poor_recent_form",
+            SelectionOmissionReason::TacticalMismatch => "selection_reason_tactical_mismatch",
+            SelectionOmissionReason::PositionFitIssue => "selection_reason_position_fit_issue",
+            SelectionOmissionReason::TeammatePreferredOnAbility => {
+                "selection_reason_teammate_preferred_on_ability"
+            }
+            SelectionOmissionReason::TeammatePreferredOnForm => {
+                "selection_reason_teammate_preferred_on_form"
+            }
+            SelectionOmissionReason::TeammatePreferredOnFitness => {
+                "selection_reason_teammate_preferred_on_fitness"
+            }
+            SelectionOmissionReason::TeammatePreferredOnTrust => {
+                "selection_reason_teammate_preferred_on_trust"
+            }
+            SelectionOmissionReason::TeammatePreferredForTacticalBalance => {
+                "selection_reason_teammate_preferred_for_tactical_balance"
+            }
+            SelectionOmissionReason::YouthDevelopmentRotation => {
+                "selection_reason_youth_development_rotation"
+            }
+            SelectionOmissionReason::CupRotation => "selection_reason_cup_rotation",
+            SelectionOmissionReason::LowMatchImportanceRotation => {
+                "selection_reason_low_match_importance_rotation"
+            }
+            SelectionOmissionReason::SquadStatusMismatch => {
+                "selection_reason_squad_status_mismatch"
+            }
+            SelectionOmissionReason::ManagerDoesNotTrustPlayer => {
+                "selection_reason_manager_does_not_trust"
+            }
+            SelectionOmissionReason::NewcomerStillIntegrating => {
+                "selection_reason_newcomer_still_integrating"
+            }
+            SelectionOmissionReason::ReturningFromInjury => {
+                "selection_reason_returning_from_injury"
+            }
+            SelectionOmissionReason::DisciplinarySelection => {
+                "selection_reason_disciplinary"
+            }
+            SelectionOmissionReason::BenchBalance => "selection_reason_bench_balance",
+            SelectionOmissionReason::NoNaturalRoleInFormation => {
+                "selection_reason_no_natural_role"
+            }
+        }
+    }
+}
+
+/// Concrete comparison to the player who took the omitted player's
+/// slot. Stores ids and scores for tests / debugging plus the
+/// dominant scoring components so the renderer can produce a
+/// "stronger condition / sharper form" sentence rather than guessing.
+#[derive(Debug, Clone)]
+pub struct SelectionComparison {
+    /// Player id that was selected for the slot the omitted player
+    /// would naturally have filled.
+    pub selected_player_id: u32,
+    /// Whether the selected player was a starter or substitute.
+    pub selected_was_starter: bool,
+    /// Position / slot the selected player took. `None` when the
+    /// player's preferred role isn't in the formation at all.
+    pub slot: Option<SelectionRole>,
+    /// Selected player's total score for that slot.
+    pub selected_score: f32,
+    /// Omitted player's total score for the same slot.
+    pub omitted_score: f32,
+    /// Top scoring factors where the selected player edged ahead. Up
+    /// to four factors, stored in dominance order so the renderer can
+    /// pick the first one or two for the comparison sentence.
+    pub top_factors: Vec<SelectionScoreFactor>,
+}
+
+/// Coarse positional bucket used in the comparison line. Mirrors the
+/// engine's positional groupings — keeping it as a render-safe enum
+/// avoids dragging the full `PlayerPositionType` into the events
+/// module's i18n surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionRole {
+    Goalkeeper,
+    CentreBack,
+    Fullback,
+    DefensiveMidfielder,
+    CentralMidfielder,
+    AttackingMidfielder,
+    Winger,
+    Striker,
+    /// Free-floating / unclassified — fallback for unusual slots.
+    Other,
+}
+
+impl SelectionRole {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            SelectionRole::Goalkeeper => "selection_role_goalkeeper",
+            SelectionRole::CentreBack => "selection_role_centre_back",
+            SelectionRole::Fullback => "selection_role_fullback",
+            SelectionRole::DefensiveMidfielder => "selection_role_defensive_midfielder",
+            SelectionRole::CentralMidfielder => "selection_role_central_midfielder",
+            SelectionRole::AttackingMidfielder => "selection_role_attacking_midfielder",
+            SelectionRole::Winger => "selection_role_winger",
+            SelectionRole::Striker => "selection_role_striker",
+            SelectionRole::Other => "selection_role_other",
+        }
+    }
+}
+
+/// Single-component breakdown atom from the scoring engine. The
+/// selector picks the top few factors where the selected player beat
+/// the omitted player and packs them into `SelectionComparison` so
+/// the renderer doesn't have to expose raw f32 scores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionScoreFactor {
+    PositionFit,
+    PerceivedQuality,
+    MatchReadiness,
+    Fatigue,
+    TacticalFit,
+    SideFootFit,
+    Reputation,
+    CoachRelationship,
+    Newcomer,
+    YouthPreference,
+    TrainingImpression,
+    Cohesion,
+    SquadStatus,
+    ForceSelection,
+    ClubPhilosophy,
+    InjuryRisk,
+    DevelopmentMinutes,
+}
+
+impl SelectionScoreFactor {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            SelectionScoreFactor::PositionFit => "selection_factor_position_fit",
+            SelectionScoreFactor::PerceivedQuality => "selection_factor_perceived_quality",
+            SelectionScoreFactor::MatchReadiness => "selection_factor_match_readiness",
+            SelectionScoreFactor::Fatigue => "selection_factor_fatigue",
+            SelectionScoreFactor::TacticalFit => "selection_factor_tactical_fit",
+            SelectionScoreFactor::SideFootFit => "selection_factor_side_foot_fit",
+            SelectionScoreFactor::Reputation => "selection_factor_reputation",
+            SelectionScoreFactor::CoachRelationship => "selection_factor_coach_relationship",
+            SelectionScoreFactor::Newcomer => "selection_factor_newcomer",
+            SelectionScoreFactor::YouthPreference => "selection_factor_youth_preference",
+            SelectionScoreFactor::TrainingImpression => "selection_factor_training_impression",
+            SelectionScoreFactor::Cohesion => "selection_factor_cohesion",
+            SelectionScoreFactor::SquadStatus => "selection_factor_squad_status",
+            SelectionScoreFactor::ForceSelection => "selection_factor_force_selection",
+            SelectionScoreFactor::ClubPhilosophy => "selection_factor_club_philosophy",
+            SelectionScoreFactor::InjuryRisk => "selection_factor_injury_risk",
+            SelectionScoreFactor::DevelopmentMinutes => "selection_factor_development_minutes",
+        }
+    }
+}
+
+/// Render-safe mirror of `crate::ChangeType`. Stored on
+/// `HappinessEventContext` so the renderer can branch on the underlying
+/// relationship-change driver without importing the relations module.
+/// Closed enum — one variant per ChangeType the events pipeline cares
+/// about; the catch-all `Other` keeps adding new ChangeType variants
+/// from being a breaking change here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HappinessEventChangeKind {
+    MatchCooperation,
+    TrainingBonding,
+    ConflictResolution,
+    PersonalSupport,
+    CoachingSuccess,
+    TeamSuccess,
+    MentorshipBond,
+    CompetitionRivalry,
+    TrainingFriction,
+    PersonalConflict,
+    TacticalDisagreement,
+    DisciplinaryAction,
+    TeamFailure,
+    ReputationAdmiration,
+    ReputationTension,
+    NaturalProgression,
+    Other,
+}
+
+impl HappinessEventChangeKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            HappinessEventChangeKind::MatchCooperation => "change_kind_match_cooperation",
+            HappinessEventChangeKind::TrainingBonding => "change_kind_training_bonding",
+            HappinessEventChangeKind::ConflictResolution => "change_kind_conflict_resolution",
+            HappinessEventChangeKind::PersonalSupport => "change_kind_personal_support",
+            HappinessEventChangeKind::CoachingSuccess => "change_kind_coaching_success",
+            HappinessEventChangeKind::TeamSuccess => "change_kind_team_success",
+            HappinessEventChangeKind::MentorshipBond => "change_kind_mentorship_bond",
+            HappinessEventChangeKind::CompetitionRivalry => "change_kind_competition_rivalry",
+            HappinessEventChangeKind::TrainingFriction => "change_kind_training_friction",
+            HappinessEventChangeKind::PersonalConflict => "change_kind_personal_conflict",
+            HappinessEventChangeKind::TacticalDisagreement => "change_kind_tactical_disagreement",
+            HappinessEventChangeKind::DisciplinaryAction => "change_kind_disciplinary_action",
+            HappinessEventChangeKind::TeamFailure => "change_kind_team_failure",
+            HappinessEventChangeKind::ReputationAdmiration => "change_kind_reputation_admiration",
+            HappinessEventChangeKind::ReputationTension => "change_kind_reputation_tension",
+            HappinessEventChangeKind::NaturalProgression => "change_kind_natural_progression",
+            HappinessEventChangeKind::Other => "change_kind_other",
+        }
+    }
+
+    /// Render-safe mirror of the relations crate's `ChangeType`.
+    /// Total mapping — `Other` keeps adding a new ChangeType variant
+    /// from being a breaking change in the events crate.
+    pub fn from_change_type(change_type: &crate::ChangeType) -> Self {
+        use crate::ChangeType as C;
+        match change_type {
+            C::MatchCooperation => HappinessEventChangeKind::MatchCooperation,
+            C::TrainingBonding => HappinessEventChangeKind::TrainingBonding,
+            C::ConflictResolution => HappinessEventChangeKind::ConflictResolution,
+            C::PersonalSupport => HappinessEventChangeKind::PersonalSupport,
+            C::CoachingSuccess => HappinessEventChangeKind::CoachingSuccess,
+            C::TeamSuccess => HappinessEventChangeKind::TeamSuccess,
+            C::MentorshipBond => HappinessEventChangeKind::MentorshipBond,
+            C::CompetitionRivalry => HappinessEventChangeKind::CompetitionRivalry,
+            C::TrainingFriction => HappinessEventChangeKind::TrainingFriction,
+            C::PersonalConflict => HappinessEventChangeKind::PersonalConflict,
+            C::TacticalDisagreement => HappinessEventChangeKind::TacticalDisagreement,
+            C::DisciplinaryAction => HappinessEventChangeKind::DisciplinaryAction,
+            C::TeamFailure => HappinessEventChangeKind::TeamFailure,
+            C::ReputationAdmiration => HappinessEventChangeKind::ReputationAdmiration,
+            C::ReputationTension => HappinessEventChangeKind::ReputationTension,
+            C::NaturalProgression => HappinessEventChangeKind::NaturalProgression,
+        }
+    }
+}
+
+/// Closed set of evidence atoms. Each variant is a concrete, football-
+/// realistic reason an emit site observed and decided was worth carrying
+/// to the renderer (e.g. "low trust between this pair", "still a new
+/// signing"). The renderer picks at most one or two of these per event
+/// — they're inputs to the explanation, not a checklist to dump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HappinessEventEvidence {
+    /// Both players had a strong existing bond before the incident.
+    StrongExistingBond,
+    /// The relationship was already strained / hostile.
+    AlreadyStrainedRelationship,
+    /// Bond was weak / neutral — not enough cushion for a small incident.
+    WeakExistingBond,
+    /// Pair compete for the same shirt / position.
+    SamePositionCompetition,
+    /// Same squad-status tier (KeyPlayer/FirstTeamRegular) competition.
+    SimilarSquadStatusCompetition,
+    /// Trust axis was low between the pair.
+    LowTrust,
+    /// Friendship axis was low.
+    LowFriendship,
+    /// Professional respect was low.
+    LowProfessionalRespect,
+    /// Professional respect was high — softens the fallout.
+    HighProfessionalRespect,
+    /// Player has high ambition; likely to read the incident as a slight.
+    HighAmbition,
+    /// Offender's temperament was low (volatile).
+    LowTemperament,
+    /// Offender's controversy was high.
+    HighControversy,
+    /// Offender's sportsmanship was low.
+    LowSportsmanship,
+    /// Offender's professionalism was high — usually walks back the fallout.
+    HighProfessionalism,
+    /// Player joined recently — still inside the settling-in window.
+    NewSigningStillSettling,
+    /// Foreign player without local-language fluency.
+    LanguageBarrier,
+    /// Same-nationality teammate alleviated integration friction.
+    SharedNationality,
+    /// A senior / mentor figure helped or was at the centre of the incident.
+    MentorInfluence,
+    /// Recent match cooperation between the pair.
+    MatchCooperation,
+    /// Roles complement each other on the pitch.
+    ComplementaryRoles,
+    /// Training-ground standards were the trigger.
+    TrainingStandardsMismatch,
+    /// Pair has had repeat incidents recently.
+    RepeatedIncident,
+    /// Wage gap between the pair was material.
+    WageGap,
+    /// Reputation gap — star vs role player tension.
+    ReputationGap,
+    /// Player has formed no inner-circle bond at the club yet.
+    NoInnerCircleYet,
+    /// Recent squad turnover left the player without consistent peers.
+    SquadTurnover,
+    /// Public-facing incident: media noise rather than dressing-room.
+    MediaIncident,
+    /// Dressing-room row, not a media or training-ground incident.
+    DressingRoomRow,
+    /// Training-ground confrontation specifically.
+    TrainingGroundIncident,
+    // ── Support / talk / supporter evidence ─────────────────────
+    /// Player produced an excellent post-match rating (≥7.5).
+    ExcellentPerformance,
+    /// Player was named Player of the Match.
+    PlayerOfTheMatch,
+    /// Player scored or assisted in this match.
+    GoalContribution,
+    /// Contribution arrived in a tight, decisive moment (1-goal margin
+    /// win, late winner, hat-trick scale moment).
+    DecisiveContribution,
+    /// Performance came in a derby fixture.
+    DerbyPerformance,
+    /// Performance came in a cup tie.
+    CupPerformance,
+    /// Reaction came from the home crowd specifically.
+    HomeCrowdMoment,
+    /// Player's morale was poor going into the talk — message was about
+    /// confidence as much as performance.
+    PoorMoraleBeforeTalk,
+    /// Player's confidence was visibly low coming in.
+    LowConfidence,
+    /// Existing manager trust amplified the message.
+    ManagerTrust,
+    /// Strong rapport with the talking coach lifted reception.
+    StrongCoachRapport,
+    /// Weak rapport with the talking coach blunted or backfired the
+    /// message.
+    WeakCoachRapport,
+    /// Player has a high-pressure personality (≥15) — handles big
+    /// occasions well.
+    HighPressurePersonality,
+    /// Player has a low-pressure personality (≤7) — shrinks under big
+    /// occasions.
+    LowPressurePersonality,
+    /// Player has high determination (≥15) — converts criticism into
+    /// motivation.
+    HighDetermination,
+    /// Player handles big matches well (`important_matches` ≥ 15).
+    ImportantMatchTemperament,
+    /// Manager has used the same tone repeatedly — message is dampened.
+    RepeatedTalkDampened,
+    /// A captain or senior leader figure was at the centre of the moment.
+    CaptainOrLeaderInfluence,
+    /// Young player needing a confidence boost.
+    YoungPlayerNeedingConfidence,
+    /// Returning from injury — the gesture lands harder.
+    ReturnFromInjuryBoost,
+}
+
+impl HappinessEventEvidence {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            HappinessEventEvidence::StrongExistingBond => "evidence_strong_existing_bond",
+            HappinessEventEvidence::AlreadyStrainedRelationship => {
+                "evidence_already_strained_relationship"
+            }
+            HappinessEventEvidence::WeakExistingBond => "evidence_weak_existing_bond",
+            HappinessEventEvidence::SamePositionCompetition => {
+                "evidence_same_position_competition"
+            }
+            HappinessEventEvidence::SimilarSquadStatusCompetition => {
+                "evidence_similar_squad_status_competition"
+            }
+            HappinessEventEvidence::LowTrust => "evidence_low_trust",
+            HappinessEventEvidence::LowFriendship => "evidence_low_friendship",
+            HappinessEventEvidence::LowProfessionalRespect => "evidence_low_professional_respect",
+            HappinessEventEvidence::HighProfessionalRespect => {
+                "evidence_high_professional_respect"
+            }
+            HappinessEventEvidence::HighAmbition => "evidence_high_ambition",
+            HappinessEventEvidence::LowTemperament => "evidence_low_temperament",
+            HappinessEventEvidence::HighControversy => "evidence_high_controversy",
+            HappinessEventEvidence::LowSportsmanship => "evidence_low_sportsmanship",
+            HappinessEventEvidence::HighProfessionalism => "evidence_high_professionalism",
+            HappinessEventEvidence::NewSigningStillSettling => {
+                "evidence_new_signing_still_settling"
+            }
+            HappinessEventEvidence::LanguageBarrier => "evidence_language_barrier",
+            HappinessEventEvidence::SharedNationality => "evidence_shared_nationality",
+            HappinessEventEvidence::MentorInfluence => "evidence_mentor_influence",
+            HappinessEventEvidence::MatchCooperation => "evidence_match_cooperation",
+            HappinessEventEvidence::ComplementaryRoles => "evidence_complementary_roles",
+            HappinessEventEvidence::TrainingStandardsMismatch => {
+                "evidence_training_standards_mismatch"
+            }
+            HappinessEventEvidence::RepeatedIncident => "evidence_repeated_incident",
+            HappinessEventEvidence::WageGap => "evidence_wage_gap",
+            HappinessEventEvidence::ReputationGap => "evidence_reputation_gap",
+            HappinessEventEvidence::NoInnerCircleYet => "evidence_no_inner_circle_yet",
+            HappinessEventEvidence::SquadTurnover => "evidence_squad_turnover",
+            HappinessEventEvidence::MediaIncident => "evidence_media_incident",
+            HappinessEventEvidence::DressingRoomRow => "evidence_dressing_room_row",
+            HappinessEventEvidence::TrainingGroundIncident => "evidence_training_ground_incident",
+            HappinessEventEvidence::ExcellentPerformance => "evidence_excellent_performance",
+            HappinessEventEvidence::PlayerOfTheMatch => "evidence_player_of_the_match",
+            HappinessEventEvidence::GoalContribution => "evidence_goal_contribution",
+            HappinessEventEvidence::DecisiveContribution => "evidence_decisive_contribution",
+            HappinessEventEvidence::DerbyPerformance => "evidence_derby_performance",
+            HappinessEventEvidence::CupPerformance => "evidence_cup_performance",
+            HappinessEventEvidence::HomeCrowdMoment => "evidence_home_crowd_moment",
+            HappinessEventEvidence::PoorMoraleBeforeTalk => "evidence_poor_morale_before_talk",
+            HappinessEventEvidence::LowConfidence => "evidence_low_confidence",
+            HappinessEventEvidence::ManagerTrust => "evidence_manager_trust",
+            HappinessEventEvidence::StrongCoachRapport => "evidence_strong_coach_rapport",
+            HappinessEventEvidence::WeakCoachRapport => "evidence_weak_coach_rapport",
+            HappinessEventEvidence::HighPressurePersonality => "evidence_high_pressure_personality",
+            HappinessEventEvidence::LowPressurePersonality => "evidence_low_pressure_personality",
+            HappinessEventEvidence::HighDetermination => "evidence_high_determination",
+            HappinessEventEvidence::ImportantMatchTemperament => {
+                "evidence_important_match_temperament"
+            }
+            HappinessEventEvidence::RepeatedTalkDampened => "evidence_repeated_talk_dampened",
+            HappinessEventEvidence::CaptainOrLeaderInfluence => {
+                "evidence_captain_or_leader_influence"
+            }
+            HappinessEventEvidence::YoungPlayerNeedingConfidence => {
+                "evidence_young_player_needing_confidence"
+            }
+            HappinessEventEvidence::ReturnFromInjuryBoost => "evidence_return_from_injury_boost",
+        }
+    }
+}
+
+
+/// Closed set of "what's next" hints. Renderer maps each to a localised
+/// sentence; storing the variant (rather than free text) keeps the UI
+/// stable across re-renders and translatable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HappinessEventFollowUp {
+    /// Likely to settle unless repeated within the next few weeks.
+    LikelyToSettle,
+    /// Repeated incidents may damage dressing-room status.
+    DressingRoomDamageRisk,
+    /// Contract request risk increased.
+    ContractRequestRisk,
+    /// Manager intervention may be required if it persists.
+    ManagerInterventionRisk,
+    /// Trend is improving — relationship should keep strengthening.
+    TrendImproving,
+    /// Settling-in period is almost over.
+    SettlingInProgress,
+    /// Manager trust should improve if this form continues.
+    ManagerTrustRising,
+    /// Standing with the supporters should improve if this form
+    /// continues.
+    FanStandingRising,
+    /// Pressure / expectations may build after a stand-out moment.
+    PressureBuilding,
+}
+
+impl HappinessEventFollowUp {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            HappinessEventFollowUp::LikelyToSettle => "follow_up_likely_to_settle",
+            HappinessEventFollowUp::DressingRoomDamageRisk => "follow_up_dressing_room_damage",
+            HappinessEventFollowUp::ContractRequestRisk => "follow_up_contract_request_risk",
+            HappinessEventFollowUp::ManagerInterventionRisk => "follow_up_manager_intervention",
+            HappinessEventFollowUp::TrendImproving => "follow_up_trend_improving",
+            HappinessEventFollowUp::SettlingInProgress => "follow_up_settling_in",
+            HappinessEventFollowUp::ManagerTrustRising => "follow_up_manager_trust_rising",
+            HappinessEventFollowUp::FanStandingRising => "follow_up_fan_standing_rising",
+            HappinessEventFollowUp::PressureBuilding => "follow_up_pressure_building",
+        }
+    }
+}
+
+/// Stage in the transfer-interest funnel — where the rumour or approach
+/// stands at the moment the event was emitted. Tracks how serious the
+/// interest is, from a single scout sighting to a formal bid being
+/// negotiated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferInterestStage {
+    ScoutWatched,
+    Shortlisted,
+    AgentSoundingOut,
+    LooseRumour,
+    ConcreteInterest,
+    BidExpected,
+    BidSubmitted,
+    BidRejected,
+    NegotiationsOpened,
+    NegotiationsStalled,
+    MoveCollapsed,
+    InterestCooled,
+}
+
+impl TransferInterestStage {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TransferInterestStage::ScoutWatched => "transfer_interest_stage_scout_watched",
+            TransferInterestStage::Shortlisted => "transfer_interest_stage_shortlisted",
+            TransferInterestStage::AgentSoundingOut => {
+                "transfer_interest_stage_agent_sounding_out"
+            }
+            TransferInterestStage::LooseRumour => "transfer_interest_stage_loose_rumour",
+            TransferInterestStage::ConcreteInterest => {
+                "transfer_interest_stage_concrete_interest"
+            }
+            TransferInterestStage::BidExpected => "transfer_interest_stage_bid_expected",
+            TransferInterestStage::BidSubmitted => "transfer_interest_stage_bid_submitted",
+            TransferInterestStage::BidRejected => "transfer_interest_stage_bid_rejected",
+            TransferInterestStage::NegotiationsOpened => {
+                "transfer_interest_stage_negotiations_opened"
+            }
+            TransferInterestStage::NegotiationsStalled => {
+                "transfer_interest_stage_negotiations_stalled"
+            }
+            TransferInterestStage::MoveCollapsed => "transfer_interest_stage_move_collapsed",
+            TransferInterestStage::InterestCooled => "transfer_interest_stage_interest_cooled",
+        }
+    }
+}
+
+/// Where the rumour came from. Drives the "how the player heard about it"
+/// line — a scout sighting reads differently from an agent leak or a
+/// confirmed approach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferInterestSource {
+    ScoutAttendance,
+    AgentLeak,
+    LocalPress,
+    NationalPress,
+    ClubBriefing,
+    FanSpeculation,
+    ConfirmedApproach,
+    InternalRecruitmentMeeting,
+    RejectedBid,
+    ContractTalk,
+}
+
+impl TransferInterestSource {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TransferInterestSource::ScoutAttendance => "transfer_interest_source_scout_attendance",
+            TransferInterestSource::AgentLeak => "transfer_interest_source_agent_leak",
+            TransferInterestSource::LocalPress => "transfer_interest_source_local_press",
+            TransferInterestSource::NationalPress => "transfer_interest_source_national_press",
+            TransferInterestSource::ClubBriefing => "transfer_interest_source_club_briefing",
+            TransferInterestSource::FanSpeculation => "transfer_interest_source_fan_speculation",
+            TransferInterestSource::ConfirmedApproach => {
+                "transfer_interest_source_confirmed_approach"
+            }
+            TransferInterestSource::InternalRecruitmentMeeting => {
+                "transfer_interest_source_internal_recruitment_meeting"
+            }
+            TransferInterestSource::RejectedBid => "transfer_interest_source_rejected_bid",
+            TransferInterestSource::ContractTalk => "transfer_interest_source_contract_talk",
+        }
+    }
+}
+
+/// The football meaning of the move from this player's perspective.
+/// Drives whether the rumour reads as a step up, a return home, an
+/// escape route, or just speculation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferInterestKind {
+    StepUp,
+    LateralMove,
+    StepDownWithMinutes,
+    Homecoming,
+    RivalMove,
+    FormerClubReturn,
+    FavoriteClubInterest,
+    BigLeagueOpportunity,
+    LoanDevelopment,
+    EscapeRoute,
+    Speculative,
+}
+
+impl TransferInterestKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TransferInterestKind::StepUp => "transfer_interest_kind_step_up",
+            TransferInterestKind::LateralMove => "transfer_interest_kind_lateral_move",
+            TransferInterestKind::StepDownWithMinutes => {
+                "transfer_interest_kind_step_down_with_minutes"
+            }
+            TransferInterestKind::Homecoming => "transfer_interest_kind_homecoming",
+            TransferInterestKind::RivalMove => "transfer_interest_kind_rival_move",
+            TransferInterestKind::FormerClubReturn => {
+                "transfer_interest_kind_former_club_return"
+            }
+            TransferInterestKind::FavoriteClubInterest => {
+                "transfer_interest_kind_favorite_club_interest"
+            }
+            TransferInterestKind::BigLeagueOpportunity => {
+                "transfer_interest_kind_big_league_opportunity"
+            }
+            TransferInterestKind::LoanDevelopment => "transfer_interest_kind_loan_development",
+            TransferInterestKind::EscapeRoute => "transfer_interest_kind_escape_route",
+            TransferInterestKind::Speculative => "transfer_interest_kind_speculative",
+        }
+    }
+}
+
+/// How the player reacted privately to the rumour or approach. Tied to
+/// personality + context — the same rumour produces different reactions
+/// for an ambitious star vs a loyal squad regular.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferInterestReaction {
+    Flattered,
+    Focused,
+    Distracted,
+    Unsettled,
+    Excited,
+    Cautious,
+    AnnoyedBySpeculation,
+    LoyalToCurrentClub,
+    WantsTalks,
+    WantsBidAccepted,
+    FearsBeingPushedOut,
+    UsesInterestForContractLeverage,
+    PubliclyCalmPrivatelyInterested,
+}
+
+impl TransferInterestReaction {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TransferInterestReaction::Flattered => "transfer_interest_reaction_flattered",
+            TransferInterestReaction::Focused => "transfer_interest_reaction_focused",
+            TransferInterestReaction::Distracted => "transfer_interest_reaction_distracted",
+            TransferInterestReaction::Unsettled => "transfer_interest_reaction_unsettled",
+            TransferInterestReaction::Excited => "transfer_interest_reaction_excited",
+            TransferInterestReaction::Cautious => "transfer_interest_reaction_cautious",
+            TransferInterestReaction::AnnoyedBySpeculation => {
+                "transfer_interest_reaction_annoyed_by_speculation"
+            }
+            TransferInterestReaction::LoyalToCurrentClub => {
+                "transfer_interest_reaction_loyal_to_current_club"
+            }
+            TransferInterestReaction::WantsTalks => "transfer_interest_reaction_wants_talks",
+            TransferInterestReaction::WantsBidAccepted => {
+                "transfer_interest_reaction_wants_bid_accepted"
+            }
+            TransferInterestReaction::FearsBeingPushedOut => {
+                "transfer_interest_reaction_fears_being_pushed_out"
+            }
+            TransferInterestReaction::UsesInterestForContractLeverage => {
+                "transfer_interest_reaction_uses_interest_for_contract_leverage"
+            }
+            TransferInterestReaction::PubliclyCalmPrivatelyInterested => {
+                "transfer_interest_reaction_publicly_calm_privately_interested"
+            }
+        }
+    }
+}
+
+/// Sporting fit category — how the move would play out on the pitch
+/// rather than as a headline. A "bigger club but harder minutes" link
+/// produces a meaningfully different reaction from a "better playing
+/// time" link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferSportingFit {
+    ClearUpgrade,
+    BiggerClubButHarderMinutes,
+    BetterPlayingTime,
+    PoorRoleFit,
+    TacticalFit,
+    BadLeagueFit,
+    EmotionalFit,
+    FinancialFitOnly,
+}
+
+impl TransferSportingFit {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TransferSportingFit::ClearUpgrade => "transfer_sporting_fit_clear_upgrade",
+            TransferSportingFit::BiggerClubButHarderMinutes => {
+                "transfer_sporting_fit_bigger_club_but_harder_minutes"
+            }
+            TransferSportingFit::BetterPlayingTime => {
+                "transfer_sporting_fit_better_playing_time"
+            }
+            TransferSportingFit::PoorRoleFit => "transfer_sporting_fit_poor_role_fit",
+            TransferSportingFit::TacticalFit => "transfer_sporting_fit_tactical_fit",
+            TransferSportingFit::BadLeagueFit => "transfer_sporting_fit_bad_league_fit",
+            TransferSportingFit::EmotionalFit => "transfer_sporting_fit_emotional_fit",
+            TransferSportingFit::FinancialFitOnly => "transfer_sporting_fit_financial_fit_only",
+        }
+    }
+}
+
+/// Concrete football evidence behind the player's reaction. Closed set;
+/// the renderer picks the most informative atom to surface as a
+/// supporting sentence next to the main reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferInterestEvidence {
+    BiggerClub,
+    BiggerLeague,
+    ChampionsLeagueOpportunity,
+    MoreLikelyStarts,
+    LessLikelyStarts,
+    CurrentPlayingTimeFrustration,
+    CurrentClubAmbitionMismatch,
+    CurrentClubLoyalty,
+    HighAmbition,
+    LowAmbition,
+    HighLoyalty,
+    LowLoyalty,
+    HighProfessionalism,
+    HighControversy,
+    AgentPushing,
+    FanPressure,
+    MediaNoise,
+    ScoutAtMatch,
+    RepeatedRumours,
+    RejectedBid,
+    RivalClub,
+    FormerClub,
+    FavoriteClub,
+    HomeCountry,
+    LanguageCultureFit,
+    ContractExpiring,
+    Underpaid,
+    ManagerPromiseConflict,
+    RecentNewSigningThreatensRole,
+}
+
+impl TransferInterestEvidence {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TransferInterestEvidence::BiggerClub => "transfer_interest_evidence_bigger_club",
+            TransferInterestEvidence::BiggerLeague => "transfer_interest_evidence_bigger_league",
+            TransferInterestEvidence::ChampionsLeagueOpportunity => {
+                "transfer_interest_evidence_champions_league_opportunity"
+            }
+            TransferInterestEvidence::MoreLikelyStarts => {
+                "transfer_interest_evidence_more_likely_starts"
+            }
+            TransferInterestEvidence::LessLikelyStarts => {
+                "transfer_interest_evidence_less_likely_starts"
+            }
+            TransferInterestEvidence::CurrentPlayingTimeFrustration => {
+                "transfer_interest_evidence_current_playing_time_frustration"
+            }
+            TransferInterestEvidence::CurrentClubAmbitionMismatch => {
+                "transfer_interest_evidence_current_club_ambition_mismatch"
+            }
+            TransferInterestEvidence::CurrentClubLoyalty => {
+                "transfer_interest_evidence_current_club_loyalty"
+            }
+            TransferInterestEvidence::HighAmbition => "transfer_interest_evidence_high_ambition",
+            TransferInterestEvidence::LowAmbition => "transfer_interest_evidence_low_ambition",
+            TransferInterestEvidence::HighLoyalty => "transfer_interest_evidence_high_loyalty",
+            TransferInterestEvidence::LowLoyalty => "transfer_interest_evidence_low_loyalty",
+            TransferInterestEvidence::HighProfessionalism => {
+                "transfer_interest_evidence_high_professionalism"
+            }
+            TransferInterestEvidence::HighControversy => {
+                "transfer_interest_evidence_high_controversy"
+            }
+            TransferInterestEvidence::AgentPushing => "transfer_interest_evidence_agent_pushing",
+            TransferInterestEvidence::FanPressure => "transfer_interest_evidence_fan_pressure",
+            TransferInterestEvidence::MediaNoise => "transfer_interest_evidence_media_noise",
+            TransferInterestEvidence::ScoutAtMatch => "transfer_interest_evidence_scout_at_match",
+            TransferInterestEvidence::RepeatedRumours => {
+                "transfer_interest_evidence_repeated_rumours"
+            }
+            TransferInterestEvidence::RejectedBid => "transfer_interest_evidence_rejected_bid",
+            TransferInterestEvidence::RivalClub => "transfer_interest_evidence_rival_club",
+            TransferInterestEvidence::FormerClub => "transfer_interest_evidence_former_club",
+            TransferInterestEvidence::FavoriteClub => "transfer_interest_evidence_favorite_club",
+            TransferInterestEvidence::HomeCountry => "transfer_interest_evidence_home_country",
+            TransferInterestEvidence::LanguageCultureFit => {
+                "transfer_interest_evidence_language_culture_fit"
+            }
+            TransferInterestEvidence::ContractExpiring => {
+                "transfer_interest_evidence_contract_expiring"
+            }
+            TransferInterestEvidence::Underpaid => "transfer_interest_evidence_underpaid",
+            TransferInterestEvidence::ManagerPromiseConflict => {
+                "transfer_interest_evidence_manager_promise_conflict"
+            }
+            TransferInterestEvidence::RecentNewSigningThreatensRole => {
+                "transfer_interest_evidence_recent_new_signing_threatens_role"
+            }
+        }
+    }
+}
+
+/// Structured payload describing a transfer-interest moment. Filled in
+/// at emit time so the renderer can compose a contextual headline +
+/// reason + reaction + outlook instead of falling back to a generic
+/// "wanted by another club" line.
+///
+/// Most fields are optional — emit sites populate only what they know.
+/// The `interest_stage`, `interest_source`, `interest_kind`, and
+/// `player_reaction` axes are required: a transfer-interest event
+/// without any of those four would not communicate anything useful.
+#[derive(Debug, Clone)]
+pub struct TransferInterestContext {
+    pub interested_club_id: Option<u32>,
+    pub interested_league_id: Option<u32>,
+    pub interest_stage: TransferInterestStage,
+    pub interest_source: TransferInterestSource,
+    pub interest_kind: TransferInterestKind,
+    pub player_reaction: TransferInterestReaction,
+    pub sporting_fit: Option<TransferSportingFit>,
+    pub reputation_gap: i32,
+    pub league_reputation_gap: i32,
+    pub likely_role: Option<PlayerSquadStatus>,
+    pub current_squad_status: Option<PlayerSquadStatus>,
+    pub is_rival: bool,
+    pub is_former_club: bool,
+    pub is_home_country: bool,
+    pub is_favorite_club: bool,
+    pub would_improve_playing_time: bool,
+    pub would_reduce_playing_time: bool,
+    pub wage_upside_ratio: Option<f32>,
+    pub agent_pressure: Option<f32>,
+    pub media_heat: Option<f32>,
+    pub evidence: Vec<TransferInterestEvidence>,
+}
+
+impl TransferInterestContext {
+    pub fn new(
+        interest_stage: TransferInterestStage,
+        interest_source: TransferInterestSource,
+        interest_kind: TransferInterestKind,
+        player_reaction: TransferInterestReaction,
+    ) -> Self {
+        Self {
+            interested_club_id: None,
+            interested_league_id: None,
+            interest_stage,
+            interest_source,
+            interest_kind,
+            player_reaction,
+            sporting_fit: None,
+            reputation_gap: 0,
+            league_reputation_gap: 0,
+            likely_role: None,
+            current_squad_status: None,
+            is_rival: false,
+            is_former_club: false,
+            is_home_country: false,
+            is_favorite_club: false,
+            would_improve_playing_time: false,
+            would_reduce_playing_time: false,
+            wage_upside_ratio: None,
+            agent_pressure: None,
+            media_heat: None,
+            evidence: Vec::new(),
+        }
+    }
+
+    pub fn with_interested_club(mut self, club_id: u32) -> Self {
+        self.interested_club_id = Some(club_id);
+        self
+    }
+
+    pub fn with_interested_league(mut self, league_id: u32) -> Self {
+        self.interested_league_id = Some(league_id);
+        self
+    }
+
+    pub fn with_sporting_fit(mut self, fit: TransferSportingFit) -> Self {
+        self.sporting_fit = Some(fit);
+        self
+    }
+
+    pub fn with_reputation_gap(mut self, gap: i32) -> Self {
+        self.reputation_gap = gap;
+        self
+    }
+
+    pub fn with_league_reputation_gap(mut self, gap: i32) -> Self {
+        self.league_reputation_gap = gap;
+        self
+    }
+
+    pub fn with_likely_role(mut self, role: PlayerSquadStatus) -> Self {
+        self.likely_role = Some(role);
+        self
+    }
+
+    pub fn with_current_squad_status(mut self, status: PlayerSquadStatus) -> Self {
+        self.current_squad_status = Some(status);
+        self
+    }
+
+    pub fn with_rival(mut self, is_rival: bool) -> Self {
+        self.is_rival = is_rival;
+        self
+    }
+
+    pub fn with_former_club(mut self, is_former: bool) -> Self {
+        self.is_former_club = is_former;
+        self
+    }
+
+    pub fn with_home_country(mut self, is_home: bool) -> Self {
+        self.is_home_country = is_home;
+        self
+    }
+
+    pub fn with_favorite_club(mut self, is_favorite: bool) -> Self {
+        self.is_favorite_club = is_favorite;
+        self
+    }
+
+    pub fn with_playing_time_change(
+        mut self,
+        improve: bool,
+        reduce: bool,
+    ) -> Self {
+        self.would_improve_playing_time = improve;
+        self.would_reduce_playing_time = reduce;
+        self
+    }
+
+    pub fn with_wage_upside(mut self, ratio: f32) -> Self {
+        self.wage_upside_ratio = Some(ratio);
+        self
+    }
+
+    pub fn with_agent_pressure(mut self, pressure: f32) -> Self {
+        self.agent_pressure = Some(pressure);
+        self
+    }
+
+    pub fn with_media_heat(mut self, heat: f32) -> Self {
+        self.media_heat = Some(heat);
+        self
+    }
+
+    pub fn with_evidence(mut self, evidence: TransferInterestEvidence) -> Self {
+        if !self.evidence.contains(&evidence) {
+            self.evidence.push(evidence);
+        }
+        self
+    }
+
+    pub fn with_evidence_iter<I>(mut self, iter: I) -> Self
+    where
+        I: IntoIterator<Item = TransferInterestEvidence>,
+    {
+        for ev in iter {
+            if !self.evidence.contains(&ev) {
+                self.evidence.push(ev);
+            }
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -255,6 +1880,51 @@ pub enum HappinessEventType {
     /// A transfer the player was set on collapsed at a late stage —
     /// medical, registration, or club back-out. Lingering bitterness.
     DreamMoveCollapsed,
+    /// Scout from a meaningful club has been watching the player. Often
+    /// invisible, but lands as a small confidence note when it leaks /
+    /// repeats / coincides with an ambition trigger.
+    ScoutedByClub,
+    /// Loose rumour — the player heard the link but the interested club
+    /// has not put concrete weight behind it.
+    TransferRumour,
+    /// Agent / representatives have been actively stirring interest with
+    /// other clubs. Distinct from a leaked club briefing.
+    AgentStirsInterest,
+    /// Concrete interest from a club well above this player's current
+    /// level. Distinct from the legacy `WantedByBiggerClub` in that it
+    /// carries the full `TransferInterestContext` payload.
+    InterestFromBiggerClub,
+    /// Concrete interest from a known sporting rival. Even at lateral
+    /// rep this raises pressure / fan backlash risk.
+    InterestFromRival,
+    /// Rumour or approach links the player to a club in their home
+    /// country. Emotionally charged regardless of pure rep gap.
+    HomecomingRumour,
+    /// Approach from a club the player previously played for. Pulls on
+    /// loyalty / unfinished-business strings.
+    FormerClubInterest,
+    /// Approach from a club listed as the player's favourite. Strong
+    /// emotional pull; often produces excitement even before a bid.
+    FavoriteClubInterest,
+    /// Repeated speculation that the player has not yet shaken off —
+    /// distracts focus, drags pressure load.
+    TransferSpeculationDistracts,
+    /// Player publicly dismisses the speculation and reaffirms focus
+    /// on the current club. Small positive PR + dressing-room effect.
+    TransferInterestDismissed,
+    /// Talks with the interested club are imminent / opening — the
+    /// player is now in the final stages of a possible move.
+    TransferTalksExpected,
+    /// Previously concrete interest has cooled — the buying club has
+    /// moved on without a bid. Mild disappointment for the player.
+    InterestCooled,
+    /// Player used external interest as leverage during contract
+    /// renewal — produces a small confidence effect plus a follow-up
+    /// risk flag.
+    UsedInterestForContractLeverage,
+    /// Supporter reaction to an active transfer rumour — split between
+    /// "stay" and "go" voices, tracked as fan pressure.
+    FansReactToTransferRumour,
     /// Praised by the supporters — banners, songs, fan-poll wins.
     FanPraise,
     /// Targeted by fan criticism — bad displays, off-field controversy.
@@ -419,6 +2089,71 @@ impl PlayerHappiness {
         magnitude: f32,
         partner_player_id: Option<u32>,
     ) {
+        self.add_event_full(event_type, magnitude, partner_player_id, None);
+    }
+
+    /// Same as [`Self::add_event_with_partner`] but also attaches a
+    /// structured [`HappinessEventContext`] for the renderer. Used by
+    /// the upgraded emit sites (PlayerBehaviourResult, controversy
+    /// pipeline, transfer-social, squad integration) so the UI can
+    /// produce a real explanation instead of a static black-box line.
+    pub fn add_event_with_context(
+        &mut self,
+        event_type: HappinessEventType,
+        magnitude: f32,
+        partner_player_id: Option<u32>,
+        context: HappinessEventContext,
+    ) {
+        self.add_event_full(event_type, magnitude, partner_player_id, Some(context));
+    }
+
+    /// Cooldown-gated counterpart of `add_event_with_context`.
+    pub fn add_event_with_context_and_cooldown(
+        &mut self,
+        event_type: HappinessEventType,
+        magnitude: f32,
+        partner_player_id: Option<u32>,
+        context: HappinessEventContext,
+        cooldown_days: u16,
+    ) -> bool {
+        if self.has_recent_event(&event_type, cooldown_days) {
+            return false;
+        }
+        self.add_event_full(event_type, magnitude, partner_player_id, Some(context));
+        true
+    }
+
+    /// Cooldown-gated, partner-aware counterpart of
+    /// `add_event_with_context`. Cooldown is keyed by `(event_type,
+    /// partner_id)` so a chronic friction pair doesn't suppress a
+    /// different teammate's first incident with the same type.
+    pub fn add_event_with_partner_context_and_cooldown(
+        &mut self,
+        event_type: HappinessEventType,
+        magnitude: f32,
+        partner_player_id: u32,
+        context: HappinessEventContext,
+        cooldown_days: u16,
+    ) -> bool {
+        if self.has_recent_event_with_partner(&event_type, partner_player_id, cooldown_days) {
+            return false;
+        }
+        self.add_event_full(
+            event_type,
+            magnitude,
+            Some(partner_player_id),
+            Some(context),
+        );
+        true
+    }
+
+    fn add_event_full(
+        &mut self,
+        event_type: HappinessEventType,
+        magnitude: f32,
+        partner_player_id: Option<u32>,
+        context: Option<HappinessEventContext>,
+    ) {
         if requires_partner_id(&event_type) && partner_player_id.is_none() {
             debug_assert!(
                 false,
@@ -433,6 +2168,7 @@ impl PlayerHappiness {
             magnitude,
             days_ago: 0,
             partner_player_id,
+            context,
         });
 
         if self.recent_events.len() > cfg.recent_events_cap {
@@ -635,5 +2371,234 @@ mod tests {
         h.add_event_default(HappinessEventType::DerbyHero);
         assert!(h.has_recent_event(&HappinessEventType::DerbyHero, 30));
         assert!(!h.has_recent_event(&HappinessEventType::DerbyDefeat, 30));
+    }
+
+    #[test]
+    fn severity_thresholds_are_stable() {
+        // Boundary checks — keep these in lockstep with renderer copy
+        // and tests that assert the visible label.
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(0.5),
+            HappinessEventSeverity::Minor
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(1.9),
+            HappinessEventSeverity::Minor
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(2.0),
+            HappinessEventSeverity::Moderate
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(-3.5),
+            HappinessEventSeverity::Moderate
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(4.0),
+            HappinessEventSeverity::Serious
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(-5.9),
+            HappinessEventSeverity::Serious
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(6.0),
+            HappinessEventSeverity::Major
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(-12.0),
+            HappinessEventSeverity::Major
+        );
+    }
+
+    #[test]
+    fn legacy_emit_paths_carry_no_context() {
+        let mut h = PlayerHappiness::new();
+        h.add_event(HappinessEventType::PoorTraining, -1.0);
+        let event = h.recent_events.last().unwrap();
+        assert!(
+            event.context.is_none(),
+            "legacy emit must not synthesise a context — None means 'unknown', \
+             which the renderer falls back from cleanly"
+        );
+    }
+
+    #[test]
+    fn add_event_with_context_round_trips() {
+        let mut h = PlayerHappiness::new();
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::PositionalRivalry,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::DressingRoom,
+        )
+        .with_relationship_level(-30.0)
+        .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk);
+        h.add_event_with_context(
+            HappinessEventType::ConflictWithTeammate,
+            -2.0,
+            Some(99),
+            ctx,
+        );
+        let event = h.recent_events.last().unwrap();
+        let stored = event.context.as_ref().expect("context must round-trip");
+        assert_eq!(stored.cause, HappinessEventCause::PositionalRivalry);
+        assert_eq!(stored.severity, HappinessEventSeverity::Moderate);
+        assert_eq!(stored.scope, HappinessEventScope::DressingRoom);
+        assert_eq!(stored.relationship_level_before, Some(-30.0));
+        assert_eq!(
+            stored.follow_up,
+            Some(HappinessEventFollowUp::DressingRoomDamageRisk)
+        );
+        assert_eq!(event.partner_player_id, Some(99));
+    }
+
+    #[test]
+    fn partner_required_event_without_partner_is_dropped() {
+        let mut h = PlayerHappiness::new();
+        // debug_assertions panic in test builds — wrap in catch_unwind so
+        // we can assert that the event is not silently committed.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let ctx = HappinessEventContext::new(
+                HappinessEventCause::PersonalityClash,
+                HappinessEventSeverity::Minor,
+                HappinessEventScope::DressingRoom,
+            );
+            h.add_event_with_context(
+                HappinessEventType::ConflictWithTeammate,
+                -1.0,
+                None,
+                ctx,
+            );
+        }));
+        assert!(
+            result.is_err() || h.recent_events.is_empty(),
+            "partner-required event without partner_id must not land in recent_events"
+        );
+    }
+
+    #[test]
+    fn match_selection_context_round_trips_through_event_context() {
+        let mut h = PlayerHappiness::new();
+        let sel = MatchSelectionContext {
+            scope: SelectionDecisionScope::DroppedToBench,
+            reason: SelectionOmissionReason::TeammatePreferredOnFitness,
+            comparison: Some(SelectionComparison {
+                selected_player_id: 42,
+                selected_was_starter: true,
+                slot: Some(SelectionRole::Winger),
+                selected_score: 14.5,
+                omitted_score: 12.0,
+                top_factors: vec![SelectionScoreFactor::MatchReadiness],
+            }),
+            role: SelectionRole::Winger,
+            match_importance: 0.8,
+            repeated: false,
+            is_friendly: false,
+        };
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::PositionalRivalry,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::MatchDay,
+        )
+        .with_selection_context(sel);
+        h.add_event_with_context(HappinessEventType::MatchDropped, -2.0, None, ctx);
+
+        let event = h.recent_events.last().expect("event must land");
+        let stored = event
+            .context
+            .as_ref()
+            .and_then(|c| c.selection_context.as_ref())
+            .expect("selection context round-trips");
+        assert_eq!(stored.scope, SelectionDecisionScope::DroppedToBench);
+        assert_eq!(
+            stored.reason,
+            SelectionOmissionReason::TeammatePreferredOnFitness
+        );
+        let comp = stored.comparison.as_ref().expect("comparison present");
+        assert_eq!(comp.selected_player_id, 42);
+        assert!(comp.selected_was_starter);
+        assert_eq!(comp.slot, Some(SelectionRole::Winger));
+    }
+
+    #[test]
+    fn selection_omission_reason_keys_are_unique_and_non_empty() {
+        let reasons = [
+            SelectionOmissionReason::LowerMatchReadiness,
+            SelectionOmissionReason::FitnessProtection,
+            SelectionOmissionReason::FatigueManagement,
+            SelectionOmissionReason::PoorRecentForm,
+            SelectionOmissionReason::TacticalMismatch,
+            SelectionOmissionReason::PositionFitIssue,
+            SelectionOmissionReason::TeammatePreferredOnAbility,
+            SelectionOmissionReason::TeammatePreferredOnForm,
+            SelectionOmissionReason::TeammatePreferredOnFitness,
+            SelectionOmissionReason::TeammatePreferredOnTrust,
+            SelectionOmissionReason::TeammatePreferredForTacticalBalance,
+            SelectionOmissionReason::YouthDevelopmentRotation,
+            SelectionOmissionReason::CupRotation,
+            SelectionOmissionReason::LowMatchImportanceRotation,
+            SelectionOmissionReason::SquadStatusMismatch,
+            SelectionOmissionReason::ManagerDoesNotTrustPlayer,
+            SelectionOmissionReason::NewcomerStillIntegrating,
+            SelectionOmissionReason::ReturningFromInjury,
+            SelectionOmissionReason::DisciplinarySelection,
+            SelectionOmissionReason::BenchBalance,
+            SelectionOmissionReason::NoNaturalRoleInFormation,
+        ];
+        let mut keys: Vec<&'static str> = reasons.iter().map(|r| r.as_i18n_key()).collect();
+        keys.sort();
+        let unique = {
+            let mut k = keys.clone();
+            k.dedup();
+            k.len()
+        };
+        assert_eq!(keys.len(), unique, "reason keys must be unique");
+        for k in &keys {
+            assert!(!k.is_empty(), "reason i18n key must be non-empty");
+            assert!(
+                k.starts_with("selection_reason_"),
+                "reason key {} must follow the naming convention",
+                k
+            );
+        }
+    }
+
+    #[test]
+    fn partner_aware_cooldown_is_per_partner() {
+        let mut h = PlayerHappiness::new();
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::TrainingFriction,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::TrainingGround,
+        );
+        let added_first = h.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::ConflictWithTeammate,
+            -1.0,
+            7,
+            ctx.clone(),
+            45,
+        );
+        assert!(added_first);
+        // Same partner inside cooldown — blocked.
+        let added_again = h.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::ConflictWithTeammate,
+            -1.0,
+            7,
+            ctx.clone(),
+            45,
+        );
+        assert!(!added_again, "same partner inside cooldown must be blocked");
+        // Different partner — should land.
+        let added_other = h.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::ConflictWithTeammate,
+            -1.0,
+            42,
+            ctx,
+            45,
+        );
+        assert!(
+            added_other,
+            "cooldown must be keyed per-partner so a new teammate's first incident is recorded"
+        );
     }
 }

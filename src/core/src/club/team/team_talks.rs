@@ -10,6 +10,11 @@
 use crate::club::HappinessEventType;
 use crate::club::Staff;
 use crate::club::player::Player;
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
+    HappinessEventScope, HappinessEventSeverity, SupportEventContext, SupportMatchPhase,
+    SupportSetting, SupportSource, SupportTone, SupportTrigger,
+};
 use chrono::NaiveDate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,11 +202,23 @@ pub fn apply_team_talk_dated<'a, I>(
         };
 
         let magnitude = raw_signal * effectiveness * phase_mod * rapport_mul * repetition_mul;
+        let repetition_dampened = repetition_mul < 1.0;
 
         if magnitude.abs() >= 0.3 {
-            player
-                .happiness
-                .add_event(HappinessEventType::DressingRoomSpeech, magnitude);
+            let event_ctx = DressingRoomSpeechContextBuilder::build(
+                player,
+                manager,
+                tone,
+                ctx,
+                magnitude,
+                repetition_dampened,
+            );
+            player.happiness.add_event_with_context(
+                HappinessEventType::DressingRoomSpeech,
+                magnitude,
+                None,
+                event_ctx,
+            );
         }
 
         // Rapport feedback — positive talk that landed lifts rapport;
@@ -213,6 +230,121 @@ pub fn apply_team_talk_dated<'a, I>(
             } else if !positive_tone && magnitude <= -1.0 {
                 player.rapport.on_negative(cid, today, 2);
             }
+        }
+    }
+}
+
+/// Builder for the structured `HappinessEventContext` payload attached
+/// to `DressingRoomSpeech` events. Bundled under a named type so tone
+/// translation, trigger selection, and evidence collection share a
+/// single namespace and the call site in `apply_team_talk_dated` reads
+/// as a thin orchestration layer.
+pub struct DressingRoomSpeechContextBuilder;
+
+impl DressingRoomSpeechContextBuilder {
+    /// Build the `HappinessEventContext` for a `DressingRoomSpeech`
+    /// event. Captures tone, phase, score-delta, and personality-aware
+    /// evidence so the renderer can produce a sentence that explains
+    /// why the talk landed (or backfired) for this specific player.
+    pub fn build(
+        player: &Player,
+        manager: Option<&Staff>,
+        tone: TeamTalkTone,
+        ctx: TeamTalkContext,
+        magnitude: f32,
+        repetition_dampened: bool,
+    ) -> HappinessEventContext {
+        let phase = match ctx.phase {
+            MatchPhase::PreMatch => SupportMatchPhase::PreMatch,
+            MatchPhase::HalfTime => SupportMatchPhase::HalfTime,
+            MatchPhase::FullTime => SupportMatchPhase::FullTime,
+        };
+        let support_tone = match tone {
+            TeamTalkTone::Praise => SupportTone::Praise,
+            TeamTalkTone::Criticise => SupportTone::Criticise,
+            TeamTalkTone::Encourage => SupportTone::Encourage,
+            TeamTalkTone::Passionate => SupportTone::Passionate,
+            TeamTalkTone::TacticalSilent => SupportTone::Calm,
+        };
+        let trigger = Self::trigger(tone, ctx);
+
+        let mut support = SupportEventContext::new(
+            SupportSource::Manager,
+            SupportSetting::DressingRoom,
+            trigger,
+        )
+        .with_phase(phase)
+        .with_tone(support_tone);
+        if let Some(staff) = manager {
+            support = support.with_speaker_staff_id(staff.id);
+        }
+        support = support.with_team_won(ctx.score_delta > 0);
+        if ctx.big_match {
+            support = support.with_derby(true);
+        }
+
+        let mut event_ctx = HappinessEventContext::new(
+            HappinessEventCause::DressingRoomLift,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_support_context(support);
+
+        if ctx.big_match && player.attributes.important_matches >= 15.0 {
+            event_ctx = event_ctx.with_evidence(HappinessEventEvidence::ImportantMatchTemperament);
+        }
+        if player.attributes.pressure >= 15.0 {
+            event_ctx = event_ctx.with_evidence(HappinessEventEvidence::HighPressurePersonality);
+        } else if player.attributes.pressure <= 7.0 {
+            event_ctx = event_ctx.with_evidence(HappinessEventEvidence::LowPressurePersonality);
+        }
+        if player.skills.mental.determination >= 15.0 {
+            event_ctx = event_ctx.with_evidence(HappinessEventEvidence::HighDetermination);
+        }
+        if player.attributes.professionalism >= 15.0 {
+            event_ctx = event_ctx.with_evidence(HappinessEventEvidence::HighProfessionalism);
+        }
+        if let Some(staff) = manager {
+            let rapport = player.rapport.score(staff.id);
+            if rapport >= 30 {
+                event_ctx = event_ctx.with_evidence(HappinessEventEvidence::StrongCoachRapport);
+            } else if rapport <= -20 {
+                event_ctx = event_ctx.with_evidence(HappinessEventEvidence::WeakCoachRapport);
+            }
+        }
+        if repetition_dampened {
+            event_ctx = event_ctx.with_evidence(HappinessEventEvidence::RepeatedTalkDampened);
+        }
+        if player.happiness.morale < 35.0 {
+            event_ctx = event_ctx.with_evidence(HappinessEventEvidence::PoorMoraleBeforeTalk);
+        }
+
+        let follow_up = if magnitude > 0.0 {
+            HappinessEventFollowUp::TrendImproving
+        } else if repetition_dampened {
+            HappinessEventFollowUp::LikelyToSettle
+        } else {
+            HappinessEventFollowUp::ManagerInterventionRisk
+        };
+        event_ctx.with_follow_up(follow_up)
+    }
+
+    /// Pick the structured trigger for a dressing-room speech based on
+    /// tone, phase, and score state. Same inputs always produce the
+    /// same trigger so the renderer is deterministic.
+    fn trigger(tone: TeamTalkTone, ctx: TeamTalkContext) -> SupportTrigger {
+        if ctx.big_match {
+            return SupportTrigger::BigMatch;
+        }
+        match (ctx.phase, ctx.score_delta) {
+            (MatchPhase::HalfTime, d) if d < 0 => SupportTrigger::TeamTrailingAtHalfTime,
+            (MatchPhase::FullTime, d) if d > 0 => SupportTrigger::TeamWon,
+            _ => match tone {
+                TeamTalkTone::Praise => SupportTrigger::TeamWon,
+                TeamTalkTone::Passionate => SupportTrigger::BigMatch,
+                TeamTalkTone::Criticise => SupportTrigger::PoorFormRecovery,
+                _ => SupportTrigger::Generic,
+            },
         }
     }
 }
@@ -232,4 +364,63 @@ fn recently_repeated_tone(player: &Player, tone: TeamTalkTone, window_days: u16)
             && (e.magnitude > 0.5) == want_positive
             && e.magnitude.abs() >= 0.5
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DressingRoomSpeechContextBuilder;
+    use super::{MatchPhase, TeamTalkContext, TeamTalkTone};
+    use crate::SupportTrigger;
+
+    fn ctx(phase: MatchPhase, score_delta: i8, big_match: bool) -> TeamTalkContext {
+        TeamTalkContext {
+            phase,
+            score_delta,
+            big_match,
+        }
+    }
+
+    #[test]
+    fn trigger_picks_team_trailing_at_half_time() {
+        let trigger = DressingRoomSpeechContextBuilder::trigger(
+            TeamTalkTone::Encourage,
+            ctx(MatchPhase::HalfTime, -1, false),
+        );
+        assert_eq!(trigger, SupportTrigger::TeamTrailingAtHalfTime);
+    }
+
+    #[test]
+    fn trigger_picks_team_won_after_full_time_with_lead() {
+        let trigger = DressingRoomSpeechContextBuilder::trigger(
+            TeamTalkTone::Praise,
+            ctx(MatchPhase::FullTime, 2, false),
+        );
+        assert_eq!(trigger, SupportTrigger::TeamWon);
+    }
+
+    #[test]
+    fn trigger_prefers_big_match_over_phase() {
+        // Acceptance criterion: a big-match talk reads as such even
+        // when the score state would otherwise dominate the trigger.
+        let trigger = DressingRoomSpeechContextBuilder::trigger(
+            TeamTalkTone::Passionate,
+            ctx(MatchPhase::HalfTime, -1, true),
+        );
+        assert_eq!(trigger, SupportTrigger::BigMatch);
+    }
+
+    #[test]
+    fn trigger_is_deterministic_for_same_inputs() {
+        // Same inputs must always pick the same trigger so the
+        // renderer never produces drifting copy across page reloads.
+        let a = DressingRoomSpeechContextBuilder::trigger(
+            TeamTalkTone::Criticise,
+            ctx(MatchPhase::FullTime, -2, false),
+        );
+        let b = DressingRoomSpeechContextBuilder::trigger(
+            TeamTalkTone::Criticise,
+            ctx(MatchPhase::FullTime, -2, false),
+        );
+        assert_eq!(a, b);
+    }
 }

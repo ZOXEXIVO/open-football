@@ -3,6 +3,10 @@ use crate::club::player::behaviour_config::AdaptationConfig;
 use crate::club::player::language::Language;
 use crate::club::player::player::{ManagerPromiseKind, Player};
 use crate::club::{Person, PlayerPositionType};
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
+    HappinessEventScope, HappinessEventSeverity,
+};
 use chrono::NaiveDate;
 
 /// Multi-axis reputation gap between the player and his current
@@ -426,8 +430,20 @@ impl Player {
 
         if !self.speaks_local_language(country_code) {
             let mag = if pending.is_loan { -3.0 } else { -5.0 };
-            self.happiness
-                .add_event(HappinessEventType::FeelingIsolated, mag);
+            let ctx = HappinessEventContext::new(
+                HappinessEventCause::AdaptationIsolation,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::DressingRoom,
+            )
+            .with_evidence(HappinessEventEvidence::LanguageBarrier)
+            .with_evidence(HappinessEventEvidence::NewSigningStillSettling)
+            .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+            self.happiness.add_event_with_context(
+                HappinessEventType::FeelingIsolated,
+                mag,
+                None,
+                ctx,
+            );
         }
 
         if let Some(f) = formation {
@@ -653,8 +669,24 @@ impl Player {
             // Use deterministic per-day roll so testing stays stable.
             let roll = isolation_roll(self.id, now);
             if roll < isolation_chance {
-                self.happiness
-                    .add_event(HappinessEventType::FeelingIsolated, -2.0);
+                let mag = -2.0;
+                let mut ctx = HappinessEventContext::new(
+                    HappinessEventCause::AdaptationIsolation,
+                    HappinessEventSeverity::from_magnitude(mag),
+                    HappinessEventScope::DressingRoom,
+                )
+                .with_evidence(HappinessEventEvidence::NoInnerCircleYet)
+                .with_evidence(HappinessEventEvidence::NewSigningStillSettling)
+                .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+                if !speaks_local {
+                    ctx = ctx.with_evidence(HappinessEventEvidence::LanguageBarrier);
+                }
+                self.happiness.add_event_with_context(
+                    HappinessEventType::FeelingIsolated,
+                    mag,
+                    None,
+                    ctx,
+                );
                 return;
             }
         }
@@ -666,8 +698,21 @@ impl Player {
         if weeks >= cfg.settled_min_weeks
             && (pull_toward_bonding > cfg.settled_pull_threshold || speaks_local)
         {
-            self.happiness
-                .add_event_with_cooldown(HappinessEventType::SettledIntoSquad, 1.0, 365);
+            let mag = 1.0;
+            let ctx = HappinessEventContext::new(
+                HappinessEventCause::TrainingPartnership,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::DressingRoom,
+            )
+            .with_evidence(HappinessEventEvidence::StrongExistingBond)
+            .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+            self.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::SettledIntoSquad,
+                mag,
+                None,
+                ctx,
+                365,
+            );
         }
     }
 }
@@ -703,8 +748,17 @@ impl Player {
         if (adapt + prof) / 40.0 > cfg.chronic_isolation_suppress_threshold {
             return;
         }
+        let mag = -1.5;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::AdaptationIsolation,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence(HappinessEventEvidence::LanguageBarrier)
+        .with_evidence(HappinessEventEvidence::NoInnerCircleYet)
+        .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
         self.happiness
-            .add_event(HappinessEventType::FeelingIsolated, -1.5);
+            .add_event_with_context(HappinessEventType::FeelingIsolated, mag, None, ctx);
     }
 }
 

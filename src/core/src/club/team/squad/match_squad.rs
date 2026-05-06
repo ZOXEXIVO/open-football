@@ -28,6 +28,7 @@ impl Team {
             vice_captain_id: self.select_vice_captain(),
             penalty_taker_id: self.select_penalty_taker(),
             free_kick_taker_id: self.select_free_kick_taker(),
+            selection_omissions: squad_result.omissions,
         }
     }
 
@@ -61,6 +62,7 @@ impl Team {
             vice_captain_id: self.select_vice_captain(),
             penalty_taker_id: self.select_penalty_taker(),
             free_kick_taker_id: self.select_free_kick_taker(),
+            selection_omissions: squad_result.omissions,
         }
     }
 
@@ -109,6 +111,7 @@ impl Team {
             vice_captain_id: self.select_vice_captain(),
             penalty_taker_id: self.select_penalty_taker(),
             free_kick_taker_id: self.select_free_kick_taker(),
+            selection_omissions: squad_result.omissions,
         }
     }
 

@@ -20,12 +20,34 @@ impl Player {
     /// the destination so future match stats accumulate against the team
     /// the player actually plays for. No fee, no `last_transfer_date`
     /// touch — this isn't a market move.
-    pub fn on_intra_club_move(&mut self, from: &TeamInfo, to: &TeamInfo, date: NaiveDate) {
+    ///
+    /// `from_senior` / `to_senior` decide which sides land in career
+    /// history. Only senior squads (Main, B, Second) are eligible — any
+    /// involvement of Reserve / U18..U23 is treated as silent for the
+    /// player history table even though stats are still drained.
+    pub fn on_intra_club_move(
+        &mut self,
+        from: &TeamInfo,
+        to: &TeamInfo,
+        from_senior: bool,
+        to_senior: bool,
+        date: NaiveDate,
+    ) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.cup_statistics = Default::default();
         self.statistics_history
-            .record_intra_club_move(stats, from, to, date);
+            .record_intra_club_move(stats, from, to, from_senior, to_senior, date);
+    }
+
+    /// Drain accumulated match stats without writing to history. Used at
+    /// season-end for non-senior squads (Reserve, U18..U23) so their
+    /// stats don't bleed into next season while keeping the player's
+    /// career history confined to senior football.
+    pub fn reset_match_stats(&mut self) {
+        self.statistics = Default::default();
+        self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
     }
 
     /// Record a loan move (called by loan execution).

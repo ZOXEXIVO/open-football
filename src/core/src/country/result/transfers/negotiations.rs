@@ -6,6 +6,7 @@ use crate::club::player::agent::PlayerAgent;
 use crate::club::player::calculators::{
     ContractValuation, ValuationContext, squad_status_wage_factor,
 };
+use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::country::result::CountryResult;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferWindowManager;
@@ -14,7 +15,10 @@ use crate::transfers::offer::TransferClause;
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::utils::{FloatUtils, FormattingUtils};
-use crate::{Country, PlayerSquadStatus, PlayerStatusType, WageCalculator};
+use crate::{
+    Country, PlayerSquadStatus, PlayerStatusType, TransferInterestSource, TransferInterestStage,
+    WageCalculator,
+};
 use chrono::NaiveDate;
 
 impl CountryResult {
@@ -116,6 +120,65 @@ impl CountryResult {
         }
 
         deferred
+    }
+
+    /// Build the transfer-interest signal that the player owner needs
+    /// to react to a stage transition. Composes the rep gaps, league
+    /// rep gaps, rivalry, home-country, and former-club facts so the
+    /// emit-side method can pick a kind / reaction without re-reading
+    /// world state.
+    fn build_interest_signal(
+        country: &Country,
+        neg_data: &NegotiationData,
+        stage: TransferInterestStage,
+        source: TransferInterestSource,
+        repeated_attention: bool,
+    ) -> Option<TransferInterestSignal> {
+        let player = find_player_in_country(country, neg_data.player_id)?;
+        let selling_club = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)?;
+        let seller_league_rep = selling_club
+            .teams
+            .teams
+            .first()
+            .and_then(|t| t.league_id)
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+        let buying_club = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id);
+        let interested_league_id = buying_club
+            .and_then(|c| c.teams.teams.first().and_then(|t| t.league_id));
+        let buying_country_id = country.id;
+        let is_home_country = player.country_id == buying_country_id;
+        let is_former_club = player
+            .sold_from
+            .as_ref()
+            .map(|(cid, _)| *cid == neg_data.buying_club_id)
+            .unwrap_or(false);
+        let is_rival = selling_club.is_rival(neg_data.buying_club_id);
+        let mut sig = TransferInterestSignal {
+            interested_club_id: neg_data.buying_club_id,
+            interested_league_id,
+            buyer_rep: neg_data.buying_rep,
+            seller_rep: neg_data.selling_rep,
+            buyer_league_rep: neg_data.buying_league_reputation,
+            seller_league_rep,
+            stage,
+            source,
+            repeated_attention,
+            is_rival,
+            is_home_country,
+            is_former_club,
+        };
+        // Light helper: keep the variable mutable in case future calls
+        // want to amend it before passing to the player.
+        let _ = &mut sig;
+        Some(sig)
     }
 
     /// True when the selling club has the buying club flagged as a rival.
@@ -240,14 +303,24 @@ impl CountryResult {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.advance_to_club_negotiation(date);
             }
-            // Interest is now real — fire the tap-up happiness event on the
-            // target so the rumour mill actually nudges morale. Only fires
-            // for domestic targets; foreign players sit outside this country.
+            // Interest is now real — fire the structured concrete-interest
+            // signal so the player owner can pick the right reaction
+            // (flattered / focused / unsettled / loyal) and attach the
+            // interested club, sporting fit, evidence and follow-up.
             if neg_data.selling_country_id.is_none() {
-                let buyer_rep = neg_data.buying_rep;
-                let seller_rep = neg_data.selling_rep;
-                if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
-                    player.on_transfer_interest_confirmed(buyer_rep, seller_rep);
+                let signal = Self::build_interest_signal(
+                    country,
+                    neg_data,
+                    TransferInterestStage::ConcreteInterest,
+                    TransferInterestSource::ConfirmedApproach,
+                    false,
+                );
+                if let Some(sig) = signal {
+                    if let Some(player) =
+                        find_player_in_country_mut(country, neg_data.player_id)
+                    {
+                        player.on_transfer_interest_signal(&sig);
+                    }
                 }
             }
         } else {
@@ -256,17 +329,24 @@ impl CountryResult {
                     .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
-            // Domestic targets feel the rejection if it was a real chance —
-            // buyer must be meaningfully bigger and either the player was
-            // already pushing for a move or has the ambition to feel snubbed.
-            // Favorite-club bid being rejected hurts even at lateral rep.
+            // Domestic targets feel the rejection if it was a real chance.
+            // Routed through the structured interest funnel so the
+            // headline carries who rejected what and the player's reaction
+            // (frustration / leverage / loyalty) lands with context.
             if neg_data.selling_country_id.is_none() {
-                let buyer_rep = neg_data.buying_rep;
-                let seller_rep = neg_data.selling_rep;
-                let buying_club_id = neg_data.buying_club_id;
-                if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
-                    let was_favorite = player.favorite_clubs.contains(&buying_club_id);
-                    player.on_transfer_bid_rejected(buyer_rep, seller_rep, was_favorite);
+                let signal = Self::build_interest_signal(
+                    country,
+                    neg_data,
+                    TransferInterestStage::BidRejected,
+                    TransferInterestSource::RejectedBid,
+                    false,
+                );
+                if let Some(sig) = signal {
+                    if let Some(player) =
+                        find_player_in_country_mut(country, neg_data.player_id)
+                    {
+                        player.on_transfer_interest_signal(&sig);
+                    }
                 }
             }
             PipelineProcessor::on_negotiation_resolved(
@@ -394,15 +474,24 @@ impl CountryResult {
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
             // Final-round rejection — the buying club really did pursue
-            // and the selling club still said no. Same gating as the
-            // initial-approach path, including favorite-club amplification.
+            // and the selling club still said no. Routed through the
+            // structured interest funnel so the headline can name the
+            // interested club and surface the player's reaction
+            // (frustrated / contract-leverage / loyal).
             if neg_data.selling_country_id.is_none() {
-                let buyer_rep = neg_data.buying_rep;
-                let seller_rep = neg_data.selling_rep;
-                let buying_club_id = neg_data.buying_club_id;
-                if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
-                    let was_favorite = player.favorite_clubs.contains(&buying_club_id);
-                    player.on_transfer_bid_rejected(buyer_rep, seller_rep, was_favorite);
+                let signal = Self::build_interest_signal(
+                    country,
+                    neg_data,
+                    TransferInterestStage::BidRejected,
+                    TransferInterestSource::RejectedBid,
+                    true,
+                );
+                if let Some(sig) = signal {
+                    if let Some(player) =
+                        find_player_in_country_mut(country, neg_data.player_id)
+                    {
+                        player.on_transfer_interest_signal(&sig);
+                    }
                 }
             }
             PipelineProcessor::on_negotiation_resolved(
@@ -861,16 +950,24 @@ impl CountryResult {
             }
             Self::reopen_listing_for_player(country, neg_data.player_id);
             // Late-stage collapse — both clubs and the player had agreed
-            // and only the medical stood in the way. Strong morale event
-            // for domestic players if the destination was meaningfully
-            // bigger or a known favorite club.
+            // and only the medical stood in the way. Routed through the
+            // structured signal so the rendered event can name the
+            // interested club and the player's reaction (excited /
+            // frustrated / contract-leverage).
             if neg_data.selling_country_id.is_none() {
-                let buyer_rep = neg_data.buying_rep;
-                let seller_rep = neg_data.selling_rep;
-                let buying_club_id = neg_data.buying_club_id;
-                if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
-                    let was_favorite = player.favorite_clubs.contains(&buying_club_id);
-                    player.on_dream_move_collapsed(buyer_rep, seller_rep, was_favorite);
+                let signal = Self::build_interest_signal(
+                    country,
+                    neg_data,
+                    TransferInterestStage::MoveCollapsed,
+                    TransferInterestSource::ConfirmedApproach,
+                    false,
+                );
+                if let Some(sig) = signal {
+                    if let Some(player) =
+                        find_player_in_country_mut(country, neg_data.player_id)
+                    {
+                        player.on_transfer_interest_signal(&sig);
+                    }
                 }
             }
             PipelineProcessor::on_negotiation_resolved(

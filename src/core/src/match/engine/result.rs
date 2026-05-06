@@ -1,6 +1,7 @@
 ﻿use crate::PlayerFieldPositionGroup;
 use crate::league::LeagueMatch;
 use crate::r#match::player::statistics::MatchStatisticType;
+use crate::r#match::squad::OmittedPlayer;
 use crate::r#match::{MatchSquad, ResultMatchPositionData};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -213,6 +214,11 @@ pub struct FieldSquad {
     pub main: Vec<u32>,
     pub substitutes: Vec<u32>,
     pub substitutes_used: Vec<u32>,
+    /// Important omissions surfaced at squad-selection time, threaded
+    /// through the match engine so the post-match dispatcher can call
+    /// `Player::on_match_dropped_with_context` with the right
+    /// explanation. Empty when nothing notable happened.
+    pub selection_omissions: Vec<OmittedPlayer>,
 }
 
 impl FieldSquad {
@@ -222,6 +228,7 @@ impl FieldSquad {
             main: Vec::new(),
             substitutes: Vec::new(),
             substitutes_used: Vec::new(),
+            selection_omissions: Vec::new(),
         }
     }
 
@@ -231,6 +238,7 @@ impl FieldSquad {
             main: squad.main_squad.iter().map(|p| p.id).collect(),
             substitutes: squad.substitutes.iter().map(|p| p.id).collect(),
             substitutes_used: Vec::new(),
+            selection_omissions: squad.selection_omissions.clone(),
         }
     }
 

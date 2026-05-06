@@ -25,15 +25,35 @@
                 </button>
             </div>
             <div class="fm-info-body">
-                <div class="fm-info-row fm-info-row-stats">
-                    <span class="fm-info-label">{{ i18n.t("info_database") }}:</span>
-                    <span class="fm-info-value fm-info-stats">
-                        <span class="fm-stat-num">{{ total_countries }}</span> {{ i18n.t("stats_countries") }}<span class="fm-stat-sep"> · </span><span class="fm-stat-num">{{ total_clubs }}</span> {{ i18n.t("stats_clubs") }}<span class="fm-stat-sep"> · </span><span class="fm-stat-num">{{ total_players }}</span> {{ i18n.t("stats_players") }}
-                    </span>
-                </div>
-                <div class="fm-info-row">
-                    <span class="fm-info-label">{{ i18n.t("info_machine") }}:</span>
-                    <span class="fm-info-value">{{ cpu_brand }}</span>
+                <div class="fm-info-grid">
+                    <div class="fm-info-tile fm-info-tile-machine">
+                        <div class="fm-info-tile-icon"><i class="fa fa-microchip"></i></div>
+                        <div class="fm-info-tile-body">
+                            <div class="fm-info-machine-value">{{ cpu_brand }}</div>
+                            <div class="fm-info-tile-label">{{ i18n.t("info_machine") }}</div>
+                        </div>
+                    </div>
+                    <div class="fm-info-tile fm-info-tile-countries">
+                        <div class="fm-info-tile-icon"><i class="fa fa-globe"></i></div>
+                        <div class="fm-info-tile-body">
+                            <div class="fm-info-tile-value">{{ total_countries }}</div>
+                            <div class="fm-info-tile-label">{{ i18n.t("stats_countries") }}</div>
+                        </div>
+                    </div>
+                    <div class="fm-info-tile fm-info-tile-clubs">
+                        <div class="fm-info-tile-icon"><i class="fa fa-trophy"></i></div>
+                        <div class="fm-info-tile-body">
+                            <div class="fm-info-tile-value">{{ total_clubs }}</div>
+                            <div class="fm-info-tile-label">{{ i18n.t("stats_clubs") }}</div>
+                        </div>
+                    </div>
+                    <div class="fm-info-tile fm-info-tile-players">
+                        <div class="fm-info-tile-icon"><i class="fa fa-users"></i></div>
+                        <div class="fm-info-tile-body">
+                            <div class="fm-info-tile-value">{{ total_players }}</div>
+                            <div class="fm-info-tile-label">{{ i18n.t("stats_players") }}</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>

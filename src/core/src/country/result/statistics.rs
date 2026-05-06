@@ -80,7 +80,14 @@ impl CountryResult {
                 };
 
                 for player in &mut team.players.players {
-                    player.on_season_end(ended_season.clone(), &team_info, date);
+                    if keeps_own_identity {
+                        player.on_season_end(ended_season.clone(), &team_info, date);
+                    } else {
+                        // Non-senior squads (Reserve, U18..U23) don't
+                        // contribute to career history — drain stats so
+                        // they don't carry over, but skip the snapshot.
+                        player.reset_match_stats();
+                    }
                     player.evaluate_favorite_club(club.id, &team_info.slug, date);
                 }
             }
@@ -251,7 +258,11 @@ mod tests {
     }
 
     #[test]
-    fn reserve_players_use_main_team_info() {
+    fn reserve_players_skip_history_snapshot() {
+        // Only Main / B / Second contribute to player career history.
+        // Reserve / U18..U23 squads still have their accumulated stats
+        // drained at season-end so they don't carry over, but no
+        // frozen history row is written.
         let player = make_player(1, 10, 2);
         let main_team = make_team(
             10,
@@ -280,12 +291,9 @@ mod tests {
         CountryResult::snapshot_player_season_statistics(&mut data, 1);
 
         let country = data.country_mut(1).unwrap();
-        let entry = &country.clubs[0].teams.teams[1].players.players[0]
-            .statistics_history
-            .items[0];
-        assert_eq!(entry.team_slug, "juventus");
-        assert_eq!(entry.team_name, "Juventus");
-        assert_eq!(entry.league_slug, "serie-a");
+        let reserve_player = &country.clubs[0].teams.teams[1].players.players[0];
+        assert_eq!(reserve_player.statistics.played, 0);
+        assert!(reserve_player.statistics_history.items.is_empty());
     }
 
     #[test]
@@ -344,10 +352,7 @@ mod tests {
 
         let reserve_player = &country.clubs[0].teams.teams[1].players.players[0];
         assert_eq!(reserve_player.statistics.played, 0);
-        assert_eq!(
-            reserve_player.statistics_history.items[0].statistics.played,
-            5
-        );
+        assert!(reserve_player.statistics_history.items.is_empty());
     }
 
     #[test]
@@ -417,18 +422,20 @@ mod tests {
     }
 
     #[test]
-    fn club_without_main_team_uses_own_team_info() {
+    fn b_team_keeps_own_history_identity() {
+        // B is one of the senior types ("Main, B, Second") that *do*
+        // contribute to player history under their own slug.
         let player = make_player(1, 8, 1);
-        let reserve = make_team(
+        let b_team = make_team(
             10,
             100,
-            "Team B",
-            "team-b",
-            TeamType::Reserve,
+            "Club B",
+            "club-b",
+            TeamType::B,
             Some(1),
             vec![player],
         );
-        let club = make_club(100, "Club", vec![reserve]);
+        let club = make_club(100, "Club", vec![b_team]);
         let league = make_league(1, "Serie B", "serie-b", false);
         let country = make_country(vec![club], vec![league]);
 
@@ -439,23 +446,27 @@ mod tests {
         let entry = &country.clubs[0].teams.teams[0].players.players[0]
             .statistics_history
             .items[0];
-        assert_eq!(entry.team_slug, "team-b");
+        assert_eq!(entry.team_slug, "club-b");
+        assert_eq!(entry.statistics.played, 8);
     }
 
     #[test]
-    fn reserve_player_gets_main_team_reputation() {
+    fn youth_squad_player_skips_history_snapshot() {
+        // U21 sits outside the senior bracket, so its season-end pass
+        // resets stats but never lands a row in the player's career
+        // history table.
         let player = make_player(1, 12, 3);
         let main_team = make_team(10, 100, "Napoli", "napoli", TeamType::Main, Some(1), vec![]);
-        let reserve = make_team(
+        let u21 = make_team(
             11,
             100,
-            "Napoli B",
-            "napoli-b",
-            TeamType::Reserve,
+            "Napoli U21",
+            "napoli-u21",
+            TeamType::U21,
             None,
             vec![player],
         );
-        let club = make_club(100, "Napoli", vec![main_team, reserve]);
+        let club = make_club(100, "Napoli", vec![main_team, u21]);
         let league = make_league(1, "Serie A", "serie-a", false);
         let country = make_country(vec![club], vec![league]);
 
@@ -463,9 +474,8 @@ mod tests {
         CountryResult::snapshot_player_season_statistics(&mut data, 1);
 
         let country = data.country_mut(1).unwrap();
-        let entry = &country.clubs[0].teams.teams[1].players.players[0]
-            .statistics_history
-            .items[0];
-        assert_eq!(entry.team_reputation, 200);
+        let u21_player = &country.clubs[0].teams.teams[1].players.players[0];
+        assert_eq!(u21_player.statistics.played, 0);
+        assert!(u21_player.statistics_history.items.is_empty());
     }
 }

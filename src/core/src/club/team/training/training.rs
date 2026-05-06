@@ -298,7 +298,10 @@ impl TeamTraining {
         training_results: &TeamTrainingResult,
         sim_date: chrono::NaiveDate,
     ) {
-        use crate::HappinessEventType;
+        use crate::{
+            HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
+            HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
+        };
 
         // Index morale changes by player id so we don't iterate the result
         // vector once per pair.
@@ -506,17 +509,59 @@ impl TeamTraining {
                 );
 
                 if eff.relation_change.abs() >= 0.5 {
+                    let snapshot = player.relations.get_player(eff.to).map(|r| {
+                        (r.level, r.trust, r.friendship, r.professional_respect)
+                    });
                     if eff.bond {
-                        player.happiness.add_event_with_partner(
+                        let mag = 0.6;
+                        let mut ctx = HappinessEventContext::new(
+                            HappinessEventCause::TrainingPartnership,
+                            HappinessEventSeverity::from_magnitude(mag),
+                            HappinessEventScope::TrainingGround,
+                        )
+                        .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
+                        .with_follow_up(HappinessEventFollowUp::TrendImproving);
+                        if let Some((level, trust, friendship, prof)) = snapshot {
+                            ctx = ctx
+                                .with_relationship_levels(level, level)
+                                .with_relationship_axes(trust, friendship, prof);
+                        }
+                        player.happiness.add_event_with_context(
                             HappinessEventType::TeammateBonding,
-                            0.6,
+                            mag,
                             Some(eff.to),
+                            ctx,
                         );
                     } else {
-                        player.happiness.add_event_with_partner(
+                        let mag = -0.8;
+                        let mut ctx = HappinessEventContext::new(
+                            HappinessEventCause::TrainingFriction,
+                            HappinessEventSeverity::from_magnitude(mag),
+                            HappinessEventScope::TrainingGround,
+                        )
+                        .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
+                        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+                        if let Some((level, trust, friendship, prof)) = snapshot {
+                            ctx = ctx
+                                .with_relationship_levels(level, level)
+                                .with_relationship_axes(trust, friendship, prof);
+                            if trust <= 35.0 {
+                                ctx = ctx.with_evidence(HappinessEventEvidence::LowTrust);
+                            }
+                            if level <= -25.0 {
+                                ctx = ctx.with_evidence(
+                                    HappinessEventEvidence::AlreadyStrainedRelationship,
+                                );
+                            } else if level.abs() < 25.0 {
+                                ctx =
+                                    ctx.with_evidence(HappinessEventEvidence::WeakExistingBond);
+                            }
+                        }
+                        player.happiness.add_event_with_context(
                             HappinessEventType::ConflictWithTeammate,
-                            -0.8,
+                            mag,
                             Some(eff.to),
+                            ctx,
                         );
                     }
                 }

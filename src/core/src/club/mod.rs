@@ -45,8 +45,11 @@ pub use transfers::ClubTransferStrategy;
 pub use player::{
     AcademyGenerationContext, AcademyIntakeState, CONDITION_MAX_VALUE, ContractBonus,
     ContractBonusType, ContractClause, ContractClauseType, ContractType, Goalkeeping,
-    HappinessEvent, HappinessEventType, HappinessFactors, InjurySeverity, InjuryType, Language,
-    Mental, NegativeHappiness, Physical, Player, PlayerAttributes, PlayerBuilder,
+    HappinessEvent, HappinessEventCause, HappinessEventChangeKind, HappinessEventContext,
+    HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, HappinessFactors, InjurySeverity, InjuryType, Language,
+    MatchSelectionContext, Mental, NegativeHappiness, Physical, Player, PlayerAttributes,
+    PlayerBuilder,
     PlayerClubContract, PlayerCollection, PlayerCollectionResult, PlayerContext,
     PlayerContractProposal, PlayerContractResult, PlayerDecision, PlayerDecisionHistory,
     PlayerFieldPositionGroup, PlayerGenerator, PlayerHappiness, PlayerLanguage, PlayerMailbox,
@@ -55,8 +58,14 @@ pub use player::{
     PlayerSkills, PlayerSquadStatus, PlayerStatistics, PlayerStatisticsHistory,
     PlayerStatisticsHistoryItem, PlayerStatus, PlayerStatusType, PlayerTraining,
     PlayerTrainingHistory, PlayerTransferStatus, PlayerUtils, PlayerValueCalculator,
-    PositionWeights, PositiveHappiness, SellOnObligation, StatusData, TeamInfo, Technical,
-    TrainingRecord, WageCalculator, next_player_id, seed_player_id_sequence,
+    PositionWeights, PositiveHappiness, SelectionComparison, SelectionDecisionScope,
+    SelectionOmissionReason, SelectionRole, SelectionScoreFactor, SellOnObligation,
+    StatusData, SupportEventContext, SupportMatchPhase, SupportSetting, SupportSource,
+    SupportTone, SupportTrigger,
+    TeamInfo, Technical, TrainingRecord, TransferInterestContext, TransferInterestEvidence,
+    TransferInterestKind, TransferInterestReaction, TransferInterestSource,
+    TransferInterestStage, TransferSportingFit, WageCalculator, next_player_id,
+    seed_player_id_sequence,
 };
 // Also export the missing types
 pub use player::mailbox::handlers::{AcceptContractHandler, ProcessContractHandler};

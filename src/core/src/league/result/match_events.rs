@@ -1314,12 +1314,39 @@ fn dispatch_match_outcomes(
     }
 
     // Unused substitutes feel the snub as well, even though they didn't
-    // feature in player_stats.
+    // feature in player_stats. Prefer the structured drop event when
+    // the squad selector attached a `MatchSelectionContext` for this
+    // player so the events feed reads "Lost out to Marco Silva..."
+    // instead of "Dropped from match squad".
     for &pid in &side.substitutes {
-        if !side.substitutes_used.contains(&pid) {
-            if let Some(player) = data.player_mut(pid) {
-                player.on_match_dropped();
+        if side.substitutes_used.contains(&pid) {
+            continue;
+        }
+        let ctx = side
+            .selection_omissions
+            .iter()
+            .find(|o| o.player_id == pid)
+            .map(|o| o.context.clone());
+        if let Some(player) = data.player_mut(pid) {
+            match ctx {
+                Some(c) => player.on_match_dropped_with_context(c),
+                None => player.on_match_dropped(),
             }
+        }
+    }
+
+    // Players left out of the matchday squad entirely also feel the
+    // snub. They never reached `side.main` / `side.substitutes`, so
+    // the squad selector flagged them upstream — fire the contextual
+    // drop event here.
+    for omitted in &side.selection_omissions {
+        if side.main.contains(&omitted.player_id)
+            || side.substitutes.contains(&omitted.player_id)
+        {
+            continue;
+        }
+        if let Some(player) = data.player_mut(omitted.player_id) {
+            player.on_match_dropped_with_context(omitted.context.clone());
         }
     }
 }

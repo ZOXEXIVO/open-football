@@ -2420,95 +2420,426 @@ a:link, a:visited, a:hover, a:active {
     font-size: 13px;
 }
 
-/* --- Events Timeline --- */
+/* ============================================
+   FM PLAYER EVENTS — DOSSIER LAYOUT
+   ============================================
+   The events page is the player's dressing-room ledger: each item is a
+   case-file card. A 3px coloured rail on the left flags valence (positive
+   / negative / neutral) and weight (big events glow). The header row shows
+   the headline, optional severity pill, and a relative-time stamp; the
+   body is a label/value grid (CAUSE / IMPACT / OUTLOOK) so the eye can
+   land on the four facts (who / why / what / next) without reading prose.
+*/
 
-.fm-events-timeline {
-    padding: 8px 16px 16px;
+.fm-evt-panel {
+    margin-top: 0;
 }
 
-.fm-evt-row {
+.fm-evt-list {
+    list-style: none;
+    margin: 0;
+    padding: 8px 12px 14px;
     display: flex;
-    align-items: flex-start;
-    padding: 7px 0;
-    border-left: 2px solid #2a3840;
-    margin-left: 6px;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.fm-evt-card {
     position: relative;
-}
-
-.fm-evt-row:last-child {
-    border-left-color: transparent;
-}
-
-.fm-evt-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #3d4f5c;
-    flex-shrink: 0;
-    margin-left: -5px;
-    margin-top: 5px;
-    margin-right: 12px;
-}
-
-.fm-evt-body {
     display: flex;
-    justify-content: space-between;
-    align-items: baseline;
+    align-items: stretch;
+    gap: 12px;
+    padding: 10px 12px 11px 16px;
+    border: 1px solid #243140;
+    border-radius: 4px;
+    background: linear-gradient(180deg, #1b262e 0%, #18222a 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.015);
+    transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.fm-evt-card:hover {
+    border-color: #2f3f50;
+}
+
+/* Coloured rail along the leading edge of the card. The card uses
+   absolute positioning here so the rail butts the rounded corner cleanly
+   without margin math. */
+.fm-evt-rail {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 3px;
+    border-radius: 4px 0 0 4px;
+    background: #3d4f5c;
+}
+
+.fm-evt-content {
     flex: 1;
     min-width: 0;
-    gap: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
 }
 
-.fm-evt-text {
+/* --- Header row --- */
+
+.fm-evt-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    justify-content: space-between;
+}
+
+.fm-evt-title {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    min-width: 0;
+    flex: 1;
+}
+
+/* The diamond marker echoes the rail's colour but sits inside the card
+   so the headline retains a fixed left edge regardless of severity. */
+.fm-evt-marker {
+    width: 7px;
+    height: 7px;
+    margin-top: 6px;
+    flex-shrink: 0;
+    transform: rotate(45deg);
+    background: #4a5a66;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.fm-evt-headline {
+    margin: 0;
     font-size: 13px;
-    color: #d0d6dc;
-    line-height: 1.35;
+    font-weight: 500;
+    line-height: 1.4;
+    color: #d8dde2;
+    letter-spacing: 0.1px;
+}
+
+.fm-evt-partner {
+    color: #5cb86c;
+    font-weight: 600;
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(92, 184, 108, 0.45);
+    padding-bottom: 0;
+}
+
+.fm-evt-partner:hover {
+    color: #6dd97e;
+    border-bottom-color: rgba(109, 217, 126, 0.7);
+}
+
+.fm-evt-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
 }
 
 .fm-evt-time {
-    font-size: 11px;
-    color: #4a5a66;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #51626d;
     white-space: nowrap;
+}
+
+/* --- Severity pill --- */
+
+.fm-evt-severity {
+    display: inline-block;
+    padding: 2px 7px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: 2px;
+    border: 1px solid transparent;
+    line-height: 1.4;
+}
+
+.fm-evt-severity-minor {
+    background: rgba(120, 144, 156, 0.12);
+    color: #8aa1ad;
+    border-color: rgba(120, 144, 156, 0.25);
+}
+
+.fm-evt-severity-moderate {
+    background: rgba(255, 167, 38, 0.12);
+    color: #ffb14d;
+    border-color: rgba(255, 167, 38, 0.32);
+}
+
+.fm-evt-severity-serious {
+    background: rgba(255, 112, 67, 0.15);
+    color: #ff9067;
+    border-color: rgba(255, 112, 67, 0.4);
+}
+
+.fm-evt-severity-major {
+    background: rgba(229, 57, 53, 0.18);
+    color: #ff6e6a;
+    border-color: rgba(229, 57, 53, 0.55);
+    box-shadow: inset 0 0 0 1px rgba(229, 57, 53, 0.25);
+}
+
+/* --- Body grid: CAUSE / IMPACT / OUTLOOK --- */
+
+.fm-evt-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 14px;
+    margin: 0;
+    padding: 8px 0 1px;
+    border-top: 1px solid #1f2a32;
+}
+
+.fm-evt-label {
+    margin: 0;
+    align-self: center;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    color: #4f6473;
+}
+
+.fm-evt-value {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #b8c0c8;
+}
+
+.fm-evt-outlook {
+    color: #98a4ae;
+    font-style: italic;
+}
+
+/* --- Impact chip ---
+   Replaces the old prose "Morale -2. Severity: Moderate." with a single
+   inline pill: an SVG arrow icon, the morale delta, and a small uppercase
+   label. The chip's colouring tracks the delta sign, not the event's
+   valence — so a SettledIntoSquad event (positive) and a fan-praise lift
+   land in the same green even when their headlines feel different. */
+
+.fm-evt-value-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-top: 1px;
+    flex-wrap: wrap;
+}
+
+.fm-evt-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px 3px 7px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 11px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.fm-evt-chip-arrow {
+    width: 11px;
+    height: 11px;
     flex-shrink: 0;
 }
 
-/* Big events — bolder text, dot glow */
-.fm-evt-big .fm-evt-dot {
-    width: 10px;
-    height: 10px;
-    margin-left: -6px;
-    margin-top: 4px;
+.fm-evt-chip-value {
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.2px;
 }
 
-.fm-evt-big .fm-evt-text {
-    font-weight: 600;
+.fm-evt-chip-label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    opacity: 0.78;
+    padding-left: 2px;
+    border-left: 1px solid currentColor;
+    margin-left: 1px;
+    /* `border-left: 1px solid currentColor` plus 78% opacity gives a
+       hairline divider that auto-tints with the chip colour without a
+       second variable. */
 }
 
-/* Neutral dot: white */
-.fm-evt-dot {
-    background: #8899a4;
+.fm-evt-chip-up {
+    background: rgba(76, 175, 80, 0.14);
+    color: #6cd078;
+    border-color: rgba(76, 175, 80, 0.4);
 }
-.fm-evt-big .fm-evt-dot {
-    background: #b0bec5;
-    box-shadow: 0 0 5px rgba(176, 190, 197, 0.3);
+.fm-evt-chip-up .fm-evt-chip-arrow {
+    fill: #6cd078;
 }
 
-/* Positive dot: green */
-.fm-evt-positive .fm-evt-dot {
+.fm-evt-chip-down {
+    background: rgba(229, 57, 53, 0.16);
+    color: #ff7a76;
+    border-color: rgba(229, 57, 53, 0.45);
+}
+.fm-evt-chip-down .fm-evt-chip-arrow {
+    fill: #ff7a76;
+}
+
+.fm-evt-chip-flat {
+    background: rgba(120, 144, 156, 0.12);
+    color: #94a3ad;
+    border-color: rgba(120, 144, 156, 0.3);
+}
+.fm-evt-chip-flat .fm-evt-chip-arrow {
+    fill: #94a3ad;
+}
+
+/* Big events bump the chip a notch — heavier border, soft outer glow so
+   it reads from across the timeline without redesigning the chip body. */
+.fm-evt-big .fm-evt-chip-up {
+    box-shadow: 0 0 0 1px rgba(76, 175, 80, 0.18), 0 0 8px rgba(76, 175, 80, 0.18);
+}
+.fm-evt-big .fm-evt-chip-down {
+    box-shadow: 0 0 0 1px rgba(229, 57, 53, 0.22), 0 0 8px rgba(229, 57, 53, 0.2);
+}
+
+/* --- Valence variants --- */
+
+/* Neutral (default) */
+.fm-evt-neutral .fm-evt-rail {
+    background: linear-gradient(180deg, #5a6e7c 0%, #455661 100%);
+}
+.fm-evt-neutral .fm-evt-marker {
+    background: #6b7e8b;
+}
+
+/* Positive */
+.fm-evt-positive .fm-evt-rail {
+    background: linear-gradient(180deg, #4caf50 0%, #2f7a36 100%);
+}
+.fm-evt-positive .fm-evt-marker {
     background: #4caf50;
-}
-.fm-evt-positive.fm-evt-big .fm-evt-dot {
-    background: #66bb6a;
-    box-shadow: 0 0 6px rgba(76, 175, 80, 0.4);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 0 4px rgba(76, 175, 80, 0.35);
 }
 
-/* Negative dot: red */
-.fm-evt-negative .fm-evt-dot {
-    background: #e53935;
+/* Negative */
+.fm-evt-negative .fm-evt-rail {
+    background: linear-gradient(180deg, #e53935 0%, #8a1c1a 100%);
 }
-.fm-evt-negative.fm-evt-big .fm-evt-dot {
-    background: #ef5350;
-    box-shadow: 0 0 6px rgba(229, 57, 53, 0.4);
+.fm-evt-negative .fm-evt-marker {
+    background: #e53935;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 0 4px rgba(229, 57, 53, 0.35);
+}
+
+/* --- Big events: career-visible moments --- */
+
+.fm-evt-big {
+    border-color: #2d3e4d;
+    background: linear-gradient(180deg, #1f2c34 0%, #1a242c 100%);
+}
+
+.fm-evt-big .fm-evt-rail {
+    width: 4px;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.06);
+}
+
+.fm-evt-big .fm-evt-headline {
+    font-weight: 700;
+    color: #e7ecf1;
+    font-size: 13.5px;
+}
+
+.fm-evt-big.fm-evt-positive {
+    border-color: rgba(76, 175, 80, 0.35);
+}
+.fm-evt-big.fm-evt-positive .fm-evt-rail {
+    background: linear-gradient(180deg, #66bb6a 0%, #2f7a36 100%);
+    box-shadow: 0 0 10px rgba(76, 175, 80, 0.45);
+}
+
+.fm-evt-big.fm-evt-negative {
+    border-color: rgba(229, 57, 53, 0.4);
+}
+.fm-evt-big.fm-evt-negative .fm-evt-rail {
+    background: linear-gradient(180deg, #ef5350 0%, #8a1c1a 100%);
+    box-shadow: 0 0 10px rgba(229, 57, 53, 0.4);
+}
+
+.fm-evt-big.fm-evt-neutral .fm-evt-rail {
+    background: linear-gradient(180deg, #b0bec5 0%, #5a6e7c 100%);
+    box-shadow: 0 0 8px rgba(176, 190, 197, 0.25);
+}
+
+/* --- Empty state --- */
+
+.fm-evt-empty {
+    padding: 56px 20px 64px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+.fm-evt-empty-mark {
+    width: 44px;
+    height: 44px;
+    border: 1px dashed #2f4250;
+    border-radius: 50%;
+    position: relative;
+}
+
+.fm-evt-empty-mark::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: -8px;
+    right: -8px;
+    height: 1px;
+    background: linear-gradient(
+        90deg,
+        transparent 0,
+        #2f4250 20%,
+        #2f4250 80%,
+        transparent 100%
+    );
+    transform: rotate(-25deg);
+}
+
+.fm-evt-empty-text {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    color: #4f6371;
+}
+
+/* --- Responsive: collapse the label/value grid on narrow screens --- */
+
+@media (max-width: 640px) {
+    .fm-evt-head {
+        flex-direction: column;
+        gap: 6px;
+    }
+    .fm-evt-meta {
+        order: 2;
+    }
+    .fm-evt-grid {
+        grid-template-columns: 1fr;
+        gap: 1px 0;
+    }
+    .fm-evt-label {
+        margin-top: 6px;
+    }
+    .fm-evt-label:first-child {
+        margin-top: 0;
+    }
 }
 
 /* --- Radar chart --- */
@@ -3537,59 +3868,145 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-info-body {
-    padding: 8px 14px;
+    padding: 12px 14px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 10px;
 }
 
-.fm-info-row {
-    display: flex;
-    align-items: baseline;
+.fm-info-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
     gap: 8px;
-    font-size: 14px;
-    line-height: 1.4;
 }
 
-.fm-info-label {
-    color: #546a78;
+.fm-info-tile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: linear-gradient(160deg, #243240 0%, #1d2832 100%);
+    border: 1px solid #2c3c4a;
+    border-radius: 6px;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.04) inset,
+        0 1px 3px rgba(0, 0, 0, 0.18);
+    transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+    min-width: 0;
+}
+
+.fm-info-tile:hover {
+    border-color: #3a5468;
+    transform: translateY(-1px);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.06) inset,
+        0 4px 10px rgba(0, 0, 0, 0.25);
+}
+
+.fm-info-tile-icon {
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    font-size: 15px;
+    flex: 0 0 38px;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.08) inset,
+        0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.fm-info-tile-countries .fm-info-tile-icon {
+    background: linear-gradient(160deg, #2c4a66 0%, #213a52 100%);
+    border: 1px solid #3a5e80;
+    color: #7ab8e8;
+}
+
+.fm-info-tile-clubs .fm-info-tile-icon {
+    background: linear-gradient(160deg, #5a4628 0%, #3f3220 100%);
+    border: 1px solid #7a5e36;
+    color: #f0c870;
+}
+
+.fm-info-tile-players .fm-info-tile-icon {
+    background: linear-gradient(160deg, #2e5a40 0%, #234430 100%);
+    border: 1px solid #3e7252;
+    color: #84d8a4;
+}
+
+.fm-info-tile-machine .fm-info-tile-icon {
+    background: linear-gradient(160deg, #2a3a48 0%, #22303c 100%);
+    border: 1px solid #38485a;
+    color: #88a4b8;
+}
+
+.fm-info-tile-body {
+    display: flex;
+    flex-direction: column;
+    line-height: 1;
+    min-width: 0;
+}
+
+.fm-info-tile-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.4px;
+    line-height: 1.05;
+}
+
+.fm-info-tile-label {
+    margin-top: 5px;
+    font-size: 10.5px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.6px;
-    font-size: 10.5px;
-    flex: 0 0 auto;
+    letter-spacing: 0.9px;
+    color: #6c8290;
 }
 
-.fm-info-value {
-    color: #c8d6e0;
-    font-weight: 500;
+.fm-info-machine-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: #ffffff;
+    line-height: 1.1;
+    letter-spacing: -0.2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.fm-info-row-stats {
-    font-size: 13px;
-    color: #c8d6e0;
+/* Tablets and small laptops — Machine claims its own full-width row
+   so the long CPU brand string never gets clipped. iPad mini portrait
+   (768px) and landscape (1024px) both hit this band. */
+@media (max-width: 1100px) {
+    .fm-info-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+    .fm-info-tile-machine {
+        grid-column: 1 / -1;
+    }
 }
 
-.fm-info-stats {
-    overflow: visible;
-    white-space: normal;
-    text-overflow: clip;
-}
-
-.fm-stat-num {
-    font-size: 16px;
-    font-weight: 700;
-    color: #ffffff;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.2px;
-    margin-right: 1px;
-}
-
-.fm-stat-sep {
-    color: #3b4d58;
+/* Phones — stack everything in a single column. */
+@media (max-width: 480px) {
+    .fm-info-grid {
+        grid-template-columns: 1fr;
+    }
+    .fm-info-tile {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 10px;
+    }
+    .fm-info-tile-value {
+        font-size: 18px;
+    }
+    .fm-info-machine-value {
+        font-size: 14px;
+        white-space: normal;
+    }
 }
 
 .fm-download-btn {

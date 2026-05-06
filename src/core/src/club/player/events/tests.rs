@@ -1904,6 +1904,181 @@ fn under_15_competitive_match_carries_far_more_load_than_adult_peer() {
     );
 }
 
+// ── MatchDropped + structured selection context ─────────────
+
+fn drop_ctx(
+    scope: crate::SelectionDecisionScope,
+    reason: crate::SelectionOmissionReason,
+    importance: f32,
+    is_friendly: bool,
+) -> crate::MatchSelectionContext {
+    crate::MatchSelectionContext {
+        scope,
+        reason,
+        comparison: None,
+        role: crate::SelectionRole::Striker,
+        match_importance: importance,
+        repeated: false,
+        is_friendly,
+    }
+}
+
+#[test]
+fn match_dropped_carries_structured_selection_context() {
+    let mut p = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
+    let ctx = drop_ctx(
+        crate::SelectionDecisionScope::DroppedToBench,
+        crate::SelectionOmissionReason::TeammatePreferredOnFitness,
+        0.8,
+        false,
+    );
+    p.on_match_dropped_with_context(ctx);
+
+    let event = p
+        .happiness
+        .recent_events
+        .last()
+        .expect("MatchDropped event must land");
+    assert_eq!(event.event_type, HappinessEventType::MatchDropped);
+    let stored = event
+        .context
+        .as_ref()
+        .and_then(|c| c.selection_context.as_ref())
+        .expect("selection context must round-trip into the event");
+    assert_eq!(
+        stored.scope,
+        crate::SelectionDecisionScope::DroppedToBench
+    );
+    assert_eq!(
+        stored.reason,
+        crate::SelectionOmissionReason::TeammatePreferredOnFitness
+    );
+}
+
+#[test]
+fn match_dropped_key_player_severity_exceeds_rotation_player() {
+    let mut key = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
+    let mut rotation =
+        build_player_with_status(crate::PlayerSquadStatus::FirstTeamSquadRotation);
+    let ctx = drop_ctx(
+        crate::SelectionDecisionScope::LeftOutOfMatchdaySquad,
+        crate::SelectionOmissionReason::TeammatePreferredOnAbility,
+        0.8,
+        false,
+    );
+    key.on_match_dropped_with_context(ctx.clone());
+    rotation.on_match_dropped_with_context(ctx);
+
+    let key_mag = key
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::MatchDropped)
+        .map(|e| e.magnitude.abs())
+        .unwrap_or(0.0);
+    let rot_mag = rotation
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::MatchDropped)
+        .map(|e| e.magnitude.abs())
+        .unwrap_or(0.0);
+    assert!(
+        key_mag > rot_mag * 1.5,
+        "KeyPlayer drop magnitude {} should clearly exceed rotation {}",
+        key_mag,
+        rot_mag
+    );
+}
+
+#[test]
+fn match_dropped_rest_softer_than_tactical_rejection() {
+    let mut rested = build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
+    let mut rejected = build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
+    rested.on_match_dropped_with_context(drop_ctx(
+        crate::SelectionDecisionScope::Rested,
+        crate::SelectionOmissionReason::FatigueManagement,
+        0.8,
+        false,
+    ));
+    rejected.on_match_dropped_with_context(drop_ctx(
+        crate::SelectionDecisionScope::DroppedToBench,
+        crate::SelectionOmissionReason::PoorRecentForm,
+        0.8,
+        false,
+    ));
+    let r_mag = rested
+        .happiness
+        .recent_events
+        .last()
+        .map(|e| e.magnitude.abs())
+        .unwrap_or(0.0);
+    let j_mag = rejected
+        .happiness
+        .recent_events
+        .last()
+        .map(|e| e.magnitude.abs())
+        .unwrap_or(0.0);
+    assert!(
+        r_mag < j_mag,
+        "rest magnitude {} must be softer than tactical-rejection magnitude {}",
+        r_mag,
+        j_mag
+    );
+}
+
+#[test]
+fn match_dropped_friendly_dampens_magnitude_below_competitive() {
+    let mut friendly = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
+    let mut competitive = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
+    friendly.on_match_dropped_with_context(drop_ctx(
+        crate::SelectionDecisionScope::DroppedToBench,
+        crate::SelectionOmissionReason::PoorRecentForm,
+        0.6,
+        true,
+    ));
+    competitive.on_match_dropped_with_context(drop_ctx(
+        crate::SelectionDecisionScope::DroppedToBench,
+        crate::SelectionOmissionReason::PoorRecentForm,
+        0.6,
+        false,
+    ));
+    let f = friendly
+        .happiness
+        .recent_events
+        .last()
+        .map(|e| e.magnitude.abs())
+        .unwrap_or(0.0);
+    let c = competitive
+        .happiness
+        .recent_events
+        .last()
+        .map(|e| e.magnitude.abs())
+        .unwrap_or(0.0);
+    assert!(
+        f < c,
+        "friendly magnitude {} should be softer than competitive {}",
+        f,
+        c
+    );
+}
+
+#[test]
+fn legacy_on_match_dropped_still_emits_no_context() {
+    let mut p = build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
+    p.on_match_dropped();
+    let event = p
+        .happiness
+        .recent_events
+        .last()
+        .expect("legacy emit must still land an event");
+    assert_eq!(event.event_type, HappinessEventType::MatchDropped);
+    assert!(
+        event.context.is_none(),
+        "legacy path must not synthesise a selection context"
+    );
+}
+
 #[test]
 fn under_15_friendly_match_does_not_get_maturity_amplification() {
     // Pre-season cameos are already discounted via the friendly factor;
@@ -2567,4 +2742,270 @@ fn award_emissions_respect_recent_events_cap() {
         p.happiness.add_event_default(event);
     }
     assert!(p.happiness.recent_events.len() <= cap);
+}
+
+// ── Transfer-interest signal tests ───────────────────────────
+
+fn make_signal(stage: crate::TransferInterestStage) -> super::transfer_social::TransferInterestSignal
+{
+    super::transfer_social::TransferInterestSignal {
+        interested_club_id: 9001,
+        interested_league_id: Some(2),
+        buyer_rep: 0.80,
+        seller_rep: 0.50,
+        buyer_league_rep: 8000,
+        seller_league_rep: 5000,
+        stage,
+        source: crate::TransferInterestSource::ConfirmedApproach,
+        repeated_attention: false,
+        is_rival: false,
+        is_home_country: false,
+        is_former_club: false,
+    }
+}
+
+#[test]
+fn transfer_interest_signal_fires_for_concrete_step_up_for_ambitious_player() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.ambition = 17.0;
+    let sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let landed = p.on_transfer_interest_signal(&sig);
+    assert!(landed, "concrete interest from a bigger club should land");
+    let count = count_events(&p, &HappinessEventType::InterestFromBiggerClub);
+    assert_eq!(count, 1);
+    let stored_ctx = p
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::InterestFromBiggerClub)
+        .and_then(|e| e.context.as_ref())
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("transfer interest context must be attached");
+    assert_eq!(stored_ctx.interested_club_id, Some(9001));
+    assert_eq!(
+        stored_ctx.player_reaction,
+        crate::TransferInterestReaction::Excited
+    );
+}
+
+#[test]
+fn transfer_interest_high_loyalty_player_reacts_calmly() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.ambition = 10.0;
+    p.attributes.loyalty = 17.0;
+    let sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    p.on_transfer_interest_signal(&sig);
+    let stored_ctx = p
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::InterestFromBiggerClub)
+        .and_then(|e| e.context.as_ref())
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("context attached");
+    assert_eq!(
+        stored_ctx.player_reaction,
+        crate::TransferInterestReaction::PubliclyCalmPrivatelyInterested,
+        "loyal player should appear calm publicly even on a step-up link"
+    );
+}
+
+#[test]
+fn transfer_interest_ambitious_player_magnitude_exceeds_low_ambition() {
+    let mut high = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut low = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    high.attributes.ambition = 18.0;
+    low.attributes.ambition = 4.0;
+    let sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    high.on_transfer_interest_signal(&sig);
+    low.on_transfer_interest_signal(&sig);
+    let m_high = high
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::InterestFromBiggerClub)
+        .map(|e| e.magnitude)
+        .unwrap_or(0.0);
+    let m_low = low
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::InterestFromBiggerClub)
+        .map(|e| e.magnitude)
+        .unwrap_or(0.0);
+    assert!(
+        m_high > m_low,
+        "ambitious player should feel a bigger lift than a low-ambition one (high={}, low={})",
+        m_high,
+        m_low
+    );
+}
+
+#[test]
+fn transfer_interest_scout_only_does_not_emit_for_peer_buyer() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut sig = make_signal(crate::TransferInterestStage::ScoutWatched);
+    sig.buyer_rep = 0.51;
+    sig.seller_rep = 0.50;
+    sig.repeated_attention = false;
+    sig.source = crate::TransferInterestSource::ScoutAttendance;
+    let landed = p.on_transfer_interest_signal(&sig);
+    assert!(
+        !landed,
+        "single scout sighting at peer rep should not surface as a player event"
+    );
+}
+
+#[test]
+fn transfer_interest_repeated_scout_attention_emits_event() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut sig = make_signal(crate::TransferInterestStage::ScoutWatched);
+    sig.buyer_rep = 0.55;
+    sig.seller_rep = 0.50;
+    sig.repeated_attention = true;
+    sig.source = crate::TransferInterestSource::ScoutAttendance;
+    let landed = p.on_transfer_interest_signal(&sig);
+    assert!(
+        landed,
+        "repeated scout attention should bubble up to the player"
+    );
+    let count = count_events(&p, &HappinessEventType::ScoutedByClub);
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn transfer_interest_scout_cooldown_blocks_repeat() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut sig = make_signal(crate::TransferInterestStage::ScoutWatched);
+    sig.buyer_rep = 0.55;
+    sig.seller_rep = 0.50;
+    sig.repeated_attention = true;
+    sig.source = crate::TransferInterestSource::ScoutAttendance;
+    p.on_transfer_interest_signal(&sig);
+    // Same scout, same window — cooldown gate should block the duplicate.
+    let landed_again = p.on_transfer_interest_signal(&sig);
+    assert!(
+        !landed_again,
+        "repeated scout watching inside the cooldown window should not fire a second event"
+    );
+    let count = count_events(&p, &HappinessEventType::ScoutedByClub);
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn transfer_interest_rival_kind_attaches_rival_evidence() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    sig.is_rival = true;
+    p.on_transfer_interest_signal(&sig);
+    let event = p
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::InterestFromRival)
+        .expect("rival-club concrete interest should fire its own event type");
+    let tic = event
+        .context
+        .as_ref()
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("rival context attached");
+    assert!(tic.is_rival);
+    assert!(tic
+        .evidence
+        .contains(&crate::TransferInterestEvidence::RivalClub));
+}
+
+#[test]
+fn transfer_interest_underused_player_reads_smaller_club_offer_as_escape() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.ambition = 12.0;
+    p.attributes.loyalty = 8.0;
+    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    // Smaller club, but offering more minutes
+    sig.buyer_rep = 0.30;
+    sig.seller_rep = 0.55;
+    // Install a contract with fringe squad status so the fringe-detection
+    // branch lights up. `build_player` starts the player with no contract;
+    // without one the classifier can't read squad status.
+    let mut contract = crate::PlayerClubContract::new(10_000, d(2035, 6, 30));
+    contract.squad_status = crate::PlayerSquadStatus::MainBackupPlayer;
+    p.contract = Some(contract);
+    p.on_transfer_interest_signal(&sig);
+    let event = p
+        .happiness
+        .recent_events
+        .iter()
+        .last()
+        .expect("an event should fire for a fringe player getting a step-down-with-minutes link");
+    let tic = event
+        .context
+        .as_ref()
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("context attached");
+    assert_eq!(
+        tic.interest_kind,
+        crate::TransferInterestKind::EscapeRoute,
+        "fringe player offered minutes elsewhere should classify as EscapeRoute"
+    );
+    assert_eq!(
+        tic.player_reaction,
+        crate::TransferInterestReaction::WantsTalks
+    );
+}
+
+#[test]
+fn transfer_interest_bid_rejected_signal_emits_with_rejected_evidence() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.ambition = 16.0;
+    let sig = make_signal(crate::TransferInterestStage::BidRejected);
+    let landed = p.on_transfer_interest_signal(&sig);
+    assert!(landed, "rejected bid should always land for ambitious player");
+    let event = p
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::TransferBidRejected)
+        .expect("bid-rejected event must fire via the signal path");
+    let tic = event
+        .context
+        .as_ref()
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("context attached for bid rejected");
+    assert!(tic
+        .evidence
+        .contains(&crate::TransferInterestEvidence::RejectedBid));
+}
+
+#[test]
+fn transfer_interest_count_helper_only_counts_interest_events() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.happiness
+        .add_event_default(HappinessEventType::PoorTraining);
+    p.happiness
+        .add_event_default(HappinessEventType::ManagerPraise);
+    let sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    p.on_transfer_interest_signal(&sig);
+    let n = p.count_recent_transfer_interest_events(60);
+    assert_eq!(
+        n, 1,
+        "only the InterestFromBiggerClub event should be counted as interest"
+    );
+}
+
+#[test]
+fn transfer_interest_speculation_pressure_high_professionalism_no_event() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.professionalism = 18.0;
+    p.on_unresolved_speculation_pressure(5);
+    let count = count_events(&p, &HappinessEventType::TransferSpeculationDistracts);
+    assert_eq!(count, 0, "highly professional players shrug it off");
+}
+
+#[test]
+fn transfer_interest_speculation_pressure_emits_for_low_professionalism() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.attributes.professionalism = 8.0;
+    p.on_unresolved_speculation_pressure(4);
+    let count = count_events(&p, &HappinessEventType::TransferSpeculationDistracts);
+    assert_eq!(count, 1);
 }

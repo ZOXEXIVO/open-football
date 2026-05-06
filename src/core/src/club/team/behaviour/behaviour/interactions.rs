@@ -5,7 +5,11 @@
 use super::TeamBehaviour;
 use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
-use crate::{ChangeType, HappinessEventType, PlayerCollection};
+use crate::{
+    ChangeType, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
+    HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
+    PlayerCollection,
+};
 
 impl TeamBehaviour {
     pub(super) fn process_daily_interactions(
@@ -120,15 +124,47 @@ impl TeamBehaviour {
                     // and read as event-feed spam. Happiness is cleared
                     // on every transfer, so the cooldown effectively
                     // resets at the next club.
-                    player.happiness.add_event_with_cooldown(
+                    let magnitude = 2.0;
+                    let mut evidence = vec![HappinessEventEvidence::NewSigningStillSettling];
+                    if positive_count >= 5 {
+                        // Plenty of positive bonds — call out the strong
+                        // existing rapport rather than just "settling in".
+                        evidence.push(HappinessEventEvidence::StrongExistingBond);
+                    }
+                    let ctx = HappinessEventContext::new(
+                        HappinessEventCause::TrainingPartnership,
+                        HappinessEventSeverity::from_magnitude(magnitude),
+                        HappinessEventScope::DressingRoom,
+                    )
+                    .with_evidence_iter(evidence)
+                    .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+                    player.happiness.add_event_with_context_and_cooldown(
                         HappinessEventType::SettledIntoSquad,
-                        2.0,
+                        magnitude,
+                        None,
+                        ctx,
                         365,
                     );
                 } else if !has_any_relation && rand::random::<f32>() < 0.08 {
-                    player.happiness.add_event_with_cooldown(
+                    let magnitude = -1.5;
+                    // Concrete reasons for isolation: no inner-circle bond
+                    // formed yet AND fresh transfer window.
+                    let evidence = [
+                        HappinessEventEvidence::NoInnerCircleYet,
+                        HappinessEventEvidence::NewSigningStillSettling,
+                    ];
+                    let ctx = HappinessEventContext::new(
+                        HappinessEventCause::AdaptationIsolation,
+                        HappinessEventSeverity::from_magnitude(magnitude),
+                        HappinessEventScope::DressingRoom,
+                    )
+                    .with_evidence_iter(evidence)
+                    .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+                    player.happiness.add_event_with_context_and_cooldown(
                         HappinessEventType::FeelingIsolated,
-                        -1.5,
+                        magnitude,
+                        None,
+                        ctx,
                         14,
                     );
                 }

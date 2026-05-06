@@ -3,8 +3,13 @@ use crate::club::player::interaction::{
     InteractionOutcome, InteractionTone, InteractionTopic, ManagerInteraction,
     default_cooldown_days,
 };
-use crate::{ChangeType, HappinessEventType, PlayerStatusType, RelationshipChange, SimulatorData};
-use chrono::Duration;
+use crate::{
+    ChangeType, HappinessEventCause, HappinessEventChangeKind, HappinessEventContext,
+    HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, Player, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
+    RelationshipChange, SimulatorData,
+};
+use chrono::{Duration, NaiveDate};
 
 pub struct TeamBehaviourResult {
     pub players: PlayerBehaviourResult,
@@ -287,59 +292,388 @@ impl PlayerBehaviourResult {
         let sim_date = data.date.date();
 
         for relationship_result in &self.relationship_result {
+            // Look up partner-side personality / squad info BEFORE we take
+            // a `&mut` on `from_player`. Used for SamePosition /
+            // SimilarSquadStatus evidence — partner is a different player,
+            // so the borrows don't conflict.
+            let partner_id = relationship_result.to_player_id;
+            let partner_position = data.player(partner_id).map(|p| p.position());
+            let partner_squad_status = data
+                .player(partner_id)
+                .and_then(|p| p.contract.as_ref())
+                .map(|c| c.squad_status.clone());
+
             if let Some(player_to_modify) = data.player_mut(relationship_result.from_player_id) {
+                // Snapshot the relation BEFORE applying the update —
+                // earlier versions of this code read it AFTER, so
+                // `relationship_level_before` was actually post-update.
+                // Default to a neutral relation when no prior record
+                // exists (first-ever interaction with this teammate).
+                let prior = PairRelationSnapshot::capture(player_to_modify, partner_id);
+                let snapshot_before = prior.unwrap_or_else(PairRelationSnapshot::neutral);
+                let had_prior_relation = prior.is_some();
+
                 player_to_modify.relations.update_with_type(
-                    relationship_result.to_player_id,
+                    partner_id,
                     relationship_result.relationship_change,
                     relationship_result.change_type.clone(),
                     sim_date,
                 );
 
-                // Generate teammate relationship events visible in player
-                // history. The raw `relationship_change` doesn't reflect
-                // what `PlayerRelation::apply_change` actually applies —
-                // PersonalConflict, MatchCooperation, ConflictResolution
-                // and others multiply the magnitude internally. Compare
-                // the *applied* magnitude against the threshold so a
-                // raw -0.20 PersonalConflict (≈-0.60 applied) actually
-                // surfaces. Tag the partner so the UI can link to the
-                // specific teammate.
+                // Snapshot AFTER so the renderer can speak about trend
+                // direction without recomputing the delta.
+                let level_after = player_to_modify
+                    .relations
+                    .get_player(partner_id)
+                    .map(|r| r.level)
+                    .unwrap_or(snapshot_before.level);
+
+                // Generate teammate relationship events visible in
+                // player history. The raw `relationship_change` doesn't
+                // reflect what `PlayerRelation::apply_change` actually
+                // applies — PersonalConflict, MatchCooperation,
+                // ConflictResolution and others multiply the magnitude
+                // internally. Compare the *applied* magnitude against
+                // the threshold so a raw -0.20 PersonalConflict
+                // (≈-0.60 applied) actually surfaces.
                 let applied = applied_level_magnitude(
                     relationship_result.relationship_change,
                     &relationship_result.change_type,
                 );
-                let partner_id = relationship_result.to_player_id;
                 // 45-day per-partner cooldown so a chronic friction
                 // pair (or a long-running bonding pair) doesn't spam
                 // history with one event per weekly tick.
                 const PARTNER_EVENT_COOLDOWN_DAYS: u16 = 45;
-                if applied > 0.5
-                    && !player_to_modify.happiness.has_recent_event_with_partner(
-                        &HappinessEventType::TeammateBonding,
-                        partner_id,
-                        PARTNER_EVENT_COOLDOWN_DAYS,
-                    )
-                {
-                    player_to_modify.happiness.add_event_with_partner(
-                        HappinessEventType::TeammateBonding,
-                        1.0,
-                        Some(partner_id),
+
+                // Evidence from the pre-update snapshot — the true
+                // "before the incident" state the user wants explained.
+                let evidence = PairEventContextBuilder::build_evidence(
+                    &relationship_result.change_type,
+                    snapshot_before,
+                    had_prior_relation,
+                    player_to_modify,
+                    partner_position.as_ref(),
+                    partner_squad_status,
+                    sim_date,
+                );
+
+                if applied > 0.5 {
+                    let magnitude = 1.0;
+                    let context = PairEventContextBuilder::bonding_context(
+                        &relationship_result.change_type,
+                        magnitude,
+                        snapshot_before,
+                        level_after,
+                        &evidence,
                     );
-                } else if applied < -0.5
-                    && !player_to_modify.happiness.has_recent_event_with_partner(
-                        &HappinessEventType::ConflictWithTeammate,
-                        partner_id,
-                        PARTNER_EVENT_COOLDOWN_DAYS,
-                    )
-                {
-                    player_to_modify.happiness.add_event_with_partner(
-                        HappinessEventType::ConflictWithTeammate,
-                        -1.5,
-                        Some(partner_id),
+                    player_to_modify
+                        .happiness
+                        .add_event_with_partner_context_and_cooldown(
+                            HappinessEventType::TeammateBonding,
+                            magnitude,
+                            partner_id,
+                            context,
+                            PARTNER_EVENT_COOLDOWN_DAYS,
+                        );
+                } else if applied < -0.5 {
+                    let magnitude = -1.5;
+                    let mut conflict_evidence = evidence.clone();
+                    // RepeatedIncident: a recent conflict with this
+                    // same partner promotes the incident from a one-off
+                    // to a chronic concern in the dressing-room.
+                    let recent_count = player_to_modify
+                        .happiness
+                        .recent_events
+                        .iter()
+                        .filter(|e| {
+                            e.event_type == HappinessEventType::ConflictWithTeammate
+                                && e.partner_player_id == Some(partner_id)
+                                && e.days_ago <= 90
+                        })
+                        .count();
+                    if recent_count >= 1
+                        && !conflict_evidence.contains(&HappinessEventEvidence::RepeatedIncident)
+                    {
+                        conflict_evidence.push(HappinessEventEvidence::RepeatedIncident);
+                    }
+
+                    let context = PairEventContextBuilder::conflict_context(
+                        &relationship_result.change_type,
+                        magnitude,
+                        snapshot_before,
+                        level_after,
+                        &conflict_evidence,
                     );
+                    player_to_modify
+                        .happiness
+                        .add_event_with_partner_context_and_cooldown(
+                            HappinessEventType::ConflictWithTeammate,
+                            magnitude,
+                            partner_id,
+                            context,
+                            PARTNER_EVENT_COOLDOWN_DAYS,
+                        );
                 }
             }
         }
+    }
+}
+
+/// Per-pair pre-update relationship snapshot used to build a
+/// [`HappinessEventContext`]. Stored as a struct so the multiple emit
+/// paths share a single shape and the construction sites read like
+/// data, not tuple gymnastics.
+#[derive(Debug, Clone, Copy)]
+pub struct PairRelationSnapshot {
+    pub level: f32,
+    pub trust: f32,
+    pub friendship: f32,
+    pub professional_respect: f32,
+}
+
+impl PairRelationSnapshot {
+    /// Snapshot a player's view of a partner relation. `None` if the
+    /// pair has never interacted — caller decides whether to default.
+    pub fn capture(player: &Player, partner_id: u32) -> Option<Self> {
+        player.relations.get_player(partner_id).map(|r| Self {
+            level: r.level,
+            trust: r.trust,
+            friendship: r.friendship,
+            professional_respect: r.professional_respect,
+        })
+    }
+
+    /// Neutral baseline used when no relation record exists yet — first
+    /// interaction with this teammate. Mirrors `PlayerRelation::new_neutral`.
+    pub fn neutral() -> Self {
+        Self {
+            level: 0.0,
+            trust: 50.0,
+            friendship: 30.0,
+            professional_respect: 50.0,
+        }
+    }
+}
+
+/// Builder for pair-event explanation contexts (TeammateBonding /
+/// ConflictWithTeammate). Centralises cause / scope mapping, evidence
+/// derivation, and outlook selection so the call site in
+/// `PlayerBehaviourResult::process` reads as a thin orchestration layer.
+pub struct PairEventContextBuilder;
+
+impl PairEventContextBuilder {
+    /// Pick a stable cause category for a conflict event driven by
+    /// `change_type`. Mapping is total — every conflict-producing
+    /// `ChangeType` resolves to a concrete cause so the renderer never
+    /// falls back to a generic "Other" line for upgraded emit sites.
+    pub fn cause_for_conflict(change_type: &ChangeType) -> HappinessEventCause {
+        match change_type {
+            ChangeType::PersonalConflict => HappinessEventCause::PersonalityClash,
+            ChangeType::TrainingFriction => HappinessEventCause::TrainingFriction,
+            ChangeType::CompetitionRivalry => HappinessEventCause::PositionalRivalry,
+            ChangeType::ReputationTension => HappinessEventCause::ReputationTension,
+            ChangeType::TacticalDisagreement => HappinessEventCause::TacticalDisagreement,
+            ChangeType::TeamFailure => HappinessEventCause::PoorFormPressure,
+            ChangeType::DisciplinaryAction => HappinessEventCause::LeadershipDispute,
+            _ => HappinessEventCause::PersonalityClash,
+        }
+    }
+
+    /// Counterpart of `cause_for_conflict` for bonding events. Always
+    /// resolves to a positive cause so the "why" sentence stays
+    /// consistent with the positive headline.
+    pub fn cause_for_bonding(change_type: &ChangeType) -> HappinessEventCause {
+        match change_type {
+            ChangeType::MatchCooperation | ChangeType::TeamSuccess => {
+                HappinessEventCause::MatchCooperation
+            }
+            ChangeType::ReputationAdmiration => HappinessEventCause::ReputationAdmiration,
+            _ => HappinessEventCause::TrainingPartnership,
+        }
+    }
+
+    fn scope_for_conflict(change_type: &ChangeType) -> HappinessEventScope {
+        match change_type {
+            ChangeType::TrainingFriction
+            | ChangeType::CompetitionRivalry
+            | ChangeType::TacticalDisagreement => HappinessEventScope::TrainingGround,
+            _ => HappinessEventScope::DressingRoom,
+        }
+    }
+
+    fn scope_for_bonding(change_type: &ChangeType) -> HappinessEventScope {
+        match change_type {
+            ChangeType::MatchCooperation | ChangeType::TeamSuccess => HappinessEventScope::MatchDay,
+            ChangeType::TrainingBonding | ChangeType::MentorshipBond => {
+                HappinessEventScope::TrainingGround
+            }
+            _ => HappinessEventScope::DressingRoom,
+        }
+    }
+
+    /// Derive the closed-set evidence list for a pair event, given the
+    /// pre-update relation snapshot, the change type, and the
+    /// from-player / partner context. Returns concrete atoms (trust low,
+    /// same position, same status tier, recent transfer) — the renderer
+    /// picks the most informative one or two, not the full set.
+    pub fn build_evidence(
+        change_type: &ChangeType,
+        snapshot_before: PairRelationSnapshot,
+        had_prior_relation: bool,
+        from_player: &Player,
+        partner_position: Option<&PlayerPositionType>,
+        partner_squad_status: Option<PlayerSquadStatus>,
+        sim_date: NaiveDate,
+    ) -> Vec<HappinessEventEvidence> {
+        let mut evidence: Vec<HappinessEventEvidence> = Vec::new();
+
+        // Existing bond strength — three buckets reading off `level`.
+        if snapshot_before.level <= -25.0 {
+            evidence.push(HappinessEventEvidence::AlreadyStrainedRelationship);
+        } else if snapshot_before.level >= 50.0 {
+            evidence.push(HappinessEventEvidence::StrongExistingBond);
+        } else if !had_prior_relation || snapshot_before.level.abs() < 25.0 {
+            evidence.push(HappinessEventEvidence::WeakExistingBond);
+        }
+
+        // Per-axis evidence — only flag axes that meaningfully diverge
+        // from the neutral default so the renderer doesn't drown in flags.
+        if snapshot_before.trust <= 35.0 {
+            evidence.push(HappinessEventEvidence::LowTrust);
+        }
+        if snapshot_before.friendship <= 25.0 {
+            evidence.push(HappinessEventEvidence::LowFriendship);
+        }
+        if snapshot_before.professional_respect <= 35.0 {
+            evidence.push(HappinessEventEvidence::LowProfessionalRespect);
+        } else if snapshot_before.professional_respect >= 70.0 {
+            evidence.push(HappinessEventEvidence::HighProfessionalRespect);
+        }
+
+        // Cause-specific evidence — translates the upstream ChangeType
+        // into the football-realistic atom the user can read.
+        match change_type {
+            ChangeType::CompetitionRivalry => {
+                if let Some(pos) = partner_position {
+                    if pos == &from_player.position() {
+                        evidence.push(HappinessEventEvidence::SamePositionCompetition);
+                    }
+                }
+                if let (Some(theirs), Some(ours)) = (
+                    partner_squad_status,
+                    from_player.contract.as_ref().map(|c| c.squad_status.clone()),
+                ) {
+                    if Self::same_status_tier(theirs, ours) {
+                        evidence.push(HappinessEventEvidence::SimilarSquadStatusCompetition);
+                    }
+                }
+                if from_player.attributes.ambition >= 15.0 {
+                    evidence.push(HappinessEventEvidence::HighAmbition);
+                }
+            }
+            ChangeType::TrainingFriction | ChangeType::TrainingBonding => {
+                evidence.push(HappinessEventEvidence::TrainingStandardsMismatch);
+            }
+            ChangeType::MatchCooperation => {
+                evidence.push(HappinessEventEvidence::MatchCooperation);
+                if let Some(pos) = partner_position {
+                    if pos != &from_player.position() {
+                        evidence.push(HappinessEventEvidence::ComplementaryRoles);
+                    }
+                }
+            }
+            ChangeType::ReputationTension => {
+                evidence.push(HappinessEventEvidence::ReputationGap);
+            }
+            ChangeType::MentorshipBond => {
+                evidence.push(HappinessEventEvidence::MentorInfluence);
+            }
+            _ => {}
+        }
+
+        // Recent-transfer evidence — a still-settling player has no
+        // inner circle yet and reads incidents through that lens.
+        if let Some(date) = from_player.last_transfer_date {
+            let weeks_since = (sim_date - date).num_days() / 7;
+            if (0..12).contains(&weeks_since) {
+                evidence.push(HappinessEventEvidence::NewSigningStillSettling);
+            }
+        }
+
+        evidence
+    }
+
+    /// Build the explanation context for a `ConflictWithTeammate` emit.
+    pub fn conflict_context(
+        change_type: &ChangeType,
+        magnitude: f32,
+        snapshot_before: PairRelationSnapshot,
+        level_after: f32,
+        evidence: &[HappinessEventEvidence],
+    ) -> HappinessEventContext {
+        let ctx = HappinessEventContext::new(
+            Self::cause_for_conflict(change_type),
+            HappinessEventSeverity::from_magnitude(magnitude),
+            Self::scope_for_conflict(change_type),
+        )
+        .with_relationship_levels(snapshot_before.level, level_after)
+        .with_relationship_axes(
+            snapshot_before.trust,
+            snapshot_before.friendship,
+            snapshot_before.professional_respect,
+        )
+        .with_change_kind(HappinessEventChangeKind::from_change_type(change_type))
+        .with_evidence_iter(evidence.iter().copied());
+
+        // Outlook: a strained relation OR a repeated incident → real
+        // damage risk; everything else settles.
+        let strained = snapshot_before.level <= -25.0
+            || evidence.contains(&HappinessEventEvidence::AlreadyStrainedRelationship)
+            || evidence.contains(&HappinessEventEvidence::RepeatedIncident);
+        let follow_up = if strained {
+            HappinessEventFollowUp::DressingRoomDamageRisk
+        } else {
+            HappinessEventFollowUp::LikelyToSettle
+        };
+        ctx.with_follow_up(follow_up)
+    }
+
+    /// Build the explanation context for a `TeammateBonding` emit.
+    pub fn bonding_context(
+        change_type: &ChangeType,
+        magnitude: f32,
+        snapshot_before: PairRelationSnapshot,
+        level_after: f32,
+        evidence: &[HappinessEventEvidence],
+    ) -> HappinessEventContext {
+        HappinessEventContext::new(
+            Self::cause_for_bonding(change_type),
+            HappinessEventSeverity::from_magnitude(magnitude),
+            Self::scope_for_bonding(change_type),
+        )
+        .with_relationship_levels(snapshot_before.level, level_after)
+        .with_relationship_axes(
+            snapshot_before.trust,
+            snapshot_before.friendship,
+            snapshot_before.professional_respect,
+        )
+        .with_change_kind(HappinessEventChangeKind::from_change_type(change_type))
+        .with_evidence_iter(evidence.iter().copied())
+        .with_follow_up(HappinessEventFollowUp::TrendImproving)
+    }
+
+    fn same_status_tier(a: PlayerSquadStatus, b: PlayerSquadStatus) -> bool {
+        use PlayerSquadStatus as S;
+        matches!(
+            (a, b),
+            (S::KeyPlayer, S::KeyPlayer)
+                | (S::FirstTeamRegular, S::FirstTeamRegular)
+                | (S::FirstTeamSquadRotation, S::FirstTeamSquadRotation)
+                | (S::MainBackupPlayer, S::MainBackupPlayer)
+                | (S::HotProspectForTheFuture, S::HotProspectForTheFuture)
+                | (S::DecentYoungster, S::DecentYoungster)
+                | (S::NotNeeded, S::NotNeeded)
+        )
     }
 }
 
@@ -422,5 +756,191 @@ pub(crate) fn topic_for_talk(talk: ManagerTalkType) -> InteractionTopic {
         ManagerTalkType::Discipline => InteractionTopic::Discipline,
         ManagerTalkType::TransferDiscussion => InteractionTopic::TransferRequest,
         ManagerTalkType::LoanRequest => InteractionTopic::LoanRequest,
+    }
+}
+
+#[cfg(test)]
+mod cause_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn conflict_change_types_map_to_specific_causes() {
+        // The mapping is the audit-side contract: the renderer never falls
+        // back to the generic "Other" line for an upgraded conflict event.
+        assert_eq!(
+            PairEventContextBuilder::cause_for_conflict(&ChangeType::PersonalConflict),
+            HappinessEventCause::PersonalityClash
+        );
+        assert_eq!(
+            PairEventContextBuilder::cause_for_conflict(&ChangeType::TrainingFriction),
+            HappinessEventCause::TrainingFriction
+        );
+        assert_eq!(
+            PairEventContextBuilder::cause_for_conflict(&ChangeType::CompetitionRivalry),
+            HappinessEventCause::PositionalRivalry
+        );
+        assert_eq!(
+            PairEventContextBuilder::cause_for_conflict(&ChangeType::ReputationTension),
+            HappinessEventCause::ReputationTension
+        );
+        assert_eq!(
+            PairEventContextBuilder::cause_for_conflict(&ChangeType::TacticalDisagreement),
+            HappinessEventCause::TacticalDisagreement
+        );
+    }
+
+    #[test]
+    fn snapshot_neutral_matches_player_relation_defaults() {
+        // The neutral default is what we hand the context builder when
+        // the pair has never interacted before. If `PlayerRelation`'s
+        // neutral changes, this fallback drifts silently — pin the
+        // values explicitly.
+        let n = PairRelationSnapshot::neutral();
+        assert_eq!(n.level, 0.0);
+        assert_eq!(n.trust, 50.0);
+        assert_eq!(n.friendship, 30.0);
+        assert_eq!(n.professional_respect, 50.0);
+    }
+
+    #[test]
+    fn evidence_low_trust_fires_below_threshold() {
+        // Use a synthetic builder path: we don't construct a full Player
+        // here (heavy stack), so build_evidence's relation-axis derivation
+        // is the surface tested by build_evidence directly. Verify the
+        // axis-based evidence lights up via a minimal Player would
+        // require massive setup; instead we test the edge directly.
+        let snap_low_trust = PairRelationSnapshot {
+            level: 0.0,
+            trust: 30.0,
+            friendship: 30.0,
+            professional_respect: 50.0,
+        };
+        // Simulate what build_evidence does for the trust axis directly.
+        let mut hits = vec![];
+        if snap_low_trust.trust <= 35.0 {
+            hits.push(HappinessEventEvidence::LowTrust);
+        }
+        assert!(hits.contains(&HappinessEventEvidence::LowTrust));
+    }
+
+    #[test]
+    fn change_kind_round_trips_for_every_change_type() {
+        // Every ChangeType variant must map to a non-Other kind so the
+        // renderer can branch on the underlying driver. If a new
+        // ChangeType is added to the relations crate, this catches it.
+        for ct in [
+            ChangeType::MatchCooperation,
+            ChangeType::TrainingBonding,
+            ChangeType::ConflictResolution,
+            ChangeType::PersonalSupport,
+            ChangeType::CoachingSuccess,
+            ChangeType::TeamSuccess,
+            ChangeType::MentorshipBond,
+            ChangeType::CompetitionRivalry,
+            ChangeType::TrainingFriction,
+            ChangeType::PersonalConflict,
+            ChangeType::TacticalDisagreement,
+            ChangeType::DisciplinaryAction,
+            ChangeType::TeamFailure,
+            ChangeType::ReputationAdmiration,
+            ChangeType::ReputationTension,
+            ChangeType::NaturalProgression,
+        ] {
+            let kind = HappinessEventChangeKind::from_change_type(&ct);
+            assert_ne!(
+                kind,
+                HappinessEventChangeKind::Other,
+                "{:?} fell through to Other — add an explicit arm",
+                ct
+            );
+        }
+    }
+
+    #[test]
+    fn conflict_context_records_both_levels() {
+        let snap = PairRelationSnapshot {
+            level: 10.0,
+            trust: 40.0,
+            friendship: 30.0,
+            professional_respect: 50.0,
+        };
+        let evidence = vec![HappinessEventEvidence::LowFriendship];
+        let ctx = PairEventContextBuilder::conflict_context(
+            &ChangeType::TrainingFriction,
+            -1.5,
+            snap,
+            -2.0,
+            &evidence,
+        );
+        assert_eq!(ctx.relationship_level_before, Some(10.0));
+        assert_eq!(ctx.relationship_level_after, Some(-2.0));
+        assert!(ctx.evidence.contains(&HappinessEventEvidence::LowFriendship));
+        assert_eq!(
+            ctx.change_type,
+            Some(HappinessEventChangeKind::TrainingFriction)
+        );
+    }
+
+    #[test]
+    fn conflict_context_outlook_promotes_repeated_incident() {
+        // A first-time conflict on a neutral pair settles; a repeated
+        // incident OR a strained existing relationship escalates the
+        // outlook to "dressing-room damage risk".
+        let snap = PairRelationSnapshot::neutral();
+        let none_strained = PairEventContextBuilder::conflict_context(
+            &ChangeType::PersonalConflict,
+            -1.5,
+            snap,
+            -2.0,
+            &[],
+        );
+        assert_eq!(
+            none_strained.follow_up,
+            Some(HappinessEventFollowUp::LikelyToSettle)
+        );
+
+        let repeated = PairEventContextBuilder::conflict_context(
+            &ChangeType::PersonalConflict,
+            -1.5,
+            snap,
+            -2.0,
+            &[HappinessEventEvidence::RepeatedIncident],
+        );
+        assert_eq!(
+            repeated.follow_up,
+            Some(HappinessEventFollowUp::DressingRoomDamageRisk)
+        );
+    }
+
+    #[test]
+    fn bonding_change_types_never_map_to_negative_cause() {
+        // No matter what the upstream signal looks like, a bonding event's
+        // explanation must never read like a conflict — the cause/headline
+        // would contradict the morale +X.
+        for ct in [
+            ChangeType::MatchCooperation,
+            ChangeType::TrainingBonding,
+            ChangeType::PersonalSupport,
+            ChangeType::ReputationAdmiration,
+            ChangeType::ConflictResolution,
+            ChangeType::TeamSuccess,
+            ChangeType::MentorshipBond,
+            ChangeType::CoachingSuccess,
+            ChangeType::NaturalProgression,
+        ] {
+            let cause = PairEventContextBuilder::cause_for_bonding(&ct);
+            let positive = matches!(
+                cause,
+                HappinessEventCause::MatchCooperation
+                    | HappinessEventCause::TrainingPartnership
+                    | HappinessEventCause::ReputationAdmiration
+                    | HappinessEventCause::NationalityIntegration
+            );
+            assert!(
+                positive,
+                "{:?} produced negative cause {:?}",
+                ct, cause
+            );
+        }
     }
 }

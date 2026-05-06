@@ -4,29 +4,58 @@
 
 {% block content %}
 <div class="fm-page">
-    <section class="fm-panel">
+    <section class="fm-panel fm-evt-panel">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("events") }}</h3>
+            {% if !events.is_empty() %}
+            <span class="fm-panel-count">{{ events.len() }}</span>
+            {% endif %}
         </div>
         {% if events.is_empty() %}
-        <div class="fm-empty-state">{{ i18n.t("no_events") }}</div>
-        {% else %}
-        <div class="fm-events-timeline">
-            {% for event in events %}
-            <div class="fm-evt-row{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% endif %}">
-                <div class="fm-evt-dot"></div>
-                <div class="fm-evt-body">
-                    <span class="fm-evt-text">
-                        {{ event.description|safe }}
-                        {% if let Some(partner_slug) = event.partner_slug %}{% if let Some(partner_name) = event.partner_name %}
-                        — <a href="/{{ lang }}/players/{{ partner_slug }}">{{ partner_name }}</a>
-                        {% endif %}{% endif %}
-                    </span>
-                    <span class="fm-evt-time">{{ event.days_ago }}{{ i18n.t("days_ago_short") }}</span>
-                </div>
-            </div>
-            {% endfor %}
+        <div class="fm-evt-empty">
+            <div class="fm-evt-empty-mark"></div>
+            <div class="fm-evt-empty-text">{{ i18n.t("no_events") }}</div>
         </div>
+        {% else %}
+        <ol class="fm-evt-list">
+            {% for event in events %}
+            <li class="fm-evt-card{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% else %} fm-evt-neutral{% endif %}">
+                <span class="fm-evt-rail" aria-hidden="true"></span>
+                <div class="fm-evt-content">
+                    <header class="fm-evt-head">
+                        <div class="fm-evt-title">
+                            <span class="fm-evt-marker" aria-hidden="true"></span>
+                            <h4 class="fm-evt-headline">
+                                {{ event.description|safe }}{% if let Some(partner_slug) = event.partner_slug %}{% if let Some(partner_name) = event.partner_name %} <a class="fm-evt-partner" href="/{{ lang }}/players/{{ partner_slug }}">{{ partner_name }}</a>{% endif %}{% endif %}
+                            </h4>
+                        </div>
+                        <div class="fm-evt-meta">
+                            {% if let Some(severity_label) = event.severity_label %}{% if let Some(severity_tag) = event.severity_tag %}
+                            <span class="fm-evt-severity fm-evt-severity-{{ severity_tag }}">{{ severity_label }}</span>
+                            {% endif %}{% endif %}
+                            <time class="fm-evt-time">{{ event.time_ago_label }}</time>
+                        </div>
+                    </header>
+                    {% if event.detail.is_some() || event.follow_up.is_some() || event.comparison.is_some() %}
+                    <dl class="fm-evt-grid">
+                        {% if let Some(comparison) = event.comparison %}
+                        <dt class="fm-evt-label">{{ i18n.t("event_label_comparison") }}</dt>
+                        <dd class="fm-evt-value">{{ comparison|safe }}</dd>
+                        {% endif %}
+                        {% if let Some(detail) = event.detail %}
+                        <dt class="fm-evt-label">{{ i18n.t("event_label_cause") }}</dt>
+                        <dd class="fm-evt-value">{{ detail }}</dd>
+                        {% endif %}
+                        {% if let Some(follow_up) = event.follow_up %}
+                        <dt class="fm-evt-label">{{ i18n.t("event_label_outlook") }}</dt>
+                        <dd class="fm-evt-value fm-evt-outlook">{{ follow_up }}</dd>
+                        {% endif %}
+                    </dl>
+                    {% endif %}
+                </div>
+            </li>
+            {% endfor %}
+        </ol>
         {% endif %}
     </section>
 </div>

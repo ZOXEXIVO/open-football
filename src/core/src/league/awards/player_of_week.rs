@@ -318,12 +318,14 @@ mod tests {
             main: starters_home.to_vec(),
             substitutes: vec![],
             substitutes_used: vec![],
+            selection_omissions: vec![],
         };
         details.right_team_players = FieldSquad {
             team_id: away_team,
             main: starters_away.to_vec(),
             substitutes: vec![],
             substitutes_used: vec![],
+            selection_omissions: vec![],
         };
         for (pid, stats) in per_player_stats {
             details.player_stats.insert(pid, stats);

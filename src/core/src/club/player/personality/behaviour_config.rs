@@ -355,6 +355,21 @@ pub struct MoraleEventCatalog {
     pub fan_criticism: f32,
     pub media_praise: f32,
     pub media_criticism: f32,
+    // Transfer-interest funnel
+    pub scouted_by_club: f32,
+    pub transfer_rumour: f32,
+    pub agent_stirs_interest: f32,
+    pub interest_from_bigger_club: f32,
+    pub interest_from_rival: f32,
+    pub homecoming_rumour: f32,
+    pub former_club_interest: f32,
+    pub favorite_club_interest: f32,
+    pub transfer_speculation_distracts: f32,
+    pub transfer_interest_dismissed: f32,
+    pub transfer_talks_expected: f32,
+    pub interest_cooled: f32,
+    pub used_interest_for_contract_leverage: f32,
+    pub fans_react_to_transfer_rumour: f32,
     // Social / culture
     pub close_friend_sold: f32,
     pub compatriot_joined: f32,
@@ -482,6 +497,22 @@ impl Default for MoraleEventCatalog {
             fan_criticism: -2.5,
             media_praise: 1.5,
             media_criticism: -2.0,
+            // Transfer-interest funnel — magnitudes are *base* values;
+            // emit sites scale by personality, rep gap, and stage.
+            scouted_by_club: 0.5,
+            transfer_rumour: 0.0,
+            agent_stirs_interest: 0.0,
+            interest_from_bigger_club: 2.0,
+            interest_from_rival: -1.0,
+            homecoming_rumour: 1.0,
+            former_club_interest: 0.5,
+            favorite_club_interest: 2.5,
+            transfer_speculation_distracts: -1.5,
+            transfer_interest_dismissed: 0.5,
+            transfer_talks_expected: 1.5,
+            interest_cooled: -1.0,
+            used_interest_for_contract_leverage: 1.0,
+            fans_react_to_transfer_rumour: 0.0,
             // Social / culture — quiet ongoing events. Friend sold and
             // mentor departed are felt; compatriot/language are gentle
             // integration helpers.
@@ -625,6 +656,20 @@ impl MoraleEventCatalog {
             FansChantPlayerName => self.fans_chant_player_name,
             MediaPressureMounting => self.media_pressure_mounting,
             LeadershipEmergence => self.leadership_emergence,
+            ScoutedByClub => self.scouted_by_club,
+            TransferRumour => self.transfer_rumour,
+            AgentStirsInterest => self.agent_stirs_interest,
+            InterestFromBiggerClub => self.interest_from_bigger_club,
+            InterestFromRival => self.interest_from_rival,
+            HomecomingRumour => self.homecoming_rumour,
+            FormerClubInterest => self.former_club_interest,
+            FavoriteClubInterest => self.favorite_club_interest,
+            TransferSpeculationDistracts => self.transfer_speculation_distracts,
+            TransferInterestDismissed => self.transfer_interest_dismissed,
+            TransferTalksExpected => self.transfer_talks_expected,
+            InterestCooled => self.interest_cooled,
+            UsedInterestForContractLeverage => self.used_interest_for_contract_leverage,
+            FansReactToTransferRumour => self.fans_react_to_transfer_rumour,
         }
     }
 }

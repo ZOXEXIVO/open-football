@@ -68,6 +68,12 @@ impl Player {
         // Decay old events weekly
         self.happiness.decay_events();
 
+        // Unresolved transfer-interest speculation drag — counts visible
+        // interest events landed in the past ~6 weeks and lets the
+        // owner-side method decide whether to add a distraction event.
+        let recent_interest_count = self.count_recent_transfer_interest_events(45);
+        self.on_unresolved_speculation_pressure(recent_interest_count);
+
         // 1. Playing time vs squad status
         let playing_time_factor = self.calculate_playing_time_factor(age_sensitivity);
         self.happiness.factors.playing_time = playing_time_factor;

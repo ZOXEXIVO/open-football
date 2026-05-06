@@ -151,6 +151,41 @@ fn test_selection_policy_from_context() {
     );
 }
 
+#[test]
+fn score_player_for_slot_with_breakdown_total_matches_legacy() {
+    let team = generate_test_team();
+    let staff = generate_test_staff();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let engine = scoring::ScoringEngine::from_staff(&staff);
+    let date = Utc::now().date_naive();
+    for player in team.players.players() {
+        for slot in [
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::MidfielderCenter,
+            PlayerPositionType::Striker,
+        ] {
+            let group = slot.position_group();
+            let total_legacy = engine
+                .score_player_for_slot(player, slot, group, &staff, &tactics, date, false, &[]);
+            let (total_new, breakdown) = engine.score_player_for_slot_with_breakdown(
+                player, slot, group, &staff, &tactics, date, false, &[],
+            );
+            assert!(
+                (total_legacy - total_new).abs() < 1e-3,
+                "breakdown total {} must match legacy total {}",
+                total_new,
+                total_legacy
+            );
+            assert!(
+                (breakdown.total() - total_new).abs() < 1e-3,
+                "summed breakdown {} must match returned total {}",
+                breakdown.total(),
+                total_new
+            );
+        }
+    }
+}
+
 // ========== Test helpers ==========
 
 fn generate_test_team() -> crate::Team {

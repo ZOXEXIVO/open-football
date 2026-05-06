@@ -1,5 +1,6 @@
 mod competitive;
 pub(crate) mod helpers;
+mod omissions;
 mod rotation;
 pub(crate) mod scoring;
 
@@ -16,11 +17,19 @@ use std::borrow::Borrow;
 use helpers::*;
 use scoring::ScoringEngine;
 
+pub use omissions::OmittedPlayer;
+
 pub struct SquadSelector;
 
 pub struct PlayerSelectionResult {
     pub main_squad: Vec<MatchPlayer>,
     pub substitutes: Vec<MatchPlayer>,
+    /// Important omissions — players the selector chose not to start or
+    /// not to include in the matchday squad, where the omission deserves
+    /// a structured explanation in the player-events feed (KeyPlayers
+    /// missed, regulars demoted, force-selected players overlooked, …).
+    /// Empty when nothing notable happened.
+    pub omissions: Vec<OmittedPlayer>,
 }
 
 pub struct SelectionContext {
@@ -284,9 +293,23 @@ impl SquadSelector {
             substitutes.len()
         );
 
+        let omissions = omissions::OmissionBuilder {
+            available: &available,
+            main_squad: &main_squad,
+            substitutes: &substitutes,
+            staff,
+            tactics,
+            engine: &engine,
+            date: ctx.date,
+            is_friendly: ctx.is_friendly,
+            match_importance: ctx.match_importance,
+        }
+        .build();
+
         PlayerSelectionResult {
             main_squad,
             substitutes,
+            omissions,
         }
     }
 
@@ -389,9 +412,13 @@ impl SquadSelector {
             }
         }
 
+        // Rotation matches (friendlies / dev leagues) don't generate
+        // morale-relevant drop events — every player is in line for a
+        // run-out and an omission carries no professional sting.
         PlayerSelectionResult {
             main_squad,
             substitutes,
+            omissions: Vec::new(),
         }
     }
 

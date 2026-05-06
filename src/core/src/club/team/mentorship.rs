@@ -25,6 +25,10 @@ use crate::club::player::traits::PlayerTrait;
 use crate::club::{
     ChangeType, HappinessEventType, MentorshipType, Player, PlayerStatusType, RelationshipChange,
 };
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
+    HappinessEventScope, HappinessEventSeverity,
+};
 use chrono::NaiveDate;
 
 /// Compatibility threshold below which a candidate mentor/mentee pair is
@@ -300,10 +304,29 @@ pub fn process_mentorship(
                 })
                 .count();
             if recent_friction >= 1 {
-                mentee.happiness.add_event_with_partner(
+                let mag = -1.5;
+                let snapshot = mentee
+                    .relations
+                    .get_player(mentor_ids[i])
+                    .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
+                let mut ctx = HappinessEventContext::new(
+                    HappinessEventCause::LeadershipDispute,
+                    HappinessEventSeverity::from_magnitude(mag),
+                    HappinessEventScope::TrainingGround,
+                )
+                .with_evidence(HappinessEventEvidence::MentorInfluence)
+                .with_evidence(HappinessEventEvidence::RepeatedIncident)
+                .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+                if let Some((level, trust, friendship, prof)) = snapshot {
+                    ctx = ctx
+                        .with_relationship_levels(level, level)
+                        .with_relationship_axes(trust, friendship, prof);
+                }
+                mentee.happiness.add_event_with_context(
                     HappinessEventType::ConflictWithTeammate,
-                    -1.5,
+                    mag,
                     Some(mentor_ids[i]),
+                    ctx,
                 );
             }
         } else {
@@ -317,10 +340,28 @@ pub fn process_mentorship(
             );
             // Partner-tagged event — tier 75+ is meaningful enough to log.
             if *compat >= 75.0 {
-                mentee.happiness.add_event_with_partner(
+                let mag = 0.6;
+                let snapshot = mentee
+                    .relations
+                    .get_player(mentor_ids[i])
+                    .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
+                let mut ctx = HappinessEventContext::new(
+                    HappinessEventCause::TrainingPartnership,
+                    HappinessEventSeverity::from_magnitude(mag),
+                    HappinessEventScope::TrainingGround,
+                )
+                .with_evidence(HappinessEventEvidence::MentorInfluence)
+                .with_follow_up(HappinessEventFollowUp::TrendImproving);
+                if let Some((level, trust, friendship, prof)) = snapshot {
+                    ctx = ctx
+                        .with_relationship_levels(level, level)
+                        .with_relationship_axes(trust, friendship, prof);
+                }
+                mentee.happiness.add_event_with_context(
                     HappinessEventType::TeammateBonding,
-                    0.6,
+                    mag,
                     Some(mentor_ids[i]),
+                    ctx,
                 );
             }
         }

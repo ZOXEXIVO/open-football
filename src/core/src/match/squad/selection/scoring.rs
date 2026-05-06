@@ -5,10 +5,136 @@ use crate::club::player::load::{
 use crate::club::staff::perception::CoachProfile;
 use crate::club::{ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, Staff};
 use crate::utils::DateUtils;
-use crate::{Player, Tactics};
+use crate::{Player, SelectionScoreFactor, Tactics};
 use chrono::NaiveDate;
 
 use super::helpers;
+
+/// Per-component breakdown of a slot score. Mirrors what
+/// `score_player_for_slot` adds together — each field is the same
+/// signed contribution the total carries, so summing them reproduces
+/// the total exactly. Used by the squad selector to explain
+/// omissions: the dominant factors (largest absolute contributions
+/// where the selected player edged ahead of the omitted one) become
+/// the comparison line in the player-events render.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SlotScoreBreakdown {
+    pub position_fit: f32,
+    pub perceived_quality: f32,
+    pub match_readiness: f32,
+    pub condition_floor: f32,
+    pub tactical_style: f32,
+    pub side_foot: f32,
+    pub reputation: f32,
+    pub coach_relationship: f32,
+    pub newcomer: f32,
+    pub youth_preference: f32,
+    pub training_impression: f32,
+    pub cohesion: f32,
+    pub squad_status: f32,
+    pub force_selection: f32,
+    pub philosophy: f32,
+    pub group_mismatch: f32,
+}
+
+impl SlotScoreBreakdown {
+    pub fn total(&self) -> f32 {
+        self.position_fit
+            + self.perceived_quality
+            + self.match_readiness
+            + self.condition_floor
+            + self.tactical_style
+            + self.side_foot
+            + self.reputation
+            + self.coach_relationship
+            + self.newcomer
+            + self.youth_preference
+            + self.training_impression
+            + self.cohesion
+            + self.squad_status
+            + self.force_selection
+            + self.philosophy
+            + self.group_mismatch
+    }
+
+    /// Pairwise comparison: rank scoring factors where `selected`
+    /// beat `omitted`, sorted by gap descending. Up to `limit` atoms
+    /// returned. Used by the squad selector to populate
+    /// `SelectionComparison::top_factors` with the dominant reasons
+    /// the rival was chosen.
+    pub fn top_factors_against(
+        &self,
+        omitted: &SlotScoreBreakdown,
+        limit: usize,
+    ) -> Vec<SelectionScoreFactor> {
+        let factors: [(SelectionScoreFactor, f32); 16] = [
+            (SelectionScoreFactor::PositionFit, self.position_fit - omitted.position_fit),
+            (
+                SelectionScoreFactor::PerceivedQuality,
+                self.perceived_quality - omitted.perceived_quality,
+            ),
+            (
+                SelectionScoreFactor::MatchReadiness,
+                self.match_readiness - omitted.match_readiness,
+            ),
+            // condition_floor is a penalty (subtracted) — a smaller
+            // (less negative) value for the selected player means the
+            // selected player is fitter than the omitted one.
+            (
+                SelectionScoreFactor::Fatigue,
+                self.condition_floor - omitted.condition_floor,
+            ),
+            (
+                SelectionScoreFactor::TacticalFit,
+                self.tactical_style - omitted.tactical_style,
+            ),
+            (SelectionScoreFactor::SideFootFit, self.side_foot - omitted.side_foot),
+            (SelectionScoreFactor::Reputation, self.reputation - omitted.reputation),
+            (
+                SelectionScoreFactor::CoachRelationship,
+                self.coach_relationship - omitted.coach_relationship,
+            ),
+            // Newcomer contributes negatively; smaller penalty = better.
+            (
+                SelectionScoreFactor::Newcomer,
+                self.newcomer - omitted.newcomer,
+            ),
+            (
+                SelectionScoreFactor::YouthPreference,
+                self.youth_preference - omitted.youth_preference,
+            ),
+            (
+                SelectionScoreFactor::TrainingImpression,
+                self.training_impression - omitted.training_impression,
+            ),
+            (SelectionScoreFactor::Cohesion, self.cohesion - omitted.cohesion),
+            (
+                SelectionScoreFactor::SquadStatus,
+                self.squad_status - omitted.squad_status,
+            ),
+            (
+                SelectionScoreFactor::ForceSelection,
+                self.force_selection - omitted.force_selection,
+            ),
+            (
+                SelectionScoreFactor::ClubPhilosophy,
+                self.philosophy - omitted.philosophy,
+            ),
+            (
+                SelectionScoreFactor::PositionFit,
+                self.group_mismatch - omitted.group_mismatch,
+            ),
+        ];
+
+        let mut wins: Vec<(SelectionScoreFactor, f32)> = factors
+            .into_iter()
+            .filter(|(_, delta)| *delta > 0.05)
+            .collect();
+        wins.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        wins.truncate(limit);
+        wins.into_iter().map(|(f, _)| f).collect()
+    }
+}
 
 pub(crate) struct ScoringEngine {
     pub(crate) profile: CoachProfile,
@@ -435,34 +561,62 @@ impl ScoringEngine {
         is_friendly: bool,
         selected_players: &[&Player],
     ) -> f32 {
-        let mut score: f32 = 0.0;
-        let p = &self.profile;
+        self.score_player_for_slot_with_breakdown(
+            player,
+            slot_position,
+            slot_group,
+            staff,
+            tactics,
+            date,
+            is_friendly,
+            selected_players,
+        )
+        .0
+    }
 
-        score += helpers::position_fit_score(player, slot_position, slot_group)
+    /// Score with per-component breakdown. The total is identical to
+    /// what `score_player_for_slot` returns — every existing caller
+    /// keeps the same number. The breakdown is consumed by the squad
+    /// selector to explain omissions in the player-events feed.
+    pub fn score_player_for_slot_with_breakdown(
+        &self,
+        player: &Player,
+        slot_position: PlayerPositionType,
+        slot_group: PlayerFieldPositionGroup,
+        staff: &Staff,
+        tactics: &Tactics,
+        date: NaiveDate,
+        is_friendly: bool,
+        selected_players: &[&Player],
+    ) -> (f32, SlotScoreBreakdown) {
+        let p = &self.profile;
+        let mut b = SlotScoreBreakdown::default();
+
+        b.position_fit = helpers::position_fit_score(player, slot_position, slot_group)
             * (0.20 * (1.0 - p.tactical_blindness * 0.3));
 
-        score += self.perceived_quality(player) * (0.40 + p.judging_accuracy * 0.05);
+        b.perceived_quality = self.perceived_quality(player) * (0.40 + p.judging_accuracy * 0.05);
 
-        score += self.match_readiness(player) * (0.15 + p.conservatism * 0.05);
+        b.match_readiness = self.match_readiness(player) * (0.15 + p.conservatism * 0.05);
 
-        score -= self.condition_floor_penalty(player, is_friendly);
+        b.condition_floor = -self.condition_floor_penalty(player, is_friendly);
 
-        score += helpers::tactical_style_bonus(player, slot_position, tactics)
+        b.tactical_style = helpers::tactical_style_bonus(player, slot_position, tactics)
             * (0.05 * (1.0 - p.tactical_blindness * 0.5));
-        score += helpers::side_foot_bonus(player, slot_position)
+        b.side_foot = helpers::side_foot_bonus(player, slot_position)
             * (0.6 * (1.0 - p.tactical_blindness * 0.3));
 
         let rep = self.reputation_score(player);
         let rel = self.relationship_score(player, staff);
-        score += rep;
+        b.reputation = rep;
         let rel_dampening = if rel < 0.0 {
             1.0
         } else {
             (1.0 - rep * 0.15).max(0.3)
         };
-        score += rel * rel_dampening;
+        b.coach_relationship = rel * rel_dampening;
 
-        score -= Self::newcomer_penalty(player, date, p);
+        b.newcomer = -Self::newcomer_penalty(player, date, p);
 
         let age = DateUtils::age(player.birth_date, date);
         let youth_multiplier = match age {
@@ -472,27 +626,22 @@ impl ScoringEngine {
             21 => 0.8,
             _ => 0.0,
         };
-        score += p.youth_preference * youth_multiplier;
+        b.youth_preference = p.youth_preference * youth_multiplier;
 
-        score += (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
+        b.training_impression = (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
 
-        score += self.cohesion_bonus(player, selected_players, slot_position, slot_group, None);
+        b.cohesion = self.cohesion_bonus(player, selected_players, slot_position, slot_group, None);
 
-        // Squad status tilt — labelled starters get their planned minutes.
-        score += self.squad_status_bonus(player);
-
-        // Manager override — forced selections dwarf every other signal.
-        score += self.force_selection_bonus(player);
-
-        // Club philosophy tilt — development clubs push youth up, loan-
-        // focused clubs reward borrowed talent.
-        score += self.philosophy_bonus(player, date);
+        b.squad_status = self.squad_status_bonus(player);
+        b.force_selection = self.force_selection_bonus(player);
+        b.philosophy = self.philosophy_bonus(player, date);
 
         if player.position().position_group() != slot_group {
-            score -= 1.5;
+            b.group_mismatch = -1.5;
         }
 
-        score
+        let total = b.total();
+        (total, b)
     }
 
     /// Manager override pinning a player into the starting XI. Returns a
