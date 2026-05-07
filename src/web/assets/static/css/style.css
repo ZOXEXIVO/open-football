@@ -2846,6 +2846,23 @@ a:link, a:visited, a:hover, a:active {
     }
     .fm-evt-meta {
         order: 2;
+        width: 100%;
+        flex-wrap: wrap;
+        gap: 4px 8px;
+        align-items: baseline;
+    }
+    .fm-evt-severity {
+        max-width: 100%;
+        padding: 1px 6px;
+        font-size: 8.5px;
+        letter-spacing: 0.55px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .fm-evt-time {
+        font-size: 9.5px;
+        letter-spacing: 0.45px;
     }
     .fm-evt-grid {
         grid-template-columns: 1fr;

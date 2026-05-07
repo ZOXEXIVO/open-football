@@ -309,9 +309,9 @@ impl Club {
                 .unwrap_or(5_000);
             self.teams
                 .run_contract_renewals_with_budget(date, wage_budget, league_rep);
-            for req in self.teams.prepare_ai_requests(date, self.id) {
-                ctx.ai.push(req);
-            }
+            result
+                .pending_ai_requests
+                .extend(self.teams.prepare_ai_requests(date, self.id));
 
             // Monthly: process wages (annual salary / 12) and income
             self.process_monthly_finances(ctx.clone());

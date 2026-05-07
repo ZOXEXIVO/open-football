@@ -12,8 +12,9 @@ use crate::club::player::player::Player;
 use crate::r#match::engine::result::PlayerMatchEndStats;
 use crate::shared::fullname::FullName;
 use crate::{
-    HappinessEventType, PersonAttributes, PlayerAttributes, PlayerFieldPositionGroup,
-    PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+    AwardReputationInput, AwardReputationKind, HappinessEventType, PersonAttributes,
+    PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType, PlayerPositions,
+    PlayerSkills,
 };
 use chrono::NaiveDate;
 
@@ -3029,4 +3030,318 @@ fn transfer_interest_speculation_pressure_emits_for_low_professionalism() {
     p.on_unresolved_speculation_pressure(4);
     let count = count_events(&p, &HappinessEventType::TransferSpeculationDistracts);
     assert_eq!(count, 1);
+}
+
+// ── Award reputation pipeline ─────────────────────────────────
+
+fn build_award_player(birth: NaiveDate, cur: i16, home: i16, world: i16) -> Player {
+    let mut attrs = PlayerAttributes::default();
+    attrs.current_reputation = cur;
+    attrs.home_reputation = home;
+    attrs.world_reputation = world;
+    PlayerBuilder::new()
+        .id(1)
+        .full_name(FullName::new("Test".to_string(), "Player".to_string()))
+        .birth_date(birth)
+        .country_id(1)
+        .attributes(PersonAttributes::default())
+        .skills(PlayerSkills::default())
+        .positions(PlayerPositions {
+            positions: vec![PlayerPosition {
+                position: PlayerPositionType::Striker,
+                level: 20,
+            }],
+        })
+        .player_attributes(attrs)
+        .build()
+        .unwrap()
+}
+
+fn rep_deltas(p: &Player, before: (i16, i16, i16)) -> (i16, i16, i16) {
+    (
+        p.player_attributes.current_reputation - before.0,
+        p.player_attributes.home_reputation - before.1,
+        p.player_attributes.world_reputation - before.2,
+    )
+}
+
+#[test]
+fn award_reputation_team_of_week_small_boost() {
+    let mut p = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let before = (
+        p.player_attributes.current_reputation,
+        p.player_attributes.home_reputation,
+        p.player_attributes.world_reputation,
+    );
+    p.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheWeekSelection,
+        AwardReputationInput::new().with_league_reputation(5_000),
+        d(2026, 5, 7),
+    );
+    let (dc, dh, dw) = rep_deltas(&p, before);
+    assert!(
+        dc > 0 && dc < 35,
+        "TOTW current delta should be small and positive, got {}",
+        dc
+    );
+    assert!(dh > 0 && dh < 35, "TOTW home delta should be small, got {}", dh);
+    assert!(dw <= 3, "TOTW world delta should be minimal, got {}", dw);
+}
+
+#[test]
+fn award_reputation_player_of_week_beats_team_of_week() {
+    let mut totw = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let mut pow = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let before = (5_000_i16, 5_000_i16, 4_000_i16);
+    let input = AwardReputationInput::new().with_league_reputation(5_000);
+    totw.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheWeekSelection,
+        input,
+        d(2026, 5, 7),
+    );
+    pow.apply_award_reputation_impact(
+        AwardReputationKind::PlayerOfTheWeek,
+        input,
+        d(2026, 5, 7),
+    );
+    let (totw_c, _, _) = rep_deltas(&totw, before);
+    let (pow_c, _, _) = rep_deltas(&pow, before);
+    assert!(
+        pow_c > totw_c,
+        "POW ({}) must beat TOTW ({}) on current rep",
+        pow_c,
+        totw_c
+    );
+}
+
+#[test]
+fn award_reputation_young_player_of_week_breakthrough_helps_low_rep_kid() {
+    // Same age (17), strong league, but vastly different starting rep.
+    let kid_birth = d(2009, 1, 1);
+    let mut low_rep = build_award_player(kid_birth, 800, 800, 200);
+    let mut famous = build_award_player(kid_birth, 4_500, 4_500, 2_500);
+    let input = AwardReputationInput::new().with_league_reputation(8_000);
+    low_rep.apply_award_reputation_impact(
+        AwardReputationKind::YoungPlayerOfTheWeek,
+        input,
+        d(2026, 5, 7),
+    );
+    famous.apply_award_reputation_impact(
+        AwardReputationKind::YoungPlayerOfTheWeek,
+        input,
+        d(2026, 5, 7),
+    );
+    let dc_low = low_rep.player_attributes.current_reputation - 800;
+    let dc_famous = famous.player_attributes.current_reputation - 4_500;
+    assert!(
+        dc_low > dc_famous,
+        "low-rep U-20 should gain more from YPOW (got {}) than already-famous U-20 ({})",
+        dc_low,
+        dc_famous,
+    );
+}
+
+#[test]
+fn award_reputation_team_of_year_more_than_team_of_week() {
+    let mut totw = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let mut toty = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let totw_input = AwardReputationInput::new().with_league_reputation(7_000);
+    let toty_input = AwardReputationInput::new()
+        .with_league_reputation(7_000)
+        .with_avg_rating(7.4)
+        .with_matches_played(34);
+    totw.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheWeekSelection,
+        totw_input,
+        d(2026, 5, 7),
+    );
+    toty.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheYearSelection,
+        toty_input,
+        d(2026, 5, 7),
+    );
+    let dc_totw = totw.player_attributes.current_reputation - 5_000;
+    let dc_toty = toty.player_attributes.current_reputation - 5_000;
+    assert!(
+        dc_toty > dc_totw,
+        "TOTY ({}) must beat TOTW ({})",
+        dc_toty,
+        dc_totw
+    );
+}
+
+#[test]
+fn award_reputation_team_of_year_less_than_world_poy() {
+    let mut toty = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let mut wpoy = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let toty_input = AwardReputationInput::new()
+        .with_league_reputation(9_000)
+        .with_avg_rating(7.5)
+        .with_matches_played(34);
+    toty.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheYearSelection,
+        toty_input,
+        d(2026, 5, 7),
+    );
+    wpoy.apply_award_reputation_impact(
+        AwardReputationKind::WorldPlayerOfYear,
+        AwardReputationInput::new(),
+        d(2026, 5, 7),
+    );
+    let dc_toty = toty.player_attributes.current_reputation - 5_000;
+    let dc_wpoy = wpoy.player_attributes.current_reputation - 5_000;
+    assert!(
+        dc_wpoy > dc_toty,
+        "World POY ({}) must beat TOTY ({})",
+        dc_wpoy,
+        dc_toty
+    );
+}
+
+#[test]
+fn award_reputation_elite_player_reduced_weekly_gain() {
+    let mut elite = build_award_player(d(1992, 1, 1), 8_500, 8_500, 8_500);
+    let mut mid = build_award_player(d(1992, 1, 1), 5_000, 5_000, 4_000);
+    let input = AwardReputationInput::new().with_league_reputation(7_000);
+    elite.apply_award_reputation_impact(
+        AwardReputationKind::PlayerOfTheWeek,
+        input,
+        d(2026, 5, 7),
+    );
+    mid.apply_award_reputation_impact(
+        AwardReputationKind::PlayerOfTheWeek,
+        input,
+        d(2026, 5, 7),
+    );
+    let dc_elite = elite.player_attributes.current_reputation - 8_500;
+    let dc_mid = mid.player_attributes.current_reputation - 5_000;
+    assert!(
+        dc_elite < dc_mid,
+        "elite POW gain ({}) must be smaller than mid-rep gain ({})",
+        dc_elite,
+        dc_mid,
+    );
+    assert!(
+        dc_elite < 12,
+        "elite player above 7500 cur rep should barely move on a weekly award, got {}",
+        dc_elite,
+    );
+}
+
+#[test]
+fn award_reputation_low_league_barely_moves_world() {
+    let mut p = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let input = AwardReputationInput::new().with_league_reputation(1_000);
+    p.apply_award_reputation_impact(
+        AwardReputationKind::PlayerOfTheWeek,
+        input,
+        d(2026, 5, 7),
+    );
+    let dw = p.player_attributes.world_reputation - 4_000;
+    assert!(
+        dw <= 1,
+        "POW in a low-rep league must barely touch world rep, got {}",
+        dw
+    );
+}
+
+#[test]
+fn award_reputation_pow_then_totw_dampens_totw() {
+    // Two players: one only got TOTW, one got POW first then TOTW.
+    let mut single = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let mut stacked = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let input = AwardReputationInput::new().with_league_reputation(7_000);
+
+    single.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheWeekSelection,
+        input,
+        d(2026, 5, 7),
+    );
+    let dc_single = single.player_attributes.current_reputation - 5_000;
+
+    // Same player wins POW then TOTW. POW emits its happiness event,
+    // which the dampener picks up.
+    stacked.on_player_of_the_week();
+    let stacked_after_pow_cur = stacked.player_attributes.current_reputation;
+    stacked.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheWeekSelection,
+        input,
+        d(2026, 5, 7),
+    );
+    let dc_stacked_totw =
+        stacked.player_attributes.current_reputation - stacked_after_pow_cur;
+
+    assert!(
+        dc_stacked_totw < dc_single,
+        "stacked TOTW after POW ({}) must be dampened vs lone TOTW ({})",
+        dc_stacked_totw,
+        dc_single,
+    );
+}
+
+#[test]
+fn award_reputation_continental_poy_preserves_scale() {
+    let mut p = build_award_player(d(1995, 1, 1), 6_000, 6_000, 5_000);
+    p.apply_award_reputation_impact(
+        AwardReputationKind::ContinentalPlayerOfYear,
+        AwardReputationInput::new(),
+        d(2026, 5, 7),
+    );
+    assert_eq!(p.player_attributes.current_reputation, 6_500);
+    assert_eq!(p.player_attributes.home_reputation, 6_500);
+    assert_eq!(p.player_attributes.world_reputation, 5_250);
+}
+
+#[test]
+fn award_reputation_world_poy_preserves_scale() {
+    let mut p = build_award_player(d(1995, 1, 1), 6_000, 6_000, 5_000);
+    p.apply_award_reputation_impact(
+        AwardReputationKind::WorldPlayerOfYear,
+        AwardReputationInput::new(),
+        d(2026, 5, 7),
+    );
+    assert_eq!(p.player_attributes.current_reputation, 6_900);
+    assert_eq!(p.player_attributes.home_reputation, 6_900);
+    assert_eq!(p.player_attributes.world_reputation, 5_500);
+}
+
+#[test]
+fn award_reputation_clamps_at_ceiling() {
+    let mut p = build_award_player(d(1995, 1, 1), 9_950, 9_950, 9_950);
+    p.apply_award_reputation_impact(
+        AwardReputationKind::WorldPlayerOfYear,
+        AwardReputationInput::new(),
+        d(2026, 5, 7),
+    );
+    assert_eq!(p.player_attributes.current_reputation, 10_000);
+    assert_eq!(p.player_attributes.home_reputation, 10_000);
+    assert_eq!(p.player_attributes.world_reputation, 10_000);
+}
+
+#[test]
+fn award_reputation_player_of_season_more_than_team_of_year() {
+    let mut toty = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let mut pos = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let input = AwardReputationInput::new()
+        .with_league_reputation(7_000)
+        .with_avg_rating(7.5)
+        .with_matches_played(34);
+    toty.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheYearSelection,
+        input,
+        d(2026, 5, 7),
+    );
+    pos.apply_award_reputation_impact(
+        AwardReputationKind::PlayerOfTheSeason,
+        input,
+        d(2026, 5, 7),
+    );
+    let dc_toty = toty.player_attributes.current_reputation - 5_000;
+    let dc_pos = pos.player_attributes.current_reputation - 5_000;
+    assert!(
+        dc_pos > dc_toty,
+        "POS ({}) must beat TOTY ({}) — individual top award",
+        dc_pos,
+        dc_toty,
+    );
 }

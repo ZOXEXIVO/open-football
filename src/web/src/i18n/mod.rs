@@ -56,6 +56,10 @@ impl I18nManager {
                 Assets::get(&path).unwrap_or_else(|| panic!("Missing translation file: {}", path));
             let json_str = std::str::from_utf8(&data.data)
                 .unwrap_or_else(|_| panic!("Invalid UTF-8 in {}", path));
+            // Tolerate a UTF-8 BOM at the start of the file — Windows
+            // editors / PowerShell sometimes prepend one and serde_json
+            // rejects it as "expected value at line 1 column 1".
+            let json_str = json_str.strip_prefix('\u{feff}').unwrap_or(json_str);
             let map: HashMap<String, String> = serde_json::from_str(json_str)
                 .unwrap_or_else(|e| panic!("Invalid JSON in {}: {}", path, e));
             translations.insert(lang.to_string(), Arc::new(map));
@@ -64,6 +68,7 @@ impl I18nManager {
             if let Some(data) = Assets::get(&countries_path) {
                 let json_str = std::str::from_utf8(&data.data)
                     .unwrap_or_else(|_| panic!("Invalid UTF-8 in {}", countries_path));
+                let json_str = json_str.strip_prefix('\u{feff}').unwrap_or(json_str);
                 let map: HashMap<String, String> = serde_json::from_str(json_str)
                     .unwrap_or_else(|e| panic!("Invalid JSON in {}: {}", countries_path, e));
                 country_names.insert(lang.to_string(), Arc::new(map));

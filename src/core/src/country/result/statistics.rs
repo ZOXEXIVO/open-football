@@ -3,6 +3,7 @@ use crate::TeamInfo;
 use crate::league::Season;
 use crate::simulator::SimulatorData;
 use log::info;
+use rayon::prelude::*;
 
 impl CountryResult {
     /// Snapshot all player statistics into history when a new season starts.
@@ -30,7 +31,7 @@ impl CountryResult {
             .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
             .collect();
 
-        for club in &mut country.clubs {
+        country.clubs.par_iter_mut().for_each(|club| {
             // Get main team info — used as fallback for sub-teams that
             // share the parent's brand (Reserve, U18..U23).
             let main_team_info: Option<(String, String, u16)> = club
@@ -91,7 +92,7 @@ impl CountryResult {
                     player.evaluate_favorite_club(club.id, &team_info.slug, date);
                 }
             }
-        }
+        });
     }
 }
 

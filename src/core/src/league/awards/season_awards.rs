@@ -8,6 +8,7 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 
 use crate::PlayerFieldPositionGroup;
+use crate::league::awards::player_of_week::PlayerOfTheWeekAward;
 use crate::r#match::MatchResult;
 use crate::r#match::engine::result::PlayerMatchEndStats;
 
@@ -22,6 +23,9 @@ const TOTW_FWD: usize = 2;
 pub const TOTW_MAX_RETAINED: usize = 52 * 3;
 pub const MONTHLY_MAX_RETAINED: usize = 36;
 pub const SEASON_MAX_RETAINED: usize = 20;
+/// Calendar-year archive bound. Mirrors `SEASON_MAX_RETAINED` so the
+/// year archive has the same depth as season-level awards.
+pub const YEAR_MAX_RETAINED: usize = 20;
 
 /// One spot in a team-of-the-week selection. Position group is preserved
 /// so the UI can render the XI in a 1-4-3-3 layout without re-classifying.
@@ -44,6 +48,18 @@ pub struct TeamOfTheWeekSlot {
 #[derive(Debug, Clone)]
 pub struct TeamOfTheWeekAward {
     pub week_end_date: NaiveDate,
+    pub slots: Vec<TeamOfTheWeekSlot>,
+}
+
+/// Calendar-year team award, distinct from `team_of_season`. Aggregated
+/// over Jan 1 → Jan 1 of the next year so it's stable across leagues
+/// that span calendar boundaries differently. Slots are denormalised
+/// (same shape as Team of the Week) so the UI can render players who
+/// later transferred or retired without a live lookup.
+#[derive(Debug, Clone)]
+pub struct TeamOfTheYearAward {
+    pub year: i32,
+    pub year_end_date: NaiveDate,
     pub slots: Vec<TeamOfTheWeekSlot>,
 }
 
@@ -128,6 +144,12 @@ pub struct SeasonAwardsSnapshot {
 #[derive(Debug, Clone, Default)]
 pub struct LeagueAwards {
     pub team_of_week: Vec<TeamOfTheWeekAward>,
+    /// Young Team of the Week archive (age ≤ 20). Mirrors `team_of_week`
+    /// shape; bounded by `TOTW_MAX_RETAINED`.
+    pub young_team_of_week: Vec<TeamOfTheWeekAward>,
+    /// Young Player of the Week archive (age ≤ 20). Reuses the
+    /// `PlayerOfTheWeekAward` shape since the data is identical.
+    pub young_player_of_week: Vec<PlayerOfTheWeekAward>,
     pub player_of_month: Vec<MonthlyPlayerAward>,
     pub young_player_of_month: Vec<MonthlyPlayerAward>,
     /// Per-completed-month snapshot (PoM, Young PoM, Team of Month,
@@ -138,12 +160,17 @@ pub struct LeagueAwards {
     /// always recorded together.
     pub monthly_awards: Vec<MonthlyAwardsSnapshot>,
     pub season_awards: Vec<SeasonAwardsSnapshot>,
+    /// Calendar-year XI archive. Bounded by `YEAR_MAX_RETAINED`.
+    pub team_of_year: Vec<TeamOfTheYearAward>,
     /// Set on season-end before stats are archived; consumed by the
     /// simulator-level `SeasonAwardsTick` to emit player events while
     /// the snapshot data is still meaningful.
     pub pending_season_awards: Option<SeasonAwardsSnapshot>,
     pub last_team_of_week: Option<NaiveDate>,
+    pub last_young_team_of_week: Option<NaiveDate>,
+    pub last_young_player_of_week: Option<NaiveDate>,
     pub last_monthly_award: Option<NaiveDate>,
+    pub last_team_of_year: Option<i32>,
 }
 
 impl LeagueAwards {
@@ -153,6 +180,33 @@ impl LeagueAwards {
         if self.team_of_week.len() > TOTW_MAX_RETAINED {
             let drop = self.team_of_week.len() - TOTW_MAX_RETAINED;
             self.team_of_week.drain(0..drop);
+        }
+    }
+
+    pub fn record_young_team_of_week(&mut self, award: TeamOfTheWeekAward) {
+        self.last_young_team_of_week = Some(award.week_end_date);
+        self.young_team_of_week.push(award);
+        if self.young_team_of_week.len() > TOTW_MAX_RETAINED {
+            let drop = self.young_team_of_week.len() - TOTW_MAX_RETAINED;
+            self.young_team_of_week.drain(0..drop);
+        }
+    }
+
+    pub fn record_young_player_of_week(&mut self, award: PlayerOfTheWeekAward) {
+        self.last_young_player_of_week = Some(award.week_end_date);
+        self.young_player_of_week.push(award);
+        if self.young_player_of_week.len() > TOTW_MAX_RETAINED {
+            let drop = self.young_player_of_week.len() - TOTW_MAX_RETAINED;
+            self.young_player_of_week.drain(0..drop);
+        }
+    }
+
+    pub fn record_team_of_year(&mut self, award: TeamOfTheYearAward) {
+        self.last_team_of_year = Some(award.year);
+        self.team_of_year.push(award);
+        if self.team_of_year.len() > YEAR_MAX_RETAINED {
+            let drop = self.team_of_year.len() - YEAR_MAX_RETAINED;
+            self.team_of_year.drain(0..drop);
         }
     }
 
@@ -205,8 +259,20 @@ impl LeagueAwards {
         self.last_team_of_week == Some(week_end_date)
     }
 
+    pub fn has_young_team_of_week_for(&self, week_end_date: NaiveDate) -> bool {
+        self.last_young_team_of_week == Some(week_end_date)
+    }
+
+    pub fn has_young_player_of_week_for(&self, week_end_date: NaiveDate) -> bool {
+        self.last_young_player_of_week == Some(week_end_date)
+    }
+
     pub fn has_monthly_award_for(&self, month_end_date: NaiveDate) -> bool {
         self.last_monthly_award == Some(month_end_date)
+    }
+
+    pub fn has_team_of_year_for(&self, year: i32) -> bool {
+        self.last_team_of_year == Some(year)
     }
 }
 
@@ -857,5 +923,166 @@ mod tests {
         let pick =
             MonthlyAwardSelector::pick_best(&scores, 8000, 3, |id| id != 1).map(|(id, _, _)| id);
         assert_eq!(pick, Some(2));
+    }
+
+    fn make_pow_award(week: NaiveDate, player_id: u32) -> PlayerOfTheWeekAward {
+        PlayerOfTheWeekAward {
+            week_end_date: week,
+            player_id,
+            player_name: "P".into(),
+            player_slug: "p".into(),
+            club_id: 1,
+            club_name: "Club".into(),
+            club_slug: "club".into(),
+            score: 1.0,
+            goals: 1,
+            assists: 0,
+            matches_played: 1,
+            average_rating: 7.0,
+        }
+    }
+
+    fn make_totw_award(week: NaiveDate) -> TeamOfTheWeekAward {
+        TeamOfTheWeekAward {
+            week_end_date: week,
+            slots: vec![],
+        }
+    }
+
+    #[test]
+    fn young_player_of_week_archive_is_bounded() {
+        let mut awards = LeagueAwards::default();
+        let base = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        for i in 0..(TOTW_MAX_RETAINED + 5) {
+            let week = base
+                .checked_add_days(chrono::Days::new(i as u64 * 7))
+                .unwrap();
+            awards.record_young_player_of_week(make_pow_award(week, i as u32));
+        }
+        assert_eq!(awards.young_player_of_week.len(), TOTW_MAX_RETAINED);
+    }
+
+    #[test]
+    fn young_player_of_week_dedup_via_has_for() {
+        let mut awards = LeagueAwards::default();
+        let week = NaiveDate::from_ymd_opt(2026, 4, 6).unwrap();
+        assert!(!awards.has_young_player_of_week_for(week));
+        awards.record_young_player_of_week(make_pow_award(week, 1));
+        assert!(awards.has_young_player_of_week_for(week));
+        // Different week is not dedup-equal.
+        let later = NaiveDate::from_ymd_opt(2026, 4, 13).unwrap();
+        assert!(!awards.has_young_player_of_week_for(later));
+    }
+
+    #[test]
+    fn young_team_of_week_archive_is_bounded() {
+        let mut awards = LeagueAwards::default();
+        let base = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        for i in 0..(TOTW_MAX_RETAINED + 3) {
+            let week = base
+                .checked_add_days(chrono::Days::new(i as u64 * 7))
+                .unwrap();
+            awards.record_young_team_of_week(make_totw_award(week));
+        }
+        assert_eq!(awards.young_team_of_week.len(), TOTW_MAX_RETAINED);
+    }
+
+    #[test]
+    fn young_team_of_week_dedup_via_has_for() {
+        let mut awards = LeagueAwards::default();
+        let week = NaiveDate::from_ymd_opt(2026, 4, 6).unwrap();
+        assert!(!awards.has_young_team_of_week_for(week));
+        awards.record_young_team_of_week(make_totw_award(week));
+        assert!(awards.has_young_team_of_week_for(week));
+    }
+
+    #[test]
+    fn team_of_year_archive_is_bounded() {
+        let mut awards = LeagueAwards::default();
+        for i in 0..(YEAR_MAX_RETAINED + 5) {
+            let year = 2000 + i as i32;
+            let date = NaiveDate::from_ymd_opt(year, 12, 31).unwrap();
+            awards.record_team_of_year(TeamOfTheYearAward {
+                year,
+                year_end_date: date,
+                slots: vec![],
+            });
+        }
+        assert_eq!(awards.team_of_year.len(), YEAR_MAX_RETAINED);
+        // Last retained must be the most recent year.
+        let last = awards.team_of_year.last().unwrap();
+        assert_eq!(last.year, (2000 + YEAR_MAX_RETAINED + 4) as i32);
+    }
+
+    #[test]
+    fn team_of_year_dedup_via_has_for() {
+        let mut awards = LeagueAwards::default();
+        let year = 2026;
+        assert!(!awards.has_team_of_year_for(year));
+        awards.record_team_of_year(TeamOfTheYearAward {
+            year,
+            year_end_date: NaiveDate::from_ymd_opt(year, 12, 31).unwrap(),
+            slots: vec![],
+        });
+        assert!(awards.has_team_of_year_for(year));
+        assert!(!awards.has_team_of_year_for(year + 1));
+    }
+
+    #[test]
+    fn young_team_of_week_eligibility_filters_to_under_20s() {
+        // Mirrors the production filter in `YoungTeamOfTheWeekTick`:
+        // candidate set is filtered before scoring, so a 21-year-old
+        // with the highest output is excluded entirely from the young
+        // selection. Implemented here as the ages-by-id map the
+        // simulator builds.
+        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        // Exceptional 21-year-old — would dominate Team of the Week.
+        scores.insert(
+            21,
+            make_agg(PlayerFieldPositionGroup::Forward, 3, 6, 3, 9.5, 3),
+        );
+        // Routine 20-year-old.
+        scores.insert(
+            20,
+            make_agg(PlayerFieldPositionGroup::Forward, 3, 2, 0, 7.4, 1),
+        );
+
+        let ages: HashMap<u32, u8> = [(21u32, 21u8), (20u32, 20u8)].into_iter().collect();
+        let young: HashMap<u32, CandidateAggregate> = scores
+            .iter()
+            .filter(|(id, _)| ages.get(*id).map(|a| *a <= 20).unwrap_or(false))
+            .map(|(id, a)| (*id, *a))
+            .collect();
+        let team = TeamOfTheWeekSelector::pick(&young);
+        let ids: Vec<u32> = team.iter().map(|(id, ..)| *id).collect();
+        assert!(!ids.contains(&21), "21-year-old must be filtered out");
+        assert!(ids.contains(&20), "20-year-old must remain eligible");
+    }
+
+    #[test]
+    fn team_of_year_min_apps_excludes_one_match_wonder() {
+        // Year-level appearance gate. Simulator uses
+        // `max(10, 25% of typical matches per team)` — for a 20-team
+        // league that's ~38 fixtures per team, gate ≈ 10. A
+        // single-match elite player must not outrank a regular starter.
+        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        // One-match wonder: rating 10, hat-trick.
+        scores.insert(
+            1,
+            make_agg(PlayerFieldPositionGroup::Forward, 1, 3, 0, 10.0, 1),
+        );
+        // Steady year-long forward: 30 apps, modest per-match.
+        scores.insert(
+            2,
+            make_agg(PlayerFieldPositionGroup::Forward, 30, 18, 6, 7.4, 18),
+        );
+        let team = TeamOfTheWeekSelector::pick_with_min_apps(&scores, 10);
+        let fwds: Vec<u32> = team
+            .iter()
+            .filter(|(_, p, ..)| matches!(p, PlayerFieldPositionGroup::Forward))
+            .map(|(id, ..)| *id)
+            .collect();
+        assert!(!fwds.contains(&1), "one-match wonder must be gated out");
+        assert_eq!(fwds, vec![2]);
     }
 }

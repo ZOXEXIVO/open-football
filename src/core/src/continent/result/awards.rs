@@ -1,8 +1,8 @@
 use super::ContinentResult;
-use crate::HappinessEventType;
 use crate::continent::Continent;
 use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
+use crate::{AwardReputationInput, AwardReputationKind, HappinessEventType};
 use log::debug;
 
 impl ContinentResult {
@@ -44,13 +44,10 @@ impl ContinentResult {
                     HappinessEventType::ContinentalPlayerOfYear,
                     330,
                 );
-                let cur = player.player_attributes.current_reputation;
-                let home = player.player_attributes.home_reputation;
-                let world = player.player_attributes.world_reputation;
-                player.player_attributes.update_reputation(
-                    ((cur as i32 + 500).min(10000) - cur as i32) as i16,
-                    ((home as i32 + 500).min(10000) - home as i32) as i16,
-                    ((world as i32 + 250).min(10000) - world as i32) as i16,
+                player.apply_award_reputation_impact(
+                    AwardReputationKind::ContinentalPlayerOfYear,
+                    AwardReputationInput::new(),
+                    date,
                 );
             }
         }

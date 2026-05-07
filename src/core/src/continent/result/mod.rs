@@ -8,6 +8,7 @@ mod types;
 pub use types::*;
 
 use crate::SimulationResult;
+use crate::ai::PendingAiRequest;
 use crate::country::CountryResult;
 use crate::r#match::MatchResult;
 use crate::simulator::SimulatorData;
@@ -25,14 +26,25 @@ pub struct ContinentResult {
 
     /// Match results from national team competitions (for global match_store)
     pub national_match_results: Vec<MatchResult>,
+
+    /// AI batch requests collected from every country/club inside this
+    /// continent's parallel pass. Drained by the simulator before Phase
+    /// B fires `AiBatchProcessor::execute`.
+    pub pending_ai_requests: Vec<PendingAiRequest>,
 }
 
 impl ContinentResult {
     pub fn new(
         continent_id: u32,
-        countries: Vec<CountryResult>,
+        mut countries: Vec<CountryResult>,
         national_match_results: Vec<MatchResult>,
     ) -> Self {
+        let mut pending_ai_requests: Vec<PendingAiRequest> = Vec::new();
+        for country in &mut countries {
+            if !country.pending_ai_requests.is_empty() {
+                pending_ai_requests.append(&mut country.pending_ai_requests);
+            }
+        }
         ContinentResult {
             continent_id,
             countries,
@@ -41,6 +53,7 @@ impl ContinentResult {
             transfer_summary: None,
             economic_impact: None,
             national_match_results,
+            pending_ai_requests,
         }
     }
 

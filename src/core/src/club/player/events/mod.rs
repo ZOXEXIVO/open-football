@@ -32,6 +32,7 @@ pub mod transfer;
 pub mod transfer_social;
 pub mod types;
 
+pub use career::{AwardReputationInput, AwardReputationKind};
 pub use types::{LoanCompletion, MatchOutcome, MatchParticipation, TransferCompletion};
 
 #[cfg(test)]

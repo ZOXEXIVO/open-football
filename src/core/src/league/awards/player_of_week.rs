@@ -470,6 +470,75 @@ mod tests {
     }
 
     #[test]
+    fn young_pow_filter_excludes_21_year_old_with_best_score() {
+        // Mirrors the exact path the simulator uses for
+        // `YoungWeeklyAwardsTick`: aggregate first, then drop everyone
+        // outside the age window before picking. A 21-year-old with the
+        // best score must not win the young award; the 20-year-old
+        // wins instead.
+        let mut elite = empty_stats();
+        elite.match_rating = 9.5;
+        elite.goals = 3;
+        elite.position_group = PlayerFieldPositionGroup::Forward;
+
+        let mut routine = empty_stats();
+        routine.match_rating = 7.6;
+        routine.goals = 1;
+        routine.position_group = PlayerFieldPositionGroup::Forward;
+
+        let m = build_match(
+            "m1",
+            10,
+            20,
+            4,
+            0,
+            &[1, 2],
+            &[],
+            vec![(1, elite), (2, routine)],
+            Some(1),
+        );
+
+        let agg = PlayerOfTheWeekSelector::aggregate([&m]);
+        // Exact senior winner is the 21-year-old (id 1) — sanity.
+        let (senior, _) = PlayerOfTheWeekSelector::pick_winner(&agg).expect("senior winner");
+        assert_eq!(senior, 1);
+
+        // Now apply the young-eligibility filter (age ≤ 20).
+        let ages: std::collections::HashMap<u32, u8> =
+            [(1u32, 21u8), (2u32, 20u8)].into_iter().collect();
+        let young: std::collections::HashMap<u32, WeeklyAggregate> = agg
+            .iter()
+            .filter(|(id, _)| ages.get(*id).map(|a| *a <= 20).unwrap_or(false))
+            .map(|(id, a)| (*id, *a))
+            .collect();
+        let (young_winner, _) =
+            PlayerOfTheWeekSelector::pick_winner(&young).expect("young winner");
+        assert_eq!(young_winner, 2);
+    }
+
+    #[test]
+    fn young_pow_filter_includes_20_year_old() {
+        // Inverse of the exclusion test — a sole 20-year-old must
+        // surface as the young winner even when senior candidates
+        // outscore them.
+        let mut twenty = empty_stats();
+        twenty.match_rating = 7.6;
+        twenty.goals = 1;
+        twenty.position_group = PlayerFieldPositionGroup::Forward;
+        let m = build_match("m", 10, 20, 1, 0, &[1], &[], vec![(1, twenty)], Some(1));
+
+        let agg = PlayerOfTheWeekSelector::aggregate([&m]);
+        let ages: std::collections::HashMap<u32, u8> = [(1u32, 20u8)].into_iter().collect();
+        let young: std::collections::HashMap<u32, WeeklyAggregate> = agg
+            .iter()
+            .filter(|(id, _)| ages.get(*id).map(|a| *a <= 20).unwrap_or(false))
+            .map(|(id, a)| (*id, *a))
+            .collect();
+        let (winner, _) = PlayerOfTheWeekSelector::pick_winner(&young).expect("a winner");
+        assert_eq!(winner, 1);
+    }
+
+    #[test]
     fn has_award_for_week_blocks_double_fire() {
         let mut h = PlayerOfTheWeekHistory::new();
         let week = NaiveDate::from_ymd_opt(2026, 4, 6).unwrap();

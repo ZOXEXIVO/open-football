@@ -80,6 +80,8 @@ pub use club::{
     AcceptContractHandler,
     Achievement,
     AchievementType,
+    AwardReputationInput,
+    AwardReputationKind,
     BoardResponsibility,
     CONDITION_MAX_VALUE,
     ChangeType,

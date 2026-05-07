@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use log::debug;
 use std::collections::HashMap;
 
+use crate::club::staff::perception::{EstimationContext, PotentialEstimator};
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
 use crate::transfers::pipeline::{
@@ -326,7 +327,15 @@ impl PipelineProcessor {
         // and now the club can't spread what it has across multiple targets.
         let max_concurrent = if ffp_breach { 1 } else { base_max_concurrent };
 
-        // Build squad info for analysis
+        // Build squad info for analysis. `estimated_potential` is what
+        // the **head coach** believes the player's ceiling is — built
+        // from visible signals only via `PotentialEstimator`. Players
+        // already on the main roster get full-visibility observations
+        // (the coach sees them every training day); reserves/youth
+        // would feed `is_main_team = false`, but the squad-eval pass
+        // only iterates the first team here so all are main-team
+        // visibility.
+        let head_coach = team.staffs.head_coach();
         let squad: Vec<SquadPlayerInfo> = players
             .iter()
             .map(|p| {
@@ -335,11 +344,18 @@ impl PipelineProcessor {
                 for pos in &all_pos {
                     levels.insert(*pos, p.positions.get_level(*pos));
                 }
+                let ctx = EstimationContext {
+                    observation_count: 12,
+                    is_main_team: true,
+                    salt: 0xA1F0_07BA,
+                };
+                let estimate = PotentialEstimator::estimate_for_staff(p, head_coach, &ctx, date);
                 SquadPlayerInfo {
                     player_id: p.id,
                     primary_position: p.position(),
                     current_ability: p.player_attributes.current_ability,
-                    potential_ability: p.player_attributes.potential_ability,
+                    estimated_potential: estimate.estimated_potential,
+                    potential_confidence: estimate.confidence,
                     age: p.age(date),
                     position_levels: levels,
                     appearances: p.statistics.played + p.statistics.played_subs,
@@ -1110,8 +1126,13 @@ impl PipelineProcessor {
                     // Young players who need game time. Compare to the
                     // position-group average + depth cushion so the main
                     // at any position isn't routed to "dev minutes".
+                    // Confidence gate: only act on a clear coach
+                    // opinion (≥ 0.4). Borderline reads stay neutral —
+                    // a low-judging coach shouldn't ship kids out on a
+                    // hunch.
                     if player_info.age <= age_threshold
-                        && player_info.potential_ability > player_info.current_ability + 5
+                        && player_info.estimated_potential > player_info.current_ability + 5
+                        && player_info.potential_confidence >= 0.40
                         && (player_info.current_ability as i16)
                             < group_avg as i16 - ability_gap - depth_cushion
                     {
@@ -1180,8 +1201,12 @@ impl PipelineProcessor {
                 ReputationLevel::National => {
                     // Young players with high potential gap — group-relative
                     // deficit + depth cushion keeps the starter unscathed.
+                    // National-tier staff have weaker judging eyes, so
+                    // demand a wider believed gap (10) and reasonable
+                    // confidence (≥ 0.35).
                     if player_info.age <= 22
-                        && player_info.potential_ability > player_info.current_ability + 10
+                        && player_info.estimated_potential > player_info.current_ability + 10
+                        && player_info.potential_confidence >= 0.35
                         && (player_info.current_ability as i16)
                             < group_avg as i16 - 5 - depth_cushion
                     {
@@ -1208,8 +1233,13 @@ impl PipelineProcessor {
                 _ => {
                     // Regional/Local/Amateur: only loan very young players.
                     // Group-relative + depth cushion, same logic as above.
+                    // Smaller-club staff are the weakest judges of
+                    // potential — require the widest believed gap (15)
+                    // and at least baseline confidence (≥ 0.30) before
+                    // acting.
                     if player_info.age <= 21
-                        && player_info.potential_ability > player_info.current_ability + 15
+                        && player_info.estimated_potential > player_info.current_ability + 15
+                        && player_info.potential_confidence >= 0.30
                         && (player_info.current_ability as i16)
                             < group_avg as i16 - 10 - depth_cushion
                     {

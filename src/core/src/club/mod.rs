@@ -43,7 +43,8 @@ pub use transfers::ClubTransferStrategy;
 
 // Player exports (except conflicting modules)
 pub use player::{
-    AcademyGenerationContext, AcademyIntakeState, CONDITION_MAX_VALUE, ContractBonus,
+    AcademyGenerationContext, AcademyIntakeState, AwardReputationInput, AwardReputationKind,
+    CONDITION_MAX_VALUE, ContractBonus,
     ContractBonusType, ContractClause, ContractClauseType, ContractType, Goalkeeping,
     HappinessEvent, HappinessEventCause, HappinessEventChangeKind, HappinessEventContext,
     HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,

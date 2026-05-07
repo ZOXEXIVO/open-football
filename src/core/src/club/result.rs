@@ -1,3 +1,4 @@
+use crate::ai::PendingAiRequest;
 use crate::club::academy::result::ClubAcademyResult;
 use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::{BoardResult, ClubFinanceResult};
@@ -21,6 +22,10 @@ pub struct ClubResult {
     pub board: BoardResult,
     pub academy: ClubAcademyResult,
     pub academy_transfers: Vec<CompletedTransfer>,
+    /// AI batch requests this club emitted during its tick. Drained by
+    /// the simulator after the parallel continent phase joins, so the
+    /// club never writes into a shared collector.
+    pub pending_ai_requests: Vec<PendingAiRequest>,
 }
 
 impl ClubResult {
@@ -38,6 +43,7 @@ impl ClubResult {
             board,
             academy,
             academy_transfers: Vec::new(),
+            pending_ai_requests: Vec::new(),
         }
     }
 

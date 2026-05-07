@@ -378,8 +378,11 @@ pub struct MoraleEventCatalog {
     // Awards / nominations
     pub player_of_the_month: f32,
     pub young_player_of_the_month: f32,
+    pub young_player_of_the_week: f32,
     pub team_of_the_week_selection: f32,
+    pub young_team_of_the_week_selection: f32,
     pub team_of_the_season_selection: f32,
+    pub team_of_the_year_selection: f32,
     pub player_of_the_season: f32,
     pub young_player_of_the_season: f32,
     pub league_top_scorer: f32,
@@ -523,8 +526,17 @@ impl Default for MoraleEventCatalog {
             // Awards / nominations — career-visible silverware.
             player_of_the_month: 8.0,
             young_player_of_the_month: 7.0,
+            // Slightly bigger than the senior weekly award because for a
+            // 20-or-under it's a much rarer, prouder moment than a 28
+            // year-old's nth POW.
+            young_player_of_the_week: 5.0,
             team_of_the_week_selection: 3.0,
+            young_team_of_the_week_selection: 2.5,
             team_of_the_season_selection: 9.0,
+            // Calendar-year XI — full year of consistency, between
+            // Team of the Season (one league campaign) and a full
+            // Player-of-the-Season pick.
+            team_of_the_year_selection: 8.0,
             player_of_the_season: 12.0,
             young_player_of_the_season: 10.0,
             league_top_scorer: 10.0,
@@ -631,8 +643,11 @@ impl MoraleEventCatalog {
             LanguageProgress => self.language_progress,
             PlayerOfTheMonth => self.player_of_the_month,
             YoungPlayerOfTheMonth => self.young_player_of_the_month,
+            YoungPlayerOfTheWeek => self.young_player_of_the_week,
             TeamOfTheWeekSelection => self.team_of_the_week_selection,
+            YoungTeamOfTheWeekSelection => self.young_team_of_the_week_selection,
             TeamOfTheSeasonSelection => self.team_of_the_season_selection,
+            TeamOfTheYearSelection => self.team_of_the_year_selection,
             PlayerOfTheSeason => self.player_of_the_season,
             YoungPlayerOfTheSeason => self.young_player_of_the_season,
             LeagueTopScorer => self.league_top_scorer,

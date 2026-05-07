@@ -2,7 +2,6 @@ pub use chrono::prelude::*;
 
 use crate::PeopleNameGeneratorData;
 use crate::TeamContext;
-use crate::ai::Ai;
 use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, StaffContext};
 use crate::continent::ContinentContext;
 use crate::country::{CountryContext, SeasonDates};
@@ -11,7 +10,6 @@ use crate::league::LeagueContext;
 #[derive(Clone)]
 pub struct GlobalContext<'gc> {
     pub simulation: SimulationContext,
-    pub ai: Ai,
     pub continent: Option<ContinentContext>,
     pub country: Option<CountryContext>,
     pub league: Option<LeagueContext<'gc>>,
@@ -24,10 +22,9 @@ pub struct GlobalContext<'gc> {
 }
 
 impl<'gc> GlobalContext<'gc> {
-    pub fn new(simulation_ctx: SimulationContext, ai: Ai) -> Self {
+    pub fn new(simulation_ctx: SimulationContext) -> Self {
         GlobalContext {
             simulation: simulation_ctx,
-            ai,
             continent: None,
             country: None,
             league: None,
@@ -366,7 +363,7 @@ mod tests {
         let sim_ctx = SimulationContext::new(date);
 
         // Create a global context with the simulation context
-        let global_ctx = GlobalContext::new(sim_ctx.clone(), Ai::new());
+        let global_ctx = GlobalContext::new(sim_ctx.clone());
 
         // Test if the simulation context is set correctly
         assert_eq!(global_ctx.simulation.date, sim_ctx.date);

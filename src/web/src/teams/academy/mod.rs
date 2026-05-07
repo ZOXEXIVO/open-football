@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::common::potential_stars::PotentialStarsView;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -98,6 +99,8 @@ pub async fn team_academy_action(
         ApiError::InternalError(format!("Club with ID {} not found", team.club_id))
     })?;
 
+    let head_coach = team.staffs.head_coach();
+
     // Get academy players directly from club academy
     let mut players: Vec<AcademyPlayer> = club
         .academy
@@ -118,8 +121,8 @@ pub async fn team_academy_action(
                 country_code: country.code.clone(),
                 country_name: country.name.clone(),
                 age: DateUtils::age(p.birth_date, now),
-                current_ability: get_ability_stars(p.player_attributes.current_ability),
-                potential_ability: get_ability_stars(p.player_attributes.potential_ability),
+                current_ability: PotentialStarsView::current(p),
+                potential_ability: PotentialStarsView::potential_by_staff(p, head_coach),
                 conditions: (100f32 * (p.player_attributes.condition as f32 / 10000.0)) as u8,
             })
         })
@@ -188,15 +191,6 @@ pub async fn team_academy_action(
         show_academy_tab: true,
         players,
     })
-}
-
-fn get_ability_stars(ability: u8) -> u8 {
-    // Absolute scale: PA 200 → 5★, PA 0 → 0.0, rounded half-up.
-    // After the academy realism overhaul PA 180+ is genuinely rare even at
-    // top clubs, so 5★ now reads as "world-class prospect" rather than
-    // "anyone the academy minted today".
-    let raw = (5.0f32 * (ability as f32 / 200.0)).round() as u8;
-    raw.max(1).min(5)
 }
 
 fn get_neighbor_teams(

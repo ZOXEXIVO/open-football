@@ -31,11 +31,18 @@ mod processor {
     pub struct PipelineProcessor;
 
     /// Info about a player in the squad for formation-based analysis.
+    /// `estimated_potential` is the **head coach's belief** about the
+    /// player's ceiling — never the biological PA. Built by
+    /// `PotentialEstimator` from visible signals (skill level, age,
+    /// mentals, training trend) plus the coach's judging skills, so two
+    /// players with identical observable attributes look identical to
+    /// the same coach regardless of their hidden PA.
     pub(in crate::transfers::pipeline) struct SquadPlayerInfo {
         pub player_id: u32,
         pub primary_position: PlayerPositionType,
         pub current_ability: u8,
-        pub potential_ability: u8,
+        pub estimated_potential: u8,
+        pub potential_confidence: f32,
         pub age: u8,
         pub position_levels: HashMap<PlayerPositionType, u8>,
         pub appearances: u16,

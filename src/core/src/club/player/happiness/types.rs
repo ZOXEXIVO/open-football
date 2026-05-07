@@ -2852,11 +2852,13 @@ impl LoanEventContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecognitionEventKind {
     PlayerOfTheWeek,
+    YoungPlayerOfTheWeek,
     PlayerOfTheMonth,
     YoungPlayerOfTheMonth,
     PlayerOfTheSeason,
     YoungPlayerOfTheSeason,
     TeamOfTheSeasonSelection,
+    TeamOfTheYearSelection,
     LeagueTopScorer,
     LeagueTopAssists,
     LeagueGoldenGlove,
@@ -2869,11 +2871,13 @@ impl RecognitionEventKind {
     pub fn as_token(&self) -> &'static str {
         match self {
             RecognitionEventKind::PlayerOfTheWeek => "player_of_the_week",
+            RecognitionEventKind::YoungPlayerOfTheWeek => "young_player_of_the_week",
             RecognitionEventKind::PlayerOfTheMonth => "player_of_the_month",
             RecognitionEventKind::YoungPlayerOfTheMonth => "young_player_of_the_month",
             RecognitionEventKind::PlayerOfTheSeason => "player_of_the_season",
             RecognitionEventKind::YoungPlayerOfTheSeason => "young_player_of_the_season",
             RecognitionEventKind::TeamOfTheSeasonSelection => "team_of_the_season",
+            RecognitionEventKind::TeamOfTheYearSelection => "team_of_the_year",
             RecognitionEventKind::LeagueTopScorer => "league_top_scorer",
             RecognitionEventKind::LeagueTopAssists => "league_top_assists",
             RecognitionEventKind::LeagueGoldenGlove => "league_golden_glove",
@@ -3327,8 +3331,19 @@ pub enum HappinessEventType {
     // ── Awards / nominations ────────────────────────────────────
     PlayerOfTheMonth,
     YoungPlayerOfTheMonth,
+    /// Named the league's Young Player of the Week (age ≤ 20). Career
+    /// memory for emerging talent — distinct from the broader Player
+    /// of the Week so a 19-year-old who edged the senior award doesn't
+    /// suppress the under-20 recognition.
+    YoungPlayerOfTheWeek,
     TeamOfTheWeekSelection,
+    /// Selected in the Young Team of the Week (age ≤ 20). Recognition
+    /// for an under-20 starting in the weekly young XI.
+    YoungTeamOfTheWeekSelection,
     TeamOfTheSeasonSelection,
+    /// Selected in the league's calendar-year XI (Team of the Year).
+    /// Distinct from `TeamOfTheSeasonSelection`, which is per-season.
+    TeamOfTheYearSelection,
     PlayerOfTheSeason,
     YoungPlayerOfTheSeason,
     LeagueTopScorer,

@@ -319,7 +319,9 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             // ── Awards / nominations ─────────────────────────
             | HappinessEventType::PlayerOfTheMonth
             | HappinessEventType::YoungPlayerOfTheMonth
+            | HappinessEventType::YoungPlayerOfTheWeek
             | HappinessEventType::TeamOfTheSeasonSelection
+            | HappinessEventType::TeamOfTheYearSelection
             | HappinessEventType::PlayerOfTheSeason
             | HappinessEventType::YoungPlayerOfTheSeason
             | HappinessEventType::LeagueTopScorer
@@ -413,8 +415,13 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::LanguageProgress => "event_language_progress",
         HappinessEventType::PlayerOfTheMonth => "event_player_of_the_month",
         HappinessEventType::YoungPlayerOfTheMonth => "event_young_player_of_the_month",
+        HappinessEventType::YoungPlayerOfTheWeek => "event_young_player_of_the_week",
         HappinessEventType::TeamOfTheWeekSelection => "event_team_of_the_week_selection",
+        HappinessEventType::YoungTeamOfTheWeekSelection => {
+            "event_young_team_of_the_week_selection"
+        }
         HappinessEventType::TeamOfTheSeasonSelection => "event_team_of_the_season_selection",
+        HappinessEventType::TeamOfTheYearSelection => "event_team_of_the_year_selection",
         HappinessEventType::PlayerOfTheSeason => "event_player_of_the_season",
         HappinessEventType::YoungPlayerOfTheSeason => "event_young_player_of_the_season",
         HappinessEventType::LeagueTopScorer => "event_league_top_scorer",
@@ -2069,11 +2076,13 @@ impl RecognitionRender {
         matches!(
             event_type,
             HappinessEventType::PlayerOfTheWeek
+                | HappinessEventType::YoungPlayerOfTheWeek
                 | HappinessEventType::PlayerOfTheMonth
                 | HappinessEventType::YoungPlayerOfTheMonth
                 | HappinessEventType::PlayerOfTheSeason
                 | HappinessEventType::YoungPlayerOfTheSeason
                 | HappinessEventType::TeamOfTheSeasonSelection
+                | HappinessEventType::TeamOfTheYearSelection
                 | HappinessEventType::LeagueTopScorer
                 | HappinessEventType::LeagueTopAssists
                 | HappinessEventType::LeagueGoldenGlove
@@ -2336,6 +2345,25 @@ fn build_description(
             raw.replace("{tow}", &link)
         } else {
             raw.replace("{tow}", i18n.t("team_of_the_week"))
+        };
+        return DescriptionRender {
+            html,
+            partner_in_headline: false,
+        };
+    }
+
+    if matches!(event.event_type, HappinessEventType::YoungTeamOfTheWeekSelection) {
+        let raw = i18n.t(event_type_to_i18n_key(&event.event_type));
+        let html = if let Some(slug) = league_slug {
+            let url = format!("/{}/leagues/{}/awards", lang, slug);
+            let link = format!(
+                r#"<a href="{}">{}</a>"#,
+                url,
+                i18n.t("young_team_of_the_week")
+            );
+            raw.replace("{tow}", &link)
+        } else {
+            raw.replace("{tow}", i18n.t("young_team_of_the_week"))
         };
         return DescriptionRender {
             html,

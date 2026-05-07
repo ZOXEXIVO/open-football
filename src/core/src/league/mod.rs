@@ -13,7 +13,7 @@ pub use awards::{
     AwardAggregator, CandidateAggregate, LeagueAwards, MonthlyAwardSelector, MonthlyAwardsSnapshot,
     MonthlyPlayerAward, MonthlyStatLeader, PlayerOfTheWeekAward, PlayerOfTheWeekHistory,
     PlayerOfTheWeekSelector, SeasonAwardSelector, SeasonAwardsSnapshot, TeamOfTheWeekAward,
-    TeamOfTheWeekSelector, TeamOfTheWeekSlot,
+    TeamOfTheWeekSelector, TeamOfTheWeekSlot, TeamOfTheYearAward,
 };
 pub use core::*;
 pub use result::*;

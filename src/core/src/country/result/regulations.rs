@@ -15,9 +15,12 @@
 use super::CountryResult;
 use crate::club::HappinessEventType;
 use crate::simulator::SimulatorData;
-use crate::{PlayerStatusType, RegulationEventContext, RegulationOutcomeKind, RegulationSlotKind};
+use crate::{
+    Player, PlayerStatusType, RegulationEventContext, RegulationOutcomeKind, RegulationSlotKind,
+};
 use chrono::NaiveDate;
 use log::debug;
+use rayon::prelude::*;
 
 impl CountryResult {
     /// Walk every club in `country_id`'s main team and drop the
@@ -48,21 +51,22 @@ impl CountryResult {
             return;
         };
 
-        for club in &mut country.clubs {
+        // Split the country borrow: regulations are shared (`&`) across
+        // workers, clubs get the mutable iter so each rayon worker
+        // mutates only its own club's main-team roster.
+        let regulations = &country.regulations;
+        country.clubs.par_iter_mut().for_each(|club| {
             // Only the main team is registered with the league. Reserve /
             // youth squads have their own rosters and aren't filtered.
             let Some(main_team) = club.teams.main_mut() else {
-                continue;
+                return;
             };
-            // Build a borrow of player references to feed the rule helper.
-            let player_refs: Vec<&crate::Player> = main_team.players.players.iter().collect();
-            let omitted_ids = country
-                .regulations
-                .omitted_for_foreign_limit(&player_refs, club_country_id);
+            let player_refs: Vec<&Player> = main_team.players.players.iter().collect();
+            let omitted_ids = regulations.omitted_for_foreign_limit(&player_refs, club_country_id);
             drop(player_refs);
 
             if omitted_ids.is_empty() {
-                continue;
+                return;
             }
             debug!(
                 "📋 Squad registration: club {} omits {} foreign players",
@@ -86,7 +90,7 @@ impl CountryResult {
                     365,
                 );
             }
-        }
+        });
         // Suppress unused-variable warning when the path stays generic.
         let _ = foreign_limit;
     }

@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::common::potential_stars::PotentialStarsView;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -106,8 +107,8 @@ pub async fn country_free_agents_action(
                 last_name: player.full_name.display_last_name().to_string(),
                 position,
                 age: DateUtils::age(player.birth_date, now),
-                current_ability: get_ability_stars(player.player_attributes.current_ability),
-                potential_ability: get_ability_stars(player.player_attributes.potential_ability),
+                current_ability: PotentialStarsView::current(player),
+                potential_ability: PotentialStarsView::potential_absolute(player),
             }
         })
         .collect();
@@ -157,6 +158,3 @@ pub async fn country_free_agents_action(
     })
 }
 
-fn get_ability_stars(ability: u8) -> u8 {
-    (5.0f32 * (ability as f32 / 200.0)).round() as u8
-}

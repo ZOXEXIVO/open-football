@@ -11,7 +11,7 @@ use core::PlayerFieldPositionGroup;
 use core::SimulatorData;
 use core::league::{
     MonthlyAwardsSnapshot, MonthlyPlayerAward, MonthlyStatLeader, PlayerOfTheWeekAward,
-    SeasonAwardsSnapshot, TeamOfTheWeekAward, TeamOfTheWeekSlot,
+    SeasonAwardsSnapshot, TeamOfTheWeekAward, TeamOfTheWeekSlot, TeamOfTheYearAward,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -42,11 +42,14 @@ pub struct LeagueAwardsTemplate {
     pub lang: String,
     pub league_slug: String,
     pub hero_player: Option<AwardPlayerCard>,
+    pub young_hero_player: Option<AwardPlayerCard>,
     pub player_of_month: Option<AwardPlayerCard>,
     pub young_player_of_month: Option<AwardPlayerCard>,
     pub team_of_week: Option<TeamOfWeekView>,
+    pub young_team_of_week: Option<TeamOfWeekView>,
     pub team_of_month: Option<TeamOfWeekView>,
     pub young_team_of_month: Option<TeamOfWeekView>,
+    pub team_of_year: Option<TeamOfYearView>,
     pub monthly_label: String,
     pub monthly_matches_count: u32,
     pub monthly_top_scorers: Vec<StatLeaderItem>,
@@ -74,6 +77,11 @@ pub struct AwardPlayerCard {
 
 pub struct TeamOfWeekView {
     pub date_label: String,
+    pub all_slots: Vec<TeamOfWeekSlotView>,
+}
+
+pub struct TeamOfYearView {
+    pub year_label: String,
     pub all_slots: Vec<TeamOfWeekSlotView>,
 }
 
@@ -193,11 +201,29 @@ pub async fn league_awards_action(
         .latest()
         .map(|a| build_player_card_from_pow(simulator_data, a));
 
+    let young_hero_player = league
+        .awards
+        .young_player_of_week
+        .last()
+        .map(|a| build_player_card_from_pow(simulator_data, a));
+
     let team_of_week = league
         .awards
         .team_of_week
         .last()
         .map(|t| build_team_of_week(simulator_data, t));
+
+    let young_team_of_week = league
+        .awards
+        .young_team_of_week
+        .last()
+        .map(|t| build_team_of_week(simulator_data, t));
+
+    let team_of_year = league
+        .awards
+        .team_of_year
+        .last()
+        .and_then(|t| build_team_of_year(simulator_data, t));
 
     // Monthly tab is driven entirely by the most recent archived
     // snapshot (built in `MonthlyAwardsTick`). Empty months are not
@@ -326,11 +352,14 @@ pub async fn league_awards_action(
         },
         league_slug: league.slug.clone(),
         hero_player,
+        young_hero_player,
         player_of_month,
         young_player_of_month,
         team_of_week,
+        young_team_of_week,
         team_of_month,
         young_team_of_month,
+        team_of_year,
         monthly_label,
         monthly_matches_count,
         monthly_top_scorers,
@@ -511,6 +540,39 @@ fn build_team_of_week(
         date_label: award.week_end_date.format("%d %b %Y").to_string(),
         all_slots,
     }
+}
+
+fn build_team_of_year(
+    data: &SimulatorData,
+    award: &TeamOfTheYearAward,
+) -> Option<TeamOfYearView> {
+    if award.slots.is_empty() {
+        return None;
+    }
+    let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<&TeamOfTheWeekSlot>> = HashMap::new();
+    for s in &award.slots {
+        by_group.entry(s.position_group).or_default().push(s);
+    }
+    let mut all_slots: Vec<TeamOfWeekSlotView> = Vec::new();
+    for (group, position_classes) in FORMATION_442 {
+        if let Some(group_slots) = by_group.get(group) {
+            for (idx, slot) in group_slots.iter().enumerate() {
+                let pos_class = position_classes
+                    .get(idx)
+                    .copied()
+                    .unwrap_or("")
+                    .to_string();
+                all_slots.push(build_totw_slot(data, slot, pos_class));
+            }
+        }
+    }
+    if all_slots.is_empty() {
+        return None;
+    }
+    Some(TeamOfYearView {
+        year_label: award.year.to_string(),
+        all_slots,
+    })
 }
 
 /// Build the Team-of-Month pitch view from an archived slot list.

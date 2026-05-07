@@ -1,5 +1,5 @@
 use crate::PlayerFieldPositionGroup;
-use crate::ai::{Ai, AiBatchProcessor};
+use crate::ai::{AiBatchProcessor, PendingAiRequest};
 use crate::club::ai::apply_ai_responses;
 use crate::club::board::manager_market;
 use crate::competitions::GlobalCompetitions;
@@ -11,7 +11,8 @@ use crate::continent::{Continent, ContinentResult};
 use crate::league::awards::{
     AwardAggregator, CandidateAggregate, MonthlyAwardSelector, MonthlyAwardsSnapshot,
     MonthlyPlayerAward, MonthlyStatLeader, SeasonAwardsSnapshot, TeamOfTheWeekAward,
-    TeamOfTheWeekSelector, TeamOfTheWeekSlot,
+    TeamOfTheWeekSelector, TeamOfTheWeekSlot, TeamOfTheYearAward, WeeklyAggregate,
+    YOUNG_WEEKLY_MAX_AGE,
 };
 use crate::league::player_of_week::{PlayerOfTheWeekAward, PlayerOfTheWeekSelector};
 use crate::league::{LeagueTable, MatchStorage};
@@ -21,13 +22,13 @@ use crate::transfers::TransferPool;
 use crate::utils::DateUtils;
 use crate::utils::random::engine as rng_engine;
 use crate::{
-    HappinessEventType, Player, RecognitionEventContext, RecognitionEventKind, Staff, TeamInfo,
+    AwardReputationInput, AwardReputationKind, HappinessEventType, Player, RecognitionEventContext,
+    RecognitionEventKind, Staff, TeamInfo,
 };
 use chrono::{Datelike, Duration, NaiveDateTime, Weekday};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Lightweight country info for nationality lookups.
@@ -90,7 +91,7 @@ impl FootballSimulator {
 
         let current_date = data.date;
 
-        let ctx = GlobalContext::new(SimulationContext::new(data.date), Ai::new());
+        let ctx = GlobalContext::new(SimulationContext::new(data.date));
 
         // National-team call-ups run at the world level so a player's
         // nationality and their club's continent can differ. Must
@@ -114,15 +115,18 @@ impl FootballSimulator {
         result.match_results.extend(national_match_results);
 
         // Phase ordering note:
-        // A simulates continents and emits AI requests as FnOnce closures that
-        // capture stable IDs (club_id, player_id, …). B executes those requests
-        // against the freshly-mutated data. C then drains the ContinentResults
-        // collected in A. The results reference the same stable IDs, so Phase B
-        // mutations (contracts, morale, etc.) are safely visible to Phase C.
+        // A simulates continents and surfaces AI requests inside each
+        // ContinentResult — no shared collector, no lock contention. B
+        // drains those requests, batch-executes them, and applies
+        // responses against the freshly-mutated data. C then drains the
+        // rest of each ContinentResult. Requests carry stable IDs
+        // (club_id, player_id, …) so Phase B mutations (contracts,
+        // morale, etc.) are safely visible to Phase C.
 
-        // Phase A: simulate all continents in parallel. Each call mutates its
-        // own continent and pushes AI requests into the shared (Arc<Mutex>) Ai
-        // collector. Continents are independent during this phase.
+        // Phase A: simulate all continents in parallel. Each call mutates
+        // its own continent and stages AI requests on its returned
+        // `ContinentResult.pending_ai_requests` — no shared state across
+        // workers.
         //
         // A panic inside one continent must not kill the whole tick — a
         // single buggy state machine or malformed save row would otherwise
@@ -135,7 +139,7 @@ impl FootballSimulator {
         // is recovered as the delta on the atomic since map closures
         // running in parallel can't share a `&mut u32`.
         let panicks_before = PANICKED_CONTINENTS.load(Ordering::Relaxed);
-        let results: Vec<ContinentResult> = data
+        let mut results: Vec<ContinentResult> = data
             .continents
             .par_iter_mut()
             .map(|continent| {
@@ -159,9 +163,16 @@ impl FootballSimulator {
         result.panicked_continents =
             (PANICKED_CONTINENTS.load(Ordering::Relaxed) - panicks_before) as u32;
 
-        // Phase B: collect and batch-execute all AI requests. The tick
-        // waits for the batch to finish — no timeout, no dropped responses.
-        let all_requests = ctx.ai.drain();
+        // Phase B: drain AI requests staged on each ContinentResult and
+        // batch-execute them. Lock-free — every request travelled up the
+        // result chain owned by exactly one worker. The tick waits for
+        // the batch to finish — no timeout, no dropped responses.
+        let mut all_requests: Vec<PendingAiRequest> = Vec::new();
+        for cr in &mut results {
+            if !cr.pending_ai_requests.is_empty() {
+                all_requests.append(&mut cr.pending_ai_requests);
+            }
+        }
         if !all_requests.is_empty() {
             let completed = AiBatchProcessor::execute(all_requests).await;
             apply_ai_responses(completed, data);
@@ -217,18 +228,41 @@ impl FootballSimulator {
             data.match_store.trim(current_date.date());
         }
 
-        // Pick each league's Player of the Week. Runs every Monday after
-        // the matchday pipeline has flushed last week's results into each
-        // league's MatchStorage.
-        WeeklyAwardsTick::run(data);
-        // Team of the Week — one XI per league, every Monday.
-        TeamOfTheWeekTick::run(data);
+        // Order: largest weekly award first so the centralised
+        // award-reputation pipeline can dampen the smaller award when
+        // both go to the same player. Young POW fires before senior
+        // POW because the breakthrough-amplified base is larger;
+        // Team selections are dampened against either weekly winner.
+        //
+        // The four Monday tickers all need per-league weekly aggregates.
+        // Build them once (in parallel across leagues) and share the
+        // `MondayAwardCache` across all four — the previous design had
+        // each tick re-aggregate the same week's matches independently.
+        let today = data.date.date();
+        if today.weekday() == Weekday::Mon {
+            let week_end = today;
+            let week_start = today - Duration::days(7);
+            let cache = MondayAwardCache::build(data, week_start, week_end);
+            // Pick each league's Young Player of the Week (age ≤ 20).
+            YoungWeeklyAwardsTick::run(data, &cache);
+            // Pick each league's Player of the Week. Runs every Monday
+            // after the matchday pipeline has flushed last week's results
+            // into each league's MatchStorage.
+            WeeklyAwardsTick::run(data, &cache);
+            // Young Team of the Week (age ≤ 20). Same window as Team of
+            // the Week.
+            YoungTeamOfTheWeekTick::run(data, &cache);
+            // Team of the Week — one XI per league, every Monday.
+            TeamOfTheWeekTick::run(data, &cache);
+        }
         // Monthly awards — first day of each month, awarding the previous
         // calendar month.
         MonthlyAwardsTick::run(data);
         // Drain any league-side pending season-awards snapshots and emit
         // the player events while stats are still meaningful.
         SeasonAwardsTick::run(data);
+        // Calendar-year XI per league — runs once on December 31.
+        TeamOfTheYearTick::run(data);
         // World player of the year — runs once per year. Builds a global
         // ranking from per-continent rankings so a top performer in any
         // league can win.
@@ -434,8 +468,10 @@ impl SimulatorData {
     /// therefore intentional: it only prevents the initial seed from
     /// clobbering an already-populated table.
     fn init_league_tables(&mut self) {
-        for continent in &mut self.continents {
-            for country in &mut continent.countries {
+        self.continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
                 let clubs = &country.clubs;
                 for league in &mut country.leagues.leagues {
                     if !league.table.rows.is_empty() {
@@ -446,16 +482,17 @@ impl SimulatorData {
                         league.table = LeagueTable::new(&team_ids);
                     }
                 }
-            }
-        }
+            });
     }
 
     /// Seed statistics history for every player. Called once at
     /// construction time — touches every player unconditionally.
     fn seed_player_histories(&mut self) {
         let date = self.date.date();
-        for continent in &mut self.continents {
-            for country in &mut continent.countries {
+        self.continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
                 let league_lookup = build_league_lookup(country);
                 for club in &mut country.clubs {
                     let club_ctx = ClubSeedingContext::resolve(club, &league_lookup);
@@ -469,8 +506,7 @@ impl SimulatorData {
                         }
                     }
                 }
-            }
-        }
+            });
     }
 
     /// Seed any players whose history is still empty — catches youth intake,
@@ -611,7 +647,7 @@ impl SimulatorData {
         }
 
         // Build a global candidate pool from every club in every country.
-        let candidates_by_country = crate::NationalTeam::collect_all_candidates_by_country(
+        let mut candidates_by_country = crate::NationalTeam::collect_all_candidates_by_country(
             self.continents.iter().flat_map(|c| c.countries.iter()),
             date,
         );
@@ -625,23 +661,27 @@ impl SimulatorData {
             .map(|c| (c.id, c.name.clone()))
             .collect();
 
-        // The HashMap is shared across the parallel countries — guard it
-        // so each worker can `remove(&country.id)` race-free. The lock
-        // is held only for the brief lookup; `call_up_squad` runs
-        // unlocked.
-        let candidates_lock = Mutex::new(candidates_by_country);
-
-        self.continents
-            .par_iter_mut()
-            .flat_map(|continent| continent.countries.par_iter_mut())
-            .for_each(|country| {
-                country.national_team.country_name = country.name.clone();
-                country.national_team.reputation = country.reputation;
-                let candidates = candidates_lock
-                    .lock()
-                    .unwrap()
+        // Pre-distribute candidates per country so each rayon worker owns
+        // its own slice — no shared HashMap, no lock. The serial drain
+        // here is O(countries) and trivial next to the parallel
+        // `call_up_squad` body.
+        let work_items: Vec<_> = self
+            .continents
+            .iter_mut()
+            .flat_map(|c| c.countries.iter_mut())
+            .map(|country| {
+                let candidates = candidates_by_country
                     .remove(&country.id)
                     .unwrap_or_default();
+                (country, candidates)
+            })
+            .collect();
+
+        work_items
+            .into_par_iter()
+            .for_each(|(country, candidates)| {
+                country.national_team.country_name = country.name.clone();
+                country.national_team.reputation = country.reputation;
                 let cid = country.id;
                 country
                     .national_team
@@ -755,6 +795,66 @@ fn settle_parent_residual_loan_wages(data: &mut SimulatorData) {
     }
 }
 
+/// Per-league aggregates for a single Monday window, built once and
+/// shared across all four weekly award ticks (Player of the Week, Young
+/// Player of the Week, Team of the Week, Young Team of the Week). Each
+/// tick used to walk every league's match storage and re-aggregate the
+/// same window — four full passes per league per Monday. This caches
+/// both the `WeeklyAggregate` (driver of Player of the Week) and the
+/// `CandidateAggregate` (driver of Team of the Week) so the four ticks
+/// reduce to a per-league lookup.
+struct MondayAwardCache {
+    weekly: HashMap<u32, HashMap<u32, WeeklyAggregate>>,
+    candidate: HashMap<u32, HashMap<u32, CandidateAggregate>>,
+}
+
+impl MondayAwardCache {
+    fn build(
+        data: &SimulatorData,
+        week_start: chrono::NaiveDate,
+        week_end: chrono::NaiveDate,
+    ) -> Self {
+        let entries: Vec<(
+            u32,
+            HashMap<u32, WeeklyAggregate>,
+            HashMap<u32, CandidateAggregate>,
+        )> = data
+            .continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.leagues.leagues.par_iter())
+            .filter(|league| !league.friendly)
+            .map(|league| {
+                let weekly = PlayerOfTheWeekSelector::aggregate(
+                    league.matches.iter_in_range(week_start, week_end),
+                );
+                let candidate = AwardAggregator::aggregate(
+                    league.matches.iter_in_range(week_start, week_end),
+                );
+                (league.id, weekly, candidate)
+            })
+            .collect();
+
+        let mut weekly: HashMap<u32, HashMap<u32, WeeklyAggregate>> =
+            HashMap::with_capacity(entries.len());
+        let mut candidate: HashMap<u32, HashMap<u32, CandidateAggregate>> =
+            HashMap::with_capacity(entries.len());
+        for (lid, w, c) in entries {
+            weekly.insert(lid, w);
+            candidate.insert(lid, c);
+        }
+        MondayAwardCache { weekly, candidate }
+    }
+
+    fn weekly_for(&self, league_id: u32) -> Option<&HashMap<u32, WeeklyAggregate>> {
+        self.weekly.get(&league_id)
+    }
+
+    fn candidate_for(&self, league_id: u32) -> Option<&HashMap<u32, CandidateAggregate>> {
+        self.candidate.get(&league_id)
+    }
+}
+
 /// Monday-only orchestration that walks every non-friendly league, picks
 /// its Player of the Week from last calendar week's matches, and applies
 /// the side effects (player happiness event + league archive). Two-pass
@@ -762,22 +862,16 @@ fn settle_parent_residual_loan_wages(data: &mut SimulatorData) {
 struct WeeklyAwardsTick;
 
 impl WeeklyAwardsTick {
-    fn run(data: &mut SimulatorData) {
-        let today = data.date.date();
-        if today.weekday() != Weekday::Mon {
-            return;
-        }
-        let week_end = today;
-        let week_start = today - Duration::days(7);
-
-        let pending = Self::collect_pending(data, week_start, week_end);
+    fn run(data: &mut SimulatorData, cache: &MondayAwardCache) {
+        let week_end = data.date.date();
+        let pending = Self::collect_pending(data, week_end, cache);
         Self::apply_pending(data, pending);
     }
 
     fn collect_pending(
         data: &SimulatorData,
-        week_start: chrono::NaiveDate,
         week_end: chrono::NaiveDate,
+        cache: &MondayAwardCache,
     ) -> Vec<PendingWeeklyAward> {
         data.continents
             .par_iter()
@@ -791,10 +885,8 @@ impl WeeklyAwardsTick {
                     return None;
                 }
 
-                let scores = PlayerOfTheWeekSelector::aggregate(
-                    league.matches.iter_in_range(week_start, week_end),
-                );
-                let (winner_id, agg) = PlayerOfTheWeekSelector::pick_winner(&scores)?;
+                let scores = cache.weekly_for(league.id)?;
+                let (winner_id, agg) = PlayerOfTheWeekSelector::pick_winner(scores)?;
 
                 let player = data.player(winner_id)?;
                 let player_name = format!(
@@ -833,9 +925,24 @@ impl WeeklyAwardsTick {
     }
 
     fn apply_pending(data: &mut SimulatorData, pending: Vec<PendingWeeklyAward>) {
+        let now = data.date.date();
         for entry in pending {
+            let league_rep = data.league(entry.league_id).map(|l| l.reputation);
+            let avg_rating = entry.award.average_rating;
+            let matches_played = entry.award.matches_played;
             if let Some(player) = data.player_mut(entry.winner_id) {
                 player.on_player_of_the_week();
+                let mut input = AwardReputationInput::new()
+                    .with_avg_rating(avg_rating)
+                    .with_matches_played(matches_played as u16);
+                if let Some(rep) = league_rep {
+                    input = input.with_league_reputation(rep);
+                }
+                player.apply_award_reputation_impact(
+                    AwardReputationKind::PlayerOfTheWeek,
+                    input,
+                    now,
+                );
             }
             if let Some(league) = data.league_mut(entry.league_id) {
                 league.player_of_week.record(entry.award);
@@ -886,21 +993,16 @@ struct PendingTeamOfWeek {
 }
 
 impl TeamOfTheWeekTick {
-    fn run(data: &mut SimulatorData) {
-        let today = data.date.date();
-        if today.weekday() != Weekday::Mon {
-            return;
-        }
-        let week_end = today;
-        let week_start = today - Duration::days(7);
-        let pending = Self::collect(data, week_start, week_end);
+    fn run(data: &mut SimulatorData, cache: &MondayAwardCache) {
+        let week_end = data.date.date();
+        let pending = Self::collect(data, week_end, cache);
         Self::apply(data, pending);
     }
 
     fn collect(
         data: &SimulatorData,
-        week_start: chrono::NaiveDate,
         week_end: chrono::NaiveDate,
+        cache: &MondayAwardCache,
     ) -> Vec<PendingTeamOfWeek> {
         data.continents
             .par_iter()
@@ -913,10 +1015,8 @@ impl TeamOfTheWeekTick {
                 if league.awards.has_team_of_week_for(week_end) {
                     return None;
                 }
-                let scores = AwardAggregator::aggregate(
-                    league.matches.iter_in_range(week_start, week_end),
-                );
-                let team = TeamOfTheWeekSelector::pick(&scores);
+                let scores = cache.candidate_for(league.id)?;
+                let team = TeamOfTheWeekSelector::pick(scores);
                 if team.is_empty() {
                     return None;
                 }
@@ -961,17 +1061,269 @@ impl TeamOfTheWeekTick {
     }
 
     fn apply(data: &mut SimulatorData, pending: Vec<PendingTeamOfWeek>) {
+        let now = data.date.date();
         for entry in pending {
+            let league_rep = data.league(entry.league_id).map(|l| l.reputation);
             for slot in &entry.award.slots {
+                let avg_rating = slot.average_rating;
+                let matches_played = slot.matches_played;
                 if let Some(player) = data.player_mut(slot.player_id) {
                     player.happiness.add_event_default_with_cooldown(
                         HappinessEventType::TeamOfTheWeekSelection,
                         6,
                     );
+                    let mut input = AwardReputationInput::new()
+                        .with_avg_rating(avg_rating)
+                        .with_matches_played(matches_played as u16);
+                    if let Some(rep) = league_rep {
+                        input = input.with_league_reputation(rep);
+                    }
+                    player.apply_award_reputation_impact(
+                        AwardReputationKind::TeamOfTheWeekSelection,
+                        input,
+                        now,
+                    );
                 }
             }
             if let Some(league) = data.league_mut(entry.league_id) {
                 league.awards.record_team_of_week(entry.award);
+            }
+        }
+    }
+}
+
+/// Monday-only Young Player of the Week (age ≤ `YOUNG_WEEKLY_MAX_AGE`).
+/// Mirrors `WeeklyAwardsTick` but filters the candidate set to under-20s
+/// before scoring. Stored in `LeagueAwards::young_player_of_week`, not on
+/// `League::player_of_week`, so the senior history stays untouched.
+struct YoungWeeklyAwardsTick;
+
+struct PendingYoungWeeklyAward {
+    league_id: u32,
+    winner_id: u32,
+    award: PlayerOfTheWeekAward,
+}
+
+impl YoungWeeklyAwardsTick {
+    fn run(data: &mut SimulatorData, cache: &MondayAwardCache) {
+        let today = data.date.date();
+        let pending = Self::collect(data, today, cache);
+        Self::apply(data, pending);
+    }
+
+    fn collect(
+        data: &SimulatorData,
+        today: chrono::NaiveDate,
+        cache: &MondayAwardCache,
+    ) -> Vec<PendingYoungWeeklyAward> {
+        let week_end = today;
+        data.continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.leagues.leagues.par_iter())
+            .filter_map(|league| {
+                if league.friendly {
+                    return None;
+                }
+                if league.awards.has_young_player_of_week_for(week_end) {
+                    return None;
+                }
+
+                let scores = cache.weekly_for(league.id)?;
+                // Score-then-filter: identical scoring to the senior
+                // award, then the eligibility gate runs over the
+                // candidate aggregate to keep the tiebreak deterministic.
+                let mut young: HashMap<u32, WeeklyAggregate> = HashMap::new();
+                for (id, agg) in scores {
+                    if data
+                        .player(*id)
+                        .map(|p| DateUtils::age(p.birth_date, today) <= YOUNG_WEEKLY_MAX_AGE)
+                        .unwrap_or(false)
+                    {
+                        young.insert(*id, *agg);
+                    }
+                }
+                let (winner_id, agg) = PlayerOfTheWeekSelector::pick_winner(&young)?;
+
+                let player = data.player(winner_id)?;
+                let player_name = format!(
+                    "{} {}",
+                    player.full_name.display_first_name(),
+                    player.full_name.display_last_name()
+                );
+                let player_slug = player.slug();
+                let (club_id, club_name, club_slug) =
+                    WeeklyAwardsTick::resolve_club_card(data, winner_id);
+                let average_rating = if agg.matches_played > 0 {
+                    agg.rating_sum / agg.matches_played as f32
+                } else {
+                    0.0
+                };
+
+                Some(PendingYoungWeeklyAward {
+                    league_id: league.id,
+                    winner_id,
+                    award: PlayerOfTheWeekAward {
+                        week_end_date: week_end,
+                        player_id: winner_id,
+                        player_name,
+                        player_slug,
+                        club_id,
+                        club_name,
+                        club_slug,
+                        score: agg.score,
+                        goals: agg.goals,
+                        assists: agg.assists,
+                        matches_played: agg.matches_played,
+                        average_rating,
+                    },
+                })
+            })
+            .collect()
+    }
+
+    fn apply(data: &mut SimulatorData, pending: Vec<PendingYoungWeeklyAward>) {
+        let now = data.date.date();
+        for entry in pending {
+            let league_rep = data.league(entry.league_id).map(|l| l.reputation);
+            let avg_rating = entry.award.average_rating;
+            let matches_played = entry.award.matches_played;
+            if let Some(player) = data.player_mut(entry.winner_id) {
+                player.on_young_player_of_the_week();
+                let mut input = AwardReputationInput::new()
+                    .with_avg_rating(avg_rating)
+                    .with_matches_played(matches_played as u16);
+                if let Some(rep) = league_rep {
+                    input = input.with_league_reputation(rep);
+                }
+                player.apply_award_reputation_impact(
+                    AwardReputationKind::YoungPlayerOfTheWeek,
+                    input,
+                    now,
+                );
+            }
+            if let Some(league) = data.league_mut(entry.league_id) {
+                league.awards.record_young_player_of_week(entry.award);
+            }
+        }
+    }
+}
+
+/// Monday-only Young Team of the Week. Reuses `TeamOfTheWeekSelector`
+/// over the same week window but with the candidate set restricted to
+/// players aged ≤ `YOUNG_WEEKLY_MAX_AGE` on the award date.
+struct YoungTeamOfTheWeekTick;
+
+struct PendingYoungTeamOfWeek {
+    league_id: u32,
+    award: TeamOfTheWeekAward,
+}
+
+impl YoungTeamOfTheWeekTick {
+    fn run(data: &mut SimulatorData, cache: &MondayAwardCache) {
+        let today = data.date.date();
+        let pending = Self::collect(data, today, cache);
+        Self::apply(data, pending);
+    }
+
+    fn collect(
+        data: &SimulatorData,
+        today: chrono::NaiveDate,
+        cache: &MondayAwardCache,
+    ) -> Vec<PendingYoungTeamOfWeek> {
+        let week_end = today;
+        data.continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.leagues.leagues.par_iter())
+            .filter_map(|league| {
+                if league.friendly {
+                    return None;
+                }
+                if league.awards.has_young_team_of_week_for(week_end) {
+                    return None;
+                }
+                let scores = cache.candidate_for(league.id)?;
+                let young: HashMap<u32, CandidateAggregate> = scores
+                    .iter()
+                    .filter(|(id, _)| {
+                        data.player(**id)
+                            .map(|p| DateUtils::age(p.birth_date, today) <= YOUNG_WEEKLY_MAX_AGE)
+                            .unwrap_or(false)
+                    })
+                    .map(|(id, agg)| (*id, *agg))
+                    .collect();
+                let team = TeamOfTheWeekSelector::pick(&young);
+                if team.is_empty() {
+                    return None;
+                }
+
+                let mut slots: Vec<TeamOfTheWeekSlot> = Vec::with_capacity(team.len());
+                for (pid, pos, score, agg) in team {
+                    let Some(player) = data.player(pid) else {
+                        continue;
+                    };
+                    let player_name = format!(
+                        "{} {}",
+                        player.full_name.display_first_name(),
+                        player.full_name.display_last_name()
+                    );
+                    let player_slug = player.slug();
+                    let (club_id, club_name, club_slug) =
+                        WeeklyAwardsTick::resolve_club_card(data, pid);
+                    slots.push(TeamOfTheWeekSlot {
+                        player_id: pid,
+                        player_name,
+                        player_slug,
+                        club_id,
+                        club_name,
+                        club_slug,
+                        position_group: pos,
+                        score,
+                        matches_played: agg.matches_played,
+                        goals: agg.goals,
+                        assists: agg.assists,
+                        average_rating: agg.average_rating(),
+                    });
+                }
+                Some(PendingYoungTeamOfWeek {
+                    league_id: league.id,
+                    award: TeamOfTheWeekAward {
+                        week_end_date: week_end,
+                        slots,
+                    },
+                })
+            })
+            .collect()
+    }
+
+    fn apply(data: &mut SimulatorData, pending: Vec<PendingYoungTeamOfWeek>) {
+        let now = data.date.date();
+        for entry in pending {
+            let league_rep = data.league(entry.league_id).map(|l| l.reputation);
+            for slot in &entry.award.slots {
+                let avg_rating = slot.average_rating;
+                let matches_played = slot.matches_played;
+                if let Some(player) = data.player_mut(slot.player_id) {
+                    player.happiness.add_event_default_with_cooldown(
+                        HappinessEventType::YoungTeamOfTheWeekSelection,
+                        6,
+                    );
+                    let mut input = AwardReputationInput::new()
+                        .with_avg_rating(avg_rating)
+                        .with_matches_played(matches_played as u16);
+                    if let Some(rep) = league_rep {
+                        input = input.with_league_reputation(rep);
+                    }
+                    player.apply_award_reputation_impact(
+                        AwardReputationKind::YoungTeamOfTheWeekSelection,
+                        input,
+                        now,
+                    );
+                }
+            }
+            if let Some(league) = data.league_mut(entry.league_id) {
+                league.awards.record_young_team_of_week(entry.award);
             }
         }
     }
@@ -1312,32 +1664,64 @@ impl MonthlyAwardsTick {
     }
 
     fn apply(data: &mut SimulatorData, pending: Vec<PendingMonthlyAward>) {
+        let now = data.date.date();
         for entry in pending {
-            if let Some(award) = &entry.pom {
-                let ctx = Self::pom_context(
-                    RecognitionEventKind::PlayerOfTheMonth,
-                    entry.league_id,
-                    award,
-                );
-                if let Some(player) = data.player_mut(award.player_id) {
-                    player.on_recognition_award(
-                        HappinessEventType::PlayerOfTheMonth,
-                        ctx,
-                        28,
-                    );
-                }
-            }
+            let league_rep = data.league(entry.league_id).map(|l| l.reputation);
+            // Young POM fires before senior POM so the centralised
+            // award-reputation pipeline dampens the senior emit when
+            // the same player wins both — young base is larger, so it
+            // takes the full impact.
             if let Some(award) = &entry.young {
                 let ctx = Self::pom_context(
                     RecognitionEventKind::YoungPlayerOfTheMonth,
                     entry.league_id,
                     award,
                 );
+                let avg_rating = award.average_rating;
+                let matches_played = award.matches_played;
                 if let Some(player) = data.player_mut(award.player_id) {
                     player.on_recognition_award(
                         HappinessEventType::YoungPlayerOfTheMonth,
                         ctx,
                         28,
+                    );
+                    let mut input = AwardReputationInput::new()
+                        .with_avg_rating(avg_rating)
+                        .with_matches_played(matches_played as u16);
+                    if let Some(rep) = league_rep {
+                        input = input.with_league_reputation(rep);
+                    }
+                    player.apply_award_reputation_impact(
+                        AwardReputationKind::YoungPlayerOfTheMonth,
+                        input,
+                        now,
+                    );
+                }
+            }
+            if let Some(award) = &entry.pom {
+                let ctx = Self::pom_context(
+                    RecognitionEventKind::PlayerOfTheMonth,
+                    entry.league_id,
+                    award,
+                );
+                let avg_rating = award.average_rating;
+                let matches_played = award.matches_played;
+                if let Some(player) = data.player_mut(award.player_id) {
+                    player.on_recognition_award(
+                        HappinessEventType::PlayerOfTheMonth,
+                        ctx,
+                        28,
+                    );
+                    let mut input = AwardReputationInput::new()
+                        .with_avg_rating(avg_rating)
+                        .with_matches_played(matches_played as u16);
+                    if let Some(rep) = league_rep {
+                        input = input.with_league_reputation(rep);
+                    }
+                    player.apply_award_reputation_impact(
+                        AwardReputationKind::PlayerOfTheMonth,
+                        input,
+                        now,
                     );
                 }
             }
@@ -1376,64 +1760,87 @@ impl SeasonAwardsTick {
         let today = data.date.date();
         let pending: Vec<(u32, SeasonAwardsSnapshot)> = data
             .continents
-            .iter_mut()
-            .flat_map(|c| c.countries.iter_mut())
-            .flat_map(|c| c.leagues.leagues.iter_mut())
+            .par_iter_mut()
+            .flat_map(|c| c.countries.par_iter_mut())
+            .flat_map(|c| c.leagues.leagues.par_iter_mut())
             .filter_map(|l| l.awards.pending_season_awards.take().map(|s| (l.id, s)))
             .collect();
 
         for (league_id, snapshot) in pending {
-            if let Some(player) = snapshot.player_of_season.and_then(|id| data.player_mut(id)) {
-                player.on_recognition_award(
-                    HappinessEventType::PlayerOfTheSeason,
-                    RecognitionEventContext::new(RecognitionEventKind::PlayerOfTheSeason)
-                        .with_league(league_id),
-                    330,
+            let league_rep = data.league(league_id).map(|l| l.reputation);
+
+            // Young POS first so the senior-POS emit is dampened when
+            // the same player wins both in a single season.
+            if let Some(id) = snapshot.young_player_of_season {
+                Self::apply_player_award(
+                    data,
+                    id,
+                    league_id,
+                    league_rep,
+                    today,
+                    HappinessEventType::YoungPlayerOfTheSeason,
+                    RecognitionEventKind::YoungPlayerOfTheSeason,
+                    AwardReputationKind::YoungPlayerOfTheSeason,
                 );
             }
-            if let Some(player) = snapshot
-                .young_player_of_season
-                .and_then(|id| data.player_mut(id))
-            {
-                player.on_recognition_award(
-                    HappinessEventType::YoungPlayerOfTheSeason,
-                    RecognitionEventContext::new(RecognitionEventKind::YoungPlayerOfTheSeason)
-                        .with_league(league_id),
-                    330,
+            if let Some(id) = snapshot.player_of_season {
+                Self::apply_player_award(
+                    data,
+                    id,
+                    league_id,
+                    league_rep,
+                    today,
+                    HappinessEventType::PlayerOfTheSeason,
+                    RecognitionEventKind::PlayerOfTheSeason,
+                    AwardReputationKind::PlayerOfTheSeason,
                 );
             }
             for pid in &snapshot.team_of_season {
-                if let Some(player) = data.player_mut(*pid) {
-                    player.on_recognition_award(
-                        HappinessEventType::TeamOfTheSeasonSelection,
-                        RecognitionEventContext::new(RecognitionEventKind::TeamOfTheSeasonSelection)
-                            .with_league(league_id),
-                        330,
-                    );
-                }
+                Self::apply_player_award(
+                    data,
+                    *pid,
+                    league_id,
+                    league_rep,
+                    today,
+                    HappinessEventType::TeamOfTheSeasonSelection,
+                    RecognitionEventKind::TeamOfTheSeasonSelection,
+                    AwardReputationKind::TeamOfTheSeasonSelection,
+                );
             }
-            if let Some(player) = snapshot.top_scorer.and_then(|id| data.player_mut(id)) {
-                player.on_recognition_award(
+            if let Some(id) = snapshot.top_scorer {
+                Self::apply_player_award(
+                    data,
+                    id,
+                    league_id,
+                    league_rep,
+                    today,
                     HappinessEventType::LeagueTopScorer,
-                    RecognitionEventContext::new(RecognitionEventKind::LeagueTopScorer)
-                        .with_league(league_id),
-                    330,
+                    RecognitionEventKind::LeagueTopScorer,
+                    AwardReputationKind::LeagueTopScorer,
                 );
             }
-            if let Some(player) = snapshot.top_assists.and_then(|id| data.player_mut(id)) {
-                player.on_recognition_award(
+            if let Some(id) = snapshot.top_assists {
+                Self::apply_player_award(
+                    data,
+                    id,
+                    league_id,
+                    league_rep,
+                    today,
                     HappinessEventType::LeagueTopAssists,
-                    RecognitionEventContext::new(RecognitionEventKind::LeagueTopAssists)
-                        .with_league(league_id),
-                    330,
+                    RecognitionEventKind::LeagueTopAssists,
+                    AwardReputationKind::LeagueTopAssists,
                 );
             }
-            if let Some(player) = snapshot.golden_glove.and_then(|id| data.player_mut(id)) {
-                player.on_recognition_award(
+            if let Some(id) = snapshot.golden_glove {
+                Self::apply_player_award(
+                    data,
+                    id,
+                    league_id,
+                    league_rep,
+                    today,
                     HappinessEventType::LeagueGoldenGlove,
-                    RecognitionEventContext::new(RecognitionEventKind::LeagueGoldenGlove)
-                        .with_league(league_id),
-                    330,
+                    RecognitionEventKind::LeagueGoldenGlove,
+                    AwardReputationKind::LeagueGoldenGlove,
                 );
             }
             // Archive the snapshot once events have been applied.
@@ -1441,6 +1848,203 @@ impl SeasonAwardsTick {
             snapshot.season_end_date = today;
             if let Some(league) = data.league_mut(league_id) {
                 league.awards.record_season(snapshot);
+            }
+        }
+    }
+
+    /// Apply a season-end award: emit the recognition event with full
+    /// season context (avg rating, matches, goals/assists) and route
+    /// the centralised reputation impact through the same helper used
+    /// by every other emit site, so the model is league-aware,
+    /// quality-weighted, and headroom-bounded in one place.
+    fn apply_player_award(
+        data: &mut SimulatorData,
+        player_id: u32,
+        league_id: u32,
+        league_rep: Option<u16>,
+        now: chrono::NaiveDate,
+        happiness_event: HappinessEventType,
+        recognition_kind: RecognitionEventKind,
+        reputation_kind: AwardReputationKind,
+    ) {
+        let Some(player) = data.player_mut(player_id) else {
+            return;
+        };
+        let avg_rating = player.statistics.average_rating;
+        let matches_played = player.statistics.played + player.statistics.played_subs;
+        let goals = player.statistics.goals;
+        let assists = player.statistics.assists;
+        let mut ctx = RecognitionEventContext::new(recognition_kind).with_league(league_id);
+        if matches_played > 0 {
+            ctx = ctx
+                .with_avg_rating(avg_rating)
+                .with_matches_played(matches_played as u16)
+                .with_season_goals(goals as u16)
+                .with_season_assists(assists as u16);
+        }
+        player.on_recognition_award(happiness_event, ctx, 330);
+
+        let mut input = AwardReputationInput::new();
+        if let Some(rep) = league_rep {
+            input = input.with_league_reputation(rep);
+        }
+        if matches_played > 0 {
+            input = input
+                .with_avg_rating(avg_rating)
+                .with_matches_played(matches_played as u16);
+        }
+        player.apply_award_reputation_impact(reputation_kind, input, now);
+    }
+}
+
+/// Calendar-year XI per league. Runs once on December 31. Aggregates
+/// every non-friendly league match played between Jan 1 (inclusive)
+/// and Jan 1 of the next year (exclusive) and picks an XI with the
+/// canonical Team of the Week quotas, gated by a per-player minimum
+/// appearances threshold so a one-match wonder cannot win.
+///
+/// Distinct from `team_of_season` (which aligns to the league's
+/// season end) — this archive is calendar-year aligned and lives at
+/// `LeagueAwards::team_of_year`.
+struct TeamOfTheYearTick;
+
+struct PendingTeamOfYear {
+    league_id: u32,
+    award: TeamOfTheYearAward,
+}
+
+impl TeamOfTheYearTick {
+    fn run(data: &mut SimulatorData) {
+        let today = data.date.date();
+        if !DateUtils::is_year_end(today) {
+            return;
+        }
+        let year = today.year();
+        let pending = Self::collect(data, today, year);
+        Self::apply(data, pending);
+    }
+
+    fn collect(
+        data: &SimulatorData,
+        year_end_date: chrono::NaiveDate,
+        year: i32,
+    ) -> Vec<PendingTeamOfYear> {
+        let year_start = chrono::NaiveDate::from_ymd_opt(year, 1, 1)
+            .unwrap_or(year_end_date);
+        let next_year_start = chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1)
+            .unwrap_or(year_end_date);
+
+        data.continents
+            .par_iter()
+            .flat_map(|c| c.countries.par_iter())
+            .flat_map(|country| country.leagues.leagues.par_iter())
+            .filter_map(|league| {
+                if league.friendly {
+                    return None;
+                }
+                if league.awards.has_team_of_year_for(year) {
+                    return None;
+                }
+
+                let scores = AwardAggregator::aggregate(
+                    league.matches.iter_in_range(year_start, next_year_start),
+                );
+                if scores.is_empty() {
+                    return None;
+                }
+
+                // Year-level appearance gate: max(10, ~25% of typical
+                // matches per team). Calendar year ≈ one full league
+                // campaign for most leagues, but split-season /
+                // summer leagues may straddle two campaigns inside
+                // one calendar year — the percentage scales with
+                // whatever fixture density actually fell in this
+                // window so a thin schedule isn't impossibly gated.
+                let team_count = league.table.rows.len() as u32;
+                let typical_matches_per_team = team_count.saturating_sub(1) * 2;
+                let pct_floor =
+                    ((typical_matches_per_team as f32) * 0.25).round() as u8;
+                let min_apps = pct_floor.max(10);
+
+                let team = TeamOfTheWeekSelector::pick_with_min_apps(&scores, min_apps);
+                if team.is_empty() {
+                    return None;
+                }
+
+                let mut slots: Vec<TeamOfTheWeekSlot> = Vec::with_capacity(team.len());
+                for (pid, pos, score, agg) in team {
+                    let Some(player) = data.player(pid) else {
+                        continue;
+                    };
+                    let player_name = format!(
+                        "{} {}",
+                        player.full_name.display_first_name(),
+                        player.full_name.display_last_name()
+                    );
+                    let player_slug = player.slug();
+                    let (club_id, club_name, club_slug) =
+                        WeeklyAwardsTick::resolve_club_card(data, pid);
+                    slots.push(TeamOfTheWeekSlot {
+                        player_id: pid,
+                        player_name,
+                        player_slug,
+                        club_id,
+                        club_name,
+                        club_slug,
+                        position_group: pos,
+                        score,
+                        matches_played: agg.matches_played,
+                        goals: agg.goals,
+                        assists: agg.assists,
+                        average_rating: agg.average_rating(),
+                    });
+                }
+                Some(PendingTeamOfYear {
+                    league_id: league.id,
+                    award: TeamOfTheYearAward {
+                        year,
+                        year_end_date,
+                        slots,
+                    },
+                })
+            })
+            .collect()
+    }
+
+    fn apply(data: &mut SimulatorData, pending: Vec<PendingTeamOfYear>) {
+        let now = data.date.date();
+        for entry in pending {
+            let league_id = entry.league_id;
+            let league_rep = data.league(league_id).map(|l| l.reputation);
+            for slot in &entry.award.slots {
+                let avg_rating = slot.average_rating;
+                let matches_played = slot.matches_played;
+                if let Some(player) = data.player_mut(slot.player_id) {
+                    player.on_recognition_award(
+                        HappinessEventType::TeamOfTheYearSelection,
+                        RecognitionEventContext::new(
+                            RecognitionEventKind::TeamOfTheYearSelection,
+                        )
+                        .with_league(league_id)
+                        .with_avg_rating(avg_rating)
+                        .with_matches_played(matches_played as u16),
+                        330,
+                    );
+                    let mut input = AwardReputationInput::new()
+                        .with_avg_rating(avg_rating)
+                        .with_matches_played(matches_played as u16);
+                    if let Some(rep) = league_rep {
+                        input = input.with_league_reputation(rep);
+                    }
+                    player.apply_award_reputation_impact(
+                        AwardReputationKind::TeamOfTheYearSelection,
+                        input,
+                        now,
+                    );
+                }
+            }
+            if let Some(league) = data.league_mut(league_id) {
+                league.awards.record_team_of_year(entry.award);
             }
         }
     }
@@ -1508,13 +2112,10 @@ impl WorldPlayerOfYearTick {
                     ctx = ctx.with_avg_rating(score);
                 }
                 player.on_recognition_award(HappinessEventType::WorldPlayerOfYear, ctx, 330);
-                let cur = player.player_attributes.current_reputation;
-                let home = player.player_attributes.home_reputation;
-                let world = player.player_attributes.world_reputation;
-                player.player_attributes.update_reputation(
-                    ((cur as i32 + 900).min(10000) - cur as i32) as i16,
-                    ((home as i32 + 900).min(10000) - home as i32) as i16,
-                    ((world as i32 + 500).min(10000) - world as i32) as i16,
+                player.apply_award_reputation_impact(
+                    AwardReputationKind::WorldPlayerOfYear,
+                    AwardReputationInput::new(),
+                    today,
                 );
             }
         }

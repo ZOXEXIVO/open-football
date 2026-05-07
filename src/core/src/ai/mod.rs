@@ -1,9 +1,7 @@
 mod batch;
-mod collector;
 mod request;
 
 pub use batch::*;
-pub use collector::Ai;
 pub use request::*;
 
 use std::future::Future;

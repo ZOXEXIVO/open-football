@@ -5,6 +5,7 @@ mod reputation;
 mod statistics;
 mod transfers;
 
+use crate::ai::PendingAiRequest;
 use crate::league::LeagueResult;
 use crate::simulator::SimulatorData;
 use crate::{ClubResult, SimulationResult};
@@ -13,14 +14,29 @@ pub struct CountryResult {
     pub country_id: u32,
     pub leagues: Vec<LeagueResult>,
     pub clubs: Vec<ClubResult>,
+    /// Batched AI requests collected from every club in this country
+    /// during the parallel tick. Drained by the simulator before
+    /// Phase B (`AiBatchProcessor::execute`).
+    pub pending_ai_requests: Vec<PendingAiRequest>,
 }
 
 impl CountryResult {
-    pub fn new(country_id: u32, leagues: Vec<LeagueResult>, clubs: Vec<ClubResult>) -> Self {
+    pub fn new(
+        country_id: u32,
+        leagues: Vec<LeagueResult>,
+        mut clubs: Vec<ClubResult>,
+    ) -> Self {
+        let mut pending_ai_requests: Vec<PendingAiRequest> = Vec::new();
+        for club in &mut clubs {
+            if !club.pending_ai_requests.is_empty() {
+                pending_ai_requests.append(&mut club.pending_ai_requests);
+            }
+        }
         CountryResult {
             country_id,
             leagues,
             clubs,
+            pending_ai_requests,
         }
     }
 

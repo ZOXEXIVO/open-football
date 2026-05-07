@@ -8,6 +8,7 @@ use crate::{
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 struct LoanReturnEvent {
@@ -118,92 +119,115 @@ impl CountryResult {
         // Trophy reputation boost: league champions and promoted sides get
         // a durable rep bump that lingers for 2 seasons (see Achievement).
         // Collected before the prize-money loop so we don't mix concerns.
-        let mut trophy_awards: Vec<(u32, AchievementType)> = Vec::new();
         // Per-player happiness events triggered by the same final tables.
         // (team_id, event, prestige) — prestige lets a lower-tier league
         // title fire `TrophyWon` at a smaller magnitude so it doesn't
         // compete with the promotion emotion that's the real headline.
-        let mut player_team_events: Vec<(u32, HappinessEventType, f32)> = Vec::new();
-        for league in &country.leagues.leagues {
-            if league.friendly {
-                continue;
-            }
-            let table = match &league.final_table {
-                Some(t) if !t.is_empty() => t,
-                _ => continue,
-            };
-            // For lower-tier leagues that *also* promote (Championship-style
-            // setups), the title is real silverware but promotion is the
-            // career-visible moment. We fire both, but soften `TrophyWon`
-            // so the stack reads as "got promoted, also won the league"
-            // rather than two huge wins.
-            let promo_slots = league.settings.promotion_spots as usize;
-            let lower_tier_with_promo = league.settings.tier > 1 && promo_slots > 0;
-            if let Some(champion) = table.first() {
-                trophy_awards.push((champion.team_id, AchievementType::LeagueTitle));
-                let trophy_prestige = if lower_tier_with_promo { 0.6 } else { 1.0 };
-                player_team_events.push((
-                    champion.team_id,
-                    HappinessEventType::TrophyWon,
-                    trophy_prestige,
-                ));
-                if lower_tier_with_promo {
-                    // Lower-league champions are *also* promoted — the
-                    // promotion emotion is the dominant one.
-                    player_team_events.push((
-                        champion.team_id,
-                        HappinessEventType::PromotionCelebration,
-                        1.0,
-                    ));
+        // Parallel collect across leagues — leagues are independent and
+        // the body is read-only against shared league state. The two
+        // per-league vecs are folded into a single tuple to keep the
+        // rayon collect simple, then flattened serially below.
+        let per_league: Vec<(
+            Vec<(u32, AchievementType)>,
+            Vec<(u32, HappinessEventType, f32)>,
+        )> = country
+            .leagues
+            .leagues
+            .par_iter()
+            .filter_map(|league| {
+                if league.friendly {
+                    return None;
                 }
-            }
-            if promo_slots > 0 {
-                // Non-title promoted clubs (positions 2..=promo_slots).
-                // Champion already handled above with the dual emit.
-                for row in table.iter().take(promo_slots).skip(1) {
-                    trophy_awards.push((row.team_id, AchievementType::Promotion));
-                    player_team_events.push((
-                        row.team_id,
-                        HappinessEventType::PromotionCelebration,
-                        1.0,
-                    ));
-                }
-            }
+                let table = match &league.final_table {
+                    Some(t) if !t.is_empty() => t,
+                    _ => return None,
+                };
 
-            // Continental qualification — only top-tier leagues feed
-            // continental competitions. Heuristic, intentionally:
-            // `continent::result::competitions::collect_*_qualified_clubs`
-            // is the authoritative qualification source, but it indexes by
-            // *continental ranking* rather than league reputation, and it
-            // runs as part of the autumn draw — there's no clean signal
-            // queryable here at end-of-season for which clubs got the
-            // letters in the post.
-            //
-            // The reputation bands below mirror the *spot counts* that
-            // collector hands out (top-4 country = 7 European spots, next
-            // 4 country tier = 4, smaller top flights = 2), so a player at
-            // a club that genuinely qualifies will reliably hit this
-            // happiness event. Bottom flights and friendlies skip.
-            //
-            // Skip position 0 (title winner already gets `TrophyWon`,
-            // which subsumes European qualification — no double-counting).
-            if league.settings.tier == 1 {
-                let mut europe_spots = 0usize;
-                if league.reputation >= 7000 {
-                    europe_spots = 7; // CL top 4 + EL/UECL slots
-                } else if league.reputation >= 5000 {
-                    europe_spots = 4; // top-4 cup-tier qualification
-                } else if league.reputation >= 3000 {
-                    europe_spots = 2; // 2 spots in modest top flights
-                }
-                for row in table.iter().take(europe_spots).skip(1) {
-                    player_team_events.push((
-                        row.team_id,
-                        HappinessEventType::QualifiedForEurope,
-                        1.0,
+                let mut trophies: Vec<(u32, AchievementType)> = Vec::new();
+                let mut events: Vec<(u32, HappinessEventType, f32)> = Vec::new();
+
+                // For lower-tier leagues that *also* promote (Championship-style
+                // setups), the title is real silverware but promotion is the
+                // career-visible moment. We fire both, but soften `TrophyWon`
+                // so the stack reads as "got promoted, also won the league"
+                // rather than two huge wins.
+                let promo_slots = league.settings.promotion_spots as usize;
+                let lower_tier_with_promo = league.settings.tier > 1 && promo_slots > 0;
+                if let Some(champion) = table.first() {
+                    trophies.push((champion.team_id, AchievementType::LeagueTitle));
+                    let trophy_prestige = if lower_tier_with_promo { 0.6 } else { 1.0 };
+                    events.push((
+                        champion.team_id,
+                        HappinessEventType::TrophyWon,
+                        trophy_prestige,
                     ));
+                    if lower_tier_with_promo {
+                        // Lower-league champions are *also* promoted — the
+                        // promotion emotion is the dominant one.
+                        events.push((
+                            champion.team_id,
+                            HappinessEventType::PromotionCelebration,
+                            1.0,
+                        ));
+                    }
                 }
-            }
+                if promo_slots > 0 {
+                    // Non-title promoted clubs (positions 2..=promo_slots).
+                    // Champion already handled above with the dual emit.
+                    for row in table.iter().take(promo_slots).skip(1) {
+                        trophies.push((row.team_id, AchievementType::Promotion));
+                        events.push((
+                            row.team_id,
+                            HappinessEventType::PromotionCelebration,
+                            1.0,
+                        ));
+                    }
+                }
+
+                // Continental qualification — only top-tier leagues feed
+                // continental competitions. Heuristic, intentionally:
+                // `continent::result::competitions::collect_*_qualified_clubs`
+                // is the authoritative qualification source, but it indexes by
+                // *continental ranking* rather than league reputation, and it
+                // runs as part of the autumn draw — there's no clean signal
+                // queryable here at end-of-season for which clubs got the
+                // letters in the post.
+                //
+                // The reputation bands below mirror the *spot counts* that
+                // collector hands out (top-4 country = 7 European spots, next
+                // 4 country tier = 4, smaller top flights = 2), so a player at
+                // a club that genuinely qualifies will reliably hit this
+                // happiness event. Bottom flights and friendlies skip.
+                //
+                // Skip position 0 (title winner already gets `TrophyWon`,
+                // which subsumes European qualification — no double-counting).
+                if league.settings.tier == 1 {
+                    let mut europe_spots = 0usize;
+                    if league.reputation >= 7000 {
+                        europe_spots = 7; // CL top 4 + EL/UECL slots
+                    } else if league.reputation >= 5000 {
+                        europe_spots = 4; // top-4 cup-tier qualification
+                    } else if league.reputation >= 3000 {
+                        europe_spots = 2; // 2 spots in modest top flights
+                    }
+                    for row in table.iter().take(europe_spots).skip(1) {
+                        events.push((
+                            row.team_id,
+                            HappinessEventType::QualifiedForEurope,
+                            1.0,
+                        ));
+                    }
+                }
+
+                Some((trophies, events))
+            })
+            .collect();
+
+        let mut trophy_awards: Vec<(u32, AchievementType)> = Vec::new();
+        let mut player_team_events: Vec<(u32, HappinessEventType, f32)> = Vec::new();
+        for (mut t, mut e) in per_league {
+            trophy_awards.append(&mut t);
+            player_team_events.append(&mut e);
         }
         for (team_id, ach_type) in trophy_awards {
             for club in &mut country.clubs {
@@ -806,7 +830,7 @@ impl CountryResult {
     fn process_year_end_finances(country: &mut Country) {
         debug!("Processing year-end finances");
 
-        for club in &mut country.clubs {
+        country.clubs.par_iter_mut().for_each(|club| {
             let balance = club.finance.balance.balance;
             if balance > 0 {
                 // 1% return on positive balance, capped at 2M per year.
@@ -819,7 +843,7 @@ impl CountryResult {
                 let penalty = (balance.abs() as f64 * 0.05) as i64;
                 club.finance.balance.push_outcome(penalty);
             }
-        }
+        });
     }
 
     fn process_promotion_relegation(country: &mut Country, date: NaiveDate) {

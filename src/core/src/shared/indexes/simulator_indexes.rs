@@ -1,4 +1,6 @@
 use crate::SimulatorData;
+use crate::continent::Continent;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -26,58 +28,94 @@ impl SimulatorDataIndexes {
     }
 
     pub fn refresh(&mut self, data: &SimulatorData) {
-        for continent in &data.continents {
-            for country in &continent.countries {
-                self.slug_indexes
-                    .add_country_slug(&country.slug, country.id);
+        // Build per-continent shards in parallel — every id in the world is
+        // globally unique, so the shards have disjoint keys and merge with
+        // a plain `extend`. Each rayon worker writes only into its own
+        // shard; no shared collector, no lock.
+        let shards: Vec<SimulatorDataIndexes> = data
+            .continents
+            .par_iter()
+            .map(|continent| {
+                let mut shard = SimulatorDataIndexes::new();
+                shard.fill_continent(continent);
+                shard
+            })
+            .collect();
 
-                //fill leagues
-                for league in &country.leagues.leagues {
-                    self.add_league_location(league.id, continent.id, country.id);
+        for shard in shards {
+            self.merge_shard(shard);
+        }
+    }
 
-                    self.slug_indexes.add_league_slug(&league.slug, league.id);
-                }
+    /// Populate this shard with every entity inside `continent`. Mirrors
+    /// the layout the serial walk used to produce — kept here on the
+    /// indexes type so the parallel and incremental paths can share a
+    /// single canonical traversal.
+    fn fill_continent(&mut self, continent: &Continent) {
+        for country in &continent.countries {
+            self.slug_indexes
+                .add_country_slug(&country.slug, country.id);
 
-                //fill teams
-                for club in &country.clubs {
-                    self.add_club_location(club.id, continent.id, country.id);
+            for league in &country.leagues.leagues {
+                self.add_league_location(league.id, continent.id, country.id);
+                self.slug_indexes.add_league_slug(&league.slug, league.id);
+            }
 
-                    for team in &club.teams.teams {
-                        self.add_team_data(
+            for club in &country.clubs {
+                self.add_club_location(club.id, continent.id, country.id);
+
+                for team in &club.teams.teams {
+                    self.add_team_data(
+                        team.id,
+                        TeamData {
+                            name: team.name.clone(),
+                            slug: team.slug.clone(),
+                        },
+                    );
+                    self.slug_indexes.add_team_slug(&team.slug, team.id);
+                    self.add_team_location(team.id, continent.id, country.id, club.id);
+
+                    for player in &team.players.players {
+                        self.add_player_location(
+                            player.id,
+                            continent.id,
+                            country.id,
+                            club.id,
                             team.id,
-                            TeamData {
-                                name: team.name.clone(),
-                                slug: team.slug.clone(),
-                            },
                         );
+                    }
 
-                        self.slug_indexes.add_team_slug(&team.slug, team.id);
-
-                        self.add_team_location(team.id, continent.id, country.id, club.id);
-
-                        for player in &team.players.players {
-                            self.add_player_location(
-                                player.id,
-                                continent.id,
-                                country.id,
-                                club.id,
-                                team.id,
-                            );
-                        }
-
-                        for staff in team.staffs.iter() {
-                            self.add_staff_location(
-                                staff.id,
-                                continent.id,
-                                country.id,
-                                club.id,
-                                team.id,
-                            );
-                        }
+                    for staff in team.staffs.iter() {
+                        self.add_staff_location(
+                            staff.id,
+                            continent.id,
+                            country.id,
+                            club.id,
+                            team.id,
+                        );
                     }
                 }
             }
         }
+    }
+
+    fn merge_shard(&mut self, shard: SimulatorDataIndexes) {
+        let SimulatorDataIndexes {
+            league_indexes,
+            club_indexes,
+            team_indexes,
+            player_indexes,
+            staff_indexes,
+            team_data_index,
+            slug_indexes,
+        } = shard;
+        self.league_indexes.extend(league_indexes);
+        self.club_indexes.extend(club_indexes);
+        self.team_indexes.extend(team_indexes);
+        self.player_indexes.extend(player_indexes);
+        self.staff_indexes.extend(staff_indexes);
+        self.team_data_index.extend(team_data_index);
+        self.slug_indexes.merge(slug_indexes);
     }
 
     //league indexes
@@ -144,24 +182,32 @@ impl SimulatorDataIndexes {
 
     /// Rebuild only the player indexes (after transfers move players between clubs)
     pub fn refresh_player_indexes(&mut self, data: &SimulatorData) {
-        self.player_indexes.clear();
-
-        for continent in &data.continents {
-            for country in &continent.countries {
-                for club in &country.clubs {
-                    for team in &club.teams.teams {
-                        for player in &team.players.players {
-                            self.add_player_location(
-                                player.id,
-                                continent.id,
-                                country.id,
-                                club.id,
-                                team.id,
-                            );
+        // Build per-continent player-index shards in parallel; player ids
+        // are globally unique so the merge is a disjoint `extend`.
+        let shards: Vec<HashMap<u32, (u32, u32, u32, u32)>> = data
+            .continents
+            .par_iter()
+            .map(|continent| {
+                let mut shard: HashMap<u32, (u32, u32, u32, u32)> = HashMap::new();
+                for country in &continent.countries {
+                    for club in &country.clubs {
+                        for team in &club.teams.teams {
+                            for player in &team.players.players {
+                                shard.insert(
+                                    player.id,
+                                    (continent.id, country.id, club.id, team.id),
+                                );
+                            }
                         }
                     }
                 }
-            }
+                shard
+            })
+            .collect();
+
+        self.player_indexes.clear();
+        for shard in shards {
+            self.player_indexes.extend(shard);
         }
     }
 
@@ -264,6 +310,22 @@ impl SlugIndexes {
             Some(team_id) => Some(*team_id),
             None => None,
         }
+    }
+
+    /// Absorb another shard's slug entries. Used during the parallel
+    /// `SimulatorDataIndexes::refresh` merge — shards are populated by
+    /// disjoint continents so collisions can't happen, but `extend` is
+    /// still the right primitive in case the same id ever resurfaces in
+    /// a later refresh after a transfer.
+    pub fn merge(&mut self, other: SlugIndexes) {
+        let SlugIndexes {
+            country_slug_index,
+            league_slug_index,
+            team_slug_index,
+        } = other;
+        self.country_slug_index.extend(country_slug_index);
+        self.league_slug_index.extend(league_slug_index);
+        self.team_slug_index.extend(team_slug_index);
     }
 }
 
