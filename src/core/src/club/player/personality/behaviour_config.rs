@@ -409,6 +409,16 @@ pub struct MoraleEventCatalog {
     pub fans_chant_player_name: f32,
     pub media_pressure_mounting: f32,
     pub leadership_emergence: f32,
+    // Career-desire moods
+    pub wants_return_home: f32,
+    pub wants_european_competition: f32,
+    pub wants_copa_libertadores: f32,
+    pub home_return_opportunity: f32,
+    pub continental_ambition_satisfied: f32,
+    /// Base magnitude for any [`HappinessEventType::LifeSimulationDesire`]
+    /// event. Severity tier on the context scales this — Mild → 0.5×,
+    /// Moderate → 1.0×, Strong → 1.5×, Acute → 2.0×.
+    pub life_simulation_desire: f32,
 }
 
 impl Default for MoraleEventCatalog {
@@ -567,6 +577,17 @@ impl Default for MoraleEventCatalog {
             fans_chant_player_name: 3.0,
             media_pressure_mounting: -3.5,
             leadership_emergence: 4.0,
+            // Career-desire moods — chronic ambient drag while the
+            // mismatch persists. Magnitudes mirror the catalog band the
+            // requirements call for: return-home is the deepest cut
+            // (homesickness compounds isolation), the two ambition
+            // moods sit a notch below.
+            wants_return_home: -5.0,
+            wants_european_competition: -4.0,
+            wants_copa_libertadores: -4.0,
+            home_return_opportunity: 4.0,
+            continental_ambition_satisfied: 4.0,
+            life_simulation_desire: -3.0,
         }
     }
 }
@@ -693,6 +714,12 @@ impl MoraleEventCatalog {
             InterestCooled => self.interest_cooled,
             UsedInterestForContractLeverage => self.used_interest_for_contract_leverage,
             FansReactToTransferRumour => self.fans_react_to_transfer_rumour,
+            WantsReturnHome => self.wants_return_home,
+            WantsEuropeanCompetition => self.wants_european_competition,
+            WantsCopaLibertadores => self.wants_copa_libertadores,
+            HomeReturnOpportunity => self.home_return_opportunity,
+            ContinentalAmbitionSatisfied => self.continental_ambition_satisfied,
+            LifeSimulationDesire => self.life_simulation_desire,
         }
     }
 }
@@ -1039,6 +1066,9 @@ mod tests {
             crate::HappinessEventType::MediaCriticism,
             crate::HappinessEventType::CloseFriendSold,
             crate::HappinessEventType::MentorDeparted,
+            crate::HappinessEventType::WantsReturnHome,
+            crate::HappinessEventType::WantsEuropeanCompetition,
+            crate::HappinessEventType::WantsCopaLibertadores,
         ];
         for n in negatives {
             assert!(cat.magnitude(n.clone()) < 0.0, "expected {:?} negative", n);
@@ -1071,6 +1101,8 @@ mod tests {
             crate::HappinessEventType::MediaPraise,
             crate::HappinessEventType::CompatriotJoined,
             crate::HappinessEventType::LanguageProgress,
+            crate::HappinessEventType::HomeReturnOpportunity,
+            crate::HappinessEventType::ContinentalAmbitionSatisfied,
         ];
         for p in positives {
             assert!(cat.magnitude(p.clone()) > 0.0, "expected {:?} positive", p);

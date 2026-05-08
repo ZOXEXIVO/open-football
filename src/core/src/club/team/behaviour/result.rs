@@ -147,9 +147,13 @@ impl TeamBehaviourResult {
                         _ => HappinessEventType::ManagerPraise,
                     }
                 } else {
+                    // A failed talk is a manager interaction outcome —
+                    // model it as ManagerCriticism (or Discipline), not
+                    // PoorTraining, which is reserved for actual
+                    // training-ground sessions.
                     match talk.talk_type {
                         ManagerTalkType::Discipline => HappinessEventType::ManagerDiscipline,
-                        _ => HappinessEventType::PoorTraining,
+                        _ => HappinessEventType::ManagerCriticism,
                     }
                 };
                 let topic = ManagerInteractionTopicMapper::from_talk(&talk.talk_type);

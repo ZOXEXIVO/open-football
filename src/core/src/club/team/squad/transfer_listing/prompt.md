@@ -36,6 +36,9 @@ TRANSFER LIST when:
 - Player's skills are clearly below squad standard compared to teammates in same position
 - Player is aging (32+) and clearly declining (negative training trend + low skills)
 - Excessive depth at a position with no path to playing time
+- UNH/REQ caused by homesickness or a desire to return to the player's home country, former club, favourite club, or home league is a valid human reason to consider listing — a foreign player who cannot settle is rarely going to recover at this club
+- UNH/REQ caused by an explicit desire for European competition (Champions / Europa / Conference) when this club cannot offer it is a valid reason to consider listing for an ambitious senior player
+- UNH/REQ caused by a South American player's desire to play Copa Libertadores when this club is outside that path is a valid reason to consider listing
 
 CONTRACT EXPIRY IS NOT A LISTING REASON:
 - Never list a player citing "contract expiring", "soon-to-expire contract", "avoid free transfer", or anything similar

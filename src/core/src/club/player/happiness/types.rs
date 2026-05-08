@@ -327,6 +327,12 @@ pub struct HappinessEventContext {
     /// Personal adaptation payload — settling into a new club /
     /// country, language progress, family / cultural cues.
     pub personal_adaptation_context: Option<PersonalAdaptationEventContext>,
+    /// Career-desire payload — return-home, European-competition or
+    /// Copa-Libertadores ambition mood (and their positive
+    /// counterparts). Drives the renderer for `WantsReturnHome` /
+    /// `WantsEuropeanCompetition` / `WantsCopaLibertadores` /
+    /// `HomeReturnOpportunity` / `ContinentalAmbitionSatisfied`.
+    pub career_desire_context: Option<CareerDesireEventContext>,
     /// Loan-specific payload — parent-club view, minutes concern,
     /// recall discussion.
     pub loan_context: Option<LoanEventContext>,
@@ -344,6 +350,10 @@ pub struct HappinessEventContext {
     /// out to free a non-EU slot for the new signing" rather than a
     /// generic "Squad registration omitted".
     pub regulation_context: Option<RegulationEventContext>,
+    /// Life-simulation desire payload — family events, leave requests,
+    /// role / pressure preferences, NT visibility, loyalty refusals.
+    /// Renderer keys off `kind` to pick the right narrative.
+    pub life_simulation_desire_context: Option<LifeSimulationDesireContext>,
 }
 
 impl HappinessEventContext {
@@ -378,10 +388,12 @@ impl HappinessEventContext {
             leadership_context: None,
             media_fan_context: None,
             personal_adaptation_context: None,
+            career_desire_context: None,
             loan_context: None,
             recognition_context: None,
             season_outcome_context: None,
             regulation_context: None,
+            life_simulation_desire_context: None,
         }
     }
 
@@ -514,6 +526,11 @@ impl HappinessEventContext {
         self
     }
 
+    pub fn with_career_desire_context(mut self, ctx: CareerDesireEventContext) -> Self {
+        self.career_desire_context = Some(ctx);
+        self
+    }
+
     pub fn with_loan_context(mut self, ctx: LoanEventContext) -> Self {
         self.loan_context = Some(ctx);
         self
@@ -531,6 +548,14 @@ impl HappinessEventContext {
 
     pub fn with_regulation_context(mut self, ctx: RegulationEventContext) -> Self {
         self.regulation_context = Some(ctx);
+        self
+    }
+
+    pub fn with_life_simulation_desire_context(
+        mut self,
+        ctx: LifeSimulationDesireContext,
+    ) -> Self {
+        self.life_simulation_desire_context = Some(ctx);
         self
     }
 
@@ -555,6 +580,7 @@ impl HappinessEventContext {
         if self.leadership_context.is_some() { n += 1; }
         if self.media_fan_context.is_some() { n += 1; }
         if self.personal_adaptation_context.is_some() { n += 1; }
+        if self.career_desire_context.is_some() { n += 1; }
         if self.loan_context.is_some() { n += 1; }
         if self.recognition_context.is_some() { n += 1; }
         if self.season_outcome_context.is_some() { n += 1; }
@@ -1509,6 +1535,14 @@ pub enum TransferInterestKind {
     LoanDevelopment,
     EscapeRoute,
     Speculative,
+    /// Approach concretely offers European competition football and
+    /// the player's current club cannot. Drives the stronger
+    /// `Excited` / `WantsTalks` reaction when the matching desire
+    /// mood is active.
+    EuropeanCompetitionOpportunity,
+    /// Approach concretely offers Copa Libertadores football for a
+    /// South American heritage player.
+    CopaLibertadoresOpportunity,
 }
 
 impl TransferInterestKind {
@@ -1533,6 +1567,12 @@ impl TransferInterestKind {
             TransferInterestKind::LoanDevelopment => "transfer_interest_kind_loan_development",
             TransferInterestKind::EscapeRoute => "transfer_interest_kind_escape_route",
             TransferInterestKind::Speculative => "transfer_interest_kind_speculative",
+            TransferInterestKind::EuropeanCompetitionOpportunity => {
+                "transfer_interest_kind_european_competition_opportunity"
+            }
+            TransferInterestKind::CopaLibertadoresOpportunity => {
+                "transfer_interest_kind_copa_libertadores_opportunity"
+            }
         }
     }
 }
@@ -1658,6 +1698,16 @@ pub enum TransferInterestEvidence {
     Underpaid,
     ManagerPromiseConflict,
     RecentNewSigningThreatensRole,
+    /// Approach offers a path to European competition (UCL / UEL /
+    /// UECL). Stronger than a generic `BiggerLeague` for ambitious
+    /// players whose current club has no continental qualification.
+    EuropeanCompetitionOpportunity,
+    /// Approach offers a path to Copa Libertadores football. Specific
+    /// to South-American heritage / South-American clubs.
+    CopaLibertadoresOpportunity,
+    /// Move would relieve a documented return-home / homesickness
+    /// desire on the player.
+    ReturnHomeRelief,
 }
 
 impl TransferInterestEvidence {
@@ -1717,6 +1767,15 @@ impl TransferInterestEvidence {
             }
             TransferInterestEvidence::RecentNewSigningThreatensRole => {
                 "transfer_interest_evidence_recent_new_signing_threatens_role"
+            }
+            TransferInterestEvidence::EuropeanCompetitionOpportunity => {
+                "transfer_interest_evidence_european_competition_opportunity"
+            }
+            TransferInterestEvidence::CopaLibertadoresOpportunity => {
+                "transfer_interest_evidence_copa_libertadores_opportunity"
+            }
+            TransferInterestEvidence::ReturnHomeRelief => {
+                "transfer_interest_evidence_return_home_relief"
             }
         }
     }
@@ -1944,6 +2003,19 @@ pub enum TrainingEventEvidence {
     VeteranLeader,
     StrongRecentForm,
     UpcomingBigMatch,
+    LowEffort,
+    FatigueLimited,
+    RecoveryLimited,
+    LowMorale,
+    TransferDistraction,
+    CoachMismatch,
+    HighWorkRate,
+    HighDetermination,
+    Overloaded,
+    StrongBaselineButOffDay,
+    YoungPlayerBreakthrough,
+    VeteranSetStandard,
+    TacticalMismatch,
 }
 
 impl TrainingEventEvidence {
@@ -1962,6 +2034,19 @@ impl TrainingEventEvidence {
             TrainingEventEvidence::VeteranLeader => "training_evidence_veteran_leader",
             TrainingEventEvidence::StrongRecentForm => "training_evidence_strong_recent_form",
             TrainingEventEvidence::UpcomingBigMatch => "training_evidence_upcoming_big_match",
+            TrainingEventEvidence::LowEffort => "training_evidence_low_effort",
+            TrainingEventEvidence::FatigueLimited => "training_evidence_fatigue_limited",
+            TrainingEventEvidence::RecoveryLimited => "training_evidence_recovery_limited",
+            TrainingEventEvidence::LowMorale => "training_evidence_low_morale",
+            TrainingEventEvidence::TransferDistraction => "training_evidence_transfer_distraction",
+            TrainingEventEvidence::CoachMismatch => "training_evidence_coach_mismatch",
+            TrainingEventEvidence::HighWorkRate => "training_evidence_high_work_rate",
+            TrainingEventEvidence::HighDetermination => "training_evidence_high_determination",
+            TrainingEventEvidence::Overloaded => "training_evidence_overloaded",
+            TrainingEventEvidence::StrongBaselineButOffDay => "training_evidence_strong_baseline_but_off_day",
+            TrainingEventEvidence::YoungPlayerBreakthrough => "training_evidence_young_player_breakthrough",
+            TrainingEventEvidence::VeteranSetStandard => "training_evidence_veteran_set_standard",
+            TrainingEventEvidence::TacticalMismatch => "training_evidence_tactical_mismatch",
         }
     }
 }
@@ -2949,6 +3034,15 @@ pub enum PersonalAdaptationKind {
     LanguageMilestone,
     SettlingIntoSquad,
     StillStrugglingToSettle,
+    /// Long-running adaptation failure — player wants to head back home
+    /// or to a familiar league/club after an extended struggle.
+    ReturnHomeAfterPoorAdaptation,
+    /// Career-stage ambition: at a club that can't offer European
+    /// competition. Used by the desire pipeline (`WantsEuropeanCompetition`).
+    EuropeanCompetitionAmbition,
+    /// Career-stage ambition: South American heritage player wants
+    /// Copa Libertadores football.
+    CopaLibertadoresAmbition,
 }
 
 impl PersonalAdaptationKind {
@@ -2965,6 +3059,15 @@ impl PersonalAdaptationKind {
             PersonalAdaptationKind::LanguageMilestone => "adaptation_kind_language_milestone",
             PersonalAdaptationKind::SettlingIntoSquad => "adaptation_kind_settling_squad",
             PersonalAdaptationKind::StillStrugglingToSettle => "adaptation_kind_still_struggling",
+            PersonalAdaptationKind::ReturnHomeAfterPoorAdaptation => {
+                "adaptation_kind_return_home_after_poor_adaptation"
+            }
+            PersonalAdaptationKind::EuropeanCompetitionAmbition => {
+                "adaptation_kind_european_competition_ambition"
+            }
+            PersonalAdaptationKind::CopaLibertadoresAmbition => {
+                "adaptation_kind_copa_libertadores_ambition"
+            }
         }
     }
 }
@@ -2992,6 +3095,335 @@ impl PersonalAdaptationEventContext {
     pub fn with_adaptability(mut self, attr: f32) -> Self { self.adaptability = Some(attr); self }
     pub fn with_compatriot(mut self, has: bool) -> Self { self.has_compatriot_in_squad = has; self }
     pub fn with_local_language(mut self, speaks: bool) -> Self { self.speaks_local_language = speaks; self }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Career-desire context (return home, continental ambition)
+// ─────────────────────────────────────────────────────────────────
+
+/// What flavour of career-desire mood the player is signalling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CareerDesireKind {
+    ReturnHomeAfterPoorAdaptation,
+    EuropeanCompetitionAmbition,
+    CopaLibertadoresAmbition,
+}
+
+impl CareerDesireKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            CareerDesireKind::ReturnHomeAfterPoorAdaptation => {
+                "career_desire_kind_return_home"
+            }
+            CareerDesireKind::EuropeanCompetitionAmbition => {
+                "career_desire_kind_european_competition"
+            }
+            CareerDesireKind::CopaLibertadoresAmbition => {
+                "career_desire_kind_copa_libertadores"
+            }
+        }
+    }
+}
+
+/// Concrete signals the desire detector latched onto. Closed enum so the
+/// renderer copy stays bounded; emit sites push the atoms that justified
+/// the mood and the renderer surfaces the most informative one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CareerDesireEvidence {
+    /// Player is at a club whose country sits on a different continent
+    /// from the player's nationality.
+    DifferentContinent,
+    /// Player does not speak the local language of his current club
+    /// country.
+    NoLocalLanguage,
+    /// Player's `adaptability` personality is low (≤ 8).
+    LowAdaptability,
+    /// No same-nationality / shared-language teammates in the squad.
+    NoCompatriotSupport,
+    /// Recent adaptation_score was poor (sub-40 band).
+    PoorAdaptationScore,
+    /// Personality `ambition` is high (≥ 14).
+    HighAmbition,
+    /// Current club is not in or near a continental qualification path.
+    CurrentClubNotContinental,
+    /// A favourite / former / home-country destination is concretely
+    /// linked.
+    HomeOrFavouriteLink,
+    /// Repeated `FeelingIsolated` events over the recent window.
+    RepeatedIsolation,
+    /// `club_fit` morale axis is meaningfully negative.
+    LowClubFit,
+}
+
+impl CareerDesireEvidence {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            CareerDesireEvidence::DifferentContinent => {
+                "career_desire_evidence_different_continent"
+            }
+            CareerDesireEvidence::NoLocalLanguage => {
+                "career_desire_evidence_no_local_language"
+            }
+            CareerDesireEvidence::LowAdaptability => {
+                "career_desire_evidence_low_adaptability"
+            }
+            CareerDesireEvidence::NoCompatriotSupport => {
+                "career_desire_evidence_no_compatriot_support"
+            }
+            CareerDesireEvidence::PoorAdaptationScore => {
+                "career_desire_evidence_poor_adaptation_score"
+            }
+            CareerDesireEvidence::HighAmbition => "career_desire_evidence_high_ambition",
+            CareerDesireEvidence::CurrentClubNotContinental => {
+                "career_desire_evidence_current_club_not_continental"
+            }
+            CareerDesireEvidence::HomeOrFavouriteLink => {
+                "career_desire_evidence_home_or_favourite_link"
+            }
+            CareerDesireEvidence::RepeatedIsolation => {
+                "career_desire_evidence_repeated_isolation"
+            }
+            CareerDesireEvidence::LowClubFit => "career_desire_evidence_low_club_fit",
+        }
+    }
+}
+
+/// Structured payload describing why the player is signalling a
+/// career-desire mood (return home / European / Libertadores). Filled
+/// in at emit time so the renderer can compose a contextual headline +
+/// reason instead of guessing from the event-type enum alone.
+#[derive(Debug, Clone)]
+pub struct CareerDesireEventContext {
+    pub kind: CareerDesireKind,
+    /// Days at current club at emit time. 0 if unknown.
+    pub days_at_club: u32,
+    /// Adaptation score 0..100 if available.
+    pub adaptation_score: Option<f32>,
+    /// Closed-set evidence atoms that justified the mood.
+    pub evidence: Vec<CareerDesireEvidence>,
+}
+
+impl CareerDesireEventContext {
+    pub fn new(kind: CareerDesireKind) -> Self {
+        Self {
+            kind,
+            days_at_club: 0,
+            adaptation_score: None,
+            evidence: Vec::new(),
+        }
+    }
+
+    pub fn with_days_at_club(mut self, days: u32) -> Self {
+        self.days_at_club = days;
+        self
+    }
+
+    pub fn with_adaptation_score(mut self, score: f32) -> Self {
+        self.adaptation_score = Some(score);
+        self
+    }
+
+    pub fn with_evidence(mut self, evidence: CareerDesireEvidence) -> Self {
+        if !self.evidence.contains(&evidence) {
+            self.evidence.push(evidence);
+        }
+        self
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Life-simulation desire / mood (broader categories beyond pure
+// transfer-ambition — family, leave, role, NT visibility, loyalty,
+// cultural fit). A single event type carries any of these via the
+// `kind` field on its context, so the renderer can branch on the
+// kind without exploding the HappinessEventType enum.
+// ─────────────────────────────────────────────────────────────────
+
+/// Specific flavour of life-simulation request / mood. Kept closed so
+/// renderers can localise each category and tests can assert which
+/// bucket a particular detector emits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifeSimulationDesireKind {
+    /// Family hasn't settled at the new country (schools, social
+    /// network, isolation). Player asks for support / time off / move.
+    FamilyUnsettledAbroad,
+    /// Schooling-age children: lack of suitable school in the language
+    /// the family uses raises home-country preference.
+    PartnerSchoolingConcern,
+    /// Bereavement leave — recent close-family loss.
+    BereavementLeave,
+    /// Family-birth leave — pregnancy / new arrival in the household.
+    FamilyBirthLeave,
+    /// Divorce / separation impact on focus and morale.
+    DivorceImpact,
+    /// Player asks for a language tutor / cultural integration support.
+    WantsLanguageTutor,
+    /// Player asks for a mentor or seeks compatriot support in the
+    /// dressing room.
+    WantsMentorSupport,
+    /// Player asks for a tactical role / position change rather than
+    /// mere minutes — minutes alone don't fix a misused asset.
+    WantsPreferredTacticalRole,
+    /// Player wants out of a media / fan-abuse cauldron and is open to
+    /// a less-prestigious lower-pressure side.
+    WantsLowerPressureClub,
+    /// Wants a release clause baked into the next contract extension.
+    WantsReleaseClause,
+    /// Wants a verbal promise that the club will entertain offers from
+    /// a specific competition / club tier.
+    WantsPromiseToSell,
+    /// Prefers loan to a permanent move (development, family ties,
+    /// short-term escape).
+    WantsLoanNotPermanent,
+    /// Wants more national-team visibility ahead of a major tournament
+    /// (World Cup / Copa America / Euros).
+    WantsNationalTeamVisibility,
+    /// Wants a league with a national-team selection bias toward its
+    /// own players (e.g. NT selectors who lean on Premier League /
+    /// Bundesliga form).
+    WantsLeagueWithNtBias,
+    /// Prefers a culturally / linguistically familiar country even if
+    /// it's not the player's home country (Argentine to Spain,
+    /// Portuguese to Brazil, …).
+    PrefersCulturalFamiliarity,
+    /// Veteran asks for a final homecoming season at his boyhood / home
+    /// club before retirement.
+    VeteranHomecomingSeason,
+    /// Long-tenured club legend resists a move out unless the club has
+    /// disrespected him.
+    ClubLegendRefusesLeave,
+    /// Player turns down a rival-club approach despite a clear career
+    /// upgrade — loyalty trumps progression.
+    RefusesRivalMoveDespiteUpgrade,
+}
+
+impl LifeSimulationDesireKind {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            LifeSimulationDesireKind::FamilyUnsettledAbroad => "life_sim_kind_family_unsettled",
+            LifeSimulationDesireKind::PartnerSchoolingConcern => "life_sim_kind_schooling",
+            LifeSimulationDesireKind::BereavementLeave => "life_sim_kind_bereavement",
+            LifeSimulationDesireKind::FamilyBirthLeave => "life_sim_kind_family_birth",
+            LifeSimulationDesireKind::DivorceImpact => "life_sim_kind_divorce",
+            LifeSimulationDesireKind::WantsLanguageTutor => "life_sim_kind_language_tutor",
+            LifeSimulationDesireKind::WantsMentorSupport => "life_sim_kind_mentor",
+            LifeSimulationDesireKind::WantsPreferredTacticalRole => "life_sim_kind_tactical_role",
+            LifeSimulationDesireKind::WantsLowerPressureClub => "life_sim_kind_lower_pressure",
+            LifeSimulationDesireKind::WantsReleaseClause => "life_sim_kind_release_clause",
+            LifeSimulationDesireKind::WantsPromiseToSell => "life_sim_kind_promise_to_sell",
+            LifeSimulationDesireKind::WantsLoanNotPermanent => "life_sim_kind_loan_preferred",
+            LifeSimulationDesireKind::WantsNationalTeamVisibility => "life_sim_kind_nt_visibility",
+            LifeSimulationDesireKind::WantsLeagueWithNtBias => "life_sim_kind_nt_bias_league",
+            LifeSimulationDesireKind::PrefersCulturalFamiliarity => "life_sim_kind_cultural_fit",
+            LifeSimulationDesireKind::VeteranHomecomingSeason => "life_sim_kind_veteran_homecoming",
+            LifeSimulationDesireKind::ClubLegendRefusesLeave => "life_sim_kind_legend_refuses",
+            LifeSimulationDesireKind::RefusesRivalMoveDespiteUpgrade => "life_sim_kind_rival_refuse",
+        }
+    }
+}
+
+/// Severity tier specific to life-simulation moods. Renderer can
+/// translate to Minor/Moderate/Strong/Acute copy independent of the
+/// generic HappinessEventSeverity tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifeSimulationSeverity {
+    Mild,
+    Moderate,
+    Strong,
+    Acute,
+}
+
+impl LifeSimulationSeverity {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            LifeSimulationSeverity::Mild => "life_sim_severity_mild",
+            LifeSimulationSeverity::Moderate => "life_sim_severity_moderate",
+            LifeSimulationSeverity::Strong => "life_sim_severity_strong",
+            LifeSimulationSeverity::Acute => "life_sim_severity_acute",
+        }
+    }
+}
+
+/// What concretely triggered the desire/mood. Closed enum so emit
+/// sites pick the football-realistic cause. Renderer uses this for the
+/// "why now" framing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifeSimulationTrigger {
+    FamilyAbroadStress,
+    SchoolingProblem,
+    PersonalLossInFamily,
+    NewbornInFamily,
+    SeparationOrDivorce,
+    LanguageBarrier,
+    LackOfMentor,
+    TacticalMisuse,
+    MediaAbuseOrFanCriticism,
+    ContractRenewalDiscussion,
+    ApproachFromSpecificClub,
+    NationalTeamSquadDeadline,
+    ApproachFromRivalClub,
+    LongTenureMilestone,
+    LateCareerWindow,
+    CulturalFitRecognition,
+}
+
+impl LifeSimulationTrigger {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            LifeSimulationTrigger::FamilyAbroadStress => "life_sim_trigger_family_abroad",
+            LifeSimulationTrigger::SchoolingProblem => "life_sim_trigger_schooling",
+            LifeSimulationTrigger::PersonalLossInFamily => "life_sim_trigger_loss",
+            LifeSimulationTrigger::NewbornInFamily => "life_sim_trigger_newborn",
+            LifeSimulationTrigger::SeparationOrDivorce => "life_sim_trigger_separation",
+            LifeSimulationTrigger::LanguageBarrier => "life_sim_trigger_language",
+            LifeSimulationTrigger::LackOfMentor => "life_sim_trigger_no_mentor",
+            LifeSimulationTrigger::TacticalMisuse => "life_sim_trigger_tactical_misuse",
+            LifeSimulationTrigger::MediaAbuseOrFanCriticism => "life_sim_trigger_media_abuse",
+            LifeSimulationTrigger::ContractRenewalDiscussion => "life_sim_trigger_contract",
+            LifeSimulationTrigger::ApproachFromSpecificClub => "life_sim_trigger_specific_approach",
+            LifeSimulationTrigger::NationalTeamSquadDeadline => "life_sim_trigger_nt_deadline",
+            LifeSimulationTrigger::ApproachFromRivalClub => "life_sim_trigger_rival_approach",
+            LifeSimulationTrigger::LongTenureMilestone => "life_sim_trigger_long_tenure",
+            LifeSimulationTrigger::LateCareerWindow => "life_sim_trigger_late_career",
+            LifeSimulationTrigger::CulturalFitRecognition => "life_sim_trigger_cultural_fit",
+        }
+    }
+}
+
+/// Structured payload for any [`LifeSimulationDesireKind`] event. The
+/// renderer reads `kind` first, then severity / trigger / evidence to
+/// fill in the headline and reason copy.
+#[derive(Debug, Clone)]
+pub struct LifeSimulationDesireContext {
+    pub kind: LifeSimulationDesireKind,
+    pub severity: LifeSimulationSeverity,
+    pub trigger: Option<LifeSimulationTrigger>,
+    /// Reuses the closed `CareerDesireEvidence` set — adaptation,
+    /// language, ambition signals are the same atoms.
+    pub evidence: Vec<CareerDesireEvidence>,
+}
+
+impl LifeSimulationDesireContext {
+    pub fn new(kind: LifeSimulationDesireKind, severity: LifeSimulationSeverity) -> Self {
+        Self {
+            kind,
+            severity,
+            trigger: None,
+            evidence: Vec::new(),
+        }
+    }
+
+    pub fn with_trigger(mut self, trigger: LifeSimulationTrigger) -> Self {
+        self.trigger = Some(trigger);
+        self
+    }
+
+    pub fn with_evidence(mut self, evidence: CareerDesireEvidence) -> Self {
+        if !self.evidence.contains(&evidence) {
+            self.evidence.push(evidence);
+        }
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -3607,6 +4039,35 @@ pub enum HappinessEventType {
     MediaPressureMounting,
     /// Veteran captain / senior pro stepping up as dressing-room leader.
     LeadershipEmergence,
+
+    // ── Career-desire moods ──────────────────────────────────────
+    /// Foreign player who has failed to settle and is openly hoping for
+    /// a move back toward his home country / former club / favourite
+    /// club. Negative ongoing mood, fed by the chronic-adaptation helper.
+    WantsReturnHome,
+    /// Ambitious player whose current club cannot offer European
+    /// competition — Champions League / Europa / Conference. Negative
+    /// ambition mood while the gap exists; cleared when the team
+    /// qualifies or the player moves on.
+    WantsEuropeanCompetition,
+    /// South-American player whose current setup cannot offer Copa
+    /// Libertadores football. Same shape as `WantsEuropeanCompetition`
+    /// but routed via the South American continent / heritage path.
+    WantsCopaLibertadores,
+    /// Positive counterpart to `WantsReturnHome` — concrete approach
+    /// from a home-country / former / favourite-club destination has
+    /// surfaced and the player feels relief.
+    HomeReturnOpportunity,
+    /// Positive counterpart to `WantsEuropeanCompetition` /
+    /// `WantsCopaLibertadores` — the team has secured the desired
+    /// continental path the player was missing.
+    ContinentalAmbitionSatisfied,
+    /// Catch-all for the broader life-simulation mood / request
+    /// categories — family events, role / pressure preferences,
+    /// language tutor asks, NT visibility, loyalty refusals. The
+    /// `LifeSimulationDesireContext` on the event identifies which
+    /// flavour was emitted; renderer picks copy off `kind`.
+    LifeSimulationDesire,
 }
 
 impl PlayerHappiness {

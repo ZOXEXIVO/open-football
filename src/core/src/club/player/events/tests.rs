@@ -2785,7 +2785,12 @@ fn make_signal(stage: crate::TransferInterestStage) -> super::transfer_social::T
         repeated_attention: false,
         is_rival: false,
         is_home_country: false,
+        is_seller_in_home_country: false,
         is_former_club: false,
+        buyer_country_id: 0,
+        buyer_continent_id: 0,
+        buyer_has_continental_path: false,
+        buyer_competition_path: None,
     }
 }
 
@@ -2999,6 +3004,147 @@ fn transfer_interest_bid_rejected_signal_emits_with_rejected_evidence() {
     assert!(tic
         .evidence
         .contains(&crate::TransferInterestEvidence::RejectedBid));
+}
+
+#[test]
+fn transfer_interest_already_home_domestic_move_is_not_homecoming() {
+    // Russian player at a Russian club linked with another Russian club:
+    // the buyer is in the player's home country, but the player is also
+    // already there — this is a domestic lateral move, not a homecoming.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    sig.buyer_rep = 0.55;
+    sig.seller_rep = 0.55;
+    sig.buyer_league_rep = 6000;
+    sig.seller_league_rep = 6000;
+    sig.is_home_country = true;
+    sig.is_seller_in_home_country = true;
+    let landed = p.on_transfer_interest_signal(&sig);
+    assert!(landed, "concrete domestic interest should still surface");
+    let homecoming_count = count_events(&p, &HappinessEventType::HomecomingRumour);
+    assert_eq!(
+        homecoming_count, 0,
+        "an already-home domestic move must not fire HomecomingRumour"
+    );
+    let last_kind = p
+        .happiness
+        .recent_events
+        .iter()
+        .last()
+        .and_then(|e| e.context.as_ref())
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .map(|tic| tic.interest_kind);
+    assert_ne!(
+        last_kind,
+        Some(crate::TransferInterestKind::Homecoming),
+        "domestic same-country move should fall through to a non-homecoming kind"
+    );
+    let tic = p
+        .happiness
+        .recent_events
+        .iter()
+        .last()
+        .and_then(|e| e.context.as_ref())
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("transfer-interest context should be attached");
+    assert!(
+        !tic.is_home_country,
+        "an already-home domestic move must not mark the context as a homecoming"
+    );
+    assert!(
+        !tic.evidence
+            .contains(&crate::TransferInterestEvidence::HomeCountry),
+        "an already-home domestic move must not carry HomeCountry evidence"
+    );
+}
+
+#[test]
+fn transfer_interest_player_abroad_linked_with_home_club_is_homecoming() {
+    // Russian player playing abroad, linked with a Russian club —
+    // proper homecoming narrative.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    sig.buyer_rep = 0.55;
+    sig.seller_rep = 0.55;
+    sig.buyer_league_rep = 6000;
+    sig.seller_league_rep = 6000;
+    sig.is_home_country = true;
+    sig.is_seller_in_home_country = false;
+    let landed = p.on_transfer_interest_signal(&sig);
+    assert!(landed, "homecoming approach for a foreign-based player should land");
+    let event = p
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::HomecomingRumour)
+        .expect("foreign-based player linked with a home-country club should fire HomecomingRumour");
+    let tic = event
+        .context
+        .as_ref()
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("context attached for homecoming");
+    assert_eq!(tic.interest_kind, crate::TransferInterestKind::Homecoming);
+    assert!(tic.is_home_country);
+}
+
+#[test]
+fn transfer_interest_former_club_precedence_over_homecoming() {
+    // A former-club approach in the player's home country should still
+    // classify as FormerClubReturn even though the home-country signal
+    // is also set.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    sig.buyer_rep = 0.55;
+    sig.seller_rep = 0.55;
+    sig.is_home_country = true;
+    sig.is_seller_in_home_country = false;
+    sig.is_former_club = true;
+    p.on_transfer_interest_signal(&sig);
+    let event = p
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::FormerClubInterest)
+        .expect("former-club interest must take precedence over homecoming");
+    let tic = event
+        .context
+        .as_ref()
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("context attached for former-club return");
+    assert_eq!(
+        tic.interest_kind,
+        crate::TransferInterestKind::FormerClubReturn
+    );
+}
+
+#[test]
+fn transfer_interest_favorite_club_precedence_over_homecoming() {
+    // A favourite-club approach should win over both homecoming and the
+    // already-home short-circuit, so the renderer keeps the strongest
+    // emotional framing.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.favorite_clubs.push(9001);
+    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    sig.buyer_rep = 0.55;
+    sig.seller_rep = 0.55;
+    sig.is_home_country = true;
+    sig.is_seller_in_home_country = true;
+    p.on_transfer_interest_signal(&sig);
+    let event = p
+        .happiness
+        .recent_events
+        .iter()
+        .find(|e| e.event_type == HappinessEventType::FavoriteClubInterest)
+        .expect("favourite-club interest must take precedence over homecoming");
+    let tic = event
+        .context
+        .as_ref()
+        .and_then(|c| c.transfer_interest_context.as_ref())
+        .expect("context attached for favourite club");
+    assert_eq!(
+        tic.interest_kind,
+        crate::TransferInterestKind::FavoriteClubInterest
+    );
 }
 
 #[test]

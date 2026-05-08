@@ -47,8 +47,48 @@ pub struct TransferInterestSignal {
     /// Domain meta — set when the buying club is in the player's home
     /// country.
     pub is_home_country: bool,
+    /// True when the player is currently at a club in his home country
+    /// (i.e. the selling club's country matches the player's nationality).
+    /// Together with `is_home_country` this distinguishes a real
+    /// homecoming from a domestic move where the player was already home.
+    pub is_seller_in_home_country: bool,
     /// True when the buying club is a previous club of this player.
     pub is_former_club: bool,
+    /// Country id of the buying club. 0 if unknown.
+    pub buyer_country_id: u32,
+    /// Continent id of the buying club's country (matches the
+    /// `transfers::scouting_region` mapping: 1 = Europe, 3 = South
+    /// America, …). 0 if unknown.
+    pub buyer_continent_id: u32,
+    /// Caller-supplied hint that the buying club is on a credible
+    /// continental qualification path right now (top of league, large
+    /// continental berth count, or active continental cup run). Used by
+    /// the classifier to surface `EuropeanCompetitionOpportunity` /
+    /// `CopaLibertadoresOpportunity` instead of generic StepUp.
+    pub buyer_has_continental_path: bool,
+    /// Caller-supplied label for the continental tier the buyer can
+    /// realistically offer — distinguishes "Champions League ladder"
+    /// from "Conference League marginal." Drives the satisfaction
+    /// rules for high-CA stars.
+    pub buyer_competition_path: Option<TransferContinentalPath>,
+}
+
+/// Coarse continental-path bucket the buyer can offer the player. Used
+/// by the classifier to choose between the European / Libertadores
+/// opportunity flavours and to gate satisfaction for high-CA stars
+/// (a 150 CA player isn't satisfied by a Conference League marginal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferContinentalPath {
+    /// Champions League regulars: top-band European clubs (UEFA pot 1-2).
+    EliteEurope,
+    /// Europa League / mid-band continental football.
+    EuropaLeague,
+    /// Conference League / qualifying-round level.
+    ConferenceLeague,
+    /// Copa Libertadores group stage / South American elite.
+    Libertadores,
+    /// Copa Sudamericana / sub-Libertadores South American.
+    Sudamericana,
 }
 
 impl TransferInterestSignal {
@@ -68,6 +108,10 @@ fn cause_for_interest_kind(kind: TransferInterestKind) -> HappinessEventCause {
         | TransferInterestKind::FormerClubReturn => HappinessEventCause::AdaptationIsolation,
         TransferInterestKind::RivalMove => HappinessEventCause::ReputationTension,
         TransferInterestKind::StepUp | TransferInterestKind::BigLeagueOpportunity => {
+            HappinessEventCause::ReputationAdmiration
+        }
+        TransferInterestKind::EuropeanCompetitionOpportunity
+        | TransferInterestKind::CopaLibertadoresOpportunity => {
             HappinessEventCause::ReputationAdmiration
         }
         TransferInterestKind::EscapeRoute | TransferInterestKind::StepDownWithMinutes => {
@@ -339,6 +383,14 @@ impl Player {
     pub fn on_transfer_interest_signal(&mut self, sig: &TransferInterestSignal) -> bool {
         let kind = self.classify_interest_kind(sig);
 
+        // Positive counterpart to a recent WantsReturnHome mood —
+        // emitted on top of (not instead of) the regular interest
+        // event, so the player feed shows both the standing rumour and
+        // the "answers his homesickness" framing. Only fires for
+        // concrete or further stages (rumours and scout sightings are
+        // too vague to be a "real opportunity").
+        self.maybe_emit_home_return_opportunity(sig, kind);
+
         // Visible-event gate: a stray scout sighting is not surfaced to
         // the player unless it actually means something — repeated
         // attention, agent/media leak, big-club gap, or contract noise.
@@ -351,6 +403,7 @@ impl Player {
             self.reaction_for_signal(sig, kind, base_mag);
         let evidence = self.evidence_for_signal(sig, kind);
 
+        let real_homecoming = sig.is_home_country && !sig.is_seller_in_home_country;
         let mut tic = TransferInterestContext::new(
             sig.stage,
             sig.source,
@@ -361,7 +414,7 @@ impl Player {
         .with_reputation_gap((sig.rep_diff() * 100.0).round() as i32)
         .with_league_reputation_gap(sig.league_rep_diff())
         .with_rival(sig.is_rival)
-        .with_home_country(sig.is_home_country)
+        .with_home_country(real_homecoming)
         .with_former_club(sig.is_former_club)
         .with_favorite_club(self.favorite_clubs.contains(&sig.interested_club_id));
         if let Some(league_id) = sig.interested_league_id {
@@ -406,6 +459,63 @@ impl Player {
         )
     }
 
+    /// Stage a `HomeReturnOpportunity` event when a concrete approach
+    /// from a home / former / favourite club lands in the wake of a
+    /// `WantsReturnHome` mood. Idempotent via cooldown — a stalled
+    /// negotiation that ticks through multiple stages over a fortnight
+    /// won't emit this twice.
+    fn maybe_emit_home_return_opportunity(
+        &mut self,
+        sig: &TransferInterestSignal,
+        kind: TransferInterestKind,
+    ) {
+        let stage_qualifies = matches!(
+            sig.stage,
+            TransferInterestStage::ConcreteInterest
+                | TransferInterestStage::BidExpected
+                | TransferInterestStage::BidSubmitted
+                | TransferInterestStage::NegotiationsOpened
+        );
+        if !stage_qualifies {
+            return;
+        }
+        let kind_qualifies = matches!(
+            kind,
+            TransferInterestKind::Homecoming
+                | TransferInterestKind::FormerClubReturn
+                | TransferInterestKind::FavoriteClubInterest
+        );
+        if !kind_qualifies {
+            return;
+        }
+        if !self
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsReturnHome, 180)
+        {
+            return;
+        }
+        let cfg = HappinessConfig::default();
+        let mag = cfg.catalog.home_return_opportunity;
+        let mut desire_ctx = crate::CareerDesireEventContext::new(
+            crate::CareerDesireKind::ReturnHomeAfterPoorAdaptation,
+        );
+        desire_ctx = desire_ctx.with_evidence(crate::CareerDesireEvidence::HomeOrFavouriteLink);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::AdaptationIsolation,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_career_desire_context(desire_ctx)
+        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::HomeReturnOpportunity,
+            mag,
+            None,
+            happiness_ctx,
+            45,
+        );
+    }
+
     fn classify_interest_kind(&self, sig: &TransferInterestSignal) -> TransferInterestKind {
         if self.favorite_clubs.contains(&sig.interested_club_id) {
             return TransferInterestKind::FavoriteClubInterest;
@@ -413,11 +523,23 @@ impl Player {
         if sig.is_former_club {
             return TransferInterestKind::FormerClubReturn;
         }
-        if sig.is_home_country && sig.rep_diff().abs() < 0.10 {
+        if sig.is_home_country
+            && !sig.is_seller_in_home_country
+            && sig.rep_diff().abs() < 0.10
+        {
             return TransferInterestKind::Homecoming;
         }
         if sig.is_rival {
             return TransferInterestKind::RivalMove;
+        }
+        // Continental-path opportunities — must be classified BEFORE
+        // generic StepUp so a documented WantsEuropeanCompetition or
+        // WantsCopaLibertadores mood routes through the matching
+        // narrative even when the rep gap is modest. We don't fire
+        // these when the buyer has no credible path or when the
+        // satisfaction-tier guard fails for a star.
+        if let Some(kind) = self.classify_continental_path_opportunity(sig) {
+            return kind;
         }
         if sig.rep_diff() >= 0.20 {
             return TransferInterestKind::StepUp;
@@ -437,6 +559,82 @@ impl Player {
             return TransferInterestKind::LateralMove;
         }
         TransferInterestKind::Speculative
+    }
+
+    /// Surface `EuropeanCompetitionOpportunity` /
+    /// `CopaLibertadoresOpportunity` when the buyer can credibly offer
+    /// the matching continental path AND either (a) the player is
+    /// already carrying the desire mood or (b) personality / heritage
+    /// makes it a natural fit. Returns `None` when neither flavour
+    /// applies — the legacy step-up / lateral classifiers take over.
+    ///
+    /// Star-tier guard: a high-CA player (≥ 145) is NOT satisfied by a
+    /// `ConferenceLeague` / `Sudamericana` path — the move still reads
+    /// as a step-up at most, not a continental-ambition narrative.
+    fn classify_continental_path_opportunity(
+        &self,
+        sig: &TransferInterestSignal,
+    ) -> Option<TransferInterestKind> {
+        if !sig.buyer_has_continental_path {
+            return None;
+        }
+        let path = sig.buyer_competition_path?;
+        let ca = self.player_attributes.current_ability;
+        let high_ca = ca >= 145;
+        match path {
+            TransferContinentalPath::EliteEurope => {
+                if self
+                    .happiness
+                    .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 120)
+                    || self.attributes.ambition >= 16.0
+                {
+                    return Some(TransferInterestKind::EuropeanCompetitionOpportunity);
+                }
+            }
+            TransferContinentalPath::EuropaLeague => {
+                if self
+                    .happiness
+                    .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 120)
+                    || self.attributes.ambition >= 14.0
+                {
+                    return Some(TransferInterestKind::EuropeanCompetitionOpportunity);
+                }
+            }
+            TransferContinentalPath::ConferenceLeague => {
+                if high_ca {
+                    // High-CA stars aren't satisfied by Conference-tier
+                    // football — let the legacy classifier label it.
+                    return None;
+                }
+                if self
+                    .happiness
+                    .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 120)
+                {
+                    return Some(TransferInterestKind::EuropeanCompetitionOpportunity);
+                }
+            }
+            TransferContinentalPath::Libertadores => {
+                if self
+                    .happiness
+                    .has_recent_event(&HappinessEventType::WantsCopaLibertadores, 120)
+                    || self.attributes.ambition >= 14.0
+                {
+                    return Some(TransferInterestKind::CopaLibertadoresOpportunity);
+                }
+            }
+            TransferContinentalPath::Sudamericana => {
+                if high_ca {
+                    return None;
+                }
+                if self
+                    .happiness
+                    .has_recent_event(&HappinessEventType::WantsCopaLibertadores, 120)
+                {
+                    return Some(TransferInterestKind::CopaLibertadoresOpportunity);
+                }
+            }
+        }
+        None
     }
 
     fn fringe_at_current_club(&self) -> bool {
@@ -694,6 +892,49 @@ impl Player {
                 },
                 None,
             ),
+            // Continental-path opportunities: stronger Excited /
+            // WantsTalks reactions when the player carries the
+            // matching desire mood, otherwise treat like a regular
+            // step-up.
+            TransferInterestKind::EuropeanCompetitionOpportunity => {
+                let has_desire = self.happiness.has_recent_event(
+                    &HappinessEventType::WantsEuropeanCompetition,
+                    120,
+                );
+                if has_desire || ambition >= 16.0 {
+                    (
+                        TransferInterestReaction::WantsTalks,
+                        Some(TransferSportingFit::ClearUpgrade),
+                    )
+                } else if loyalty >= 14.0 {
+                    (
+                        TransferInterestReaction::PubliclyCalmPrivatelyInterested,
+                        Some(TransferSportingFit::ClearUpgrade),
+                    )
+                } else {
+                    (
+                        TransferInterestReaction::Excited,
+                        Some(TransferSportingFit::ClearUpgrade),
+                    )
+                }
+            }
+            TransferInterestKind::CopaLibertadoresOpportunity => {
+                let has_desire = self.happiness.has_recent_event(
+                    &HappinessEventType::WantsCopaLibertadores,
+                    120,
+                );
+                if has_desire {
+                    (
+                        TransferInterestReaction::WantsTalks,
+                        Some(TransferSportingFit::EmotionalFit),
+                    )
+                } else {
+                    (
+                        TransferInterestReaction::Excited,
+                        Some(TransferSportingFit::EmotionalFit),
+                    )
+                }
+            }
         };
 
         // Magnitude — base scaled by personality + listed/unhappy + stage.
@@ -761,7 +1002,11 @@ impl Player {
         if self.favorite_clubs.contains(&sig.interested_club_id) {
             out.push(TransferInterestEvidence::FavoriteClub);
         }
-        if sig.is_home_country {
+        // Home-country evidence should mean a real homecoming: the buyer
+        // is in the player's home country and the seller is not. A
+        // domestic move while the player is already home is not a
+        // "return home" story.
+        if sig.is_home_country && !sig.is_seller_in_home_country {
             out.push(TransferInterestEvidence::HomeCountry);
         }
         if sig.repeated_attention {
@@ -825,6 +1070,34 @@ impl Player {
             || self.statuses.get().contains(&PlayerStatusType::Req)
         {
             out.push(TransferInterestEvidence::CurrentClubAmbitionMismatch);
+        }
+        // Career-desire alignment — when the player is carrying a
+        // documented career-desire mood, flag the matching evidence so
+        // the renderer can call out "answers his open homesickness"
+        // / "matches his European-ambition mood" instead of relying
+        // on generic step-up copy.
+        if matches!(kind, TransferInterestKind::EuropeanCompetitionOpportunity)
+            || self
+                .happiness
+                .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 120)
+        {
+            out.push(TransferInterestEvidence::EuropeanCompetitionOpportunity);
+        }
+        if matches!(kind, TransferInterestKind::CopaLibertadoresOpportunity)
+            || self
+                .happiness
+                .has_recent_event(&HappinessEventType::WantsCopaLibertadores, 120)
+        {
+            out.push(TransferInterestEvidence::CopaLibertadoresOpportunity);
+        }
+        if ((sig.is_home_country && !sig.is_seller_in_home_country)
+            || sig.is_former_club
+            || self.favorite_clubs.contains(&sig.interested_club_id))
+            && self
+                .happiness
+                .has_recent_event(&HappinessEventType::WantsReturnHome, 120)
+        {
+            out.push(TransferInterestEvidence::ReturnHomeRelief);
         }
         out
     }

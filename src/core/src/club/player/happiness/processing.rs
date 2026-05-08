@@ -882,13 +882,31 @@ impl Player {
         }
 
         // Loan underperformance — apps but rating < 6.0 means the loan
-        // isn't producing minutes the parent club would value. Adds
-        // the "I'm not enjoying this" hit.
+        // isn't yielding the kind of minutes the parent club hoped for.
+        // Surface this as a *loan* event (parent club concerned) rather
+        // than a fake training report — it's about competitive form, not
+        // attitude on the training ground.
         let apps = self.statistics.played + self.statistics.played_subs;
         let form = self.statistics.average_rating;
         if apps >= 6 && form > 0.0 && form < 6.0 {
-            self.happiness
-                .add_event_with_cooldown(HappinessEventType::PoorTraining, -1.5, 28);
+            use crate::{
+                HappinessEventCause, HappinessEventContext, HappinessEventScope,
+                HappinessEventSeverity, LoanEventContext, LoanEventKind,
+            };
+            let lctx = LoanEventContext::new(LoanEventKind::ParentClubConcerned);
+            let ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::Moderate,
+                HappinessEventScope::Boardroom,
+            )
+            .with_loan_context(lctx);
+            self.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::LackOfPlayingTime,
+                -1.5,
+                None,
+                ctx,
+                28,
+            );
         }
     }
 }
@@ -903,5 +921,93 @@ fn ambition_status_dampening(status: Option<&PlayerSquadStatus>) -> f32 {
         | Some(PlayerSquadStatus::DecentYoungster) => 0.1,
         Some(PlayerSquadStatus::NotNeeded) => 0.3,
         _ => 0.5,
+    }
+}
+
+#[cfg(test)]
+mod loan_morale_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        LoanEventKind, PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
+    };
+
+    fn build_loan_player_with_form(apps: u16, rating: f32) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.world_reputation = 4_000;
+        attrs.current_reputation = 4_000;
+        let person = PersonAttributes::default();
+        let mut player = PlayerBuilder::new()
+            .id(101)
+            .full_name(FullName::new("Loan".into(), "Tester".into()))
+            .birth_date(NaiveDate::from_ymd_opt(2003, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(person)
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 18,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        player.contract_loan = Some(PlayerClubContract::new_loan(
+            50_000,
+            NaiveDate::from_ymd_opt(2027, 6, 30).unwrap(),
+            1,
+            1,
+            2,
+        ));
+        player.statistics.played = apps;
+        player.statistics.played_subs = 0;
+        player.statistics.average_rating = rating;
+        player
+    }
+
+    #[test]
+    fn loan_underperformance_emits_loan_event_not_poor_training() {
+        let mut p = build_loan_player_with_form(8, 5.4);
+        // Hit the actual loan-morale branch. Reputations passed in are
+        // arbitrary - the underperformance check only reads stats.
+        p.process_loan_morale(2_500.0, 3_000);
+
+        assert!(
+            p.happiness
+                .recent_events
+                .iter()
+                .all(|e| e.event_type != HappinessEventType::PoorTraining),
+            "loan underperformance must never emit PoorTraining"
+        );
+
+        let lop_event = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::LackOfPlayingTime)
+            .expect("loan underperformance must emit LackOfPlayingTime");
+        let loan_ctx = lop_event
+            .context
+            .as_ref()
+            .and_then(|c| c.loan_context.as_ref())
+            .expect("loan event must carry a LoanEventContext");
+        assert_eq!(loan_ctx.kind, LoanEventKind::ParentClubConcerned);
+    }
+
+    #[test]
+    fn loan_branch_silent_for_decent_form() {
+        let mut p = build_loan_player_with_form(8, 6.7);
+        p.process_loan_morale(2_500.0, 3_000);
+        assert!(
+            p.happiness
+                .recent_events
+                .iter()
+                .all(|e| e.event_type != HappinessEventType::LackOfPlayingTime
+                    && e.event_type != HappinessEventType::PoorTraining),
+            "decent form on loan must not fire the underperformance event"
+        );
     }
 }

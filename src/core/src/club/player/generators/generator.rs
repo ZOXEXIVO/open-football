@@ -1017,6 +1017,7 @@ impl PlayerGenerator {
             full_name,
             birth_date,
             country_id,
+            nationality_continent_id: 0,
             behaviour: PersonBehaviour {
                 state: PersonBehaviourState::Normal,
             },
@@ -1095,6 +1096,8 @@ impl PlayerGenerator {
             pending_contract_ask: None,
             last_intl_caps_paid: 0,
             free_agent_state: None,
+            squad_social_view: None,
+            transfer_request_reasons: Vec::new(),
         }
     }
 

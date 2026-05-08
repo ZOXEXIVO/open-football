@@ -17,7 +17,9 @@ use crate::club::player::contract::contract::{
 };
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::player::{Player, SellOnObligation};
-use crate::{ContractBonusType, Person, PlayerHappiness, PlayerPlan, PlayerStatusType};
+use crate::{
+    ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerStatusType,
+};
 
 impl Player {
     /// React to a completed permanent transfer. Resets stats history,
@@ -26,6 +28,7 @@ impl Player {
     /// tick can emit the shock / role-fit / promise events.
     pub fn complete_transfer(&mut self, t: TransferCompletion<'_>) {
         let previous_salary = self.contract.as_ref().map(|c| c.salary);
+        let desire_carry = self.snapshot_desire_carry();
         self.on_transfer(t.from, t.to, t.fee, t.date);
         self.sold_from = Some((t.selling_club_id, t.fee));
         self.reset_on_club_change();
@@ -51,6 +54,9 @@ impl Player {
             fee: t.fee,
             is_loan: false,
             destination_club_id: t.buying_club_id,
+            had_return_home_desire: desire_carry.return_home,
+            had_european_desire: desire_carry.european,
+            had_libertadores_desire: desire_carry.libertadores,
         });
     }
 
@@ -70,6 +76,7 @@ impl Player {
         agreed_wage: Option<u32>,
     ) {
         let previous_salary = self.contract.as_ref().map(|c| c.salary);
+        let desire_carry = self.snapshot_desire_carry();
         self.on_free_agent_signing(to, date);
         self.reset_on_club_change();
         self.clear_free_agent_state();
@@ -80,6 +87,9 @@ impl Player {
             fee: 0.0,
             is_loan: false,
             destination_club_id: buying_club_id,
+            had_return_home_desire: desire_carry.return_home,
+            had_european_desire: desire_carry.european,
+            had_libertadores_desire: desire_carry.libertadores,
         });
     }
 
@@ -98,6 +108,7 @@ impl Player {
     /// `contract_loan`.
     pub fn complete_loan(&mut self, l: LoanCompletion<'_>) {
         let borrowing_id = l.borrowing_club_id;
+        let desire_carry = self.snapshot_desire_carry();
         self.on_loan(l.from, l.to, l.loan_fee, l.date);
         self.reset_on_club_change();
         if let Some(parent) = self.contract.as_mut() {
@@ -109,8 +120,39 @@ impl Player {
             fee: l.loan_fee,
             is_loan: true,
             destination_club_id: borrowing_id,
+            had_return_home_desire: desire_carry.return_home,
+            had_european_desire: desire_carry.european,
+            had_libertadores_desire: desire_carry.libertadores,
         });
     }
+
+    /// Snapshot which career-desire moods the player carried into this
+    /// transfer. Read by `complete_*` before `reset_on_club_change` wipes
+    /// `happiness`, so `process_transfer_shock` can fire the matching
+    /// satisfaction events at the new club.
+    fn snapshot_desire_carry(&self) -> DesireCarry {
+        DesireCarry {
+            return_home: self
+                .happiness
+                .has_recent_event(&HappinessEventType::WantsReturnHome, 180),
+            european: self
+                .happiness
+                .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 180),
+            libertadores: self
+                .happiness
+                .has_recent_event(&HappinessEventType::WantsCopaLibertadores, 180),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DesireCarry {
+    return_home: bool,
+    european: bool,
+    libertadores: bool,
+}
+
+impl Player {
 
     fn reset_on_club_change(&mut self) {
         const TRANSIENT: [PlayerStatusType; 10] = [
@@ -130,6 +172,12 @@ impl Player {
         }
         self.happiness = PlayerHappiness::new();
         self.load = PlayerLoad::new();
+        // Squad social view belongs to the previous club's roster; the
+        // new club's weekly pre-tick will rebuild it on its next Monday.
+        self.squad_social_view = None;
+        // Transfer-request reasons evaporate when the move actually
+        // happens — the wish was granted.
+        self.transfer_request_reasons.clear();
         // Force-selection is the previous manager's pin — the new
         // club's manager hasn't expressed a preference yet, so the
         // flag mustn't survive the move.

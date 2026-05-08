@@ -84,6 +84,7 @@ impl NationalTeam {
             birth_date: NaiveDate::from_ymd_opt(year, month, day)
                 .unwrap_or(NaiveDate::from_ymd_opt(year, 1, 1).unwrap()),
             country_id,
+            nationality_continent_id: 0,
             behaviour: PersonBehaviour {
                 state: PersonBehaviourState::Normal,
             },
@@ -212,6 +213,8 @@ impl NationalTeam {
             pending_contract_ask: None,
             last_intl_caps_paid: 0,
             free_agent_state: None,
+            squad_social_view: None,
+            transfer_request_reasons: Vec::new(),
         }
     }
 }

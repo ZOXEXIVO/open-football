@@ -22,6 +22,7 @@ use core::MatchPerformanceEventContext;
 use core::MatchSelectionContext;
 use core::MediaFanEventContext;
 use core::NationalTeamEventContext;
+use core::CareerDesireEventContext;
 use core::PersonalAdaptationEventContext;
 use core::PlayerStatusType;
 use core::RoleStatusEventContext;
@@ -479,6 +480,14 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
             "event_used_interest_for_contract_leverage"
         }
         HappinessEventType::FansReactToTransferRumour => "event_fans_react_to_transfer_rumour",
+        HappinessEventType::WantsReturnHome => "event_wants_return_home",
+        HappinessEventType::WantsEuropeanCompetition => "event_wants_european_competition",
+        HappinessEventType::WantsCopaLibertadores => "event_wants_copa_libertadores",
+        HappinessEventType::HomeReturnOpportunity => "event_home_return_opportunity",
+        HappinessEventType::ContinentalAmbitionSatisfied => {
+            "event_continental_ambition_satisfied"
+        }
+        HappinessEventType::LifeSimulationDesire => "event_life_simulation_desire",
     }
 }
 
@@ -713,6 +722,12 @@ impl EventContextRenderer {
         }
         if let Some(pa) = ctx.personal_adaptation_context.as_ref() {
             return PersonalAdaptationRender::reason_sentence(pa, i18n);
+        }
+        if let Some(cd) = ctx.career_desire_context.as_ref() {
+            return CareerDesireRender::reason_sentence(cd, i18n);
+        }
+        if let Some(ls) = ctx.life_simulation_desire_context.as_ref() {
+            return LifeSimulationRender::reason_sentence(ls, i18n);
         }
         if let Some(lc) = ctx.loan_context.as_ref() {
             return LoanRender::reason_sentence(lc, i18n);
@@ -2156,7 +2171,131 @@ impl PersonalAdaptationRender {
             K::LanguageMilestone => "language_milestone",
             K::SettlingIntoSquad => "settling_squad",
             K::StillStrugglingToSettle => "still_struggling",
+            K::ReturnHomeAfterPoorAdaptation => "return_home_after_poor_adaptation",
+            K::EuropeanCompetitionAmbition => "european_competition_ambition",
+            K::CopaLibertadoresAmbition => "copa_libertadores_ambition",
         }
+    }
+}
+
+/// Renders career-desire moods (return-home, European-competition,
+/// Copa Libertadores) plus their positive counterparts. Reads the
+/// `CareerDesireEventContext` so the renderer can compose a contextual
+/// reason sentence rather than a bare "Wants to return home" line.
+struct CareerDesireRender;
+
+impl CareerDesireRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::WantsReturnHome
+                | HappinessEventType::WantsEuropeanCompetition
+                | HappinessEventType::WantsCopaLibertadores
+                | HappinessEventType::HomeReturnOpportunity
+                | HappinessEventType::ContinentalAmbitionSatisfied
+        )
+    }
+
+    pub fn headline(ctx: &CareerDesireEventContext, i18n: &I18n) -> String {
+        let key = format!("career_desire_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.kind.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &CareerDesireEventContext, i18n: &I18n) -> Option<String> {
+        let key = format!("career_desire_reason_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        let base = if raw == key { String::new() } else { raw.to_string() };
+
+        // Append up to two evidence-specific details so the reason
+        // line reflects the actual signals the detector latched onto,
+        // rather than a single canned sentence per kind.
+        let details = Self::evidence_details(ctx, i18n);
+        if base.is_empty() && details.is_empty() {
+            return None;
+        }
+        if details.is_empty() {
+            return Some(base);
+        }
+        let suffix = details.join("; ");
+        if base.is_empty() {
+            Some(suffix)
+        } else {
+            Some(format!("{} ({})", base, suffix))
+        }
+    }
+
+    fn evidence_details(ctx: &CareerDesireEventContext, i18n: &I18n) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for ev in ctx.evidence.iter().take(2) {
+            let key = ev.as_i18n_key();
+            let raw = i18n.t(key);
+            if raw != key {
+                out.push(raw.to_string());
+            }
+        }
+        out
+    }
+
+    fn kind_token(ctx: &CareerDesireEventContext) -> &'static str {
+        use core::CareerDesireKind as K;
+        match ctx.kind {
+            K::ReturnHomeAfterPoorAdaptation => "return_home",
+            K::EuropeanCompetitionAmbition => "european_competition",
+            K::CopaLibertadoresAmbition => "copa_libertadores",
+        }
+    }
+}
+
+/// Renderer for `LifeSimulationDesire` events. Branches on the
+/// `LifeSimulationDesireKind` to pick the headline and on the
+/// optional trigger / evidence to fill the reason line.
+struct LifeSimulationRender;
+
+impl LifeSimulationRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(event_type, HappinessEventType::LifeSimulationDesire)
+    }
+
+    pub fn headline(ctx: &core::LifeSimulationDesireContext, i18n: &I18n) -> String {
+        let kind_key = ctx.kind.as_i18n_key();
+        let raw = i18n.t(kind_key);
+        if raw == kind_key {
+            // Fall back to a generic "wants something" line if a locale
+            // hasn't been updated yet.
+            i18n.t("life_sim_kind_generic").to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(
+        ctx: &core::LifeSimulationDesireContext,
+        i18n: &I18n,
+    ) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(t) = ctx.trigger {
+            let key = t.as_i18n_key();
+            let raw = i18n.t(key);
+            if raw != key {
+                parts.push(raw.to_string());
+            }
+        }
+        for ev in ctx.evidence.iter().take(2) {
+            let key = ev.as_i18n_key();
+            let raw = i18n.t(key);
+            if raw != key {
+                parts.push(raw.to_string());
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(parts.join("; "))
     }
 }
 
@@ -2435,6 +2574,16 @@ impl<'a> HeadlineDispatcher<'a> {
         if PersonalAdaptationRender::handles(ev) {
             if let Some(pa) = ctx.personal_adaptation_context.as_ref() {
                 return Some((PersonalAdaptationRender::headline(pa, self.i18n), false));
+            }
+        }
+        if CareerDesireRender::handles(ev) {
+            if let Some(cd) = ctx.career_desire_context.as_ref() {
+                return Some((CareerDesireRender::headline(cd, self.i18n), false));
+            }
+        }
+        if LifeSimulationRender::handles(ev) {
+            if let Some(ls) = ctx.life_simulation_desire_context.as_ref() {
+                return Some((LifeSimulationRender::headline(ls, self.i18n), false));
             }
         }
         if LoanRender::handles(ev) {
@@ -3847,6 +3996,62 @@ mod tests {
                 key
             );
         }
+    }
+
+    #[test]
+    fn training_render_picks_struggled_with_intensity_headline() {
+        // Acceptance criterion: a fatigue-limited PoorTraining session
+        // must render via the training_headline_struggled_with_intensity
+        // copy, never the generic event_poor_training fallback.
+        let i18n = load_en_i18n();
+        let ctx = core::TrainingEventContext::new(
+            core::TrainingEventReason::StruggledWithIntensity,
+            5.0,
+            10.0,
+        );
+        let headline = TrainingRender::headline(&ctx, &i18n);
+        assert_eq!(
+            headline,
+            i18n.t("training_headline_struggled_with_intensity").to_string(),
+            "fatigue-limited session must use the struggled-with-intensity headline"
+        );
+        assert_ne!(
+            headline,
+            i18n.t("event_poor_training").to_string(),
+            "fatigue-limited session must not fall back to the generic poor-training line"
+        );
+    }
+
+    #[test]
+    fn training_render_picks_poor_attitude_headline() {
+        let i18n = load_en_i18n();
+        let ctx = core::TrainingEventContext::new(
+            core::TrainingEventReason::PoorAttitude,
+            5.0,
+            10.0,
+        );
+        let headline = TrainingRender::headline(&ctx, &i18n);
+        assert_eq!(
+            headline,
+            i18n.t("training_headline_poor_attitude").to_string()
+        );
+    }
+
+    #[test]
+    fn training_render_picks_returning_from_injury_headline() {
+        let i18n = load_en_i18n();
+        let ctx = core::TrainingEventContext::new(
+            core::TrainingEventReason::ReturningFromInjuryNotSharp,
+            5.0,
+            10.0,
+        );
+        let headline = TrainingRender::headline(&ctx, &i18n);
+        assert_eq!(
+            headline,
+            i18n.t("training_headline_returning_from_injury_not_sharp")
+                .to_string(),
+            "recovery-limited session must use the returning-from-injury headline"
+        );
     }
 
     #[test]

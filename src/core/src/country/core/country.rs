@@ -112,6 +112,12 @@ impl Country {
         // Phase 1: League Competitions
         let league_results = self.leagues.simulate(&self.clubs, &ctx);
 
+        // Bridge between league and club passes: refresh each team's
+        // fixture window from the (now-current) league schedule so
+        // training in Phase 2 can react to real calendar distance to
+        // the next match instead of guessing a Saturday fixture.
+        self.refresh_team_fixture_windows(ctx.simulation.date.date());
+
         // Phase 2: Club Operations (with economic factors)
         // National team call-ups are handled at the continent level (cross-country visibility)
         let ctx = {
@@ -213,5 +219,46 @@ impl Country {
                 club.simulate(club_ctx)
             })
             .collect()
+    }
+
+    /// Walk every league's schedule and write each team's next four
+    /// upcoming + last four recent competitive fixture dates into
+    /// `Team::fixture_window`. Skips friendly leagues — those don't
+    /// drive the MD-1/MD-2 training rhythm. Cheap: scales O(fixtures)
+    /// per league once a tick.
+    fn refresh_team_fixture_windows(&mut self, today: NaiveDate) {
+        use std::collections::HashMap;
+        let mut upcoming_map: HashMap<u32, Vec<NaiveDate>> = HashMap::new();
+        let mut recent_map: HashMap<u32, Vec<NaiveDate>> = HashMap::new();
+        for league in &self.leagues.leagues {
+            if league.friendly {
+                continue;
+            }
+            for tour in &league.schedule.tours {
+                for item in &tour.items {
+                    let d = item.date.date();
+                    if d > today && item.result.is_none() {
+                        upcoming_map.entry(item.home_team_id).or_default().push(d);
+                        upcoming_map.entry(item.away_team_id).or_default().push(d);
+                    } else if d <= today && item.result.is_some() {
+                        recent_map.entry(item.home_team_id).or_default().push(d);
+                        recent_map.entry(item.away_team_id).or_default().push(d);
+                    }
+                }
+            }
+        }
+        for club in &mut self.clubs {
+            for team in &mut club.teams.teams {
+                let mut up = upcoming_map.remove(&team.id).unwrap_or_default();
+                up.sort_unstable();
+                up.truncate(4);
+                let mut rec = recent_map.remove(&team.id).unwrap_or_default();
+                rec.sort_unstable_by(|a, b| b.cmp(a));
+                rec.truncate(4);
+                team.fixture_window.refreshed = Some(today);
+                team.fixture_window.upcoming = up;
+                team.fixture_window.recent = rec;
+            }
+        }
     }
 }

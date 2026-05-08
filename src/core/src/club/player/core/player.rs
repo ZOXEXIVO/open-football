@@ -6,6 +6,7 @@ use crate::{
     PlayerAcceptance, PromiseKind,
 };
 use crate::club::player::adaptation::PendingSigning;
+use crate::club::player::transfer::processing::TransferDesireContext;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::development::CoachingEffect;
 use crate::club::player::happiness::TeamSeasonState;
@@ -42,6 +43,29 @@ pub struct SellOnObligation {
     pub percentage: f32,
 }
 
+/// Snapshot of squad-level social context computed once per weekly
+/// tick at the team level and read by the desire / adaptation pipeline.
+/// Cleared when the player transfers — a new club rebuilds it on its
+/// next week's pre-tick.
+#[derive(Debug, Clone, Default)]
+pub struct SquadSocialView {
+    /// Number of senior squad teammates who share the player's primary
+    /// nationality (country_id match). Capped at u8::MAX.
+    pub same_nationality_teammates: u8,
+    /// Number of senior squad teammates who speak any language this
+    /// player speaks at conversational level (≥40) or natively. Capped
+    /// at u8::MAX.
+    pub same_language_teammates: u8,
+}
+
+impl SquadSocialView {
+    pub fn same_language_or_nationality(&self) -> u8 {
+        self.same_nationality_teammates
+            .saturating_add(self.same_language_teammates)
+            .min(u8::MAX)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Player {
     //person data
@@ -49,6 +73,11 @@ pub struct Player {
     pub full_name: FullName,
     pub birth_date: NaiveDate,
     pub country_id: u32,
+    /// Continent id of the player's nationality country. Denormalised
+    /// from the country lookup at world-load / player-generation time so
+    /// the desire pipeline doesn't need to walk the simulator world.
+    /// 0 = unknown (gates that read it fail closed).
+    pub nationality_continent_id: u32,
     pub behaviour: PersonBehaviour,
     pub attributes: PersonAttributes,
 
@@ -164,6 +193,39 @@ pub struct Player {
     /// — defined in `crate::club::player::transfer::free_agent_market`.
     pub(crate) free_agent_state:
         Option<crate::club::player::transfer::free_agent_market::FreeAgentMarketState>,
+
+    /// Snapshot of compatriot / shared-language teammate counts written
+    /// by the team's weekly pre-tick. Read by the desire pipeline; not
+    /// persisted across saves and not cloned with the player on transfer.
+    /// Cleared on transfer so a new club rebuilds it on its next tick.
+    pub squad_social_view: Option<SquadSocialView>,
+
+    /// Active reasons sustaining a transfer request (`Req` status). Used
+    /// by `process_transfer_desire` to avoid clearing `Req` while at
+    /// least one reason is still unresolved. Cleared on transfer.
+    pub transfer_request_reasons: Vec<TransferRequestReason>,
+}
+
+/// Why a player has an active transfer request. The set is bounded so
+/// the renderer can attribute the request to the right narrative axis,
+/// and `process_transfer_desire` keeps `Req` alive while at least one
+/// reason is unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferRequestReason {
+    /// Behaviour band crossed `is_poor` — character / discipline issues.
+    PoorBehaviour,
+    /// Long-running `Unh` status (>30 days).
+    LongUnhappiness,
+    /// Ambition fit deeply red and `Unh` >14 days — structural mismatch.
+    AmbitionMismatch,
+    /// Salary unhappiness past the request horizon (540-730d).
+    SalaryUnresolved,
+    /// Chronic homesickness mood + low morale / club_fit.
+    ReturnHome,
+    /// European-competition mood lingered past the request horizon.
+    EuropeanAmbition,
+    /// Copa Libertadores ambition mood lingered past the request horizon.
+    CopaLibertadoresAmbition,
 }
 
 /// What the manager committed to. Each variant carries everything the
@@ -857,8 +919,11 @@ impl Player {
         self.process_contract(&mut result, now);
         self.process_mailbox(&mut result, now.date());
 
-        // Transfer desire based on multiple factors
-        self.process_transfer_desire(&mut result, now.date());
+        // Transfer desire based on multiple factors. Build the
+        // context once from `GlobalContext` so the transfer-desire
+        // path doesn't have to walk the simulator world.
+        let desire_ctx = TransferDesireContext::from_global(self, &ctx);
+        self.process_transfer_desire(&mut result, now.date(), &desire_ctx);
 
         result
     }

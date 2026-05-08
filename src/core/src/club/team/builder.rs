@@ -1,4 +1,5 @@
 use crate::club::team::behaviour::TeamBehaviour;
+use crate::club::team::team::TeamFixtureWindow;
 use crate::{
     MatchHistory, PlayerCollection, StaffCollection, Tactics, Team, TeamReputation, TeamType,
     TrainingSchedule, Transfers,
@@ -115,6 +116,7 @@ impl TeamBuilder {
                 .ok_or("training_schedule is required")?,
             transfer_list: self.transfer_list.unwrap_or_else(Transfers::new),
             match_history: self.match_history.unwrap_or_else(MatchHistory::new),
+            fixture_window: TeamFixtureWindow::default(),
             captain_id: None,
             vice_captain_id: None,
             captaincy_initialized: false,

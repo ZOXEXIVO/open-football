@@ -194,6 +194,7 @@ impl PlayerBuilder {
             full_name: self.full_name.ok_or("full_name is required")?,
             birth_date: self.birth_date.ok_or("birth_date is required")?,
             country_id: self.country_id.ok_or("country_id is required")?,
+            nationality_continent_id: 0,
             behaviour: self.behaviour.unwrap_or_default(),
             attributes: self.attributes.ok_or("attributes is required")?,
             happiness: self.happiness.unwrap_or_else(PlayerHappiness::new),
@@ -237,6 +238,8 @@ impl PlayerBuilder {
             pending_contract_ask: None,
             last_intl_caps_paid: 0,
             free_agent_state: None,
+            squad_social_view: None,
+            transfer_request_reasons: Vec::new(),
         })
     }
 }

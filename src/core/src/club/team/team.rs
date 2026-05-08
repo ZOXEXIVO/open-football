@@ -1,3 +1,5 @@
+use crate::club::player::core::player::SquadSocialView;
+use crate::club::player::language::Language;
 use crate::club::relations::ChemistryContext;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::builder::TeamBuilder;
@@ -38,6 +40,12 @@ pub struct Team {
     pub training_schedule: TrainingSchedule,
     pub transfer_list: Transfers,
     pub match_history: MatchHistory,
+
+    /// Cached upcoming-fixture window written by the league/country
+    /// pipeline before `simulate` runs. Lets training read real
+    /// calendar distance to the next match instead of guessing a
+    /// Saturday fixture week. Refreshed once per simulation tick.
+    pub fixture_window: TeamFixtureWindow,
 
     /// Appointed captain — wears the armband. Selected monthly by
     /// `assign_captaincy` based on leadership, loyalty, and tenure.
@@ -122,6 +130,12 @@ impl Team {
             // explicit, visible mechanism instead of an opaque "rest" hint.
             let best_sports_sci = self.staffs.best_sports_science();
             apply_preventive_rest(&mut self.players.players, best_sports_sci, week_date);
+
+            // Pre-compute per-player squad social view (compatriots and
+            // shared-language teammates) so the desire / adaptation
+            // pipelines see the actual squad rather than always-zero
+            // defaults. Cheap: O(n²) over the senior squad, but n ≤ 30.
+            SquadSocialViewBuilder::refresh(&mut self.players.players);
         }
 
         // Pick (or keep) the team tactic before simulating players so the
@@ -423,6 +437,59 @@ impl Team {
     }
 }
 
+/// Builds [`SquadSocialView`] snapshots for every player on the team
+/// from the current roster. Wraps the O(n²) walk so the team simulator
+/// reads as one named call rather than an inline nested loop.
+pub struct SquadSocialViewBuilder;
+
+impl SquadSocialViewBuilder {
+    /// Refresh each player's `squad_social_view` from the current roster.
+    /// O(n²) over the squad, with n ≤ 30 — cheap. Same-language counts
+    /// use the player's stored `languages` (≥40 proficiency or native
+    /// qualifies as a chat-ready buddy); same-nationality counts compare
+    /// `country_id`. Self is excluded from both counts.
+    pub fn refresh(players: &mut [Player]) {
+        let snapshot: Vec<(u32, u32, Vec<Language>)> = players
+            .iter()
+            .map(|p| {
+                let langs = p
+                    .languages
+                    .iter()
+                    .filter(|l| l.is_native || l.proficiency >= 40)
+                    .map(|l| l.language)
+                    .collect();
+                (p.id, p.country_id, langs)
+            })
+            .collect();
+
+        for player in players.iter_mut() {
+            let player_langs: Vec<Language> = player
+                .languages
+                .iter()
+                .filter(|l| l.is_native || l.proficiency >= 40)
+                .map(|l| l.language)
+                .collect();
+            let mut same_nat: u32 = 0;
+            let mut same_lang: u32 = 0;
+            for (other_id, other_country, other_langs) in &snapshot {
+                if *other_id == player.id {
+                    continue;
+                }
+                if *other_country == player.country_id {
+                    same_nat += 1;
+                }
+                if player_langs.iter().any(|l| other_langs.contains(l)) {
+                    same_lang += 1;
+                }
+            }
+            player.squad_social_view = Some(SquadSocialView {
+                same_nationality_teammates: same_nat.min(u8::MAX as u32) as u8,
+                same_language_teammates: same_lang.min(u8::MAX as u32) as u8,
+            });
+        }
+    }
+}
+
 /// Build the squad-wide [`ChemistryContext`] consumed by every player's
 /// chemistry recalculation this week. Centralised here so all players see
 /// the same captain / leadership / turnover signals — otherwise per-player
@@ -628,6 +695,47 @@ impl TeamType {
         TeamType::U21,
         TeamType::U23,
     ];
+}
+
+/// Cached competitive-fixture window for this team. Populated by the
+/// league/country pipeline before `Team::simulate` runs so training
+/// can read real calendar distance to the next match. Friendlies are
+/// excluded — they do not earn the same MD-1 / MD-2 protection.
+#[derive(Debug, Clone, Default)]
+pub struct TeamFixtureWindow {
+    /// Date this window was last refreshed. Lets training tell the
+    /// difference between "no fixtures because there are none" and
+    /// "no fixtures because the cache was never written".
+    pub refreshed: Option<NaiveDate>,
+    /// Up to four upcoming competitive match dates, oldest first.
+    pub upcoming: Vec<NaiveDate>,
+    /// Up to four most recent competitive match dates, newest first.
+    pub recent: Vec<NaiveDate>,
+}
+
+impl TeamFixtureWindow {
+    pub fn next_after(&self, today: NaiveDate) -> Option<NaiveDate> {
+        self.upcoming.iter().copied().find(|d| *d >= today)
+    }
+
+    pub fn previous_before(&self, today: NaiveDate) -> Option<NaiveDate> {
+        self.recent.iter().copied().find(|d| *d <= today)
+    }
+
+    /// Number of fixtures (recent or upcoming) within `days` calendar
+    /// days of `today`. Drives the double-match-week dampener.
+    pub fn fixtures_within(&self, today: NaiveDate, days: i64) -> u8 {
+        let half = chrono::Duration::days(days);
+        let lo = today - half;
+        let hi = today + half;
+        let r = self.recent.iter().filter(|d| **d >= lo && **d <= today).count();
+        let u = self
+            .upcoming
+            .iter()
+            .filter(|d| **d > today && **d <= hi)
+            .count();
+        (r + u).min(u8::MAX as usize) as u8
+    }
 }
 
 impl fmt::Display for TeamType {

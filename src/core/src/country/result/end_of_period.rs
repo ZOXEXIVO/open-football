@@ -392,6 +392,7 @@ impl CountryResult {
         prestige: f32,
         date: NaiveDate,
     ) {
+        let is_european_qualification = matches!(event, HappinessEventType::QualifiedForEurope);
         for club in &mut country.clubs {
             for team in club.teams.iter_mut() {
                 if team.id != team_id {
@@ -404,6 +405,9 @@ impl CountryResult {
                         prestige,
                         date,
                     );
+                    if is_european_qualification {
+                        player.on_continental_qualification_satisfaction();
+                    }
                 }
             }
         }

@@ -400,8 +400,61 @@ impl SimulatorData {
 
         data.init_league_tables();
         data.seed_player_histories();
+        data.seed_player_nationality_continents();
 
         data
+    }
+
+    /// Populate `Player.nationality_continent_id` from `country_info` for
+    /// every player on every roster + retired + national-team + free-agent
+    /// pool. Called once at construction time after `country_info` is
+    /// populated. Cheap parallel pass.
+    pub fn seed_player_nationality_continents(&mut self) {
+        let lookup: std::collections::HashMap<u32, u32> = self
+            .country_info
+            .iter()
+            .map(|(k, v)| (*k, v.continent_id))
+            .collect();
+        if lookup.is_empty() {
+            return;
+        }
+        self.continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
+                for club in &mut country.clubs {
+                    for team in club.teams.iter_mut() {
+                        for player in &mut team.players.players {
+                            if player.nationality_continent_id == 0 {
+                                if let Some(cid) = lookup.get(&player.country_id) {
+                                    player.nationality_continent_id = *cid;
+                                }
+                            }
+                        }
+                    }
+                }
+                for player in &mut country.retired_players {
+                    if player.nationality_continent_id == 0 {
+                        if let Some(cid) = lookup.get(&player.country_id) {
+                            player.nationality_continent_id = *cid;
+                        }
+                    }
+                }
+                for player in &mut country.national_team.generated_squad {
+                    if player.nationality_continent_id == 0 {
+                        if let Some(cid) = lookup.get(&player.country_id) {
+                            player.nationality_continent_id = *cid;
+                        }
+                    }
+                }
+            });
+        for player in &mut self.free_agents {
+            if player.nationality_continent_id == 0 {
+                if let Some(cid) = lookup.get(&player.country_id) {
+                    player.nationality_continent_id = *cid;
+                }
+            }
+        }
     }
 
     /// Register country info for countries that may not have active leagues in the simulation.

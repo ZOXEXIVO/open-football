@@ -7,11 +7,35 @@ use crate::{
     TrainingEventReason,
 };
 
+/// Per-session outcome breakdown built by `PlayerTraining::train`.
+/// Carries the sub-scores (effort / focus / physical / coach / psychological
+/// / random), the chosen primary reason, and the evidence list so the
+/// happiness layer can emit auditable GoodTraining / PoorTraining events
+/// instead of guessing why the session swung.
+#[derive(Debug, Clone)]
+pub struct TrainingOutcomeBreakdown {
+    pub raw_score: f32,
+    pub baseline_score: f32,
+    pub delta_from_baseline: f32,
+    pub effort_score: f32,
+    pub focus_score: f32,
+    pub physical_state_score: f32,
+    pub coach_fit_score: f32,
+    pub tactical_fit_score: f32,
+    pub psychological_score: f32,
+    pub randomness_score: f32,
+    pub primary_reason: TrainingEventReason,
+    pub evidence: Vec<TrainingEventEvidence>,
+}
+
 pub struct PlayerTrainingResult {
     pub player_id: u32,
     pub effects: TrainingEffects,
     /// How well the player executed this session (1.0-20.0)
     pub session_performance: f32,
+    /// Detailed outcome model used to drive event emission. `None` for
+    /// legacy `empty()` results that don't represent a real session.
+    pub outcome: Option<TrainingOutcomeBreakdown>,
 }
 
 impl PlayerTrainingResult {
@@ -20,6 +44,7 @@ impl PlayerTrainingResult {
             player_id,
             effects,
             session_performance: 10.0,
+            outcome: None,
         }
     }
 
@@ -38,6 +63,7 @@ impl PlayerTrainingResult {
                 readiness_change: 0.0,
             },
             session_performance: 10.0,
+            outcome: None,
         }
     }
 
@@ -240,158 +266,201 @@ impl PlayerTrainingResult {
                     (player.skills.physical.match_readiness - 0.5).max(0.0);
             }
 
-            // Apply morale changes to happiness system
-            if self.effects.morale_change.abs() > 0.001 {
-                let positive = self.effects.morale_change > 0.0;
-                let event_type = if positive {
-                    HappinessEventType::GoodTraining
-                } else {
-                    HappinessEventType::PoorTraining
-                };
-                let context = TrainingContextBuilder {
-                    positive,
-                    session_performance: self.session_performance,
-                    training_performance_ema: player.training.training_performance,
-                    professionalism: player.attributes.professionalism,
-                    age: DateUtils::age(player.birth_date, current_date),
-                    in_recovery: player.player_attributes.is_in_recovery(),
-                    condition_pct: player.player_attributes.condition_percentage(),
-                    fatigue_change: self.effects.fatigue_change,
-                    has_recent_criticism: player.happiness.recent_events.iter().any(|e| {
-                        e.days_ago <= 14
-                            && (e.event_type == HappinessEventType::ManagerCriticism
-                                || e.event_type == HappinessEventType::ManagerDiscipline
-                                || e.event_type == HappinessEventType::MatchDropped)
-                    }),
-                    has_transfer_speculation: player.happiness.recent_events.iter().any(|e| {
-                        e.days_ago <= 21
-                            && matches!(
-                                e.event_type,
-                                HappinessEventType::TransferRumour
-                                    | HappinessEventType::AgentStirsInterest
-                                    | HappinessEventType::TransferSpeculationDistracts
-                                    | HappinessEventType::WantedByBiggerClub
-                                    | HappinessEventType::InterestFromBiggerClub
-                            )
-                    }),
-                    leadership: player.skills.mental.leadership,
-                }
-                .build();
-                let happiness_ctx = HappinessEventContext::new(
-                    HappinessEventCause::Other,
-                    HappinessEventSeverity::from_magnitude(self.effects.morale_change * 5.0),
-                    HappinessEventScope::TrainingGround,
-                )
-                .with_training_context(context);
-                player
-                    .happiness
-                    .add_event_with_context(event_type, self.effects.morale_change * 5.0, None, happiness_ctx);
-                player
-                    .happiness
-                    .adjust_morale(self.effects.morale_change * 3.0);
-
-                // Good training still has a chance to improve behaviour
-                if positive && rand::random::<f32>() < self.effects.morale_change {
-                    player.behaviour.try_increase();
-                }
+            // Emit GoodTraining / PoorTraining strictly from the
+            // session-outcome model. Sessions whose outcome is neutral —
+            // a routine, expected-quality day — produce *no* training
+            // event so the player's history doesn't fill up with
+            // GoodTraining lines for every TeamShape or RestDay.
+            if let Some(outcome) = self.outcome.as_ref() {
+                Self::maybe_emit_training_event(
+                    player,
+                    outcome,
+                    self.effects.morale_change,
+                    current_date,
+                );
             }
         }
     }
-}
 
-struct TrainingContextBuilder {
-    positive: bool,
-    session_performance: f32,
-    training_performance_ema: f32,
-    professionalism: f32,
-    age: u8,
-    in_recovery: bool,
-    condition_pct: u32,
-    fatigue_change: f32,
-    has_recent_criticism: bool,
-    has_transfer_speculation: bool,
-    leadership: f32,
-}
+    fn maybe_emit_training_event(
+        player: &mut crate::Player,
+        outcome: &TrainingOutcomeBreakdown,
+        morale_change: f32,
+        current_date: chrono::NaiveDate,
+    ) {
+        // Hard gates — outcome quality, not session-type morale.
+        let raw = outcome.raw_score;
+        let delta = outcome.delta_from_baseline;
+        let age = DateUtils::age(player.birth_date, current_date);
+        let leadership = player.skills.mental.leadership;
+        let professionalism = player.attributes.professionalism;
+        let condition_pct = player.player_attributes.condition_percentage();
+        let in_recovery = player.player_attributes.is_in_recovery();
 
-impl TrainingContextBuilder {
-    fn build(self) -> TrainingEventContext {
-        let reason = self.pick_reason();
-        let mut ctx = TrainingEventContext::new(
-            reason,
-            self.session_performance,
-            self.training_performance_ema,
+        let high_effort = outcome.effort_score;
+        let physical_state = outcome.physical_state_score;
+
+        let positive_qualifies = (raw >= 14.0 && delta >= 1.5)
+            || raw >= 16.0
+            || (raw >= 13.5 && delta >= 2.0 && age <= 21)
+            || (raw >= 13.5 && age >= 30 && leadership >= 14.0);
+
+        let recovery_or_fatigue_cause = matches!(
+            outcome.primary_reason,
+            TrainingEventReason::StruggledWithIntensity
+                | TrainingEventReason::ReturningFromInjuryNotSharp
         );
-        if self.session_performance >= 14.0 {
-            ctx = ctx.with_evidence(TrainingEventEvidence::HighSessionPerformance);
+        let physically_compromised = condition_pct < 60 || in_recovery;
+        let attitude_failure = high_effort <= 7.0
+            && professionalism <= 7.0
+            && physical_state >= 10.0;
+        let distraction_failure = (player.happiness.morale < 35.0
+            || player.happiness.recent_events.iter().any(|e| {
+                e.days_ago <= 21
+                    && matches!(
+                        e.event_type,
+                        HappinessEventType::TransferRumour
+                            | HappinessEventType::AgentStirsInterest
+                            | HappinessEventType::TransferSpeculationDistracts
+                            | HappinessEventType::WantedByBiggerClub
+                            | HappinessEventType::InterestFromBiggerClub
+                    )
+            }))
+            && raw <= 8.0
+            && delta <= -2.0;
+
+        let negative_qualifies = (raw <= 6.5 && delta <= -1.5)
+            || raw <= 5.5
+            || attitude_failure
+            || distraction_failure;
+
+        // Block PoorTraining when fatigue is the actual cause but the
+        // reason machine somehow produced an attitude label — a tired
+        // player who failed an intense session must not be tagged poor
+        // attitude.
+        let block_poor_for_fatigue = !recovery_or_fatigue_cause
+            && physically_compromised
+            && raw > 5.5
+            && !attitude_failure;
+
+        let (event_type, magnitude) = if positive_qualifies && morale_change > 0.0 {
+            (HappinessEventType::GoodTraining, morale_change * 5.0)
+        } else if negative_qualifies && !block_poor_for_fatigue && morale_change < 0.0 {
+            (HappinessEventType::PoorTraining, morale_change * 5.0)
+        } else if recovery_or_fatigue_cause && raw <= 6.5 && morale_change < 0.0 {
+            (HappinessEventType::PoorTraining, morale_change * 5.0)
+        } else {
+            if morale_change.abs() > 0.001 {
+                player.happiness.adjust_morale(morale_change * 1.5);
+            }
+            return;
+        };
+
+        let positive = matches!(event_type, HappinessEventType::GoodTraining);
+        let mut training_ctx = TrainingEventContext::new(
+            outcome.primary_reason,
+            outcome.raw_score,
+            player.training.training_performance,
+        );
+        for ev in &outcome.evidence {
+            training_ctx = training_ctx.with_evidence(*ev);
         }
-        if self.session_performance <= 6.0 {
-            ctx = ctx.with_evidence(TrainingEventEvidence::LowSessionPerformance);
+        // PoorAttitude must never carry fatigue / recovery / overload
+        // evidence — copy would contradict itself.
+        if outcome.primary_reason == TrainingEventReason::PoorAttitude {
+            training_ctx.evidence.retain(|e| {
+                !matches!(
+                    e,
+                    TrainingEventEvidence::FatigueLimited
+                        | TrainingEventEvidence::RecoveryLimited
+                        | TrainingEventEvidence::Overloaded
+                )
+            });
         }
-        if self.fatigue_change > 100.0 {
-            ctx = ctx.with_evidence(TrainingEventEvidence::HighWorkload);
+
+        // Visible-event cooldown. Morale still moves on every session;
+        // only the timeline entry is suppressed when an event of the
+        // same type with the same primary reason fired recently. This
+        // keeps a chronic flashpoint (e.g. a player whose attitude is
+        // poor every week) from spamming the player's history.
+        let cooldown_days = Self::training_event_cooldown_days(
+            event_type.clone(),
+            outcome.primary_reason,
+        );
+        let suppressed = Self::recent_training_event_with_reason(
+            player,
+            event_type.clone(),
+            outcome.primary_reason,
+            cooldown_days,
+        );
+        if !suppressed {
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(magnitude),
+                HappinessEventScope::TrainingGround,
+            )
+            .with_training_context(training_ctx);
+            player.happiness.add_event_with_context(
+                event_type.clone(),
+                magnitude,
+                None,
+                happiness_ctx,
+            );
         }
-        if self.condition_pct < 60 {
-            ctx = ctx.with_evidence(TrainingEventEvidence::LowCondition);
+        player.happiness.adjust_morale(morale_change * 3.0);
+
+        if !positive
+            && outcome.primary_reason == TrainingEventReason::PoorAttitude
+            && morale_change.abs() > 0.4
+        {
+            player.behaviour.state = match player.behaviour.state {
+                crate::PersonBehaviourState::Good => crate::PersonBehaviourState::Normal,
+                crate::PersonBehaviourState::Normal => crate::PersonBehaviourState::Poor,
+                other => other,
+            };
         }
-        if self.has_recent_criticism {
-            ctx = ctx.with_evidence(TrainingEventEvidence::RecentlyDropped);
+        if positive && morale_change >= 0.4 {
+            player.behaviour.try_increase();
         }
-        if self.has_transfer_speculation {
-            ctx = ctx.with_evidence(TrainingEventEvidence::TransferSpeculation);
-        }
-        if self.in_recovery {
-            ctx = ctx.with_evidence(TrainingEventEvidence::InRecoveryPhase);
-        }
-        if self.professionalism >= 15.0 {
-            ctx = ctx.with_evidence(TrainingEventEvidence::HighProfessionalism);
-        }
-        if self.professionalism <= 7.0 {
-            ctx = ctx.with_evidence(TrainingEventEvidence::LowProfessionalism);
-        }
-        if self.age <= 21 {
-            ctx = ctx.with_evidence(TrainingEventEvidence::YouthDevelopmentTier);
-        }
-        if self.age >= 30 && self.leadership >= 14.0 {
-            ctx = ctx.with_evidence(TrainingEventEvidence::VeteranLeader);
-        }
-        ctx
     }
 
-    fn pick_reason(&self) -> TrainingEventReason {
-        if self.positive {
-            if self.in_recovery {
-                return TrainingEventReason::ReturningFromInjuryNotSharp;
-            }
-            if self.has_recent_criticism {
-                return TrainingEventReason::RespondedToCriticism;
-            }
-            if self.age <= 21 && self.session_performance >= 14.0 {
-                return TrainingEventReason::YoungImpressedStaff;
-            }
-            if self.age >= 30 && self.leadership >= 14.0 && self.session_performance >= 13.0 {
-                return TrainingEventReason::SettingStandards;
-            }
-            if self.professionalism >= 15.0 && self.session_performance >= 14.0 {
-                return TrainingEventReason::ExtraWorkAfterSession;
-            }
-            TrainingEventReason::RoutineGoodSession
-        } else {
-            if self.in_recovery {
-                return TrainingEventReason::ReturningFromInjuryNotSharp;
-            }
-            if self.condition_pct < 60 || self.fatigue_change > 100.0 {
-                return TrainingEventReason::StruggledWithIntensity;
-            }
-            if self.has_transfer_speculation {
-                return TrainingEventReason::DistractedByRumours;
-            }
-            if self.has_recent_criticism && self.session_performance <= 6.0 {
-                return TrainingEventReason::SharpAfterBeingLeftOut;
-            }
-            if self.professionalism <= 7.0 {
-                return TrainingEventReason::PoorAttitude;
-            }
-            TrainingEventReason::RoutineBadSession
+    /// Cooldown window (days) before another visible training event of
+    /// the same type+reason can fire. PoorAttitude is the longest so a
+    /// chronic low-pro player doesn't rack up weekly entries; the
+    /// fatigue / recovery branches sit slightly below the generic
+    /// poor/good cap so the player still gets occasional updates.
+    fn training_event_cooldown_days(
+        event_type: HappinessEventType,
+        reason: TrainingEventReason,
+    ) -> u16 {
+        match (event_type, reason) {
+            (HappinessEventType::PoorTraining, TrainingEventReason::PoorAttitude) => 14,
+            (HappinessEventType::PoorTraining, TrainingEventReason::StruggledWithIntensity) => 5,
+            (
+                HappinessEventType::PoorTraining,
+                TrainingEventReason::ReturningFromInjuryNotSharp,
+            ) => 7,
+            (HappinessEventType::PoorTraining, _) => 7,
+            (HappinessEventType::GoodTraining, _) => 7,
+            _ => 7,
         }
     }
+
+    fn recent_training_event_with_reason(
+        player: &crate::Player,
+        event_type: HappinessEventType,
+        reason: TrainingEventReason,
+        days: u16,
+    ) -> bool {
+        player.happiness.recent_events.iter().any(|e| {
+            e.event_type == event_type
+                && e.days_ago <= days
+                && e.context
+                    .as_ref()
+                    .and_then(|c| c.training_context.as_ref())
+                    .map(|tc| tc.reason == reason)
+                    .unwrap_or(false)
+        })
+    }
 }
+

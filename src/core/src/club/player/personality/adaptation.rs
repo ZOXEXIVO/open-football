@@ -4,9 +4,10 @@ use crate::club::player::language::Language;
 use crate::club::player::player::{ManagerPromiseKind, Player};
 use crate::club::{Person, PlayerPositionType};
 use crate::{
-    ContractEventContext, ContractEventEvidence, ContractEventKind, HappinessEventCause,
-    HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
-    HappinessEventSeverity, RoleStatusEventContext, RoleStatusKind,
+    CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, ContractEventContext,
+    ContractEventEvidence, ContractEventKind, HappinessEventCause, HappinessEventContext,
+    HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
+    PersonalAdaptationEventContext, PersonalAdaptationKind, RoleStatusEventContext, RoleStatusKind,
 };
 use chrono::NaiveDate;
 
@@ -115,6 +116,18 @@ pub struct PendingSigning {
     /// Destination club id — needed to check whether the signing is to one
     /// of the player's favorite clubs so the right shock event can fire.
     pub destination_club_id: u32,
+    /// True when the player carried a recent `WantsReturnHome` mood at
+    /// the moment the transfer was finalised. Drives
+    /// `HomeReturnOpportunity`-on-completion satisfaction events when
+    /// the destination is the player's home country / former / favourite
+    /// club.
+    pub had_return_home_desire: bool,
+    /// True when the player carried a recent `WantsEuropeanCompetition`
+    /// mood at the moment of the transfer.
+    pub had_european_desire: bool,
+    /// True when the player carried a recent `WantsCopaLibertadores`
+    /// mood at the moment of the transfer.
+    pub had_libertadores_desire: bool,
 }
 
 // All settlement-shock thresholds (ambition gap, dream-move surplus,
@@ -457,6 +470,140 @@ impl Player {
         if promise_horizon > 0 {
             self.record_promise(ManagerPromiseKind::PlayingTime, now, promise_horizon);
         }
+
+        // Career-desire satisfaction events. These run at the *new*
+        // club's first tick (after happiness was reset by the move) so
+        // they latch on top of the fresh state. Cooldowns prevent any
+        // duplicate emission if process_transfer_shock fires twice for
+        // the same signing (defensive guard — pending_signing is
+        // single-shot today).
+        self.emit_continental_satisfaction_on_signing(&pending, club_rep_0_to_1);
+        self.emit_home_return_satisfaction_on_signing(&pending, country_code);
+    }
+
+    /// Stage `ContinentalAmbitionSatisfied` when a player who carried a
+    /// recent European or Libertadores desire mood signs for a club at
+    /// a credible continental tier. Reads `pending_signing` flags
+    /// captured before happiness was reset.
+    fn emit_continental_satisfaction_on_signing(
+        &mut self,
+        pending: &PendingSigning,
+        club_rep_0_to_1: f32,
+    ) {
+        if !(pending.had_european_desire || pending.had_libertadores_desire) {
+            return;
+        }
+        // Conservative tier guard: club rep ≥ 0.55 (mid-table top-flight)
+        // is the floor for a credible "you got Europe" / "you got
+        // Libertadores" moment. Below that the move's a step-up at most.
+        if club_rep_0_to_1 < 0.55 {
+            return;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.continental_ambition_satisfied;
+        let mut desire_ctx = if pending.had_libertadores_desire {
+            CareerDesireEventContext::new(CareerDesireKind::CopaLibertadoresAmbition)
+        } else {
+            CareerDesireEventContext::new(CareerDesireKind::EuropeanCompetitionAmbition)
+        };
+        desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::HighAmbition);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationAdmiration,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_career_desire_context(desire_ctx)
+        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::ContinentalAmbitionSatisfied,
+            mag,
+            None,
+            happiness_ctx,
+            120,
+        );
+    }
+
+    /// Called when the player's club secures continental qualification
+    /// (Europe, Libertadores). Stages `ContinentalAmbitionSatisfied`
+    /// when the player has a recent matching desire mood — the team's
+    /// season delivered exactly what the player was asking for.
+    /// Cooldown 365d: at most one satisfaction event per season.
+    pub fn on_continental_qualification_satisfaction(&mut self) {
+        let european = self
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 240);
+        let libertadores = self
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsCopaLibertadores, 240);
+        if !(european || libertadores) {
+            return;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.continental_ambition_satisfied;
+        let mut desire_ctx = if libertadores {
+            CareerDesireEventContext::new(CareerDesireKind::CopaLibertadoresAmbition)
+        } else {
+            CareerDesireEventContext::new(CareerDesireKind::EuropeanCompetitionAmbition)
+        };
+        desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::HighAmbition);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationAdmiration,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_career_desire_context(desire_ctx)
+        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::ContinentalAmbitionSatisfied,
+            mag,
+            None,
+            happiness_ctx,
+            365,
+        );
+    }
+
+    /// Stage `HomeReturnOpportunity` when a player who carried a recent
+    /// `WantsReturnHome` mood signs for a club in their home country
+    /// (or a favourite club). The earlier "approach landed" emission
+    /// in `transfer_social` covers the *interest* moment; this one
+    /// covers the *signature* moment.
+    fn emit_home_return_satisfaction_on_signing(
+        &mut self,
+        pending: &PendingSigning,
+        country_code: &str,
+    ) {
+        if !pending.had_return_home_desire {
+            return;
+        }
+        // Either the destination is a favourite club (covers heritage
+        // / boyhood-club returns), or the local language matches the
+        // player's native — a reasonable proxy for "home-country move"
+        // when the country_id mapping isn't surfaced here.
+        let is_favourite = self.favorite_clubs.contains(&pending.destination_club_id);
+        let speaks_native = self.speaks_local_language(country_code)
+            && self.languages.iter().any(|l| l.is_native);
+        if !(is_favourite || speaks_native) {
+            return;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.home_return_opportunity;
+        let mut desire_ctx =
+            CareerDesireEventContext::new(CareerDesireKind::ReturnHomeAfterPoorAdaptation);
+        desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::HomeOrFavouriteLink);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::AdaptationIsolation,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_career_desire_context(desire_ctx)
+        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::HomeReturnOpportunity,
+            mag,
+            None,
+            happiness_ctx,
+            120,
+        );
     }
 
     fn emit_ambition_shock(&mut self, club_rep_0_to_1: f32, damp: f32) {
@@ -768,7 +915,256 @@ fn isolation_roll(player_id: u32, date: NaiveDate) -> f32 {
     frac.clamp(0.0, 0.999)
 }
 
+/// Inputs for chronic-adaptation-failure detection. Keeps the player
+/// helper free of world walks: the caller (Player::simulate via the
+/// transfer-desire context) collects continent / language / squad
+/// signals from `GlobalContext` once and feeds them through.
+#[derive(Debug, Clone, Copy)]
+pub struct AdaptationFailureSignals {
+    /// Continent of the player's nationality country.
+    pub player_nationality_continent_id: u32,
+    /// Continent of the player's current club country. 0 if unknown.
+    pub club_continent_id: u32,
+    /// True if club country == player nationality country.
+    pub club_in_home_country: bool,
+    /// True if the destination is one of the player's favourite clubs
+    /// (lifts the suppression bar — favourite-club moves don't fire
+    /// return-home unless adaptation is genuinely terrible).
+    pub destination_is_favourite: bool,
+    /// Compatriots / shared-language teammates currently in the squad.
+    /// Drives the `NoCompatriotSupport` evidence.
+    pub same_language_or_nationality_teammates: u8,
+    /// Pre-computed adaptation score (0..100) at emit time. Pass 0 if
+    /// the caller didn't compute it; the helper falls back to recent
+    /// isolation counts.
+    pub adaptation_score: f32,
+    /// Current `club_fit` morale axis. Drives `LowClubFit` evidence and
+    /// the suppression bar.
+    pub club_fit: f32,
+}
+
 impl Player {
+    /// Detect chronic post-settlement adaptation failure and emit a
+    /// `WantsReturnHome` mood (with `CareerDesireEventContext`). Fires
+    /// only after a fair window (60–120 days post-transfer) and is
+    /// suppressed for favourite-club moves / clear dream moves unless
+    /// adaptation is genuinely poor. Cooldown 60 days so the mood
+    /// doesn't spam the event log.
+    ///
+    /// Caller — typically `process_transfer_desire` from the weekly
+    /// tick — decides whether the cumulative mood justifies escalating
+    /// to `Req`. This helper just stages the *fact* on happiness; the
+    /// transfer-desire path reads the recent events.
+    pub fn process_chronic_adaptation_failure(
+        &mut self,
+        now: NaiveDate,
+        country_code: &str,
+        signals: &AdaptationFailureSignals,
+    ) -> bool {
+        // Honeymoon guard — settlement window plus a tail. The weakest
+        // bound (60 days) is the request requirement; the upper bound
+        // (no upper bound) lets the mood persist as long as the
+        // mismatch does, gated by cooldown.
+        let days_at_club = match self.days_since_transfer(now) {
+            Some(d) if d >= 60 => d,
+            _ => return false,
+        };
+
+        // Cooldown — 60 days between WantsReturnHome events on the same
+        // player. Short enough that weekly ticks can re-fire as the
+        // mood lingers, long enough to avoid spam.
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::WantsReturnHome, 60)
+        {
+            return false;
+        }
+
+        // Players in their home country never want to "return home".
+        if signals.club_in_home_country {
+            return false;
+        }
+
+        let speaks_local = self.speaks_local_language(country_code);
+        let adapt = self.attributes.adaptability.clamp(0.0, 20.0);
+        let prof = self.attributes.professionalism.clamp(0.0, 20.0);
+        // Both ids must be known — if the caller passed 0 for either,
+        // we can't claim the move crossed a continent boundary, so the
+        // signal is dropped to avoid false positives on foreign-country
+        // players whose nationality continent the caller couldn't
+        // resolve.
+        let different_continent = signals.club_continent_id != 0
+            && signals.player_nationality_continent_id != 0
+            && signals.club_continent_id != signals.player_nationality_continent_id;
+
+        // Repeated isolation events in the last 90 days — a chronic
+        // outsider, not a one-off bad fortnight. Filter out the
+        // companion `StillStrugglingToSettle` markers this helper itself
+        // emits below, otherwise the detector would feed itself: every
+        // fired WantsReturnHome would stage an isolation event that
+        // counts toward the *next* fire, ratcheting the mood up.
+        let recent_isolation_count = self
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                if e.event_type != HappinessEventType::FeelingIsolated || e.days_ago > 90 {
+                    return false;
+                }
+                // Drop our own companion markers — see emit site below.
+                let is_companion = e
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.personal_adaptation_context.as_ref())
+                    .map(|p| {
+                        matches!(
+                            p.kind,
+                            PersonalAdaptationKind::StillStrugglingToSettle
+                                | PersonalAdaptationKind::ReturnHomeAfterPoorAdaptation
+                        )
+                    })
+                    .unwrap_or(false);
+                !is_companion
+            })
+            .count() as u8;
+
+        let adaptation_score = signals.adaptation_score;
+        let poor_adaptation = adaptation_score > 0.0 && adaptation_score < 40.0;
+
+        // Score the situation. Each signal is a small positive weight;
+        // we fire once the cumulative weight clears the bar.
+        let mut score: f32 = 0.0;
+        if different_continent {
+            score += 2.0;
+        }
+        if !speaks_local {
+            score += 1.5;
+        }
+        if adapt <= 8.0 {
+            score += 1.5;
+        }
+        if signals.same_language_or_nationality_teammates == 0 {
+            score += 1.0;
+        }
+        if recent_isolation_count >= 2 {
+            score += 1.5;
+        }
+        if signals.club_fit <= -3.0 {
+            score += 1.0;
+        }
+        if poor_adaptation {
+            score += 2.0;
+        }
+        if self.happiness.morale < 35.0 {
+            score += 1.0;
+        }
+
+        // High professionalism delays acceptance of homesickness — pros
+        // grit through. Doesn't fully suppress.
+        if prof >= 16.0 {
+            score -= 1.0;
+        }
+        // High loyalty similarly buys patience.
+        let loyalty = self.attributes.loyalty.clamp(0.0, 20.0);
+        if loyalty >= 16.0 {
+            score -= 1.0;
+        }
+
+        // Favourite-club move: lift the bar — only the most extreme
+        // failures (very low adaptation, deeply negative morale) get
+        // through.
+        if signals.destination_is_favourite {
+            if !poor_adaptation || self.happiness.morale > 20.0 {
+                return false;
+            }
+            score -= 2.0;
+        }
+
+        // Threshold — five signal-points clears it. A foreign player
+        // with no language, no compatriots, low adaptability, and a
+        // few isolation events crosses this naturally; a settled
+        // foreign player with one or two checks does not.
+        if score < 5.0 {
+            return false;
+        }
+
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.wants_return_home;
+
+        let mut desire_ctx =
+            CareerDesireEventContext::new(CareerDesireKind::ReturnHomeAfterPoorAdaptation)
+                .with_days_at_club(days_at_club.max(0) as u32);
+        if adaptation_score > 0.0 {
+            desire_ctx = desire_ctx.with_adaptation_score(adaptation_score);
+        }
+        if different_continent {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::DifferentContinent);
+        }
+        if !speaks_local {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::NoLocalLanguage);
+        }
+        if adapt <= 8.0 {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::LowAdaptability);
+        }
+        if signals.same_language_or_nationality_teammates == 0 {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::NoCompatriotSupport);
+        }
+        if poor_adaptation {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::PoorAdaptationScore);
+        }
+        if recent_isolation_count >= 2 {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::RepeatedIsolation);
+        }
+        if signals.club_fit <= -3.0 {
+            desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::LowClubFit);
+        }
+
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::AdaptationIsolation,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_career_desire_context(desire_ctx)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+
+        // Also stage a `StillStrugglingToSettle` adaptation marker so
+        // the renderer's existing personal-adaptation surface keeps a
+        // contemporaneous "why" entry alongside the desire mood. Note
+        // the kind is `StillStrugglingToSettle`, not the desire kind —
+        // this companion must NOT feed back into the isolation count
+        // that drives this helper (see filter above).
+        let pactx = PersonalAdaptationEventContext::new(
+            PersonalAdaptationKind::StillStrugglingToSettle,
+            days_at_club.max(0) as u32,
+        )
+        .with_adaptability(self.attributes.adaptability)
+        .with_local_language(speaks_local);
+
+        self.happiness.add_event_with_context(
+            HappinessEventType::WantsReturnHome,
+            mag,
+            None,
+            happiness_ctx,
+        );
+        // Companion StillStrugglingToSettle adaptation marker — fires on
+        // a 30d cooldown so the player feed can show one "settling"
+        // anchor without the desire mood being duplicated every week.
+        let still_struggling_ctx = HappinessEventContext::new(
+            HappinessEventCause::AdaptationIsolation,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::DressingRoom,
+        )
+        .with_personal_adaptation_context(pactx);
+        let _ = self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::FeelingIsolated,
+            -1.0,
+            None,
+            still_struggling_ctx,
+            30,
+        );
+        true
+    }
+
     /// Post-settlement ongoing language check. A player who's been at a
     /// foreign club for years but never picked up the language keeps
     /// accruing small isolation hits — the dressing-room outsider model.

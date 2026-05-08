@@ -3,7 +3,7 @@ use crate::{
     ChangeType, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerTraining,
     RelationshipChange, Staff, Team, TeamTrainingResult,
 };
-use chrono::{Datelike, NaiveDateTime, Weekday};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Weekday};
 use std::collections::HashMap;
 
 /// Deterministic pseudo-random roll in `[0.0, 1.0)` for an unordered pair
@@ -69,10 +69,31 @@ impl TeamTraining {
         // Determine periodization phase based on season progress
         let phase = Self::determine_phase(date);
 
-        // Get or generate weekly plan
-        let weekly_plan = WeeklyTrainingPlan::generate_weekly_plan(
-            Self::get_next_match_day(team, date),
-            Self::get_previous_match_day(team, date),
+        // Build the day's plan from the real fixture window cached on
+        // the team by the country/league pipeline. Falls back to match
+        // history (and a Weekday-only path) when no upcoming fixture
+        // is available — keeping unit tests with no scheduled fixtures
+        // running cleanly.
+        let today = date.date();
+        let next_match_date = team.fixture_window.next_after(today);
+        let prev_match_date = team.fixture_window.previous_before(today).or_else(|| {
+            team.match_history
+                .items()
+                .iter()
+                .rev()
+                .find(|m| m.date.date() <= today)
+                .map(|m| m.date.date())
+        });
+        let recent_matches = if next_match_date.is_some() || prev_match_date.is_some() {
+            team.fixture_window.fixtures_within(today, 7) + Self::matches_last_14_days(team, date)
+        } else {
+            Self::matches_last_14_days(team, date)
+        };
+        let weekly_plan = WeeklyTrainingPlan::generate_for_date(
+            today,
+            prev_match_date,
+            next_match_date,
+            recent_matches,
             phase,
             &Self::get_coach_philosophy(coach),
         );
@@ -493,8 +514,15 @@ impl TeamTraining {
             }
         }
 
-        // Apply effects. Event emission only on magnitudes ≥ 0.5 to keep
-        // the player history readable — small drifts stay silent.
+        // Apply effects. Event emission thresholds chosen to match the
+        // bond/friction magnitude bands above:
+        //   bonding magnitudes land in 0.08..0.25 - emit at >= 0.20
+        //   friction magnitudes land in 0.10..0.35 - emit at >= 0.25
+        // A 14-day per-partner cooldown stops a chronic flashpoint pair
+        // from spamming the timeline every training week.
+        const BOND_EVENT_THRESHOLD: f32 = 0.20;
+        const FRICTION_EVENT_THRESHOLD: f32 = 0.25;
+        const PAIR_COOLDOWN_DAYS: u16 = 14;
         for eff in effects {
             if let Some(player) = team.players.find_mut(eff.from) {
                 let change_type = if eff.bond {
@@ -509,66 +537,74 @@ impl TeamTraining {
                     sim_date,
                 );
 
-                if eff.relation_change.abs() >= 0.5 {
-                    let snapshot = player.relations.get_player(eff.to).map(|r| {
-                        (r.level, r.trust, r.friendship, r.professional_respect)
-                    });
-                    if eff.bond {
-                        let mag = 0.6;
-                        let mut ctx = HappinessEventContext::new(
-                            HappinessEventCause::TrainingPartnership,
-                            HappinessEventSeverity::from_magnitude(mag),
-                            HappinessEventScope::TrainingGround,
-                        )
-                        .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
-                        .with_follow_up(HappinessEventFollowUp::TrendImproving);
-                        if let Some((level, trust, friendship, prof)) = snapshot {
-                            ctx = ctx
-                                .with_relationship_levels(level, level)
-                                .with_relationship_axes(trust, friendship, prof);
-                        }
-                        player.happiness.add_event_with_context(
-                            HappinessEventType::TeammateBonding,
-                            mag,
-                            Some(eff.to),
-                            ctx,
-                        );
-                    } else {
-                        let mag = -0.8;
-                        let mut ctx = HappinessEventContext::new(
-                            HappinessEventCause::TrainingFriction,
-                            HappinessEventSeverity::from_magnitude(mag),
-                            HappinessEventScope::TrainingGround,
-                        )
-                        .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
-                        .with_follow_up(HappinessEventFollowUp::LikelyToSettle)
-                        .with_teammate_conflict_context(TeammateConflictContext::new(
-                            TeammateConflictReason::TrainingStandards,
-                            ConflictLocation::TrainingGround,
-                        ));
-                        if let Some((level, trust, friendship, prof)) = snapshot {
-                            ctx = ctx
-                                .with_relationship_levels(level, level)
-                                .with_relationship_axes(trust, friendship, prof);
-                            if trust <= 35.0 {
-                                ctx = ctx.with_evidence(HappinessEventEvidence::LowTrust);
-                            }
-                            if level <= -25.0 {
-                                ctx = ctx.with_evidence(
-                                    HappinessEventEvidence::AlreadyStrainedRelationship,
-                                );
-                            } else if level.abs() < 25.0 {
-                                ctx =
-                                    ctx.with_evidence(HappinessEventEvidence::WeakExistingBond);
-                            }
-                        }
-                        player.happiness.add_event_with_context(
-                            HappinessEventType::ConflictWithTeammate,
-                            mag,
-                            Some(eff.to),
-                            ctx,
-                        );
+                let mag_abs = eff.relation_change.abs();
+                let qualifies = if eff.bond {
+                    mag_abs >= BOND_EVENT_THRESHOLD
+                } else {
+                    mag_abs >= FRICTION_EVENT_THRESHOLD
+                };
+                if !qualifies {
+                    continue;
+                }
+                let snapshot = player
+                    .relations
+                    .get_player(eff.to)
+                    .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
+                if eff.bond {
+                    let mag = 0.6;
+                    let mut ctx = HappinessEventContext::new(
+                        HappinessEventCause::TrainingPartnership,
+                        HappinessEventSeverity::from_magnitude(mag),
+                        HappinessEventScope::TrainingGround,
+                    )
+                    .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
+                    .with_follow_up(HappinessEventFollowUp::TrendImproving);
+                    if let Some((level, trust, friendship, prof)) = snapshot {
+                        ctx = ctx
+                            .with_relationship_levels(level, level)
+                            .with_relationship_axes(trust, friendship, prof);
                     }
+                    player.happiness.add_event_with_partner_context_and_cooldown(
+                        HappinessEventType::TeammateBonding,
+                        mag,
+                        eff.to,
+                        ctx,
+                        PAIR_COOLDOWN_DAYS,
+                    );
+                } else {
+                    let mag = -0.8;
+                    let mut ctx = HappinessEventContext::new(
+                        HappinessEventCause::TrainingFriction,
+                        HappinessEventSeverity::from_magnitude(mag),
+                        HappinessEventScope::TrainingGround,
+                    )
+                    .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
+                    .with_follow_up(HappinessEventFollowUp::LikelyToSettle)
+                    .with_teammate_conflict_context(TeammateConflictContext::new(
+                        TeammateConflictReason::TrainingStandards,
+                        ConflictLocation::TrainingGround,
+                    ));
+                    if let Some((level, trust, friendship, prof)) = snapshot {
+                        ctx = ctx
+                            .with_relationship_levels(level, level)
+                            .with_relationship_axes(trust, friendship, prof);
+                        if trust <= 35.0 {
+                            ctx = ctx.with_evidence(HappinessEventEvidence::LowTrust);
+                        }
+                        if level <= -25.0 {
+                            ctx = ctx
+                                .with_evidence(HappinessEventEvidence::AlreadyStrainedRelationship);
+                        } else if level.abs() < 25.0 {
+                            ctx = ctx.with_evidence(HappinessEventEvidence::WeakExistingBond);
+                        }
+                    }
+                    player.happiness.add_event_with_partner_context_and_cooldown(
+                        HappinessEventType::ConflictWithTeammate,
+                        mag,
+                        eff.to,
+                        ctx,
+                        PAIR_COOLDOWN_DAYS,
+                    );
                 }
             }
         }
@@ -586,16 +622,17 @@ impl TeamTraining {
         }
     }
 
-    fn get_next_match_day(_team: &Team, _date: NaiveDateTime) -> Option<Weekday> {
-        // This would check the actual match schedule
-        // For now, assume Saturday matches
-        Some(Weekday::Sat)
-    }
-
-    fn get_previous_match_day(_team: &Team, _date: NaiveDateTime) -> Option<Weekday> {
-        // This would check the actual match history
-        // For now, return None
-        None
+    /// Count competitive matches in the last 14 days from match
+    /// history. Used as a fallback when the league-side fixture window
+    /// has not been written yet (early simulation tick or unit test).
+    fn matches_last_14_days(team: &Team, date: NaiveDateTime) -> u8 {
+        let cutoff = date.date() - chrono::Duration::days(14);
+        team.match_history
+            .items()
+            .iter()
+            .filter(|m| m.date.date() > cutoff && m.date.date() <= date.date())
+            .count()
+            .min(u8::MAX as usize) as u8
     }
 
     fn get_coach_philosophy(coach: &Staff) -> CoachingPhilosophy {
@@ -708,10 +745,44 @@ pub enum PeriodizationPhase {
 }
 
 impl WeeklyTrainingPlan {
-    /// Generate a realistic weekly training plan based on match schedule
+    /// Generate a realistic weekly training plan based on match schedule.
+    /// Backwards-compatible shim — internally it calls the
+    /// context-aware path with `recent_matches = 0` (no congestion).
     pub fn generate_weekly_plan(
         next_match_day: Option<Weekday>,
         previous_match_day: Option<Weekday>,
+        phase: PeriodizationPhase,
+        coach_philosophy: &CoachingPhilosophy,
+    ) -> Self {
+        Self::generate_weekly_plan_with_context(
+            next_match_day,
+            previous_match_day,
+            0,
+            phase,
+            coach_philosophy,
+        )
+    }
+
+    /// Generate a weekly training plan with full fixture context.
+    ///
+    /// `recent_matches_14d` lets the plan dampen high-intensity work in
+    /// double-match weeks — pressing drills and Speed sessions get
+    /// replaced with technical / tactical work when the legs need
+    /// protection.
+    ///
+    /// The plan reads `previous_match_day` and `next_match_day` to
+    /// react to real match proximity:
+    ///   * MD+1 / MD+2 → recovery / video / light technical
+    ///   * MD-1        → set pieces / opponent specific / light
+    ///   * MD-2        → match preparation / team shape
+    ///   * 3+ days from a match → main physical / tactical load
+    ///
+    /// When no fixture is in range, the plan defaults to a full
+    /// training week rather than assuming a Saturday match.
+    pub fn generate_weekly_plan_with_context(
+        next_match_day: Option<Weekday>,
+        previous_match_day: Option<Weekday>,
+        recent_matches_14d: u8,
         phase: PeriodizationPhase,
         coach_philosophy: &CoachingPhilosophy,
     ) -> Self {
@@ -720,33 +791,27 @@ impl WeeklyTrainingPlan {
             .into_iter()
             .flatten()
             .collect();
+        let congested = recent_matches_14d >= 3;
 
-        // Monday - Recovery or moderate training
-        sessions.insert(
+        for &day in &[
             Weekday::Mon,
-            Self::monday_sessions(previous_match_day, phase),
-        );
-
-        // Tuesday - Main training day
-        sessions.insert(
             Weekday::Tue,
-            Self::tuesday_sessions(phase, coach_philosophy),
-        );
-
-        // Wednesday - Tactical/Technical focus
-        sessions.insert(Weekday::Wed, Self::wednesday_sessions(phase));
-
-        // Thursday - High intensity or recovery based on fixture
-        sessions.insert(Weekday::Thu, Self::thursday_sessions(next_match_day, phase));
-
-        // Friday - Match preparation or main training
-        sessions.insert(Weekday::Fri, Self::friday_sessions(next_match_day, phase));
-
-        // Saturday - Match day or training
-        sessions.insert(Weekday::Sat, Self::saturday_sessions(next_match_day));
-
-        // Sunday - Match day or rest
-        sessions.insert(Weekday::Sun, Self::sunday_sessions(next_match_day));
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+            Weekday::Sun,
+        ] {
+            let day_sessions = Self::sessions_for_day(
+                day,
+                next_match_day,
+                previous_match_day,
+                phase,
+                coach_philosophy,
+                congested,
+            );
+            sessions.insert(day, day_sessions);
+        }
 
         WeeklyTrainingPlan {
             sessions,
@@ -755,13 +820,30 @@ impl WeeklyTrainingPlan {
         }
     }
 
-    fn monday_sessions(
+    /// Pick the right band of sessions for `day` given fixture context.
+    /// Single dispatcher so every weekday respects the same MD-relative
+    /// rules — no fragile per-day branching.
+    fn sessions_for_day(
+        day: Weekday,
+        next_match: Option<Weekday>,
         previous_match: Option<Weekday>,
-        _phase: PeriodizationPhase,
+        phase: PeriodizationPhase,
+        philosophy: &CoachingPhilosophy,
+        congested: bool,
     ) -> Vec<TrainingSession> {
-        if previous_match == Some(Weekday::Sun) || previous_match == Some(Weekday::Sat) {
-            // Recovery after weekend match
-            vec![
+        // Match day itself — no training session.
+        if Some(day) == next_match {
+            return vec![];
+        }
+
+        // Days since previous match (1..6, or None when too far back).
+        let md_plus = previous_match.and_then(|m| Some(Self::weekday_distance(m, day)));
+        // Days until next match (1..6, or None when no fixture).
+        let md_minus = next_match.and_then(|m| Some(Self::weekday_distance(day, m)));
+
+        // MD+1 → recovery + video. Universally true regardless of weekday.
+        if md_plus == Some(1) {
+            return vec![
                 TrainingSession {
                     session_type: TrainingType::Recovery,
                     intensity: TrainingIntensity::VeryLight,
@@ -776,125 +858,30 @@ impl WeeklyTrainingPlan {
                     focus_positions: vec![],
                     participants: vec![],
                 },
-            ]
-        } else {
-            // Normal training
-            vec![
+            ];
+        }
+        // MD+2 → light recovery + technical maintenance.
+        if md_plus == Some(2) {
+            return vec![
                 TrainingSession {
-                    session_type: TrainingType::Endurance,
-                    intensity: TrainingIntensity::Moderate,
-                    duration_minutes: 60,
+                    session_type: TrainingType::LightRecovery,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 45,
                     focus_positions: vec![],
                     participants: vec![],
                 },
                 TrainingSession {
                     session_type: TrainingType::Passing,
-                    intensity: TrainingIntensity::Moderate,
-                    duration_minutes: 45,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 30,
                     focus_positions: vec![],
                     participants: vec![],
                 },
-            ]
+            ];
         }
-    }
-
-    fn tuesday_sessions(
-        phase: PeriodizationPhase,
-        philosophy: &CoachingPhilosophy,
-    ) -> Vec<TrainingSession> {
-        let base_intensity = match phase {
-            PeriodizationPhase::PreSeason => TrainingIntensity::High,
-            PeriodizationPhase::MidSeason => TrainingIntensity::Moderate,
-            PeriodizationPhase::LateSeason => TrainingIntensity::Light,
-            _ => TrainingIntensity::Moderate,
-        };
-
-        vec![
-            TrainingSession {
-                session_type: match philosophy.tactical_focus {
-                    TacticalFocus::Possession => TrainingType::Passing,
-                    TacticalFocus::Pressing => TrainingType::PressingDrills,
-                    TacticalFocus::Counter => TrainingType::TransitionPlay,
-                    _ => TrainingType::TeamShape,
-                },
-                intensity: base_intensity.clone(),
-                duration_minutes: 90,
-                focus_positions: vec![],
-                participants: vec![],
-            },
-            TrainingSession {
-                session_type: TrainingType::SetPieces,
-                intensity: TrainingIntensity::Light,
-                duration_minutes: 30,
-                focus_positions: vec![],
-                participants: vec![],
-            },
-        ]
-    }
-
-    fn wednesday_sessions(_phase: PeriodizationPhase) -> Vec<TrainingSession> {
-        vec![
-            TrainingSession {
-                session_type: TrainingType::Positioning,
-                intensity: TrainingIntensity::Moderate,
-                duration_minutes: 75,
-                focus_positions: vec![],
-                participants: vec![],
-            },
-            TrainingSession {
-                session_type: TrainingType::Shooting,
-                intensity: TrainingIntensity::Moderate,
-                duration_minutes: 45,
-                focus_positions: vec![
-                    PlayerPositionType::Striker,
-                    PlayerPositionType::ForwardCenter,
-                ],
-                participants: vec![],
-            },
-        ]
-    }
-
-    fn thursday_sessions(
-        next_match: Option<Weekday>,
-        _phase: PeriodizationPhase,
-    ) -> Vec<TrainingSession> {
-        if next_match == Some(Weekday::Sat) {
-            // Light preparation for Saturday match
-            vec![TrainingSession {
-                session_type: TrainingType::MatchPreparation,
-                intensity: TrainingIntensity::Light,
-                duration_minutes: 60,
-                focus_positions: vec![],
-                participants: vec![],
-            }]
-        } else {
-            // Full training session
-            vec![
-                TrainingSession {
-                    session_type: TrainingType::Speed,
-                    intensity: TrainingIntensity::High,
-                    duration_minutes: 45,
-                    focus_positions: vec![],
-                    participants: vec![],
-                },
-                TrainingSession {
-                    session_type: TrainingType::TeamShape,
-                    intensity: TrainingIntensity::Moderate,
-                    duration_minutes: 60,
-                    focus_positions: vec![],
-                    participants: vec![],
-                },
-            ]
-        }
-    }
-
-    fn friday_sessions(
-        next_match: Option<Weekday>,
-        _phase: PeriodizationPhase,
-    ) -> Vec<TrainingSession> {
-        if next_match == Some(Weekday::Sat) {
-            // Final preparation
-            vec![
+        // MD-1 → set pieces / opponent specific / light.
+        if md_minus == Some(1) {
+            return vec![
                 TrainingSession {
                     session_type: TrainingType::SetPieces,
                     intensity: TrainingIntensity::Light,
@@ -909,10 +896,311 @@ impl WeeklyTrainingPlan {
                     focus_positions: vec![],
                     participants: vec![],
                 },
-            ]
-        } else {
-            // Normal training
-            vec![
+            ];
+        }
+        // MD-2 → match preparation / team shape.
+        if md_minus == Some(2) {
+            return vec![
+                TrainingSession {
+                    session_type: TrainingType::MatchPreparation,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 60,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::TeamShape,
+                    intensity: TrainingIntensity::Moderate,
+                    duration_minutes: 45,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+            ];
+        }
+
+        // Otherwise — at least 3 days from any match — run the main
+        // physical / tactical load week, dampened in congested periods.
+        Self::main_load_sessions(day, phase, philosophy, congested)
+    }
+
+    /// Whole-day distance between two weekdays in the forward direction
+    /// (Mon-Wed = 2, Sat-Mon = 2, Sat-Sat = 7).
+    fn weekday_distance(from: Weekday, to: Weekday) -> u8 {
+        let f = from.num_days_from_monday() as i32;
+        let t = to.num_days_from_monday() as i32;
+        let mut d = t - f;
+        if d <= 0 {
+            d += 7;
+        }
+        d as u8
+    }
+
+    /// Generate a plan whose `today` slot is computed from real
+    /// calendar distance to the next/previous fixture, and whose other
+    /// weekday slots fall back to the standard main-load layout. The
+    /// production training pipeline only consumes today's slot, so the
+    /// other days are inspectable in tests but never executed against
+    /// a fictional fixture.
+    pub fn generate_for_date(
+        today: NaiveDate,
+        previous_match: Option<NaiveDate>,
+        next_match: Option<NaiveDate>,
+        fixtures_within_7d: u8,
+        phase: PeriodizationPhase,
+        philosophy: &CoachingPhilosophy,
+    ) -> Self {
+        let mut sessions = HashMap::new();
+        let match_days = vec![
+            next_match.map(|d| d.weekday()),
+            previous_match.map(|d| d.weekday()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        // Two competitive matches inside any rolling 7-day window is
+        // the canonical congestion threshold for top-flight schedules.
+        let congested = fixtures_within_7d >= 2;
+
+        let today_sessions = Self::sessions_for_real_date(
+            today,
+            previous_match,
+            next_match,
+            phase,
+            philosophy,
+            congested,
+        );
+        for &day in &[
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+            Weekday::Sun,
+        ] {
+            if day == today.weekday() {
+                sessions.insert(day, today_sessions.clone());
+            } else {
+                sessions.insert(
+                    day,
+                    Self::main_load_sessions(day, phase, philosophy, congested),
+                );
+            }
+        }
+
+        WeeklyTrainingPlan {
+            sessions,
+            match_days,
+            periodization_phase: phase,
+        }
+    }
+
+    /// Pick the right band of sessions for `today` based on real
+    /// calendar distance to the next/previous fixture. Strict on the
+    /// "match day = no training" rule, so a kickoff date never picks
+    /// up a phantom session.
+    fn sessions_for_real_date(
+        today: NaiveDate,
+        previous_match: Option<NaiveDate>,
+        next_match: Option<NaiveDate>,
+        phase: PeriodizationPhase,
+        philosophy: &CoachingPhilosophy,
+        congested: bool,
+    ) -> Vec<TrainingSession> {
+        if Some(today) == next_match {
+            return vec![];
+        }
+        let md_plus = previous_match
+            .map(|d| (today - d).num_days())
+            .filter(|n| *n >= 0);
+        let md_minus = next_match
+            .map(|d| (d - today).num_days())
+            .filter(|n| *n > 0);
+
+        if md_plus == Some(1) {
+            return vec![
+                TrainingSession {
+                    session_type: TrainingType::Recovery,
+                    intensity: TrainingIntensity::VeryLight,
+                    duration_minutes: 45,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::VideoAnalysis,
+                    intensity: TrainingIntensity::VeryLight,
+                    duration_minutes: 30,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+            ];
+        }
+        if md_plus == Some(2) {
+            return vec![
+                TrainingSession {
+                    session_type: TrainingType::LightRecovery,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 45,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::Passing,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 30,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+            ];
+        }
+        if md_minus == Some(1) {
+            return vec![
+                TrainingSession {
+                    session_type: TrainingType::SetPieces,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 30,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::OpponentSpecific,
+                    intensity: TrainingIntensity::VeryLight,
+                    duration_minutes: 45,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+            ];
+        }
+        if md_minus == Some(2) {
+            return vec![
+                TrainingSession {
+                    session_type: TrainingType::MatchPreparation,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 60,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::TeamShape,
+                    intensity: TrainingIntensity::Moderate,
+                    duration_minutes: 45,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+            ];
+        }
+        // 3+ days from any match - run the main load.
+        Self::main_load_sessions(today.weekday(), phase, philosophy, congested)
+    }
+
+    /// Default load week — used when no fixture is within ±2 days. The
+    /// `congested` flag drops Speed / Pressing in favour of technical
+    /// work to protect a tired squad.
+    fn main_load_sessions(
+        day: Weekday,
+        phase: PeriodizationPhase,
+        philosophy: &CoachingPhilosophy,
+        congested: bool,
+    ) -> Vec<TrainingSession> {
+        let base = match phase {
+            PeriodizationPhase::PreSeason => TrainingIntensity::High,
+            PeriodizationPhase::MidSeason => TrainingIntensity::Moderate,
+            PeriodizationPhase::LateSeason => TrainingIntensity::Light,
+            PeriodizationPhase::OffSeason => TrainingIntensity::VeryLight,
+            _ => TrainingIntensity::Moderate,
+        };
+        match day {
+            Weekday::Mon => vec![
+                TrainingSession {
+                    session_type: TrainingType::Endurance,
+                    intensity: base.clone(),
+                    duration_minutes: 60,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::Passing,
+                    intensity: TrainingIntensity::Moderate,
+                    duration_minutes: 45,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+            ],
+            Weekday::Tue => vec![
+                TrainingSession {
+                    session_type: match philosophy.tactical_focus {
+                        TacticalFocus::Possession => TrainingType::Passing,
+                        TacticalFocus::Pressing => {
+                            if congested {
+                                TrainingType::Positioning
+                            } else {
+                                TrainingType::PressingDrills
+                            }
+                        }
+                        TacticalFocus::Counter => TrainingType::TransitionPlay,
+                        _ => TrainingType::TeamShape,
+                    },
+                    intensity: if congested {
+                        TrainingIntensity::Light
+                    } else {
+                        base.clone()
+                    },
+                    duration_minutes: 90,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::SetPieces,
+                    intensity: TrainingIntensity::Light,
+                    duration_minutes: 30,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+            ],
+            Weekday::Wed => vec![
+                TrainingSession {
+                    session_type: TrainingType::Positioning,
+                    intensity: TrainingIntensity::Moderate,
+                    duration_minutes: 75,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::Shooting,
+                    intensity: TrainingIntensity::Moderate,
+                    duration_minutes: 45,
+                    focus_positions: vec![
+                        PlayerPositionType::Striker,
+                        PlayerPositionType::ForwardCenter,
+                    ],
+                    participants: vec![],
+                },
+            ],
+            Weekday::Thu => vec![
+                TrainingSession {
+                    session_type: if congested {
+                        TrainingType::BallControl
+                    } else {
+                        TrainingType::Speed
+                    },
+                    intensity: if congested {
+                        TrainingIntensity::Moderate
+                    } else {
+                        TrainingIntensity::High
+                    },
+                    duration_minutes: 45,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+                TrainingSession {
+                    session_type: TrainingType::TeamShape,
+                    intensity: TrainingIntensity::Moderate,
+                    duration_minutes: 60,
+                    focus_positions: vec![],
+                    participants: vec![],
+                },
+            ],
+            Weekday::Fri => vec![
                 TrainingSession {
                     session_type: TrainingType::BallControl,
                     intensity: TrainingIntensity::Moderate,
@@ -921,43 +1209,38 @@ impl WeeklyTrainingPlan {
                     participants: vec![],
                 },
                 TrainingSession {
-                    session_type: TrainingType::TransitionPlay,
-                    intensity: TrainingIntensity::High,
+                    session_type: if congested {
+                        TrainingType::Passing
+                    } else {
+                        TrainingType::TransitionPlay
+                    },
+                    intensity: if congested {
+                        TrainingIntensity::Light
+                    } else {
+                        TrainingIntensity::High
+                    },
                     duration_minutes: 45,
                     focus_positions: vec![],
                     participants: vec![],
                 },
-            ]
-        }
-    }
-
-    fn saturday_sessions(next_match: Option<Weekday>) -> Vec<TrainingSession> {
-        if next_match == Some(Weekday::Sat) {
-            vec![] // Match day
-        } else {
-            vec![TrainingSession {
+            ],
+            Weekday::Sat => vec![TrainingSession {
                 session_type: TrainingType::MatchPreparation,
                 intensity: TrainingIntensity::High,
                 duration_minutes: 90,
                 focus_positions: vec![],
                 participants: vec![],
-            }]
-        }
-    }
-
-    fn sunday_sessions(next_match: Option<Weekday>) -> Vec<TrainingSession> {
-        if next_match == Some(Weekday::Sun) {
-            vec![] // Match day
-        } else {
-            vec![TrainingSession {
+            }],
+            Weekday::Sun => vec![TrainingSession {
                 session_type: TrainingType::RestDay,
                 intensity: TrainingIntensity::VeryLight,
                 duration_minutes: 0,
                 focus_positions: vec![],
                 participants: vec![],
-            }]
+            }],
         }
     }
+
 }
 
 // ============== Training Effects System ==============

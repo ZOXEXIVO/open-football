@@ -6,7 +6,9 @@ use crate::club::player::agent::PlayerAgent;
 use crate::club::player::calculators::{
     ContractValuation, ValuationContext, squad_status_wage_factor,
 };
-use crate::club::player::events::transfer_social::TransferInterestSignal;
+use crate::club::player::events::transfer_social::{
+    TransferContinentalPath, TransferInterestSignal,
+};
 use crate::country::result::CountryResult;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferWindowManager;
@@ -154,13 +156,23 @@ impl CountryResult {
         let interested_league_id = buying_club
             .and_then(|c| c.teams.teams.first().and_then(|t| t.league_id));
         let buying_country_id = country.id;
+        let seller_country_id = neg_data.selling_country_id.unwrap_or(country.id);
         let is_home_country = player.country_id == buying_country_id;
+        let is_seller_in_home_country = player.country_id == seller_country_id;
         let is_former_club = player
             .sold_from
             .as_ref()
             .map(|(cid, _)| *cid == neg_data.buying_club_id)
             .unwrap_or(false);
         let is_rival = selling_club.is_rival(neg_data.buying_club_id);
+        let buyer_has_continental_path = BuyerContinentalPathHint {
+            league_reputation: neg_data.buying_league_reputation,
+        }
+        .is_on_path();
+        let buyer_competition_path = BuyerContinentalPathHint {
+            league_reputation: neg_data.buying_league_reputation,
+        }
+        .competition_path(country.continent_id);
         let mut sig = TransferInterestSignal {
             interested_club_id: neg_data.buying_club_id,
             interested_league_id,
@@ -173,7 +185,12 @@ impl CountryResult {
             repeated_attention,
             is_rival,
             is_home_country,
+            is_seller_in_home_country,
             is_former_club,
+            buyer_country_id: country.id,
+            buyer_continent_id: country.continent_id,
+            buyer_has_continental_path,
+            buyer_competition_path,
         };
         // Light helper: keep the variable mutable in case future calls
         // want to amend it before passing to the player.
@@ -1078,6 +1095,48 @@ impl CountryResult {
             1.0
         } else {
             1.0 - (days_left as f32 - 1.0) / 13.0
+        }
+    }
+}
+
+/// Coarse "is this buying club on a credible continental qualification
+/// path?" hint passed into `TransferInterestSignal`. Built from the
+/// buying club's league reputation only — the negotiation pipeline
+/// doesn't carry per-club continental cup state, so the hint stays
+/// reputation-driven on purpose. Threshold tuning is intentionally
+/// narrower than the desire-context heuristic on the player side
+/// because we have less information here (no league position).
+pub struct BuyerContinentalPathHint {
+    pub league_reputation: u16,
+}
+
+impl BuyerContinentalPathHint {
+    /// True when the buyer's league sits at a level where mid-table
+    /// finishers still see continental cup minutes.
+    pub fn is_on_path(&self) -> bool {
+        self.league_reputation >= 6500
+    }
+
+    /// Map league reputation × continent to a coarse continental tier
+    /// the buyer can offer the player. Returns `None` for non-European
+    /// non-South-American leagues — those don't carry the "ambition
+    /// satisfaction" semantics on the new opportunity kinds.
+    pub fn competition_path(&self, continent_id: u32) -> Option<TransferContinentalPath> {
+        const EUROPE: u32 = 1;
+        const SOUTH_AMERICA: u32 = 3;
+        match continent_id {
+            EUROPE => Some(match self.league_reputation {
+                r if r >= 8500 => TransferContinentalPath::EliteEurope,
+                r if r >= 7000 => TransferContinentalPath::EuropaLeague,
+                r if r >= 5500 => TransferContinentalPath::ConferenceLeague,
+                _ => return None,
+            }),
+            SOUTH_AMERICA => Some(match self.league_reputation {
+                r if r >= 6500 => TransferContinentalPath::Libertadores,
+                r if r >= 4500 => TransferContinentalPath::Sudamericana,
+                _ => return None,
+            }),
+            _ => None,
         }
     }
 }
