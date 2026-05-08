@@ -4023,22 +4023,48 @@ a:link, a:visited, a:hover, a:active {
     }
 }
 
-/* Phones — stack everything in a single column. */
+/* Phones — Machine spans full width on its own row; Countries/Clubs/
+   Players share one row of three with shrunken icons so icon+text still
+   fit horizontally inside the narrow columns. */
 @media (max-width: 480px) {
     .fm-info-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+    }
+    .fm-info-tile-machine {
+        grid-column: 1 / -1;
     }
     .fm-info-tile {
-        flex-direction: column;
-        align-items: flex-start;
         gap: 8px;
+        padding: 8px 9px;
+    }
+    .fm-info-tile-icon {
+        width: 26px;
+        height: 26px;
+        flex: 0 0 26px;
+        font-size: 11px;
+        border-radius: 5px;
+    }
+    .fm-info-tile-machine {
+        gap: 10px;
         padding: 10px;
     }
+    .fm-info-tile-machine .fm-info-tile-icon {
+        width: 30px;
+        height: 30px;
+        flex: 0 0 30px;
+        font-size: 12px;
+    }
     .fm-info-tile-value {
-        font-size: 18px;
+        font-size: 15px;
+    }
+    .fm-info-tile-label {
+        margin-top: 3px;
+        font-size: 9px;
+        letter-spacing: 0.6px;
     }
     .fm-info-machine-value {
-        font-size: 14px;
+        font-size: 13px;
         white-space: normal;
     }
 }
@@ -7814,15 +7840,16 @@ a:link, a:visited, a:hover, a:active {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    padding: 6px 4px 14px;
     gap: 12px;
+    padding: 10px 31px 12px;
 }
 
 .fm-aw-month-label {
-    font-size: 16px;
+    font-size: 13px;
     font-weight: 700;
     color: #d0d6dc;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
 }
 
 .fm-aw-month-count {
@@ -7831,6 +7858,7 @@ a:link, a:visited, a:hover, a:active {
     color: #6b7580;
     text-transform: uppercase;
     letter-spacing: 0.6px;
+    font-variant-numeric: tabular-nums;
 }
 
 .fm-aw-stat-grid {

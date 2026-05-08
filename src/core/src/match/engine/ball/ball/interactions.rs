@@ -339,6 +339,12 @@ impl Ball {
         self.record_touch(blocker_id, blocker_team, tick, false);
         self.offside_snapshot = None;
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
+        // Dedicated Blocked event so the block credit can't leak into a
+        // separate Intercepted that happens to share the same tick — the
+        // ordering of events in `EventCollection` is no longer load-
+        // bearing for stat correctness.
+        let block_position = self.position;
+        events.add_ball_event(BallEvent::Blocked(blocker_id, block_position));
 
         if roll < p_controlled {
             // Clean block — defender gets the ball at his feet.
@@ -350,6 +356,14 @@ impl Ball {
             return;
         }
 
+        // Deflection branches below leave the ball loose (no owner) and
+        // do NOT emit `Intercepted` — block credit was already booked
+        // via the dedicated `Blocked` event above. Emitting `Intercepted`
+        // here would double-credit (interception + block), and worse,
+        // its `ClaimBall` follow-up would force ownership onto a
+        // defender who in physics terms hasn't actually picked the ball
+        // up. Possession is decided by whoever claims the loose ball
+        // next, not by the block itself.
         if roll < p_corner {
             // Deflection wide — push the ball toward the defender's own
             // endline so it crosses out of play. The endline resolver
@@ -374,7 +388,6 @@ impl Ball {
             self.current_owner = None;
             self.flags.in_flight_state = 30;
             self.claim_cooldown = 0;
-            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
             return;
         }
 
@@ -394,7 +407,6 @@ impl Ball {
             self.current_owner = None;
             self.flags.in_flight_state = 25;
             self.claim_cooldown = 0;
-            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
             return;
         }
 
@@ -408,7 +420,6 @@ impl Ball {
             self.current_owner = None;
             self.flags.in_flight_state = 20;
             self.claim_cooldown = 0;
-            events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
             return;
         }
 
@@ -423,7 +434,6 @@ impl Ball {
         self.current_owner = None;
         self.flags.in_flight_state = 25;
         self.claim_cooldown = 0;
-        events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
     }
 
     /// Goalkeeper save check. Runs during shot flight: when the ball

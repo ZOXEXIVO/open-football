@@ -18,6 +18,7 @@ pub mod set_pieces;
 pub mod state;
 pub mod sub_scoring;
 pub mod substitutions;
+pub mod zones;
 
 #[cfg(test)]
 mod intelligence_tests;
@@ -49,6 +50,7 @@ pub use psychology::{
     team_leadership_score,
 };
 pub use rating::*;
+pub use zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
 pub use raycast::*;
 pub use referee::{ContactLocation, FoulCallContext, RefereeProfile};
 pub use result::*;

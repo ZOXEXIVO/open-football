@@ -7,6 +7,7 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::PlayerPositionType;
 use core::utils::DateUtils;
 use serde::Deserialize;
 
@@ -47,6 +48,9 @@ pub struct FreeAgentPlayerDto {
     pub age: u8,
     pub current_ability: u8,
     pub potential_ability: u8,
+    /// Primary position used to bucket players in the squad-style sort
+    /// (GK → DF → MF → FW). Not rendered — purely a sort key.
+    pub position_sort: PlayerPositionType,
 }
 
 pub async fn country_free_agents_action(
@@ -109,11 +113,17 @@ pub async fn country_free_agents_action(
                 age: DateUtils::age(player.birth_date, now),
                 current_ability: PotentialStarsView::current(player),
                 potential_ability: PotentialStarsView::potential_absolute(player),
+                position_sort: player.position(),
             }
         })
         .collect();
 
-    players.sort_by(|a, b| b.current_ability.cmp(&a.current_ability));
+    players.sort_by(|a, b| {
+        a.position_sort
+            .partial_cmp(&b.position_sort)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.current_ability.cmp(&a.current_ability))
+    });
 
     let current_path = format!(
         "/{}/countries/{}/free-agents",

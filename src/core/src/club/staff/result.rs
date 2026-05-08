@@ -3,10 +3,10 @@ use crate::simulator::SimulatorData;
 use crate::{
     ChangeType, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
     HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
-    HealthIssue, ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic,
-    Player, PlayerAcceptance, RelationshipChange, RelationshipEvent, ResignationReason,
-    StaffContractResult, StaffMoraleEvent, StaffTrainingResult, StaffWarning, SupportEventContext,
-    SupportMatchPhase, SupportSetting, SupportSource, SupportTrigger,
+    HealthIssue, ManagerCriticismReason, ManagerInteractionEventContext, ManagerInteractionTone,
+    ManagerInteractionTopic, Player, PlayerAcceptance, RelationshipChange, RelationshipEvent,
+    ResignationReason, StaffContractResult, StaffMoraleEvent, StaffTrainingResult, StaffWarning,
+    SupportEventContext, SupportMatchPhase, SupportSetting, SupportSource, SupportTrigger,
 };
 
 pub struct StaffCollectionResult {
@@ -135,13 +135,15 @@ impl StaffResult {
                             ManagerInteractionTone::Stern,
                             PlayerAcceptance::Resented,
                         )
-                        .with_manager_staff_id(self.staff_id);
+                        .with_manager_staff_id(self.staff_id)
+                        .with_criticism_reason(ManagerCriticismReason::IgnoredTacticalInstruction);
                         let ctx = HappinessEventContext::new(
                             HappinessEventCause::TacticalDisagreement,
                             HappinessEventSeverity::Moderate,
                             HappinessEventScope::TrainingGround,
                         )
-                        .with_manager_interaction_context(mctx);
+                        .with_manager_interaction_context(mctx)
+                        .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
                         player.happiness.add_event_with_context(
                             HappinessEventType::ManagerCriticism,
                             -2.0,

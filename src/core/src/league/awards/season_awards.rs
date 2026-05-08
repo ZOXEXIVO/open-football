@@ -28,7 +28,7 @@ pub const SEASON_MAX_RETAINED: usize = 20;
 pub const YEAR_MAX_RETAINED: usize = 20;
 
 /// One spot in a team-of-the-week selection. Position group is preserved
-/// so the UI can render the XI in a 1-4-3-3 layout without re-classifying.
+/// so the UI can render the XI in a 1-4-4-2 layout without re-classifying.
 #[derive(Debug, Clone)]
 pub struct TeamOfTheWeekSlot {
     pub player_id: u32,
@@ -410,7 +410,7 @@ impl AwardAggregator {
     }
 }
 
-/// Team of the Week selector. Picks 1 GK + 4 DEF + 3 MID + 3 FWD.
+/// Team of the Week selector. Picks 1 GK + 4 DEF + 4 MID + 2 FWD.
 pub struct TeamOfTheWeekSelector;
 
 impl TeamOfTheWeekSelector {

@@ -1,5 +1,6 @@
 ﻿use crate::PlayerFieldPositionGroup;
 use crate::league::LeagueMatch;
+use crate::r#match::engine::zones::ZoneStats;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::squad::OmittedPlayer;
 use crate::r#match::{MatchSquad, ResultMatchPositionData};
@@ -80,6 +81,16 @@ pub struct PlayerMatchEndStats {
     /// (GK) Post-shot xG faced minus goals conceded. Positive values
     /// indicate above-expectation shot-stopping.
     pub xg_prevented: f32,
+    /// Offside calls against this player.
+    pub offsides: u16,
+    /// Auto-goals scored by this player. Treated as a -1.0 base
+    /// penalty in the rating with an extra -0.30 because the OG sits
+    /// inside the player's own goal mouth.
+    pub own_goals: u16,
+    /// Per-zone counters mirrored from `MatchPlayerStatistics`. Used
+    /// by the rating helper to apply zone-aware multipliers without
+    /// re-deriving the action stream.
+    pub zone_stats: ZoneStats,
 }
 
 #[derive(Debug, Clone)]

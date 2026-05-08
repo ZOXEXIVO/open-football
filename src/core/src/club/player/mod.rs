@@ -24,6 +24,7 @@ pub use core::{builder, collection, context, player, result, utils};
 pub use events::{AwardReputationInput, AwardReputationKind};
 pub use personality::{adaptation, behaviour_config, decisions, interaction, language, rapport};
 pub use squad::{plan, status};
+pub use transfer::free_agent_market;
 
 pub use attributes::*;
 pub use builder::*;

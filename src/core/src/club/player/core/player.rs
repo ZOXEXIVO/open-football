@@ -157,6 +157,13 @@ pub struct Player {
     /// Visibility narrowed to `pub(crate)` — read via `Player::is_retired()`.
     /// Mutation is internal (set by end-of-season retirement processing).
     pub(crate) retired: bool,
+
+    /// Durable market-state snapshot kept while the player is a free
+    /// agent. Read via `Player::free_agent_state()`. Mutation is owner-
+    /// side via `on_release` / `on_offer_received` / `clear_free_agent_state`
+    /// — defined in `crate::club::player::transfer::free_agent_market`.
+    pub(crate) free_agent_state:
+        Option<crate::club::player::transfer::free_agent_market::FreeAgentMarketState>,
 }
 
 /// What the manager committed to. Each variant carries everything the

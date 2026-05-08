@@ -211,6 +211,7 @@ impl NationalTeam {
             load: PlayerLoad::new(),
             pending_contract_ask: None,
             last_intl_caps_paid: 0,
+            free_agent_state: None,
         }
     }
 }

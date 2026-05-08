@@ -1,4 +1,8 @@
 use crate::PlayerFieldPositionGroup;
+use crate::PlayerSquadStatus;
+use crate::club::player::calculators::WageCalculator;
+use crate::country::result::transfers::free_agent_market_calc::FreeAgentMarketCalculator;
+use crate::utils::IntegerUtils;
 use crate::ai::{AiBatchProcessor, PendingAiRequest};
 use crate::club::ai::apply_ai_responses;
 use crate::club::board::manager_market;
@@ -22,10 +26,10 @@ use crate::transfers::TransferPool;
 use crate::utils::DateUtils;
 use crate::utils::random::engine as rng_engine;
 use crate::{
-    AwardReputationInput, AwardReputationKind, HappinessEventType, Player, RecognitionEventContext,
-    RecognitionEventKind, Staff, TeamInfo,
+    AwardReputationInput, AwardReputationKind, HappinessEventType, Person, Player,
+    RecognitionEventContext, RecognitionEventKind, Staff, TeamInfo,
 };
-use chrono::{Datelike, Duration, NaiveDateTime, Weekday};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Weekday};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
@@ -197,6 +201,9 @@ impl FootballSimulator {
         // both.
         if today.day() == 1 {
             settle_parent_residual_loan_wages(data);
+            // Long-unemployed free agents eventually hang up the boots.
+            // Monthly check, gated internally on `free_since` >= 12mo.
+            data.process_free_agent_retirements(today);
         }
 
         // Global competitions (Champions League, World Cup, etc.)
@@ -565,6 +572,7 @@ impl SimulatorData {
     /// `dirty_player_index` so the next index rebuild picks up the moves.
     pub fn sweep_released_to_free_agents(&mut self) {
         use crate::PlayerStatusType;
+        use crate::club::player::transfer::ReleaseContext;
         use crate::shared::{Currency, CurrencyValue};
         use crate::transfers::{CompletedTransfer, TransferType};
 
@@ -574,6 +582,19 @@ impl SimulatorData {
             .par_iter_mut()
             .flat_map(|continent| continent.countries.par_iter_mut())
             .flat_map_iter(|country| {
+                // League reputation is needed by `on_release` so the
+                // player carries an accurate market-state snapshot into
+                // the free-agent pool. Pre-collect once per country —
+                // immutable read before the mutable club iteration
+                // takes the borrow.
+                let league_reputations: std::collections::HashMap<u32, u16> = country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .map(|l| (l.id, l.reputation))
+                    .collect();
+                let country_id = country.id;
+                let country_reputation = country.reputation;
                 let mut released_in_country: Vec<Player> = Vec::new();
                 let mut new_history: Vec<CompletedTransfer> = Vec::new();
                 for club in &mut country.clubs {
@@ -581,6 +602,11 @@ impl SimulatorData {
                     for team in &mut club.teams.teams {
                         let team_id = team.id;
                         let team_name = team.name.clone();
+                        let team_reputation_world = team.reputation.world;
+                        let team_league_reputation = team
+                            .league_id
+                            .and_then(|lid| league_reputations.get(&lid).copied())
+                            .unwrap_or(country_reputation);
                         let candidates: Vec<(u32, String, bool)> = team
                             .players
                             .players
@@ -593,7 +619,7 @@ impl SimulatorData {
                             })
                             .collect();
                         for (id, player_name, released_early) in candidates {
-                            if let Some(p) = team.players.take_player(&id) {
+                            if let Some(mut p) = team.players.take_player(&id) {
                                 let reason = if released_early {
                                     "dec_reason_released_free".to_string()
                                 } else {
@@ -614,6 +640,35 @@ impl SimulatorData {
                                     )
                                     .with_reason(reason),
                                 );
+                                // Stamp the player's market-state
+                                // snapshot at the moment they enter the
+                                // pool. `last_salary` is unrecoverable
+                                // here (the contract was already cleared
+                                // upstream), so seed from the wage
+                                // calculator using the team / league
+                                // tiers as a faithful replacement.
+                                let last_squad_status =
+                                    PlayerSquadStatus::FirstTeamSquadRotation;
+                                let club_score =
+                                    (team_reputation_world as f32 / 10_000.0).clamp(0.0, 1.0);
+                                let last_salary = WageCalculator::expected_annual_wage(
+                                    &p,
+                                    p.age(date),
+                                    club_score,
+                                    team_league_reputation,
+                                );
+                                if p.free_agent_state().is_none() {
+                                    p.enter_free_agent_market(ReleaseContext {
+                                        date,
+                                        last_club_id: Some(club_id),
+                                        last_country_id: Some(country_id),
+                                        last_country_reputation: country_reputation,
+                                        last_league_reputation: team_league_reputation,
+                                        last_club_reputation_score: club_score,
+                                        last_salary,
+                                        last_squad_status,
+                                    });
+                                }
                                 released_in_country.push(p);
                             }
                         }
@@ -626,6 +681,60 @@ impl SimulatorData {
         if !released.is_empty() {
             self.dirty_player_index = true;
             self.free_agents.extend(released);
+        }
+    }
+
+    /// Monthly retirement pass over the global free-agent pool. Anyone
+    /// 12+ months without a club rolls retirement at a probability that
+    /// climbs with age, low quality, and time spent unemployed; high
+    /// world-rep players resist longer (they're still names, clubs come
+    /// looking).
+    ///
+    /// Gated by the caller on `today.day() == 1`. The internal gate on
+    /// `free_since` ≥ 12 months means a fresh database free agent
+    /// (seeded `free_since = today - 30d`) is automatically skipped.
+    pub fn process_free_agent_retirements(&mut self, date: NaiveDate) {
+        use crate::PlayerStatusType;
+
+        let mut to_retire: Vec<usize> = Vec::new();
+        for (idx, player) in self.free_agents.iter().enumerate() {
+            let Some(state) = player.free_agent_state() else {
+                continue;
+            };
+            let days_free = (date - state.free_since).num_days();
+            if days_free < 365 {
+                continue;
+            }
+            let months_after_12 = ((days_free - 365) / 30).max(0) as u32;
+            let prob = FreeAgentMarketCalculator::retirement_probability_per_month(
+                months_after_12,
+                player.age(date),
+                player.player_attributes.current_ability,
+                player.player_attributes.world_reputation,
+            );
+            if prob <= 0.0 {
+                continue;
+            }
+            let roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
+            if roll < prob {
+                to_retire.push(idx);
+            }
+        }
+
+        // Reverse order so swap_remove against earlier indexes doesn't
+        // disturb later ones.
+        to_retire.sort_unstable_by(|a, b| b.cmp(a));
+        for idx in to_retire {
+            let mut player = self.free_agents.swap_remove(idx);
+            player.statuses.add(date, PlayerStatusType::Ret);
+            player.contract = None;
+            player.retired = true;
+            let country_id = player.country_id;
+            if let Some(country) = self.country_mut(country_id) {
+                country.retired_players.push(player);
+            }
+            // Else: nationality country isn't loaded — drop silently.
+            // The player is gone from the pool either way.
         }
     }
 
@@ -983,7 +1092,7 @@ struct PendingWeeklyAward {
 }
 
 /// Monday-only Team of the Week selection. Builds an XI per league with
-/// the canonical 1-4-3-3 quotas and emits `TeamOfTheWeekSelection` to each
+/// the canonical 1-4-4-2 quotas and emits `TeamOfTheWeekSelection` to each
 /// selected player.
 struct TeamOfTheWeekTick;
 
@@ -1513,7 +1622,7 @@ impl MonthlyAwardsTick {
         })
     }
 
-    /// Pick a Team of Month (1-4-3-3 quotas, min 2 apps) from the
+    /// Pick a Team of Month (1-4-4-2 quotas, min 2 apps) from the
     /// passed aggregate, restricted to ids passing `eligibility`. Used
     /// for both the open and Young (≤21) variants.
     fn build_team(
@@ -1720,6 +1829,71 @@ impl MonthlyAwardsTick {
                     }
                     player.apply_award_reputation_impact(
                         AwardReputationKind::PlayerOfTheMonth,
+                        input,
+                        now,
+                    );
+                }
+            }
+            // Team-of-month XIs fire after the individual monthly
+            // awards so the centralised stacking dampener can suppress
+            // the team-XI reputation gain when the same player just
+            // won POM / Young POM. Young XI runs first by the same
+            // larger-base-takes-full-impact rule used for POW/TOTW.
+            for slot in &entry.snapshot.young_team_of_month {
+                let avg_rating = slot.average_rating;
+                let matches_played = slot.matches_played;
+                let ctx = RecognitionEventContext::new(
+                    RecognitionEventKind::YoungTeamOfTheMonthSelection,
+                )
+                .with_league(entry.league_id)
+                .with_avg_rating(avg_rating)
+                .with_matches_played(matches_played as u16)
+                .with_season_goals(slot.goals as u16)
+                .with_season_assists(slot.assists as u16);
+                if let Some(player) = data.player_mut(slot.player_id) {
+                    player.on_recognition_award(
+                        HappinessEventType::YoungTeamOfTheMonthSelection,
+                        ctx,
+                        28,
+                    );
+                    let mut input = AwardReputationInput::new()
+                        .with_avg_rating(avg_rating)
+                        .with_matches_played(matches_played as u16);
+                    if let Some(rep) = league_rep {
+                        input = input.with_league_reputation(rep);
+                    }
+                    player.apply_award_reputation_impact(
+                        AwardReputationKind::YoungTeamOfTheMonthSelection,
+                        input,
+                        now,
+                    );
+                }
+            }
+            for slot in &entry.snapshot.team_of_month {
+                let avg_rating = slot.average_rating;
+                let matches_played = slot.matches_played;
+                let ctx = RecognitionEventContext::new(
+                    RecognitionEventKind::TeamOfTheMonthSelection,
+                )
+                .with_league(entry.league_id)
+                .with_avg_rating(avg_rating)
+                .with_matches_played(matches_played as u16)
+                .with_season_goals(slot.goals as u16)
+                .with_season_assists(slot.assists as u16);
+                if let Some(player) = data.player_mut(slot.player_id) {
+                    player.on_recognition_award(
+                        HappinessEventType::TeamOfTheMonthSelection,
+                        ctx,
+                        28,
+                    );
+                    let mut input = AwardReputationInput::new()
+                        .with_avg_rating(avg_rating)
+                        .with_matches_played(matches_played as u16);
+                    if let Some(rep) = league_rep {
+                        input = input.with_league_reputation(rep);
+                    }
+                    player.apply_award_reputation_impact(
+                        AwardReputationKind::TeamOfTheMonthSelection,
                         input,
                         now,
                     );

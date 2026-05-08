@@ -1,6 +1,7 @@
+use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{MatchContext, MatchField};
+use crate::r#match::{MatchContext, MatchField, PlayerSide};
 use log::debug;
 use nalgebra::Vector3;
 
@@ -14,6 +15,13 @@ pub enum BallEvent {
     PassCompleted(u32, u32),
     /// Pass intercepted by opponent: (interceptor_id, passer_id)
     Intercepted(u32, Option<u32>),
+    /// Shot blocked by an outfielder: `(blocker_id, ball_position)`.
+    /// Emitted by `Ball::try_block_shot` whenever a block resolves
+    /// (irrespective of the deflection outcome — controlled,
+    /// corner-bound, safe, loose, unlucky). Distinct from
+    /// `Intercepted` so block credit cannot leak into an unrelated
+    /// pass interception that happens to share the same tick.
+    Blocked(u32, Vector3<f32>),
     Gained(u32),
     TakeMe(u32),
     /// Offside resolved on receiver involvement: (receiver_id,
@@ -21,6 +29,11 @@ pub enum BallEvent {
     /// dispatcher so the player-event pipeline owns ball-stop / free-
     /// kick award.
     Offside(u32, Vector3<f32>),
+    /// Carry concluded: `(carrier_id, start_position, end_position)`.
+    /// Emitted by `Ball::tick_carry_tracker` when ownership changes
+    /// hands. The dispatcher classifies the carry as progressive,
+    /// box-entry, or none and credits the carrier's stats.
+    CarryEnded(u32, Vector3<f32>, Vector3<f32>),
 }
 
 #[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
@@ -100,23 +113,103 @@ impl BallEventDispatcher {
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(player_id)));
             }
             BallEvent::PassCompleted(receiver_id, passer_id) => {
-                if let Some(passer) = field.get_player_mut(passer_id) {
-                    passer.statistics.passes_completed += 1;
-                }
-                // Clear the pending-pass tag so the downstream ClaimBall
-                // handler doesn't also credit this pass (double-count).
-                field.ball.pending_pass_passer = None;
+                // Single completion path — `credit_completed_pass`
+                // increments `passes_completed`, classifies progressive
+                // / box-entry / cross-completed, and clears the
+                // pending-pass metadata. The downstream ClaimBall
+                // handler sees an empty pass window and won't double-
+                // credit.
+                PlayerEventDispatcher::credit_completed_pass(
+                    receiver_id,
+                    passer_id,
+                    field,
+                    context,
+                );
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(receiver_id)));
             }
             BallEvent::Intercepted(interceptor_id, passer_id) => {
                 // Credit the interceptor. Opponent touch ends the pass
                 // window — accuracy was NOT earned.
-                let _ = passer_id;
-                field.ball.pending_pass_passer = None;
+                let ball_pos = field.ball.position;
+                let pending_passer = field.ball.pending_pass_passer;
+                field.ball.clear_pending_pass_metadata();
+
+                // Stamp the giveaway tracker only for genuine pass
+                // interceptions (the ball was on a live pass when the
+                // opponent picked it off). Shot-block interceptions
+                // (try_block_shot also fires Intercepted) don't have a
+                // pending pass and shouldn't charge the shooter as
+                // having "given the ball away".
+                if let Some(passer) = pending_passer {
+                    let giver_meta = field
+                        .get_player(passer)
+                        .map(|p| (p.team_id, PlayerEventDispatcher::zone_for_player(p, ball_pos, context)));
+                    if let Some((team, zone)) = giver_meta {
+                        let was_own_box = zone.map_or(false, |z| z.is_own_box());
+                        let was_dangerous_zone = zone
+                            .map_or(false, |z| z.is_own_box() || z.is_own_third());
+                        field.ball.stamp_giveaway(
+                            passer,
+                            team,
+                            context.current_tick(),
+                            was_own_box,
+                        );
+                        // Note the dangerous turnover on the giver's
+                        // stats so the rating helper can dock the
+                        // own-third / own-box penalty even if no shot
+                        // converts within the response window.
+                        if was_dangerous_zone {
+                            if let (Some(zone), Some(giver)) =
+                                (zone, field.get_player_mut(passer))
+                            {
+                                giver.statistics.note_dangerous_turnover(zone);
+                            }
+                        }
+                    }
+                    // Successful pressure: opponents who were within
+                    // the pressing radius at pass-emit time get
+                    // promoted from raw `pressures` to
+                    // `successful_pressures` because their close
+                    // presence forced the turnover. Final-third wins
+                    // also tag the press-zone counter.
+                    let press_count = field.ball.pressers_at_pass_count as usize;
+                    let pressers = field.ball.pressers_at_pass;
+                    for &pid in pressers.iter().take(press_count) {
+                        if let Some(presser) = field.get_player_mut(pid) {
+                            presser.statistics.add_successful_pressure();
+                            if let Some(zone) = PlayerEventDispatcher::zone_for_player(
+                                presser, ball_pos, context,
+                            ) {
+                                presser.statistics.note_pressure_won_zone(zone);
+                            }
+                        }
+                    }
+                } else if let Some(prev_id) = passer_id {
+                    let _ = prev_id; // shot-block path; no giveaway stamp
+                }
+                // Pressure snapshot consumed — clear so a later
+                // unrelated interception doesn't reuse it.
+                field.ball.pressers_at_pass_count = 0;
+
                 if let Some(player) = field.get_player_mut(interceptor_id) {
                     player.statistics.interceptions += 1;
+                    if let Some(zone) =
+                        PlayerEventDispatcher::zone_for_player(player, ball_pos, context)
+                    {
+                        player.statistics.note_interception_zone(zone);
+                    }
                 }
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(interceptor_id)));
+            }
+            BallEvent::Blocked(blocker_id, position) => {
+                if let Some(player) = field.get_player_mut(blocker_id) {
+                    player.statistics.add_block();
+                    if let Some(zone) =
+                        PlayerEventDispatcher::zone_for_player(player, position, context)
+                    {
+                        player.statistics.note_block_zone(zone);
+                    }
+                }
             }
             BallEvent::Gained(player_id) => {
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::GainBall(player_id)));
@@ -125,14 +218,64 @@ impl BallEventDispatcher {
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::TakeBall(player_id)));
             }
             BallEvent::Offside(receiver_id, position) => {
-                field.ball.pending_pass_passer = None;
+                field.ball.clear_pending_pass_metadata();
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::Offside(
                     receiver_id,
                     position,
                 )));
             }
+            BallEvent::CarryEnded(carrier_id, start, end) => {
+                Self::credit_carry(carrier_id, start, end, field, context);
+            }
         }
 
         remaining_events
+    }
+
+    /// Classify a concluded carry and credit progressive_carries /
+    /// carries-into-box / carry_distance on the carrier's stats.
+    fn credit_carry(
+        carrier_id: u32,
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        let side = match field.get_player(carrier_id).and_then(|p| p.side) {
+            Some(s) => s,
+            None => return,
+        };
+        let field_w = context.field_size.width as f32;
+        let forward_progress = side.forward_delta(start.x, end.x);
+        if forward_progress <= 0.0 {
+            return;
+        }
+        let end_in_final_third = side.attacking_progress_x(end.x, field_w) >= 2.0 / 3.0;
+        let start_in_final_third = side.attacking_progress_x(start.x, field_w) >= 2.0 / 3.0;
+        // Progressive carry threshold: ≥25u outside final third, ≥12u inside.
+        let progressive_threshold = if start_in_final_third { 12.0 } else { 25.0 };
+        let is_progressive = forward_progress >= progressive_threshold;
+
+        let is_home = side == PlayerSide::Left;
+        let opp_box = context.penalty_area(!is_home);
+        let started_outside_box = !opp_box.contains(&start);
+        let ended_in_box = opp_box.contains(&end);
+
+        if let Some(carrier) = field.get_player_mut(carrier_id) {
+            carrier.statistics.carry_distance = carrier
+                .statistics
+                .carry_distance
+                .saturating_add(forward_progress as u32);
+            if is_progressive {
+                carrier.statistics.progressive_carries =
+                    carrier.statistics.progressive_carries.saturating_add(1);
+                if end_in_final_third && !start_in_final_third {
+                    carrier.statistics.note_progressive_carry_into_final_third();
+                }
+            }
+            if started_outside_box && ended_in_box {
+                carrier.statistics.note_carry_into_box();
+            }
+        }
     }
 }

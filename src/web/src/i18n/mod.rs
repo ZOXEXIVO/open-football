@@ -169,6 +169,26 @@ pub struct LangOption {
 }
 
 impl I18n {
+    /// Build a test-only `I18n` from a flat key→string map. Renderer
+    /// unit tests use this to exercise the cause / headline / evidence
+    /// branches without standing up the full bundle loader. Translations
+    /// fall back to the same map for missing keys (mirroring production
+    /// `t()` semantics: unknown keys return the key itself).
+    #[cfg(test)]
+    pub fn for_test(map: HashMap<String, String>) -> Self {
+        let translations = Arc::new(map);
+        let fallback = translations.clone();
+        Self {
+            translations,
+            fallback,
+            country_names: Arc::new(HashMap::new()),
+            country_names_fallback: Arc::new(HashMap::new()),
+            lang: "en".to_string(),
+            date_main: String::new(),
+            date_sub: String::new(),
+        }
+    }
+
     pub fn t<'a>(&'a self, key: &'a str) -> &'a str {
         self.translations
             .get(key)

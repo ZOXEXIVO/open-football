@@ -90,6 +90,9 @@ fn stats(
         errors_leading_to_shot: 0,
         errors_leading_to_goal: 0,
         xg_prevented: 0.0,
+        offsides: 0,
+        own_goals: 0,
+        zone_stats: Default::default(),
     }
 }
 
@@ -3343,5 +3346,208 @@ fn award_reputation_player_of_season_more_than_team_of_year() {
         "POS ({}) must beat TOTY ({}) — individual top award",
         dc_pos,
         dc_toty,
+    );
+}
+
+// ── Team of the Month / Young Team of the Month ─────────────
+
+#[test]
+fn catalog_magnitude_team_of_the_month_between_week_and_season() {
+    let cat = crate::club::player::behaviour_config::MoraleEventCatalog::default();
+    let week = cat.magnitude(HappinessEventType::TeamOfTheWeekSelection);
+    let month = cat.magnitude(HappinessEventType::TeamOfTheMonthSelection);
+    let season = cat.magnitude(HappinessEventType::TeamOfTheSeasonSelection);
+    assert!(
+        month > week,
+        "TOTM magnitude ({}) must beat TOTW ({})",
+        month,
+        week
+    );
+    assert!(
+        month < season,
+        "TOTM magnitude ({}) must be smaller than TOTS ({})",
+        month,
+        season
+    );
+    let young_month = cat.magnitude(HappinessEventType::YoungTeamOfTheMonthSelection);
+    assert!(
+        young_month > 0.0,
+        "Young TOTM magnitude must be positive, got {}",
+        young_month
+    );
+}
+
+#[test]
+fn award_reputation_team_of_the_month_between_week_and_season() {
+    let mut totw = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let mut totm = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let mut tots = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let input = AwardReputationInput::new()
+        .with_league_reputation(7_000)
+        .with_avg_rating(7.4)
+        .with_matches_played(4);
+    totw.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheWeekSelection,
+        input,
+        d(2026, 5, 7),
+    );
+    totm.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheMonthSelection,
+        input,
+        d(2026, 5, 7),
+    );
+    tots.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheSeasonSelection,
+        AwardReputationInput::new()
+            .with_league_reputation(7_000)
+            .with_avg_rating(7.4)
+            .with_matches_played(34),
+        d(2026, 5, 7),
+    );
+    let dc_totw = totw.player_attributes.current_reputation - 5_000;
+    let dc_totm = totm.player_attributes.current_reputation - 5_000;
+    let dc_tots = tots.player_attributes.current_reputation - 5_000;
+    assert!(
+        dc_totm > dc_totw,
+        "TOTM ({}) must beat TOTW ({})",
+        dc_totm,
+        dc_totw
+    );
+    assert!(
+        dc_totm < dc_tots,
+        "TOTM ({}) must be smaller than TOTS ({})",
+        dc_totm,
+        dc_tots
+    );
+}
+
+#[test]
+fn award_reputation_pom_then_totm_dampens_totm() {
+    // Mirror of `award_reputation_pow_then_totw_dampens_totw` — POM
+    // emits its happiness event, the centralised stacking dampener
+    // picks it up and trims the TOTM reputation gain on the same
+    // first-of-month tick.
+    let mut single = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let mut stacked = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let input = AwardReputationInput::new()
+        .with_league_reputation(7_000)
+        .with_avg_rating(7.4)
+        .with_matches_played(4);
+
+    single.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheMonthSelection,
+        input,
+        d(2026, 5, 1),
+    );
+    let dc_single = single.player_attributes.current_reputation - 5_000;
+
+    // Same player wins POM and is then named in the monthly XI on the
+    // same tick. POM happiness event is the dampener trigger.
+    stacked.on_recognition_award(
+        HappinessEventType::PlayerOfTheMonth,
+        crate::RecognitionEventContext::new(
+            crate::RecognitionEventKind::PlayerOfTheMonth,
+        ),
+        28,
+    );
+    let stacked_after_pom_cur = stacked.player_attributes.current_reputation;
+    stacked.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheMonthSelection,
+        input,
+        d(2026, 5, 1),
+    );
+    let dc_stacked_totm =
+        stacked.player_attributes.current_reputation - stacked_after_pom_cur;
+
+    assert!(
+        dc_stacked_totm < dc_single,
+        "stacked TOTM after POM ({}) must be dampened vs lone TOTM ({})",
+        dc_stacked_totm,
+        dc_single,
+    );
+}
+
+#[test]
+fn award_reputation_young_pom_then_young_totm_dampens() {
+    // Young POM should dampen Young TOTM the same way POM dampens
+    // TOTM — both fire on the same first-of-month tick.
+    let kid = d(2007, 1, 1);
+    let mut single = build_award_player(kid, 1_500, 1_500, 800);
+    let mut stacked = build_award_player(kid, 1_500, 1_500, 800);
+    let input = AwardReputationInput::new()
+        .with_league_reputation(7_000)
+        .with_avg_rating(7.4)
+        .with_matches_played(4);
+
+    single.apply_award_reputation_impact(
+        AwardReputationKind::YoungTeamOfTheMonthSelection,
+        input,
+        d(2026, 5, 1),
+    );
+    let dc_single = single.player_attributes.current_reputation - 1_500;
+
+    stacked.on_recognition_award(
+        HappinessEventType::YoungPlayerOfTheMonth,
+        crate::RecognitionEventContext::new(
+            crate::RecognitionEventKind::YoungPlayerOfTheMonth,
+        ),
+        28,
+    );
+    let stacked_after_ypom = stacked.player_attributes.current_reputation;
+    stacked.apply_award_reputation_impact(
+        AwardReputationKind::YoungTeamOfTheMonthSelection,
+        input,
+        d(2026, 5, 1),
+    );
+    let dc_stacked = stacked.player_attributes.current_reputation - stacked_after_ypom;
+
+    assert!(
+        dc_stacked < dc_single,
+        "stacked Young TOTM after Young POM ({}) must be dampened vs lone Young TOTM ({})",
+        dc_stacked,
+        dc_single,
+    );
+}
+
+#[test]
+fn on_recognition_award_records_team_of_the_month_event() {
+    let mut p = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    let recorded = p.on_recognition_award(
+        HappinessEventType::TeamOfTheMonthSelection,
+        crate::RecognitionEventContext::new(
+            crate::RecognitionEventKind::TeamOfTheMonthSelection,
+        ),
+        28,
+    );
+    assert!(recorded, "first-time TOTM emit must record");
+    assert_eq!(
+        count_events(&p, &HappinessEventType::TeamOfTheMonthSelection),
+        1
+    );
+    // Cooldown of 28 days suppresses a same-tick double-fire.
+    let second = p.on_recognition_award(
+        HappinessEventType::TeamOfTheMonthSelection,
+        crate::RecognitionEventContext::new(
+            crate::RecognitionEventKind::TeamOfTheMonthSelection,
+        ),
+        28,
+    );
+    assert!(!second, "second TOTM emit inside cooldown must be suppressed");
+}
+
+#[test]
+fn on_recognition_award_records_young_team_of_the_month_event() {
+    let mut p = build_award_player(d(2007, 1, 1), 1_500, 1_500, 800);
+    let recorded = p.on_recognition_award(
+        HappinessEventType::YoungTeamOfTheMonthSelection,
+        crate::RecognitionEventContext::new(
+            crate::RecognitionEventKind::YoungTeamOfTheMonthSelection,
+        ),
+        28,
+    );
+    assert!(recorded, "first-time Young TOTM emit must record");
+    assert_eq!(
+        count_events(&p, &HappinessEventType::YoungTeamOfTheMonthSelection),
+        1
     );
 }

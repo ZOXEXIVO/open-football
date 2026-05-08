@@ -390,6 +390,9 @@ fn match_rating_penalises_error_leading_to_goal() {
         errors_leading_to_shot: 0,
         errors_leading_to_goal: 0,
         xg_prevented: 0.0,
+        offsides: 0,
+        own_goals: 0,
+        zone_stats: Default::default(),
     };
     let clean_rating = calculate_match_rating(&clean, 1, 1);
     clean.errors_leading_to_goal = 1;
@@ -438,6 +441,9 @@ fn gk_rating_uses_xg_prevented() {
         errors_leading_to_shot: 0,
         errors_leading_to_goal: 0,
         xg_prevented: 0.0,
+        offsides: 0,
+        own_goals: 0,
+        zone_stats: Default::default(),
     };
     let baseline = calculate_match_rating(&base, 1, 1);
     base.xg_prevented = 1.0;

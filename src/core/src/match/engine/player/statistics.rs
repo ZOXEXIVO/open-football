@@ -1,3 +1,5 @@
+use crate::r#match::engine::zones::{MatchZone, ZoneStats};
+
 #[derive(Debug, Clone)]
 pub struct MatchPlayerStatistics {
     pub items: Vec<MatchPlayerStatisticsItem>,
@@ -55,11 +57,22 @@ pub struct MatchPlayerStatistics {
     /// (GK) Post-shot xG faced minus goals conceded — positive = above
     /// expectation save performance.
     pub xg_prevented: f32,
-    /// Total miscontrols / heavy touches recorded by the first-touch
-    /// resolver.
+    /// Total miscontrols recorded by the first-touch resolver. The
+    /// rating helper consumes this counter with a live coefficient;
+    /// the live PRODUCER is intentionally deferred until receiver-state
+    /// tracking can distinguish a clean reception from a mishit on
+    /// claim. Defaults to zero — rating impact is zero until the
+    /// producer lands.
     pub miscontrols: u16,
     /// First-touch resolutions in [HeavyTouchForward, HeavyTouchSideways].
+    /// Same deferred-producer status as `miscontrols` — counter is read
+    /// by the rating helper, written by the (not-yet-wired) first-touch
+    /// resolver.
     pub heavy_touches: u16,
+    /// Per-zone counters for zone-aware rating multipliers. Defaults
+    /// to zero — engine call-sites that haven't been updated to record
+    /// zone metadata still produce sensible (zone-neutral) ratings.
+    pub zone_stats: ZoneStats,
 }
 
 impl MatchPlayerStatistics {
@@ -93,6 +106,7 @@ impl MatchPlayerStatistics {
             xg_prevented: 0.0,
             miscontrols: 0,
             heavy_touches: 0,
+            zone_stats: ZoneStats::default(),
         }
     }
 
@@ -249,6 +263,155 @@ impl MatchPlayerStatistics {
             .filter(|i| i.stat_type == MatchStatisticType::RedCard)
             .count() as u16
     }
+
+    pub fn own_goals_count(&self) -> u16 {
+        self.items
+            .iter()
+            .filter(|i| i.stat_type == MatchStatisticType::Goal && i.is_auto_goal)
+            .count() as u16
+    }
+
+    /// Tag a tackle with the zone it occurred in. Caller still
+    /// increments `tackles`; this helper only records the zone bucket.
+    /// Six-yard and own-box counters are mutually exclusive — the
+    /// six-yard band IS inside the own box, but the rating helper
+    /// applies six-yard as the *replacement* bonus, not a stack on
+    /// top of own-box. Crediting both would double-charge the same
+    /// action's location bonus.
+    pub fn note_tackle_zone(&mut self, zone: MatchZone) {
+        if zone.is_own_six_yard() {
+            self.zone_stats.tackles_own_six_yard =
+                self.zone_stats.tackles_own_six_yard.saturating_add(1);
+        } else if zone.is_own_box() {
+            self.zone_stats.tackles_own_box = self.zone_stats.tackles_own_box.saturating_add(1);
+        }
+        if zone.is_final_third() {
+            self.zone_stats.tackles_final_third =
+                self.zone_stats.tackles_final_third.saturating_add(1);
+        }
+    }
+
+    pub fn note_interception_zone(&mut self, zone: MatchZone) {
+        if zone.is_own_six_yard() {
+            self.zone_stats.interceptions_own_six_yard =
+                self.zone_stats.interceptions_own_six_yard.saturating_add(1);
+        } else if zone.is_own_box() {
+            self.zone_stats.interceptions_own_box =
+                self.zone_stats.interceptions_own_box.saturating_add(1);
+        }
+        if zone.is_middle_third() {
+            self.zone_stats.interceptions_middle_third =
+                self.zone_stats.interceptions_middle_third.saturating_add(1);
+        }
+    }
+
+    pub fn note_block_zone(&mut self, zone: MatchZone) {
+        if zone.is_own_six_yard() {
+            self.zone_stats.blocks_own_six_yard =
+                self.zone_stats.blocks_own_six_yard.saturating_add(1);
+        } else if zone.is_own_box() {
+            self.zone_stats.blocks_own_box = self.zone_stats.blocks_own_box.saturating_add(1);
+        }
+    }
+
+    pub fn note_clearance_zone(&mut self, zone: MatchZone) {
+        if zone.is_own_six_yard() {
+            self.zone_stats.clearances_own_six_yard =
+                self.zone_stats.clearances_own_six_yard.saturating_add(1);
+        } else if zone.is_own_box() {
+            self.zone_stats.clearances_own_box =
+                self.zone_stats.clearances_own_box.saturating_add(1);
+        }
+    }
+
+    pub fn note_pressure_won_zone(&mut self, zone: MatchZone) {
+        if zone.is_final_third() {
+            self.zone_stats.pressures_won_final_third =
+                self.zone_stats.pressures_won_final_third.saturating_add(1);
+        }
+    }
+
+    pub fn note_progressive_pass_into_final_third(&mut self) {
+        self.zone_stats.progressive_passes_into_final_third = self
+            .zone_stats
+            .progressive_passes_into_final_third
+            .saturating_add(1);
+    }
+
+    pub fn note_progressive_carry_into_final_third(&mut self) {
+        self.zone_stats.progressive_carries_into_final_third = self
+            .zone_stats
+            .progressive_carries_into_final_third
+            .saturating_add(1);
+    }
+
+    pub fn note_carry_into_box(&mut self) {
+        self.zone_stats.carries_into_box = self.zone_stats.carries_into_box.saturating_add(1);
+    }
+
+    pub fn note_half_space_pass_into_box(&mut self) {
+        self.zone_stats.half_space_passes_into_box = self
+            .zone_stats
+            .half_space_passes_into_box
+            .saturating_add(1);
+    }
+
+    pub fn note_central_pass_into_box(&mut self) {
+        self.zone_stats.central_passes_into_box =
+            self.zone_stats.central_passes_into_box.saturating_add(1);
+    }
+
+    pub fn note_switch_of_play(&mut self) {
+        self.zone_stats.switches_of_play = self.zone_stats.switches_of_play.saturating_add(1);
+    }
+
+    pub fn note_dangerous_turnover(&mut self, zone: MatchZone) {
+        if zone.is_own_box() {
+            self.zone_stats.dangerous_turnovers_own_box = self
+                .zone_stats
+                .dangerous_turnovers_own_box
+                .saturating_add(1);
+        } else if zone.is_own_third() {
+            self.zone_stats.dangerous_turnovers_own_third = self
+                .zone_stats
+                .dangerous_turnovers_own_third
+                .saturating_add(1);
+        }
+    }
+
+    pub fn note_error_to_goal_own_box(&mut self) {
+        self.zone_stats.errors_to_goal_own_box =
+            self.zone_stats.errors_to_goal_own_box.saturating_add(1);
+    }
+
+    pub fn note_gk_command_action(&mut self) {
+        self.zone_stats.gk_command_actions =
+            self.zone_stats.gk_command_actions.saturating_add(1);
+    }
+
+    pub fn note_gk_failed_claim_to_shot(&mut self) {
+        self.zone_stats.gk_failed_claims_to_shot = self
+            .zone_stats
+            .gk_failed_claims_to_shot
+            .saturating_add(1);
+    }
+
+    pub fn note_gk_failed_claim_to_goal(&mut self) {
+        self.zone_stats.gk_failed_claims_to_goal = self
+            .zone_stats
+            .gk_failed_claims_to_goal
+            .saturating_add(1);
+    }
+
+    pub fn note_penalty_foul_conceded(&mut self) {
+        self.zone_stats.penalty_fouls_conceded =
+            self.zone_stats.penalty_fouls_conceded.saturating_add(1);
+    }
+
+    pub fn note_own_third_def_foul(&mut self) {
+        self.zone_stats.own_third_def_fouls =
+            self.zone_stats.own_third_def_fouls.saturating_add(1);
+    }
 }
 
 impl Default for MatchPlayerStatistics {
@@ -318,5 +481,213 @@ mod tests {
         let mut stats_with_assist = MatchPlayerStatistics::new();
         stats_with_assist.add_assist(20);
         assert!(!stats_with_assist.is_empty());
+    }
+
+    #[test]
+    fn six_yard_zone_increments_only_six_yard_counter() {
+        // Mutual exclusivity: a tackle inside the six-yard band must
+        // not also bump the own-box counter (the rating helper applies
+        // six-yard as a *replacement* bonus, not a stack on top of
+        // own-box).
+        let mut stats = MatchPlayerStatistics::new();
+        stats.note_tackle_zone(MatchZone::OwnSixYardBox);
+        stats.note_interception_zone(MatchZone::OwnSixYardBox);
+        stats.note_block_zone(MatchZone::OwnSixYardBox);
+        stats.note_clearance_zone(MatchZone::OwnSixYardBox);
+        assert_eq!(stats.zone_stats.tackles_own_six_yard, 1);
+        assert_eq!(stats.zone_stats.tackles_own_box, 0);
+        assert_eq!(stats.zone_stats.interceptions_own_six_yard, 1);
+        assert_eq!(stats.zone_stats.interceptions_own_box, 0);
+        assert_eq!(stats.zone_stats.blocks_own_six_yard, 1);
+        assert_eq!(stats.zone_stats.blocks_own_box, 0);
+        assert_eq!(stats.zone_stats.clearances_own_six_yard, 1);
+        assert_eq!(stats.zone_stats.clearances_own_box, 0);
+    }
+
+    #[test]
+    fn own_penalty_area_zone_increments_only_own_box_counter() {
+        // The other half of mutual exclusivity: an own-penalty-area
+        // (but outside the six-yard) action only credits the own-box
+        // counter.
+        let mut stats = MatchPlayerStatistics::new();
+        stats.note_tackle_zone(MatchZone::OwnPenaltyArea);
+        stats.note_interception_zone(MatchZone::OwnPenaltyArea);
+        stats.note_block_zone(MatchZone::OwnPenaltyArea);
+        stats.note_clearance_zone(MatchZone::OwnPenaltyArea);
+        assert_eq!(stats.zone_stats.tackles_own_box, 1);
+        assert_eq!(stats.zone_stats.tackles_own_six_yard, 0);
+        assert_eq!(stats.zone_stats.interceptions_own_box, 1);
+        assert_eq!(stats.zone_stats.interceptions_own_six_yard, 0);
+        assert_eq!(stats.zone_stats.blocks_own_box, 1);
+        assert_eq!(stats.zone_stats.blocks_own_six_yard, 0);
+        assert_eq!(stats.zone_stats.clearances_own_box, 1);
+        assert_eq!(stats.zone_stats.clearances_own_six_yard, 0);
+    }
+
+    #[test]
+    fn final_third_tackle_also_credits_final_third_counter() {
+        // Third-band counters are independent of the own-box / six-yard
+        // mutual-exclusion rule: a tackle in the final third still
+        // bumps `tackles_final_third` regardless.
+        let mut stats = MatchPlayerStatistics::new();
+        stats.note_tackle_zone(MatchZone::FinalThird);
+        assert_eq!(stats.zone_stats.tackles_final_third, 1);
+        assert_eq!(stats.zone_stats.tackles_own_box, 0);
+        assert_eq!(stats.zone_stats.tackles_own_six_yard, 0);
+    }
+
+    #[test]
+    fn middle_third_interception_records_middle_third_only() {
+        let mut stats = MatchPlayerStatistics::new();
+        stats.note_interception_zone(MatchZone::MiddleThird);
+        assert_eq!(stats.zone_stats.interceptions_middle_third, 1);
+        assert_eq!(stats.zone_stats.interceptions_own_box, 0);
+        assert_eq!(stats.zone_stats.interceptions_own_six_yard, 0);
+    }
+
+    #[test]
+    fn dangerous_turnover_own_box_excludes_own_third() {
+        // An own-box giveaway only bumps the own-box counter, not the
+        // own-third counter — the rating helper applies them as
+        // independent layers.
+        let mut stats = MatchPlayerStatistics::new();
+        stats.note_dangerous_turnover(MatchZone::OwnPenaltyArea);
+        assert_eq!(stats.zone_stats.dangerous_turnovers_own_box, 1);
+        assert_eq!(stats.zone_stats.dangerous_turnovers_own_third, 0);
+    }
+
+    #[test]
+    fn note_error_to_goal_own_box_increments_counter() {
+        let mut stats = MatchPlayerStatistics::new();
+        stats.note_error_to_goal_own_box();
+        stats.note_error_to_goal_own_box();
+        assert_eq!(stats.zone_stats.errors_to_goal_own_box, 2);
+    }
+
+    #[test]
+    fn lateral_lane_helpers_increment_counters() {
+        let mut stats = MatchPlayerStatistics::new();
+        stats.note_half_space_pass_into_box();
+        stats.note_half_space_pass_into_box();
+        stats.note_central_pass_into_box();
+        stats.note_switch_of_play();
+        stats.note_switch_of_play();
+        stats.note_switch_of_play();
+        assert_eq!(stats.zone_stats.half_space_passes_into_box, 2);
+        assert_eq!(stats.zone_stats.central_passes_into_box, 1);
+        assert_eq!(stats.zone_stats.switches_of_play, 3);
+    }
+
+    #[test]
+    fn pressure_helpers_track_separately() {
+        let mut stats = MatchPlayerStatistics::new();
+        stats.add_pressure();
+        stats.add_pressure();
+        stats.add_pressure();
+        stats.add_successful_pressure();
+        assert_eq!(stats.pressures, 3);
+        assert_eq!(stats.successful_pressures, 1);
+    }
+
+    #[test]
+    fn dribble_helpers_track_attempts_and_successes() {
+        let mut stats = MatchPlayerStatistics::new();
+        stats.add_successful_dribble();
+        stats.add_successful_dribble();
+        stats.add_failed_dribble();
+        assert_eq!(stats.successful_dribbles, 2);
+        assert_eq!(stats.attempted_dribbles, 3);
+    }
+
+    #[test]
+    fn final_third_pressure_won_tags_zone_counter() {
+        // Successful pressure won in the final third must populate
+        // `pressures_won_final_third`. The interception handler reads
+        // the player's zone and calls `note_pressure_won_zone(zone)`
+        // — the rating helper's PRESSURE_FINAL_THIRD_BONUS depends on
+        // this counter.
+        let mut stats = MatchPlayerStatistics::new();
+        stats.add_pressure();
+        stats.add_successful_pressure();
+        stats.note_pressure_won_zone(MatchZone::FinalThird);
+        assert_eq!(stats.zone_stats.pressures_won_final_third, 1);
+        // Pressures won in other zones don't credit the final-third
+        // counter (the bonus is final-third-specific).
+        stats.note_pressure_won_zone(MatchZone::MiddleThird);
+        stats.note_pressure_won_zone(MatchZone::DefensiveThird);
+        assert_eq!(stats.zone_stats.pressures_won_final_third, 1);
+    }
+
+    #[test]
+    fn pressure_invariant_holds_when_only_credited_pressers_promoted() {
+        // Contract enforced by `credit_pressures_on_pass` after the
+        // cooldown-promotion fix: every `add_successful_pressure` is
+        // preceded by an `add_pressure` on the same player. The
+        // helper's responsibility is to populate `pressers_at_pass`
+        // ONLY with players who got `add_pressure()`. Modeling that
+        // contract here lets a future regression that bumps
+        // successful_pressures from a non-credited cooldown shadow
+        // surface as a coherence assertion failure.
+        let mut stats = MatchPlayerStatistics::new();
+        // Pass A: opponent within radius, no cooldown → credited.
+        stats.add_pressure();
+        // Pass A intercepted → promotion.
+        stats.add_successful_pressure();
+        // Pass B: same opponent within radius, but inside cooldown
+        // window → NOT credited. With the fix in place, the helper
+        // does NOT add this player to `pressers_at_pass`, so a Pass B
+        // interception cannot promote them. Simulate that by simply
+        // not calling `add_successful_pressure` here.
+        // Pass C: cooldown elapsed, opponent credited again.
+        stats.add_pressure();
+        stats.add_successful_pressure();
+        assert_eq!(stats.pressures, 2);
+        assert_eq!(stats.successful_pressures, 2);
+        // Coach press-success rate would be 1.0 — at the bound but
+        // not over. Pre-fix behaviour could promote the cooldown
+        // shadow on Pass B, producing successful_pressures=3 with
+        // pressures=2 — ratio 1.5, which is what the fix prevents.
+        assert!(
+            stats.successful_pressures <= stats.pressures,
+            "successful_pressures ({}) must not exceed pressures ({}) — \
+             coach press-success rate would exceed 1.0",
+            stats.successful_pressures,
+            stats.pressures
+        );
+    }
+
+    #[test]
+    fn block_zone_credit_independent_of_interception() {
+        // After the block-vs-intercept separation: block credit
+        // travels through `add_block` + `note_block_zone(zone)` and
+        // does NOT require `interceptions` to bump. A loose / corner
+        // / safe / unlucky deflection now credits ONLY the block —
+        // verify the zone bookkeeping remains independent.
+        let mut stats = MatchPlayerStatistics::new();
+        stats.add_block();
+        stats.note_block_zone(MatchZone::OwnPenaltyArea);
+        assert_eq!(stats.blocks, 1);
+        assert_eq!(stats.zone_stats.blocks_own_box, 1);
+        assert_eq!(
+            stats.interceptions, 0,
+            "deflection block must not inflate interceptions"
+        );
+    }
+
+    #[test]
+    fn controlled_block_credits_both_block_and_interception() {
+        // The controlled-block path keeps emitting both `Blocked` and
+        // `Intercepted` so the defender wins possession AND collects
+        // a block stat. This test pins the dual-credit shape.
+        let mut stats = MatchPlayerStatistics::new();
+        stats.add_block();
+        stats.note_block_zone(MatchZone::OwnPenaltyArea);
+        // Controlled branch additionally credits an interception.
+        stats.interceptions += 1;
+        stats.note_interception_zone(MatchZone::OwnPenaltyArea);
+        assert_eq!(stats.blocks, 1);
+        assert_eq!(stats.interceptions, 1);
+        assert_eq!(stats.zone_stats.blocks_own_box, 1);
+        assert_eq!(stats.zone_stats.interceptions_own_box, 1);
     }
 }

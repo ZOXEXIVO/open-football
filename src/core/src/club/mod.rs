@@ -69,8 +69,10 @@ pub use player::{
     seed_player_id_sequence,
     // New context payloads (Phase 1-11 explanation upgrades)
     TrainingEventContext, TrainingEventEvidence, TrainingEventReason,
+    ConflictLocation, ManagerCriticismReason,
     ManagerInteractionEventContext, ManagerInteractionTopic, ManagerInteractionTone,
     PlayerAcceptance, PromiseKind,
+    TeammateConflictContext, TeammateConflictReason,
     ContractEventContext, ContractEventEvidence, ContractEventKind,
     InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage,
     MatchPerformanceEventContext, MatchPerformanceEvidence, MatchPerformanceKind,

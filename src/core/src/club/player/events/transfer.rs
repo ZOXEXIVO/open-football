@@ -29,6 +29,8 @@ impl Player {
         self.on_transfer(t.from, t.to, t.fee, t.date);
         self.sold_from = Some((t.selling_club_id, t.fee));
         self.reset_on_club_change();
+        // No more market-state to track once they're under contract.
+        self.clear_free_agent_state();
         self.install_permanent_contract(
             t.date,
             t.to.reputation,
@@ -70,6 +72,7 @@ impl Player {
         let previous_salary = self.contract.as_ref().map(|c| c.salary);
         self.on_free_agent_signing(to, date);
         self.reset_on_club_change();
+        self.clear_free_agent_state();
         self.install_permanent_contract(date, to.reputation, buying_league_reputation, agreed_wage);
         self.plan = Some(PlayerPlan::from_signing(self.age(date), 0.0, date));
         self.pending_signing = Some(PendingSigning {

@@ -33,6 +33,8 @@ pub enum AwardReputationKind {
     YoungTeamOfTheWeekSelection,
     PlayerOfTheMonth,
     YoungPlayerOfTheMonth,
+    TeamOfTheMonthSelection,
+    YoungTeamOfTheMonthSelection,
     TeamOfTheSeasonSelection,
     TeamOfTheYearSelection,
     PlayerOfTheSeason,
@@ -57,6 +59,8 @@ impl AwardReputationKind {
             Self::YoungPlayerOfTheWeek => (85, 70, 15),
             Self::PlayerOfTheMonth => (135, 110, 35),
             Self::YoungPlayerOfTheMonth => (155, 125, 40),
+            Self::TeamOfTheMonthSelection => (75, 60, 18),
+            Self::YoungTeamOfTheMonthSelection => (90, 72, 22),
             Self::TeamOfTheSeasonSelection => (240, 200, 80),
             Self::TeamOfTheYearSelection => (300, 240, 120),
             Self::PlayerOfTheSeason => (470, 400, 200),
@@ -444,6 +448,25 @@ impl Player {
             AwardReputationKind::YoungPlayerOfTheMonth => {
                 if recent(H::PlayerOfTheMonth, 3) {
                     0.25
+                } else {
+                    1.0
+                }
+            }
+            // Monthly XI selections fire on the same first-of-month tick
+            // as POM / Young POM. If the same player just won the
+            // larger monthly individual award, dampen the team-XI emit
+            // so a single player can't take double reputation in one
+            // tick. Symmetric with the weekly TOTW/POW logic.
+            AwardReputationKind::TeamOfTheMonthSelection => {
+                if recent(H::PlayerOfTheMonth, 3) || recent(H::YoungPlayerOfTheMonth, 3) {
+                    0.30
+                } else {
+                    1.0
+                }
+            }
+            AwardReputationKind::YoungTeamOfTheMonthSelection => {
+                if recent(H::YoungPlayerOfTheMonth, 3) || recent(H::PlayerOfTheMonth, 3) {
+                    0.30
                 } else {
                     1.0
                 }

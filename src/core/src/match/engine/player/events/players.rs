@@ -262,7 +262,7 @@ impl PlayerEventDispatcher {
             }
             PlayerEvent::TacklingBall(player_id) => {
                 Self::record_team_possession_if_switch(player_id, field, context);
-                Self::handle_tackling_ball_event(player_id, field);
+                Self::handle_tackling_ball_event(player_id, field, context);
             }
             PlayerEvent::BallOwnerChange(player_id) => {
                 Self::handle_ball_owner_change_event(player_id, field);
@@ -300,6 +300,27 @@ impl PlayerEventDispatcher {
                     );
                 }
                 let passer_id = pass_event_model.from_player_id;
+                let pass_target = pass_event_model.pass_target;
+                let (passer_position, passer_side, passer_team) = field
+                    .get_player(passer_id)
+                    .map(|p| (p.position, p.side, p.team_id))
+                    .unwrap_or((Vector3::zeros(), None, 0));
+                // ── Pressure producer ─────────────────────────────────
+                // Opponents within the pressing radius (~8u) of the
+                // passer at emit time are credited with a pressure
+                // event. Per-player cooldown prevents a single
+                // shadowing defender from generating one pressure per
+                // tick across a multi-second press burst. Pressers are
+                // stashed on the ball so the interception handler can
+                // promote them to "successful pressure" if the same
+                // pass is intercepted within the response window.
+                Self::credit_pressures_on_pass(
+                    passer_id,
+                    passer_position,
+                    passer_team,
+                    field,
+                    context,
+                );
                 Self::handle_pass_to_event(pass_event_model, field);
                 // Tag the ball with the passer for pass-accuracy
                 // accounting. Lives for a short window (150 ticks)
@@ -307,13 +328,30 @@ impl PlayerEventDispatcher {
                 // `pending_pass_passer` docs.
                 field.ball.pending_pass_passer = Some(passer_id);
                 field.ball.pending_pass_set_tick = context.current_tick();
+                field.ball.pending_pass_origin = Some(passer_position);
+                field.ball.pending_pass_target = Some(pass_target);
+                // Cross detection at emit-time: passer in a wide channel
+                // delivering toward the opposition box. The completion
+                // path credits the cross-completed counterpart when the
+                // intended receiver actually claims it.
+                let was_cross = if let Some(side) = passer_side {
+                    Self::is_cross_attempt(passer_position, pass_target, side, context)
+                } else {
+                    false
+                };
+                field.ball.pending_pass_was_cross = was_cross;
+                if was_cross {
+                    if let Some(passer) = field.get_player_mut(passer_id) {
+                        passer.statistics.add_cross_attempt();
+                    }
+                }
                 field.ball.offside_snapshot = snapshot;
                 // After the kick, restart context decays back to OpenPlay.
                 field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
             }
             PlayerEvent::ClaimBall(player_id) => {
                 Self::record_team_possession_if_switch(player_id, field, context);
-                Self::handle_claim_ball_event(player_id, field);
+                Self::handle_claim_ball_event(player_id, field, context);
             }
             PlayerEvent::MoveBall(player_id, ball_velocity) => {
                 Self::handle_move_ball_event(player_id, ball_velocity, field);
@@ -373,7 +411,86 @@ impl PlayerEventDispatcher {
                 if let Some(player) = field.get_player_mut(shoot_event_model.from_player_id) {
                     player.pending_shot_reason = None;
                 }
-                Self::handle_shoot_event(shoot_event_model, field);
+                // ── Key-pass linking ──────────────────────────────────
+                // The shooter just received a completed pass within the
+                // key-pass window — the passer earns a key pass. Reads
+                // `last_completed_pass_*` (populated by
+                // `credit_completed_pass` when the receiver claimed the
+                // ball) rather than `pending_pass_*` (which the
+                // completion path already cleared). Without the
+                // separate snapshot the receive-then-shoot sequence
+                // would silently drop the assist link.
+                //
+                // To avoid double-credit when the same passer also
+                // appears as `pending_pass_passer` (can happen if the
+                // shooter intercepted a NEW outgoing pass and shot in
+                // the same tick), null `last_completed_pass_*` after
+                // crediting.
+                //
+                // Capture the direct assister BEFORE clearing — the xG
+                // buildup distribution in `handle_shoot_event` needs it
+                // to exclude the assister from buildup credit. Without
+                // this snapshot, the clear below races the buildup read.
+                let shooter_id = shoot_event_model.from_player_id;
+                let now_tick = context.current_tick();
+                const KEY_PASS_WINDOW_TICKS: u64 = 300;
+                let shooter_team = field.get_player(shooter_id).map(|p| p.team_id);
+                let mut direct_assister_id: Option<u32> = None;
+                if let (Some(passer_id), Some(receiver_id)) = (
+                    field.ball.last_completed_pass_passer_id,
+                    field.ball.last_completed_pass_receiver_id,
+                ) {
+                    let elapsed = now_tick
+                        .saturating_sub(field.ball.last_completed_pass_tick);
+                    let in_window = elapsed <= KEY_PASS_WINDOW_TICKS;
+                    let receiver_is_shooter = receiver_id == shooter_id;
+                    let passer_not_shooter = passer_id != shooter_id;
+                    let passer_team = field.get_player(passer_id).map(|p| p.team_id);
+                    let same_team = passer_team.is_some()
+                        && passer_team == shooter_team;
+                    if in_window && receiver_is_shooter && passer_not_shooter && same_team {
+                        if let Some(passer) = field.get_player_mut(passer_id) {
+                            passer.statistics.add_key_pass();
+                        }
+                        direct_assister_id = Some(passer_id);
+                    }
+                    // Single-credit guarantee: even if the shot resolves
+                    // into a goal that fires another event, the link is
+                    // gone after the first read.
+                    field.ball.last_completed_pass_passer_id = None;
+                    field.ball.last_completed_pass_receiver_id = None;
+                }
+                // ── Error leading to shot/goal ────────────────────────
+                // If an opponent gave the ball away within the response
+                // window and the shooter is on the opposite team, the
+                // giver is charged with the error. Persist to
+                // `pending_error_to_shot_player_id` so the goal handler
+                // can also charge `errors_leading_to_goal` if the shot
+                // converts.
+                const ERROR_TO_SHOT_WINDOW_TICKS: u64 = 600; // ~6s
+                let shooter_team = field
+                    .get_player(shooter_id)
+                    .map(|p| p.team_id);
+                if let (Some(giver_id), Some(giver_team), shooter_team) = (
+                    field.ball.last_giveaway_player_id,
+                    field.ball.last_giveaway_team_id,
+                    shooter_team,
+                ) {
+                    let in_window = now_tick
+                        .saturating_sub(field.ball.last_giveaway_tick)
+                        <= ERROR_TO_SHOT_WINDOW_TICKS;
+                    if in_window && Some(giver_team) != shooter_team {
+                        if let Some(giver) = field.get_player_mut(giver_id) {
+                            giver.statistics.add_error_leading_to_shot();
+                        }
+                        field.ball.pending_error_to_shot_player_id = Some(giver_id);
+                    } else {
+                        field.ball.pending_error_to_shot_player_id = None;
+                    }
+                } else {
+                    field.ball.pending_error_to_shot_player_id = None;
+                }
+                Self::handle_shoot_event(shoot_event_model, field, direct_assister_id);
             }
             PlayerEvent::CaughtBall(player_id) => {
                 Self::handle_caught_ball_event(player_id, field);
@@ -388,7 +505,7 @@ impl PlayerEventDispatcher {
                 Self::handle_take_ball_event(player_id, field);
             }
             PlayerEvent::ClearBall(velocity) => {
-                Self::handle_clear_ball_event(velocity, field);
+                Self::handle_clear_ball_event(velocity, field, context);
             }
             PlayerEvent::RequestBallReceive(player_id) => {
                 Self::handle_request_ball_receive(player_id, field);
@@ -431,8 +548,12 @@ impl PlayerEventDispatcher {
         // Credit the conceding goalkeeper's `shots_faced` so the rating
         // helper has the right denominator for save percentage. Auto-
         // goals (own-goals) don't count — those aren't shots the GK got
-        // beaten by, they're defensive errors.
+        // beaten by, they're defensive errors. While we're here, debit
+        // the GK's xg_prevented by the shot's xG: a 0.7 xG goal beats
+        // the keeper, but a 0.05 xG worldie barely dents the keeper's
+        // rating because there's nothing to prevent.
         if !is_auto_goal {
+            let shot_xg = field.ball.last_shot_xg;
             if let Some(scoring_team) = scorer_team_id {
                 let conceding_gk_id = field
                     .players
@@ -446,10 +567,30 @@ impl PlayerEventDispatcher {
                 if let Some(gk_id) = conceding_gk_id {
                     if let Some(gk) = field.get_player_mut(gk_id) {
                         gk.statistics.shots_faced += 1;
+                        if shot_xg > 0.0 {
+                            gk.statistics.record_xg_prevented(-shot_xg);
+                        }
+                    }
+                }
+            }
+            // Promote a pending error-to-shot into an error-to-goal.
+            // Layer the own-box-extra zone counter when the original
+            // giveaway happened inside the giver's own box — the rating
+            // helper applies an extra penalty on top of the base
+            // errors_leading_to_goal hit.
+            if let Some(giver_id) = field.ball.pending_error_to_shot_player_id {
+                let was_own_box = field.ball.last_giveaway_was_own_box;
+                if let Some(giver) = field.get_player_mut(giver_id) {
+                    giver.statistics.add_error_leading_to_goal();
+                    if was_own_box {
+                        giver.statistics.note_error_to_goal_own_box();
                     }
                 }
             }
         }
+        field.ball.clear_shot_metadata();
+        field.ball.pending_error_to_shot_player_id = None;
+        field.ball.clear_giveaway();
 
         context.score.add_goal_detail(GoalDetail {
             player_id,
@@ -488,9 +629,32 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_tackling_ball_event(player_id: u32, field: &mut MatchField) {
+    fn handle_tackling_ball_event(
+        player_id: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        let ball_pos = field.ball.position;
+        // Capture the carrier (= dispossessed player) BEFORE
+        // secure_ball_for nulls them out — the tackle handler treats
+        // the previous owner as the dribbler losing a duel.
+        let dispossessed_id = field.ball.current_owner.filter(|&id| id != player_id);
         if let Some(player) = field.get_player_mut(player_id) {
             player.statistics.tackles += 1;
+            if let Some(zone) = Self::zone_for_player(player, ball_pos, context) {
+                player.statistics.note_tackle_zone(zone);
+            }
+        }
+        // Failed-dribble producer: the carrier lost a 1-v-1 to the
+        // tackler. Real engine doesn't separately resolve dribble
+        // duels in live play, so we use the tackle outcome as a
+        // proxy. This also gives the rating helper a non-zero
+        // attempted_dribbles signal for fullbacks / wingers who get
+        // tackled while attacking.
+        if let Some(dispossessed) = dispossessed_id {
+            if let Some(p) = field.get_player_mut(dispossessed) {
+                p.statistics.add_failed_dribble();
+            }
         }
         Self::secure_ball_for(player_id, field);
         field.ball.clear_pass_history();
@@ -498,6 +662,356 @@ impl PlayerEventDispatcher {
 
     fn handle_ball_owner_change_event(player_id: u32, field: &mut MatchField) {
         Self::secure_ball_for(player_id, field);
+    }
+
+    /// Classify a position from a player's defensive perspective.
+    /// Returns None if the player has no side assigned (shouldn't
+    /// happen on field, but stays defensive).
+    pub(crate) fn zone_for_player(
+        player: &MatchPlayer,
+        position: Vector3<f32>,
+        context: &MatchContext,
+    ) -> Option<crate::r#match::engine::zones::MatchZone> {
+        use crate::r#match::engine::zones::MatchZone;
+        let side = player.side?;
+        let field_w = context.field_size.width as f32;
+        let is_home = side == PlayerSide::Left;
+        let own = context.penalty_area(is_home);
+        let opp = context.penalty_area(!is_home);
+        Some(MatchZone::classify(position, side, field_w, own, opp))
+    }
+
+    /// Pressing radius — defenders within this distance of the
+    /// passer at pass-emit time are credited with a pressure event.
+    /// 8u in field coordinates (~1m at the engine's 1u≈0.125m scale —
+    /// close-range pressing distance).
+    pub(crate) const PRESSURE_RADIUS_SQ: f32 = 8.0 * 8.0;
+    /// Per-player cooldown between pressure events (in ticks ≈ 100/s).
+    /// 200 ticks ≈ 2 seconds. Without this a single defender shadowing
+    /// the carrier across a buildup phase would post 50+ pressures per
+    /// match. Real high-pressing midfielders sit around 25-40 per 90.
+    pub(crate) const PRESSURE_COOLDOWN_TICKS: u64 = 200;
+
+    /// Distribute a shot's xG across the chain participants. Returns a
+    /// list of `(player_id, chain_credit, buildup_credit)` ready to
+    /// apply to player statistics — `buildup_credit` is `None` for the
+    /// shooter and the direct assister (already rewarded elsewhere).
+    ///
+    /// Pure function over `recent_passers`-style input so it can be
+    /// unit-tested without spinning up a `MatchField`. Both pools split
+    /// across the unique participants of the chain so a single player
+    /// appearing multiple times in the ring buffer can't accumulate the
+    /// per-event credit linearly.
+    pub(crate) fn distribute_xg_credit<I>(
+        recent_passers: I,
+        shooter_id: u32,
+        direct_assister_id: Option<u32>,
+        xg: f32,
+    ) -> Vec<(u32, f32, Option<f32>)>
+    where
+        I: IntoIterator<Item = u32>,
+    {
+        if xg <= 0.0 {
+            return Vec::new();
+        }
+        const CHAIN_FRACTION: f32 = 0.30;
+        const BUILDUP_FRACTION: f32 = 0.20;
+        let chain_pool = xg * CHAIN_FRACTION;
+        let buildup_pool = xg * BUILDUP_FRACTION;
+
+        let mut unique_ids: Vec<u32> = Vec::new();
+        for pid in recent_passers {
+            if !unique_ids.contains(&pid) {
+                unique_ids.push(pid);
+            }
+        }
+        if unique_ids.is_empty() {
+            return Vec::new();
+        }
+
+        let buildup_count = unique_ids
+            .iter()
+            .filter(|&&pid| pid != shooter_id && Some(pid) != direct_assister_id)
+            .count();
+        let chain_per = chain_pool / unique_ids.len() as f32;
+        let buildup_per = if buildup_count > 0 {
+            buildup_pool / buildup_count as f32
+        } else {
+            0.0
+        };
+
+        unique_ids
+            .into_iter()
+            .map(|pid| {
+                let buildup = if pid != shooter_id && Some(pid) != direct_assister_id {
+                    Some(buildup_per)
+                } else {
+                    None
+                };
+                (pid, chain_per, buildup)
+            })
+            .collect()
+    }
+
+    /// Producer: at pass-emit time, scan opponents within the pressing
+    /// radius and credit them with a `pressures` event (subject to the
+    /// per-player cooldown). The set of pressers is also stamped on
+    /// the ball so a downstream `Intercepted` can promote them to
+    /// `successful_pressures` when the close-range presence forced the
+    /// turnover.
+    pub(crate) fn credit_pressures_on_pass(
+        passer_id: u32,
+        passer_position: Vector3<f32>,
+        passer_team: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        let now = context.current_tick();
+        // Reset the press snapshot — each new pass starts a clean slate.
+        field.ball.pressers_at_pass = [0; 4];
+        field.ball.pressers_at_pass_count = 0;
+
+        // Two-pass borrow dance: collect ids first (immutable iter),
+        // then bump stats (mutable get_player_mut per id).
+        let mut presser_ids: [u32; 4] = [0; 4];
+        let mut count: u8 = 0;
+        for player in field.players.iter() {
+            if player.id == passer_id || player.team_id == passer_team {
+                continue;
+            }
+            if player.is_sent_off {
+                continue;
+            }
+            let dx = player.position.x - passer_position.x;
+            let dy = player.position.y - passer_position.y;
+            if dx * dx + dy * dy > Self::PRESSURE_RADIUS_SQ {
+                continue;
+            }
+            if (count as usize) < presser_ids.len() {
+                presser_ids[count as usize] = player.id;
+                count += 1;
+            }
+        }
+        // Only stash pressers who actually received `add_pressure()`.
+        // Cooldown shadows are excluded so a downstream interception
+        // cannot promote them to `successful_pressures` — that would
+        // produce `successful_pressures > pressures` and let coach
+        // press-success rates exceed 1.0.
+        let mut credited_ids: [u32; 4] = [0; 4];
+        let mut credited_count: u8 = 0;
+        for &id in presser_ids.iter().take(count as usize) {
+            if let Some(presser) = field.get_player_mut(id) {
+                let in_cooldown = now.saturating_sub(presser.last_pressure_tick)
+                    < Self::PRESSURE_COOLDOWN_TICKS;
+                if !in_cooldown {
+                    presser.statistics.add_pressure();
+                    presser.last_pressure_tick = now;
+                    if (credited_count as usize) < credited_ids.len() {
+                        credited_ids[credited_count as usize] = id;
+                        credited_count += 1;
+                    }
+                }
+            }
+        }
+        field.ball.pressers_at_pass = credited_ids;
+        field.ball.pressers_at_pass_count = credited_count;
+    }
+
+    /// Single completion path: increment `passes_completed`, classify
+    /// progressive / cross / box-entry, then clear the pass-window
+    /// metadata. Both the "intended receiver claimed cleanly"
+    /// (`BallEvent::PassCompleted`) flow and the "ball claimed by a
+    /// teammate during the pass window" fallback in
+    /// `handle_claim_ball_event` route through here, so the two
+    /// branches produce identical stats and never double-credit.
+    pub(crate) fn credit_completed_pass(
+        receiver_id: u32,
+        passer_id: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        let origin = field.ball.pending_pass_origin;
+        let target = field.ball.pending_pass_target;
+        let was_cross = field.ball.pending_pass_was_cross;
+        if let Some(passer) = field.get_player_mut(passer_id) {
+            passer.statistics.passes_completed =
+                passer.statistics.passes_completed.saturating_add(1);
+        }
+        if let (Some(origin), Some(target)) = (origin, target) {
+            Self::classify_completed_pass(
+                passer_id,
+                receiver_id,
+                origin,
+                target,
+                was_cross,
+                field,
+                context,
+            );
+        }
+        // Snapshot the completed pass for the shot-after-pass key-pass
+        // linker. MUST happen before clearing the pending-pass envelope
+        // — the pending fields stop tracking the pass at this point,
+        // but the key-pass window extends past completion until the
+        // receiver shoots, passes again, or loses the ball.
+        field
+            .ball
+            .record_completed_pass(passer_id, receiver_id, context.current_tick());
+        field.ball.clear_pending_pass_metadata();
+        // Pass completed — the pressers at emit time did NOT force a
+        // turnover, so don't credit a successful pressure. Clear the
+        // snapshot so it can't be reused by an unrelated future event.
+        field.ball.pressers_at_pass_count = 0;
+    }
+
+    /// Classify a completed pass and bump the passer's per-zone /
+    /// chance-creation counters. Called from `credit_completed_pass`
+    /// after `passes_completed` has been credited. Public to the
+    /// crate so the ball-event dispatcher can stay thin.
+    pub(crate) fn classify_completed_pass(
+        passer_id: u32,
+        _receiver_id: u32,
+        origin: Vector3<f32>,
+        target: Vector3<f32>,
+        was_cross: bool,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        use crate::r#match::engine::zones::{LateralLane, MatchZone};
+
+        let passer_side = match field.get_player(passer_id).and_then(|p| p.side) {
+            Some(s) => s,
+            None => return,
+        };
+        let field_w = context.field_size.width as f32;
+        let field_h = context.field_size.height as f32;
+        let is_home = passer_side == PlayerSide::Left;
+        let opp_box = context.penalty_area(!is_home);
+
+        // Forward progress along the attacking axis.
+        let forward_progress = passer_side.forward_delta(origin.x, target.x);
+        let target_in_final_third =
+            passer_side.attacking_progress_x(target.x, field_w) >= 2.0 / 3.0;
+        let origin_in_final_third =
+            passer_side.attacking_progress_x(origin.x, field_w) >= 2.0 / 3.0;
+
+        // Progressive pass: ≥25u outside final third, ≥12u inside.
+        let progressive_threshold = if origin_in_final_third { 12.0 } else { 25.0 };
+        let is_progressive = forward_progress >= progressive_threshold;
+
+        let target_in_box = opp_box.contains(&target);
+        let own_box = context.penalty_area(is_home);
+        let endpoint_zone =
+            MatchZone::classify(target, passer_side, field_w, own_box, opp_box);
+
+        // Lateral-lane classification (origin & target).
+        let origin_lane = LateralLane::classify(origin.y, field_h);
+        let target_lane = LateralLane::classify(target.y, field_h);
+        let from_half_space = matches!(
+            origin_lane,
+            LateralLane::HalfSpaceLeft | LateralLane::HalfSpaceRight
+        );
+        let from_central = matches!(origin_lane, LateralLane::CentralLane);
+        // Switch of play: long lateral diagonal across the pitch's
+        // y-axis. Tight definition — origin lane and target lane must
+        // BOTH be wide-or-half-space AND on opposite sides of centre.
+        let switch_of_play = {
+            let opposite_sides = matches!(
+                (origin_lane, target_lane),
+                (LateralLane::WideLeft, LateralLane::WideRight)
+                    | (LateralLane::WideLeft, LateralLane::HalfSpaceRight)
+                    | (LateralLane::HalfSpaceLeft, LateralLane::WideRight)
+                    | (LateralLane::HalfSpaceLeft, LateralLane::HalfSpaceRight)
+                    | (LateralLane::WideRight, LateralLane::WideLeft)
+                    | (LateralLane::WideRight, LateralLane::HalfSpaceLeft)
+                    | (LateralLane::HalfSpaceRight, LateralLane::WideLeft)
+                    | (LateralLane::HalfSpaceRight, LateralLane::HalfSpaceLeft)
+            );
+            // Switch must also cover meaningful y-distance — ≥ 35% of
+            // pitch height. Filters out short outside-channel passes
+            // that happen to clip lane boundaries.
+            let lateral_distance = (target.y - origin.y).abs();
+            let lateral_threshold = field_h * 0.35;
+            opposite_sides && lateral_distance >= lateral_threshold
+        };
+
+        if let Some(passer) = field.get_player_mut(passer_id) {
+            if is_progressive {
+                passer.statistics.add_progressive_pass();
+                if target_in_final_third && !origin_in_final_third {
+                    passer.statistics.note_progressive_pass_into_final_third();
+                }
+            }
+            if target_in_box {
+                passer.statistics.add_pass_into_box();
+                // Origin-lane breakdown for box-entry passes —
+                // half-space and central balls beat compact defences
+                // and earn a small extra credit on top of the regular
+                // box-entry line.
+                if from_half_space {
+                    passer.statistics.note_half_space_pass_into_box();
+                } else if from_central {
+                    passer.statistics.note_central_pass_into_box();
+                }
+            }
+            if was_cross {
+                passer.statistics.add_cross_completed();
+            }
+            if switch_of_play {
+                passer.statistics.note_switch_of_play();
+            }
+            // Future GK command-zone hookup point: an aerial cross that
+            // ends inside the GK's own box could be a "claim candidate"
+            // — leaving the marker for Slice C.
+            let _ = endpoint_zone;
+        }
+    }
+
+    /// Did this pass start in a wide channel and target the
+    /// opposition box? That's the cross-attempt signal — wing-play
+    /// service into the danger area, regardless of whether the
+    /// pass was tagged as a "cross" by the strategy layer.
+    fn is_cross_attempt(
+        passer_position: Vector3<f32>,
+        target: Vector3<f32>,
+        side: PlayerSide,
+        context: &MatchContext,
+    ) -> bool {
+        use crate::r#match::engine::zones::LateralLane;
+        let field_h = context.field_size.height as f32;
+        if !LateralLane::classify(passer_position.y, field_h).is_wide() {
+            return false;
+        }
+        // Pass must travel forward and end in or near the opp box.
+        let opp_box = match side {
+            PlayerSide::Left => context.penalty_area(false),
+            PlayerSide::Right => context.penalty_area(true),
+        };
+        if opp_box.contains(&target) {
+            return true;
+        }
+        // Within ~10u of the box — wide-channel deliveries that
+        // arrive at the edge of the area still count as crosses.
+        let dx = (target.x - opp_box.min.x.max(0.0))
+            .min(opp_box.max.x - target.x)
+            .max(0.0);
+        let dy = (target.y - opp_box.min.y)
+            .min(opp_box.max.y - target.y)
+            .max(0.0);
+        let inside_x = target.x >= opp_box.min.x && target.x <= opp_box.max.x;
+        let inside_y = target.y >= opp_box.min.y && target.y <= opp_box.max.y;
+        if inside_x && inside_y {
+            return true;
+        }
+        // Approximate "within 10u of box edge" using axis distances —
+        // good enough for a binary classification.
+        let edge_dist = if inside_x {
+            dy
+        } else if inside_y {
+            dx
+        } else {
+            (dx * dx + dy * dy).sqrt()
+        };
+        edge_dist <= 10.0
     }
 
     fn handle_pass_to_event(event_model: PassingEventContext, field: &mut MatchField) {
@@ -1133,7 +1647,11 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_claim_ball_event(player_id: u32, field: &mut MatchField) {
+    fn handle_claim_ball_event(
+        player_id: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
         // CLAIM COOLDOWN: Prevent rapid ping-pong between players
         // If the ball was just claimed by someone else, reject this claim
         const CLAIM_COOLDOWN_TICKS: u32 = 15; // ~250ms at 60fps - time before ball can change hands
@@ -1225,13 +1743,13 @@ impl PlayerEventDispatcher {
                 })
                 .unwrap_or(false);
             if same_team && passer_id != player_id {
-                if let Some(passer) = field.get_player_mut(passer_id) {
-                    passer.statistics.passes_completed += 1;
-                }
-                field.ball.pending_pass_passer = None;
+                // Same single completion path as `BallEvent::PassCompleted`
+                // — increments `passes_completed`, classifies progressive
+                // / cross / box-entry, and clears the metadata.
+                Self::credit_completed_pass(player_id, passer_id, field, context);
             } else if !same_team {
                 // Opponent won the pass — accuracy window ends.
-                field.ball.pending_pass_passer = None;
+                field.ball.clear_pending_pass_metadata();
             }
         }
         field.ball.previous_owner = field.ball.current_owner;
@@ -1271,7 +1789,11 @@ impl PlayerEventDispatcher {
         field.ball.cached_shot_target = None;
     }
 
-    fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
+    fn handle_shoot_event(
+        shoot_event_model: ShootingEventContext,
+        field: &mut MatchField,
+        direct_assister_id: Option<u32>,
+    ) {
         const GOAL_WIDTH: f32 = 29.0; // Half-width of goal in game units (matches engine GOAL_WIDTH)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
@@ -1601,40 +2123,93 @@ impl PlayerEventDispatcher {
         let on_target = clamped_y_target >= goal_left_post
             && clamped_y_target <= goal_right_post
             && !shot_goes_over_bar;
-        if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
-            // Quick xG from distance + finishing skill. Full-context xG with
-            // pressure/angle lives in ShotQualityEvaluator (player strategy
-            // layer) — that's the right place to compute a richer value when
-            // plumbing exposes the state context here.
-            let xg = {
-                let d = horizontal_distance;
-                // Calibrated to real-world xG curves: ~0.55 at 6yd, ~0.08 at 20yd
-                let distance_factor = if d <= 10.0 {
-                    0.55
-                } else if d <= 30.0 {
-                    0.55 - (d - 10.0) / 20.0 * 0.30
-                } else if d <= 60.0 {
-                    0.25 - (d - 30.0) / 30.0 * 0.18
-                } else if d <= 120.0 {
-                    0.07 - (d - 60.0) / 60.0 * 0.05
-                } else {
-                    0.02
-                };
-                let finishing = (shooter.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
-                let skill_mult = 0.7 + finishing * 0.6; // 0.7 .. 1.3
-                // Off-target shots are misses — don't credit xG
-                let target_mult = if on_target { 1.0 } else { 0.15 };
-                (distance_factor * skill_mult * target_mult).clamp(0.0, 0.90)
+        // Quick xG from distance + finishing skill. Computed once and
+        // shared between the shooter's memory (for striker xG totals)
+        // and the ball's `last_shot_xg` (for GK xg_prevented credit
+        // when the shot resolves).
+        let xg = {
+            let d = horizontal_distance;
+            let distance_factor = if d <= 10.0 {
+                0.55
+            } else if d <= 30.0 {
+                0.55 - (d - 10.0) / 20.0 * 0.30
+            } else if d <= 60.0 {
+                0.25 - (d - 30.0) / 30.0 * 0.18
+            } else if d <= 120.0 {
+                0.07 - (d - 60.0) / 60.0 * 0.05
+            } else {
+                0.02
             };
+            let finishing = field
+                .get_player(shoot_event_model.from_player_id)
+                .map(|p| (p.skills.technical.finishing / 20.0).clamp(0.0, 1.0))
+                .unwrap_or(0.5);
+            let skill_mult = 0.7 + finishing * 0.6;
+            let target_mult = if on_target { 1.0 } else { 0.15 };
+            (distance_factor * skill_mult * target_mult).clamp(0.0, 0.90)
+        };
+        if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
             shooter
                 .memory
                 .record_shot(shoot_event_model.tick, on_target);
             shooter.memory.record_shot_xg(shoot_event_model.tick, xg);
         }
 
+        // ── xG chain / buildup distribution ──────────────────────────
+        // The shooter's recent attacking partners share a small slice
+        // of the shot's xG so a midfielder who set up the chance gets
+        // some signal even when the shot misses or the assister is
+        // someone else. `recent_passers` is a 5-deep ring updated on
+        // every successful kick from a teammate.
+        //
+        // - xg_chain: anyone who touched the ball in the chain
+        //   (including shooter and direct assister).
+        // - xg_buildup: same set MINUS shooter and direct assister
+        //   (the shooter already gets the shot's xG via memory.xg, the
+        //   assister's value is already captured separately).
+        //
+        // The total chain pool (xg * 0.30) and buildup pool (xg * 0.20)
+        // are split across the unique participants of the chain. Without
+        // the split, a player who appeared in the ring multiple times
+        // accumulated the per-event credit linearly — a single shot
+        // with the same passer at indices 0/2/4 produced 3× the buildup
+        // it should. Per-player caps in `rating.rs` clip the worst case,
+        // but the raw stat reported on the match sheet was still wrong.
+        let shooter_id = shoot_event_model.from_player_id;
+        if xg > 0.0 {
+            let credits = Self::distribute_xg_credit(
+                field.ball.recent_passers.iter().copied(),
+                shooter_id,
+                direct_assister_id,
+                xg,
+            );
+            for (pid, chain_credit, buildup_credit) in credits {
+                if let Some(p) = field.get_player_mut(pid) {
+                    p.statistics.record_xg_chain(chain_credit);
+                    if let Some(buildup) = buildup_credit {
+                        p.statistics.record_xg_buildup(buildup);
+                    }
+                }
+            }
+        }
+
+        // Stash the in-flight shot's xG and shooter so the GK xG-prevented
+        // hook (in save / catch / parry / goal handlers) can credit /
+        // debit the keeper without re-deriving the value.
+        field.ball.last_shot_xg = xg;
+        field.ball.last_shot_shooter_id = Some(shoot_event_model.from_player_id);
+
         field.ball.previous_owner = Some(shoot_event_model.from_player_id);
         field.ball.current_owner = None;
         field.ball.pass_target_player_id = None;
+        // Shot arms the carry tracker — clear the carry; if a goal /
+        // save resolves, no carry credit is owed for the player who
+        // just shot.
+        field.ball.carry_owner = None;
+        // Likewise clear pass metadata — a shot ends the live pass
+        // window and the receiver-becomes-shooter case has already
+        // been credited by the dispatch site above.
+        field.ball.clear_pending_pass_metadata();
         field.ball.velocity = final_velocity;
 
         // Shorter flight protection for shots — allows defenders/GK to claim sooner
@@ -1718,10 +2293,16 @@ impl PlayerEventDispatcher {
             return;
         }
         let shooter_id = field.ball.previous_owner;
+        let shot_xg = field.ball.last_shot_xg;
         if let Some(gk) = field.get_player_mut(player_id) {
             gk.statistics.saves += 1;
             gk.statistics.shots_faced += 1;
+            if shot_xg > 0.0 {
+                gk.statistics.record_xg_prevented(shot_xg);
+            }
         }
+        field.ball.clear_shot_metadata();
+        field.ball.pending_error_to_shot_player_id = None;
         // Credit on-target to the shooter — a parry IS the keeper
         // touching a shot that reached the goal frame. Without this,
         // saves > on-target shots, an impossible ratio.
@@ -1753,19 +2334,25 @@ impl PlayerEventDispatcher {
             .iter()
             .find(|p| p.id == player_id)
             .map(|p| p.team_id);
+        let opponent_ball =
+            ball_was_moving && last_owner_team.is_some() && last_owner_team != gk_team;
 
         // Save credit requires both: the ball was moving from an opponent
         // AND the catch resolves a real shot (cached_shot_target set).
         // Without the shot gate, every cross / through-ball / clearance
         // that ends in the keeper's hands counted as a save — pushing
         // saves/on-target above 100% (more "saves" than on-target shots).
-        if ball_was_moving && last_owner_team.is_some() && last_owner_team != gk_team {
+        if opponent_ball {
             let was_shot = field.ball.cached_shot_target.is_some();
             if was_shot {
                 let shooter_id = field.ball.previous_owner;
+                let shot_xg = field.ball.last_shot_xg;
                 if let Some(player) = field.get_player_mut(player_id) {
                     player.statistics.saves += 1;
                     player.statistics.shots_faced += 1;
+                    if shot_xg > 0.0 {
+                        player.statistics.record_xg_prevented(shot_xg);
+                    }
                 }
                 let mut shooter_found = false;
                 if let Some(sid) = shooter_id {
@@ -1777,6 +2364,20 @@ impl PlayerEventDispatcher {
                 #[cfg(feature = "match-logs")]
                 Self::dbg_save_credit(1, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
                 let _ = shooter_found;
+                field.ball.clear_shot_metadata();
+                field.ball.pending_error_to_shot_player_id = None;
+            } else {
+                // Non-shot catch from an opponent ball (cross claim,
+                // through-ball collected, aerial gathered) — the GK
+                // commanded the box without a save. Counts as a small
+                // command-zone credit, NOT a save.
+                if let Some(gk) = field.get_player_mut(player_id) {
+                    if gk.tactical_position.current_position.position_group()
+                        == PlayerFieldPositionGroup::Goalkeeper
+                    {
+                        gk.statistics.note_gk_command_action();
+                    }
+                }
             }
         }
 
@@ -2276,13 +2877,18 @@ impl PlayerEventDispatcher {
         Some(clearer_id)
     }
 
-    fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
+    fn handle_clear_ball_event(
+        velocity: Vector3<f32>,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
         // Punches / dive-parries from a shot: the GK touched a real
         // attempt-on-goal and steered it away. The catching path
         // (handle_caught_ball_event) already credits saves; this is the
         // companion that closes the long-standing gap where punched and
         // parried shots stayed at zero saves regardless of effort.
         let gk_save_id = Self::gk_clearing_shot(field);
+        let is_gk_shot_save = gk_save_id.is_some();
         if let Some(gk_id) = gk_save_id {
             // Capture shooter BEFORE we mutate the field — the previous
             // owner is the player whose shot the GK is now clearing.
@@ -2345,6 +2951,34 @@ impl PlayerEventDispatcher {
             }
         }
 
+        // Clearance credit. A GK who just deflected a real shot away
+        // (handled at the top of this fn) is already getting the save —
+        // crediting a clearance on top would double-stamp the action,
+        // so the shot-save branch is excluded here. Outfielders and a
+        // GK doing routine sweeper work both get clearance credit + the
+        // zone classification.
+        if !is_gk_shot_save {
+            if let Some(clearer_id) = field.ball.current_owner {
+                let ball_pos = field.ball.position;
+                if let Some(clearer) = field.get_player_mut(clearer_id) {
+                    clearer.statistics.add_clearance();
+                    let zone = Self::zone_for_player(clearer, ball_pos, context);
+                    if let Some(zone) = zone {
+                        clearer.statistics.note_clearance_zone(zone);
+                    }
+                    // GK sweeper / routine clear-out is a command-zone
+                    // action — counted alongside the clearance so the
+                    // box-commanding GK gets the small per-event credit.
+                    if zone.map_or(false, |z| z.is_own_box())
+                        && clearer.tactical_position.current_position.position_group()
+                            == PlayerFieldPositionGroup::Goalkeeper
+                    {
+                        clearer.statistics.note_gk_command_action();
+                    }
+                }
+            }
+        }
+
         // Apply the clearing velocity to the ball
         field.ball.velocity = capped_velocity;
 
@@ -2393,6 +3027,32 @@ impl PlayerEventDispatcher {
         };
         let foul_pos = field.ball.position;
         let in_penalty_area = pa.contains(&foul_pos);
+
+        // Tag the fouler's stats with the zone-aware bumps the rating
+        // helper consumes. Penalty-conceded fouls and DEF/GK fouls in
+        // the team's own third both carry extra rating penalties on
+        // top of the per-foul base.
+        {
+            let field_w = context.field_size.width as f32;
+            let foul_progress = fouler_side.attacking_progress_x(foul_pos.x, field_w);
+            let in_own_third = foul_progress < 1.0 / 3.0;
+            if let Some(fouler) = field.get_player_mut(fouler_id) {
+                if in_penalty_area {
+                    fouler.statistics.note_penalty_foul_conceded();
+                }
+                if in_own_third {
+                    let pos_group =
+                        fouler.tactical_position.current_position.position_group();
+                    if matches!(
+                        pos_group,
+                        PlayerFieldPositionGroup::Defender
+                            | PlayerFieldPositionGroup::Goalkeeper
+                    ) {
+                        fouler.statistics.note_own_third_def_foul();
+                    }
+                }
+            }
+        }
 
         // Restart position: penalty spot vs foul spot. Penalty spot is
         // 88u from the defending goal line on the centre y axis.
@@ -2533,5 +3193,158 @@ impl PlayerEventDispatcher {
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|t| t.player_id)
+    }
+}
+
+#[cfg(test)]
+mod xg_distribution_tests {
+    use super::PlayerEventDispatcher;
+
+    fn credit_for(
+        out: &[(u32, f32, Option<f32>)],
+        pid: u32,
+    ) -> Option<(f32, Option<f32>)> {
+        out.iter()
+            .find(|(id, _, _)| *id == pid)
+            .map(|(_, c, b)| (*c, *b))
+    }
+
+    #[test]
+    fn assister_excluded_from_buildup() {
+        // Chain: passer P1 → P2 (assister, last completed pass) → shooter S.
+        // Recent passers contains [P1, P2] (S is shooter, not in passers).
+        // Buildup must credit only P1 — P2 is the direct assister.
+        let recent = vec![1, 2];
+        let credits = PlayerEventDispatcher::distribute_xg_credit(
+            recent.into_iter(),
+            99,         // shooter
+            Some(2),    // assister
+            0.40,
+        );
+        let p1 = credit_for(&credits, 1).expect("P1 must be credited");
+        let p2 = credit_for(&credits, 2).expect("P2 must be credited (chain)");
+        assert!(p1.1.is_some(), "P1 buildup should be set");
+        assert!(p2.1.is_none(), "assister P2 must be excluded from buildup");
+    }
+
+    #[test]
+    fn shooter_excluded_from_buildup() {
+        // Shooter appearing in recent_passers (e.g. they kicked it earlier
+        // in the chain) gets chain credit but not buildup.
+        let recent = vec![1, 2, 99];
+        let credits = PlayerEventDispatcher::distribute_xg_credit(
+            recent.into_iter(),
+            99,
+            Some(2),
+            0.50,
+        );
+        let s = credit_for(&credits, 99).expect("shooter chain credit");
+        assert!(s.1.is_none(), "shooter must not get buildup credit");
+    }
+
+    #[test]
+    fn third_player_in_chain_still_receives_buildup() {
+        // Passer P1 (deeper in chain), P2 assister, S shooter — P1 still
+        // earns buildup even though P2/S are excluded.
+        let recent = vec![1, 2];
+        let credits = PlayerEventDispatcher::distribute_xg_credit(
+            recent.into_iter(),
+            99,
+            Some(2),
+            0.40,
+        );
+        let p1 = credit_for(&credits, 1).expect("P1 in chain");
+        assert!(p1.1.is_some(), "third-player buildup must be present");
+        // Pool is xg * 0.20 = 0.08, split across 1 eligible player.
+        let buildup = p1.1.unwrap();
+        assert!(
+            (buildup - 0.40 * 0.20).abs() < 1e-4,
+            "P1 should receive the entire buildup pool — got {}",
+            buildup
+        );
+    }
+
+    #[test]
+    fn duplicate_recent_passers_credited_once() {
+        // Same passer appears 3 times in the ring; chain credit and
+        // buildup credit must each fire ONCE for that player.
+        let recent = vec![1, 1, 1];
+        let credits = PlayerEventDispatcher::distribute_xg_credit(
+            recent.into_iter(),
+            99,
+            None,
+            0.40,
+        );
+        assert_eq!(credits.len(), 1, "dedupe — one entry per unique id");
+        let (pid, chain, buildup) = credits[0];
+        assert_eq!(pid, 1);
+        // Chain pool 0.40 * 0.30 = 0.12, divided by 1 unique = 0.12.
+        assert!((chain - 0.12).abs() < 1e-4);
+        // Buildup pool 0.40 * 0.20 = 0.08, divided by 1 unique = 0.08.
+        assert!((buildup.unwrap() - 0.08).abs() < 1e-4);
+    }
+
+    #[test]
+    fn buildup_does_not_scale_linearly_with_duplicate_ring_entries() {
+        // Same chain ([1, 1, 2, 2, 1]) once and a deduped equivalent
+        // ([1, 2]) must produce the same TOTAL credit per player —
+        // duplicates can't inflate buildup.
+        let dup_credits = PlayerEventDispatcher::distribute_xg_credit(
+            vec![1u32, 1, 2, 2, 1].into_iter(),
+            99,
+            None,
+            0.40,
+        );
+        let unique_credits = PlayerEventDispatcher::distribute_xg_credit(
+            vec![1u32, 2].into_iter(),
+            99,
+            None,
+            0.40,
+        );
+        // Both must be length 2 and credit the same per-player amounts.
+        assert_eq!(dup_credits.len(), 2);
+        assert_eq!(unique_credits.len(), 2);
+        for &(pid, chain_a, build_a) in dup_credits.iter() {
+            let (chain_b, build_b) =
+                credit_for(&unique_credits, pid).expect("paired credit");
+            assert!(
+                (chain_a - chain_b).abs() < 1e-4,
+                "chain credit for {} differs: dup {} vs unique {}",
+                pid,
+                chain_a,
+                chain_b
+            );
+            match (build_a, build_b) {
+                (Some(a), Some(b)) => assert!((a - b).abs() < 1e-4),
+                (None, None) => {}
+                _ => panic!("buildup presence differs for {}", pid),
+            }
+        }
+    }
+
+    #[test]
+    fn pool_total_bounded_by_xg_fractions() {
+        // Aggregate buildup credit summed across all eligible players
+        // must equal the pool — 0.40 * 0.20 = 0.08 — regardless of
+        // how many participants there are.
+        let recent = vec![1, 2, 3, 4]; // 4 unique participants
+        let credits = PlayerEventDispatcher::distribute_xg_credit(
+            recent.into_iter(),
+            99,
+            None,
+            0.40,
+        );
+        let total_buildup: f32 = credits.iter().map(|(_, _, b)| b.unwrap_or(0.0)).sum();
+        assert!(
+            (total_buildup - 0.08).abs() < 1e-4,
+            "total buildup pool should be 0.08, got {}",
+            total_buildup
+        );
+        let total_chain: f32 = credits.iter().map(|(_, c, _)| *c).sum();
+        assert!(
+            (total_chain - 0.12).abs() < 1e-4,
+            "total chain pool should be 0.12, got {}",
+            total_chain
+        );
     }
 }

@@ -29,6 +29,7 @@ use core::SelectionScoreFactor;
 use core::SimulatorData;
 use core::SupportEventContext;
 use core::SupportTrigger;
+use core::TeammateConflictContext;
 use core::TrainingEventContext;
 use core::TransferInterestContext;
 use core::TransferInterestEvidence;
@@ -320,6 +321,8 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             | HappinessEventType::PlayerOfTheMonth
             | HappinessEventType::YoungPlayerOfTheMonth
             | HappinessEventType::YoungPlayerOfTheWeek
+            | HappinessEventType::TeamOfTheMonthSelection
+            | HappinessEventType::YoungTeamOfTheMonthSelection
             | HappinessEventType::TeamOfTheSeasonSelection
             | HappinessEventType::TeamOfTheYearSelection
             | HappinessEventType::PlayerOfTheSeason
@@ -419,6 +422,10 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::TeamOfTheWeekSelection => "event_team_of_the_week_selection",
         HappinessEventType::YoungTeamOfTheWeekSelection => {
             "event_young_team_of_the_week_selection"
+        }
+        HappinessEventType::TeamOfTheMonthSelection => "event_team_of_the_month_selection",
+        HappinessEventType::YoungTeamOfTheMonthSelection => {
+            "event_young_team_of_the_month_selection"
         }
         HappinessEventType::TeamOfTheSeasonSelection => "event_team_of_the_season_selection",
         HappinessEventType::TeamOfTheYearSelection => "event_team_of_the_year_selection",
@@ -653,8 +660,30 @@ impl EventContextRenderer {
         if let Some(tc) = ctx.training_context.as_ref() {
             return TrainingRender::reason_sentence(tc, i18n);
         }
+        if let Some(conflict) = ctx.teammate_conflict_context.as_ref() {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(reason) = TeammateConflictRender::reason_sentence(conflict, i18n) {
+                parts.push(reason);
+            }
+            if let Some(evidence) = TeammateConflictRender::evidence_sentence(conflict, i18n) {
+                parts.push(evidence);
+            }
+            if !parts.is_empty() {
+                return Some(parts.join(" "));
+            }
+        }
         if let Some(mc) = ctx.manager_interaction_context.as_ref() {
-            return ManagerInteractionRender::reason_sentence(mc, i18n);
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(reason) = ManagerInteractionRender::reason_sentence(mc, i18n) {
+                parts.push(reason);
+            }
+            if let Some(evidence) = ManagerInteractionRender::evidence_sentence(mc, i18n) {
+                parts.push(evidence);
+            }
+            if !parts.is_empty() {
+                return Some(parts.join(" "));
+            }
+            return None;
         }
         if let Some(cc) = ctx.contract_context.as_ref() {
             return ContractRender::reason_sentence(cc, i18n);
@@ -1566,6 +1595,19 @@ impl ManagerInteractionRender {
         ctx: &ManagerInteractionEventContext,
         i18n: &I18n,
     ) -> String {
+        // Criticism with a concrete reason gets the dedicated headline
+        // family (event_manager_criticism_<reason>) — that's where the
+        // football-specific copy lives ("Criticised over his pressing
+        // work") and where the user reads the *what specifically*.
+        if matches!(event_type, HappinessEventType::ManagerCriticism) {
+            if let Some(reason) = ctx.criticism_reason {
+                let key = format!("event_manager_criticism_{}", reason.as_headline_token());
+                let raw = i18n.t(&key);
+                if raw != key {
+                    return raw.to_string();
+                }
+            }
+        }
         let key = format!(
             "manager_interaction_headline_{}_{}",
             Self::event_token(event_type),
@@ -1583,6 +1625,16 @@ impl ManagerInteractionRender {
         ctx: &ManagerInteractionEventContext,
         i18n: &I18n,
     ) -> Option<String> {
+        // Concrete criticism reason wins — that's where the cause copy
+        // explains the *why* in football terms ("The criticism focused on
+        // missed pressing triggers and slow recovery runs.").
+        if let Some(reason) = ctx.criticism_reason {
+            let key = reason.as_i18n_key();
+            let raw = i18n.t(key);
+            if raw != key {
+                return Some(raw.to_string());
+            }
+        }
         let key = format!(
             "manager_reason_{}_{}",
             ctx.tone.as_i18n_key().trim_start_matches("manager_tone_"),
@@ -1604,6 +1656,32 @@ impl ManagerInteractionRender {
         Some(raw.to_string())
     }
 
+    /// Compose the supporting "Evidence" sentence — concrete signal
+    /// the manager weighed (rating number, repeat warning, trust gap).
+    /// Returns `None` when the context has no readable evidence.
+    pub fn evidence_sentence(
+        ctx: &ManagerInteractionEventContext,
+        i18n: &I18n,
+    ) -> Option<String> {
+        if ctx.repeated_recently {
+            let key = "manager_evidence_repeated_recently";
+            let raw = i18n.t(key);
+            if raw != key {
+                return Some(raw.to_string());
+            }
+        }
+        if let Some(rating) = ctx.match_rating {
+            if rating < 6.3 {
+                let key = "manager_evidence_low_match_rating";
+                let raw = i18n.t(key);
+                if raw != key {
+                    return Some(raw.replace("{rating}", &format!("{:.1}", rating)));
+                }
+            }
+        }
+        None
+    }
+
     fn event_token(event_type: &HappinessEventType) -> &'static str {
         match event_type {
             HappinessEventType::ManagerPraise => "praise",
@@ -1615,6 +1693,61 @@ impl ManagerInteractionRender {
             HappinessEventType::ManagerPlayingTimePromise => "playing_time_promise",
             _ => "other",
         }
+    }
+}
+
+/// Renders the structured payload for `ConflictWithTeammate` events.
+/// Maps the concrete reason / location attached at emit time onto a
+/// partner-aware headline + cause sentence so the rendered row reads
+/// "Clashed with {partner} over training standards" instead of the
+/// generic "Had a disagreement with a teammate" filler.
+struct TeammateConflictRender;
+
+impl TeammateConflictRender {
+    /// Returns the partner-aware headline key (with `{partner}`
+    /// placeholder) for a concrete conflict reason. `None` when the
+    /// context has no specific reason — caller falls back to the legacy
+    /// `event_conflict_with_teammate_named` line.
+    pub fn partner_named_key(ctx: &TeammateConflictContext) -> Option<String> {
+        if matches!(ctx.reason, core::TeammateConflictReason::Other) {
+            return None;
+        }
+        Some(format!(
+            "event_teammate_conflict_{}_named",
+            ctx.reason.as_headline_token()
+        ))
+    }
+
+    /// Compose the cause sentence describing why the conflict happened
+    /// in concrete football terms.
+    pub fn reason_sentence(ctx: &TeammateConflictContext, i18n: &I18n) -> Option<String> {
+        let key = ctx.reason.as_i18n_key();
+        let raw = i18n.t(key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
+    }
+
+    /// "Where it happened" sentence — short setting note that lands
+    /// after the cause line. Optional: returns `None` when the locale
+    /// has no copy for the location yet.
+    pub fn evidence_sentence(ctx: &TeammateConflictContext, i18n: &I18n) -> Option<String> {
+        let key = format!(
+            "conflict_evidence_{}",
+            match ctx.location {
+                core::ConflictLocation::TrainingGround => "training_ground",
+                core::ConflictLocation::DressingRoom => "dressing_room",
+                core::ConflictLocation::Match => "match",
+                core::ConflictLocation::Media => "media",
+                core::ConflictLocation::TeamMeeting => "team_meeting",
+            }
+        );
+        let raw = i18n.t(&key);
+        if raw == key {
+            return None;
+        }
+        Some(raw.to_string())
     }
 }
 
@@ -2079,6 +2212,8 @@ impl RecognitionRender {
                 | HappinessEventType::YoungPlayerOfTheWeek
                 | HappinessEventType::PlayerOfTheMonth
                 | HappinessEventType::YoungPlayerOfTheMonth
+                | HappinessEventType::TeamOfTheMonthSelection
+                | HappinessEventType::YoungTeamOfTheMonthSelection
                 | HappinessEventType::PlayerOfTheSeason
                 | HappinessEventType::YoungPlayerOfTheSeason
                 | HappinessEventType::TeamOfTheSeasonSelection
@@ -2372,6 +2507,29 @@ fn build_description(
     }
 
     if let Some((name, slug)) = partner {
+        // Conflict event with a concrete reason → reach for the specific
+        // partner-aware key family ("Clashed with {partner} over training
+        // standards") before the legacy generic line.
+        if matches!(event.event_type, HappinessEventType::ConflictWithTeammate) {
+            if let Some(reason_key) = event
+                .context
+                .as_ref()
+                .and_then(|c| c.teammate_conflict_context.as_ref())
+                .and_then(TeammateConflictRender::partner_named_key)
+            {
+                let raw = i18n.t(&reason_key);
+                if raw != reason_key {
+                    let link = format!(
+                        r#"<a href="/{}/players/{}">{}</a>"#,
+                        lang, slug, name
+                    );
+                    return DescriptionRender {
+                        html: raw.replace("{partner}", &link),
+                        partner_in_headline: true,
+                    };
+                }
+            }
+        }
         if let Some(named_key) = partner_named_key(&event.event_type) {
             let raw = i18n.t(named_key);
             let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
@@ -3360,6 +3518,330 @@ mod tests {
             missing.len(),
             missing
         );
+    }
+
+    #[test]
+    fn manager_criticism_reason_keys_present_in_en_locale() {
+        // Locale audit: every concrete manager-criticism reason must
+        // resolve to a real cause sentence + a real headline variant in
+        // en.json. The renderer falls back to the legacy generic line
+        // when a key is missing, which silently hides the upgrade.
+        use std::collections::HashMap;
+        let bytes = include_bytes!("../../../assets/i18n/en.json");
+        let map: HashMap<String, String> =
+            serde_json::from_slice(bytes).expect("en.json is valid JSON");
+        const REASONS: &[core::ManagerCriticismReason] = &[
+            core::ManagerCriticismReason::MissedAssignment,
+            core::ManagerCriticismReason::PoorPressing,
+            core::ManagerCriticismReason::CostlyError,
+            core::ManagerCriticismReason::LowTrainingIntensity,
+            core::ManagerCriticismReason::PoorBodyLanguage,
+            core::ManagerCriticismReason::PublicComplaint,
+            core::ManagerCriticismReason::LateArrival,
+            core::ManagerCriticismReason::IgnoredTacticalInstruction,
+            core::ManagerCriticismReason::RepeatedIncident,
+            core::ManagerCriticismReason::Other,
+        ];
+        let mut missing: Vec<String> = Vec::new();
+        for r in REASONS {
+            let cause = r.as_i18n_key().to_string();
+            if !map.contains_key(&cause) {
+                missing.push(cause);
+            }
+            let headline = format!("event_manager_criticism_{}", r.as_headline_token());
+            if !map.contains_key(&headline) {
+                missing.push(headline);
+            }
+        }
+        for k in [
+            "manager_evidence_repeated_recently",
+            "manager_evidence_low_match_rating",
+        ] {
+            if !map.contains_key(k) {
+                missing.push(k.to_string());
+            }
+        }
+        assert!(missing.is_empty(), "en.json missing keys: {:#?}", missing);
+    }
+
+    #[test]
+    fn teammate_conflict_reason_keys_present_in_en_locale() {
+        // Locale audit: every concrete conflict reason must have a
+        // partner-aware headline ({partner} placeholder) plus a cause
+        // sentence + a location evidence sentence in en.json. Otherwise
+        // the renderer silently degrades to the generic legacy copy.
+        use std::collections::HashMap;
+        let bytes = include_bytes!("../../../assets/i18n/en.json");
+        let map: HashMap<String, String> =
+            serde_json::from_slice(bytes).expect("en.json is valid JSON");
+        const REASONS: &[core::TeammateConflictReason] = &[
+            core::TeammateConflictReason::TrainingStandards,
+            core::TeammateConflictReason::PositionalRivalry,
+            core::TeammateConflictReason::WageJealousy,
+            core::TeammateConflictReason::TacticalBlame,
+            core::TeammateConflictReason::PersonalityClash,
+            core::TeammateConflictReason::LanguageBarrier,
+            core::TeammateConflictReason::LeadershipChallenge,
+            core::TeammateConflictReason::MediaComments,
+        ];
+        const LOCATIONS: &[(core::ConflictLocation, &str)] = &[
+            (core::ConflictLocation::TrainingGround, "training_ground"),
+            (core::ConflictLocation::DressingRoom, "dressing_room"),
+            (core::ConflictLocation::Match, "match"),
+            (core::ConflictLocation::Media, "media"),
+            (core::ConflictLocation::TeamMeeting, "team_meeting"),
+        ];
+        let mut missing: Vec<String> = Vec::new();
+        for r in REASONS {
+            let cause = r.as_i18n_key().to_string();
+            if !map.contains_key(&cause) {
+                missing.push(cause);
+            }
+            let headline = format!("event_teammate_conflict_{}_named", r.as_headline_token());
+            if let Some(value) = map.get(&headline) {
+                assert!(
+                    value.contains("{partner}"),
+                    "{} must contain {{partner}} placeholder",
+                    headline
+                );
+            } else {
+                missing.push(headline);
+            }
+        }
+        for (_, token) in LOCATIONS {
+            let evidence = format!("conflict_evidence_{}", token);
+            if !map.contains_key(&evidence) {
+                missing.push(evidence);
+            }
+        }
+        assert!(missing.is_empty(), "en.json missing keys: {:#?}", missing);
+    }
+
+    #[test]
+    fn manager_criticism_and_conflict_keys_present_in_every_locale() {
+        // Locale parity: a representative key from each new family must
+        // exist in every supported locale. Catches the case where the
+        // i18n injector ran on en.json but missed a translation file.
+        const LOCALES: &[&str] = &["en", "de", "es", "fr", "ja", "pt", "ru", "tr", "zh"];
+        const REPRESENTATIVES: &[&str] = &[
+            "event_manager_criticism_pressing",
+            "event_manager_criticism_costly_error",
+            "manager_criticism_reason_poor_pressing",
+            "manager_criticism_reason_repeated",
+            "manager_evidence_repeated_recently",
+            "event_teammate_conflict_training_standards_named",
+            "event_teammate_conflict_leadership_challenge_named",
+            "teammate_conflict_reason_training_standards",
+            "teammate_conflict_reason_wage_jealousy",
+            "conflict_evidence_training_ground",
+            "conflict_evidence_dressing_room",
+        ];
+        for loc in LOCALES {
+            let path_full = format!(
+                "{}/assets/i18n/{}.json",
+                env!("CARGO_MANIFEST_DIR"),
+                loc
+            );
+            let raw = std::fs::read_to_string(&path_full)
+                .unwrap_or_else(|e| panic!("could not read {}: {}", path_full, e));
+            for key in REPRESENTATIVES {
+                assert!(
+                    raw.contains(key),
+                    "{}.json missing required key {}",
+                    loc,
+                    key
+                );
+            }
+        }
+    }
+
+    /// Lightweight in-memory I18n stub that returns either the loaded
+    /// value or — for missing keys — the key itself. Mirrors the
+    /// production `I18n.t` semantics so the renderer's "fall back to the
+    /// raw key" branch can still be exercised without standing up the
+    /// full bundle loader.
+    fn test_i18n_from(map: std::collections::HashMap<String, String>) -> I18n {
+        I18n::for_test(map)
+    }
+
+    fn load_en_i18n() -> I18n {
+        let bytes = include_bytes!("../../../assets/i18n/en.json");
+        let map: std::collections::HashMap<String, String> =
+            serde_json::from_slice(bytes).expect("en.json is valid JSON");
+        test_i18n_from(map)
+    }
+
+    #[test]
+    fn manager_criticism_with_concrete_reason_renders_specific_cause() {
+        // Acceptance criterion: ManagerCriticism with a concrete reason
+        // must render the football-specific cause sentence, not the
+        // generic topic-only fallback.
+        let i18n = load_en_i18n();
+        let mctx = core::ManagerInteractionEventContext::new(
+            core::ManagerInteractionTopic::Tactical,
+            core::ManagerInteractionTone::Honest,
+            core::PlayerAcceptance::Discouraged,
+        )
+        .with_criticism_reason(core::ManagerCriticismReason::PoorPressing);
+        let cause = ManagerInteractionRender::reason_sentence(&mctx, &i18n)
+            .expect("reason sentence should render");
+        assert!(
+            cause.contains("pressing"),
+            "expected pressing-specific copy, got: {cause}"
+        );
+        // Headline must follow the concrete-reason key family.
+        let headline = ManagerInteractionRender::headline(
+            &HappinessEventType::ManagerCriticism,
+            &mctx,
+            &i18n,
+        );
+        assert_ne!(
+            headline,
+            i18n.t("event_manager_criticism").to_string(),
+            "headline must use the reason-specific variant, not the legacy line"
+        );
+    }
+
+    #[test]
+    fn manager_criticism_evidence_surfaces_repeated_warning() {
+        let i18n = load_en_i18n();
+        let mctx = core::ManagerInteractionEventContext::new(
+            core::ManagerInteractionTopic::Performance,
+            core::ManagerInteractionTone::Stern,
+            core::PlayerAcceptance::Discouraged,
+        )
+        .with_criticism_reason(core::ManagerCriticismReason::PoorPressing)
+        .with_repeated_recently(true);
+        let evidence = ManagerInteractionRender::evidence_sentence(&mctx, &i18n)
+            .expect("evidence sentence should render when repeated_recently is set");
+        assert!(
+            evidence.to_lowercase().contains("warned"),
+            "expected repeat-warning copy, got: {evidence}"
+        );
+    }
+
+    #[test]
+    fn manager_criticism_without_reason_falls_back_safely() {
+        // Legacy emit sites that don't attach a criticism reason must
+        // still produce a non-empty cause sentence (topic-only fallback)
+        // and the legacy generic headline. No raw i18n key bleed.
+        let i18n = load_en_i18n();
+        let mctx = core::ManagerInteractionEventContext::new(
+            core::ManagerInteractionTopic::Performance,
+            core::ManagerInteractionTone::Honest,
+            core::PlayerAcceptance::Discouraged,
+        );
+        let _ = ManagerInteractionRender::reason_sentence(&mctx, &i18n);
+        let headline = ManagerInteractionRender::headline(
+            &HappinessEventType::ManagerCriticism,
+            &mctx,
+            &i18n,
+        );
+        assert!(
+            !headline.starts_with("event_manager_criticism_"),
+            "fallback headline must not be a raw key: {headline}"
+        );
+    }
+
+    #[test]
+    fn conflict_with_teammate_renders_partner_cause_and_outlook() {
+        // Acceptance criterion: ConflictWithTeammate with a concrete
+        // reason renders a partner-aware headline, a specific cause
+        // sentence, and an outlook (follow_up) line.
+        let i18n = load_en_i18n();
+        let conflict = core::TeammateConflictContext::new(
+            core::TeammateConflictReason::TrainingStandards,
+            core::ConflictLocation::TrainingGround,
+        );
+        let key = TeammateConflictRender::partner_named_key(&conflict)
+            .expect("training-standards reason must produce a partner key");
+        let raw = i18n.t(&key);
+        assert!(
+            raw.contains("{partner}"),
+            "partner-aware headline must carry {{partner}} placeholder, got: {raw}"
+        );
+
+        let cause = TeammateConflictRender::reason_sentence(&conflict, &i18n)
+            .expect("conflict cause sentence must render");
+        assert!(
+            cause.to_lowercase().contains("training"),
+            "training-standards cause must mention training, got: {cause}"
+        );
+
+        let evidence = TeammateConflictRender::evidence_sentence(&conflict, &i18n)
+            .expect("conflict evidence sentence must render for known location");
+        assert!(!evidence.is_empty());
+
+        // Outlook copy lives on HappinessEventFollowUp::DressingRoomDamageRisk.
+        let follow_up = i18n.t(core::HappinessEventFollowUp::DressingRoomDamageRisk.as_i18n_key());
+        assert!(!follow_up.is_empty());
+    }
+
+    #[test]
+    fn conflict_other_reason_falls_back_to_legacy_named_key() {
+        // Reason::Other is the catch-all — the renderer must not invent
+        // a key like "event_teammate_conflict_other_named". It returns
+        // None so build_description falls back to the legacy
+        // event_conflict_with_teammate_named line.
+        let conflict = core::TeammateConflictContext::new(
+            core::TeammateConflictReason::Other,
+            core::ConflictLocation::DressingRoom,
+        );
+        assert_eq!(TeammateConflictRender::partner_named_key(&conflict), None);
+    }
+
+    #[test]
+    fn conflict_reason_token_round_trips_through_partner_named_key() {
+        // Every concrete reason must produce a partner-aware key whose
+        // token suffix matches `as_headline_token`. Catches a missed
+        // arm in either side of the renderer mapping.
+        for (reason, expected_token) in [
+            (
+                core::TeammateConflictReason::TrainingStandards,
+                "training_standards",
+            ),
+            (
+                core::TeammateConflictReason::PositionalRivalry,
+                "positional_rivalry",
+            ),
+            (
+                core::TeammateConflictReason::WageJealousy,
+                "wage_jealousy",
+            ),
+            (
+                core::TeammateConflictReason::TacticalBlame,
+                "tactical_blame",
+            ),
+            (
+                core::TeammateConflictReason::PersonalityClash,
+                "personality_clash",
+            ),
+            (
+                core::TeammateConflictReason::LanguageBarrier,
+                "language_barrier",
+            ),
+            (
+                core::TeammateConflictReason::LeadershipChallenge,
+                "leadership_challenge",
+            ),
+            (
+                core::TeammateConflictReason::MediaComments,
+                "media_comments",
+            ),
+        ] {
+            let ctx = core::TeammateConflictContext::new(
+                reason,
+                core::ConflictLocation::DressingRoom,
+            );
+            let key = TeammateConflictRender::partner_named_key(&ctx)
+                .expect("concrete reason must produce a partner key");
+            assert!(
+                key.ends_with(&format!("{}_named", expected_token)),
+                "{:?} produced unexpected key {}",
+                reason,
+                key
+            );
+        }
     }
 
     #[test]

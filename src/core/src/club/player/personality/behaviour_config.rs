@@ -381,6 +381,8 @@ pub struct MoraleEventCatalog {
     pub young_player_of_the_week: f32,
     pub team_of_the_week_selection: f32,
     pub young_team_of_the_week_selection: f32,
+    pub team_of_the_month_selection: f32,
+    pub young_team_of_the_month_selection: f32,
     pub team_of_the_season_selection: f32,
     pub team_of_the_year_selection: f32,
     pub player_of_the_season: f32,
@@ -532,6 +534,10 @@ impl Default for MoraleEventCatalog {
             young_player_of_the_week: 5.0,
             team_of_the_week_selection: 3.0,
             young_team_of_the_week_selection: 2.5,
+            // Monthly XI sits between the weekly selection and the
+            // season XI — full month of fixtures, but not a campaign.
+            team_of_the_month_selection: 5.0,
+            young_team_of_the_month_selection: 4.0,
             team_of_the_season_selection: 9.0,
             // Calendar-year XI — full year of consistency, between
             // Team of the Season (one league campaign) and a full
@@ -646,6 +652,8 @@ impl MoraleEventCatalog {
             YoungPlayerOfTheWeek => self.young_player_of_the_week,
             TeamOfTheWeekSelection => self.team_of_the_week_selection,
             YoungTeamOfTheWeekSelection => self.young_team_of_the_week_selection,
+            TeamOfTheMonthSelection => self.team_of_the_month_selection,
+            YoungTeamOfTheMonthSelection => self.young_team_of_the_month_selection,
             TeamOfTheSeasonSelection => self.team_of_the_season_selection,
             TeamOfTheYearSelection => self.team_of_the_year_selection,
             PlayerOfTheSeason => self.player_of_the_season,

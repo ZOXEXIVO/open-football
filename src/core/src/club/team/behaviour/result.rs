@@ -4,11 +4,12 @@ use crate::club::player::interaction::{
     default_cooldown_days,
 };
 use crate::{
-    ChangeType, HappinessEventCause, HappinessEventChangeKind, HappinessEventContext,
+    ChangeType, ConflictLocation, HappinessEventCause, HappinessEventChangeKind, HappinessEventContext,
     HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, LoanEventContext, LoanEventKind, ManagerInteractionEventContext,
     ManagerInteractionTone, ManagerInteractionTopic, PlayerAcceptance, Player, PlayerPositionType,
     PlayerSquadStatus, PlayerStatusType, PromiseKind, RelationshipChange, SimulatorData,
+    TeammateConflictContext, TeammateConflictReason,
 };
 use chrono::{Duration, NaiveDate};
 
@@ -648,6 +649,10 @@ impl PairEventContextBuilder {
         level_after: f32,
         evidence: &[HappinessEventEvidence],
     ) -> HappinessEventContext {
+        let conflict_payload = TeammateConflictContext::new(
+            Self::reason_for_conflict(change_type, evidence),
+            Self::location_for_conflict(change_type, evidence),
+        );
         let ctx = HappinessEventContext::new(
             Self::cause_for_conflict(change_type),
             HappinessEventSeverity::from_magnitude(magnitude),
@@ -660,7 +665,8 @@ impl PairEventContextBuilder {
             snapshot_before.professional_respect,
         )
         .with_change_kind(HappinessEventChangeKind::from_change_type(change_type))
-        .with_evidence_iter(evidence.iter().copied());
+        .with_evidence_iter(evidence.iter().copied())
+        .with_teammate_conflict_context(conflict_payload);
 
         // Outlook: a strained relation OR a repeated incident → real
         // damage risk; everything else settles.
@@ -673,6 +679,63 @@ impl PairEventContextBuilder {
             HappinessEventFollowUp::LikelyToSettle
         };
         ctx.with_follow_up(follow_up)
+    }
+
+    /// Resolve the football-specific reason behind a conflict from the
+    /// upstream `ChangeType`, refined by any concrete evidence atoms the
+    /// caller already gathered (wage gap, training standards, etc.).
+    /// Closed mapping — every change type lands on a specific
+    /// `TeammateConflictReason` so the renderer can drop the generic
+    /// "had a disagreement" line.
+    pub fn reason_for_conflict(
+        change_type: &ChangeType,
+        evidence: &[HappinessEventEvidence],
+    ) -> TeammateConflictReason {
+        if evidence.contains(&HappinessEventEvidence::WageGap) {
+            return TeammateConflictReason::WageJealousy;
+        }
+        if evidence.contains(&HappinessEventEvidence::LanguageBarrier) {
+            return TeammateConflictReason::LanguageBarrier;
+        }
+        if evidence.contains(&HappinessEventEvidence::MediaIncident) {
+            return TeammateConflictReason::MediaComments;
+        }
+        if evidence.contains(&HappinessEventEvidence::TrainingStandardsMismatch) {
+            return TeammateConflictReason::TrainingStandards;
+        }
+        match change_type {
+            ChangeType::TrainingFriction => TeammateConflictReason::TrainingStandards,
+            ChangeType::CompetitionRivalry => TeammateConflictReason::PositionalRivalry,
+            ChangeType::ReputationTension => TeammateConflictReason::WageJealousy,
+            ChangeType::TacticalDisagreement => TeammateConflictReason::TacticalBlame,
+            ChangeType::DisciplinaryAction => TeammateConflictReason::LeadershipChallenge,
+            ChangeType::PersonalConflict => TeammateConflictReason::PersonalityClash,
+            _ => TeammateConflictReason::PersonalityClash,
+        }
+    }
+
+    /// Where the conflict played out, derived from the change type with
+    /// scope evidence (training-ground / dressing-room / media) able to
+    /// override the default.
+    pub fn location_for_conflict(
+        change_type: &ChangeType,
+        evidence: &[HappinessEventEvidence],
+    ) -> ConflictLocation {
+        if evidence.contains(&HappinessEventEvidence::MediaIncident) {
+            return ConflictLocation::Media;
+        }
+        if evidence.contains(&HappinessEventEvidence::TrainingGroundIncident) {
+            return ConflictLocation::TrainingGround;
+        }
+        if evidence.contains(&HappinessEventEvidence::DressingRoomRow) {
+            return ConflictLocation::DressingRoom;
+        }
+        match change_type {
+            ChangeType::TrainingFriction
+            | ChangeType::CompetitionRivalry
+            | ChangeType::TacticalDisagreement => ConflictLocation::TrainingGround,
+            _ => ConflictLocation::DressingRoom,
+        }
     }
 
     /// Build the explanation context for a `TeammateBonding` emit.

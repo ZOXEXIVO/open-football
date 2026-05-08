@@ -1,4 +1,3 @@
-use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::PlayerSide;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::context::SubstitutionRecord;
@@ -189,58 +188,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let home_team_id = score_ref.home_team.team_id;
 
         for player in &field.players {
-            let goals = player.statistics.goals_count();
-            let assists = player.statistics.assists_count();
-            let position_group = player.tactical_position.current_position.position_group();
-
             let (player_team_goals, opponent_goals) = if player.team_id == home_team_id {
                 (home_goals, away_goals)
             } else {
                 (away_goals, home_goals)
             };
 
-            let yellow_cards = player.statistics.yellow_cards_count();
-            let red_cards = player.statistics.red_cards_count();
-            let fouls = player.fouls_committed as u16;
-            let mut stats = PlayerMatchEndStats {
-                shots_on_target: player.memory.shots_on_target as u16,
-                shots_total: player.memory.shots_taken as u16,
-                passes_attempted: player.statistics.passes_attempted,
-                passes_completed: player.statistics.passes_completed,
-                tackles: player.statistics.tackles,
-                interceptions: player.statistics.interceptions,
-                saves: player.statistics.saves,
-                shots_faced: player.statistics.shots_faced,
-                goals,
-                assists,
-                match_rating: 0.0,
-                xg: player.memory.xg_total,
-                position_group,
-                fouls,
-                yellow_cards,
-                red_cards,
-                minutes_played: ((context.total_match_time / 60_000) as u16).min(120),
-                key_passes: player.statistics.key_passes,
-                progressive_passes: player.statistics.progressive_passes,
-                progressive_carries: player.statistics.progressive_carries,
-                successful_dribbles: player.statistics.successful_dribbles,
-                attempted_dribbles: player.statistics.attempted_dribbles,
-                successful_pressures: player.statistics.successful_pressures,
-                pressures: player.statistics.pressures,
-                blocks: player.statistics.blocks,
-                clearances: player.statistics.clearances,
-                passes_into_box: player.statistics.passes_into_box,
-                crosses_attempted: player.statistics.crosses_attempted,
-                crosses_completed: player.statistics.crosses_completed,
-                xg_chain: player.statistics.xg_chain,
-                xg_buildup: player.statistics.xg_buildup,
-                miscontrols: player.statistics.miscontrols,
-                heavy_touches: player.statistics.heavy_touches,
-                carry_distance: player.statistics.carry_distance,
-                errors_leading_to_shot: player.statistics.errors_leading_to_shot,
-                errors_leading_to_goal: player.statistics.errors_leading_to_goal,
-                xg_prevented: player.statistics.xg_prevented,
-            };
+            let minutes = player.minutes_played_at(context.total_match_time);
+            let mut stats = player.to_match_end_stats(minutes);
             stats.match_rating = calculate_match_rating(&stats, player_team_goals, opponent_goals);
 
             result.player_stats.insert(player.id, stats);
@@ -819,12 +774,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // proxy for "deep territorial entries" — every pass-into-
             // box advances the team's threat into the danger zone.
             let deep_entries = p.statistics.passes_into_box as u32;
-            // `errors_leading_to_shot` already counts turnovers /
-            // mistakes that produced an opposition shot — exactly the
-            // "dangerous turnovers" signal the smart coach evaluator
-            // uses to decide whether to drop the line / abandon the
-            // press.
-            let dangerous_turnovers = p.statistics.errors_leading_to_shot as u32;
+            // Coach-side "dangerous turnovers" = errors that produced an
+            // opposition shot PLUS any giveaway inside the team's own
+            // box (irrespective of whether the opponent converted
+            // within the response window). The own-third bucket is
+            // deliberately NOT summed — that's a much wider net and
+            // would dilute the smart-coach trigger. Aligns with the
+            // rating helper's zone counters: an own-box turnover is
+            // rated as the worst non-error event, so the coach
+            // metric matches that severity.
+            let dangerous_turnovers = (p.statistics.errors_leading_to_shot as u32)
+                + (p.statistics.zone_stats.dangerous_turnovers_own_box as u32);
             if p.team_id == context.field_home_team_id {
                 home_cond_sum += cond;
                 home_count += 1;
@@ -1230,13 +1190,24 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if keeper_team.is_none() || shooter_team.is_none() || keeper_team == shooter_team {
             return;
         }
+        let shot_xg = field.ball.last_shot_xg;
         if let Some(gk) = field.players.iter_mut().find(|p| p.id == keeper_id) {
             gk.statistics.saves += 1;
             gk.statistics.shots_faced += 1;
+            // The GK denied a shot worth `shot_xg` xG — full credit goes
+            // to xG prevented. Saves an above-baseline keeper from being
+            // capped by the synthetic-proxy fallback in the rating helper.
+            if shot_xg > 0.0 {
+                gk.statistics.record_xg_prevented(shot_xg);
+            }
         }
         if let Some(shooter) = field.players.iter_mut().find(|p| p.id == shooter_id) {
             shooter.memory.credit_shot_on_target();
         }
+        // Shot has resolved (saved). Drop the metadata so any
+        // subsequent goal / save event can't double-credit.
+        field.ball.clear_shot_metadata();
+        field.ball.pending_error_to_shot_player_id = None;
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering;

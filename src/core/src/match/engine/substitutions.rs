@@ -1,6 +1,5 @@
 use chrono::NaiveDate;
 
-use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::engine::coach::TacticalNeed;
 use crate::r#match::field::MatchField;
 use crate::r#match::{MatchContext, MatchPlayer};
@@ -555,60 +554,25 @@ impl Substitutions {
         player_out_id: u32,
         player_in_id: u32,
     ) -> bool {
-        // Save subbed-out player's stats before they're replaced
+        // Save subbed-out player's stats before they're replaced. Minutes
+        // are computed from the player's entry tick so a 60th-minute sub-
+        // off correctly records ~60 minutes (or less, if the player came
+        // on after kickoff).
         if let Some(player_out) = field.get_player(player_out_id) {
-            let goals = player_out.statistics.goals_count();
-            let assists = player_out.statistics.assists_count();
-
-            context.substituted_out_stats.push((
-                player_out_id,
-                PlayerMatchEndStats {
-                    shots_on_target: player_out.memory.shots_on_target as u16,
-                    shots_total: player_out.memory.shots_taken as u16,
-                    passes_attempted: player_out.statistics.passes_attempted,
-                    passes_completed: player_out.statistics.passes_completed,
-                    tackles: player_out.statistics.tackles,
-                    interceptions: player_out.statistics.interceptions,
-                    saves: player_out.statistics.saves,
-                    shots_faced: player_out.statistics.shots_faced,
-                    goals,
-                    assists,
-                    match_rating: 0.0,
-                    xg: player_out.memory.xg_total,
-                    position_group: player_out
-                        .tactical_position
-                        .current_position
-                        .position_group(),
-                    fouls: player_out.fouls_committed as u16,
-                    yellow_cards: player_out.statistics.yellow_cards_count(),
-                    red_cards: player_out.statistics.red_cards_count(),
-                    minutes_played: ((context.total_match_time / 60_000) as u16).min(120),
-                    key_passes: player_out.statistics.key_passes,
-                    progressive_passes: player_out.statistics.progressive_passes,
-                    progressive_carries: player_out.statistics.progressive_carries,
-                    successful_dribbles: player_out.statistics.successful_dribbles,
-                    attempted_dribbles: player_out.statistics.attempted_dribbles,
-                    successful_pressures: player_out.statistics.successful_pressures,
-                    pressures: player_out.statistics.pressures,
-                    blocks: player_out.statistics.blocks,
-                    clearances: player_out.statistics.clearances,
-                    passes_into_box: player_out.statistics.passes_into_box,
-                    crosses_attempted: player_out.statistics.crosses_attempted,
-                    crosses_completed: player_out.statistics.crosses_completed,
-                    xg_chain: player_out.statistics.xg_chain,
-                    xg_buildup: player_out.statistics.xg_buildup,
-                    miscontrols: player_out.statistics.miscontrols,
-                    heavy_touches: player_out.statistics.heavy_touches,
-                    carry_distance: player_out.statistics.carry_distance,
-                    errors_leading_to_shot: player_out.statistics.errors_leading_to_shot,
-                    errors_leading_to_goal: player_out.statistics.errors_leading_to_goal,
-                    xg_prevented: player_out.statistics.xg_prevented,
-                },
-            ));
+            let minutes = player_out.minutes_played_at(context.total_match_time);
+            let snapshot = player_out.to_match_end_stats(minutes);
+            context.substituted_out_stats.push((player_out_id, snapshot));
         }
 
         if !field.substitute_player(player_out_id, player_in_id) {
             return false;
+        }
+
+        // Stamp the incoming player's entry tick so their end-of-match
+        // minute count reflects only the time they were actually on the
+        // pitch.
+        if let Some(player_in) = field.get_player_mut(player_in_id) {
+            player_in.entry_match_time_ms = context.total_match_time;
         }
 
         context.record_substitution(

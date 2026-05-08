@@ -7,6 +7,7 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
+use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{GameTickContext, MatchContext, StateProcessingContext};
@@ -82,6 +83,20 @@ pub struct MatchPlayer {
     /// thresholds for under-18 players (lower fatigue ceiling, condition
     /// floor that overrides the manager's force-selection flag).
     pub birth_date: NaiveDate,
+
+    /// Match-time (in ms) at which the player entered the field.
+    /// Starters are stamped with 0; substitutes are stamped with
+    /// `context.total_match_time` at swap time. The end-of-match rating
+    /// helper computes minutes-played as
+    /// `(exit_or_now - entry_match_time_ms) / 60_000`, which fixes the
+    /// previous behaviour where every player — even an 80th-minute sub —
+    /// was credited with full match minutes.
+    pub entry_match_time_ms: u64,
+    /// Last tick at which a pressure event was credited for this
+    /// player. Used as a per-player cooldown so a defender shadowing
+    /// the carrier across many ticks racks up one pressure per "press
+    /// burst" rather than one per tick.
+    pub last_pressure_tick: u64,
 }
 
 impl MatchPlayer {
@@ -198,7 +213,67 @@ impl MatchPlayer {
             pending_shot_reason: None,
             is_force_match_selection: player.is_force_match_selection,
             birth_date: player.birth_date,
+            entry_match_time_ms: 0,
+            last_pressure_tick: 0,
         }
+    }
+
+    /// Build the per-match end-of-game stats snapshot for this player.
+    /// Owns the field-by-field mapping so the engine end-of-match path
+    /// and the substitution snapshot path don't drift. `minutes_played`
+    /// is computed by the caller from `entry_match_time_ms` and the
+    /// exit / now match time — see `engine.rs` and `substitutions.rs`.
+    pub fn to_match_end_stats(&self, minutes_played: u16) -> PlayerMatchEndStats {
+        PlayerMatchEndStats {
+            shots_on_target: self.memory.shots_on_target as u16,
+            shots_total: self.memory.shots_taken as u16,
+            passes_attempted: self.statistics.passes_attempted,
+            passes_completed: self.statistics.passes_completed,
+            tackles: self.statistics.tackles,
+            interceptions: self.statistics.interceptions,
+            saves: self.statistics.saves,
+            shots_faced: self.statistics.shots_faced,
+            goals: self.statistics.goals_count(),
+            assists: self.statistics.assists_count(),
+            match_rating: 0.0,
+            xg: self.memory.xg_total,
+            position_group: self.tactical_position.current_position.position_group(),
+            fouls: self.fouls_committed as u16,
+            yellow_cards: self.statistics.yellow_cards_count(),
+            red_cards: self.statistics.red_cards_count(),
+            minutes_played,
+            key_passes: self.statistics.key_passes,
+            progressive_passes: self.statistics.progressive_passes,
+            progressive_carries: self.statistics.progressive_carries,
+            successful_dribbles: self.statistics.successful_dribbles,
+            attempted_dribbles: self.statistics.attempted_dribbles,
+            successful_pressures: self.statistics.successful_pressures,
+            pressures: self.statistics.pressures,
+            blocks: self.statistics.blocks,
+            clearances: self.statistics.clearances,
+            passes_into_box: self.statistics.passes_into_box,
+            crosses_attempted: self.statistics.crosses_attempted,
+            crosses_completed: self.statistics.crosses_completed,
+            xg_chain: self.statistics.xg_chain,
+            xg_buildup: self.statistics.xg_buildup,
+            miscontrols: self.statistics.miscontrols,
+            heavy_touches: self.statistics.heavy_touches,
+            carry_distance: self.statistics.carry_distance,
+            errors_leading_to_shot: self.statistics.errors_leading_to_shot,
+            errors_leading_to_goal: self.statistics.errors_leading_to_goal,
+            xg_prevented: self.statistics.xg_prevented,
+            offsides: self.statistics.offsides,
+            own_goals: self.statistics.own_goals_count(),
+            zone_stats: self.statistics.zone_stats,
+        }
+    }
+
+    /// Compute minutes spent on the pitch for this player given the
+    /// current absolute match time (ms). Capped at 120 minutes so an
+    /// extra-time match doesn't produce silly minute totals.
+    pub fn minutes_played_at(&self, now_match_time_ms: u64) -> u16 {
+        let elapsed = now_match_time_ms.saturating_sub(self.entry_match_time_ms);
+        ((elapsed / 60_000) as u16).min(120)
     }
 
     /// Consumes the tackle cooldown (ticks it down by 1). Called once per
@@ -475,5 +550,79 @@ impl From<&MatchPlayer> for MatchPlayerLite {
             position: player.position,
             tactical_positions: player.tactical_position.current_position,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::r#match::MatchPlayer;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    fn build_player(pos: PlayerPositionType) -> MatchPlayer {
+        let player = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("T".to_string(), "P".to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: pos,
+                    level: 18,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        MatchPlayer::from_player(1, &player, pos, false)
+    }
+
+    #[test]
+    fn starter_minutes_count_full_90() {
+        let p = build_player(PlayerPositionType::DefenderCenter);
+        // entry_match_time_ms defaults to 0 (kickoff). At full time
+        // the helper returns the elapsed minutes.
+        let minutes = p.minutes_played_at(90 * 60_000);
+        assert_eq!(minutes, 90);
+    }
+
+    #[test]
+    fn substituted_in_player_minutes_only_count_post_entry() {
+        // Substitute came on at the 70th minute; at full time their
+        // minutes-played should be 20, not 90 — the rating helper
+        // damps cameo bonuses based on this number, so an 80th-minute
+        // sub posting a key pass shouldn't be rated like a starter.
+        let mut p = build_player(PlayerPositionType::ForwardCenter);
+        p.entry_match_time_ms = 70 * 60_000;
+        let minutes = p.minutes_played_at(90 * 60_000);
+        assert_eq!(minutes, 20);
+    }
+
+    #[test]
+    fn match_end_stats_carry_substituted_minutes() {
+        // The end-of-match snapshot accepts the minutes count from the
+        // caller — the substitution path computes it via
+        // `minutes_played_at` and writes the right value into the
+        // resulting `PlayerMatchEndStats`.
+        let mut p = build_player(PlayerPositionType::MidfielderCenter);
+        p.entry_match_time_ms = 60 * 60_000;
+        let minutes = p.minutes_played_at(90 * 60_000);
+        let stats = p.to_match_end_stats(minutes);
+        assert_eq!(stats.minutes_played, 30);
+    }
+
+    #[test]
+    fn minutes_played_at_caps_at_120_for_extra_time() {
+        let p = build_player(PlayerPositionType::DefenderCenter);
+        // Pathological — 200 minute match should clamp to 120.
+        let minutes = p.minutes_played_at(200 * 60_000);
+        assert_eq!(minutes, 120);
     }
 }

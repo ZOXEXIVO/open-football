@@ -3,7 +3,7 @@ mod preseason;
 mod regulations;
 mod reputation;
 mod statistics;
-mod transfers;
+pub mod transfers;
 
 use crate::ai::PendingAiRequest;
 use crate::league::LeagueResult;

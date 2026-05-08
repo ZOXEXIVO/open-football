@@ -3,7 +3,7 @@ pub mod core;
 pub mod economy;
 pub mod media;
 pub mod national;
-mod result;
+pub mod result;
 pub mod rules;
 
 pub use config::*;

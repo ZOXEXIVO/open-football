@@ -1,5 +1,6 @@
 pub(crate) mod config;
 pub(crate) mod execution;
+pub(crate) mod free_agent_market_calc;
 mod free_agents;
 mod listings;
 mod negotiations;
@@ -61,6 +62,12 @@ impl CountryResult {
         // Phase 1: Negotiations & pipeline (per-country)
         let mut global_signings: Vec<GlobalFreeAgentSigning> = Vec::new();
         let mut domestic_signed_ids: Vec<u32> = Vec::new();
+        // Side-channel for free-agent market state: each global-pool
+        // candidate that fielded an offer today, and the subset whose
+        // acceptance roll failed. Applied to the player's
+        // `FreeAgentMarketState` after the country borrow ends.
+        let mut global_offered_ids: Vec<u32> = Vec::new();
+        let mut global_rejected_ids: Vec<u32> = Vec::new();
         let deferred_transfers = if let Some(country) = data.country_mut(country_id) {
             // Sync market's window flag. On open→closed transitions this cancels
             // any stranded listings and expires pending negotiations.
@@ -90,6 +97,8 @@ impl CountryResult {
                 &global_free_agents,
                 &config,
                 &mut domestic_signed_ids,
+                &mut global_offered_ids,
+                &mut global_rejected_ids,
             );
 
             if window_open {
@@ -156,6 +165,23 @@ impl CountryResult {
         // still have the player on a shortlist or in scout monitoring.
         for signed_id in &domestic_signed_ids {
             PipelineProcessor::cleanup_player_transfer_interest(data, *signed_id);
+        }
+
+        // Apply free-agent market state outside the country borrow. Each
+        // global-pool offer made today bumps the 30-day window counter;
+        // declined offers also bump the rejected-total. Done before the
+        // signing executor because signing clears the player's state
+        // anyway, so updating both for a successful candidate is harmless
+        // but updating after would race against `clear_free_agent_state`.
+        if !global_offered_ids.is_empty() || !global_rejected_ids.is_empty() {
+            for player in data.free_agents.iter_mut() {
+                if global_offered_ids.contains(&player.id) {
+                    player.on_offer_received(current_date);
+                }
+                if global_rejected_ids.contains(&player.id) {
+                    player.on_offer_rejected();
+                }
+            }
         }
 
         // Execute any deferred global free-agent signings (players from

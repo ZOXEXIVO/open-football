@@ -296,6 +296,10 @@ pub struct HappinessEventContext {
     /// `ManagerTacticalInstruction` / `PromiseKept` / `PromiseBroken`
     /// rendering with topic + tone + trust state.
     pub manager_interaction_context: Option<ManagerInteractionEventContext>,
+    /// Teammate-conflict explanation payload. Drives
+    /// `ConflictWithTeammate` rendering with a concrete reason +
+    /// location so the headline reads as a specific football moment.
+    pub teammate_conflict_context: Option<TeammateConflictContext>,
     /// Contract / agent explanation payload — wage delta, promised
     /// status, agent pressure, loyalty discount. Drives
     /// `ContractOffer` / `ContractRenewal` / `ContractTerminated` /
@@ -365,6 +369,7 @@ impl HappinessEventContext {
             transfer_interest_context: None,
             training_context: None,
             manager_interaction_context: None,
+            teammate_conflict_context: None,
             contract_context: None,
             injury_context: None,
             match_performance_context: None,
@@ -464,6 +469,11 @@ impl HappinessEventContext {
         self
     }
 
+    pub fn with_teammate_conflict_context(mut self, ctx: TeammateConflictContext) -> Self {
+        self.teammate_conflict_context = Some(ctx);
+        self
+    }
+
     pub fn with_contract_context(mut self, ctx: ContractEventContext) -> Self {
         self.contract_context = Some(ctx);
         self
@@ -536,6 +546,7 @@ impl HappinessEventContext {
         if self.transfer_interest_context.is_some() { n += 1; }
         if self.training_context.is_some() { n += 1; }
         if self.manager_interaction_context.is_some() { n += 1; }
+        if self.teammate_conflict_context.is_some() { n += 1; }
         if self.contract_context.is_some() { n += 1; }
         if self.injury_context.is_some() { n += 1; }
         if self.match_performance_context.is_some() { n += 1; }
@@ -2086,6 +2097,75 @@ impl PromiseKind {
     }
 }
 
+/// Concrete football reason a manager singled the player out for
+/// criticism. Closed enum so the renderer can pick a stable, translated
+/// "what specifically did the manager focus on" sentence per variant.
+/// `None` (i.e. legacy emit sites that haven't picked one) keeps the
+/// renderer on the topic + tone fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagerCriticismReason {
+    /// Player ignored a specific tactical assignment (didn't track a
+    /// runner, drifted out of position).
+    MissedAssignment,
+    /// Pressing triggers were skipped or recovery runs were too slow.
+    PoorPressing,
+    /// A direct mistake changed the match state (gave the ball away in a
+    /// dangerous area, missed a clearance, gave away a penalty).
+    CostlyError,
+    /// Training-ground intensity dropped below squad standards.
+    LowTrainingIntensity,
+    /// Body language / reaction when things went wrong was the issue,
+    /// not the ability.
+    PoorBodyLanguage,
+    /// Player publicly complained about the manager / team.
+    PublicComplaint,
+    /// Late arrival, dressing-room standards, off-field discipline.
+    LateArrival,
+    /// Player ignored a specific tactical instruction the manager had
+    /// drilled in pre-match.
+    IgnoredTacticalInstruction,
+    /// Repeat occurrence — manager has already addressed this.
+    RepeatedIncident,
+    /// Generic catch-all — renderer falls back to topic/tone copy.
+    Other,
+}
+
+impl ManagerCriticismReason {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            ManagerCriticismReason::MissedAssignment => "manager_criticism_reason_missed_assignment",
+            ManagerCriticismReason::PoorPressing => "manager_criticism_reason_poor_pressing",
+            ManagerCriticismReason::CostlyError => "manager_criticism_reason_costly_error",
+            ManagerCriticismReason::LowTrainingIntensity => "manager_criticism_reason_low_intensity",
+            ManagerCriticismReason::PoorBodyLanguage => "manager_criticism_reason_body_language",
+            ManagerCriticismReason::PublicComplaint => "manager_criticism_reason_public_complaint",
+            ManagerCriticismReason::LateArrival => "manager_criticism_reason_late_arrival",
+            ManagerCriticismReason::IgnoredTacticalInstruction => {
+                "manager_criticism_reason_ignored_instruction"
+            }
+            ManagerCriticismReason::RepeatedIncident => "manager_criticism_reason_repeated",
+            ManagerCriticismReason::Other => "manager_criticism_reason_other",
+        }
+    }
+
+    /// Renderer headline-token suffix. Must match the `event_manager_criticism_<token>`
+    /// key family in the locale bundles.
+    pub fn as_headline_token(&self) -> &'static str {
+        match self {
+            ManagerCriticismReason::MissedAssignment => "missed_assignment",
+            ManagerCriticismReason::PoorPressing => "pressing",
+            ManagerCriticismReason::CostlyError => "costly_error",
+            ManagerCriticismReason::LowTrainingIntensity => "training_intensity",
+            ManagerCriticismReason::PoorBodyLanguage => "body_language",
+            ManagerCriticismReason::PublicComplaint => "public_complaint",
+            ManagerCriticismReason::LateArrival => "late_arrival",
+            ManagerCriticismReason::IgnoredTacticalInstruction => "tactical_discipline",
+            ManagerCriticismReason::RepeatedIncident => "repeated",
+            ManagerCriticismReason::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ManagerInteractionEventContext {
     pub topic: ManagerInteractionTopic,
@@ -2095,6 +2175,16 @@ pub struct ManagerInteractionEventContext {
     pub trust_in_manager: Option<f32>,
     pub promise_kind: Option<PromiseKind>,
     pub promise_credibility: Option<f32>,
+    /// Concrete reason behind a `ManagerCriticism` emit. Optional so
+    /// other interaction types (praise, tactical instruction, promise
+    /// kept/broken) leave it `None` without forcing a meaningless value.
+    pub criticism_reason: Option<ManagerCriticismReason>,
+    /// Match rating that triggered the interaction, if known. Lets the
+    /// renderer surface the concrete number alongside the headline.
+    pub match_rating: Option<f32>,
+    /// True when the manager has flagged the same issue inside the last
+    /// month — escalates the outlook copy.
+    pub repeated_recently: bool,
 }
 
 impl ManagerInteractionEventContext {
@@ -2107,6 +2197,9 @@ impl ManagerInteractionEventContext {
             trust_in_manager: None,
             promise_kind: None,
             promise_credibility: None,
+            criticism_reason: None,
+            match_rating: None,
+            repeated_recently: false,
         }
     }
 
@@ -2116,6 +2209,125 @@ impl ManagerInteractionEventContext {
         self.promise_kind = Some(kind);
         self.promise_credibility = Some(credibility);
         self
+    }
+    pub fn with_criticism_reason(mut self, reason: ManagerCriticismReason) -> Self {
+        self.criticism_reason = Some(reason);
+        self
+    }
+    pub fn with_match_rating(mut self, rating: f32) -> Self {
+        self.match_rating = Some(rating);
+        self
+    }
+    pub fn with_repeated_recently(mut self, repeated: bool) -> Self {
+        self.repeated_recently = repeated;
+        self
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Teammate-conflict context
+// ─────────────────────────────────────────────────────────────────
+
+/// Concrete football reason behind a `ConflictWithTeammate` emit.
+/// Closed enum — the renderer maps each to a localised headline + cause
+/// sentence so the user reads "Clashed with Edwards over training
+/// standards" instead of the generic "Had a disagreement with a
+/// teammate" line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TeammateConflictReason {
+    /// Difference in how seriously each player took training.
+    TrainingStandards,
+    /// Both compete for the same shirt / minutes; small spark carried
+    /// extra weight.
+    PositionalRivalry,
+    /// One player resented the other's wage / squad-status differential.
+    WageJealousy,
+    /// On-pitch breakdown each blamed on the other.
+    TacticalBlame,
+    /// Personality friction — temperament, ego, public profile.
+    PersonalityClash,
+    /// Foreign signing struggling to integrate with a senior teammate.
+    LanguageBarrier,
+    /// Senior figure challenged the player's standards in the dressing
+    /// room.
+    LeadershipChallenge,
+    /// Public / media comments (player or partner aired the friction).
+    MediaComments,
+    /// Generic catch-all — renderer uses the legacy headline copy.
+    Other,
+}
+
+impl TeammateConflictReason {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TeammateConflictReason::TrainingStandards => "teammate_conflict_reason_training_standards",
+            TeammateConflictReason::PositionalRivalry => "teammate_conflict_reason_positional_rivalry",
+            TeammateConflictReason::WageJealousy => "teammate_conflict_reason_wage_jealousy",
+            TeammateConflictReason::TacticalBlame => "teammate_conflict_reason_tactical_blame",
+            TeammateConflictReason::PersonalityClash => "teammate_conflict_reason_personality_clash",
+            TeammateConflictReason::LanguageBarrier => "teammate_conflict_reason_language_barrier",
+            TeammateConflictReason::LeadershipChallenge => "teammate_conflict_reason_leadership_challenge",
+            TeammateConflictReason::MediaComments => "teammate_conflict_reason_media_comments",
+            TeammateConflictReason::Other => "teammate_conflict_reason_other",
+        }
+    }
+
+    /// Token used to compose the partner-aware headline key
+    /// (`event_teammate_conflict_<token>_named`).
+    pub fn as_headline_token(&self) -> &'static str {
+        match self {
+            TeammateConflictReason::TrainingStandards => "training_standards",
+            TeammateConflictReason::PositionalRivalry => "positional_rivalry",
+            TeammateConflictReason::WageJealousy => "wage_jealousy",
+            TeammateConflictReason::TacticalBlame => "tactical_blame",
+            TeammateConflictReason::PersonalityClash => "personality_clash",
+            TeammateConflictReason::LanguageBarrier => "language_barrier",
+            TeammateConflictReason::LeadershipChallenge => "leadership_challenge",
+            TeammateConflictReason::MediaComments => "media_comments",
+            TeammateConflictReason::Other => "other",
+        }
+    }
+}
+
+/// Where the conflict played out. Drives the "in the dressing room",
+/// "on the training ground", "in front of the cameras" copy variant so
+/// the same reason reads differently depending on the setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictLocation {
+    TrainingGround,
+    DressingRoom,
+    Match,
+    Media,
+    TeamMeeting,
+}
+
+impl ConflictLocation {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            ConflictLocation::TrainingGround => "conflict_location_training_ground",
+            ConflictLocation::DressingRoom => "conflict_location_dressing_room",
+            ConflictLocation::Match => "conflict_location_match",
+            ConflictLocation::Media => "conflict_location_media",
+            ConflictLocation::TeamMeeting => "conflict_location_team_meeting",
+        }
+    }
+}
+
+/// Structured payload for `ConflictWithTeammate` emits. The closed
+/// `reason` + `location` axes drive the headline + cause + outlook copy
+/// so the rendered row always reads as a specific football moment, not
+/// the generic "argued with a teammate" filler. Optional fields are
+/// captured by the emit site when known and skipped otherwise — the
+/// renderer hides whatever is missing rather than fabricating it.
+#[derive(Debug, Clone)]
+pub struct TeammateConflictContext {
+    pub reason: TeammateConflictReason,
+    pub location: ConflictLocation,
+}
+
+impl TeammateConflictContext {
+    pub fn new(reason: TeammateConflictReason, location: ConflictLocation) -> Self {
+        Self { reason, location }
     }
 }
 
@@ -2855,6 +3067,8 @@ pub enum RecognitionEventKind {
     YoungPlayerOfTheWeek,
     PlayerOfTheMonth,
     YoungPlayerOfTheMonth,
+    TeamOfTheMonthSelection,
+    YoungTeamOfTheMonthSelection,
     PlayerOfTheSeason,
     YoungPlayerOfTheSeason,
     TeamOfTheSeasonSelection,
@@ -2874,6 +3088,8 @@ impl RecognitionEventKind {
             RecognitionEventKind::YoungPlayerOfTheWeek => "young_player_of_the_week",
             RecognitionEventKind::PlayerOfTheMonth => "player_of_the_month",
             RecognitionEventKind::YoungPlayerOfTheMonth => "young_player_of_the_month",
+            RecognitionEventKind::TeamOfTheMonthSelection => "team_of_the_month",
+            RecognitionEventKind::YoungTeamOfTheMonthSelection => "young_team_of_the_month",
             RecognitionEventKind::PlayerOfTheSeason => "player_of_the_season",
             RecognitionEventKind::YoungPlayerOfTheSeason => "young_player_of_the_season",
             RecognitionEventKind::TeamOfTheSeasonSelection => "team_of_the_season",
@@ -3340,6 +3556,13 @@ pub enum HappinessEventType {
     /// Selected in the Young Team of the Week (age ≤ 20). Recognition
     /// for an under-20 starting in the weekly young XI.
     YoungTeamOfTheWeekSelection,
+    /// Selected in the league's monthly XI. Career-visible recognition
+    /// covering a full month of fixtures — distinct from
+    /// `TeamOfTheWeekSelection` (single matchweek) and
+    /// `TeamOfTheSeasonSelection` (whole campaign).
+    TeamOfTheMonthSelection,
+    /// Selected in the Young Team of the Month (age ≤ 21).
+    YoungTeamOfTheMonthSelection,
     TeamOfTheSeasonSelection,
     /// Selected in the league's calendar-year XI (Team of the Year).
     /// Distinct from `TeamOfTheSeasonSelection`, which is per-season.

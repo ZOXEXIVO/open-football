@@ -186,6 +186,9 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
                 errors_leading_to_shot: 0,
                 errors_leading_to_goal: 0,
                 xg_prevented: 0.0,
+                offsides: 0,
+                own_goals: 0,
+                zone_stats: Default::default(),
             },
         );
     }
@@ -388,6 +391,9 @@ fn global_tournament_result_updates_caps_schedule_and_match_result() {
             errors_leading_to_shot: 0,
             errors_leading_to_goal: 0,
             xg_prevented: 0.0,
+            offsides: 0,
+            own_goals: 0,
+            zone_stats: Default::default(),
         },
     );
     let date = d(2026, 6, 20);

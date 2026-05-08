@@ -299,8 +299,9 @@ impl TeamTraining {
         sim_date: chrono::NaiveDate,
     ) {
         use crate::{
-            HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
+            ConflictLocation, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
             HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
+            TeammateConflictContext, TeammateConflictReason,
         };
 
         // Index morale changes by player id so we don't iterate the result
@@ -540,7 +541,11 @@ impl TeamTraining {
                             HappinessEventScope::TrainingGround,
                         )
                         .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
-                        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+                        .with_follow_up(HappinessEventFollowUp::LikelyToSettle)
+                        .with_teammate_conflict_context(TeammateConflictContext::new(
+                            TeammateConflictReason::TrainingStandards,
+                            ConflictLocation::TrainingGround,
+                        ));
                         if let Some((level, trust, friendship, prof)) = snapshot {
                             ctx = ctx
                                 .with_relationship_levels(level, level)

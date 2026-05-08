@@ -18,6 +18,7 @@
         <div class="fm-transfer-tabs fm-aw-subtabs fm-aw-toptabs">
             <button class="fm-ttab active" onclick="switchAwTop(this, 'week')">{{ i18n.t("weekly") }}</button>
             <button class="fm-ttab" onclick="switchAwTop(this, 'month')">{{ i18n.t("monthly") }}</button>
+            <button class="fm-ttab" onclick="switchAwTop(this, 'year')">{{ i18n.t("yearly") }}</button>
         </div>
 
         <div class="fm-aw-top-pane" id="aw-top-week">
@@ -382,6 +383,20 @@
             </div>
         </div>
 
+        <div class="fm-aw-top-pane" id="aw-top-year" style="display:none">
+            {% if let Some(totw) = team_of_year %}
+            <div class="fm-aw-tab-pitch-wrap">
+                <div class="fm-aw-tab-card-head">
+                    <span class="fm-aw-tab-title">{{ i18n.t("team_of_the_year") }}</span>
+                    <span class="fm-aw-tab-date">{{ totw.year_label }}</span>
+                </div>
+                {% include "leagues/awards/_pitch.html" %}
+            </div>
+            {% else %}
+            <div class="fm-empty">{{ i18n.t("no_awards_yet") }}</div>
+            {% endif %}
+        </div>
+
         <script>
         function switchAwTop(btn, tab) {
             document.querySelectorAll('.fm-aw-toptabs .fm-ttab').forEach(b => b.classList.remove('active'));
@@ -397,18 +412,6 @@
         }
         </script>
     </section>
-
-    {% if let Some(totw) = team_of_year %}
-    <section class="fm-panel">
-        <div class="fm-panel-head">
-            <h3>{{ i18n.t("team_of_the_year") }}</h3>
-            <span class="fm-panel-count">{{ totw.year_label }}</span>
-        </div>
-        <div class="fm-aw-tab-pitch-wrap">
-            {% include "leagues/awards/_pitch.html" %}
-        </div>
-    </section>
-    {% endif %}
 
     {% if !season_highlights.is_empty() %}
     <div class="row g-3 mt-0">

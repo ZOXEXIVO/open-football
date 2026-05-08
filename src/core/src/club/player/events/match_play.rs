@@ -13,12 +13,13 @@ use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
-    HappinessEventScope, HappinessEventSeverity, HappinessEventType, ManagerInteractionEventContext,
-    ManagerInteractionTone, ManagerInteractionTopic, MatchPerformanceEventContext,
-    MatchPerformanceEvidence, MatchPerformanceKind, MatchSelectionContext, MediaFanEventContext,
-    MediaFanEventKind, MediaFanSource, PlayerAcceptance, PlayerSquadStatus, PlayerStatistics,
-    SelectionDecisionScope, SelectionOmissionReason, SelectionRole, SupportEventContext, SupportSetting,
-    SupportSource, SupportTrigger,
+    HappinessEventScope, HappinessEventSeverity, HappinessEventType, ManagerCriticismReason,
+    ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic,
+    MatchPerformanceEventContext, MatchPerformanceEvidence, MatchPerformanceKind,
+    MatchSelectionContext, MediaFanEventContext, MediaFanEventKind, MediaFanSource,
+    PlayerAcceptance, PlayerSquadStatus, PlayerStatistics, SelectionDecisionScope,
+    SelectionOmissionReason, SelectionRole, SupportEventContext, SupportSetting, SupportSource,
+    SupportTrigger,
 };
 
 impl Player {
@@ -331,17 +332,61 @@ impl Player {
                 );
             } else if o.effective_rating < 6.3 {
                 let mag = -(2.0 + (6.3 - o.effective_rating).clamp(0.0, 0.8));
-                let mctx = ManagerInteractionEventContext::new(
-                    ManagerInteractionTopic::Performance,
-                    ManagerInteractionTone::Honest,
-                    PlayerAcceptance::Discouraged,
-                );
+                let recent_mgr_criticism = self.happiness.recent_events.iter().any(|e| {
+                    e.event_type == HappinessEventType::ManagerCriticism && e.days_ago <= 30
+                });
+                // Concrete reason picked from the most readable signal in the
+                // post-match outcome. Pressing breakdowns dominate when the
+                // engine flagged the player for it; otherwise fall back to a
+                // general performance / discipline reading.
+                let reason = if o.stats.red_cards > 0 {
+                    ManagerCriticismReason::PublicComplaint
+                } else if recent_mgr_criticism {
+                    ManagerCriticismReason::RepeatedIncident
+                } else if self.skills.mental.work_rate <= 8.0 {
+                    ManagerCriticismReason::PoorPressing
+                } else if self.skills.mental.teamwork <= 8.0 {
+                    ManagerCriticismReason::MissedAssignment
+                } else if self.attributes.professionalism <= 8.0 {
+                    ManagerCriticismReason::PoorBodyLanguage
+                } else {
+                    ManagerCriticismReason::IgnoredTacticalInstruction
+                };
+                let topic = match reason {
+                    ManagerCriticismReason::PoorBodyLanguage => ManagerInteractionTopic::Attitude,
+                    ManagerCriticismReason::IgnoredTacticalInstruction
+                    | ManagerCriticismReason::MissedAssignment
+                    | ManagerCriticismReason::PoorPressing => ManagerInteractionTopic::Tactical,
+                    ManagerCriticismReason::PublicComplaint => ManagerInteractionTopic::Discipline,
+                    _ => ManagerInteractionTopic::Performance,
+                };
+                let tone = if recent_mgr_criticism {
+                    ManagerInteractionTone::Stern
+                } else {
+                    ManagerInteractionTone::Honest
+                };
+                let acceptance = if self.skills.mental.determination >= 15.0 {
+                    PlayerAcceptance::Motivated
+                } else if self.attributes.professionalism <= 8.0 {
+                    PlayerAcceptance::Resented
+                } else {
+                    PlayerAcceptance::Discouraged
+                };
+                let mctx = ManagerInteractionEventContext::new(topic, tone, acceptance)
+                    .with_criticism_reason(reason)
+                    .with_match_rating(o.effective_rating)
+                    .with_repeated_recently(recent_mgr_criticism);
                 let happiness_ctx = HappinessEventContext::new(
                     HappinessEventCause::PoorFormPressure,
                     HappinessEventSeverity::from_magnitude(mag),
                     HappinessEventScope::MatchDay,
                 )
-                .with_manager_interaction_context(mctx);
+                .with_manager_interaction_context(mctx)
+                .with_follow_up(if recent_mgr_criticism {
+                    HappinessEventFollowUp::DressingRoomDamageRisk
+                } else {
+                    HappinessEventFollowUp::ManagerInterventionRisk
+                });
                 self.happiness.add_event_with_context(
                     HappinessEventType::ManagerCriticism,
                     mag,

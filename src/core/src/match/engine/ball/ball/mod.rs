@@ -18,6 +18,7 @@ mod ownership;
 mod restart;
 mod stall;
 
+use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
@@ -223,6 +224,73 @@ pub struct Ball {
     /// active (touches the ball or claims). Cleared on resolution,
     /// opponent touch, or expiry.
     pub offside_snapshot: Option<OffsideSnapshot>,
+
+    /// Origin of the most-recent live pass (passer's position when the
+    /// pass was emitted). Read by the pass-completion classifier to
+    /// decide if the pass was progressive / cross / box-entry. None
+    /// outside an active pass window.
+    pub pending_pass_origin: Option<Vector3<f32>>,
+    /// Intended target position of the most-recent live pass. Cleared
+    /// alongside `pending_pass_passer`.
+    pub pending_pass_target: Option<Vector3<f32>>,
+    /// Pass was emitted from the wide channel toward the box — flagged
+    /// at emit-time so the completion classifier can credit
+    /// `crosses_completed` when the same pass is received.
+    pub pending_pass_was_cross: bool,
+
+    /// Snapshot of the most recently *completed* pass — populated by
+    /// `credit_completed_pass` AFTER it bumps `passes_completed` and
+    /// BEFORE it clears `pending_pass_*`. The shot-handler key-pass
+    /// linker reads these (rather than `pending_pass_*` which the
+    /// completion path nulls out) so a receive-then-shoot sequence
+    /// still credits the assister with a key pass. None outside the
+    /// shot-after-pass window.
+    pub last_completed_pass_passer_id: Option<u32>,
+    pub last_completed_pass_receiver_id: Option<u32>,
+    pub last_completed_pass_tick: u64,
+
+    /// Opponents that were within the pressing radius of the passer at
+    /// pass-emit time. Read by the interception handler to credit a
+    /// successful pressure when their close-range presence forced the
+    /// turnover. Capped at 4 entries — the count of "real" pressers in
+    /// any single moment is small. Cleared at pass-completion or
+    /// pass-window expiry.
+    pub pressers_at_pass: [u32; 4],
+    pub pressers_at_pass_count: u8,
+
+    /// Most-recent shot's xG and shooter id, used to credit the
+    /// conceding goalkeeper with `xg_prevented` when the shot is saved
+    /// (positive credit) or scored (negative credit). Cleared on
+    /// resolution (save / goal / wide / over) and on any non-shot
+    /// ownership change.
+    pub last_shot_xg: f32,
+    pub last_shot_shooter_id: Option<u32>,
+
+    /// Last meaningful giveaway: the player who lost possession via a
+    /// misplaced pass that was intercepted by an opponent. Read by the
+    /// "errors leading to shot/goal" linker — when an opponent shoots
+    /// within the response window after this is stamped, the giver is
+    /// charged with the error.
+    pub last_giveaway_player_id: Option<u32>,
+    pub last_giveaway_team_id: Option<u32>,
+    pub last_giveaway_tick: u64,
+    /// Defensive zone the giveaway happened in (from the giver's
+    /// perspective). Lets the goal handler credit
+    /// `errors_to_goal_own_box` when an opponent converts a giveaway
+    /// from inside the giver's own box.
+    pub last_giveaway_was_own_box: bool,
+    /// Player charged with `errors_leading_to_shot` for the shot
+    /// currently in flight. Held from shoot-time until the shot
+    /// resolves; if the shot becomes a goal we also bump
+    /// `errors_leading_to_goal` on this player.
+    pub pending_error_to_shot_player_id: Option<u32>,
+
+    /// Carry tracking. `carry_owner` is the player currently dribbling /
+    /// running with the ball; `carry_start_position` is where the carry
+    /// began. Evaluated when the carry ends (owner change / shot / pass)
+    /// to credit progressive carries and box entries.
+    pub carry_owner: Option<u32>,
+    pub carry_start_position: Vector3<f32>,
 }
 
 /// Projection of a shot at the moment it's taken. The `PreparingForSave`
@@ -304,6 +372,23 @@ impl Ball {
             current_tick_cached: 0,
             pass_origin_restart: PassOriginRestart::OpenPlay,
             offside_snapshot: None,
+            pending_pass_origin: None,
+            pending_pass_target: None,
+            pending_pass_was_cross: false,
+            last_completed_pass_passer_id: None,
+            last_completed_pass_receiver_id: None,
+            last_completed_pass_tick: 0,
+            pressers_at_pass: [0; 4],
+            pressers_at_pass_count: 0,
+            last_shot_xg: 0.0,
+            last_shot_shooter_id: None,
+            last_giveaway_player_id: None,
+            last_giveaway_team_id: None,
+            last_giveaway_tick: 0,
+            last_giveaway_was_own_box: false,
+            pending_error_to_shot_player_id: None,
+            carry_owner: None,
+            carry_start_position: Vector3::new(x, y, 0.0),
         }
     }
 
@@ -413,6 +498,7 @@ impl Ball {
         self.detect_position_stall(players);
 
         self.process_ownership(context, players, events);
+        self.tick_carry_tracker(events);
 
         // Move ball FIRST, then check goal/boundary on new position
         self.move_to(tick_context);
@@ -443,6 +529,7 @@ impl Ball {
         self.try_block_shot(players, events);
         self.try_save_shot(context, players, events);
         self.process_ownership(context, players, events);
+        self.tick_carry_tracker(events);
 
         // Move ball: find owner position from players slice directly
         self.move_to_with_players(players);
@@ -554,6 +641,21 @@ impl Ball {
         self.last_touch_was_controlled = false;
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
         self.offside_snapshot = None;
+        self.last_completed_pass_passer_id = None;
+        self.last_completed_pass_receiver_id = None;
+        self.last_completed_pass_tick = 0;
+    }
+
+    /// Snapshot the most-recent completed pass so the shot-handler
+    /// key-pass linker can credit the passer when the receiver
+    /// shoots within the key-pass window. Called from
+    /// `credit_completed_pass` *before* `clear_pending_pass_metadata`
+    /// nulls out the live pass envelope.
+    #[inline]
+    pub fn record_completed_pass(&mut self, passer_id: u32, receiver_id: u32, tick: u64) {
+        self.last_completed_pass_passer_id = Some(passer_id);
+        self.last_completed_pass_receiver_id = Some(receiver_id);
+        self.last_completed_pass_tick = tick;
     }
 
     pub fn clear_player_reference(&mut self, player_id: u32) {
@@ -566,6 +668,12 @@ impl Ball {
         }
         if self.pass_target_player_id == Some(player_id) {
             self.pass_target_player_id = None;
+        }
+        if self.last_completed_pass_passer_id == Some(player_id)
+            || self.last_completed_pass_receiver_id == Some(player_id)
+        {
+            self.last_completed_pass_passer_id = None;
+            self.last_completed_pass_receiver_id = None;
         }
         self.take_ball_notified_players
             .retain(|&id| id != player_id);
@@ -588,5 +696,139 @@ impl Ball {
     /// Clear the recent passers history (e.g. on tackles, interceptions, clearances).
     pub fn clear_pass_history(&mut self) {
         self.recent_passers.clear();
+    }
+
+    /// Clear the pass-window metadata used by the pass-completion classifier
+    /// and the key-pass linker. Called whenever the live pass is no longer
+    /// in flight (claim, interception, expiry, set-piece restart).
+    #[inline]
+    pub fn clear_pending_pass_metadata(&mut self) {
+        self.pending_pass_passer = None;
+        self.pending_pass_origin = None;
+        self.pending_pass_target = None;
+        self.pending_pass_was_cross = false;
+    }
+
+    /// Drop any in-flight shot metadata (xG / shooter id). Called once
+    /// the shot resolves (save / goal / wide / over / opponent claim).
+    #[inline]
+    pub fn clear_shot_metadata(&mut self) {
+        self.last_shot_xg = 0.0;
+        self.last_shot_shooter_id = None;
+    }
+
+    /// Stamp the giveaway tracker for the player who just lost the ball
+    /// via a misplaced pass / lost tackle / dispossession. Subsequent
+    /// shot / goal events from the opposing team within the response
+    /// window will be charged back as an error to this player. The
+    /// `was_own_box` flag is read later by the goal handler to layer the
+    /// own-box-extra penalty on top of `errors_leading_to_goal`.
+    #[inline]
+    pub fn stamp_giveaway(
+        &mut self,
+        player_id: u32,
+        team_id: u32,
+        tick: u64,
+        was_own_box: bool,
+    ) {
+        self.last_giveaway_player_id = Some(player_id);
+        self.last_giveaway_team_id = Some(team_id);
+        self.last_giveaway_tick = tick;
+        self.last_giveaway_was_own_box = was_own_box;
+    }
+
+    /// Drop the giveaway tracker — the response window has expired or
+    /// the giver's team has recovered the ball.
+    #[inline]
+    pub fn clear_giveaway(&mut self) {
+        self.last_giveaway_player_id = None;
+        self.last_giveaway_team_id = None;
+        self.last_giveaway_was_own_box = false;
+    }
+
+    /// Detect and resolve carry transitions. Called once per tick from
+    /// `update` / `update_light`, after `process_ownership` has settled
+    /// the current owner. When the owner changes (or goes None) we emit
+    /// a `BallEvent::CarryEnded` for the previous carrier; the
+    /// dispatcher classifies the carry and credits the carrier's stats.
+    /// A new carry starts the moment ownership lands on a player.
+    pub fn tick_carry_tracker(&mut self, events: &mut crate::r#match::events::EventCollection) {
+        match (self.carry_owner, self.current_owner) {
+            (Some(prev), Some(curr)) if prev == curr => {
+                // Same carrier — nothing to emit.
+            }
+            (Some(prev), _) => {
+                // Carry ended (owner changed or went None).
+                events.add_ball_event(BallEvent::CarryEnded(
+                    prev,
+                    self.carry_start_position,
+                    self.position,
+                ));
+                self.carry_owner = self.current_owner;
+                self.carry_start_position = self.position;
+            }
+            (None, Some(curr)) => {
+                // Carry begins.
+                self.carry_owner = Some(curr);
+                self.carry_start_position = self.position;
+            }
+            (None, None) => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod completed_pass_tests {
+    use super::*;
+
+    #[test]
+    fn record_completed_pass_populates_snapshot() {
+        let mut ball = Ball::with_coord(840.0, 545.0);
+        ball.record_completed_pass(7, 11, 1234);
+        assert_eq!(ball.last_completed_pass_passer_id, Some(7));
+        assert_eq!(ball.last_completed_pass_receiver_id, Some(11));
+        assert_eq!(ball.last_completed_pass_tick, 1234);
+    }
+
+    #[test]
+    fn clear_pending_pass_metadata_does_not_clear_completed_snapshot() {
+        // Regression: the centralized completion path used to clear
+        // pending_pass_passer immediately, leaving the shot-handler
+        // key-pass linker without a passer to credit. The completed
+        // snapshot survives the pending clear.
+        let mut ball = Ball::with_coord(840.0, 545.0);
+        ball.pending_pass_passer = Some(7);
+        ball.pending_pass_set_tick = 100;
+        ball.pending_pass_origin = Some(Vector3::new(50.0, 100.0, 0.0));
+        ball.pending_pass_target = Some(Vector3::new(150.0, 100.0, 0.0));
+        ball.pending_pass_was_cross = true;
+        ball.record_completed_pass(7, 11, 200);
+        ball.clear_pending_pass_metadata();
+        assert!(ball.pending_pass_passer.is_none());
+        assert!(ball.pending_pass_origin.is_none());
+        assert!(ball.pending_pass_target.is_none());
+        assert!(!ball.pending_pass_was_cross);
+        // The completed snapshot stays — the key-pass linker reads it.
+        assert_eq!(ball.last_completed_pass_passer_id, Some(7));
+        assert_eq!(ball.last_completed_pass_receiver_id, Some(11));
+        assert_eq!(ball.last_completed_pass_tick, 200);
+    }
+
+    #[test]
+    fn clear_player_reference_drops_completed_pass_snapshot() {
+        // If a player is removed (red card, sub), any completed-pass
+        // metadata referencing them must be cleared so the next shot
+        // doesn't credit a phantom key pass.
+        let mut ball = Ball::with_coord(840.0, 545.0);
+        ball.record_completed_pass(7, 11, 200);
+        ball.clear_player_reference(7);
+        assert!(ball.last_completed_pass_passer_id.is_none());
+        assert!(ball.last_completed_pass_receiver_id.is_none());
+
+        // Receiver removal also wipes (consistency).
+        ball.record_completed_pass(7, 11, 300);
+        ball.clear_player_reference(11);
+        assert!(ball.last_completed_pass_passer_id.is_none());
+        assert!(ball.last_completed_pass_receiver_id.is_none());
     }
 }

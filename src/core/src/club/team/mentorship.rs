@@ -26,8 +26,9 @@ use crate::club::{
     ChangeType, HappinessEventType, MentorshipType, Player, PlayerStatusType, RelationshipChange,
 };
 use crate::{
-    HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
-    HappinessEventScope, HappinessEventSeverity,
+    ConflictLocation, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
+    HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, TeammateConflictContext,
+    TeammateConflictReason,
 };
 use chrono::NaiveDate;
 
@@ -316,7 +317,11 @@ pub fn process_mentorship(
                 )
                 .with_evidence(HappinessEventEvidence::MentorInfluence)
                 .with_evidence(HappinessEventEvidence::RepeatedIncident)
-                .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+                .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk)
+                .with_teammate_conflict_context(TeammateConflictContext::new(
+                    TeammateConflictReason::LeadershipChallenge,
+                    ConflictLocation::TrainingGround,
+                ));
                 if let Some((level, trust, friendship, prof)) = snapshot {
                     ctx = ctx
                         .with_relationship_levels(level, level)
