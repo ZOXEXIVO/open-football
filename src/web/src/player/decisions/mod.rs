@@ -8,8 +8,26 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
+use chrono::{Duration, NaiveDate};
 use core::{PlayerStatusType, SimulatorData};
 use serde::Deserialize;
+
+pub struct PlayerDecisionsCounter;
+
+impl PlayerDecisionsCounter {
+    /// Decisions taken within the last 3 months — drives the Decisions tab badge.
+    pub const RECENT_WINDOW_DAYS: i64 = 90;
+
+    pub fn count_recent(player: &core::Player, today: NaiveDate) -> usize {
+        let cutoff = today - Duration::days(Self::RECENT_WINDOW_DAYS);
+        player
+            .decision_history
+            .items
+            .iter()
+            .filter(|d| d.date >= cutoff)
+            .count()
+    }
+}
 
 #[derive(Deserialize)]
 pub struct PlayerDecisionsRequest {
@@ -45,6 +63,8 @@ pub struct PlayerDecisionsTemplate {
     pub is_force_match_selection: bool,
     pub is_on_watchlist: bool,
     pub events_count: usize,
+    pub decisions_count: usize,
+    pub interested_clubs_count: usize,
     pub decisions: Vec<PlayerDecisionItem>,
 }
 
@@ -180,6 +200,8 @@ pub async fn player_decisions_action(
         is_force_match_selection: player.is_force_match_selection,
         is_on_watchlist: simulator_data.watchlist.contains(&player.id),
         events_count: PlayerEventsCounter::count(player),
+        decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
+        interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         decisions,
     }
     .into_response())
