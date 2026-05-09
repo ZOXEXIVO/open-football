@@ -1,4 +1,5 @@
-﻿use crate::club::player::traits::PlayerTrait;
+use crate::club::player::traits::PlayerTrait;
+use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::tactics::TacticalPositions;
 use crate::r#match::events::EventCollection;
@@ -7,7 +8,6 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
-use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{GameTickContext, MatchContext, StateProcessingContext};

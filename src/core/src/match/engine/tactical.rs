@@ -118,6 +118,51 @@ impl BallSideZone {
 /// Inputs to `TeamTacticalState::refresh` — bundled so the call site
 /// stays readable. The engine's tick loop fills this once per refresh
 /// and hands it over.
+/// Per-team skill composite aggregates derived from the engine's
+/// per-player skill composites. All fields are 0..1 normalised. A
+/// neutral squad sits near 0.50; elite ~0.70+; weak ~0.35-.
+#[derive(Debug, Clone, Copy)]
+pub struct TeamSkillAggregates {
+    /// Average passing-execution composite of defenders + midfielders.
+    pub build_up_quality: f32,
+    /// Average pressing composite of outfielders.
+    pub press_quality: f32,
+    /// Average defensive-duel ⊕ interception composite of defenders +
+    /// midfielders.
+    pub defensive_quality: f32,
+    /// Average shooting + dribble + off-ball composite of forwards +
+    /// attacking midfielders. (Not consumed by `refresh()` directly —
+    /// kept on the inputs so coach-eval and per-player reads can lift
+    /// the same number.)
+    pub attacking_quality: f32,
+    /// Goalkeeper shot stopping ⊕ distribution composite.
+    pub gk_quality: f32,
+    /// Mean of (concentration + teamwork) / 2 across the outfield. Used
+    /// by lead-protection logic to damp panic shape changes.
+    pub concentration_teamwork_avg: f32,
+}
+
+impl TeamSkillAggregates {
+    /// Neutral default — used when the team has no players or as a
+    /// fallback for callers that don't compute composites.
+    pub const fn neutral() -> Self {
+        Self {
+            build_up_quality: 0.5,
+            press_quality: 0.5,
+            defensive_quality: 0.5,
+            attacking_quality: 0.5,
+            gk_quality: 0.5,
+            concentration_teamwork_avg: 0.5,
+        }
+    }
+}
+
+impl Default for TeamSkillAggregates {
+    fn default() -> Self {
+        Self::neutral()
+    }
+}
+
 pub struct TacticalRefreshInputs<'a> {
     pub field: &'a MatchField,
     pub home_team_id: u32,
@@ -132,6 +177,13 @@ pub struct TacticalRefreshInputs<'a> {
     pub away_avg_condition: f32,
     pub home_tactics: &'a Tactics,
     pub away_tactics: &'a Tactics,
+    /// Per-team skill composite aggregates. `engine.rs` walks the
+    /// active players once and fills these so `refresh()` can tune
+    /// line height, press sustainability, and build-up patience using
+    /// the team's actual collective ability — not just the raw `current
+    /// _ability` average.
+    pub home_skills: TeamSkillAggregates,
+    pub away_skills: TeamSkillAggregates,
 }
 
 /// Team-level tactical context, shared across all eleven players. Cheap
@@ -389,6 +441,19 @@ impl TeamTacticalState {
             away.risk_appetite,
         );
 
+        // Skill-aware nudges to build-up patience: a side that can
+        // genuinely play out (high passing-execution composite) buys
+        // more recycle time; a side full of hoof-it CBs ought to bias
+        // toward direct outlets.
+        home.build_up_patience = Self::skill_adjusted_build_up_patience(
+            home.build_up_patience,
+            inputs.home_skills.build_up_quality,
+        );
+        away.build_up_patience = Self::skill_adjusted_build_up_patience(
+            away.build_up_patience,
+            inputs.away_skills.build_up_quality,
+        );
+
         // ── Phase ────────────────────────────────────────────────────
         // Use per-team transition windows derived from the just-computed
         // patience and tactic signals.
@@ -420,20 +485,39 @@ impl TeamTacticalState {
         // boundary) and "high" (opponent's half) based on phase. Gives
         // defenders a shared reference frame for how high to push.
         let third = field_width / 3.0;
-        home.defensive_line_x = match home.phase {
+        let home_base_line = match home.phase {
             GamePhase::HighPress | GamePhase::Attack => field_width * 0.55,
             GamePhase::AttackingTransition | GamePhase::Progression => field_width * 0.45,
             GamePhase::BuildUp => field_width * 0.25,
             GamePhase::MidBlock | GamePhase::DefensiveTransition => third,
             GamePhase::LowBlock => field_width * 0.18,
         };
-        away.defensive_line_x = match away.phase {
+        let away_base_line = match away.phase {
             GamePhase::HighPress | GamePhase::Attack => field_width * 0.45,
             GamePhase::AttackingTransition | GamePhase::Progression => field_width * 0.55,
             GamePhase::BuildUp => field_width * 0.75,
             GamePhase::MidBlock | GamePhase::DefensiveTransition => field_width - third,
             GamePhase::LowBlock => field_width * 0.82,
         };
+        // Defensive-quality risk drop: weak back lines lower their
+        // line by up to 0.06 of the pitch so a shaky 5-rated CB pair
+        // doesn't get caught chasing through-balls they can't recover.
+        // Home plays toward x=high, away toward x=low — invert the
+        // sign accordingly.
+        let home_line_drop_units =
+            Self::line_height_drop(inputs.home_skills.defensive_quality, field_width);
+        let away_line_drop_units =
+            Self::line_height_drop(inputs.away_skills.defensive_quality, field_width);
+        // GK-quality lift: a sweeper-keeper-class GK lets us play a
+        // higher line than skill on the back four alone would warrant.
+        // Bounded to +0.02 of pitch width so it's a tweak, not a
+        // dominant signal.
+        let home_gk_lift = Self::gk_line_lift(inputs.home_skills.gk_quality, field_width);
+        let away_gk_lift = Self::gk_line_lift(inputs.away_skills.gk_quality, field_width);
+        home.defensive_line_x =
+            (home_base_line - home_line_drop_units + home_gk_lift).clamp(0.0, field_width);
+        away.defensive_line_x =
+            (away_base_line + away_line_drop_units - away_gk_lift).clamp(0.0, field_width);
 
         // ── Phase-dependent signals ──────────────────────────────────
         home.press_intensity = Self::compute_press_intensity(
@@ -452,6 +536,14 @@ impl TeamTacticalState {
             away.game_management_intensity,
             away.is_defensive_transition(),
         );
+        // High-press sustainability: when press_quality < 0.45, scale
+        // the press intensity by up to 35% of the deficit so an
+        // unfit/under-skilled side cannot run a hopelessly hot press
+        // even if the coach asked for one.
+        home.press_intensity =
+            Self::press_skill_adjustment(home.press_intensity, inputs.home_skills.press_quality);
+        away.press_intensity =
+            Self::press_skill_adjustment(away.press_intensity, inputs.away_skills.press_quality);
 
         home.compactness_target =
             Self::compute_compactness(home_compact, home.phase, home.game_management_intensity);
@@ -473,6 +565,42 @@ impl TeamTacticalState {
             away.phase,
             away.game_management_intensity,
         );
+
+        // Attacking-quality bias: a side with elite finishers chasing
+        // a goal late should bias slightly more direct (higher tempo
+        // + risk appetite). Bounded to ±0.05 each so it tunes existing
+        // signals rather than driving them. A losing weak attacking
+        // side does NOT get a free kicker bonus — only sides good
+        // enough to actually convert get to play more direct.
+        let home_chasing = inputs.home_score_diff < 0;
+        let away_chasing = inputs.home_score_diff > 0;
+        if home_chasing {
+            let lift = Self::attacking_chase_lift(inputs.home_skills.attacking_quality, minute);
+            home.tempo = (home.tempo + lift).clamp(0.10, 1.0);
+            home.risk_appetite = (home.risk_appetite + lift).clamp(0.0, 1.0);
+        }
+        if away_chasing {
+            let lift = Self::attacking_chase_lift(inputs.away_skills.attacking_quality, minute);
+            away.tempo = (away.tempo + lift).clamp(0.10, 1.0);
+            away.risk_appetite = (away.risk_appetite + lift).clamp(0.0, 1.0);
+        }
+
+        // Protect-lead damping: a leading side with concentrated /
+        // high-teamwork players is less prone to "panic" tempo spikes
+        // and rash forward passes. We damp the tempo slightly when
+        // game-management intensity is high AND the side organises
+        // well. The 0.85..1.05 factor keeps the effect subtle.
+        if home.game_management_intensity > 0.05 {
+            let damp = Self::protect_lead_damping(inputs.home_skills.concentration_teamwork_avg);
+            // Scale only the protect-lead delta, not the whole tempo.
+            let delta = damp - 1.0; // negative when damping
+            home.tempo = (home.tempo + delta * home.game_management_intensity).clamp(0.10, 1.0);
+        }
+        if away.game_management_intensity > 0.05 {
+            let damp = Self::protect_lead_damping(inputs.away_skills.concentration_teamwork_avg);
+            let delta = damp - 1.0;
+            away.tempo = (away.tempo + delta * away.game_management_intensity).clamp(0.10, 1.0);
+        }
 
         home.rest_defense_count = Self::compute_rest_defense_count(
             inputs.home_tactics.defender_count(),
@@ -812,6 +940,98 @@ impl TeamTacticalState {
         let gm_bonus = game_management_intensity * 0.30;
         let risk_penalty = (1.0 - risk_appetite) * 0.10; // risk-averse → patient
         (base + gm_bonus + risk_penalty).clamp(0.0, 1.0)
+    }
+
+    /// Skill-adjust the build-up patience by the team's actual passing
+    /// execution composite. Above 0.65 we lift patience (the side can
+    /// genuinely play through pressure); below 0.45 we drop it (we
+    /// should look for direct outlets instead of holding the ball).
+    pub(crate) fn skill_adjusted_build_up_patience(base: f32, build_up_quality: f32) -> f32 {
+        let q = build_up_quality.clamp(0.0, 1.0);
+        let delta = if q >= 0.65 {
+            // 0.65 → 0, 1.00 → +0.15
+            (q - 0.65) / 0.35 * 0.15
+        } else if q <= 0.45 {
+            // 0.45 → 0, 0.00 → -0.20
+            -(0.45 - q) / 0.45 * 0.20
+        } else {
+            0.0
+        };
+        (base + delta).clamp(0.0, 1.0)
+    }
+
+    /// Drop the defensive line by up to 0.08 of pitch width when
+    /// `defensive_quality` is poor. Returns absolute units to subtract
+    /// from the home line / add to the away line.
+    pub(crate) fn line_height_drop(defensive_quality: f32, field_width: f32) -> f32 {
+        let q = defensive_quality.clamp(0.0, 1.0);
+        if q >= 0.55 {
+            return 0.0;
+        }
+        // 0.55 → 0, 0.00 → 0.08 of field_width.
+        let factor = (0.55 - q) / 0.55 * 0.08;
+        field_width * factor
+    }
+
+    /// Reduce press intensity by up to 35% when `press_quality` < 0.45.
+    pub(crate) fn press_skill_adjustment(press_intensity: f32, press_quality: f32) -> f32 {
+        let q = press_quality.clamp(0.0, 1.0);
+        if q >= 0.45 {
+            return press_intensity;
+        }
+        let deficit = (0.45 - q) / 0.45; // 0..1
+        let mult = (1.0 - deficit * 0.35).max(0.65);
+        (press_intensity * mult).clamp(0.0, 1.0)
+    }
+
+    /// Damping factor for "panic" tactical shape changes. Returns a
+    /// multiplier in [0.85, 1.05] — high concentration / teamwork
+    /// damps the panic response (the leader holds shape better);
+    /// poor organisation slightly amplifies it (the leader rushes
+    /// clearances and gives the ball back). Spec: 0.85..1.05.
+    pub fn protect_lead_damping(concentration_teamwork_avg: f32) -> f32 {
+        let q = concentration_teamwork_avg.clamp(0.0, 1.0);
+        if q >= 0.50 {
+            // Above 0.50: scale down toward 0.85 at q=1.0.
+            let damp = (q - 0.50) / 0.50 * 0.15;
+            (1.0 - damp).clamp(0.85, 1.05)
+        } else {
+            // Below 0.50: very slight amplification — a poorly-organised
+            // side that's leading can play wilder than they should.
+            let amp = (0.50 - q) / 0.50 * 0.05;
+            (1.0 + amp).clamp(0.85, 1.05)
+        }
+    }
+
+    /// Sweeper-keeper line lift: a high `gk_quality` lets the back
+    /// line push higher because the keeper covers space behind. Capped
+    /// at 0.02 of pitch width so this is a tweak, not a takeover.
+    pub(crate) fn gk_line_lift(gk_quality: f32, field_width: f32) -> f32 {
+        let q = gk_quality.clamp(0.0, 1.0);
+        if q <= 0.55 {
+            return 0.0;
+        }
+        // 0.55 → 0, 1.00 → 0.02 of field_width.
+        ((q - 0.55) / 0.45 * 0.02).max(0.0) * field_width
+    }
+
+    /// Bias delta when chasing a result. Sides with the actual
+    /// attacking quality to convert get a small tempo / risk lift —
+    /// poor sides chasing late don't, since rushing wouldn't help
+    /// them. Spec: bounded to ±0.05.
+    pub(crate) fn attacking_chase_lift(attacking_quality: f32, minute: f32) -> f32 {
+        // Only bites in the back half of the match (chasing late, not
+        // hunting in minute 12).
+        let late = ((minute - 60.0).max(0.0) / 30.0).clamp(0.0, 1.0);
+        // Skill gate: only sides above 0.55 attacking_quality see the
+        // lift; weaker sides stay disciplined.
+        let q = attacking_quality.clamp(0.0, 1.0);
+        if q <= 0.55 {
+            return 0.0;
+        }
+        // 0.55 → 0; 1.00 → 0.05 max at minute 90.
+        let raw = (q - 0.55) / 0.45 * 0.05;
+        (raw * late).clamp(0.0, 0.05)
     }
 }
 
@@ -1258,5 +1478,99 @@ mod tests {
         assert!((v - 1.0).abs() < 1e-4);
         let v = s.forward_delta_norm(900.0, 0.0, 900.0);
         assert!((v + 1.0).abs() < 1e-4);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Skill-composite-aware adjustments (line height, press
+    // sustainability, build-up patience, lead protection damping).
+    // ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn line_height_drop_zero_when_strong_back_line() {
+        // defensive_quality >= 0.55 means the back line is good enough
+        // to hold a high line — no drop.
+        let drop = TeamTacticalState::line_height_drop(0.70, 840.0);
+        assert_eq!(drop, 0.0);
+    }
+
+    #[test]
+    fn line_height_drop_grows_as_defense_weakens() {
+        let mid = TeamTacticalState::line_height_drop(0.30, 840.0);
+        let weak = TeamTacticalState::line_height_drop(0.10, 840.0);
+        assert!(weak > mid);
+        // Spec: max ~0.08 of pitch.
+        let worst = TeamTacticalState::line_height_drop(0.0, 840.0);
+        assert!(worst <= 840.0 * 0.0801);
+        assert!(worst >= 840.0 * 0.07);
+    }
+
+    #[test]
+    fn press_skill_adjustment_no_op_when_strong() {
+        let pressed = TeamTacticalState::press_skill_adjustment(0.80, 0.75);
+        assert!((pressed - 0.80).abs() < 1e-6);
+    }
+
+    #[test]
+    fn press_skill_adjustment_drops_for_weak_side() {
+        let strong = TeamTacticalState::press_skill_adjustment(0.80, 0.70);
+        let weak = TeamTacticalState::press_skill_adjustment(0.80, 0.10);
+        assert!(weak < strong);
+        // Spec: at most 35% reduction.
+        assert!(weak >= 0.80 * 0.65 - 1e-4);
+    }
+
+    #[test]
+    fn skill_adjusted_build_up_patience_lifts_for_quality_sides() {
+        let neutral = TeamTacticalState::skill_adjusted_build_up_patience(0.50, 0.50);
+        let high = TeamTacticalState::skill_adjusted_build_up_patience(0.50, 0.90);
+        let low = TeamTacticalState::skill_adjusted_build_up_patience(0.50, 0.20);
+        assert_eq!(neutral, 0.50);
+        assert!(high > neutral);
+        assert!(low < neutral);
+    }
+
+    #[test]
+    fn protect_lead_damping_in_band() {
+        // Spec range 0.85..1.05.
+        assert!((TeamTacticalState::protect_lead_damping(0.50) - 1.0).abs() < 1e-6);
+        // Elite organisation: max 15% damp.
+        let elite = TeamTacticalState::protect_lead_damping(1.0);
+        assert!((elite - 0.85).abs() < 1e-6);
+        // Poor organisation: slight amplification.
+        let poor = TeamTacticalState::protect_lead_damping(0.0);
+        assert!((poor - 1.05).abs() < 1e-6);
+        // Always inside [0.85, 1.05].
+        for q_int in 0..=20 {
+            let q = q_int as f32 / 20.0;
+            let v = TeamTacticalState::protect_lead_damping(q);
+            assert!(v >= 0.85 - 1e-6 && v <= 1.05 + 1e-6, "q={q} v={v}");
+        }
+    }
+
+    #[test]
+    fn gk_line_lift_zero_when_average() {
+        assert_eq!(TeamTacticalState::gk_line_lift(0.50, 840.0), 0.0);
+    }
+
+    #[test]
+    fn gk_line_lift_caps_at_two_percent_width() {
+        let lift = TeamTacticalState::gk_line_lift(1.0, 840.0);
+        assert!(lift <= 840.0 * 0.0201);
+        assert!(lift >= 840.0 * 0.019);
+    }
+
+    #[test]
+    fn attacking_chase_lift_zero_for_weak_side() {
+        // Weak attack chasing late shouldn't get a free pass.
+        assert_eq!(TeamTacticalState::attacking_chase_lift(0.40, 85.0), 0.0);
+    }
+
+    #[test]
+    fn attacking_chase_lift_grows_late_for_strong_side() {
+        let early = TeamTacticalState::attacking_chase_lift(0.85, 30.0);
+        let late = TeamTacticalState::attacking_chase_lift(0.85, 88.0);
+        assert!(late > early);
+        // Spec cap: bounded to 0.05.
+        assert!(late <= 0.0501);
     }
 }

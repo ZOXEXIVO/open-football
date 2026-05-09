@@ -25,6 +25,12 @@ impl Player {
     /// history. Only senior squads (Main, B, Second) are eligible — any
     /// involvement of Reserve / U18..U23 is treated as silent for the
     /// player history table even though stats are still drained.
+    ///
+    /// `friendly_statistics` and `cup_statistics` are intentionally NOT
+    /// cleared: they're not tracked per-spell in `statistics_history`, so
+    /// resetting them on an intra-club move just discards data the player
+    /// page would otherwise show. Inter-club moves (transfer/loan) still
+    /// reset them via their own paths.
     pub fn on_intra_club_move(
         &mut self,
         from: &TeamInfo,
@@ -34,10 +40,14 @@ impl Player {
         date: NaiveDate,
     ) {
         let stats = std::mem::take(&mut self.statistics);
-        self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
-        self.statistics_history
-            .record_intra_club_move(stats, from, to, from_senior, to_senior, date);
+        self.statistics_history.record_intra_club_move(
+            stats,
+            from,
+            to,
+            from_senior,
+            to_senior,
+            date,
+        );
     }
 
     /// Drain accumulated match stats without writing to history. Used at

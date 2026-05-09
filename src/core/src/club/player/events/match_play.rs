@@ -73,7 +73,8 @@ impl Player {
         let severity = HappinessEventSeverity::from_magnitude(magnitude);
         let cause = drop_cause(&ctx);
         let follow_up = drop_follow_up(self, &ctx);
-        let mut event_ctx = HappinessEventContext::new(cause, severity, HappinessEventScope::MatchDay);
+        let mut event_ctx =
+            HappinessEventContext::new(cause, severity, HappinessEventScope::MatchDay);
         if let Some(fu) = follow_up {
             event_ctx = event_ctx.with_follow_up(fu);
         }
@@ -313,8 +314,12 @@ impl Player {
                 .with_derby(o.is_derby)
                 .with_cup(o.is_cup)
                 .with_evidence(MatchPerformanceEvidence::LowRating);
-                if o.is_derby { mp = mp.with_evidence(MatchPerformanceEvidence::DerbyFixture); }
-                if o.is_cup { mp = mp.with_evidence(MatchPerformanceEvidence::CupTie); }
+                if o.is_derby {
+                    mp = mp.with_evidence(MatchPerformanceEvidence::DerbyFixture);
+                }
+                if o.is_cup {
+                    mp = mp.with_evidence(MatchPerformanceEvidence::CupTie);
+                }
                 if self.attributes.pressure <= 7.0 {
                     mp = mp.with_evidence(MatchPerformanceEvidence::LowPressurePersonality);
                 }
@@ -435,8 +440,7 @@ impl Player {
             let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let scene_mul = if o.is_cup || o.is_derby { 1.2 } else { 1.0 };
             let mag = cfg.catalog.fan_praise * rep_mul * scene_mul;
-            let event_ctx =
-                MatchSupportContextBuilder::fan_praise(self, o, had_contribution, mag);
+            let event_ctx = MatchSupportContextBuilder::fan_praise(self, o, had_contribution, mag);
             self.happiness.add_event_with_context_and_cooldown(
                 HappinessEventType::FanPraise,
                 mag,
@@ -724,8 +728,7 @@ impl Player {
             o.team_won && (o.effective_rating >= 8.2 || o.stats.goals >= 3 || derby_hero_now);
         if chant_trigger {
             let mag = cfg.catalog.fans_chant_player_name * rep_mul * scene_mul;
-            let event_ctx =
-                MatchSupportContextBuilder::fans_chant(self, o, derby_hero_now, mag);
+            let event_ctx = MatchSupportContextBuilder::fans_chant(self, o, derby_hero_now, mag);
             self.happiness.add_event_with_context_and_cooldown(
                 HappinessEventType::FansChantPlayerName,
                 mag,
@@ -898,9 +901,13 @@ fn drop_cause(ctx: &MatchSelectionContext) -> HappinessEventCause {
         | SelectionOmissionReason::TeammatePreferredOnTrust => {
             HappinessEventCause::PositionalRivalry
         }
-        SelectionOmissionReason::ManagerDoesNotTrustPlayer => HappinessEventCause::LeadershipDispute,
+        SelectionOmissionReason::ManagerDoesNotTrustPlayer => {
+            HappinessEventCause::LeadershipDispute
+        }
         SelectionOmissionReason::DisciplinarySelection => HappinessEventCause::PersonalityClash,
-        SelectionOmissionReason::NewcomerStillIntegrating => HappinessEventCause::AdaptationIsolation,
+        SelectionOmissionReason::NewcomerStillIntegrating => {
+            HappinessEventCause::AdaptationIsolation
+        }
         _ => HappinessEventCause::Other,
     }
 }
@@ -977,17 +984,14 @@ impl MatchSupportContextBuilder {
         let contributed = o.stats.goals > 0 || o.stats.assists > 0;
         let trigger = Self::manager_encouragement_trigger(player, o, contributed);
 
-        let support = SupportEventContext::new(
-            SupportSource::Manager,
-            SupportSetting::PostMatch,
-            trigger,
-        )
-        .with_match_rating(o.effective_rating)
-        .with_goals(o.stats.goals as u8)
-        .with_assists(o.stats.assists as u8)
-        .with_team_won(o.team_won)
-        .with_derby(o.is_derby)
-        .with_cup(o.is_cup);
+        let support =
+            SupportEventContext::new(SupportSource::Manager, SupportSetting::PostMatch, trigger)
+                .with_match_rating(o.effective_rating)
+                .with_goals(o.stats.goals as u8)
+                .with_assists(o.stats.assists as u8)
+                .with_team_won(o.team_won)
+                .with_derby(o.is_derby)
+                .with_cup(o.is_cup);
 
         let mut ctx = HappinessEventContext::new(
             HappinessEventCause::ManagerSupport,
@@ -1203,22 +1207,22 @@ impl MatchPerfContextBuilder {
         mp
     }
 
-    fn costly_error(
-        player: &Player,
-        o: &MatchOutcome<'_>,
-    ) -> MatchPerformanceEventContext {
-        let mut mp = MatchPerformanceEventContext::new(
-            MatchPerformanceKind::CostlyErrorUnderPressure,
-        )
-        .with_rating(o.effective_rating)
-        .with_minutes(o.stats.minutes_played as u16)
-        .with_team_won(o.team_won)
-        .with_goal_margin(o.goal_margin() as i8)
-        .with_derby(o.is_derby)
-        .with_cup(o.is_cup)
-        .with_evidence(MatchPerformanceEvidence::LowRating);
-        if o.is_derby { mp = mp.with_evidence(MatchPerformanceEvidence::DerbyFixture); }
-        if o.is_cup { mp = mp.with_evidence(MatchPerformanceEvidence::CupTie); }
+    fn costly_error(player: &Player, o: &MatchOutcome<'_>) -> MatchPerformanceEventContext {
+        let mut mp =
+            MatchPerformanceEventContext::new(MatchPerformanceKind::CostlyErrorUnderPressure)
+                .with_rating(o.effective_rating)
+                .with_minutes(o.stats.minutes_played as u16)
+                .with_team_won(o.team_won)
+                .with_goal_margin(o.goal_margin() as i8)
+                .with_derby(o.is_derby)
+                .with_cup(o.is_cup)
+                .with_evidence(MatchPerformanceEvidence::LowRating);
+        if o.is_derby {
+            mp = mp.with_evidence(MatchPerformanceEvidence::DerbyFixture);
+        }
+        if o.is_cup {
+            mp = mp.with_evidence(MatchPerformanceEvidence::CupTie);
+        }
         if player.attributes.pressure <= 7.0 {
             mp = mp.with_evidence(MatchPerformanceEvidence::LowPressurePersonality);
         }

@@ -311,9 +311,8 @@ impl PlayerTrainingResult {
                 | TrainingEventReason::ReturningFromInjuryNotSharp
         );
         let physically_compromised = condition_pct < 60 || in_recovery;
-        let attitude_failure = high_effort <= 7.0
-            && professionalism <= 7.0
-            && physical_state >= 10.0;
+        let attitude_failure =
+            high_effort <= 7.0 && professionalism <= 7.0 && physical_state >= 10.0;
         let distraction_failure = (player.happiness.morale < 35.0
             || player.happiness.recent_events.iter().any(|e| {
                 e.days_ago <= 21
@@ -329,19 +328,15 @@ impl PlayerTrainingResult {
             && raw <= 8.0
             && delta <= -2.0;
 
-        let negative_qualifies = (raw <= 6.5 && delta <= -1.5)
-            || raw <= 5.5
-            || attitude_failure
-            || distraction_failure;
+        let negative_qualifies =
+            (raw <= 6.5 && delta <= -1.5) || raw <= 5.5 || attitude_failure || distraction_failure;
 
         // Block PoorTraining when fatigue is the actual cause but the
         // reason machine somehow produced an attitude label — a tired
         // player who failed an intense session must not be tagged poor
         // attitude.
-        let block_poor_for_fatigue = !recovery_or_fatigue_cause
-            && physically_compromised
-            && raw > 5.5
-            && !attitude_failure;
+        let block_poor_for_fatigue =
+            !recovery_or_fatigue_cause && physically_compromised && raw > 5.5 && !attitude_failure;
 
         let (event_type, magnitude) = if positive_qualifies && morale_change > 0.0 {
             (HappinessEventType::GoodTraining, morale_change * 5.0)
@@ -383,10 +378,8 @@ impl PlayerTrainingResult {
         // same type with the same primary reason fired recently. This
         // keeps a chronic flashpoint (e.g. a player whose attitude is
         // poor every week) from spamming the player's history.
-        let cooldown_days = Self::training_event_cooldown_days(
-            event_type.clone(),
-            outcome.primary_reason,
-        );
+        let cooldown_days =
+            Self::training_event_cooldown_days(event_type.clone(), outcome.primary_reason);
         let suppressed = Self::recent_training_event_with_reason(
             player,
             event_type.clone(),
@@ -463,4 +456,3 @@ impl PlayerTrainingResult {
         })
     }
 }
-

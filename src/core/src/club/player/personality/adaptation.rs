@@ -580,8 +580,8 @@ impl Player {
         // player's native — a reasonable proxy for "home-country move"
         // when the country_id mapping isn't surfaced here.
         let is_favourite = self.favorite_clubs.contains(&pending.destination_club_id);
-        let speaks_native = self.speaks_local_language(country_code)
-            && self.languages.iter().any(|l| l.is_native);
+        let speaks_native =
+            self.speaks_local_language(country_code) && self.languages.iter().any(|l| l.is_native);
         if !(is_favourite || speaks_native) {
             return;
         }

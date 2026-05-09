@@ -1,11 +1,11 @@
 use crate::club::player::agent::PlayerAgent;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::calculators::{
     ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_proposal,
 };
 use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
 use crate::handlers::AcceptContractHandler;
 use crate::utils::DateUtils;
-use crate::club::player::behaviour_config::HappinessConfig;
 use crate::{
     ContractEventContext, ContractEventEvidence, ContractEventKind, HappinessEventCause,
     HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
@@ -356,11 +356,10 @@ impl ProcessContractHandler {
                         let pay_cut_ratio = proposal.salary as f32 / current_salary.max(1) as f32;
                         let proposal_years = proposal.years;
                         accept_and_clear(player, proposal, now);
-                        let mut cctx = ContractEventContext::new(
-                            ContractEventKind::LoyaltyDiscountAccepted,
-                        )
-                        .with_wage_vs_previous(pay_cut_ratio)
-                        .with_years_remaining(proposal_years);
+                        let mut cctx =
+                            ContractEventContext::new(ContractEventKind::LoyaltyDiscountAccepted)
+                                .with_wage_vs_previous(pay_cut_ratio)
+                                .with_years_remaining(proposal_years);
                         if player.attributes.loyalty >= 15.0 {
                             cctx = cctx.with_evidence(ContractEventEvidence::HighLoyalty);
                         }

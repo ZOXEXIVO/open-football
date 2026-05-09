@@ -15,8 +15,8 @@ use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
 use crate::{
-    MatchSelectionContext, Player, PlayerSquadStatus, SelectionComparison,
-    SelectionDecisionScope, SelectionOmissionReason, SelectionRole, Tactics,
+    MatchSelectionContext, Player, PlayerSquadStatus, SelectionComparison, SelectionDecisionScope,
+    SelectionOmissionReason, SelectionRole, Tactics,
 };
 use chrono::NaiveDate;
 

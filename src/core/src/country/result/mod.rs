@@ -21,11 +21,7 @@ pub struct CountryResult {
 }
 
 impl CountryResult {
-    pub fn new(
-        country_id: u32,
-        leagues: Vec<LeagueResult>,
-        mut clubs: Vec<ClubResult>,
-    ) -> Self {
+    pub fn new(country_id: u32, leagues: Vec<LeagueResult>, mut clubs: Vec<ClubResult>) -> Self {
         let mut pending_ai_requests: Vec<PendingAiRequest> = Vec::new();
         for club in &mut clubs {
             if !club.pending_ai_requests.is_empty() {

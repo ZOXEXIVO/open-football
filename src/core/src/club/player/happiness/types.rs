@@ -551,10 +551,7 @@ impl HappinessEventContext {
         self
     }
 
-    pub fn with_life_simulation_desire_context(
-        mut self,
-        ctx: LifeSimulationDesireContext,
-    ) -> Self {
+    pub fn with_life_simulation_desire_context(mut self, ctx: LifeSimulationDesireContext) -> Self {
         self.life_simulation_desire_context = Some(ctx);
         self
     }
@@ -566,25 +563,63 @@ impl HappinessEventContext {
     /// Used by tests as a soft invariant on emit-site code.
     pub fn specialized_payload_count(&self) -> usize {
         let mut n = 0;
-        if self.selection_context.is_some() { n += 1; }
-        if self.support_context.is_some() { n += 1; }
-        if self.transfer_interest_context.is_some() { n += 1; }
-        if self.training_context.is_some() { n += 1; }
-        if self.manager_interaction_context.is_some() { n += 1; }
-        if self.teammate_conflict_context.is_some() { n += 1; }
-        if self.contract_context.is_some() { n += 1; }
-        if self.injury_context.is_some() { n += 1; }
-        if self.match_performance_context.is_some() { n += 1; }
-        if self.role_status_context.is_some() { n += 1; }
-        if self.national_team_context.is_some() { n += 1; }
-        if self.leadership_context.is_some() { n += 1; }
-        if self.media_fan_context.is_some() { n += 1; }
-        if self.personal_adaptation_context.is_some() { n += 1; }
-        if self.career_desire_context.is_some() { n += 1; }
-        if self.loan_context.is_some() { n += 1; }
-        if self.recognition_context.is_some() { n += 1; }
-        if self.season_outcome_context.is_some() { n += 1; }
-        if self.regulation_context.is_some() { n += 1; }
+        if self.selection_context.is_some() {
+            n += 1;
+        }
+        if self.support_context.is_some() {
+            n += 1;
+        }
+        if self.transfer_interest_context.is_some() {
+            n += 1;
+        }
+        if self.training_context.is_some() {
+            n += 1;
+        }
+        if self.manager_interaction_context.is_some() {
+            n += 1;
+        }
+        if self.teammate_conflict_context.is_some() {
+            n += 1;
+        }
+        if self.contract_context.is_some() {
+            n += 1;
+        }
+        if self.injury_context.is_some() {
+            n += 1;
+        }
+        if self.match_performance_context.is_some() {
+            n += 1;
+        }
+        if self.role_status_context.is_some() {
+            n += 1;
+        }
+        if self.national_team_context.is_some() {
+            n += 1;
+        }
+        if self.leadership_context.is_some() {
+            n += 1;
+        }
+        if self.media_fan_context.is_some() {
+            n += 1;
+        }
+        if self.personal_adaptation_context.is_some() {
+            n += 1;
+        }
+        if self.career_desire_context.is_some() {
+            n += 1;
+        }
+        if self.loan_context.is_some() {
+            n += 1;
+        }
+        if self.recognition_context.is_some() {
+            n += 1;
+        }
+        if self.season_outcome_context.is_some() {
+            n += 1;
+        }
+        if self.regulation_context.is_some() {
+            n += 1;
+        }
         n
     }
 }
@@ -969,7 +1004,9 @@ pub enum SelectionOmissionReason {
 impl SelectionOmissionReason {
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
-            SelectionOmissionReason::LowerMatchReadiness => "selection_reason_lower_match_readiness",
+            SelectionOmissionReason::LowerMatchReadiness => {
+                "selection_reason_lower_match_readiness"
+            }
             SelectionOmissionReason::FitnessProtection => "selection_reason_fitness_protection",
             SelectionOmissionReason::FatigueManagement => "selection_reason_fatigue_management",
             SelectionOmissionReason::PoorRecentForm => "selection_reason_poor_recent_form",
@@ -1009,13 +1046,9 @@ impl SelectionOmissionReason {
             SelectionOmissionReason::ReturningFromInjury => {
                 "selection_reason_returning_from_injury"
             }
-            SelectionOmissionReason::DisciplinarySelection => {
-                "selection_reason_disciplinary"
-            }
+            SelectionOmissionReason::DisciplinarySelection => "selection_reason_disciplinary",
             SelectionOmissionReason::BenchBalance => "selection_reason_bench_balance",
-            SelectionOmissionReason::NoNaturalRoleInFormation => {
-                "selection_reason_no_natural_role"
-            }
+            SelectionOmissionReason::NoNaturalRoleInFormation => "selection_reason_no_natural_role",
         }
     }
 }
@@ -1325,18 +1358,14 @@ impl HappinessEventEvidence {
                 "evidence_already_strained_relationship"
             }
             HappinessEventEvidence::WeakExistingBond => "evidence_weak_existing_bond",
-            HappinessEventEvidence::SamePositionCompetition => {
-                "evidence_same_position_competition"
-            }
+            HappinessEventEvidence::SamePositionCompetition => "evidence_same_position_competition",
             HappinessEventEvidence::SimilarSquadStatusCompetition => {
                 "evidence_similar_squad_status_competition"
             }
             HappinessEventEvidence::LowTrust => "evidence_low_trust",
             HappinessEventEvidence::LowFriendship => "evidence_low_friendship",
             HappinessEventEvidence::LowProfessionalRespect => "evidence_low_professional_respect",
-            HappinessEventEvidence::HighProfessionalRespect => {
-                "evidence_high_professional_respect"
-            }
+            HappinessEventEvidence::HighProfessionalRespect => "evidence_high_professional_respect",
             HappinessEventEvidence::HighAmbition => "evidence_high_ambition",
             HappinessEventEvidence::LowTemperament => "evidence_low_temperament",
             HappinessEventEvidence::HighControversy => "evidence_high_controversy",
@@ -1390,7 +1419,6 @@ impl HappinessEventEvidence {
         }
     }
 }
-
 
 /// Closed set of "what's next" hints. Renderer maps each to a localised
 /// sentence; storing the variant (rather than free text) keeps the UI
@@ -1459,13 +1487,9 @@ impl TransferInterestStage {
         match self {
             TransferInterestStage::ScoutWatched => "transfer_interest_stage_scout_watched",
             TransferInterestStage::Shortlisted => "transfer_interest_stage_shortlisted",
-            TransferInterestStage::AgentSoundingOut => {
-                "transfer_interest_stage_agent_sounding_out"
-            }
+            TransferInterestStage::AgentSoundingOut => "transfer_interest_stage_agent_sounding_out",
             TransferInterestStage::LooseRumour => "transfer_interest_stage_loose_rumour",
-            TransferInterestStage::ConcreteInterest => {
-                "transfer_interest_stage_concrete_interest"
-            }
+            TransferInterestStage::ConcreteInterest => "transfer_interest_stage_concrete_interest",
             TransferInterestStage::BidExpected => "transfer_interest_stage_bid_expected",
             TransferInterestStage::BidSubmitted => "transfer_interest_stage_bid_submitted",
             TransferInterestStage::BidRejected => "transfer_interest_stage_bid_rejected",
@@ -1555,9 +1579,7 @@ impl TransferInterestKind {
             }
             TransferInterestKind::Homecoming => "transfer_interest_kind_homecoming",
             TransferInterestKind::RivalMove => "transfer_interest_kind_rival_move",
-            TransferInterestKind::FormerClubReturn => {
-                "transfer_interest_kind_former_club_return"
-            }
+            TransferInterestKind::FormerClubReturn => "transfer_interest_kind_former_club_return",
             TransferInterestKind::FavoriteClubInterest => {
                 "transfer_interest_kind_favorite_club_interest"
             }
@@ -1652,9 +1674,7 @@ impl TransferSportingFit {
             TransferSportingFit::BiggerClubButHarderMinutes => {
                 "transfer_sporting_fit_bigger_club_but_harder_minutes"
             }
-            TransferSportingFit::BetterPlayingTime => {
-                "transfer_sporting_fit_better_playing_time"
-            }
+            TransferSportingFit::BetterPlayingTime => "transfer_sporting_fit_better_playing_time",
             TransferSportingFit::PoorRoleFit => "transfer_sporting_fit_poor_role_fit",
             TransferSportingFit::TacticalFit => "transfer_sporting_fit_tactical_fit",
             TransferSportingFit::BadLeagueFit => "transfer_sporting_fit_bad_league_fit",
@@ -1902,11 +1922,7 @@ impl TransferInterestContext {
         self
     }
 
-    pub fn with_playing_time_change(
-        mut self,
-        improve: bool,
-        reduce: bool,
-    ) -> Self {
+    pub fn with_playing_time_change(mut self, improve: bool, reduce: bool) -> Self {
         self.would_improve_playing_time = improve;
         self.would_reduce_playing_time = reduce;
         self
@@ -1972,15 +1988,23 @@ pub enum TrainingEventReason {
 impl TrainingEventReason {
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
-            TrainingEventReason::SharpAfterBeingLeftOut => "training_reason_sharp_after_being_left_out",
+            TrainingEventReason::SharpAfterBeingLeftOut => {
+                "training_reason_sharp_after_being_left_out"
+            }
             TrainingEventReason::RespondedToCriticism => "training_reason_responded_to_criticism",
-            TrainingEventReason::StruggledWithIntensity => "training_reason_struggled_with_intensity",
+            TrainingEventReason::StruggledWithIntensity => {
+                "training_reason_struggled_with_intensity"
+            }
             TrainingEventReason::DistractedByRumours => "training_reason_distracted_by_rumours",
             TrainingEventReason::PoorAttitude => "training_reason_poor_attitude",
-            TrainingEventReason::ReturningFromInjuryNotSharp => "training_reason_returning_from_injury_not_sharp",
+            TrainingEventReason::ReturningFromInjuryNotSharp => {
+                "training_reason_returning_from_injury_not_sharp"
+            }
             TrainingEventReason::YoungImpressedStaff => "training_reason_young_impressed_staff",
             TrainingEventReason::SettingStandards => "training_reason_setting_standards",
-            TrainingEventReason::ExtraWorkAfterSession => "training_reason_extra_work_after_session",
+            TrainingEventReason::ExtraWorkAfterSession => {
+                "training_reason_extra_work_after_session"
+            }
             TrainingEventReason::MatchPreparationFocus => "training_reason_match_preparation_focus",
             TrainingEventReason::RoutineGoodSession => "training_reason_routine_good_session",
             TrainingEventReason::RoutineBadSession => "training_reason_routine_bad_session",
@@ -2021,8 +2045,12 @@ pub enum TrainingEventEvidence {
 impl TrainingEventEvidence {
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
-            TrainingEventEvidence::HighSessionPerformance => "training_evidence_high_session_performance",
-            TrainingEventEvidence::LowSessionPerformance => "training_evidence_low_session_performance",
+            TrainingEventEvidence::HighSessionPerformance => {
+                "training_evidence_high_session_performance"
+            }
+            TrainingEventEvidence::LowSessionPerformance => {
+                "training_evidence_low_session_performance"
+            }
             TrainingEventEvidence::HighWorkload => "training_evidence_high_workload",
             TrainingEventEvidence::LowCondition => "training_evidence_low_condition",
             TrainingEventEvidence::RecentlyDropped => "training_evidence_recently_dropped",
@@ -2030,7 +2058,9 @@ impl TrainingEventEvidence {
             TrainingEventEvidence::InRecoveryPhase => "training_evidence_in_recovery_phase",
             TrainingEventEvidence::HighProfessionalism => "training_evidence_high_professionalism",
             TrainingEventEvidence::LowProfessionalism => "training_evidence_low_professionalism",
-            TrainingEventEvidence::YouthDevelopmentTier => "training_evidence_youth_development_tier",
+            TrainingEventEvidence::YouthDevelopmentTier => {
+                "training_evidence_youth_development_tier"
+            }
             TrainingEventEvidence::VeteranLeader => "training_evidence_veteran_leader",
             TrainingEventEvidence::StrongRecentForm => "training_evidence_strong_recent_form",
             TrainingEventEvidence::UpcomingBigMatch => "training_evidence_upcoming_big_match",
@@ -2043,8 +2073,12 @@ impl TrainingEventEvidence {
             TrainingEventEvidence::HighWorkRate => "training_evidence_high_work_rate",
             TrainingEventEvidence::HighDetermination => "training_evidence_high_determination",
             TrainingEventEvidence::Overloaded => "training_evidence_overloaded",
-            TrainingEventEvidence::StrongBaselineButOffDay => "training_evidence_strong_baseline_but_off_day",
-            TrainingEventEvidence::YoungPlayerBreakthrough => "training_evidence_young_player_breakthrough",
+            TrainingEventEvidence::StrongBaselineButOffDay => {
+                "training_evidence_strong_baseline_but_off_day"
+            }
+            TrainingEventEvidence::YoungPlayerBreakthrough => {
+                "training_evidence_young_player_breakthrough"
+            }
             TrainingEventEvidence::VeteranSetStandard => "training_evidence_veteran_set_standard",
             TrainingEventEvidence::TacticalMismatch => "training_evidence_tactical_mismatch",
         }
@@ -2060,8 +2094,17 @@ pub struct TrainingEventContext {
 }
 
 impl TrainingEventContext {
-    pub fn new(reason: TrainingEventReason, session_performance: f32, training_performance_ema: f32) -> Self {
-        Self { reason, session_performance, training_performance_ema, evidence: Vec::new() }
+    pub fn new(
+        reason: TrainingEventReason,
+        session_performance: f32,
+        training_performance_ema: f32,
+    ) -> Self {
+        Self {
+            reason,
+            session_performance,
+            training_performance_ema,
+            evidence: Vec::new(),
+        }
     }
 
     pub fn with_evidence(mut self, evidence: TrainingEventEvidence) -> Self {
@@ -2218,10 +2261,14 @@ pub enum ManagerCriticismReason {
 impl ManagerCriticismReason {
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
-            ManagerCriticismReason::MissedAssignment => "manager_criticism_reason_missed_assignment",
+            ManagerCriticismReason::MissedAssignment => {
+                "manager_criticism_reason_missed_assignment"
+            }
             ManagerCriticismReason::PoorPressing => "manager_criticism_reason_poor_pressing",
             ManagerCriticismReason::CostlyError => "manager_criticism_reason_costly_error",
-            ManagerCriticismReason::LowTrainingIntensity => "manager_criticism_reason_low_intensity",
+            ManagerCriticismReason::LowTrainingIntensity => {
+                "manager_criticism_reason_low_intensity"
+            }
             ManagerCriticismReason::PoorBodyLanguage => "manager_criticism_reason_body_language",
             ManagerCriticismReason::PublicComplaint => "manager_criticism_reason_public_complaint",
             ManagerCriticismReason::LateArrival => "manager_criticism_reason_late_arrival",
@@ -2273,7 +2320,11 @@ pub struct ManagerInteractionEventContext {
 }
 
 impl ManagerInteractionEventContext {
-    pub fn new(topic: ManagerInteractionTopic, tone: ManagerInteractionTone, acceptance: PlayerAcceptance) -> Self {
+    pub fn new(
+        topic: ManagerInteractionTopic,
+        tone: ManagerInteractionTone,
+        acceptance: PlayerAcceptance,
+    ) -> Self {
         Self {
             topic,
             tone,
@@ -2288,8 +2339,14 @@ impl ManagerInteractionEventContext {
         }
     }
 
-    pub fn with_manager_staff_id(mut self, id: u32) -> Self { self.manager_staff_id = Some(id); self }
-    pub fn with_trust(mut self, trust: f32) -> Self { self.trust_in_manager = Some(trust); self }
+    pub fn with_manager_staff_id(mut self, id: u32) -> Self {
+        self.manager_staff_id = Some(id);
+        self
+    }
+    pub fn with_trust(mut self, trust: f32) -> Self {
+        self.trust_in_manager = Some(trust);
+        self
+    }
     pub fn with_promise(mut self, kind: PromiseKind, credibility: f32) -> Self {
         self.promise_kind = Some(kind);
         self.promise_credibility = Some(credibility);
@@ -2345,13 +2402,21 @@ pub enum TeammateConflictReason {
 impl TeammateConflictReason {
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
-            TeammateConflictReason::TrainingStandards => "teammate_conflict_reason_training_standards",
-            TeammateConflictReason::PositionalRivalry => "teammate_conflict_reason_positional_rivalry",
+            TeammateConflictReason::TrainingStandards => {
+                "teammate_conflict_reason_training_standards"
+            }
+            TeammateConflictReason::PositionalRivalry => {
+                "teammate_conflict_reason_positional_rivalry"
+            }
             TeammateConflictReason::WageJealousy => "teammate_conflict_reason_wage_jealousy",
             TeammateConflictReason::TacticalBlame => "teammate_conflict_reason_tactical_blame",
-            TeammateConflictReason::PersonalityClash => "teammate_conflict_reason_personality_clash",
+            TeammateConflictReason::PersonalityClash => {
+                "teammate_conflict_reason_personality_clash"
+            }
             TeammateConflictReason::LanguageBarrier => "teammate_conflict_reason_language_barrier",
-            TeammateConflictReason::LeadershipChallenge => "teammate_conflict_reason_leadership_challenge",
+            TeammateConflictReason::LeadershipChallenge => {
+                "teammate_conflict_reason_leadership_challenge"
+            }
             TeammateConflictReason::MediaComments => "teammate_conflict_reason_media_comments",
             TeammateConflictReason::Other => "teammate_conflict_reason_other",
         }
@@ -2479,13 +2544,21 @@ impl ContractEventEvidence {
             ContractEventEvidence::LowLoyalty => "contract_evidence_low_loyalty",
             ContractEventEvidence::HighAmbition => "contract_evidence_high_ambition",
             ContractEventEvidence::UnderpaidVsPeers => "contract_evidence_underpaid_vs_peers",
-            ContractEventEvidence::OverpaidVsExpectation => "contract_evidence_overpaid_vs_expectation",
+            ContractEventEvidence::OverpaidVsExpectation => {
+                "contract_evidence_overpaid_vs_expectation"
+            }
             ContractEventEvidence::SquadStatusUpgrade => "contract_evidence_squad_status_upgrade",
-            ContractEventEvidence::SquadStatusDowngrade => "contract_evidence_squad_status_downgrade",
-            ContractEventEvidence::UsedExternalInterestAsLeverage => "contract_evidence_used_external_interest",
+            ContractEventEvidence::SquadStatusDowngrade => {
+                "contract_evidence_squad_status_downgrade"
+            }
+            ContractEventEvidence::UsedExternalInterestAsLeverage => {
+                "contract_evidence_used_external_interest"
+            }
             ContractEventEvidence::ContractExpiring => "contract_evidence_contract_expiring",
             ContractEventEvidence::HasOtherInterest => "contract_evidence_has_other_interest",
-            ContractEventEvidence::ClubInFinancialDistress => "contract_evidence_club_financial_distress",
+            ContractEventEvidence::ClubInFinancialDistress => {
+                "contract_evidence_club_financial_distress"
+            }
         }
     }
 }
@@ -2516,12 +2589,30 @@ impl ContractEventContext {
         }
     }
 
-    pub fn with_wage_vs_previous(mut self, ratio: f32) -> Self { self.wage_ratio_vs_previous = Some(ratio); self }
-    pub fn with_wage_vs_peers(mut self, ratio: f32) -> Self { self.wage_ratio_vs_peers = Some(ratio); self }
-    pub fn with_promised_status(mut self, status: PlayerSquadStatus) -> Self { self.promised_status = Some(status); self }
-    pub fn with_agent_pressure(mut self, pressure: f32) -> Self { self.agent_pressure = Some(pressure); self }
-    pub fn with_years_remaining(mut self, years: u8) -> Self { self.years_remaining = Some(years); self }
-    pub fn with_interested_club(mut self, club_id: u32) -> Self { self.interested_club_id = Some(club_id); self }
+    pub fn with_wage_vs_previous(mut self, ratio: f32) -> Self {
+        self.wage_ratio_vs_previous = Some(ratio);
+        self
+    }
+    pub fn with_wage_vs_peers(mut self, ratio: f32) -> Self {
+        self.wage_ratio_vs_peers = Some(ratio);
+        self
+    }
+    pub fn with_promised_status(mut self, status: PlayerSquadStatus) -> Self {
+        self.promised_status = Some(status);
+        self
+    }
+    pub fn with_agent_pressure(mut self, pressure: f32) -> Self {
+        self.agent_pressure = Some(pressure);
+        self
+    }
+    pub fn with_years_remaining(mut self, years: u8) -> Self {
+        self.years_remaining = Some(years);
+        self
+    }
+    pub fn with_interested_club(mut self, club_id: u32) -> Self {
+        self.interested_club_id = Some(club_id);
+        self
+    }
 
     pub fn with_evidence(mut self, evidence: ContractEventEvidence) -> Self {
         if !self.evidence.contains(&evidence) {
@@ -2576,8 +2667,12 @@ impl InjuryRecoveryEvidence {
             InjuryRecoveryEvidence::LongTermLayoff => "injury_evidence_long_term_layoff",
             InjuryRecoveryEvidence::ShortTermLayoff => "injury_evidence_short_term_layoff",
             InjuryRecoveryEvidence::MatchSharpnessLow => "injury_evidence_sharpness_low",
-            InjuryRecoveryEvidence::MatchSharpnessRecovering => "injury_evidence_sharpness_recovering",
-            InjuryRecoveryEvidence::MultipleInjuriesThisSeason => "injury_evidence_multiple_injuries_season",
+            InjuryRecoveryEvidence::MatchSharpnessRecovering => {
+                "injury_evidence_sharpness_recovering"
+            }
+            InjuryRecoveryEvidence::MultipleInjuriesThisSeason => {
+                "injury_evidence_multiple_injuries_season"
+            }
             InjuryRecoveryEvidence::PriorRecurringIssue => "injury_evidence_prior_recurring_issue",
             InjuryRecoveryEvidence::HighProfessionalism => "injury_evidence_high_professionalism",
             InjuryRecoveryEvidence::FearLosingPlace => "injury_evidence_fear_losing_place",
@@ -2595,7 +2690,12 @@ pub struct InjuryRecoveryEventContext {
 
 impl InjuryRecoveryEventContext {
     pub fn new(stage: InjuryRecoveryStage, recovery_days_total: u16, match_readiness: f32) -> Self {
-        Self { stage, recovery_days_total, match_readiness, evidence: Vec::new() }
+        Self {
+            stage,
+            recovery_days_total,
+            match_readiness,
+            evidence: Vec::new(),
+        }
     }
 
     pub fn with_evidence(mut self, evidence: InjuryRecoveryEvidence) -> Self {
@@ -2629,8 +2729,12 @@ pub enum MatchPerformanceKind {
 impl MatchPerformanceKind {
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
-            MatchPerformanceKind::AnsweredCriticsWithPerformance => "match_perf_kind_answered_critics",
-            MatchPerformanceKind::CostlyErrorUnderPressure => "match_perf_kind_costly_error_pressure",
+            MatchPerformanceKind::AnsweredCriticsWithPerformance => {
+                "match_perf_kind_answered_critics"
+            }
+            MatchPerformanceKind::CostlyErrorUnderPressure => {
+                "match_perf_kind_costly_error_pressure"
+            }
             MatchPerformanceKind::SavedResultLate => "match_perf_kind_saved_result_late",
             MatchPerformanceKind::ChangedGameFromBench => "match_perf_kind_changed_game_from_bench",
             MatchPerformanceKind::DefensiveLeaderPerformance => "match_perf_kind_defensive_leader",
@@ -2668,16 +2772,24 @@ impl MatchPerformanceEvidence {
             MatchPerformanceEvidence::HighRating => "match_perf_evidence_high_rating",
             MatchPerformanceEvidence::LowRating => "match_perf_evidence_low_rating",
             MatchPerformanceEvidence::GoalContribution => "match_perf_evidence_goal_contribution",
-            MatchPerformanceEvidence::DecisiveContribution => "match_perf_evidence_decisive_contribution",
+            MatchPerformanceEvidence::DecisiveContribution => {
+                "match_perf_evidence_decisive_contribution"
+            }
             MatchPerformanceEvidence::DerbyFixture => "match_perf_evidence_derby",
             MatchPerformanceEvidence::CupTie => "match_perf_evidence_cup_tie",
             MatchPerformanceEvidence::LeagueDecider => "match_perf_evidence_league_decider",
             MatchPerformanceEvidence::SubstituteAppearance => "match_perf_evidence_substitute",
             MatchPerformanceEvidence::PlayedFullMinutes => "match_perf_evidence_full_minutes",
             MatchPerformanceEvidence::PlayedAfterCriticism => "match_perf_evidence_after_criticism",
-            MatchPerformanceEvidence::HighPressurePersonality => "match_perf_evidence_high_pressure_personality",
-            MatchPerformanceEvidence::LowPressurePersonality => "match_perf_evidence_low_pressure_personality",
-            MatchPerformanceEvidence::ImportantMatchTemperament => "match_perf_evidence_important_match_temperament",
+            MatchPerformanceEvidence::HighPressurePersonality => {
+                "match_perf_evidence_high_pressure_personality"
+            }
+            MatchPerformanceEvidence::LowPressurePersonality => {
+                "match_perf_evidence_low_pressure_personality"
+            }
+            MatchPerformanceEvidence::ImportantMatchTemperament => {
+                "match_perf_evidence_important_match_temperament"
+            }
         }
     }
 }
@@ -2714,15 +2826,42 @@ impl MatchPerformanceEventContext {
         }
     }
 
-    pub fn with_rating(mut self, rating: f32) -> Self { self.rating = Some(rating); self }
-    pub fn with_goals(mut self, goals: u8) -> Self { self.goals = goals; self }
-    pub fn with_assists(mut self, assists: u8) -> Self { self.assists = assists; self }
-    pub fn with_minutes(mut self, minutes: u16) -> Self { self.minutes = minutes; self }
-    pub fn with_team_won(mut self, won: bool) -> Self { self.team_won = Some(won); self }
-    pub fn with_goal_margin(mut self, margin: i8) -> Self { self.goal_margin = Some(margin); self }
-    pub fn with_derby(mut self, is_derby: bool) -> Self { self.is_derby = is_derby; self }
-    pub fn with_cup(mut self, is_cup: bool) -> Self { self.is_cup = is_cup; self }
-    pub fn with_opponent(mut self, club_id: u32) -> Self { self.opponent_club_id = Some(club_id); self }
+    pub fn with_rating(mut self, rating: f32) -> Self {
+        self.rating = Some(rating);
+        self
+    }
+    pub fn with_goals(mut self, goals: u8) -> Self {
+        self.goals = goals;
+        self
+    }
+    pub fn with_assists(mut self, assists: u8) -> Self {
+        self.assists = assists;
+        self
+    }
+    pub fn with_minutes(mut self, minutes: u16) -> Self {
+        self.minutes = minutes;
+        self
+    }
+    pub fn with_team_won(mut self, won: bool) -> Self {
+        self.team_won = Some(won);
+        self
+    }
+    pub fn with_goal_margin(mut self, margin: i8) -> Self {
+        self.goal_margin = Some(margin);
+        self
+    }
+    pub fn with_derby(mut self, is_derby: bool) -> Self {
+        self.is_derby = is_derby;
+        self
+    }
+    pub fn with_cup(mut self, is_cup: bool) -> Self {
+        self.is_cup = is_cup;
+        self
+    }
+    pub fn with_opponent(mut self, club_id: u32) -> Self {
+        self.opponent_club_id = Some(club_id);
+        self
+    }
 
     pub fn with_evidence(mut self, evidence: MatchPerformanceEvidence) -> Self {
         if !self.evidence.contains(&evidence) {
@@ -2800,10 +2939,22 @@ impl RoleStatusEventContext {
         self.new_status = Some(new);
         self
     }
-    pub fn with_formation_slot(mut self, slot: SelectionRole) -> Self { self.formation_slot = Some(slot); self }
-    pub fn with_starter_ratio(mut self, ratio: f32) -> Self { self.starter_ratio = Some(ratio); self }
-    pub fn with_repeated_omissions(mut self, n: u8) -> Self { self.repeated_omissions = n; self }
-    pub fn with_direct_rival(mut self, id: u32) -> Self { self.direct_rival_id = Some(id); self }
+    pub fn with_formation_slot(mut self, slot: SelectionRole) -> Self {
+        self.formation_slot = Some(slot);
+        self
+    }
+    pub fn with_starter_ratio(mut self, ratio: f32) -> Self {
+        self.starter_ratio = Some(ratio);
+        self
+    }
+    pub fn with_repeated_omissions(mut self, n: u8) -> Self {
+        self.repeated_omissions = n;
+        self
+    }
+    pub fn with_direct_rival(mut self, id: u32) -> Self {
+        self.direct_rival_id = Some(id);
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -2835,8 +2986,12 @@ impl NationalTeamEventKind {
             NationalTeamEventKind::DroppedDueToForm => "national_kind_dropped_form",
             NationalTeamEventKind::DroppedDueToInjury => "national_kind_dropped_injury",
             NationalTeamEventKind::DroppedDueToCompetition => "national_kind_dropped_competition",
-            NationalTeamEventKind::TournamentSquadOmitted => "national_kind_tournament_squad_omitted",
-            NationalTeamEventKind::InternationalPlaceUnderThreat => "national_kind_place_under_threat",
+            NationalTeamEventKind::TournamentSquadOmitted => {
+                "national_kind_tournament_squad_omitted"
+            }
+            NationalTeamEventKind::InternationalPlaceUnderThreat => {
+                "national_kind_place_under_threat"
+            }
             NationalTeamEventKind::FirstCapPride => "national_kind_first_cap_pride",
             NationalTeamEventKind::NationalTeamRoleGrowing => "national_kind_role_growing",
         }
@@ -2863,10 +3018,22 @@ impl NationalTeamEventContext {
         }
     }
 
-    pub fn with_country(mut self, country_id: u32) -> Self { self.country_id = Some(country_id); self }
-    pub fn with_previous_caps(mut self, caps: u16) -> Self { self.previous_caps = caps; self }
-    pub fn with_recent_club_form(mut self, form: f32) -> Self { self.recent_club_form = Some(form); self }
-    pub fn with_competition_window(mut self, in_window: bool) -> Self { self.competition_window = in_window; self }
+    pub fn with_country(mut self, country_id: u32) -> Self {
+        self.country_id = Some(country_id);
+        self
+    }
+    pub fn with_previous_caps(mut self, caps: u16) -> Self {
+        self.previous_caps = caps;
+        self
+    }
+    pub fn with_recent_club_form(mut self, form: f32) -> Self {
+        self.recent_club_form = Some(form);
+        self
+    }
+    pub fn with_competition_window(mut self, in_window: bool) -> Self {
+        self.competition_window = in_window;
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -2896,12 +3063,20 @@ impl LeadershipEventKind {
             LeadershipEventKind::LeadershipEmergence => "leadership_kind_emergence",
             LeadershipEventKind::SeniorPlayerMediates => "leadership_kind_senior_mediates",
             LeadershipEventKind::BackedBySeniorPlayers => "leadership_kind_backed_seniors",
-            LeadershipEventKind::ChallengedTrainingStandards => "leadership_kind_challenged_standards",
-            LeadershipEventKind::InfluenceInDressingRoomRising => "leadership_kind_influence_rising",
-            LeadershipEventKind::InfluenceInDressingRoomFalling => "leadership_kind_influence_falling",
+            LeadershipEventKind::ChallengedTrainingStandards => {
+                "leadership_kind_challenged_standards"
+            }
+            LeadershipEventKind::InfluenceInDressingRoomRising => {
+                "leadership_kind_influence_rising"
+            }
+            LeadershipEventKind::InfluenceInDressingRoomFalling => {
+                "leadership_kind_influence_falling"
+            }
             LeadershipEventKind::MentorshipStarted => "leadership_kind_mentorship_started",
             LeadershipEventKind::MentorshipStrained => "leadership_kind_mentorship_strained",
-            LeadershipEventKind::SquadLeadershipQuestioned => "leadership_kind_squad_leadership_questioned",
+            LeadershipEventKind::SquadLeadershipQuestioned => {
+                "leadership_kind_squad_leadership_questioned"
+            }
         }
     }
 }
@@ -2924,9 +3099,18 @@ impl LeadershipEventContext {
         }
     }
 
-    pub fn with_partner(mut self, id: u32) -> Self { self.partner_player_id = Some(id); self }
-    pub fn with_leadership_attribute(mut self, attr: f32) -> Self { self.leadership_attribute = Some(attr); self }
-    pub fn with_influence_change(mut self, change: f32) -> Self { self.influence_change = Some(change); self }
+    pub fn with_partner(mut self, id: u32) -> Self {
+        self.partner_player_id = Some(id);
+        self
+    }
+    pub fn with_leadership_attribute(mut self, attr: f32) -> Self {
+        self.leadership_attribute = Some(attr);
+        self
+    }
+    pub fn with_influence_change(mut self, change: f32) -> Self {
+        self.influence_change = Some(change);
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -3011,10 +3195,22 @@ impl MediaFanEventContext {
         }
     }
 
-    pub fn with_form_trigger(mut self) -> Self { self.trigger_due_to_form = true; self }
-    pub fn with_transfer_trigger(mut self) -> Self { self.trigger_due_to_transfer = true; self }
-    pub fn with_discipline_trigger(mut self) -> Self { self.trigger_due_to_discipline = true; self }
-    pub fn with_big_match_trigger(mut self) -> Self { self.trigger_due_to_big_match = true; self }
+    pub fn with_form_trigger(mut self) -> Self {
+        self.trigger_due_to_form = true;
+        self
+    }
+    pub fn with_transfer_trigger(mut self) -> Self {
+        self.trigger_due_to_transfer = true;
+        self
+    }
+    pub fn with_discipline_trigger(mut self) -> Self {
+        self.trigger_due_to_discipline = true;
+        self
+    }
+    pub fn with_big_match_trigger(mut self) -> Self {
+        self.trigger_due_to_big_match = true;
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -3092,9 +3288,18 @@ impl PersonalAdaptationEventContext {
         }
     }
 
-    pub fn with_adaptability(mut self, attr: f32) -> Self { self.adaptability = Some(attr); self }
-    pub fn with_compatriot(mut self, has: bool) -> Self { self.has_compatriot_in_squad = has; self }
-    pub fn with_local_language(mut self, speaks: bool) -> Self { self.speaks_local_language = speaks; self }
+    pub fn with_adaptability(mut self, attr: f32) -> Self {
+        self.adaptability = Some(attr);
+        self
+    }
+    pub fn with_compatriot(mut self, has: bool) -> Self {
+        self.has_compatriot_in_squad = has;
+        self
+    }
+    pub fn with_local_language(mut self, speaks: bool) -> Self {
+        self.speaks_local_language = speaks;
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -3112,15 +3317,11 @@ pub enum CareerDesireKind {
 impl CareerDesireKind {
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
-            CareerDesireKind::ReturnHomeAfterPoorAdaptation => {
-                "career_desire_kind_return_home"
-            }
+            CareerDesireKind::ReturnHomeAfterPoorAdaptation => "career_desire_kind_return_home",
             CareerDesireKind::EuropeanCompetitionAmbition => {
                 "career_desire_kind_european_competition"
             }
-            CareerDesireKind::CopaLibertadoresAmbition => {
-                "career_desire_kind_copa_libertadores"
-            }
+            CareerDesireKind::CopaLibertadoresAmbition => "career_desire_kind_copa_libertadores",
         }
     }
 }
@@ -3161,12 +3362,8 @@ impl CareerDesireEvidence {
             CareerDesireEvidence::DifferentContinent => {
                 "career_desire_evidence_different_continent"
             }
-            CareerDesireEvidence::NoLocalLanguage => {
-                "career_desire_evidence_no_local_language"
-            }
-            CareerDesireEvidence::LowAdaptability => {
-                "career_desire_evidence_low_adaptability"
-            }
+            CareerDesireEvidence::NoLocalLanguage => "career_desire_evidence_no_local_language",
+            CareerDesireEvidence::LowAdaptability => "career_desire_evidence_low_adaptability",
             CareerDesireEvidence::NoCompatriotSupport => {
                 "career_desire_evidence_no_compatriot_support"
             }
@@ -3180,9 +3377,7 @@ impl CareerDesireEvidence {
             CareerDesireEvidence::HomeOrFavouriteLink => {
                 "career_desire_evidence_home_or_favourite_link"
             }
-            CareerDesireEvidence::RepeatedIsolation => {
-                "career_desire_evidence_repeated_isolation"
-            }
+            CareerDesireEvidence::RepeatedIsolation => "career_desire_evidence_repeated_isolation",
             CareerDesireEvidence::LowClubFit => "career_desire_evidence_low_club_fit",
         }
     }
@@ -3317,7 +3512,9 @@ impl LifeSimulationDesireKind {
             LifeSimulationDesireKind::PrefersCulturalFamiliarity => "life_sim_kind_cultural_fit",
             LifeSimulationDesireKind::VeteranHomecomingSeason => "life_sim_kind_veteran_homecoming",
             LifeSimulationDesireKind::ClubLegendRefusesLeave => "life_sim_kind_legend_refuses",
-            LifeSimulationDesireKind::RefusesRivalMoveDespiteUpgrade => "life_sim_kind_rival_refuse",
+            LifeSimulationDesireKind::RefusesRivalMoveDespiteUpgrade => {
+                "life_sim_kind_rival_refuse"
+            }
         }
     }
 }
@@ -3479,10 +3676,22 @@ impl LoanEventContext {
         }
     }
 
-    pub fn with_parent_club(mut self, id: u32) -> Self { self.parent_club_id = Some(id); self }
-    pub fn with_loan_club(mut self, id: u32) -> Self { self.loan_club_id = Some(id); self }
-    pub fn with_minutes_share(mut self, share: f32) -> Self { self.minutes_share = Some(share); self }
-    pub fn with_permanent_option(mut self, present: bool) -> Self { self.permanent_option_present = present; self }
+    pub fn with_parent_club(mut self, id: u32) -> Self {
+        self.parent_club_id = Some(id);
+        self
+    }
+    pub fn with_loan_club(mut self, id: u32) -> Self {
+        self.loan_club_id = Some(id);
+        self
+    }
+    pub fn with_minutes_share(mut self, share: f32) -> Self {
+        self.minutes_share = Some(share);
+        self
+    }
+    pub fn with_permanent_option(mut self, present: bool) -> Self {
+        self.permanent_option_present = present;
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -3581,17 +3790,50 @@ impl RecognitionEventContext {
         }
     }
 
-    pub fn with_league(mut self, id: u32) -> Self { self.league_id = Some(id); self }
-    pub fn with_country(mut self, id: u32) -> Self { self.country_id = Some(id); self }
-    pub fn with_season_goals(mut self, goals: u16) -> Self { self.season_goals = Some(goals); self }
-    pub fn with_season_assists(mut self, assists: u16) -> Self { self.season_assists = Some(assists); self }
-    pub fn with_clean_sheets(mut self, cs: u16) -> Self { self.season_clean_sheets = Some(cs); self }
-    pub fn with_avg_rating(mut self, rating: f32) -> Self { self.avg_rating = Some(rating); self }
-    pub fn with_margin(mut self, margin: f32) -> Self { self.margin = Some(margin); self }
-    pub fn with_runner_up(mut self, id: u32) -> Self { self.runner_up_player_id = Some(id); self }
-    pub fn with_matches_played(mut self, m: u16) -> Self { self.matches_played = Some(m); self }
-    pub fn with_previous_caps(mut self, caps: u16) -> Self { self.previous_caps = Some(caps); self }
-    pub fn with_first_time(mut self, first: bool) -> Self { self.first_time = first; self }
+    pub fn with_league(mut self, id: u32) -> Self {
+        self.league_id = Some(id);
+        self
+    }
+    pub fn with_country(mut self, id: u32) -> Self {
+        self.country_id = Some(id);
+        self
+    }
+    pub fn with_season_goals(mut self, goals: u16) -> Self {
+        self.season_goals = Some(goals);
+        self
+    }
+    pub fn with_season_assists(mut self, assists: u16) -> Self {
+        self.season_assists = Some(assists);
+        self
+    }
+    pub fn with_clean_sheets(mut self, cs: u16) -> Self {
+        self.season_clean_sheets = Some(cs);
+        self
+    }
+    pub fn with_avg_rating(mut self, rating: f32) -> Self {
+        self.avg_rating = Some(rating);
+        self
+    }
+    pub fn with_margin(mut self, margin: f32) -> Self {
+        self.margin = Some(margin);
+        self
+    }
+    pub fn with_runner_up(mut self, id: u32) -> Self {
+        self.runner_up_player_id = Some(id);
+        self
+    }
+    pub fn with_matches_played(mut self, m: u16) -> Self {
+        self.matches_played = Some(m);
+        self
+    }
+    pub fn with_previous_caps(mut self, caps: u16) -> Self {
+        self.previous_caps = Some(caps);
+        self
+    }
+    pub fn with_first_time(mut self, first: bool) -> Self {
+        self.first_time = first;
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -3646,12 +3888,30 @@ impl SeasonOutcomeContext {
         }
     }
 
-    pub fn with_league(mut self, id: u32) -> Self { self.league_id = Some(id); self }
-    pub fn with_final_position(mut self, pos: u8) -> Self { self.final_position = Some(pos); self }
-    pub fn with_points(mut self, points: u16) -> Self { self.points = Some(points); self }
-    pub fn with_points_to_safety(mut self, gap: i16) -> Self { self.points_to_safety = Some(gap); self }
-    pub fn with_matches_remaining(mut self, n: u8) -> Self { self.matches_remaining = Some(n); self }
-    pub fn with_participation(mut self, p: f32) -> Self { self.season_participation = Some(p); self }
+    pub fn with_league(mut self, id: u32) -> Self {
+        self.league_id = Some(id);
+        self
+    }
+    pub fn with_final_position(mut self, pos: u8) -> Self {
+        self.final_position = Some(pos);
+        self
+    }
+    pub fn with_points(mut self, points: u16) -> Self {
+        self.points = Some(points);
+        self
+    }
+    pub fn with_points_to_safety(mut self, gap: i16) -> Self {
+        self.points_to_safety = Some(gap);
+        self
+    }
+    pub fn with_matches_remaining(mut self, n: u8) -> Self {
+        self.matches_remaining = Some(n);
+        self
+    }
+    pub fn with_participation(mut self, p: f32) -> Self {
+        self.season_participation = Some(p);
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -3730,7 +3990,10 @@ impl RegulationEventContext {
         self.competition_name_key = Some(key.into());
         self
     }
-    pub fn with_replacement(mut self, id: u32) -> Self { self.replacement_player_id = Some(id); self }
+    pub fn with_replacement(mut self, id: u32) -> Self {
+        self.replacement_player_id = Some(id);
+        self
+    }
     pub fn with_slots(mut self, used: u8, total: u8) -> Self {
         self.slots_used = Some(used);
         self.slots_total = Some(total);
@@ -4453,9 +4716,8 @@ mod tests {
         ));
         assert_eq!(recognition.specialized_payload_count(), 1);
 
-        let season = base().with_season_outcome_context(SeasonOutcomeContext::new(
-            SeasonOutcomeKind::Relegated,
-        ));
+        let season = base()
+            .with_season_outcome_context(SeasonOutcomeContext::new(SeasonOutcomeKind::Relegated));
         assert_eq!(season.specialized_payload_count(), 1);
 
         let regulation = base().with_regulation_context(RegulationEventContext::new(
@@ -4480,9 +4742,7 @@ mod tests {
         .with_recognition_context(RecognitionEventContext::new(
             RecognitionEventKind::PlayerOfTheWeek,
         ))
-        .with_season_outcome_context(SeasonOutcomeContext::new(
-            SeasonOutcomeKind::Relegated,
-        ));
+        .with_season_outcome_context(SeasonOutcomeContext::new(SeasonOutcomeKind::Relegated));
         assert_eq!(ctx.specialized_payload_count(), 2);
     }
 
@@ -4507,12 +4767,7 @@ mod tests {
             RegulationOutcomeKind::Omitted,
             RegulationSlotKind::Other,
         ));
-        h.add_event_with_context(
-            HappinessEventType::PlayerOfTheMonth,
-            5.0,
-            None,
-            bad_ctx,
-        );
+        h.add_event_with_context(HappinessEventType::PlayerOfTheMonth, 5.0, None, bad_ctx);
     }
 
     #[test]
@@ -4639,12 +4894,7 @@ mod tests {
                 HappinessEventSeverity::Minor,
                 HappinessEventScope::DressingRoom,
             );
-            h.add_event_with_context(
-                HappinessEventType::ConflictWithTeammate,
-                -1.0,
-                None,
-                ctx,
-            );
+            h.add_event_with_context(HappinessEventType::ConflictWithTeammate, -1.0, None, ctx);
         }));
         assert!(
             result.is_err() || h.recent_events.is_empty(),

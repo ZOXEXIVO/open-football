@@ -573,8 +573,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
                 .teammates()
                 .defenders()
                 .filter(|d| {
-                    d.id != self.ctx.player.id
-                        && (d.position - my_pos).norm_squared() < 50.0 * 50.0
+                    d.id != self.ctx.player.id && (d.position - my_pos).norm_squared() < 50.0 * 50.0
                 })
                 .count();
 

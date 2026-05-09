@@ -53,7 +53,7 @@ impl StateProcessingHandler for GoalkeeperStandingState {
 
         // Skill-based threat assessment
         let anticipation = ctx.player.skills.mental.anticipation / 20.0;
-        let command_of_area = ctx.player.skills.mental.vision / 20.0;
+        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
 
         // Check for immediate threats requiring urgent action
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
@@ -251,7 +251,7 @@ impl GoalkeeperStandingState {
 
         // Goalkeeper skills affecting positioning
         let positioning_skill = ctx.player.skills.mental.positioning / 20.0;
-        let command_of_area = ctx.player.skills.mental.vision / 20.0;
+        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
 
         // Calculate distance from goal to ball
         let goal_to_ball = ball_position - goal_center;

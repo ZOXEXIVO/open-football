@@ -181,12 +181,8 @@ impl Player {
         let nat_rep = nationality_country_reputation;
         let last_league_rep = ((nat_rep as f32) * 0.75) as u16;
         let club_score = (nat_rep as f32 / 10_000.0).clamp(0.0, 1.0) * 0.35;
-        let inferred_salary = WageCalculator::expected_annual_wage(
-            self,
-            self.age(date),
-            club_score,
-            last_league_rep,
-        );
+        let inferred_salary =
+            WageCalculator::expected_annual_wage(self, self.age(date), club_score, last_league_rep);
         // Seed `free_since` 30 days in the past so a fresh database
         // free agent isn't treated as "released yesterday". They've
         // been on the market — the engine just hasn't been simulating
@@ -400,7 +396,10 @@ mod tests {
             last_squad_status: PlayerSquadStatus::MainBackupPlayer,
         });
         let pressure = p.career_pressure(today);
-        assert!(pressure > 0.85, "expected near-cap pressure, got {pressure}");
+        assert!(
+            pressure > 0.85,
+            "expected near-cap pressure, got {pressure}"
+        );
     }
 
     #[test]

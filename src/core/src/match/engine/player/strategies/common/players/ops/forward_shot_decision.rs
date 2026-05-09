@@ -1,4 +1,5 @@
 use crate::r#match::StateProcessingContext;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
 /// Outcome of `evaluate_forward_shot_decision`.
 ///
@@ -59,11 +60,25 @@ pub fn evaluate_forward_shot_decision(
     }
 
     let skills = &ctx.player.skills;
-    let finishing = (skills.technical.finishing / 20.0).clamp(0.0, 1.0);
-    let composure = (skills.mental.composure / 20.0).clamp(0.0, 1.0);
+    let minute = sc::minute_from_ms(ctx.context.total_match_time);
+    // `shot_selection` drives the decision — composure + decisions
+    // weighted heavily, with finishing/long_shots/vision/teamwork
+    // mixed in. Used to gate the xG floor and willingness roll so a
+    // pure poacher with weak decisions doesn't smash the same shots a
+    // smart forward declines.
+    let selection = sc::shot_selection(ctx.player, minute);
+    let tech = sc::EffActionContext::technical(minute);
+    let mental = sc::EffActionContext::mental(minute);
+    // A few execution-quality reads still need the raw band (used in
+    // willingness shaping and 1v1 cool-headedness). Routed through
+    // `effective_skill` so they fade with fatigue.
+    let finishing = sc::n(sc::eff(ctx.player, tech, |p| p.skills.technical.finishing));
+    let composure = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.composure));
     let _technique = (skills.technical.technique / 20.0).clamp(0.0, 1.0);
-    let first_touch = (skills.technical.first_touch / 20.0).clamp(0.0, 1.0);
-    let decisions = (skills.mental.decisions / 20.0).clamp(0.0, 1.0);
+    let first_touch = sc::n(sc::eff(ctx.player, tech, |p| {
+        p.skills.technical.first_touch
+    }));
+    let decisions = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.decisions));
 
     // ── xG quality ────────────────────────────────────────────────────
     // Pre-shot xG (matches `handle_shoot_event`'s formula). Low-xG
@@ -71,10 +86,17 @@ pub fn evaluate_forward_shot_decision(
     // box where ANY shot has a meaningful chance.
     let xg = ctx.player().shooting().expected_xg();
     // Skill-aware xG floor:
-    //   * elite finisher (≥0.80) — accepts 0.06 xG  (will speculate)
-    //   * average     (~0.50)    — accepts 0.09 xG
-    //   * poor       (≤0.30)     — needs 0.13 xG
-    let mut min_xg = 0.13 - finishing * 0.08;
+    //   * elite finisher (>=0.80) -- accepts 0.06 xG  (will speculate)
+    //   * average     (~0.50)     -- accepts 0.09 xG
+    //   * poor       (<=0.30)     -- needs 0.13 xG
+    // The `shot_selection` composite adds a small correction on top:
+    // a low-decisions forward with the same finishing speculates more
+    // (lower floor); a high-decisions forward with the same finishing
+    // demands a slightly higher floor. Capped at +/-0.02 so the
+    // finishing-driven baseline stays the dominant signal.
+    let baseline = 0.13 - finishing * 0.08;
+    let selection_adj = (selection - 0.5) * 0.04;
+    let mut min_xg = baseline + selection_adj;
     min_xg = min_xg.clamp(0.06, 0.13);
     let inside_six = distance <= 18.0;
     if !inside_six && xg < min_xg {
@@ -170,14 +192,27 @@ pub fn evaluate_forward_shot_decision(
     }
 
     // ── Willingness roll ──────────────────────────────────────────────
-    // Per-tick base 0.10 (poor) … 0.35 (elite). Modulated by clarity,
+    // Per-tick base 0.10 (poor) ... 0.35 (elite). Modulated by clarity,
     // sprint balance, GK proximity, and xG quality. Inside the six-yard
     // box willingness floors at 0.30 so a scuffed bobble there still
     // resolves into a strike most of the time.
+    //
+    // `selection` shifts willingness inversely to the xG floor: a
+    // high-selection forward shoots LESS often on marginal chances
+    // (avoids bad shots) but the inside-six floor protects easy ones.
     let base = (finishing * 0.22 + composure * 0.06 + decisions * 0.04 + 0.07).clamp(0.10, 0.35);
     let xg_boost = (xg / 0.30).clamp(0.30, 1.20);
-    let mut willingness =
-        base * (0.40 + clarity * 0.60) * balance_factor * xg_boost * gk_proximity;
+    // Marginal-chance gate: when xg < min_xg + 0.05 a high-selection
+    // player damps willingness 10%; a low-selection player lifts it
+    // 10%. Bounded so the dominant willingness math still holds shape.
+    let marginal = (xg < min_xg + 0.05) as i32 as f32;
+    let selection_marginal_adj = marginal * (0.5 - selection) * 0.20;
+    let mut willingness = base
+        * (0.40 + clarity * 0.60)
+        * balance_factor
+        * xg_boost
+        * gk_proximity
+        * (1.0 + selection_marginal_adj);
     if inside_six {
         willingness = willingness.max(0.30);
     }
@@ -229,9 +264,26 @@ mod tests {
     #[test]
     fn xg_floor_scales_with_finishing() {
         // Skill-aware xG floor: poor finishers need ~0.13, elite need ~0.06.
-        let poor_floor = (0.13_f32 - 0.30 * 0.08).clamp(0.06, 0.13);
-        let elite_floor = (0.13_f32 - 0.85 * 0.08).clamp(0.06, 0.13);
-        assert!(poor_floor > elite_floor + 0.04);
+        // Selection adjustment is +/-0.02 around the finishing-driven baseline
+        // (small correction so the test compares baselines at neutral selection).
+        let baseline = |finishing: f32, selection: f32| -> f32 {
+            ((0.13_f32 - finishing * 0.08) + (selection - 0.5) * 0.04).clamp(0.06, 0.13)
+        };
+        let poor = baseline(0.30, 0.50);
+        let elite = baseline(0.85, 0.50);
+        assert!(poor > elite + 0.04);
+    }
+
+    #[test]
+    fn smart_forward_demands_higher_floor_than_poacher() {
+        // Same finishing, different shot_selection: the smart pick
+        // (high decisions/composure) raises the xG floor.
+        let baseline = |finishing: f32, selection: f32| -> f32 {
+            ((0.13_f32 - finishing * 0.08) + (selection - 0.5) * 0.04).clamp(0.06, 0.13)
+        };
+        let smart = baseline(0.65, 0.85);
+        let poacher = baseline(0.65, 0.30);
+        assert!(smart > poacher, "smart={smart} poacher={poacher}");
     }
 
     #[test]

@@ -382,8 +382,8 @@ pub fn calculate_match_rating(
     rating += progressive_zone.min(ZoneCoeffs::PROGRESSIVE_TO_FINAL_THIRD_CAP) * minute_damp;
 
     let box_entries = stats.passes_into_box as f32 + z.carries_into_box as f32;
-    rating += (box_entries * ZoneCoeffs::BOX_ENTRY_PER).min(ZoneCoeffs::BOX_ENTRY_CAP)
-        * minute_damp;
+    rating +=
+        (box_entries * ZoneCoeffs::BOX_ENTRY_PER).min(ZoneCoeffs::BOX_ENTRY_CAP) * minute_damp;
 
     // ── Lane-aware creation bonuses (capped tight) ──────────────────────
     //
@@ -458,18 +458,15 @@ pub fn calculate_match_rating(
             ZoneCoeffs::OFFSIDE_FORWARD_PER,
             ZoneCoeffs::OFFSIDE_FORWARD_CAP,
         ),
-        _ => (
-            ZoneCoeffs::OFFSIDE_OTHER_PER,
-            ZoneCoeffs::OFFSIDE_OTHER_CAP,
-        ),
+        _ => (ZoneCoeffs::OFFSIDE_OTHER_PER, ZoneCoeffs::OFFSIDE_OTHER_CAP),
     };
     rating += (stats.offsides as f32 * off_per).max(off_cap);
 
     // Own goals: -1.0 base + -0.30 because OGs sit inside the player's
     // own box by definition. Multiple OGs stack but are clipped by the
     // 1.0 floor.
-    rating += stats.own_goals as f32
-        * (ZoneCoeffs::OWN_GOAL_BASE + ZoneCoeffs::OWN_GOAL_OWN_BOX_EXTRA);
+    rating +=
+        stats.own_goals as f32 * (ZoneCoeffs::OWN_GOAL_BASE + ZoneCoeffs::OWN_GOAL_OWN_BOX_EXTRA);
 
     // GK xG-prevented — positive means above-expectation shot stopping.
     // The engine doesn't currently populate per-shot xG, so when
@@ -1510,8 +1507,7 @@ mod tests {
         with_extra.zone_stats.errors_to_goal_own_box = 1;
         let extra_rating = calculate_match_rating(&with_extra, 1, 1);
         assert!(
-            (baseline - extra_rating - ZoneCoeffs::ERROR_TO_GOAL_OWN_BOX_EXTRA.abs()).abs()
-                < 0.01,
+            (baseline - extra_rating - ZoneCoeffs::ERROR_TO_GOAL_OWN_BOX_EXTRA.abs()).abs() < 0.01,
             "own-box error-to-goal extra should subtract {:.2} on top of base — got delta {}",
             ZoneCoeffs::ERROR_TO_GOAL_OWN_BOX_EXTRA,
             baseline - extra_rating

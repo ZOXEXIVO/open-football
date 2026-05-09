@@ -329,8 +329,7 @@ impl Player {
                 club_continent_id: ctx.club_continent_id,
                 club_in_home_country: ctx.club_in_home_country,
                 destination_is_favourite: ctx.destination_is_favourite,
-                same_language_or_nationality_teammates: ctx
-                    .same_language_or_nationality_teammates,
+                same_language_or_nationality_teammates: ctx.same_language_or_nationality_teammates,
                 adaptation_score,
                 club_fit: self.happiness.factors.club_fit,
             };
@@ -361,11 +360,10 @@ impl Player {
         }
 
         if !recently_transferred && self.happiness.factors.ambition_fit <= -7.0 {
-            let has_unh_short = self
-                .statuses
-                .statuses
-                .iter()
-                .any(|s| s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 14);
+            let has_unh_short =
+                self.statuses.statuses.iter().any(|s| {
+                    s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 14
+                });
             if has_unh_short {
                 active_reasons.push(TransferRequestReason::AmbitionMismatch);
             }
@@ -631,11 +629,7 @@ impl Player {
     /// True when persistent return-home pressure justifies escalating
     /// to a transfer request. Reads recent `WantsReturnHome` events
     /// plus the player's adaptation signals.
-    fn return_home_request_pressure(
-        &self,
-        now: NaiveDate,
-        _ctx: &TransferDesireContext,
-    ) -> bool {
+    fn return_home_request_pressure(&self, now: NaiveDate, _ctx: &TransferDesireContext) -> bool {
         // Need a fair window (60-120 days post-transfer baseline).
         let days = match self.days_since_transfer(now) {
             Some(d) if d >= 60 => d,
@@ -650,9 +644,7 @@ impl Player {
             .happiness
             .recent_events
             .iter()
-            .filter(|e| {
-                e.event_type == HappinessEventType::WantsReturnHome && e.days_ago <= 120
-            })
+            .filter(|e| e.event_type == HappinessEventType::WantsReturnHome && e.days_ago <= 120)
             .count();
         if return_home_count == 0 {
             return false;
@@ -1118,9 +1110,8 @@ mod career_desire_tests {
         // chronic-failure detector should fire WantsReturnHome.
         let today = d(2026, 5, 1);
         let mut p = build(
-            27, /* ambition */ 12.0, /* adaptability */ 6.0,
-            /* loyalty */ 10.0, /* professionalism */ 10.0,
-            /* country_id (SA) */ 30, 130, 4500, 90, today,
+            27, /* ambition */ 12.0, /* adaptability */ 6.0, /* loyalty */ 10.0,
+            /* professionalism */ 10.0, /* country_id (SA) */ 30, 130, 4500, 90, today,
         );
         // Push a couple of FeelingIsolated events so the detector sees
         // chronic isolation.
@@ -1150,16 +1141,15 @@ mod career_desire_tests {
         // Same shape but high adaptability, speaks the language, has a
         // compatriot, neutral club_fit. Detector should hold its fire.
         let today = d(2026, 5, 1);
-        let mut p = build(
-            27, 12.0, 16.0, 10.0, 14.0, 30, 130, 4500, 90, today,
-        );
+        let mut p = build(27, 12.0, 16.0, 10.0, 14.0, 30, 130, 4500, 90, today);
         // Add the player's native language at a level that counts as
         // local-language fluent for the test country code.
-        p.languages.push(crate::club::player::language::PlayerLanguage {
-            language: crate::club::player::language::Language::English,
-            proficiency: 100,
-            is_native: true,
-        });
+        p.languages
+            .push(crate::club::player::language::PlayerLanguage {
+                language: crate::club::player::language::Language::English,
+                proficiency: 100,
+                is_native: true,
+            });
         p.happiness.morale = 60.0;
         p.happiness.factors.club_fit = 1.0;
 
@@ -1182,9 +1172,7 @@ mod career_desire_tests {
         // Same isolation profile, only 30 days at club — under the
         // 60-day honeymoon. Must not fire.
         let today = d(2026, 5, 1);
-        let mut p = build(
-            27, 12.0, 6.0, 10.0, 10.0, 30, 130, 4500, 30, today,
-        );
+        let mut p = build(27, 12.0, 6.0, 10.0, 10.0, 30, 130, 4500, 30, today);
         p.happiness
             .add_event(HappinessEventType::FeelingIsolated, -2.0);
         p.happiness
@@ -1207,9 +1195,7 @@ mod career_desire_tests {
     #[test]
     fn return_home_cooldown_prevents_repeat_within_60_days() {
         let today = d(2026, 5, 1);
-        let mut p = build(
-            27, 12.0, 6.0, 10.0, 10.0, 30, 130, 4500, 90, today,
-        );
+        let mut p = build(27, 12.0, 6.0, 10.0, 10.0, 30, 130, 4500, 90, today);
         p.happiness
             .add_event(HappinessEventType::FeelingIsolated, -2.0);
         p.happiness
@@ -1298,7 +1284,10 @@ mod career_desire_tests {
         ctx.league_reputation = 4000;
         ctx.main_league_tier = 1;
         let fired = p.detect_copa_libertadores_desire(today, &ctx);
-        assert!(fired, "SA player outside SA should fire Libertadores desire");
+        assert!(
+            fired,
+            "SA player outside SA should fire Libertadores desire"
+        );
         assert_eq!(
             count_event(&p, HappinessEventType::WantsCopaLibertadores),
             1
@@ -1385,7 +1374,9 @@ mod career_desire_tests {
         let mut p = build(28, 14.0, 12.0, 10.0, 12.0, 30, 130, 5000, 200, today);
         p.happiness.factors.ambition_fit = -8.0;
         p.statuses.add(
-            today.checked_sub_signed(chrono::Duration::days(20)).unwrap(),
+            today
+                .checked_sub_signed(chrono::Duration::days(20))
+                .unwrap(),
             PlayerStatusType::Unh,
         );
         p.happiness.last_salary_negotiation = Some(
@@ -1400,12 +1391,14 @@ mod career_desire_tests {
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(p.statuses.get().contains(&PlayerStatusType::Req));
-        assert!(p
-            .transfer_request_reasons
-            .contains(&TransferRequestReason::SalaryUnresolved));
-        assert!(p
-            .transfer_request_reasons
-            .contains(&TransferRequestReason::AmbitionMismatch));
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::SalaryUnresolved)
+        );
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::AmbitionMismatch)
+        );
 
         // Salary issue resolves — but ambition mismatch remains.
         p.happiness.factors.salary_satisfaction = 0.0;
@@ -1415,12 +1408,14 @@ mod career_desire_tests {
             p.statuses.get().contains(&PlayerStatusType::Req),
             "Req must persist while ambition still red"
         );
-        assert!(!p
-            .transfer_request_reasons
-            .contains(&TransferRequestReason::SalaryUnresolved));
-        assert!(p
-            .transfer_request_reasons
-            .contains(&TransferRequestReason::AmbitionMismatch));
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::SalaryUnresolved)
+        );
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::AmbitionMismatch)
+        );
     }
 
     #[test]
@@ -1428,7 +1423,9 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(28, 14.0, 12.0, 10.0, 12.0, 30, 130, 5000, 200, today);
         p.statuses.add(
-            today.checked_sub_signed(chrono::Duration::days(40)).unwrap(),
+            today
+                .checked_sub_signed(chrono::Duration::days(40))
+                .unwrap(),
             PlayerStatusType::Unh,
         );
         let mut ctx = TransferDesireContext::default();
@@ -1529,30 +1526,29 @@ mod career_desire_tests {
         let mut p = build(27, 12.0, 14.0, 14.0, 14.0, 30, 130, 4500, 90, today);
         // Mark player as native English speaker so speaks_local("gb") is true
         // (removes the !speaks_local penalty).
-        p.languages.push(crate::club::player::language::PlayerLanguage {
-            language: crate::club::player::language::Language::English,
-            proficiency: 100,
-            is_native: true,
-        });
+        p.languages
+            .push(crate::club::player::language::PlayerLanguage {
+                language: crate::club::player::language::Language::English,
+                proficiency: 100,
+                is_native: true,
+            });
         p.happiness.morale = 60.0;
         p.happiness.factors.club_fit = 0.0;
         // Inject ONE companion FeelingIsolated with the
         // StillStrugglingToSettle marker — exactly what the helper
         // emits on the back of a WantsReturnHome.
-        let pactx =
-            PersonalAdaptationEventContext::new(PersonalAdaptationKind::StillStrugglingToSettle, 90);
+        let pactx = PersonalAdaptationEventContext::new(
+            PersonalAdaptationKind::StillStrugglingToSettle,
+            90,
+        );
         let ctx = HappinessEventContext::new(
             HappinessEventCause::AdaptationIsolation,
             HappinessEventSeverity::Moderate,
             HappinessEventScope::DressingRoom,
         )
         .with_personal_adaptation_context(pactx);
-        p.happiness.add_event_with_context(
-            HappinessEventType::FeelingIsolated,
-            -1.0,
-            None,
-            ctx,
-        );
+        p.happiness
+            .add_event_with_context(HappinessEventType::FeelingIsolated, -1.0, None, ctx);
         let signals = AdaptationFailureSignals {
             player_nationality_continent_id: 3,
             club_continent_id: 4,
@@ -1668,16 +1664,12 @@ mod career_desire_tests {
         for ev in &p.happiness.recent_events {
             if let Some(ctx) = ev.context.as_ref() {
                 if let Some(tic) = ctx.transfer_interest_context.as_ref() {
-                    if tic
-                        .evidence
-                        .iter()
-                        .any(|e| {
-                            matches!(
-                                e,
-                                crate::TransferInterestEvidence::EuropeanCompetitionOpportunity
-                            )
-                        })
-                    {
+                    if tic.evidence.iter().any(|e| {
+                        matches!(
+                            e,
+                            crate::TransferInterestEvidence::EuropeanCompetitionOpportunity
+                        )
+                    }) {
                         found = true;
                         break;
                     }

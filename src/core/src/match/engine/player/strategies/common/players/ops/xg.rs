@@ -1,4 +1,5 @@
 use crate::r#match::StateProcessingContext;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
 pub const MIN_XG_THRESHOLD: f32 = 0.08;
 pub const GOOD_XG_THRESHOLD: f32 = 0.12;
@@ -239,34 +240,24 @@ impl ShotQualityEvaluator {
     }
 
     fn skill_factor(ctx: &StateProcessingContext, distance: f32) -> f32 {
-        let finishing = ctx.player.skills.technical.finishing / 20.0;
-        let composure = ctx.player.skills.mental.composure / 20.0;
-        let technique = ctx.player.skills.technical.technique / 20.0;
-        let first_touch = ctx.player.skills.technical.first_touch / 20.0;
-        let decisions = ctx.player.skills.mental.decisions / 20.0;
-        let long_shots = ctx.player.skills.technical.long_shots / 20.0;
-
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let player = ctx.player;
+        // Pick the right composite by range. Composites already route
+        // every skill read through `effective_skill` so fatigue, late-
+        // game mental drift, and stamina mitigation are applied.
         let skill = if distance > 100.0 {
-            // Long range: long_shots matters most
-            long_shots * 0.40 + technique * 0.25 + finishing * 0.15
-                + composure * 0.10 + decisions * 0.10
+            sc::long_shot(player, minute)
         } else if distance > 30.0 {
-            // Medium range: finishing + technique with composure under pressure
-            finishing * 0.35 + technique * 0.20 + composure * 0.15
-                + decisions * 0.15 + long_shots * 0.10 + first_touch * 0.05
+            sc::shooting_medium(player, minute)
         } else {
-            // Close range / inside the box: finishing + composure + first touch
-            // dominate. Technique handles awkward stances; decisions chooses
-            // placement. A panicked low-composure striker close to the keeper
-            // skies the chance even with elite finishing.
-            finishing * 0.35 + composure * 0.25 + first_touch * 0.15
-                + decisions * 0.15 + technique * 0.10
+            sc::shooting_close(player, minute)
         };
 
         // Map skill (0.0-1.0) to a steeper multiplier (0.45 .. 1.30) using
-        // a quadratic curve. Real football: a Finishing-8 striker is NOT
-        // 70% as deadly as a Finishing-18 striker — closer to 50%. The
-        // old linear curve (0.60 .. 1.40 with bottom skewed up) made
+        // a quadratic curve. Same shape as the legacy formula — only the
+        // input changed. Real football: a Finishing-8 striker is NOT 70%
+        // as deadly as a Finishing-18 striker — closer to 50%. The old
+        // linear curve (0.60 .. 1.40 with bottom skewed up) made
         // mediocre finishers convert at near-elite rates simply by
         // getting into position. Quadratic squashes the bottom of the
         // curve so journeymen get punished without flattening the top.
@@ -335,7 +326,10 @@ mod distance_curve_tests {
         let mut prev = ShotQualityEvaluator::distance_factor(5.0);
         for d in [10, 20, 30, 50, 70, 100, 150, 200].iter().copied() {
             let next = ShotQualityEvaluator::distance_factor(d as f32);
-            assert!(next <= prev + 1e-4, "non-monotonic at d={d}: prev={prev} next={next}");
+            assert!(
+                next <= prev + 1e-4,
+                "non-monotonic at d={d}: prev={prev} next={next}"
+            );
             prev = next;
         }
     }

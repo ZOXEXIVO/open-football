@@ -141,13 +141,16 @@ impl BallEventDispatcher {
                 // pending pass and shouldn't charge the shooter as
                 // having "given the ball away".
                 if let Some(passer) = pending_passer {
-                    let giver_meta = field
-                        .get_player(passer)
-                        .map(|p| (p.team_id, PlayerEventDispatcher::zone_for_player(p, ball_pos, context)));
+                    let giver_meta = field.get_player(passer).map(|p| {
+                        (
+                            p.team_id,
+                            PlayerEventDispatcher::zone_for_player(p, ball_pos, context),
+                        )
+                    });
                     if let Some((team, zone)) = giver_meta {
                         let was_own_box = zone.map_or(false, |z| z.is_own_box());
-                        let was_dangerous_zone = zone
-                            .map_or(false, |z| z.is_own_box() || z.is_own_third());
+                        let was_dangerous_zone =
+                            zone.map_or(false, |z| z.is_own_box() || z.is_own_third());
                         field.ball.stamp_giveaway(
                             passer,
                             team,
@@ -159,8 +162,7 @@ impl BallEventDispatcher {
                         // own-third / own-box penalty even if no shot
                         // converts within the response window.
                         if was_dangerous_zone {
-                            if let (Some(zone), Some(giver)) =
-                                (zone, field.get_player_mut(passer))
+                            if let (Some(zone), Some(giver)) = (zone, field.get_player_mut(passer))
                             {
                                 giver.statistics.note_dangerous_turnover(zone);
                             }
@@ -177,9 +179,9 @@ impl BallEventDispatcher {
                     for &pid in pressers.iter().take(press_count) {
                         if let Some(presser) = field.get_player_mut(pid) {
                             presser.statistics.add_successful_pressure();
-                            if let Some(zone) = PlayerEventDispatcher::zone_for_player(
-                                presser, ball_pos, context,
-                            ) {
+                            if let Some(zone) =
+                                PlayerEventDispatcher::zone_for_player(presser, ball_pos, context)
+                            {
                                 presser.statistics.note_pressure_won_zone(zone);
                             }
                         }

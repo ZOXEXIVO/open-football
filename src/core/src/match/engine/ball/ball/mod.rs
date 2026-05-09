@@ -724,13 +724,7 @@ impl Ball {
     /// `was_own_box` flag is read later by the goal handler to layer the
     /// own-box-extra penalty on top of `errors_leading_to_goal`.
     #[inline]
-    pub fn stamp_giveaway(
-        &mut self,
-        player_id: u32,
-        team_id: u32,
-        tick: u64,
-        was_own_box: bool,
-    ) {
+    pub fn stamp_giveaway(&mut self, player_id: u32, team_id: u32, tick: u64, was_own_box: bool) {
         self.last_giveaway_player_id = Some(player_id);
         self.last_giveaway_team_id = Some(team_id);
         self.last_giveaway_tick = tick;

@@ -68,7 +68,10 @@ impl SlotScoreBreakdown {
         limit: usize,
     ) -> Vec<SelectionScoreFactor> {
         let factors: [(SelectionScoreFactor, f32); 16] = [
-            (SelectionScoreFactor::PositionFit, self.position_fit - omitted.position_fit),
+            (
+                SelectionScoreFactor::PositionFit,
+                self.position_fit - omitted.position_fit,
+            ),
             (
                 SelectionScoreFactor::PerceivedQuality,
                 self.perceived_quality - omitted.perceived_quality,
@@ -88,8 +91,14 @@ impl SlotScoreBreakdown {
                 SelectionScoreFactor::TacticalFit,
                 self.tactical_style - omitted.tactical_style,
             ),
-            (SelectionScoreFactor::SideFootFit, self.side_foot - omitted.side_foot),
-            (SelectionScoreFactor::Reputation, self.reputation - omitted.reputation),
+            (
+                SelectionScoreFactor::SideFootFit,
+                self.side_foot - omitted.side_foot,
+            ),
+            (
+                SelectionScoreFactor::Reputation,
+                self.reputation - omitted.reputation,
+            ),
             (
                 SelectionScoreFactor::CoachRelationship,
                 self.coach_relationship - omitted.coach_relationship,
@@ -107,7 +116,10 @@ impl SlotScoreBreakdown {
                 SelectionScoreFactor::TrainingImpression,
                 self.training_impression - omitted.training_impression,
             ),
-            (SelectionScoreFactor::Cohesion, self.cohesion - omitted.cohesion),
+            (
+                SelectionScoreFactor::Cohesion,
+                self.cohesion - omitted.cohesion,
+            ),
             (
                 SelectionScoreFactor::SquadStatus,
                 self.squad_status - omitted.squad_status,

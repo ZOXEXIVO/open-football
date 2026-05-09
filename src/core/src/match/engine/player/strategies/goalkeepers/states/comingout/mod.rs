@@ -56,8 +56,10 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             ));
         }
 
-        // Check if ball is too far - be more generous with command of area
-        let command_of_area = ctx.player.skills.mental.vision / 20.0;
+        // Check if ball is too far - be more generous with command of area.
+        // Old code aliased this to `mental.vision`; the dedicated GK
+        // attribute is `goalkeeping.command_of_area`.
+        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
         let max_pursuit_distance = MAX_COMING_OUT_DISTANCE * (1.0 + command_of_area * 0.5);
         if ball_distance > max_pursuit_distance {
             return Some(StateChangeResult::with_goalkeeper_state(

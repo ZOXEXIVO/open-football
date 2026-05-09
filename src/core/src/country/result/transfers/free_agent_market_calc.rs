@@ -7,8 +7,8 @@
 //! see one namespace rather than free `fn`s scattered through the
 //! transfer module — the project convention is "no global helpers".
 
-use crate::transfers::pipeline::PipelineProcessor;
 use crate::PlayerFieldPositionGroup;
+use crate::transfers::pipeline::PipelineProcessor;
 
 /// Inferred role the buyer is signing the player for. Drives wage
 /// asks, role-fit scoring, and acceptance. The matcher rarely knows
@@ -66,7 +66,11 @@ impl FreeAgentMarketCalculator {
     /// Minimum CA the buyer will sign at this tier, slackened by the
     /// player's career pressure. Very pressured players will be
     /// considered well below the buyer's nominal starter standard.
-    pub fn min_acceptable_ca(club_reputation_score: f32, group: PlayerFieldPositionGroup, career_pressure: f32) -> u8 {
+    pub fn min_acceptable_ca(
+        club_reputation_score: f32,
+        group: PlayerFieldPositionGroup,
+        career_pressure: f32,
+    ) -> u8 {
         let starter = PipelineProcessor::tier_starter_ca_score(club_reputation_score, group) as i16;
         let tolerance = PipelineProcessor::tier_quality_tolerance_score(club_reputation_score);
         let slack = (4.0 + 10.0 * career_pressure.clamp(0.0, 1.0)).round() as i16;
@@ -77,8 +81,13 @@ impl FreeAgentMarketCalculator {
     /// be talking about a star randomly slumming it at a small club).
     /// Pressure widens the band: a desperate 160-CA player can credibly
     /// land at a Continental club, but not at an Amateur side.
-    pub fn max_acceptable_ca(club_reputation_score: f32, group: PlayerFieldPositionGroup, career_pressure: f32) -> u8 {
-        let ceiling = PipelineProcessor::tier_target_ceiling_score(club_reputation_score, group) as i16;
+    pub fn max_acceptable_ca(
+        club_reputation_score: f32,
+        group: PlayerFieldPositionGroup,
+        career_pressure: f32,
+    ) -> u8 {
+        let ceiling =
+            PipelineProcessor::tier_target_ceiling_score(club_reputation_score, group) as i16;
         let overreach = (5.0 + 18.0 * career_pressure.clamp(0.0, 1.0)).round() as i16;
         (ceiling + overreach).clamp(20, 200) as u8
     }
@@ -189,9 +198,14 @@ impl FreeAgentMarketCalculator {
     /// starter and ceiling. The matcher rarely passes an explicit role
     /// for free agents, so this gives every signing a defensible
     /// classification without requiring upstream changes.
-    pub fn infer_buyer_role(ca: u8, club_reputation_score: f32, group: PlayerFieldPositionGroup) -> BuyerRoleFit {
+    pub fn infer_buyer_role(
+        ca: u8,
+        club_reputation_score: f32,
+        group: PlayerFieldPositionGroup,
+    ) -> BuyerRoleFit {
         let starter = PipelineProcessor::tier_starter_ca_score(club_reputation_score, group) as i16;
-        let ceiling = PipelineProcessor::tier_target_ceiling_score(club_reputation_score, group) as i16;
+        let ceiling =
+            PipelineProcessor::tier_target_ceiling_score(club_reputation_score, group) as i16;
         let headroom = ceiling - starter;
         let high_anchor = starter + (headroom * 2 / 3);
         let ca_i = ca as i16;
@@ -322,7 +336,10 @@ mod tests {
         let fresh = FreeAgentMarketCalculator::rep_drop_allowed(0.0, 23, 130);
         // Old 60 CA at full pressure: very wide tolerance.
         let desperate = FreeAgentMarketCalculator::rep_drop_allowed(1.0, 38, 60);
-        assert!(desperate > fresh + 4000, "fresh={fresh} desperate={desperate}");
+        assert!(
+            desperate > fresh + 4000,
+            "fresh={fresh} desperate={desperate}"
+        );
     }
 
     #[test]
@@ -403,8 +420,7 @@ mod tests {
     fn retirement_probability_lifts_for_old_low_quality_player() {
         let young_strong =
             FreeAgentMarketCalculator::retirement_probability_per_month(6, 26, 120, 5000);
-        let old_weak =
-            FreeAgentMarketCalculator::retirement_probability_per_month(6, 36, 50, 0);
+        let old_weak = FreeAgentMarketCalculator::retirement_probability_per_month(6, 36, 50, 0);
         assert!(old_weak > young_strong);
     }
 
@@ -414,10 +430,10 @@ mod tests {
         // country's minimum professional wage. Pre-fix this hit
         // `f32::clamp(floor, ceiling)` with floor > ceiling and panicked.
         let offer = FreeAgentMarketCalculator::offer_wage(
-            4_329,                       // market_wage — 2.5× = 10_822.5
+            4_329, // market_wage — 2.5× = 10_822.5
             BuyerRoleFit::Backup,
             10,
-            4_768,                       // buyer_country_reputation → floor 18_304
+            4_768, // buyer_country_reputation → floor 18_304
             5_000,
             0.5,
         );

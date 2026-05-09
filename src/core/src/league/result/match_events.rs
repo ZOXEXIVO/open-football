@@ -1357,9 +1357,7 @@ fn dispatch_match_outcomes(
     // the squad selector flagged them upstream — fire the contextual
     // drop event here.
     for omitted in &side.selection_omissions {
-        if side.main.contains(&omitted.player_id)
-            || side.substitutes.contains(&omitted.player_id)
-        {
+        if side.main.contains(&omitted.player_id) || side.substitutes.contains(&omitted.player_id) {
             continue;
         }
         if let Some(player) = data.player_mut(omitted.player_id) {

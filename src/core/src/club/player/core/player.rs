@@ -1,12 +1,5 @@
-use crate::club::player::behaviour_config::HappinessConfig;
-use crate::{
-    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
-    HappinessEventType, ManagerInteractionEventContext, ManagerInteractionTone,
-    ManagerInteractionTopic, PersonalAdaptationEventContext, PersonalAdaptationKind,
-    PlayerAcceptance, PromiseKind,
-};
 use crate::club::player::adaptation::PendingSigning;
-use crate::club::player::transfer::processing::TransferDesireContext;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::development::CoachingEffect;
 use crate::club::player::happiness::TeamSeasonState;
@@ -18,6 +11,7 @@ use crate::club::player::mailbox::PlayerContractAsk;
 use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
+use crate::club::player::transfer::processing::TransferDesireContext;
 use crate::club::player::utils::PlayerUtils;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox, PlayerResult,
@@ -26,6 +20,12 @@ use crate::club::{
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
+use crate::{
+    HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, ManagerInteractionEventContext, ManagerInteractionTone,
+    ManagerInteractionTopic, PersonalAdaptationEventContext, PersonalAdaptationKind,
+    PlayerAcceptance, PromiseKind,
+};
 use crate::{
     Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerPositionType,
     PlayerPositions, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,

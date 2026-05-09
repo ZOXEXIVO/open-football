@@ -321,8 +321,8 @@ impl TeamTraining {
     ) {
         use crate::{
             ConflictLocation, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
-            HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
-            TeammateConflictContext, TeammateConflictReason,
+            HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
+            HappinessEventType, TeammateConflictContext, TeammateConflictReason,
         };
 
         // Index morale changes by player id so we don't iterate the result
@@ -564,13 +564,15 @@ impl TeamTraining {
                             .with_relationship_levels(level, level)
                             .with_relationship_axes(trust, friendship, prof);
                     }
-                    player.happiness.add_event_with_partner_context_and_cooldown(
-                        HappinessEventType::TeammateBonding,
-                        mag,
-                        eff.to,
-                        ctx,
-                        PAIR_COOLDOWN_DAYS,
-                    );
+                    player
+                        .happiness
+                        .add_event_with_partner_context_and_cooldown(
+                            HappinessEventType::TeammateBonding,
+                            mag,
+                            eff.to,
+                            ctx,
+                            PAIR_COOLDOWN_DAYS,
+                        );
                 } else {
                     let mag = -0.8;
                     let mut ctx = HappinessEventContext::new(
@@ -580,10 +582,12 @@ impl TeamTraining {
                     )
                     .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
                     .with_follow_up(HappinessEventFollowUp::LikelyToSettle)
-                    .with_teammate_conflict_context(TeammateConflictContext::new(
-                        TeammateConflictReason::TrainingStandards,
-                        ConflictLocation::TrainingGround,
-                    ));
+                    .with_teammate_conflict_context(
+                        TeammateConflictContext::new(
+                            TeammateConflictReason::TrainingStandards,
+                            ConflictLocation::TrainingGround,
+                        ),
+                    );
                     if let Some((level, trust, friendship, prof)) = snapshot {
                         ctx = ctx
                             .with_relationship_levels(level, level)
@@ -598,13 +602,15 @@ impl TeamTraining {
                             ctx = ctx.with_evidence(HappinessEventEvidence::WeakExistingBond);
                         }
                     }
-                    player.happiness.add_event_with_partner_context_and_cooldown(
-                        HappinessEventType::ConflictWithTeammate,
-                        mag,
-                        eff.to,
-                        ctx,
-                        PAIR_COOLDOWN_DAYS,
-                    );
+                    player
+                        .happiness
+                        .add_event_with_partner_context_and_cooldown(
+                            HappinessEventType::ConflictWithTeammate,
+                            mag,
+                            eff.to,
+                            ctx,
+                            PAIR_COOLDOWN_DAYS,
+                        );
                 }
             }
         }
@@ -1240,7 +1246,6 @@ impl WeeklyTrainingPlan {
             }],
         }
     }
-
 }
 
 // ============== Training Effects System ==============

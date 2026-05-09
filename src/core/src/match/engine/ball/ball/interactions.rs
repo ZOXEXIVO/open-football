@@ -10,6 +10,10 @@ use crate::r#match::engine::goal::GOAL_WIDTH;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
 use crate::r#match::events::EventCollection;
+use crate::r#match::player::strategies::players::ops::effective_skill::{
+    ActionContext as EffSkillCtx, effective_skill,
+};
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart, PlayerSide};
 use nalgebra::Vector3;
 
@@ -79,15 +83,13 @@ impl Ball {
                 continue;
             }
 
-            // Calculate interception probability from player skills
-            let tackling = player.skills.technical.tackling;
-            let anticipation = player.skills.mental.anticipation;
-            let positioning = player.skills.mental.positioning;
-            let concentration = player.skills.mental.concentration;
-
-            // Base chance: average of key defensive skills (0-20 scale → 0-1)
-            let skill_factor =
-                (tackling + anticipation + positioning + concentration) / (4.0 * 20.0);
+            // Base chance: dedicated `interception` composite — anticipation,
+            // positioning, concentration, marking, etc. routed through
+            // `effective_skill` so fatigue applies. Drop-in replacement for
+            // the legacy 4-skill average; magnitude lands in the same band
+            // (0..1). Minute derived from the cached tick (10ms ticks).
+            let minute = sc::minute_from_ticks(self.current_tick_cached);
+            let skill_factor = sc::interception(player, minute);
 
             // Proximity factor: closer = higher chance (1.0 at 0m, 0.3 at max radius)
             let dist = dist_sq.sqrt();
@@ -253,12 +255,19 @@ impl Ball {
             // cue), jumping/agility (get the body in the way), plus
             // tackling (stretching / last-ditch leg out). Weighted
             // toward mental attributes since shot-blocking is 70%
-            // reading the shooter's body shape.
-            let bravery = player.skills.mental.bravery;
-            let positioning = player.skills.mental.positioning;
-            let anticipation = player.skills.mental.anticipation;
-            let agility = player.skills.physical.agility;
-            let tackling = player.skills.technical.tackling;
+            // reading the shooter's body shape. Routed through
+            // `effective_skill` so a tired defender blocks worse.
+            let block_minute = sc::minute_from_ticks(self.current_tick_cached);
+            let block_tech = EffSkillCtx::technical(block_minute);
+            let block_mental = EffSkillCtx::mental(block_minute);
+            let block_expl = EffSkillCtx::explosive(block_minute);
+            let bravery = effective_skill(player, player.skills.mental.bravery, block_mental);
+            let positioning =
+                effective_skill(player, player.skills.mental.positioning, block_mental);
+            let anticipation =
+                effective_skill(player, player.skills.mental.anticipation, block_mental);
+            let agility = effective_skill(player, player.skills.physical.agility, block_expl);
+            let tackling = effective_skill(player, player.skills.technical.tackling, block_tech);
             let skill_factor = (bravery * 0.25
                 + positioning * 0.25
                 + anticipation * 0.25
@@ -534,12 +543,23 @@ impl Ball {
             None => return,
         };
 
-        let handling = keeper.skills.goalkeeping.handling;
-        let reflexes = keeper.skills.goalkeeping.reflexes;
-        let agility = keeper.skills.physical.agility;
+        // Route through `effective_skill` so a tired keeper has worse
+        // reach / handling / reflexes than a fresh one. Routing minute
+        // is taken from `MatchContext::total_match_time`.
+        let minute_for_effective = sc::minute_from_ms(context.total_match_time);
+        let tech_ctx = EffSkillCtx::technical(minute_for_effective);
+        let mental_ctx = EffSkillCtx::mental(minute_for_effective);
+        let expl_ctx = EffSkillCtx::explosive(minute_for_effective);
+        let handling = effective_skill(keeper, keeper.skills.goalkeeping.handling, tech_ctx);
+        let reflexes = effective_skill(keeper, keeper.skills.goalkeeping.reflexes, tech_ctx);
+        let agility = effective_skill(keeper, keeper.skills.physical.agility, expl_ctx);
+        // Concentration acts on the catch / parry split — focused
+        // keepers catch cleaner, distracted ones parry into danger.
+        let concentration = effective_skill(keeper, keeper.skills.mental.concentration, mental_ctx);
         let scaled_handling = ((handling - 1.0) / 19.0).max(0.0);
         let scaled_reflexes = ((reflexes - 1.0) / 19.0).max(0.0);
         let scaled_agility = ((agility - 1.0) / 19.0).max(0.0);
+        let scaled_concentration = ((concentration - 1.0) / 19.0).max(0.0);
 
         // Diving reach in game units. Field is 840u = 105m, so 1u = 0.126m
         // (half-goal 29u = 3.66m matches real 3.66m). Every keeper, even a
@@ -573,7 +593,13 @@ impl Ball {
         // with hnd=1.0 / ref=1.0 GKs into 10-goal blowouts. At 0.72 →
         // 1.07, skill matters (10-pt skill gap = ~30% save-rate gap)
         // but weak keepers can't single-handedly lose 13-4.
-        let skill = scaled_handling * 0.4 + scaled_reflexes * 0.4 + scaled_agility * 0.2;
+        //
+        // The composite blend (`gk_shot_stopping`) feeds reflexes,
+        // handling, agility, positioning, concentration, anticipation
+        // and one_on_ones through `effective_skill` so a tired keeper
+        // late in the match plays worse — drop-in replacement for the
+        // legacy 3-skill blend, magnitude tuned to the same band.
+        let skill = sc::gk_shot_stopping(keeper, minute_for_effective);
         // Per-tick save rate. This save check runs every tick the ball
         // is within reach of the goal line, AND the GK state-machine
         // (Catching, Diving) runs its OWN per-tick save roll. Both
@@ -602,20 +628,30 @@ impl Ball {
 
         // Save outcome distribution. Catch / safe parry / dangerous
         // parry / corner — the previous code always caught.
-        //   catch_prob   = 0.12 + handling*0.28 + positioning*0.12
+        //   catch_prob   = 0.12 + handling*0.26 + positioning*0.10
+        //                  + concentration*0.06
         //                  - shot_power*0.18 - reach_stretch*0.18
-        //   safe_parry   = 0.20 + reflexes*0.12 + handling*0.08 + agility*0.05
+        //   safe_parry   = 0.20 + reflexes*0.10 + handling*0.07 + agility*0.05
+        //                  + concentration*0.04
         //   dangerous    = remainder
-        let positioning = (keeper.skills.mental.positioning / 20.0).clamp(0.0, 1.0);
+        // Concentration shifts the split toward catch/safe parry: a
+        // focused keeper does NOT spill the ball back into danger.
+        let positioning = (effective_skill(keeper, keeper.skills.mental.positioning, mental_ctx)
+            / 20.0)
+            .clamp(0.0, 1.0);
         let shot_power_norm = (ball_speed / 8.0).clamp(0.0, 1.0);
         let reach_stretch = reach_ratio;
-        let catch_prob = (0.12 + scaled_handling * 0.28 + positioning * 0.12
-            - shot_power_norm * 0.18
-            - reach_stretch * 0.18)
-            .clamp(0.04, 0.62);
-        let safe_parry_prob =
-            (0.20 + scaled_reflexes * 0.12 + scaled_handling * 0.08 + scaled_agility * 0.05)
-                .clamp(0.12, 0.52);
+        let catch_prob =
+            (0.12 + scaled_handling * 0.26 + positioning * 0.10 + scaled_concentration * 0.06
+                - shot_power_norm * 0.18
+                - reach_stretch * 0.18)
+                .clamp(0.04, 0.62);
+        let safe_parry_prob = (0.20
+            + scaled_reflexes * 0.10
+            + scaled_handling * 0.07
+            + scaled_agility * 0.05
+            + scaled_concentration * 0.04)
+            .clamp(0.12, 0.52);
 
         let keeper_id = keeper.id;
         let keeper_pos = keeper.position;

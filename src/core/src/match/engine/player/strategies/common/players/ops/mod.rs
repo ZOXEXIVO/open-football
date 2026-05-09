@@ -8,6 +8,7 @@ pub mod panic;
 pub mod passing;
 pub mod pressure;
 pub mod shooting;
+pub mod skill_composites;
 pub mod traits_bias;
 pub mod xg;
 
@@ -21,5 +22,6 @@ pub use panic::*;
 pub use passing::*;
 pub use pressure::*;
 pub use shooting::*;
+pub use skill_composites::*;
 pub use traits_bias::*;
 pub use xg::*;

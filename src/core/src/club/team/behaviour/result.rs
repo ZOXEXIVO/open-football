@@ -4,12 +4,12 @@ use crate::club::player::interaction::{
     default_cooldown_days,
 };
 use crate::{
-    ChangeType, ConflictLocation, HappinessEventCause, HappinessEventChangeKind, HappinessEventContext,
-    HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
-    HappinessEventType, LoanEventContext, LoanEventKind, ManagerInteractionEventContext,
-    ManagerInteractionTone, ManagerInteractionTopic, PlayerAcceptance, Player, PlayerPositionType,
-    PlayerSquadStatus, PlayerStatusType, PromiseKind, RelationshipChange, SimulatorData,
-    TeammateConflictContext, TeammateConflictReason,
+    ChangeType, ConflictLocation, HappinessEventCause, HappinessEventChangeKind,
+    HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
+    HappinessEventSeverity, HappinessEventType, LoanEventContext, LoanEventKind,
+    ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic, Player,
+    PlayerAcceptance, PlayerPositionType, PlayerSquadStatus, PlayerStatusType, PromiseKind,
+    RelationshipChange, SimulatorData, TeammateConflictContext, TeammateConflictReason,
 };
 use chrono::{Duration, NaiveDate};
 
@@ -246,7 +246,8 @@ impl TeamBehaviourResult {
                             // nothing actually happens, the player stays.
                             if !player.is_force_match_selection {
                                 player.statuses.add(sim_date, PlayerStatusType::Loa);
-                                let lctx = LoanEventContext::new(LoanEventKind::LoanListingAccepted);
+                                let lctx =
+                                    LoanEventContext::new(LoanEventKind::LoanListingAccepted);
                                 let happiness_ctx = HappinessEventContext::new(
                                     HappinessEventCause::Other,
                                     HappinessEventSeverity::Moderate,
@@ -603,7 +604,10 @@ impl PairEventContextBuilder {
                 }
                 if let (Some(theirs), Some(ours)) = (
                     partner_squad_status,
-                    from_player.contract.as_ref().map(|c| c.squad_status.clone()),
+                    from_player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.squad_status.clone()),
                 ) {
                     if Self::same_status_tier(theirs, ours) {
                         evidence.push(HappinessEventEvidence::SimilarSquadStatusCompetition);
@@ -871,9 +875,9 @@ impl ManagerInteractionTopicMapper {
             ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest => {
                 ManagerInteractionTopic::PlayingTime
             }
-            ManagerTalkType::Praise | ManagerTalkType::MoraleTalk | ManagerTalkType::Motivational => {
-                ManagerInteractionTopic::Performance
-            }
+            ManagerTalkType::Praise
+            | ManagerTalkType::MoraleTalk
+            | ManagerTalkType::Motivational => ManagerInteractionTopic::Performance,
             ManagerTalkType::Discipline => ManagerInteractionTopic::Discipline,
             ManagerTalkType::TransferDiscussion => ManagerInteractionTopic::Other,
             ManagerTalkType::LoanRequest => ManagerInteractionTopic::Other,
@@ -1035,7 +1039,10 @@ mod cause_mapping_tests {
         );
         assert_eq!(ctx.relationship_level_before, Some(10.0));
         assert_eq!(ctx.relationship_level_after, Some(-2.0));
-        assert!(ctx.evidence.contains(&HappinessEventEvidence::LowFriendship));
+        assert!(
+            ctx.evidence
+                .contains(&HappinessEventEvidence::LowFriendship)
+        );
         assert_eq!(
             ctx.change_type,
             Some(HappinessEventChangeKind::TrainingFriction)
@@ -1097,11 +1104,7 @@ mod cause_mapping_tests {
                     | HappinessEventCause::ReputationAdmiration
                     | HappinessEventCause::NationalityIntegration
             );
-            assert!(
-                positive,
-                "{:?} produced negative cause {:?}",
-                ct, cause
-            );
+            assert!(positive, "{:?} produced negative cause {:?}", ct, cause);
         }
     }
 }

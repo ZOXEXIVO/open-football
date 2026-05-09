@@ -1,18 +1,17 @@
 use crate::PlayerFieldPositionGroup;
 use crate::PlayerSquadStatus;
-use crate::club::player::calculators::WageCalculator;
-use crate::country::result::transfers::free_agent_market_calc::FreeAgentMarketCalculator;
-use crate::utils::IntegerUtils;
 use crate::ai::{AiBatchProcessor, PendingAiRequest};
 use crate::club::ai::apply_ai_responses;
 use crate::club::board::manager_market;
+use crate::club::player::calculators::WageCalculator;
 use crate::competitions::GlobalCompetitions;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::config::SimulatorConfig;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::national::world as national_world;
 use crate::continent::{Continent, ContinentResult};
-use crate::perf::{PerfCounters, PerfPhase, TickEndContext};
+use crate::country::result::transfers::free_agent_market_calc::FreeAgentMarketCalculator;
+use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use crate::league::awards::{
     AwardAggregator, CandidateAggregate, MonthlyAwardSelector, MonthlyAwardsSnapshot,
     MonthlyPlayerAward, MonthlyStatLeader, SeasonAwardsSnapshot, TeamOfTheWeekAward,
@@ -22,11 +21,12 @@ use crate::league::awards::{
 use crate::league::player_of_week::{PlayerOfTheWeekAward, PlayerOfTheWeekSelector};
 use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
+use crate::perf::{PerfCounters, PerfPhase, TickEndContext};
 use crate::shared::SimulatorDataIndexes;
-use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use crate::transfers::TransferPool;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::utils::DateUtils;
+use crate::utils::IntegerUtils;
 use crate::utils::random::engine as rng_engine;
 use crate::{
     AwardReputationInput, AwardReputationKind, HappinessEventType, Person, Player,
@@ -800,8 +800,7 @@ impl SimulatorData {
                                 // upstream), so seed from the wage
                                 // calculator using the team / league
                                 // tiers as a faithful replacement.
-                                let last_squad_status =
-                                    PlayerSquadStatus::FirstTeamSquadRotation;
+                                let last_squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
                                 let club_score =
                                     (team_reputation_world as f32 / 10_000.0).clamp(0.0, 1.0);
                                 let last_salary = WageCalculator::expected_annual_wage(
@@ -1123,9 +1122,8 @@ impl MondayAwardCache {
                 let weekly = PlayerOfTheWeekSelector::aggregate(
                     league.matches.iter_in_range(week_start, week_end),
                 );
-                let candidate = AwardAggregator::aggregate(
-                    league.matches.iter_in_range(week_start, week_end),
-                );
+                let candidate =
+                    AwardAggregator::aggregate(league.matches.iter_in_range(week_start, week_end));
                 (league.id, weekly, candidate)
             })
             .collect();
@@ -1711,8 +1709,7 @@ impl MonthlyAwardsTick {
                     return None;
                 }
 
-                let scores =
-                    AwardAggregator::aggregate(league.matches.iter_in_range(start, end));
+                let scores = AwardAggregator::aggregate(league.matches.iter_in_range(start, end));
 
                 let pom = Self::pick_pom(data, &scores, league.reputation, month_end);
                 let young =
@@ -1975,11 +1972,7 @@ impl MonthlyAwardsTick {
                 let avg_rating = award.average_rating;
                 let matches_played = award.matches_played;
                 if let Some(player) = data.player_mut(award.player_id) {
-                    player.on_recognition_award(
-                        HappinessEventType::YoungPlayerOfTheMonth,
-                        ctx,
-                        28,
-                    );
+                    player.on_recognition_award(HappinessEventType::YoungPlayerOfTheMonth, ctx, 28);
                     let mut input = AwardReputationInput::new()
                         .with_avg_rating(avg_rating)
                         .with_matches_played(matches_played as u16);
@@ -2002,11 +1995,7 @@ impl MonthlyAwardsTick {
                 let avg_rating = award.average_rating;
                 let matches_played = award.matches_played;
                 if let Some(player) = data.player_mut(award.player_id) {
-                    player.on_recognition_award(
-                        HappinessEventType::PlayerOfTheMonth,
-                        ctx,
-                        28,
-                    );
+                    player.on_recognition_award(HappinessEventType::PlayerOfTheMonth, ctx, 28);
                     let mut input = AwardReputationInput::new()
                         .with_avg_rating(avg_rating)
                         .with_matches_played(matches_played as u16);
@@ -2058,14 +2047,13 @@ impl MonthlyAwardsTick {
             for slot in &entry.snapshot.team_of_month {
                 let avg_rating = slot.average_rating;
                 let matches_played = slot.matches_played;
-                let ctx = RecognitionEventContext::new(
-                    RecognitionEventKind::TeamOfTheMonthSelection,
-                )
-                .with_league(entry.league_id)
-                .with_avg_rating(avg_rating)
-                .with_matches_played(matches_played as u16)
-                .with_season_goals(slot.goals as u16)
-                .with_season_assists(slot.assists as u16);
+                let ctx =
+                    RecognitionEventContext::new(RecognitionEventKind::TeamOfTheMonthSelection)
+                        .with_league(entry.league_id)
+                        .with_avg_rating(avg_rating)
+                        .with_matches_played(matches_played as u16)
+                        .with_season_goals(slot.goals as u16)
+                        .with_season_assists(slot.assists as u16);
                 if let Some(player) = data.player_mut(slot.player_id) {
                     player.on_recognition_award(
                         HappinessEventType::TeamOfTheMonthSelection,
@@ -2289,10 +2277,9 @@ impl TeamOfTheYearTick {
         year_end_date: chrono::NaiveDate,
         year: i32,
     ) -> Vec<PendingTeamOfYear> {
-        let year_start = chrono::NaiveDate::from_ymd_opt(year, 1, 1)
-            .unwrap_or(year_end_date);
-        let next_year_start = chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1)
-            .unwrap_or(year_end_date);
+        let year_start = chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(year_end_date);
+        let next_year_start =
+            chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap_or(year_end_date);
 
         data.continents
             .par_iter()
@@ -2322,8 +2309,7 @@ impl TeamOfTheYearTick {
                 // window so a thin schedule isn't impossibly gated.
                 let team_count = league.table.rows.len() as u32;
                 let typical_matches_per_team = team_count.saturating_sub(1) * 2;
-                let pct_floor =
-                    ((typical_matches_per_team as f32) * 0.25).round() as u8;
+                let pct_floor = ((typical_matches_per_team as f32) * 0.25).round() as u8;
                 let min_apps = pct_floor.max(10);
 
                 let team = TeamOfTheWeekSelector::pick_with_min_apps(&scores, min_apps);
@@ -2382,12 +2368,10 @@ impl TeamOfTheYearTick {
                 if let Some(player) = data.player_mut(slot.player_id) {
                     player.on_recognition_award(
                         HappinessEventType::TeamOfTheYearSelection,
-                        RecognitionEventContext::new(
-                            RecognitionEventKind::TeamOfTheYearSelection,
-                        )
-                        .with_league(league_id)
-                        .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16),
+                        RecognitionEventContext::new(RecognitionEventKind::TeamOfTheYearSelection)
+                            .with_league(league_id)
+                            .with_avg_rating(avg_rating)
+                            .with_matches_played(matches_played as u16),
                         330,
                     );
                     let mut input = AwardReputationInput::new()
@@ -2460,8 +2444,7 @@ impl WorldPlayerOfYearTick {
         }
         if let Some(id) = winner {
             if let Some(player) = data.player_mut(id) {
-                let mut ctx =
-                    RecognitionEventContext::new(RecognitionEventKind::WorldPlayerOfYear);
+                let mut ctx = RecognitionEventContext::new(RecognitionEventKind::WorldPlayerOfYear);
                 if let Some(rup) = runner_up_id {
                     ctx = ctx.with_runner_up(rup);
                 }

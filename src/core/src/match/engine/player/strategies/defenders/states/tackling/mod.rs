@@ -2,6 +2,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -228,19 +229,49 @@ impl DefenderTacklingState {
         opponent: &MatchPlayerLite,
     ) -> (bool, bool, FoulSeverity) {
         let mut rng = rand::rng();
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
 
-        let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
-        let aggression = ctx.player.skills.mental.aggression / 20.0;
-        let composure = ctx.player.skills.mental.composure / 20.0;
-        let strength = ctx.player.skills.physical.strength / 20.0;
+        // Per-tackle skill reads still need a few raw values for the
+        // foul-rate model below, so route them through `effective_skill`
+        // via the `eff` helper rather than reading the raw 1..20 values.
+        let tackling_skill = sc::n(sc::eff(
+            ctx.player,
+            sc::EffActionContext::technical(minute),
+            |p| p.skills.technical.tackling,
+        ));
+        let aggression = sc::n(sc::eff(
+            ctx.player,
+            sc::EffActionContext::mental(minute),
+            |p| p.skills.mental.aggression,
+        ));
+        let composure = sc::n(sc::eff(
+            ctx.player,
+            sc::EffActionContext::mental(minute),
+            |p| p.skills.mental.composure,
+        ));
 
-        // Defender composite: tackling is dominant, strength and composure support
-        let overall_skill = tackling_skill * 0.50 + strength * 0.25 + composure * 0.25;
+        // Duel scoring uses the shared `defensive_duel` and
+        // `dribble_attack` composites — the same helpers that resolve
+        // 1v1s in dribble_duel, so the engine speaks one language for
+        // attacker-vs-defender rolls.
+        let overall_skill = sc::defensive_duel(ctx.player, minute);
+        let attacker_score = if let Some(att) = ctx.context.players.by_id(opponent.id) {
+            sc::dribble_attack(att, minute)
+        } else {
+            // Fallback to lite-skill blend if the attacker is no
+            // longer in the registry (subbed out, stale grid hit).
+            let dribbling;
+            let agility;
+            {
+                let players = ctx.player();
+                let s = players.skills(opponent.id);
+                dribbling = sc::n(s.technical.dribbling);
+                agility = sc::n(s.physical.agility);
+            }
+            (dribbling + agility) * 0.5
+        };
 
-        let opponent_dribbling = ctx.player().skills(opponent.id).technical.dribbling / 20.0;
-        let opponent_agility = ctx.player().skills(opponent.id).physical.agility / 20.0;
-
-        let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
+        let skill_difference = overall_skill - attacker_score;
 
         // Total tackles/team/match converges on real football's ~18 by
         // suppressing both attempt rate (10u distance + 30s cooldown)
@@ -322,5 +353,116 @@ impl DefenderTacklingState {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::PlayerSkills;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::r#match::MatchPlayer;
+    use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+    };
+    use chrono::NaiveDate;
+
+    fn defender(tackling: f32, marking: f32, positioning: f32) -> MatchPlayer {
+        let mut attrs = PlayerAttributes::default();
+        attrs.condition = 9000;
+        let mut skills = PlayerSkills::default();
+        skills.technical.tackling = tackling;
+        skills.technical.marking = marking;
+        skills.mental.positioning = positioning;
+        skills.mental.anticipation = 12.0;
+        skills.mental.concentration = 12.0;
+        skills.mental.bravery = 12.0;
+        skills.physical.strength = 13.0;
+        skills.physical.balance = 12.0;
+        skills.physical.agility = 12.0;
+        skills.physical.stamina = 14.0;
+        skills.physical.natural_fitness = 14.0;
+        let p = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("D".into(), "Z".into()))
+            .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(skills)
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::DefenderCenter,
+                    level: 18,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        MatchPlayer::from_player(1, &p, PlayerPositionType::DefenderCenter, false)
+    }
+
+    fn attacker(dribbling: f32, technique: f32, agility: f32) -> MatchPlayer {
+        let mut attrs = PlayerAttributes::default();
+        attrs.condition = 9000;
+        let mut skills = PlayerSkills::default();
+        skills.technical.dribbling = dribbling;
+        skills.technical.technique = technique;
+        skills.mental.flair = 12.0;
+        skills.mental.composure = 12.0;
+        skills.mental.decisions = 12.0;
+        skills.physical.agility = agility;
+        skills.physical.acceleration = 14.0;
+        skills.physical.balance = 12.0;
+        skills.physical.strength = 11.0;
+        skills.physical.stamina = 14.0;
+        skills.physical.natural_fitness = 14.0;
+        let p = PlayerBuilder::new()
+            .id(2)
+            .full_name(FullName::new("A".into(), "Z".into()))
+            .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(skills)
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::ForwardCenter,
+                    level: 18,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        MatchPlayer::from_player(2, &p, PlayerPositionType::ForwardCenter, false)
+    }
+
+    #[test]
+    fn strong_tackler_dominates_weak_dribbler() {
+        let strong = defender(18.0, 17.0, 16.0);
+        let weak_attacker = attacker(7.0, 7.0, 9.0);
+        let diff = sc::defensive_duel(&strong, 30) - sc::dribble_attack(&weak_attacker, 30);
+        assert!(
+            diff > 0.20,
+            "expected strong defender advantage, got diff={diff}"
+        );
+    }
+
+    #[test]
+    fn weak_tackler_loses_to_strong_dribbler() {
+        let weak = defender(7.0, 7.0, 8.0);
+        let elite_attacker = attacker(18.0, 17.0, 17.0);
+        let diff = sc::defensive_duel(&weak, 30) - sc::dribble_attack(&elite_attacker, 30);
+        assert!(diff < -0.10, "expected attacker advantage, got diff={diff}");
+    }
+
+    #[test]
+    fn marking_and_positioning_help_defender_in_duel() {
+        let positional = defender(12.0, 18.0, 18.0);
+        let raw_tackler = defender(15.0, 8.0, 8.0);
+        // The positional defender should match or exceed a stronger
+        // pure tackler thanks to marking + positioning weight (0.13 +
+        // 0.17). This validates the spec's expectation that the duel
+        // composite isn't dominated by raw tackling alone.
+        assert!(sc::defensive_duel(&positional, 30) >= sc::defensive_duel(&raw_tackler, 30));
     }
 }

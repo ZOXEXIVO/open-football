@@ -8,8 +8,8 @@ use crate::utils::IntegerUtils;
 use crate::{
     ConflictLocation, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
     HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
-    LoanEventContext, LoanEventKind, PlayerCollection, PlayerFieldPositionGroup,
-    PlayerSquadStatus, TeammateConflictContext, TeammateConflictReason,
+    LoanEventContext, LoanEventKind, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
+    TeammateConflictContext, TeammateConflictReason,
 };
 use chrono::Datelike;
 use std::collections::HashMap;
@@ -376,10 +376,12 @@ impl TeamBehaviour {
                     )
                     .with_evidence_iter(victim_evidence.iter().copied())
                     .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk)
-                    .with_teammate_conflict_context(TeammateConflictContext::new(
-                        TeammateConflictReason::PersonalityClash,
-                        ConflictLocation::DressingRoom,
-                    ));
+                    .with_teammate_conflict_context(
+                        TeammateConflictContext::new(
+                            TeammateConflictReason::PersonalityClash,
+                            ConflictLocation::DressingRoom,
+                        ),
+                    );
                     if let Some((level, trust, friendship, prof)) = snapshot {
                         conflict_ctx = conflict_ctx
                             .with_relationship_levels(level, level)

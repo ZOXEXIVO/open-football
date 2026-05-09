@@ -124,11 +124,9 @@ impl PotentialEstimator {
         // ── Mental ceiling indicators. Composure / decisions /
         // anticipation / concentration project tactical and on-pitch
         // intelligence growth, especially relevant for late developers.
-        let ceiling_avg = (mentals.composure
-            + mentals.decisions
-            + mentals.anticipation
-            + mentals.concentration)
-            / 4.0;
+        let ceiling_avg =
+            (mentals.composure + mentals.decisions + mentals.anticipation + mentals.concentration)
+                / 4.0;
         let ceiling_factor = ((ceiling_avg - 8.0) / 12.0).clamp(0.0, 1.0);
 
         // ── Technical projection signal: high first_touch / technique
@@ -157,8 +155,8 @@ impl PotentialEstimator {
         // pure-attitude grinder doesn't project unrealistically high
         // without the cognitive ceiling to back it up.
         let realisation = (attitude_factor * 0.55 + training_trend * 0.15).clamp(0.0, 1.0);
-        let ceiling_quality = (ceiling_factor * 0.65 + tech_indicator.max(0.0) * 0.35)
-            .clamp(0.0, 1.2);
+        let ceiling_quality =
+            (ceiling_factor * 0.65 + tech_indicator.max(0.0) * 0.35).clamp(0.0, 1.2);
         let combined_factor = (realisation * 0.55 + ceiling_quality * 0.45).clamp(0.0, 1.1);
 
         let mut projected = visible_ca as f32 + age_room * combined_factor;
@@ -248,8 +246,8 @@ impl PotentialEstimator {
         // 1..200 ability scale. Top-end is also softly capped at
         // visible_ca + age_room + bias_room so a noise spike on a
         // 25yo won't suddenly grant a +50 ceiling.
-        let upper_cap = (visible_ca as f32 + age_room.max(8.0) + bias_room.max(0.0) + 6.0)
-            .min(200.0);
+        let upper_cap =
+            (visible_ca as f32 + age_room.max(8.0) + bias_room.max(0.0) + 6.0).min(200.0);
         let estimated = projected.clamp(visible_ca as f32, upper_cap.max(visible_ca as f32));
         let estimated_potential = estimated.round().clamp(1.0, 200.0) as u8;
 
@@ -280,9 +278,7 @@ impl PotentialEstimator {
             let years_below = (18 - age) as f32;
             credible -= years_below * 1.5 * (1.0 - confidence);
         }
-        let credible_potential = credible
-            .clamp(visible_ca as f32, 200.0)
-            .round() as u8;
+        let credible_potential = credible.clamp(visible_ca as f32, 200.0).round() as u8;
 
         PotentialEstimate {
             estimated_potential,

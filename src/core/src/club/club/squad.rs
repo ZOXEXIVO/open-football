@@ -280,13 +280,7 @@ impl Club {
                 // team so future official matches accumulate against the
                 // team the player actually plays for. Without this, B-team
                 // appearances kept being recorded under the Main row.
-                player.on_intra_club_move(
-                    &from_info,
-                    &to_info,
-                    from_senior,
-                    to_senior,
-                    date,
-                );
+                player.on_intra_club_move(&from_info, &to_info, from_senior, to_senior, date);
 
                 debug!(
                     "squad rebalance: {} (CA={}, age={}) {} → {} ({})",
@@ -342,13 +336,7 @@ impl Club {
                 {
                     upgrade_contract_if_youth(&mut player, date, &self.teams.teams[main_idx]);
                     player.on_youth_breakthrough(date);
-                    player.on_intra_club_move(
-                        &from_info,
-                        &to_info,
-                        from_senior,
-                        to_senior,
-                        date,
-                    );
+                    player.on_intra_club_move(&from_info, &to_info, from_senior, to_senior, date);
                     debug!(
                         "backfill to main: {} (CA={}, age={}) from {}",
                         player.full_name,

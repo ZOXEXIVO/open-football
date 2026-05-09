@@ -177,8 +177,7 @@ impl CountryResult {
                             continue;
                         }
 
-                        let last_salary =
-                            player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+                        let last_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
                         candidates.push(FreeAgentCandidate {
                             player_id: player.id,
                             player_name: player.full_name.to_string(),
@@ -403,8 +402,7 @@ impl CountryResult {
                             c.age,
                             c.ability,
                         );
-                        let buyer_anchor =
-                            buyer_country_reputation as i32 + rep_drop;
+                        let buyer_anchor = buyer_country_reputation as i32 + rep_drop;
                         if buyer_anchor < c.reference_reputation as i32 {
                             return false;
                         }
@@ -521,8 +519,7 @@ impl CountryResult {
                     );
                     let threshold =
                         FreeAgentMarketCalculator::acceptance_threshold(best.career_pressure);
-                    let prob =
-                        FreeAgentMarketCalculator::acceptance_probability(score, threshold);
+                    let prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold);
                     let acceptance_roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
                     // Every roll is an "offer received" — the player
                     // got a concrete approach today. Track separately
@@ -750,7 +747,13 @@ pub(crate) fn snapshot_global_free_agents(
         let reference_reputation = player.reference_reputation(nationality_rep);
         let (last_salary, last_country_reputation, last_league_reputation) = player
             .free_agent_state()
-            .map(|s| (s.last_salary, s.last_country_reputation, s.last_league_reputation))
+            .map(|s| {
+                (
+                    s.last_salary,
+                    s.last_country_reputation,
+                    s.last_league_reputation,
+                )
+            })
             .unwrap_or((0, nationality_rep, ((nationality_rep as f32) * 0.75) as u16));
 
         summaries.push(GlobalFreeAgentSummary {

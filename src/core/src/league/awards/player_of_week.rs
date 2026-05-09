@@ -514,8 +514,7 @@ mod tests {
             .filter(|(id, _)| ages.get(*id).map(|a| *a <= 20).unwrap_or(false))
             .map(|(id, a)| (*id, *a))
             .collect();
-        let (young_winner, _) =
-            PlayerOfTheWeekSelector::pick_winner(&young).expect("young winner");
+        let (young_winner, _) = PlayerOfTheWeekSelector::pick_winner(&young).expect("young winner");
         assert_eq!(young_winner, 2);
     }
 

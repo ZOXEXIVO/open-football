@@ -1261,8 +1261,7 @@ impl ForwardRunningState {
             let closer_teammate = cutoff > 0.0 && {
                 let cutoff_sq = cutoff * cutoff;
                 ctx.players().teammates().all().any(|t| {
-                    t.id != ctx.player.id
-                        && (t.position - ball_pos).norm_squared() < cutoff_sq
+                    t.id != ctx.player.id && (t.position - ball_pos).norm_squared() < cutoff_sq
                 })
             };
             if !closer_teammate {
@@ -1517,8 +1516,7 @@ impl ForwardRunningState {
                 }
             }
             None => {
-                let (sum, count) =
-                    defender_xs().fold((0.0_f32, 0u32), |(s, c), x| (s + x, c + 1));
+                let (sum, count) = defender_xs().fold((0.0_f32, 0u32), |(s, c), x| (s + x, c + 1));
                 if count == 0 {
                     ctx.context.field_size.width as f32 / 2.0
                 } else {

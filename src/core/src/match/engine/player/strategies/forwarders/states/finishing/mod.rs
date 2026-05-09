@@ -44,9 +44,9 @@ impl StateProcessingHandler for ForwardFinishingState {
                     )),
                 ))
             }
-            ShotDecision::Pass => Some(StateChangeResult::with_forward_state(
-                ForwardState::Passing,
-            )),
+            ShotDecision::Pass => {
+                Some(StateChangeResult::with_forward_state(ForwardState::Passing))
+            }
             ShotDecision::Hold => Some(StateChangeResult::with_forward_state(
                 ForwardState::Dribbling,
             )),

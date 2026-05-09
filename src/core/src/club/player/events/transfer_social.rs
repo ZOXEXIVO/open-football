@@ -399,24 +399,18 @@ impl Player {
         }
 
         let (event_type, base_mag, cooldown_days) = self.event_for_signal(sig, kind);
-        let (reaction, fit, magnitude) =
-            self.reaction_for_signal(sig, kind, base_mag);
+        let (reaction, fit, magnitude) = self.reaction_for_signal(sig, kind, base_mag);
         let evidence = self.evidence_for_signal(sig, kind);
 
         let real_homecoming = sig.is_home_country && !sig.is_seller_in_home_country;
-        let mut tic = TransferInterestContext::new(
-            sig.stage,
-            sig.source,
-            kind,
-            reaction,
-        )
-        .with_interested_club(sig.interested_club_id)
-        .with_reputation_gap((sig.rep_diff() * 100.0).round() as i32)
-        .with_league_reputation_gap(sig.league_rep_diff())
-        .with_rival(sig.is_rival)
-        .with_home_country(real_homecoming)
-        .with_former_club(sig.is_former_club)
-        .with_favorite_club(self.favorite_clubs.contains(&sig.interested_club_id));
+        let mut tic = TransferInterestContext::new(sig.stage, sig.source, kind, reaction)
+            .with_interested_club(sig.interested_club_id)
+            .with_reputation_gap((sig.rep_diff() * 100.0).round() as i32)
+            .with_league_reputation_gap(sig.league_rep_diff())
+            .with_rival(sig.is_rival)
+            .with_home_country(real_homecoming)
+            .with_former_club(sig.is_former_club)
+            .with_favorite_club(self.favorite_clubs.contains(&sig.interested_club_id));
         if let Some(league_id) = sig.interested_league_id {
             tic = tic.with_interested_league(league_id);
         }
@@ -523,10 +517,7 @@ impl Player {
         if sig.is_former_club {
             return TransferInterestKind::FormerClubReturn;
         }
-        if sig.is_home_country
-            && !sig.is_seller_in_home_country
-            && sig.rep_diff().abs() < 0.10
-        {
+        if sig.is_home_country && !sig.is_seller_in_home_country && sig.rep_diff().abs() < 0.10 {
             return TransferInterestKind::Homecoming;
         }
         if sig.is_rival {
@@ -736,8 +727,7 @@ impl Player {
                     cat.interest_from_rival,
                     14,
                 ),
-                TransferInterestKind::StepUp
-                | TransferInterestKind::BigLeagueOpportunity => (
+                TransferInterestKind::StepUp | TransferInterestKind::BigLeagueOpportunity => (
                     HappinessEventType::InterestFromBiggerClub,
                     cat.interest_from_bigger_club,
                     14,
@@ -775,11 +765,7 @@ impl Player {
         sig: &TransferInterestSignal,
         kind: TransferInterestKind,
         base_mag: f32,
-    ) -> (
-        TransferInterestReaction,
-        Option<TransferSportingFit>,
-        f32,
-    ) {
+    ) -> (TransferInterestReaction, Option<TransferSportingFit>, f32) {
         let ambition = self.attributes.ambition;
         let loyalty = self.attributes.loyalty;
         let professionalism = self.attributes.professionalism;
@@ -897,10 +883,9 @@ impl Player {
             // matching desire mood, otherwise treat like a regular
             // step-up.
             TransferInterestKind::EuropeanCompetitionOpportunity => {
-                let has_desire = self.happiness.has_recent_event(
-                    &HappinessEventType::WantsEuropeanCompetition,
-                    120,
-                );
+                let has_desire = self
+                    .happiness
+                    .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 120);
                 if has_desire || ambition >= 16.0 {
                     (
                         TransferInterestReaction::WantsTalks,
@@ -919,10 +904,9 @@ impl Player {
                 }
             }
             TransferInterestKind::CopaLibertadoresOpportunity => {
-                let has_desire = self.happiness.has_recent_event(
-                    &HappinessEventType::WantsCopaLibertadores,
-                    120,
-                );
+                let has_desire = self
+                    .happiness
+                    .has_recent_event(&HappinessEventType::WantsCopaLibertadores, 120);
                 if has_desire {
                     (
                         TransferInterestReaction::WantsTalks,

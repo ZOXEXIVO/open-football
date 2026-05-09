@@ -246,13 +246,16 @@ impl Schedule {
         days: i64,
     ) -> impl Iterator<Item = &ScheduleItem> + '_ {
         let end_date = from_date + chrono::Duration::days(days);
-        self.tours.iter().flat_map(|t| &t.items).filter(move |item| {
-            let item_date = item.date.date();
-            (item.home_team_id == team_id || item.away_team_id == team_id)
-                && item_date >= from_date
-                && item_date <= end_date
-                && item.result.is_none()
-        })
+        self.tours
+            .iter()
+            .flat_map(|t| &t.items)
+            .filter(move |item| {
+                let item_date = item.date.date();
+                (item.home_team_id == team_id || item.away_team_id == team_id)
+                    && item_date >= from_date
+                    && item_date <= end_date
+                    && item.result.is_none()
+            })
     }
 
     /// Count upcoming matches for a team in the next `days` without

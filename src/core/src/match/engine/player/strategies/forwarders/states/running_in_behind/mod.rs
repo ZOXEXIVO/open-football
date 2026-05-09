@@ -33,9 +33,7 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
                     StateChangeResult::with_forward_state(ForwardState::Shooting)
                         .with_shot_reason(reason)
                 }
-                ShotDecision::Pass => {
-                    StateChangeResult::with_forward_state(ForwardState::Passing)
-                }
+                ShotDecision::Pass => StateChangeResult::with_forward_state(ForwardState::Passing),
                 ShotDecision::Hold => {
                     // Carry through into a controlled dribble — the
                     // forward isn't ready to strike (xG too low,

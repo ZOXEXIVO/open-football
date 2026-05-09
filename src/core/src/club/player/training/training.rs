@@ -27,7 +27,6 @@ struct ReasonInputs {
     session_type: TrainingType,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct PlayerTraining {
     /// Rolling average of actual training session quality (1.0-20.0).
@@ -354,8 +353,7 @@ impl PlayerTraining {
         // intensity) so tests stay stable and the same week reproduces
         // identically across runs.
         let coach_specialization_norm = (specialization_bonus - 1.0) / 0.40; // 1.0-1.4 → 0.0-1.0
-        let rapport_mult_norm =
-            (Self::rapport_training_multiplier(player, coach) - 0.85) / 0.35; // ~0.0-1.0
+        let rapport_mult_norm = (Self::rapport_training_multiplier(player, coach) - 0.85) / 0.35; // ~0.0-1.0
         let outcome = Self::compute_outcome(
             player,
             coach,
@@ -373,8 +371,7 @@ impl PlayerTraining {
         // (raw_score 4) extracts ~0.79× the gains; an excellent one
         // (raw_score 18) extracts ~1.28×. Effort and focus add narrow
         // bonuses; overload bites when the body cannot support quality.
-        let outcome_multiplier =
-            (0.65 + outcome.raw_score / 20.0 * 0.70).clamp(0.65, 1.35);
+        let outcome_multiplier = (0.65 + outcome.raw_score / 20.0 * 0.70).clamp(0.65, 1.35);
         let effort_bonus = 0.90 + outcome.effort_score / 20.0 * 0.20;
         let focus_bonus = 0.90 + outcome.focus_score / 20.0 * 0.20;
         let overload_penalty = Self::overload_penalty(player, &effects);
@@ -417,8 +414,7 @@ impl PlayerTraining {
         let cond_pct = player.player_attributes.condition_percentage() as f32;
         let fitness_pct =
             (player.player_attributes.fitness as f32 / 10000.0 * 100.0).clamp(0.0, 100.0);
-        let jadedness_pct =
-            (player.player_attributes.jadedness as f32 / 10000.0).clamp(0.0, 1.0);
+        let jadedness_pct = (player.player_attributes.jadedness as f32 / 10000.0).clamp(0.0, 1.0);
 
         // ── Effort ────────────────────────────────────────────────
         let effort_score = 20.0
@@ -618,10 +614,16 @@ impl PlayerTraining {
             push(TrainingEventEvidence::TacticalMismatch, &mut evidence);
         }
         if !positive && baseline_score >= 13.5 && delta <= -2.0 {
-            push(TrainingEventEvidence::StrongBaselineButOffDay, &mut evidence);
+            push(
+                TrainingEventEvidence::StrongBaselineButOffDay,
+                &mut evidence,
+            );
         }
         if positive && age <= 21 && raw >= 13.5 && delta >= 2.0 {
-            push(TrainingEventEvidence::YoungPlayerBreakthrough, &mut evidence);
+            push(
+                TrainingEventEvidence::YoungPlayerBreakthrough,
+                &mut evidence,
+            );
         }
         if positive && age >= 30 && leadership >= 14.0 && raw >= 13.0 {
             push(TrainingEventEvidence::VeteranSetStandard, &mut evidence);
@@ -718,8 +720,7 @@ impl PlayerTraining {
 
         // Two independent rolls so the inner sum is triangular-ish.
         let r1 = ((h >> 11) as u32 as f32) / (u32::MAX as f32);
-        let r2 = ((h.wrapping_mul(0xD1B5_4A32_D192_ED03) >> 17) as u32 as f32)
-            / (u32::MAX as f32);
+        let r2 = ((h.wrapping_mul(0xD1B5_4A32_D192_ED03) >> 17) as u32 as f32) / (u32::MAX as f32);
         let triangular = r1 + r2 - 1.0; // -1..+1 with peak at 0
 
         // Width: high consistency narrows the band; low consistency
@@ -745,19 +746,18 @@ impl PlayerTraining {
         // attribute-driven scoring.
         let morale_pressure = ((50.0 - morale) / 50.0).clamp(0.0, 1.0);
         let high_morale_lift = ((morale - 60.0) / 40.0).clamp(0.0, 1.0);
-        let r3 = ((h.wrapping_mul(0xACE2_4D8B_5E2F_91A3) >> 13) as u32 as f32)
-            / (u32::MAX as f32);
+        let r3 = ((h.wrapping_mul(0xACE2_4D8B_5E2F_91A3) >> 13) as u32 as f32) / (u32::MAX as f32);
         let off_chance =
             (0.03 - consistency / 20.0 * 0.02 + morale_pressure * 0.03).clamp(0.0, 0.08);
         if r3 < off_chance {
-            let r4 = ((h.wrapping_mul(0x65A1_8C0B_3F4D_22B7) >> 19) as u32 as f32)
-                / (u32::MAX as f32);
+            let r4 =
+                ((h.wrapping_mul(0x65A1_8C0B_3F4D_22B7) >> 19) as u32 as f32) / (u32::MAX as f32);
             let mag = 1.0 + r4 * 1.0; // 1.0..2.0
             // Direction bias: morale_pressure raises negative odds, a
             // healthy mood raises positive odds. The crossover sits at
             // morale ~ 50, exactly where pressure and lift are both 0.
-            let neg_share = (0.5 + morale_pressure * 0.4 - high_morale_lift * 0.4)
-                .clamp(0.05, 0.95);
+            let neg_share =
+                (0.5 + morale_pressure * 0.4 - high_morale_lift * 0.4).clamp(0.05, 0.95);
             let sign = if r3 < off_chance * neg_share {
                 -1.0
             } else {
@@ -784,9 +784,7 @@ impl PlayerTraining {
         if cond < 40 {
             penalty -= 0.10;
         }
-        if player.load.recovery_debt
-            >= crate::club::player::condition::load::RECOVERY_DEBT_HEAVY
-        {
+        if player.load.recovery_debt >= crate::club::player::condition::load::RECOVERY_DEBT_HEAVY {
             penalty -= 0.10;
         }
         if player.load.is_workload_spike() {
@@ -1451,10 +1449,10 @@ mod training_load_tests {
         let mut sum_pro = 0.0;
         let mut sum_lazy = 0.0;
         for day in 1..=20 {
-            sum_pro += PlayerTraining::train(&pro, &coach, &s, d(2025, 9, day), 0.6)
-                .session_performance;
-            sum_lazy += PlayerTraining::train(&lazy, &coach, &s, d(2025, 9, day), 0.6)
-                .session_performance;
+            sum_pro +=
+                PlayerTraining::train(&pro, &coach, &s, d(2025, 9, day), 0.6).session_performance;
+            sum_lazy +=
+                PlayerTraining::train(&lazy, &coach, &s, d(2025, 9, day), 0.6).session_performance;
         }
         let avg_pro = sum_pro / 20.0;
         let avg_lazy = sum_lazy / 20.0;
@@ -1646,14 +1644,10 @@ mod training_load_tests {
     fn archetype_transfer_target() -> Player {
         let mut p = build_pro_pro(PlayerPositionType::MidfielderCenter, 14.0, 13.0, 13.0);
         p.happiness.morale = 28.0;
-        p.happiness.add_event(
-            crate::HappinessEventType::TransferRumour,
-            -2.0,
-        );
-        p.happiness.add_event(
-            crate::HappinessEventType::AgentStirsInterest,
-            -1.5,
-        );
+        p.happiness
+            .add_event(crate::HappinessEventType::TransferRumour, -2.0);
+        p.happiness
+            .add_event(crate::HappinessEventType::AgentStirsInterest, -1.5);
         p
     }
 
@@ -1792,8 +1786,7 @@ mod training_load_tests {
             (TrainingType::BallControl, TrainingIntensity::Moderate),
         ];
         let (_, reasons) = run_archetype(&p, &plan, 30);
-        let breakthroughs =
-            count_reason(&reasons, TrainingEventReason::YoungImpressedStaff);
+        let breakthroughs = count_reason(&reasons, TrainingEventReason::YoungImpressedStaff);
         let total = reasons.len();
         // Cannot fire on every session - that's spam - and shouldn't fire 0
         // times if the gates are working. Aim for an occasional event.
@@ -1857,11 +1850,8 @@ mod training_load_tests {
         // production. This mirrors what `maybe_emit_training_event`
         // would do under heavy negative outcomes.
         for day in 0..14 {
-            let mut ctx = crate::TrainingEventContext::new(
-                TrainingEventReason::PoorAttitude,
-                4.0,
-                6.0,
-            );
+            let mut ctx =
+                crate::TrainingEventContext::new(TrainingEventReason::PoorAttitude, 4.0, 6.0);
             ctx = ctx.with_evidence(TrainingEventEvidence::LowEffort);
             let happiness_ctx = crate::HappinessEventContext::new(
                 crate::HappinessEventCause::Other,

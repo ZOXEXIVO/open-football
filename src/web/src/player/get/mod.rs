@@ -768,21 +768,28 @@ fn get_neighbor_teams(
 }
 
 fn get_statistics(player: &Player) -> PlayerStatistics {
+    // Aggregate across every current-season spell. `player.statistics` is
+    // a per-spell live counter that gets drained on each Main ↔ B ↔ Second
+    // move; the drained spells survive in `statistics_history.current`.
+    // Reading the live field alone shows zero apps right after a move.
+    let s = player
+        .statistics_history
+        .current_season_stats(&player.statistics);
     PlayerStatistics {
-        played: player.statistics.played,
-        played_subs: player.statistics.played_subs,
-        goals: player.statistics.goals,
-        assists: player.statistics.assists,
-        penalties: player.statistics.penalties,
-        player_of_the_match: player.statistics.player_of_the_match,
-        yellow_cards: player.statistics.yellow_cards,
-        red_cards: player.statistics.red_cards,
-        shots_on_target: player.statistics.shots_on_target,
-        tackling: player.statistics.tackling,
-        passes: player.statistics.passes,
-        average_rating: player.statistics.average_rating_str(),
-        conceded: player.statistics.conceded,
-        clean_sheets: player.statistics.clean_sheets,
+        played: s.played,
+        played_subs: s.played_subs,
+        goals: s.goals,
+        assists: s.assists,
+        penalties: s.penalties,
+        player_of_the_match: s.player_of_the_match,
+        yellow_cards: s.yellow_cards,
+        red_cards: s.red_cards,
+        shots_on_target: s.shots_on_target,
+        tackling: s.tackling,
+        passes: s.passes,
+        average_rating: s.average_rating_str(),
+        conceded: s.conceded,
+        clean_sheets: s.clean_sheets,
     }
 }
 

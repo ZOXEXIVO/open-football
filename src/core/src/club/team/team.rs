@@ -728,7 +728,11 @@ impl TeamFixtureWindow {
         let half = chrono::Duration::days(days);
         let lo = today - half;
         let hi = today + half;
-        let r = self.recent.iter().filter(|d| **d >= lo && **d <= today).count();
+        let r = self
+            .recent
+            .iter()
+            .filter(|d| **d >= lo && **d <= today)
+            .count();
         let u = self
             .upcoming
             .iter()

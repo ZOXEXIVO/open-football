@@ -6,15 +6,20 @@ use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
 use crate::r#match::engine::rating::calculate_match_rating;
+use crate::r#match::engine::set_pieces::{
+    penalty_conversion_prob, score_keeper_save, score_penalty_taker,
+};
 use crate::r#match::engine::substitutions::process_substitutions;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::statistics::MatchStatisticType;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::{
-    GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState,
-    PenaltyShootoutKick, Score, StateManager, SubstitutionInfo,
+    CoachInstruction, GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad,
+    MatchState, PenaltyShootoutKick, Score, StateManager, SubstitutionInfo, TacticalRefreshInputs,
+    TeamTacticalState,
 };
 use crate::perf::PerfCounters;
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics, is_match_events_mode};
@@ -27,6 +32,158 @@ use std::time::Instant;
 // ───────────────────────────────────────────────────────────────────────────────
 // FootballEngine — match orchestration
 // ───────────────────────────────────────────────────────────────────────────────
+
+/// Per-team rolling sum used to compute the skill-composite averages
+/// fed into `TacticalRefreshInputs`. Keeping the accumulator simple —
+/// add per-player contributions for each composite, then divide by the
+/// per-bucket counts in `finalize`. Counts differ across composites
+/// because some only apply to a subset (defenders/midfielders, GK,
+/// forwards/AMs).
+struct SkillAccumulator {
+    build_up_sum: f32,
+    build_up_count: u32,
+    press_sum: f32,
+    press_count: u32,
+    defensive_sum: f32,
+    defensive_count: u32,
+    attacking_sum: f32,
+    attacking_count: u32,
+    gk_sum: f32,
+    gk_count: u32,
+    conc_team_sum: f32,
+    conc_team_count: u32,
+}
+
+impl SkillAccumulator {
+    fn new() -> Self {
+        Self {
+            build_up_sum: 0.0,
+            build_up_count: 0,
+            press_sum: 0.0,
+            press_count: 0,
+            defensive_sum: 0.0,
+            defensive_count: 0,
+            attacking_sum: 0.0,
+            attacking_count: 0,
+            gk_sum: 0.0,
+            gk_count: 0,
+            conc_team_sum: 0.0,
+            conc_team_count: 0,
+        }
+    }
+
+    fn add(&mut self, p: &MatchPlayer, minute: u32) {
+        let group = p.tactical_position.current_position.position_group();
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => {
+                // Per spec: shot_stopping 0.45 + aerial/claim_cross 0.30
+                // + distribution 0.25. `gk_claim_cross` is the active
+                // cross-claim composite; `gk_aerial` covers the broader
+                // aerial duel. We blend them 50/50 for the aerial slot
+                // so a strong cross-claimer with weak overall aerial
+                // duel still carries weight.
+                let aerial_blend = 0.5 * (sc::gk_claim_cross(p, minute) + sc::gk_aerial(p, minute));
+                let g = sc::gk_shot_stopping(p, minute) * 0.45
+                    + aerial_blend * 0.30
+                    + sc::gk_distribution(p, minute) * 0.25;
+                self.gk_sum += g;
+                self.gk_count += 1;
+                self.add_conc_team(p, minute);
+            }
+            PlayerFieldPositionGroup::Defender => {
+                self.build_up_sum += sc::passing_execution(p, minute);
+                self.build_up_count += 1;
+                // Defenders: defensive_duel + interception + positioning.
+                // Adding `defensive_positioning` so a CB who reads the
+                // game well lifts the team's defensive_quality even
+                // without elite tackling.
+                let d = (sc::defensive_duel(p, minute)
+                    + sc::interception(p, minute)
+                    + sc::defensive_positioning(p, minute))
+                    / 3.0;
+                self.defensive_sum += d;
+                self.defensive_count += 1;
+                self.press_sum += sc::pressing(p, minute);
+                self.press_count += 1;
+                self.add_conc_team(p, minute);
+            }
+            PlayerFieldPositionGroup::Midfielder => {
+                self.build_up_sum += sc::passing_execution(p, minute);
+                self.build_up_count += 1;
+                let d = (sc::defensive_duel(p, minute)
+                    + sc::interception(p, minute)
+                    + sc::defensive_positioning(p, minute))
+                    / 3.0;
+                self.defensive_sum += d;
+                self.defensive_count += 1;
+                self.press_sum += sc::pressing(p, minute);
+                self.press_count += 1;
+                // Box-to-box midfielders contribute partial attacking
+                // quality so an attacking-mid heavy side reads as more
+                // dangerous than a holding-mid heavy side.
+                let mid_attack = (sc::shooting_medium(p, minute)
+                    + sc::off_ball_attack(p, minute)
+                    + sc::pass_selection(p, minute))
+                    / 3.0;
+                // Half-weight: a midfielder isn't worth a forward in
+                // the attacking_quality average, but they shouldn't be
+                // ignored entirely.
+                self.attacking_sum += mid_attack * 0.5;
+                self.attacking_count += 1; // counts as half a slot via the *0.5 above? No — keep full slot but value halved
+                self.add_conc_team(p, minute);
+            }
+            PlayerFieldPositionGroup::Forward => {
+                // Forwards: shooting + dribbling + off-ball attacking
+                // movement (replaces raw off_the_ball read).
+                let a = (sc::shooting_close(p, minute)
+                    + sc::dribble_attack(p, minute)
+                    + sc::off_ball_attack(p, minute))
+                    / 3.0;
+                self.attacking_sum += a;
+                self.attacking_count += 1;
+                self.press_sum += sc::pressing(p, minute);
+                self.press_count += 1;
+                // Forwards still contribute to defensive_quality at
+                // half weight via their pressing + positioning — a
+                // hard-working striker raises the defensive baseline
+                // without being a CB.
+                let f_def = 0.5 * (sc::defensive_positioning(p, minute) + sc::pressing(p, minute));
+                self.defensive_sum += f_def * 0.5;
+                self.defensive_count += 1;
+                self.add_conc_team(p, minute);
+            }
+        }
+    }
+
+    fn add_conc_team(&mut self, p: &MatchPlayer, minute: u32) {
+        // Use effective skills for the concentration / teamwork
+        // average. Without `effective_skill` an exhausted side would
+        // still register as "well-organised" purely on paper skill.
+        let mental = sc::EffActionContext::mental(minute);
+        let conc = sc::n(sc::eff(p, mental, |q| q.skills.mental.concentration));
+        let team = sc::n(sc::eff(p, mental, |q| q.skills.mental.teamwork));
+        self.conc_team_sum += (conc + team) * 0.5;
+        self.conc_team_count += 1;
+    }
+
+    fn finalize(self) -> crate::r#match::TeamSkillAggregates {
+        let avg = |sum: f32, count: u32, default: f32| -> f32 {
+            if count == 0 {
+                default
+            } else {
+                (sum / count as f32).clamp(0.0, 1.0)
+            }
+        };
+        crate::r#match::TeamSkillAggregates {
+            build_up_quality: avg(self.build_up_sum, self.build_up_count, 0.5),
+            press_quality: avg(self.press_sum, self.press_count, 0.5),
+            defensive_quality: avg(self.defensive_sum, self.defensive_count, 0.5),
+            attacking_quality: avg(self.attacking_sum, self.attacking_count, 0.5),
+            gk_quality: avg(self.gk_sum, self.gk_count, 0.5),
+            concentration_teamwork_avg: avg(self.conc_team_sum, self.conc_team_count, 0.5),
+        }
+    }
+}
 
 /// Cumulative-metric snapshot fed into `FootballEngine::build_rolling_metrics`.
 /// Bundling the seven inputs into a struct keeps the call signature
@@ -959,7 +1116,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// `MatchContext`. `tick_interval` is how many ticks elapsed since
     /// the last refresh — rolling counters scale with it.
     fn refresh_tactical_states(field: &MatchField, context: &mut MatchContext, tick_interval: u32) {
-        use crate::r#match::{CoachInstruction, TacticalRefreshInputs, TeamTacticalState};
         let home_high_press = matches!(
             context.coach_home.instruction,
             CoachInstruction::PushForward | CoachInstruction::AllOutAttack
@@ -1005,6 +1161,25 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             0.5
         };
 
+        // Per-team skill composite aggregates. Computed here so the
+        // tactical refresh can size line height, press sustainability,
+        // and build-up patience by the team's actual collective skill —
+        // not just the raw `current_ability` average. Uses the engine's
+        // own composite helpers so attribute reads pass through fatigue.
+        let minute_now = sc::minute_from_ms(context.total_match_time);
+        let mut home_skills = SkillAccumulator::new();
+        let mut away_skills = SkillAccumulator::new();
+        for p in field.players.iter().filter(|p| !p.is_sent_off) {
+            let bucket = if p.team_id == context.field_home_team_id {
+                &mut home_skills
+            } else {
+                &mut away_skills
+            };
+            bucket.add(p, minute_now);
+        }
+        let home_skill_aggregates = home_skills.finalize();
+        let away_skill_aggregates = away_skills.finalize();
+
         let home_goals = context.score.home_team.get() as i16;
         let away_goals = context.score.away_team.get() as i16;
         let home_score_diff = (home_goals - away_goals).clamp(-100, 100) as i8;
@@ -1037,6 +1212,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             away_avg_condition: away_avg_cond,
             home_tactics,
             away_tactics,
+            home_skills: home_skill_aggregates,
+            away_skills: away_skill_aggregates,
         };
         TeamTacticalState::refresh(
             &mut context.tactical_home,
@@ -1359,7 +1536,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let away_id = context.field_away_team_id;
 
         // Sort available outfield takers by penalty skill + composure.
-        // Sent-off players (and the keeper) can't take kicks.
+        // Sent-off players (and the keeper) can't take kicks. Reuses the
+        // shared `score_penalty_taker` helper so taker selection here
+        // and in-play penalty taker selection use the same ranking
+        // formula (penalty_taking, finishing, composure, pressure,
+        // technique, confidence).
         let takers_for = |team_id: u32| -> Vec<u32> {
             let mut candidates: Vec<(u32, f32)> = field
                 .players
@@ -1372,10 +1553,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 .map(|p| {
                     let t = &p.skills.technical;
                     let m = &p.skills.mental;
-                    let score = t.penalty_taking * 0.45
-                        + t.finishing * 0.25
-                        + t.technique * 0.15
-                        + m.composure * 0.15;
+                    let pressure = p.attributes.pressure;
+                    let score = score_penalty_taker(
+                        t.penalty_taking,
+                        t.finishing,
+                        m.composure,
+                        pressure,
+                        t.technique,
+                        0.0,
+                    );
                     (p.id, score)
                 })
                 .collect();
@@ -1424,37 +1610,47 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let home_keeper = keeper_for(home_id);
         let away_keeper = keeper_for(away_id);
 
-        // Pulls taker-side skill (0..1).
-        let taker_prob_adj = |fld: &MatchField, id: u32| -> f32 {
+        // Per-kick taker score (0..1). Routes through the shared set-piece
+        // helper so the shootout uses the same skill weighting as in-play
+        // penalties.
+        let taker_score_of = |fld: &MatchField, id: u32| -> f32 {
             if let Some(p) = fld.players.iter().find(|p| p.id == id) {
                 let t = &p.skills.technical;
                 let m = &p.skills.mental;
                 let pressure = p.attributes.pressure;
-                ((t.penalty_taking * 0.40
-                    + t.finishing * 0.20
-                    + t.technique * 0.10
-                    + m.composure * 0.20
-                    + pressure * 0.10)
-                    / 20.0)
-                    .clamp(0.05, 1.0)
+                score_penalty_taker(
+                    t.penalty_taking,
+                    t.finishing,
+                    m.composure,
+                    pressure,
+                    t.technique,
+                    0.0,
+                )
+                .clamp(0.05, 1.0)
             } else {
                 0.5
             }
         };
-        // Pulls keeper-side save skill (0..1). None means no keeper → very low save chance.
-        let gk_prob_adj = |fld: &MatchField, id: Option<u32>| -> f32 {
+        // Per-kick keeper score (0..1). None means no keeper → score
+        // collapses to a small baseline so an outfielder in goal still
+        // has a non-zero save floor (set_pieces clamp 0.58–0.90 won't
+        // drop conversion below 0.58 either way).
+        let keeper_score_of = |fld: &MatchField, id: Option<u32>| -> f32 {
             match id {
                 Some(gk_id) => {
                     if let Some(p) = fld.players.iter().find(|p| p.id == gk_id) {
                         let g = &p.skills.goalkeeping;
                         let m = &p.skills.mental;
-                        ((g.handling * 0.20
-                            + g.one_on_ones * 0.30
-                            + g.reflexes * 0.30
-                            + m.concentration * 0.10
-                            + m.composure * 0.10)
-                            / 20.0)
-                            .clamp(0.05, 1.0)
+                        let pressure = p.attributes.pressure;
+                        score_keeper_save(
+                            g.reflexes,
+                            p.skills.physical.agility,
+                            g.handling,
+                            m.anticipation,
+                            pressure,
+                            m.concentration,
+                        )
+                        .clamp(0.05, 1.0)
                     } else {
                         0.5
                     }
@@ -1463,14 +1659,27 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         };
 
-        // Single kick: returns true if goal.
-        let mut take_kick = |taker_id: u32, gk_id: Option<u32>| -> bool {
-            let taker_q = taker_prob_adj(field, taker_id);
-            let gk_q = gk_prob_adj(field, gk_id);
-            // League average ≈ 0.76. Skill delta nudges 0.45..0.92.
-            let goal_prob = (0.72 + (taker_q - gk_q) * 0.25).clamp(0.45, 0.92);
-            rng.random::<f32>() < goal_prob
+        // Round-pressure model: best-of-5 ramps 0.04 per round (round 1
+        // = 0.04, round 5 = 0.20); sudden death sits at 0.65. Combined
+        // with the 0.35 base this stays inside the [0,1] band that
+        // `penalty_conversion_prob` expects.
+        let round_pressure = |round_idx: u8, sudden_death: bool| -> f32 {
+            if sudden_death {
+                0.65
+            } else {
+                (round_idx as f32) * 0.04
+            }
         };
+
+        // Single kick: returns true if goal.
+        let mut take_kick =
+            |taker_id: u32, gk_id: Option<u32>, round_idx: u8, sudden_death: bool| -> bool {
+                let taker = taker_score_of(field, taker_id);
+                let keeper = keeper_score_of(field, gk_id);
+                let pressure = (0.35 + round_pressure(round_idx, sudden_death)).clamp(0.0, 1.0);
+                let goal_prob = penalty_conversion_prob(taker, keeper, pressure, true);
+                rng.random::<f32>() < goal_prob
+            };
 
         // Takers in rotation; sudden-death wraps the order.
         let mut home_idx: usize = 0;
@@ -1502,7 +1711,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             // Home kick.
             if let Some(id) = next_home_taker(&mut home_idx) {
-                let scored = take_kick(id, away_keeper);
+                let scored = take_kick(id, away_keeper, round + 1, false);
                 context.penalty_shootout_kicks.push(PenaltyShootoutKick {
                     team_id: home_id,
                     taker_id: id,
@@ -1524,7 +1733,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             // Away kick.
             if let Some(id) = next_away_taker(&mut away_idx) {
-                let scored = take_kick(id, home_keeper);
+                let scored = take_kick(id, home_keeper, round + 1, false);
                 context.penalty_shootout_kicks.push(PenaltyShootoutKick {
                     team_id: away_id,
                     taker_id: id,
@@ -1558,7 +1767,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let home_taker = h.unwrap();
             let away_taker = a.unwrap();
             let round = 5 + sudden_rounds;
-            let home_scored = take_kick(home_taker, away_keeper);
+            let home_scored = take_kick(home_taker, away_keeper, round, true);
             context.penalty_shootout_kicks.push(PenaltyShootoutKick {
                 team_id: home_id,
                 taker_id: home_taker,
@@ -1570,7 +1779,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if home_scored {
                 home_score += 1;
             }
-            let away_scored = take_kick(away_taker, home_keeper);
+            let away_scored = take_kick(away_taker, home_keeper, round, true);
             context.penalty_shootout_kicks.push(PenaltyShootoutKick {
                 team_id: away_id,
                 taker_id: away_taker,

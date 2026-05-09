@@ -181,7 +181,9 @@ impl DefenderWalkingState {
             .players()
             .teammates()
             .all()
-            .fold((Vector3::zeros(), 0u32), |(s, c), p| (s + p.position, c + 1));
+            .fold((Vector3::zeros(), 0u32), |(s, c), p| {
+                (s + p.position, c + 1)
+            });
 
         if count == 0 {
             Vector3::zeros()

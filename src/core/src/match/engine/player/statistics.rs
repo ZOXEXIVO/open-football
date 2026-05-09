@@ -350,10 +350,8 @@ impl MatchPlayerStatistics {
     }
 
     pub fn note_half_space_pass_into_box(&mut self) {
-        self.zone_stats.half_space_passes_into_box = self
-            .zone_stats
-            .half_space_passes_into_box
-            .saturating_add(1);
+        self.zone_stats.half_space_passes_into_box =
+            self.zone_stats.half_space_passes_into_box.saturating_add(1);
     }
 
     pub fn note_central_pass_into_box(&mut self) {
@@ -385,22 +383,17 @@ impl MatchPlayerStatistics {
     }
 
     pub fn note_gk_command_action(&mut self) {
-        self.zone_stats.gk_command_actions =
-            self.zone_stats.gk_command_actions.saturating_add(1);
+        self.zone_stats.gk_command_actions = self.zone_stats.gk_command_actions.saturating_add(1);
     }
 
     pub fn note_gk_failed_claim_to_shot(&mut self) {
-        self.zone_stats.gk_failed_claims_to_shot = self
-            .zone_stats
-            .gk_failed_claims_to_shot
-            .saturating_add(1);
+        self.zone_stats.gk_failed_claims_to_shot =
+            self.zone_stats.gk_failed_claims_to_shot.saturating_add(1);
     }
 
     pub fn note_gk_failed_claim_to_goal(&mut self) {
-        self.zone_stats.gk_failed_claims_to_goal = self
-            .zone_stats
-            .gk_failed_claims_to_goal
-            .saturating_add(1);
+        self.zone_stats.gk_failed_claims_to_goal =
+            self.zone_stats.gk_failed_claims_to_goal.saturating_add(1);
     }
 
     pub fn note_penalty_foul_conceded(&mut self) {
@@ -409,8 +402,7 @@ impl MatchPlayerStatistics {
     }
 
     pub fn note_own_third_def_foul(&mut self) {
-        self.zone_stats.own_third_def_fouls =
-            self.zone_stats.own_third_def_fouls.saturating_add(1);
+        self.zone_stats.own_third_def_fouls = self.zone_stats.own_third_def_fouls.saturating_add(1);
     }
 }
 

@@ -50,7 +50,6 @@ pub use psychology::{
     team_leadership_score,
 };
 pub use rating::*;
-pub use zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
 pub use raycast::*;
 pub use referee::{ContactLocation, FoulCallContext, RefereeProfile};
 pub use result::*;
@@ -63,6 +62,7 @@ pub use set_pieces::{
 };
 pub use state::*;
 pub use tactical::*;
+pub use zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
 
 // Re-export player items except conflicting ones
 pub use player::{

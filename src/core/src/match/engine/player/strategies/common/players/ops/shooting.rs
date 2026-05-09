@@ -1,5 +1,6 @@
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::StateProcessingContext;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
 /// Operations for shooting decision-making
 pub struct ShootingOperationsImpl<'p> {
@@ -52,14 +53,19 @@ impl<'p> ShootingOperationsImpl<'p> {
         } else {
             0.02
         };
-        let finishing = (self.ctx.player.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
-        let composure = (self.ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-        // Quadratic skill curve: same shape used in xg.rs `skill_factor`.
-        // Mediocre finishers (~0.5 finishing) sit near 0.66×, elite (~0.9)
-        // sit near 1.20×. Old linear (0.7 + 0.6×fin) gave the mediocre a
-        // free 0.96× ride.
-        let blend = (finishing * 0.7 + composure * 0.3).clamp(0.0, 1.0);
-        let skill_mult = (0.55 + blend * blend * 0.85).clamp(0.45, 1.30);
+        let minute = sc::minute_from_ms(self.ctx.context.total_match_time);
+        // Pick the right shooting composite by distance. The composite
+        // is the fatigue-aware drop-in for the legacy
+        // (finishing*0.7 + composure*0.3) blend.
+        let composite = if d > 100.0 {
+            sc::long_shot(self.ctx.player, minute)
+        } else if d > 30.0 {
+            sc::shooting_medium(self.ctx.player, minute)
+        } else {
+            sc::shooting_close(self.ctx.player, minute)
+        };
+        let s = composite.clamp(0.0, 1.0);
+        let skill_mult = (0.55 + s * s * 0.85).clamp(0.45, 1.30);
         // Penalise a pressured / blocked shot — matches the real gameplay
         // where a defender in the corridor drastically reduces xG.
         let clarity_mult = if self.ctx.player().has_clear_shot() {
@@ -248,18 +254,23 @@ impl<'p> ShootingOperationsImpl<'p> {
         distance >= MIN_SHOOTING_DISTANCE && distance <= OPTIMAL_SHOOTING_DISTANCE
     }
 
-    /// Get shooting confidence factor (0.0 - 1.0)
+    /// Get shooting confidence factor (0.0 - 1.0).
+    /// Routes the per-distance shooting composite (close / medium / long)
+    /// through the same fatigue + composure curve that drives `expected_xg`
+    /// and `ShotQualityEvaluator::skill_factor`.
     pub fn shooting_confidence(&self) -> f32 {
-        let skills = &self.ctx.player.skills;
-        let finishing = skills.technical.finishing / 20.0;
-        let composure = skills.mental.composure / 20.0;
-        let technique = skills.technical.technique / 20.0;
+        let distance = self.ctx.ball().distance_to_opponent_goal();
+        let minute = sc::minute_from_ms(self.ctx.context.total_match_time);
+        let skill_factor = if distance > 100.0 {
+            sc::long_shot(self.ctx.player, minute)
+        } else if distance > 30.0 {
+            sc::shooting_medium(self.ctx.player, minute)
+        } else {
+            sc::shooting_close(self.ctx.player, minute)
+        };
 
         let distance_factor = self.distance_factor();
         let pressure_factor = self.pressure_factor();
-
-        // Combine factors
-        let skill_factor = finishing * 0.5 + composure * 0.3 + technique * 0.2;
 
         let base = (skill_factor * distance_factor * pressure_factor).clamp(0.0, 1.0);
 

@@ -176,11 +176,7 @@ impl CountryResult {
                     // Champion already handled above with the dual emit.
                     for row in table.iter().take(promo_slots).skip(1) {
                         trophies.push((row.team_id, AchievementType::Promotion));
-                        events.push((
-                            row.team_id,
-                            HappinessEventType::PromotionCelebration,
-                            1.0,
-                        ));
+                        events.push((row.team_id, HappinessEventType::PromotionCelebration, 1.0));
                     }
                 }
 
@@ -211,11 +207,7 @@ impl CountryResult {
                         europe_spots = 2; // 2 spots in modest top flights
                     }
                     for row in table.iter().take(europe_spots).skip(1) {
-                        events.push((
-                            row.team_id,
-                            HappinessEventType::QualifiedForEurope,
-                            1.0,
-                        ));
+                        events.push((row.team_id, HappinessEventType::QualifiedForEurope, 1.0));
                     }
                 }
 
@@ -1191,10 +1183,7 @@ impl CountryResult {
                 let pos = (idx + 1) as u8;
                 let pts = row.effective_points() as u16;
                 let gap = pts as i16 - safety_points as i16;
-                at_risk_teams.insert(
-                    row.team_id,
-                    (league.id, pos, pts, gap, matches_remaining),
-                );
+                at_risk_teams.insert(row.team_id, (league.id, pos, pts, gap, matches_remaining));
             }
         }
 

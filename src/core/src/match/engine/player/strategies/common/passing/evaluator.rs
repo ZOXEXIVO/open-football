@@ -2,6 +2,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::club::player::behaviour_config::PassEvaluatorConfig;
 use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     BallSideZone, GamePhase, MatchPlayer, MatchPlayerLite, PlayerSide, StateProcessingContext,
 };
@@ -205,9 +206,11 @@ impl PassEvaluator {
         // Additional pressure from multiple opponents
         let number_pressure = (1.0 - (num_opponents - 1.0) * 0.15).max(0.5);
 
-        // Mental attributes help under pressure
-        let composure_factor = passer.skills.mental.composure / 20.0;
-        let decision_factor = passer.skills.mental.decisions / 20.0;
+        // Mental attributes help under pressure — fatigue-folded.
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let mental = sc::EffActionContext::mental(minute);
+        let composure_factor = sc::n(sc::eff(passer, mental, |p| p.skills.mental.composure));
+        let decision_factor = sc::n(sc::eff(passer, mental, |p| p.skills.mental.decisions));
 
         let base_pressure = distance_pressure * number_pressure;
         let pressure_with_mentals =
@@ -268,59 +271,64 @@ impl PassEvaluator {
             0.95
         };
 
-        // Off the ball movement skill affects positioning quality
-        let players = ctx.player();
-        let skills = players.skills(receiver.id);
+        // Off-ball quality. Use the dedicated `off_ball_attack`
+        // composite when the receiver is in the registry — it folds
+        // off_the_ball, anticipation, decisions, accel/pace, teamwork,
+        // and bravery through `effective_skill`. Fall back to the
+        // legacy raw skill blend if the lookup misses.
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let off_ball_lift = match ctx.context.players.by_id(receiver.id) {
+            Some(rp) => sc::off_ball_attack(rp, minute) * 0.30,
+            None => {
+                let players = ctx.player();
+                let skills = players.skills(receiver.id);
+                let off_ball = (skills.mental.off_the_ball / 20.0).clamp(0.0, 1.0);
+                let positioning = (skills.mental.positioning / 20.0).clamp(0.0, 1.0);
+                off_ball * 0.15 + positioning * 0.15
+            }
+        };
 
-        let off_ball_factor = skills.mental.off_the_ball / 20.0;
-        let positioning_factor = skills.mental.positioning / 20.0;
-
-        (space_factor
-            * movement_factor
-            * (0.7 + off_ball_factor * 0.15 + positioning_factor * 0.15))
-            .clamp(0.1, 1.0)
+        (space_factor * movement_factor * (0.7 + off_ball_lift)).clamp(0.1, 1.0)
     }
 
-    /// Calculate passer's ability to execute this pass
+    /// Calculate passer's ability to execute this pass.
+    ///
+    /// Routes through the shared `passing_execution` / `long_passing`
+    /// composites so fatigue, late-game mental drift, and stamina
+    /// mitigation are applied consistently. The composite already
+    /// accounts for condition via `effective_skill`, so we no longer
+    /// multiply by a raw condition factor.
     fn calculate_passer_ability(
-        _ctx: &StateProcessingContext,
+        ctx: &StateProcessingContext,
         passer: &MatchPlayer,
         distance: f32,
     ) -> f32 {
-        let passing_skill = passer.skills.technical.passing / 20.0;
-        let technique_skill = passer.skills.technical.technique / 20.0;
-        let vision_skill = passer.skills.mental.vision / 20.0;
-
-        // For short passes, technique matters more
-        // For long passes, passing skill matters more
-        let short_pass_weight = 1.0 - (distance / 100.0).min(1.0);
-
-        let ability = passing_skill * (0.5 + short_pass_weight * 0.2)
-            + technique_skill * (0.3 + short_pass_weight * 0.2)
-            + vision_skill * 0.2;
-
-        // Condition affects ability
-        let condition_factor = passer.player_attributes.condition as f32 / 10000.0;
-
-        (ability * condition_factor).clamp(0.3, 1.0)
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        // Distance blend: short passes weighted toward `passing_execution`
+        // (technique-led), long passes weighted toward `long_passing`
+        // (vision-led). Crossover at ~80u so the weighting transitions
+        // smoothly across the field.
+        let long_weight = (distance / 80.0).clamp(0.0, 1.0);
+        let short = sc::passing_execution(passer, minute);
+        let long = sc::long_passing(passer, minute);
+        let composite = short * (1.0 - long_weight) + long * long_weight;
+        // Preserve historical 0.30 floor so utterly tired passers still
+        // produce a non-zero pass ability — the pass evaluator further
+        // downstream multiplies this through the success_probability
+        // formula and clamps the final result.
+        composite.clamp(0.30, 1.0)
     }
 
-    /// Calculate receiver's ability to control the pass
+    /// Calculate receiver's ability to control the pass.
+    /// Uses the receiving / first-touch composite — same fatigue and
+    /// late-game pathway as every other skill read.
     fn calculate_receiver_ability(ctx: &StateProcessingContext, receiver: &MatchPlayerLite) -> f32 {
-        let players = ctx.player();
-        let skills = players.skills(receiver.id);
-
-        let first_touch = skills.technical.first_touch / 20.0;
-        let technique = skills.technical.technique / 20.0;
-        let anticipation = skills.mental.anticipation / 20.0;
-
-        let ability = first_touch * 0.5 + technique * 0.3 + anticipation * 0.2;
-
-        // Condition affects ability
-        let player_attributes = players.attributes(receiver.id);
-        let condition_factor = player_attributes.condition as f32 / 10000.0;
-
-        (ability * condition_factor).clamp(0.3, 1.0)
+        let receiver_player = match ctx.context.players.by_id(receiver.id) {
+            Some(p) => p,
+            None => return 0.30,
+        };
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        sc::receiving_first_touch(receiver_player, minute).clamp(0.30, 1.0)
     }
 
     /// Calculate tactical value of the pass

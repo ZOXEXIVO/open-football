@@ -251,10 +251,13 @@ impl GoalkeeperWalkingState {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_distance_to_goal = (ball_position - goal_position).magnitude();
 
-        // Use positioning and command of area skills
+        // Use positioning and command of area skills. Communication
+        // reads the dedicated GK attribute, not `mental.leadership`,
+        // so an outfield captaincy-style player doesn't substitute
+        // for an actual shouting goalkeeper.
         let positioning_skill = ctx.player.skills.mental.positioning / 20.0;
-        let command_of_area = ctx.player.skills.mental.vision / 20.0;
-        let communication = ctx.player.skills.mental.leadership / 20.0;
+        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
+        let communication = ctx.player.skills.goalkeeping.communication / 20.0;
 
         // Calculate angle to ball for positioning
         let angle_to_ball = if ball_distance_to_goal > 0.1 {
@@ -318,7 +321,7 @@ impl GoalkeeperWalkingState {
             .penalty_area(ctx.player.side == Some(PlayerSide::Left));
 
         // Allow slight extension for sweeper-keepers with high command of area
-        let command_of_area = ctx.player.skills.mental.vision / 20.0;
+        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
         let extension_factor = 1.0 + (command_of_area * 0.1); // Up to 10% extension for excellent keepers
 
         let extended_min_x = penalty_area.min.x - (2.0 * extension_factor);

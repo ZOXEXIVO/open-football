@@ -56,7 +56,11 @@ impl MatchZone {
     /// Six-yard band: inner third of the penalty-area depth on the
     /// goal-line side. Approximation — engine has no explicit six-yard
     /// rectangle.
-    fn is_inner_third_of_box(position: &Vector3<f32>, box_area: &PenaltyArea, side: PlayerSide) -> bool {
+    fn is_inner_third_of_box(
+        position: &Vector3<f32>,
+        box_area: &PenaltyArea,
+        side: PlayerSide,
+    ) -> bool {
         let depth = box_area.max.x - box_area.min.x;
         let inner = depth / 3.0;
         match side {
@@ -334,7 +338,10 @@ mod tests {
 
     #[test]
     fn lateral_lane_central_for_centre_y() {
-        assert_eq!(LateralLane::classify(272.5, 545.0), LateralLane::CentralLane);
+        assert_eq!(
+            LateralLane::classify(272.5, 545.0),
+            LateralLane::CentralLane
+        );
     }
 
     #[test]

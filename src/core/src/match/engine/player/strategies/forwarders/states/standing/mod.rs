@@ -209,14 +209,10 @@ impl ForwardStandingState {
 
 /// Route a candidate shot through the centralised gate stack. See the
 /// twin helper in forwarders/states/dribbling/mod.rs for rationale.
-fn dispatch_shot(
-    ctx: &StateProcessingContext,
-    tag: &'static str,
-) -> Option<StateChangeResult> {
+fn dispatch_shot(ctx: &StateProcessingContext, tag: &'static str) -> Option<StateChangeResult> {
     match evaluate_forward_shot_decision(ctx, tag) {
         ShotDecision::Shoot { reason } => Some(
-            StateChangeResult::with_forward_state(ForwardState::Shooting)
-                .with_shot_reason(reason),
+            StateChangeResult::with_forward_state(ForwardState::Shooting).with_shot_reason(reason),
         ),
         ShotDecision::Pass => Some(StateChangeResult::with_forward_state(ForwardState::Passing)),
         ShotDecision::Hold => None,

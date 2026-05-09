@@ -153,7 +153,6 @@ struct DesireCarry {
 }
 
 impl Player {
-
     fn reset_on_club_change(&mut self) {
         const TRANSIENT: [PlayerStatusType; 10] = [
             PlayerStatusType::Lst,

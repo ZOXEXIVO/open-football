@@ -1197,9 +1197,8 @@ impl SimulatorData {
 // ════════════════════════════════════════════════════════════════════
 
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, RecruitmentDecisionType, ScoutMonitoringStatus,
-    ScoutVoteChoice, ScoutingAssignment, ScoutingRecommendation, ShortlistCandidateStatus,
-    TransferRequest,
+    DetailedScoutingReport, RecruitmentDecisionType, ScoutMonitoringStatus, ScoutVoteChoice,
+    ScoutingAssignment, ScoutingRecommendation, ShortlistCandidateStatus, TransferRequest,
 };
 
 /// Holds references to the simulator, club, and pre-computed lookups

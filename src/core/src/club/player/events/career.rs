@@ -351,8 +351,7 @@ impl Player {
         let quality_mul = match input.avg_rating {
             Some(rating) if kind.is_season_aggregate() => {
                 let matches = input.matches_played.unwrap_or(0) as f32;
-                (0.85 + (rating - 7.0) * 0.12 + ((matches + 1.0).log10()) * 0.05)
-                    .clamp(0.85, 1.30)
+                (0.85 + (rating - 7.0) * 0.12 + ((matches + 1.0).log10()) * 0.05).clamp(0.85, 1.30)
             }
             Some(rating) => (0.85 + (rating - 7.0) * 0.18).clamp(0.75, 1.25),
             None => 1.0,

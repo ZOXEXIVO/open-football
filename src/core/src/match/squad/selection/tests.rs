@@ -165,10 +165,25 @@ fn score_player_for_slot_with_breakdown_total_matches_legacy() {
             PlayerPositionType::Striker,
         ] {
             let group = slot.position_group();
-            let total_legacy = engine
-                .score_player_for_slot(player, slot, group, &staff, &tactics, date, false, &[]);
+            let total_legacy = engine.score_player_for_slot(
+                player,
+                slot,
+                group,
+                &staff,
+                &tactics,
+                date,
+                false,
+                &[],
+            );
             let (total_new, breakdown) = engine.score_player_for_slot_with_breakdown(
-                player, slot, group, &staff, &tactics, date, false, &[],
+                player,
+                slot,
+                group,
+                &staff,
+                &tactics,
+                date,
+                false,
+                &[],
             );
             assert!(
                 (total_legacy - total_new).abs() < 1e-3,

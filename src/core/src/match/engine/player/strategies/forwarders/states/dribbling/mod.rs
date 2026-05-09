@@ -141,14 +141,10 @@ impl ForwardDribblingState {
 /// `with_shot_reason` paths bypassed xG / sprint-balance / 1v1 / pass-EV
 /// gating because `ForwardShootingState` skips its own helper roll once a
 /// `pending_shot_reason` is set.
-fn dispatch_shot(
-    ctx: &StateProcessingContext,
-    tag: &'static str,
-) -> Option<StateChangeResult> {
+fn dispatch_shot(ctx: &StateProcessingContext, tag: &'static str) -> Option<StateChangeResult> {
     match evaluate_forward_shot_decision(ctx, tag) {
         ShotDecision::Shoot { reason } => Some(
-            StateChangeResult::with_forward_state(ForwardState::Shooting)
-                .with_shot_reason(reason),
+            StateChangeResult::with_forward_state(ForwardState::Shooting).with_shot_reason(reason),
         ),
         ShotDecision::Pass => Some(StateChangeResult::with_forward_state(ForwardState::Passing)),
         ShotDecision::Hold => None,

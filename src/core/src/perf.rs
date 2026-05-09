@@ -172,10 +172,9 @@ impl PerfCounters {
     }
 
     pub fn end_tick(&self, ctx: TickEndContext) {
-        let total_ns =
-            self.now_ns() - self.cur_tick_start_ns.load(Ordering::Relaxed);
-        let was_match_day = ctx.match_results_written > 0
-            || self.cur_match_count.load(Ordering::Relaxed) > 0;
+        let total_ns = self.now_ns() - self.cur_tick_start_ns.load(Ordering::Relaxed);
+        let was_match_day =
+            ctx.match_results_written > 0 || self.cur_match_count.load(Ordering::Relaxed) > 0;
 
         let match_count = self.cur_match_count.load(Ordering::Relaxed);
         let tick_count = self.cur_match_tick_count.load(Ordering::Relaxed);
@@ -268,7 +267,8 @@ impl PerfCounters {
             .store(ctx.countries, Ordering::Relaxed);
         self.last_leagues_processed
             .store(ctx.leagues, Ordering::Relaxed);
-        self.last_clubs_processed.store(ctx.clubs, Ordering::Relaxed);
+        self.last_clubs_processed
+            .store(ctx.clubs, Ordering::Relaxed);
         self.last_players_touched
             .store(ctx.players, Ordering::Relaxed);
         self.last_match_results_written
@@ -340,8 +340,7 @@ impl PerfCounters {
     }
 
     pub fn mark_dirty_index_rebuild(&self) {
-        self.cur_dirty_index_rebuild
-            .store(true, Ordering::Relaxed);
+        self.cur_dirty_index_rebuild.store(true, Ordering::Relaxed);
     }
 
     pub fn scope(&'static self, phase: PerfPhase) -> PhaseScope {

@@ -738,6 +738,30 @@ impl PlayerStatisticsHistory {
             .map(|e| e.team_slug.as_str())
     }
 
+    /// League stats accumulated across every current-season spell, with
+    /// the live counter standing in for the still-active spell. The live
+    /// `player.statistics` field is per-spell and gets drained on every
+    /// intra-club move (Main ↔ B / Second), so reading it directly hides
+    /// games the player accumulated before the move. This blends the
+    /// drained spells (preserved on `current`) with the live counter so
+    /// the player profile shows the full season tally.
+    pub fn current_season_stats(&self, live_stats: &PlayerStatistics) -> PlayerStatistics {
+        let mut total = PlayerStatistics::default();
+        let mut found_active = false;
+        for entry in &self.current {
+            if entry.departed_date.is_none() && !found_active {
+                total.merge_from(live_stats);
+                found_active = true;
+            } else {
+                total.merge_from(&entry.statistics);
+            }
+        }
+        if !found_active {
+            total.merge_from(live_stats);
+        }
+        total
+    }
+
     /// Total competitive (league + cup) apps the player has logged for
     /// their current club across all spells: prior frozen seasons +
     /// current-season snapshot. `live_played` / `live_played_subs` come

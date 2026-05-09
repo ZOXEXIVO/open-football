@@ -561,7 +561,9 @@ impl Substitutions {
         if let Some(player_out) = field.get_player(player_out_id) {
             let minutes = player_out.minutes_played_at(context.total_match_time);
             let snapshot = player_out.to_match_end_stats(minutes);
-            context.substituted_out_stats.push((player_out_id, snapshot));
+            context
+                .substituted_out_stats
+                .push((player_out_id, snapshot));
         }
 
         if !field.substitute_player(player_out_id, player_in_id) {

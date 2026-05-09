@@ -2,6 +2,10 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
+use crate::r#match::player::strategies::players::ops::effective_skill::{
+    ActionContext as EffSkillCtx, effective_skill,
+};
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     GoalDetail, MatchContext, MatchField, MatchPlayer, OffsideSnapshot, PassOriginRestart,
     PlayerSide, ResultMatchPositionData, ShotTarget,
@@ -101,7 +105,12 @@ pub mod save_accounting_stats {
     }
 }
 
-/// Helper struct to encapsulate player passing skills and condition
+/// Helper struct to encapsulate player passing skills and condition.
+/// Skill fields are already fatigue-folded via `effective_skill` —
+/// callers should not multiply by raw condition again. The remaining
+/// `availability_factor` covers ONLY independent physical-availability
+/// effects (chronic fitness, jadedness from cumulative load) that
+/// `effective_skill` doesn't model.
 struct PassSkills {
     passing: f32,
     technique: f32,
@@ -113,33 +122,54 @@ struct PassSkills {
     long_shots: f32,
     crossing: f32,
     stamina: f32,
-    match_readiness: f32,
-    condition_factor: f32,
+    /// Independent of skill condition — captures fitness*(1-jadedness)
+    /// only. Lightly applied to power consistency / miskick rates so
+    /// it isn't a second fatigue penalty stacked on top of effective
+    /// skills.
+    availability_factor: f32,
 }
 
 impl PassSkills {
-    fn from_player(player: &MatchPlayer) -> Self {
-        // Normalize skills to 0.0-1.0 range
-        // Low floors allow bad players (skill < 7) to be genuinely inaccurate
-        let passing = (player.skills.technical.passing / 20.0).clamp(0.1, 1.0);
-        let technique = (player.skills.technical.technique / 20.0).clamp(0.1, 1.0);
-        let vision = (player.skills.mental.vision / 20.0).clamp(0.1, 1.0);
-        let composure = (player.skills.mental.composure / 20.0).clamp(0.1, 1.0);
-        let decisions = (player.skills.mental.decisions / 20.0).clamp(0.1, 1.0);
-        let concentration = (player.skills.mental.concentration / 20.0).clamp(0.1, 1.0);
-        let flair = (player.skills.mental.flair / 20.0).clamp(0.0, 1.0);
-        let long_shots = (player.skills.technical.long_shots / 20.0).clamp(0.1, 1.0);
-        let crossing = (player.skills.technical.crossing / 20.0).clamp(0.1, 1.0);
-        let stamina = (player.skills.physical.stamina / 20.0).clamp(0.15, 1.0);
-        let match_readiness = (player.skills.physical.match_readiness / 20.0).clamp(0.15, 1.0);
+    /// Build a fatigue-aware skill snapshot. Skill values pass through
+    /// `effective_skill` so a tired player produces lower passing
+    /// numbers without each call site having to apply the band itself.
+    /// `minute` should be the current match minute (0..=120). Use
+    /// `MatchContext::total_match_time / 60_000` to derive it.
+    fn from_player(player: &MatchPlayer, minute: u32) -> Self {
+        let tech = EffSkillCtx::technical(minute);
+        let mental = EffSkillCtx::mental(minute);
+        let expl = EffSkillCtx::explosive(minute);
 
-        // Calculate condition factor (0.5 to 1.0 based on player condition)
-        let condition_percentage = player.player_attributes.condition as f32 / 10000.0;
+        let passing =
+            (effective_skill(player, player.skills.technical.passing, tech) / 20.0).clamp(0.1, 1.0);
+        let technique = (effective_skill(player, player.skills.technical.technique, tech) / 20.0)
+            .clamp(0.1, 1.0);
+        let vision =
+            (effective_skill(player, player.skills.mental.vision, mental) / 20.0).clamp(0.1, 1.0);
+        let composure = (effective_skill(player, player.skills.mental.composure, mental) / 20.0)
+            .clamp(0.1, 1.0);
+        let decisions = (effective_skill(player, player.skills.mental.decisions, mental) / 20.0)
+            .clamp(0.1, 1.0);
+        let concentration = (effective_skill(player, player.skills.mental.concentration, mental)
+            / 20.0)
+            .clamp(0.1, 1.0);
+        let flair =
+            (effective_skill(player, player.skills.mental.flair, mental) / 20.0).clamp(0.0, 1.0);
+        let long_shots = (effective_skill(player, player.skills.technical.long_shots, tech) / 20.0)
+            .clamp(0.1, 1.0);
+        let crossing = (effective_skill(player, player.skills.technical.crossing, tech) / 20.0)
+            .clamp(0.1, 1.0);
+        let stamina =
+            (effective_skill(player, player.skills.physical.stamina, expl) / 20.0).clamp(0.15, 1.0);
+
+        // Availability factor — independent of `effective_skill`'s
+        // condition handling. Captures chronic fitness (long-term shape)
+        // and jadedness (cumulative load not yet recovered). Lightly
+        // applied so we don't double-stack on top of the per-skill
+        // condition penalty.
         let fitness_factor = (player.player_attributes.fitness as f32 / 10000.0).clamp(0.5, 1.0);
-        let jadedness_penalty = (player.player_attributes.jadedness as f32 / 10000.0) * 0.3;
-
-        let condition_factor =
-            (condition_percentage * fitness_factor - jadedness_penalty).clamp(0.5, 1.0);
+        let jadedness_penalty = (player.player_attributes.jadedness as f32 / 10000.0) * 0.20;
+        let availability_factor = (fitness_factor - jadedness_penalty).clamp(0.70, 1.0);
 
         Self {
             passing,
@@ -152,21 +182,26 @@ impl PassSkills {
             long_shots,
             crossing,
             stamina,
-            match_readiness,
-            condition_factor,
+            availability_factor,
         }
     }
 
-    /// Calculate overall passing quality (affected by condition)
+    /// Overall passing quality. Skills are already fatigue-aware; the
+    /// availability factor adds a small independent penalty for
+    /// chronic fitness / jadedness without re-applying condition.
     fn overall_quality(&self) -> f32 {
         let base_quality = self.passing * 0.5 + self.technique * 0.3 + self.vision * 0.2;
-        base_quality * self.condition_factor * self.match_readiness
+        // 0.70..1.00 gives a max ~30% softening from chronic load — the
+        // skill values already ship the per-match condition curve.
+        base_quality * self.availability_factor
     }
 
-    /// Calculate decision-making quality for trajectory selection
+    /// Decision-making quality for trajectory selection. Same rule:
+    /// no second condition multiplier — only the independent
+    /// availability factor on top of effective skills.
     fn decision_quality(&self) -> f32 {
         (self.decisions * 0.4 + self.vision * 0.3 + self.concentration * 0.2 + self.composure * 0.1)
-            * self.condition_factor
+            * self.availability_factor
     }
 }
 
@@ -321,7 +356,7 @@ impl PlayerEventDispatcher {
                     field,
                     context,
                 );
-                Self::handle_pass_to_event(pass_event_model, field);
+                Self::handle_pass_to_event(pass_event_model, field, context.total_match_time);
                 // Tag the ball with the passer for pass-accuracy
                 // accounting. Lives for a short window (150 ticks)
                 // and is cleared on opponent touch — see ball.rs
@@ -440,14 +475,12 @@ impl PlayerEventDispatcher {
                     field.ball.last_completed_pass_passer_id,
                     field.ball.last_completed_pass_receiver_id,
                 ) {
-                    let elapsed = now_tick
-                        .saturating_sub(field.ball.last_completed_pass_tick);
+                    let elapsed = now_tick.saturating_sub(field.ball.last_completed_pass_tick);
                     let in_window = elapsed <= KEY_PASS_WINDOW_TICKS;
                     let receiver_is_shooter = receiver_id == shooter_id;
                     let passer_not_shooter = passer_id != shooter_id;
                     let passer_team = field.get_player(passer_id).map(|p| p.team_id);
-                    let same_team = passer_team.is_some()
-                        && passer_team == shooter_team;
+                    let same_team = passer_team.is_some() && passer_team == shooter_team;
                     if in_window && receiver_is_shooter && passer_not_shooter && same_team {
                         if let Some(passer) = field.get_player_mut(passer_id) {
                             passer.statistics.add_key_pass();
@@ -468,16 +501,13 @@ impl PlayerEventDispatcher {
                 // can also charge `errors_leading_to_goal` if the shot
                 // converts.
                 const ERROR_TO_SHOT_WINDOW_TICKS: u64 = 600; // ~6s
-                let shooter_team = field
-                    .get_player(shooter_id)
-                    .map(|p| p.team_id);
+                let shooter_team = field.get_player(shooter_id).map(|p| p.team_id);
                 if let (Some(giver_id), Some(giver_team), shooter_team) = (
                     field.ball.last_giveaway_player_id,
                     field.ball.last_giveaway_team_id,
                     shooter_team,
                 ) {
-                    let in_window = now_tick
-                        .saturating_sub(field.ball.last_giveaway_tick)
+                    let in_window = now_tick.saturating_sub(field.ball.last_giveaway_tick)
                         <= ERROR_TO_SHOT_WINDOW_TICKS;
                     if in_window && Some(giver_team) != shooter_team {
                         if let Some(giver) = field.get_player_mut(giver_id) {
@@ -629,11 +659,7 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_tackling_ball_event(
-        player_id: u32,
-        field: &mut MatchField,
-        context: &MatchContext,
-    ) {
+    fn handle_tackling_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
         let ball_pos = field.ball.position;
         // Capture the carrier (= dispossessed player) BEFORE
         // secure_ball_for nulls them out — the tackle handler treats
@@ -801,8 +827,8 @@ impl PlayerEventDispatcher {
         let mut credited_count: u8 = 0;
         for &id in presser_ids.iter().take(count as usize) {
             if let Some(presser) = field.get_player_mut(id) {
-                let in_cooldown = now.saturating_sub(presser.last_pressure_tick)
-                    < Self::PRESSURE_COOLDOWN_TICKS;
+                let in_cooldown =
+                    now.saturating_sub(presser.last_pressure_tick) < Self::PRESSURE_COOLDOWN_TICKS;
                 if !in_cooldown {
                     presser.statistics.add_pressure();
                     presser.last_pressure_tick = now;
@@ -900,8 +926,7 @@ impl PlayerEventDispatcher {
 
         let target_in_box = opp_box.contains(&target);
         let own_box = context.penalty_area(is_home);
-        let endpoint_zone =
-            MatchZone::classify(target, passer_side, field_w, own_box, opp_box);
+        let endpoint_zone = MatchZone::classify(target, passer_side, field_w, own_box, opp_box);
 
         // Lateral-lane classification (origin & target).
         let origin_lane = LateralLane::classify(origin.y, field_h);
@@ -1014,8 +1039,13 @@ impl PlayerEventDispatcher {
         edge_dist <= 10.0
     }
 
-    fn handle_pass_to_event(event_model: PassingEventContext, field: &mut MatchField) {
+    fn handle_pass_to_event(
+        event_model: PassingEventContext,
+        field: &mut MatchField,
+        total_match_time_ms: u64,
+    ) {
         let mut rng = rand::rng();
+        let minute = sc::minute_from_ms(total_match_time_ms);
 
         // Only increment attempts here. `passes_completed` is bumped when
         // the intended receiver actually claims the ball (see
@@ -1033,7 +1063,7 @@ impl PlayerEventDispatcher {
         let player = field.get_player(event_model.from_player_id).unwrap();
         let passer_position = player.position;
         let passer_side = player.side;
-        let skills = PassSkills::from_player(player);
+        let skills = PassSkills::from_player(player, minute);
 
         // Calculate overall quality for accuracy - affected by condition
         let overall_quality = skills.overall_quality();
@@ -1536,7 +1566,7 @@ impl PlayerEventDispatcher {
                 // Very slight lift - driven passes should barely leave the ground
                 // Maximum height should be ~0.3-0.8m for realistic driven passes
                 let distance_factor = (horizontal_distance / 150.0).clamp(0.2, 0.8);
-                let skill_factor = skills.technique * skills.condition_factor;
+                let skill_factor = skills.technique * skills.availability_factor;
 
                 let base_z = 0.2 + (distance_factor * 0.5); // 0.2 to 0.7 m/s (much lower)
                 let variation = rng.random_range(0.9..1.1);
@@ -1580,7 +1610,7 @@ impl PlayerEventDispatcher {
                 // Chips are based on technique, not distance
                 let chip_ability =
                     (skills.technique * 0.5 + skills.flair * 0.3 + skills.passing * 0.2)
-                        * skills.condition_factor;
+                        * skills.availability_factor;
 
                 // Base height for chip regardless of distance
                 let base_chip_height = 2.5 + (chip_ability * 2.0); // 2.5 to 4.5 m/s
@@ -1597,7 +1627,7 @@ impl PlayerEventDispatcher {
     fn calculate_max_z_velocity(horizontal_distance: f32, skills: &PassSkills) -> f32 {
         // Combine vision and long_shots for long pass capability
         let long_pass_ability =
-            (skills.vision * 0.6 + skills.long_shots * 0.4) * skills.condition_factor;
+            (skills.vision * 0.6 + skills.long_shots * 0.4) * skills.availability_factor;
 
         if horizontal_distance <= 20.0 {
             // Short passes - mostly ground, slight lift allowed
@@ -1647,11 +1677,7 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_claim_ball_event(
-        player_id: u32,
-        field: &mut MatchField,
-        context: &MatchContext,
-    ) {
+    fn handle_claim_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
         // CLAIM COOLDOWN: Prevent rapid ping-pong between players
         // If the ball was just claimed by someone else, reject this claim
         const CLAIM_COOLDOWN_TICKS: u32 = 15; // ~250ms at 60fps - time before ball can change hands
@@ -3051,12 +3077,10 @@ impl PlayerEventDispatcher {
                     fouler.statistics.note_penalty_foul_conceded();
                 }
                 if in_own_third {
-                    let pos_group =
-                        fouler.tactical_position.current_position.position_group();
+                    let pos_group = fouler.tactical_position.current_position.position_group();
                     if matches!(
                         pos_group,
-                        PlayerFieldPositionGroup::Defender
-                            | PlayerFieldPositionGroup::Goalkeeper
+                        PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Goalkeeper
                     ) {
                         fouler.statistics.note_own_third_def_foul();
                     }
@@ -3204,10 +3228,7 @@ impl PlayerEventDispatcher {
 mod xg_distribution_tests {
     use super::PlayerEventDispatcher;
 
-    fn credit_for(
-        out: &[(u32, f32, Option<f32>)],
-        pid: u32,
-    ) -> Option<(f32, Option<f32>)> {
+    fn credit_for(out: &[(u32, f32, Option<f32>)], pid: u32) -> Option<(f32, Option<f32>)> {
         out.iter()
             .find(|(id, _, _)| *id == pid)
             .map(|(_, c, b)| (*c, *b))
@@ -3221,8 +3242,8 @@ mod xg_distribution_tests {
         let recent = vec![1, 2];
         let credits = PlayerEventDispatcher::distribute_xg_credit(
             recent.into_iter(),
-            99,         // shooter
-            Some(2),    // assister
+            99,      // shooter
+            Some(2), // assister
             0.40,
         );
         let p1 = credit_for(&credits, 1).expect("P1 must be credited");
@@ -3236,12 +3257,8 @@ mod xg_distribution_tests {
         // Shooter appearing in recent_passers (e.g. they kicked it earlier
         // in the chain) gets chain credit but not buildup.
         let recent = vec![1, 2, 99];
-        let credits = PlayerEventDispatcher::distribute_xg_credit(
-            recent.into_iter(),
-            99,
-            Some(2),
-            0.50,
-        );
+        let credits =
+            PlayerEventDispatcher::distribute_xg_credit(recent.into_iter(), 99, Some(2), 0.50);
         let s = credit_for(&credits, 99).expect("shooter chain credit");
         assert!(s.1.is_none(), "shooter must not get buildup credit");
     }
@@ -3251,12 +3268,8 @@ mod xg_distribution_tests {
         // Passer P1 (deeper in chain), P2 assister, S shooter — P1 still
         // earns buildup even though P2/S are excluded.
         let recent = vec![1, 2];
-        let credits = PlayerEventDispatcher::distribute_xg_credit(
-            recent.into_iter(),
-            99,
-            Some(2),
-            0.40,
-        );
+        let credits =
+            PlayerEventDispatcher::distribute_xg_credit(recent.into_iter(), 99, Some(2), 0.40);
         let p1 = credit_for(&credits, 1).expect("P1 in chain");
         assert!(p1.1.is_some(), "third-player buildup must be present");
         // Pool is xg * 0.20 = 0.08, split across 1 eligible player.
@@ -3273,12 +3286,8 @@ mod xg_distribution_tests {
         // Same passer appears 3 times in the ring; chain credit and
         // buildup credit must each fire ONCE for that player.
         let recent = vec![1, 1, 1];
-        let credits = PlayerEventDispatcher::distribute_xg_credit(
-            recent.into_iter(),
-            99,
-            None,
-            0.40,
-        );
+        let credits =
+            PlayerEventDispatcher::distribute_xg_credit(recent.into_iter(), 99, None, 0.40);
         assert_eq!(credits.len(), 1, "dedupe — one entry per unique id");
         let (pid, chain, buildup) = credits[0];
         assert_eq!(pid, 1);
@@ -3299,18 +3308,13 @@ mod xg_distribution_tests {
             None,
             0.40,
         );
-        let unique_credits = PlayerEventDispatcher::distribute_xg_credit(
-            vec![1u32, 2].into_iter(),
-            99,
-            None,
-            0.40,
-        );
+        let unique_credits =
+            PlayerEventDispatcher::distribute_xg_credit(vec![1u32, 2].into_iter(), 99, None, 0.40);
         // Both must be length 2 and credit the same per-player amounts.
         assert_eq!(dup_credits.len(), 2);
         assert_eq!(unique_credits.len(), 2);
         for &(pid, chain_a, build_a) in dup_credits.iter() {
-            let (chain_b, build_b) =
-                credit_for(&unique_credits, pid).expect("paired credit");
+            let (chain_b, build_b) = credit_for(&unique_credits, pid).expect("paired credit");
             assert!(
                 (chain_a - chain_b).abs() < 1e-4,
                 "chain credit for {} differs: dup {} vs unique {}",
@@ -3332,12 +3336,8 @@ mod xg_distribution_tests {
         // must equal the pool — 0.40 * 0.20 = 0.08 — regardless of
         // how many participants there are.
         let recent = vec![1, 2, 3, 4]; // 4 unique participants
-        let credits = PlayerEventDispatcher::distribute_xg_credit(
-            recent.into_iter(),
-            99,
-            None,
-            0.40,
-        );
+        let credits =
+            PlayerEventDispatcher::distribute_xg_credit(recent.into_iter(), 99, None, 0.40);
         let total_buildup: f32 = credits.iter().map(|(_, _, b)| b.unwrap_or(0.0)).sum();
         assert!(
             (total_buildup - 0.08).abs() < 1e-4,

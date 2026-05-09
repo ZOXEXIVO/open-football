@@ -13,8 +13,8 @@ use crate::r#match::engine::result::PlayerMatchEndStats;
 use crate::shared::fullname::FullName;
 use crate::{
     AwardReputationInput, AwardReputationKind, HappinessEventType, PersonAttributes,
-    PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType, PlayerPositions,
-    PlayerSkills,
+    PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType,
+    PlayerPositions, PlayerSkills,
 };
 use chrono::NaiveDate;
 
@@ -1949,10 +1949,7 @@ fn match_dropped_carries_structured_selection_context() {
         .as_ref()
         .and_then(|c| c.selection_context.as_ref())
         .expect("selection context must round-trip into the event");
-    assert_eq!(
-        stored.scope,
-        crate::SelectionDecisionScope::DroppedToBench
-    );
+    assert_eq!(stored.scope, crate::SelectionDecisionScope::DroppedToBench);
     assert_eq!(
         stored.reason,
         crate::SelectionOmissionReason::TeammatePreferredOnFitness
@@ -1962,8 +1959,7 @@ fn match_dropped_carries_structured_selection_context() {
 #[test]
 fn match_dropped_key_player_severity_exceeds_rotation_player() {
     let mut key = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
-    let mut rotation =
-        build_player_with_status(crate::PlayerSquadStatus::FirstTeamSquadRotation);
+    let mut rotation = build_player_with_status(crate::PlayerSquadStatus::FirstTeamSquadRotation);
     let ctx = drop_ctx(
         crate::SelectionDecisionScope::LeftOutOfMatchdaySquad,
         crate::SelectionOmissionReason::TeammatePreferredOnAbility,
@@ -2771,8 +2767,9 @@ fn award_emissions_respect_recent_events_cap() {
 
 // ── Transfer-interest signal tests ───────────────────────────
 
-fn make_signal(stage: crate::TransferInterestStage) -> super::transfer_social::TransferInterestSignal
-{
+fn make_signal(
+    stage: crate::TransferInterestStage,
+) -> super::transfer_social::TransferInterestSignal {
     super::transfer_social::TransferInterestSignal {
         interested_club_id: 9001,
         interested_league_id: Some(2),
@@ -2940,9 +2937,10 @@ fn transfer_interest_rival_kind_attaches_rival_evidence() {
         .and_then(|c| c.transfer_interest_context.as_ref())
         .expect("rival context attached");
     assert!(tic.is_rival);
-    assert!(tic
-        .evidence
-        .contains(&crate::TransferInterestEvidence::RivalClub));
+    assert!(
+        tic.evidence
+            .contains(&crate::TransferInterestEvidence::RivalClub)
+    );
 }
 
 #[test]
@@ -2961,12 +2959,10 @@ fn transfer_interest_underused_player_reads_smaller_club_offer_as_escape() {
     contract.squad_status = crate::PlayerSquadStatus::MainBackupPlayer;
     p.contract = Some(contract);
     p.on_transfer_interest_signal(&sig);
-    let event = p
-        .happiness
-        .recent_events
-        .iter()
-        .last()
-        .expect("an event should fire for a fringe player getting a step-down-with-minutes link");
+    let event =
+        p.happiness.recent_events.iter().last().expect(
+            "an event should fire for a fringe player getting a step-down-with-minutes link",
+        );
     let tic = event
         .context
         .as_ref()
@@ -2989,7 +2985,10 @@ fn transfer_interest_bid_rejected_signal_emits_with_rejected_evidence() {
     p.attributes.ambition = 16.0;
     let sig = make_signal(crate::TransferInterestStage::BidRejected);
     let landed = p.on_transfer_interest_signal(&sig);
-    assert!(landed, "rejected bid should always land for ambitious player");
+    assert!(
+        landed,
+        "rejected bid should always land for ambitious player"
+    );
     let event = p
         .happiness
         .recent_events
@@ -3001,9 +3000,10 @@ fn transfer_interest_bid_rejected_signal_emits_with_rejected_evidence() {
         .as_ref()
         .and_then(|c| c.transfer_interest_context.as_ref())
         .expect("context attached for bid rejected");
-    assert!(tic
-        .evidence
-        .contains(&crate::TransferInterestEvidence::RejectedBid));
+    assert!(
+        tic.evidence
+            .contains(&crate::TransferInterestEvidence::RejectedBid)
+    );
 }
 
 #[test]
@@ -3071,13 +3071,18 @@ fn transfer_interest_player_abroad_linked_with_home_club_is_homecoming() {
     sig.is_home_country = true;
     sig.is_seller_in_home_country = false;
     let landed = p.on_transfer_interest_signal(&sig);
-    assert!(landed, "homecoming approach for a foreign-based player should land");
+    assert!(
+        landed,
+        "homecoming approach for a foreign-based player should land"
+    );
     let event = p
         .happiness
         .recent_events
         .iter()
         .find(|e| e.event_type == HappinessEventType::HomecomingRumour)
-        .expect("foreign-based player linked with a home-country club should fire HomecomingRumour");
+        .expect(
+            "foreign-based player linked with a home-country club should fire HomecomingRumour",
+        );
     let tic = event
         .context
         .as_ref()
@@ -3233,7 +3238,11 @@ fn award_reputation_team_of_week_small_boost() {
         "TOTW current delta should be small and positive, got {}",
         dc
     );
-    assert!(dh > 0 && dh < 35, "TOTW home delta should be small, got {}", dh);
+    assert!(
+        dh > 0 && dh < 35,
+        "TOTW home delta should be small, got {}",
+        dh
+    );
     assert!(dw <= 3, "TOTW world delta should be minimal, got {}", dw);
 }
 
@@ -3248,11 +3257,7 @@ fn award_reputation_player_of_week_beats_team_of_week() {
         input,
         d(2026, 5, 7),
     );
-    pow.apply_award_reputation_impact(
-        AwardReputationKind::PlayerOfTheWeek,
-        input,
-        d(2026, 5, 7),
-    );
+    pow.apply_award_reputation_impact(AwardReputationKind::PlayerOfTheWeek, input, d(2026, 5, 7));
     let (totw_c, _, _) = rep_deltas(&totw, before);
     let (pow_c, _, _) = rep_deltas(&pow, before);
     assert!(
@@ -3352,16 +3357,8 @@ fn award_reputation_elite_player_reduced_weekly_gain() {
     let mut elite = build_award_player(d(1992, 1, 1), 8_500, 8_500, 8_500);
     let mut mid = build_award_player(d(1992, 1, 1), 5_000, 5_000, 4_000);
     let input = AwardReputationInput::new().with_league_reputation(7_000);
-    elite.apply_award_reputation_impact(
-        AwardReputationKind::PlayerOfTheWeek,
-        input,
-        d(2026, 5, 7),
-    );
-    mid.apply_award_reputation_impact(
-        AwardReputationKind::PlayerOfTheWeek,
-        input,
-        d(2026, 5, 7),
-    );
+    elite.apply_award_reputation_impact(AwardReputationKind::PlayerOfTheWeek, input, d(2026, 5, 7));
+    mid.apply_award_reputation_impact(AwardReputationKind::PlayerOfTheWeek, input, d(2026, 5, 7));
     let dc_elite = elite.player_attributes.current_reputation - 8_500;
     let dc_mid = mid.player_attributes.current_reputation - 5_000;
     assert!(
@@ -3381,11 +3378,7 @@ fn award_reputation_elite_player_reduced_weekly_gain() {
 fn award_reputation_low_league_barely_moves_world() {
     let mut p = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
     let input = AwardReputationInput::new().with_league_reputation(1_000);
-    p.apply_award_reputation_impact(
-        AwardReputationKind::PlayerOfTheWeek,
-        input,
-        d(2026, 5, 7),
-    );
+    p.apply_award_reputation_impact(AwardReputationKind::PlayerOfTheWeek, input, d(2026, 5, 7));
     let dw = p.player_attributes.world_reputation - 4_000;
     assert!(
         dw <= 1,
@@ -3417,8 +3410,7 @@ fn award_reputation_pow_then_totw_dampens_totw() {
         input,
         d(2026, 5, 7),
     );
-    let dc_stacked_totw =
-        stacked.player_attributes.current_reputation - stacked_after_pow_cur;
+    let dc_stacked_totw = stacked.player_attributes.current_reputation - stacked_after_pow_cur;
 
     assert!(
         dc_stacked_totw < dc_single,
@@ -3480,11 +3472,7 @@ fn award_reputation_player_of_season_more_than_team_of_year() {
         input,
         d(2026, 5, 7),
     );
-    pos.apply_award_reputation_impact(
-        AwardReputationKind::PlayerOfTheSeason,
-        input,
-        d(2026, 5, 7),
-    );
+    pos.apply_award_reputation_impact(AwardReputationKind::PlayerOfTheSeason, input, d(2026, 5, 7));
     let dc_toty = toty.player_attributes.current_reputation - 5_000;
     let dc_pos = pos.player_attributes.current_reputation - 5_000;
     assert!(
@@ -3591,9 +3579,7 @@ fn award_reputation_pom_then_totm_dampens_totm() {
     // same tick. POM happiness event is the dampener trigger.
     stacked.on_recognition_award(
         HappinessEventType::PlayerOfTheMonth,
-        crate::RecognitionEventContext::new(
-            crate::RecognitionEventKind::PlayerOfTheMonth,
-        ),
+        crate::RecognitionEventContext::new(crate::RecognitionEventKind::PlayerOfTheMonth),
         28,
     );
     let stacked_after_pom_cur = stacked.player_attributes.current_reputation;
@@ -3602,8 +3588,7 @@ fn award_reputation_pom_then_totm_dampens_totm() {
         input,
         d(2026, 5, 1),
     );
-    let dc_stacked_totm =
-        stacked.player_attributes.current_reputation - stacked_after_pom_cur;
+    let dc_stacked_totm = stacked.player_attributes.current_reputation - stacked_after_pom_cur;
 
     assert!(
         dc_stacked_totm < dc_single,
@@ -3634,9 +3619,7 @@ fn award_reputation_young_pom_then_young_totm_dampens() {
 
     stacked.on_recognition_award(
         HappinessEventType::YoungPlayerOfTheMonth,
-        crate::RecognitionEventContext::new(
-            crate::RecognitionEventKind::YoungPlayerOfTheMonth,
-        ),
+        crate::RecognitionEventContext::new(crate::RecognitionEventKind::YoungPlayerOfTheMonth),
         28,
     );
     let stacked_after_ypom = stacked.player_attributes.current_reputation;
@@ -3660,9 +3643,7 @@ fn on_recognition_award_records_team_of_the_month_event() {
     let mut p = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
     let recorded = p.on_recognition_award(
         HappinessEventType::TeamOfTheMonthSelection,
-        crate::RecognitionEventContext::new(
-            crate::RecognitionEventKind::TeamOfTheMonthSelection,
-        ),
+        crate::RecognitionEventContext::new(crate::RecognitionEventKind::TeamOfTheMonthSelection),
         28,
     );
     assert!(recorded, "first-time TOTM emit must record");
@@ -3673,12 +3654,13 @@ fn on_recognition_award_records_team_of_the_month_event() {
     // Cooldown of 28 days suppresses a same-tick double-fire.
     let second = p.on_recognition_award(
         HappinessEventType::TeamOfTheMonthSelection,
-        crate::RecognitionEventContext::new(
-            crate::RecognitionEventKind::TeamOfTheMonthSelection,
-        ),
+        crate::RecognitionEventContext::new(crate::RecognitionEventKind::TeamOfTheMonthSelection),
         28,
     );
-    assert!(!second, "second TOTM emit inside cooldown must be suppressed");
+    assert!(
+        !second,
+        "second TOTM emit inside cooldown must be suppressed"
+    );
 }
 
 #[test]

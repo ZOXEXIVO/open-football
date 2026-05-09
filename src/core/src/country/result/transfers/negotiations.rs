@@ -153,8 +153,8 @@ impl CountryResult {
             .clubs
             .iter()
             .find(|c| c.id == neg_data.buying_club_id);
-        let interested_league_id = buying_club
-            .and_then(|c| c.teams.teams.first().and_then(|t| t.league_id));
+        let interested_league_id =
+            buying_club.and_then(|c| c.teams.teams.first().and_then(|t| t.league_id));
         let buying_country_id = country.id;
         let seller_country_id = neg_data.selling_country_id.unwrap_or(country.id);
         let is_home_country = player.country_id == buying_country_id;
@@ -333,9 +333,7 @@ impl CountryResult {
                     false,
                 );
                 if let Some(sig) = signal {
-                    if let Some(player) =
-                        find_player_in_country_mut(country, neg_data.player_id)
-                    {
+                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
                         player.on_transfer_interest_signal(&sig);
                     }
                 }
@@ -359,9 +357,7 @@ impl CountryResult {
                     false,
                 );
                 if let Some(sig) = signal {
-                    if let Some(player) =
-                        find_player_in_country_mut(country, neg_data.player_id)
-                    {
+                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
                         player.on_transfer_interest_signal(&sig);
                     }
                 }
@@ -504,9 +500,7 @@ impl CountryResult {
                     true,
                 );
                 if let Some(sig) = signal {
-                    if let Some(player) =
-                        find_player_in_country_mut(country, neg_data.player_id)
-                    {
+                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
                         player.on_transfer_interest_signal(&sig);
                     }
                 }
@@ -980,9 +974,7 @@ impl CountryResult {
                     false,
                 );
                 if let Some(sig) = signal {
-                    if let Some(player) =
-                        find_player_in_country_mut(country, neg_data.player_id)
-                    {
+                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
                         player.on_transfer_interest_signal(&sig);
                     }
                 }
