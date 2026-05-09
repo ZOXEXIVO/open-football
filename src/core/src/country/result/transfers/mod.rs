@@ -9,12 +9,11 @@ pub(crate) mod types;
 use super::CountryResult;
 use crate::simulator::SimulatorData;
 use crate::transfers::TransferWindowManager;
-use crate::transfers::pipeline::PipelineProcessor;
+use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use chrono::NaiveDate;
 use config::TransferConfig;
-use free_agents::{
-    GlobalFreeAgentSigning, execute_global_free_agent_signing, snapshot_global_free_agents,
-};
+use free_agents::{GlobalFreeAgentSigning, execute_global_free_agent_signing};
+pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use log::debug;
 use types::TransferActivitySummary;
 
@@ -34,26 +33,46 @@ impl CountryResult {
         // game's published balance.
         let config = TransferConfig::default();
 
-        // Collect foreign player pool from other countries (for cross-country scouting)
-        let foreign_players = if window_open {
-            data.continents
-                .iter()
-                .flat_map(|cont| &cont.countries)
-                .filter(|c| c.id != country_id)
-                .flat_map(|c| PipelineProcessor::collect_player_pool(c, current_date))
-                .collect()
+        // Collect foreign player pool from other countries (for cross-country scouting).
+        //
+        // Phase C in `simulator.rs` builds a world-wide pool once per
+        // tick and stows it on `data.daily_world_player_pool` so each
+        // country can borrow from the cached snapshot instead of
+        // re-walking every other country's players. Filtering out
+        // own-country entries here is O(N) over the cache. Falls back
+        // to a per-country rebuild when the cache is absent (test
+        // harnesses, future callers outside Phase C).
+        let foreign_players: Vec<PlayerSummary> = if window_open {
+            if let Some(world_pool) = data.daily_world_player_pool.as_ref() {
+                world_pool
+                    .iter()
+                    .filter(|s| s.country_id != country_id)
+                    .cloned()
+                    .collect()
+            } else {
+                data.continents
+                    .iter()
+                    .flat_map(|cont| &cont.countries)
+                    .filter(|c| c.id != country_id)
+                    .flat_map(|c| PipelineProcessor::collect_player_pool(c, current_date))
+                    .collect()
+            }
         } else {
             Vec::new()
         };
 
-        // Snapshot the global "Move on Free" pool *before* we take a mutable
-        // borrow on the country. Players in `data.free_agents` have no club
-        // and were therefore invisible to `handle_free_agents`, which only
-        // scanned club rosters. With this snapshot in hand the per-country
-        // handler can match them against unfulfilled transfer requests; the
-        // returned `GlobalFreeAgentSigning`s get executed below once the
-        // country borrow ends and we can mutate `data.free_agents`.
-        let global_free_agents = snapshot_global_free_agents(data, current_date);
+        // Snapshot the global "Move on Free" pool. Phase C in
+        // `simulator.rs` builds this snapshot once per tick and stows
+        // it on `data.daily_global_free_agents`; per-country callers
+        // share the same view (the matching loop is read-only).
+        // Falls back to a per-country rebuild when the cache is
+        // absent (test paths and one-off callers).
+        let global_free_agents: Vec<GlobalFreeAgentSummary> =
+            if let Some(cached) = data.daily_global_free_agents.as_ref() {
+                cached.clone()
+            } else {
+                snapshot_global_free_agents(data, current_date)
+            };
 
         // Snapshot completed count so we can detect any free-agent / negotiation
         // signings that bypass the deferred execution path below.

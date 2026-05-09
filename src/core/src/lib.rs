@@ -55,9 +55,11 @@ pub use crate::r#match::engine::player::strategies::forwarders::states::running:
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
 
 pub mod config;
+pub mod perf;
 pub mod simulator;
 pub use config::SimulatorConfig;
 pub use continent::national::world::emergency_callups_total;
+pub use perf::{PerfCounters, PerfPhase, PerfSnapshot, PhaseScope, TickEndContext};
 pub use simulator::*;
 
 pub mod club;

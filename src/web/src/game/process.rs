@@ -5,6 +5,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use core::FootballSimulator;
+use core::PerfCounters;
 use core::SimulationResult;
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -134,5 +135,7 @@ async fn write_match_results(result: SimulationResult) {
 
     tasks.join_all().await;
 
-    debug!("match results stored in {} ms", now.elapsed().as_millis());
+    let elapsed = now.elapsed();
+    PerfCounters::instance().record_match_storage(elapsed);
+    debug!("match results stored in {} ms", elapsed.as_millis());
 }

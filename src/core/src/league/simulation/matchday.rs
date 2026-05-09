@@ -1,9 +1,45 @@
 use crate::context::GlobalContext;
 use crate::league::{League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable};
 use crate::r#match::{Match, MatchResult, SelectionContext};
-use crate::{Club, Person, Player, PlayerStatusType, Team, TeamType};
+use crate::{Club, ClubPhilosophy, Person, Player, PlayerStatusType, Team, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
+use std::collections::HashMap;
+
+/// Per-matchday snapshot of clubs and teams indexed by id. Built once
+/// at the top of `play_scheduled_matches` so `build_match` and friends
+/// can fan out lookups in O(1) instead of re-scanning every club's
+/// team list per fixture.
+struct MatchdayLookup<'a> {
+    team_by_id: HashMap<u32, &'a Team>,
+    club_by_id: HashMap<u32, &'a Club>,
+}
+
+impl<'a> MatchdayLookup<'a> {
+    fn build(clubs: &'a [Club]) -> Self {
+        let estimated_teams = clubs.len() * 4;
+        let mut team_by_id: HashMap<u32, &'a Team> = HashMap::with_capacity(estimated_teams);
+        let mut club_by_id: HashMap<u32, &'a Club> = HashMap::with_capacity(clubs.len());
+        for club in clubs {
+            club_by_id.insert(club.id, club);
+            for team in &club.teams.teams {
+                team_by_id.insert(team.id, team);
+            }
+        }
+        MatchdayLookup {
+            team_by_id,
+            club_by_id,
+        }
+    }
+
+    fn team(&self, id: u32) -> Option<&'a Team> {
+        self.team_by_id.get(&id).copied()
+    }
+
+    fn club(&self, id: u32) -> Option<&'a Club> {
+        self.club_by_id.get(&id).copied()
+    }
+}
 
 impl League {
     pub(in crate::league) fn prepare_matchday(&mut self, ctx: &GlobalContext<'_>, clubs: &[Club]) {
@@ -27,14 +63,13 @@ impl League {
     }
 
     fn check_fixture_congestion(&self, team: &Team, current_date: NaiveDate) {
-        let upcoming_matches = self
+        let upcoming = self
             .schedule
-            .get_matches_for_team_in_days(team.id, current_date, 7);
-        if upcoming_matches.len() > 2 {
+            .count_matches_for_team_in_days(team.id, current_date, 7);
+        if upcoming > 2 {
             debug!(
                 "⚠️ Fixture congestion for team {}: {} matches in 7 days",
-                team.name,
-                upcoming_matches.len()
+                team.name, upcoming
             );
         }
     }
@@ -47,6 +82,7 @@ impl League {
         friendly: bool,
     ) -> Vec<MatchResult> {
         let today = ctx.simulation.date.date();
+        let lookup = MatchdayLookup::build(clubs);
         let matches: Vec<Match> = scheduled_matches
             .iter()
             .map(|scheduled_match| {
@@ -54,25 +90,20 @@ impl League {
                 // each side. A team with a cup tie three days from now
                 // has a reason to rotate today even if the league match
                 // would otherwise be high-importance.
-                let home_upcoming = self
-                    .schedule
-                    .get_matches_for_team_in_days(
-                        scheduled_match.home_team_id,
-                        today + chrono::Duration::days(1),
-                        5,
-                    )
-                    .len() as u8;
-                let away_upcoming = self
-                    .schedule
-                    .get_matches_for_team_in_days(
-                        scheduled_match.away_team_id,
-                        today + chrono::Duration::days(1),
-                        5,
-                    )
-                    .len() as u8;
+                let home_upcoming = self.schedule.count_matches_for_team_in_days(
+                    scheduled_match.home_team_id,
+                    today + chrono::Duration::days(1),
+                    5,
+                ) as u8;
+                let away_upcoming = self.schedule.count_matches_for_team_in_days(
+                    scheduled_match.away_team_id,
+                    today + chrono::Duration::days(1),
+                    5,
+                ) as u8;
                 Self::build_match(
                     scheduled_match,
                     clubs,
+                    &lookup,
                     ctx,
                     &self.dynamics,
                     &self.table,
@@ -102,22 +133,19 @@ impl League {
     fn build_match(
         scheduled_match: &LeagueMatch,
         clubs: &[Club],
+        lookup: &MatchdayLookup<'_>,
         ctx: &GlobalContext<'_>,
         dynamics: &LeagueDynamics,
         table: &LeagueTable,
         friendly: bool,
         upcoming_fixtures: (u8, u8),
     ) -> Match {
-        let home_team = clubs
-            .iter()
-            .flat_map(|c| &c.teams.teams)
-            .find(|team| team.id == scheduled_match.home_team_id)
+        let home_team = lookup
+            .team(scheduled_match.home_team_id)
             .expect("Home team not found");
 
-        let away_team = clubs
-            .iter()
-            .flat_map(|c| &c.teams.teams)
-            .find(|team| team.id == scheduled_match.away_team_id)
+        let away_team = lookup
+            .team(scheduled_match.away_team_id)
             .expect("Away team not found");
 
         let home_momentum = dynamics.get_team_momentum(scheduled_match.home_team_id);
@@ -162,14 +190,10 @@ impl League {
         // Surface each team's club philosophy to the selector so
         // DevelopAndSell / LoanFocused sides actually put their archetype
         // on the pitch, not just on paper.
-        let home_philosophy = clubs
-            .iter()
-            .find(|c| c.id == home_team.club_id)
-            .map(|c| c.philosophy.clone());
-        let away_philosophy = clubs
-            .iter()
-            .find(|c| c.id == away_team.club_id)
-            .map(|c| c.philosophy.clone());
+        let home_philosophy: Option<ClubPhilosophy> =
+            lookup.club(home_team.club_id).map(|c| c.philosophy.clone());
+        let away_philosophy: Option<ClubPhilosophy> =
+            lookup.club(away_team.club_id).map(|c| c.philosophy.clone());
 
         // Surface each side's baseline tactic to the other so a sharp
         // coach can pick a counter. If the team hasn't locked in tactics

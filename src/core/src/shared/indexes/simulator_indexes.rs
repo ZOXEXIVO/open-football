@@ -12,6 +12,17 @@ pub struct SimulatorDataIndexes {
     pub staff_indexes: HashMap<u32, (u32, u32, u32, u32)>,
     pub team_data_index: HashMap<u32, TeamData>,
     pub slug_indexes: SlugIndexes,
+
+    // Positional indices — array indices into nested vectors so
+    // `player_mut`/`team_mut`/etc. avoid the per-call ID walk.
+    // Keyed by entity id, value is the path of `usize` indices from
+    // `data.continents` down. Refreshed by the same refresh pass that
+    // populates the ID-based maps; fall back to a brute-force walk if
+    // the position is stale (post-transfer before next refresh).
+    pub player_positions: HashMap<u32, (u32, u32, u32, u32)>,
+    pub team_positions: HashMap<u32, (u32, u32, u32, u32)>,
+    pub club_positions: HashMap<u32, (u32, u32, u32)>,
+    pub league_positions: HashMap<u32, (u32, u32, u32)>,
 }
 
 impl SimulatorDataIndexes {
@@ -24,6 +35,10 @@ impl SimulatorDataIndexes {
             staff_indexes: HashMap::new(),
             team_data_index: HashMap::new(),
             slug_indexes: SlugIndexes::new(),
+            player_positions: HashMap::new(),
+            team_positions: HashMap::new(),
+            club_positions: HashMap::new(),
+            league_positions: HashMap::new(),
         }
     }
 
@@ -35,12 +50,23 @@ impl SimulatorDataIndexes {
         let shards: Vec<SimulatorDataIndexes> = data
             .continents
             .par_iter()
-            .map(|continent| {
+            .enumerate()
+            .map(|(idx, continent)| {
                 let mut shard = SimulatorDataIndexes::new();
-                shard.fill_continent(continent);
+                shard.fill_continent(continent, idx as u32);
                 shard
             })
             .collect();
+
+        // Clear positional maps before merging — array indices change
+        // when a Vec shrinks (retirement, dissolved club), and a stale
+        // tuple would silently point to the wrong entity. ID-based maps
+        // are left as-is to preserve historical behaviour for callers
+        // that rely on cross-refresh persistence.
+        self.player_positions.clear();
+        self.team_positions.clear();
+        self.club_positions.clear();
+        self.league_positions.clear();
 
         for shard in shards {
             self.merge_shard(shard);
@@ -51,20 +77,31 @@ impl SimulatorDataIndexes {
     /// the layout the serial walk used to produce — kept here on the
     /// indexes type so the parallel and incremental paths can share a
     /// single canonical traversal.
-    fn fill_continent(&mut self, continent: &Continent) {
-        for country in &continent.countries {
+    ///
+    /// `continent_idx` is the position of `continent` inside
+    /// `data.continents`; needed so the positional indices can record
+    /// array offsets all the way from the root, not just from the
+    /// continent down.
+    fn fill_continent(&mut self, continent: &Continent, continent_idx: u32) {
+        for (country_idx, country) in continent.countries.iter().enumerate() {
+            let country_idx = country_idx as u32;
             self.slug_indexes
                 .add_country_slug(&country.slug, country.id);
 
-            for league in &country.leagues.leagues {
+            for (league_idx, league) in country.leagues.leagues.iter().enumerate() {
+                let league_idx = league_idx as u32;
                 self.add_league_location(league.id, continent.id, country.id);
+                self.add_league_position(league.id, continent_idx, country_idx, league_idx);
                 self.slug_indexes.add_league_slug(&league.slug, league.id);
             }
 
-            for club in &country.clubs {
+            for (club_idx, club) in country.clubs.iter().enumerate() {
+                let club_idx = club_idx as u32;
                 self.add_club_location(club.id, continent.id, country.id);
+                self.add_club_position(club.id, continent_idx, country_idx, club_idx);
 
-                for team in &club.teams.teams {
+                for (team_idx, team) in club.teams.teams.iter().enumerate() {
+                    let team_idx = team_idx as u32;
                     self.add_team_data(
                         team.id,
                         TeamData {
@@ -74,6 +111,7 @@ impl SimulatorDataIndexes {
                     );
                     self.slug_indexes.add_team_slug(&team.slug, team.id);
                     self.add_team_location(team.id, continent.id, country.id, club.id);
+                    self.add_team_position(team.id, continent_idx, country_idx, club_idx, team_idx);
 
                     for player in &team.players.players {
                         self.add_player_location(
@@ -82,6 +120,13 @@ impl SimulatorDataIndexes {
                             country.id,
                             club.id,
                             team.id,
+                        );
+                        self.add_player_position(
+                            player.id,
+                            continent_idx,
+                            country_idx,
+                            club_idx,
+                            team_idx,
                         );
                     }
 
@@ -108,6 +153,10 @@ impl SimulatorDataIndexes {
             staff_indexes,
             team_data_index,
             slug_indexes,
+            player_positions,
+            team_positions,
+            club_positions,
+            league_positions,
         } = shard;
         self.league_indexes.extend(league_indexes);
         self.club_indexes.extend(club_indexes);
@@ -116,6 +165,10 @@ impl SimulatorDataIndexes {
         self.staff_indexes.extend(staff_indexes);
         self.team_data_index.extend(team_data_index);
         self.slug_indexes.merge(slug_indexes);
+        self.player_positions.extend(player_positions);
+        self.team_positions.extend(team_positions);
+        self.club_positions.extend(club_positions);
+        self.league_positions.extend(league_positions);
     }
 
     //league indexes
@@ -183,31 +236,45 @@ impl SimulatorDataIndexes {
     /// Rebuild only the player indexes (after transfers move players between clubs)
     pub fn refresh_player_indexes(&mut self, data: &SimulatorData) {
         // Build per-continent player-index shards in parallel; player ids
-        // are globally unique so the merge is a disjoint `extend`.
-        let shards: Vec<HashMap<u32, (u32, u32, u32, u32)>> = data
+        // are globally unique so the merge is a disjoint `extend`. Both
+        // the ID-based map and the positional map are rebuilt here so a
+        // post-transfer caller sees consistent state on either path.
+        type IdShard = HashMap<u32, (u32, u32, u32, u32)>;
+        type PosShard = HashMap<u32, (u32, u32, u32, u32)>;
+
+        let shards: Vec<(IdShard, PosShard)> = data
             .continents
             .par_iter()
-            .map(|continent| {
-                let mut shard: HashMap<u32, (u32, u32, u32, u32)> = HashMap::new();
-                for country in &continent.countries {
-                    for club in &country.clubs {
-                        for team in &club.teams.teams {
+            .enumerate()
+            .map(|(ci, continent)| {
+                let ci = ci as u32;
+                let mut id_shard: IdShard = HashMap::new();
+                let mut pos_shard: PosShard = HashMap::new();
+                for (coi, country) in continent.countries.iter().enumerate() {
+                    let coi = coi as u32;
+                    for (cli, club) in country.clubs.iter().enumerate() {
+                        let cli = cli as u32;
+                        for (ti, team) in club.teams.teams.iter().enumerate() {
+                            let ti = ti as u32;
                             for player in &team.players.players {
-                                shard.insert(
+                                id_shard.insert(
                                     player.id,
                                     (continent.id, country.id, club.id, team.id),
                                 );
+                                pos_shard.insert(player.id, (ci, coi, cli, ti));
                             }
                         }
                     }
                 }
-                shard
+                (id_shard, pos_shard)
             })
             .collect();
 
         self.player_indexes.clear();
-        for shard in shards {
-            self.player_indexes.extend(shard);
+        self.player_positions.clear();
+        for (id_shard, pos_shard) in shards {
+            self.player_indexes.extend(id_shard);
+            self.player_positions.extend(pos_shard);
         }
     }
 
@@ -260,6 +327,73 @@ impl SimulatorDataIndexes {
             }
             None => None,
         }
+    }
+
+    // Positional setters/getters. Tuple values are array indices
+    // (continent_idx, country_idx, club_idx[, team_idx]) into the
+    // nested `data.continents[..].countries[..].clubs[..].teams[..]`
+    // structure. Used by `accessors.rs` to skip the per-call ID walk.
+
+    pub fn add_player_position(
+        &mut self,
+        player_id: u32,
+        continent_idx: u32,
+        country_idx: u32,
+        club_idx: u32,
+        team_idx: u32,
+    ) {
+        self.player_positions
+            .insert(player_id, (continent_idx, country_idx, club_idx, team_idx));
+    }
+
+    pub fn get_player_position(&self, player_id: u32) -> Option<(u32, u32, u32, u32)> {
+        self.player_positions.get(&player_id).copied()
+    }
+
+    pub fn add_team_position(
+        &mut self,
+        team_id: u32,
+        continent_idx: u32,
+        country_idx: u32,
+        club_idx: u32,
+        team_idx: u32,
+    ) {
+        self.team_positions
+            .insert(team_id, (continent_idx, country_idx, club_idx, team_idx));
+    }
+
+    pub fn get_team_position(&self, team_id: u32) -> Option<(u32, u32, u32, u32)> {
+        self.team_positions.get(&team_id).copied()
+    }
+
+    pub fn add_club_position(
+        &mut self,
+        club_id: u32,
+        continent_idx: u32,
+        country_idx: u32,
+        club_idx: u32,
+    ) {
+        self.club_positions
+            .insert(club_id, (continent_idx, country_idx, club_idx));
+    }
+
+    pub fn get_club_position(&self, club_id: u32) -> Option<(u32, u32, u32)> {
+        self.club_positions.get(&club_id).copied()
+    }
+
+    pub fn add_league_position(
+        &mut self,
+        league_id: u32,
+        continent_idx: u32,
+        country_idx: u32,
+        league_idx: u32,
+    ) {
+        self.league_positions
+            .insert(league_id, (continent_idx, country_idx, league_idx));
+    }
+
+    pub fn get_league_position(&self, league_id: u32) -> Option<(u32, u32, u32)> {
+        self.league_positions.get(&league_id).copied()
     }
 }
 

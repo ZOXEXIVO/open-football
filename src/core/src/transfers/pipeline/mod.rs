@@ -53,6 +53,7 @@ mod processor {
     }
 
     #[allow(dead_code)]
+    #[derive(Clone)]
     pub struct PlayerSummary {
         pub player_id: u32,
         pub club_id: u32,

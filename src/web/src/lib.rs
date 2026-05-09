@@ -12,6 +12,7 @@ pub mod i18n;
 mod leagues;
 mod r#match;
 mod national_competitions;
+mod performance;
 mod player;
 mod routes;
 mod search;

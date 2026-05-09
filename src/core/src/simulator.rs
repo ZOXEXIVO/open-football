@@ -12,6 +12,7 @@ use crate::config::SimulatorConfig;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::national::world as national_world;
 use crate::continent::{Continent, ContinentResult};
+use crate::perf::{PerfCounters, PerfPhase, TickEndContext};
 use crate::league::awards::{
     AwardAggregator, CandidateAggregate, MonthlyAwardSelector, MonthlyAwardsSnapshot,
     MonthlyPlayerAward, MonthlyStatLeader, SeasonAwardsSnapshot, TeamOfTheWeekAward,
@@ -22,7 +23,9 @@ use crate::league::player_of_week::{PlayerOfTheWeekAward, PlayerOfTheWeekSelecto
 use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
+use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use crate::transfers::TransferPool;
+use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::utils::DateUtils;
 use crate::utils::random::engine as rng_engine;
 use crate::{
@@ -91,6 +94,9 @@ impl FootballSimulator {
         data: &mut SimulatorData,
         config: &SimulatorConfig,
     ) -> SimulationResult {
+        let perf = PerfCounters::instance();
+        perf.begin_tick();
+
         let mut result = SimulationResult::new();
 
         let current_date = data.date;
@@ -101,17 +107,23 @@ impl FootballSimulator {
         // nationality and their club's continent can differ. Must
         // happen BEFORE the world-level national-competition phase —
         // those matches need a populated squad with world visibility.
-        data.process_world_national_team_callups();
+        {
+            let _g = perf.scope(PerfPhase::WorldCallups);
+            data.process_world_national_team_callups();
+        }
 
         // National-team competition matches simulate at the world level
         // so squads can include foreign-based players and post-match
         // stats updates fan out across every continent. Lifted out of
         // the parallel continent phase because squad construction needs
         // read access to clubs in *every* continent.
-        let national_match_results = national_world::simulate_world_national_competitions(
-            &mut data.continents,
-            current_date.date(),
-        );
+        let national_match_results = {
+            let _g = perf.scope(PerfPhase::WorldNationalMatches);
+            national_world::simulate_world_national_competitions(
+                &mut data.continents,
+                current_date.date(),
+            )
+        };
         for match_result in &national_match_results {
             data.match_store
                 .push(match_result.clone(), current_date.date());
@@ -143,27 +155,30 @@ impl FootballSimulator {
         // is recovered as the delta on the atomic since map closures
         // running in parallel can't share a `&mut u32`.
         let panicks_before = PANICKED_CONTINENTS.load(Ordering::Relaxed);
-        let mut results: Vec<ContinentResult> = data
-            .continents
-            .par_iter_mut()
-            .map(|continent| {
-                let cid = continent.id;
-                let name = continent.name.clone();
-                let ctx_ref = &ctx;
-                panic::catch_unwind(AssertUnwindSafe(|| {
-                    continent.simulate(ctx_ref.with_continent(cid))
-                }))
-                .unwrap_or_else(|payload| {
-                    PANICKED_CONTINENTS.fetch_add(1, Ordering::Relaxed);
-                    let msg = panic_message(&payload);
-                    log::error!(
-                        "event=continent_panic continent_id={} continent_name={:?} message={:?} tick_action=continue_with_empty_result",
-                        cid, name, msg
-                    );
-                    ContinentResult::new(cid, Vec::new(), Vec::new())
+        let mut results: Vec<ContinentResult> = {
+            let _g = perf.scope(PerfPhase::ParallelContinents);
+            data
+                .continents
+                .par_iter_mut()
+                .map(|continent| {
+                    let cid = continent.id;
+                    let name = continent.name.clone();
+                    let ctx_ref = &ctx;
+                    panic::catch_unwind(AssertUnwindSafe(|| {
+                        continent.simulate(ctx_ref.with_continent(cid))
+                    }))
+                    .unwrap_or_else(|payload| {
+                        PANICKED_CONTINENTS.fetch_add(1, Ordering::Relaxed);
+                        let msg = panic_message(&payload);
+                        log::error!(
+                            "event=continent_panic continent_id={} continent_name={:?} message={:?} tick_action=continue_with_empty_result",
+                            cid, name, msg
+                        );
+                        ContinentResult::new(cid, Vec::new(), Vec::new())
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        };
         result.panicked_continents =
             (PANICKED_CONTINENTS.load(Ordering::Relaxed) - panicks_before) as u32;
 
@@ -178,19 +193,60 @@ impl FootballSimulator {
             }
         }
         if !all_requests.is_empty() {
+            perf.record_ai_batch_active();
+            let _g = perf.scope(PerfPhase::AiBatch);
             let completed = AiBatchProcessor::execute(all_requests).await;
             apply_ai_responses(completed, data);
         }
 
         // Phase C: process the collected results against post-AI data
-        for continent_result in results {
-            continent_result.process(data, &mut result);
+        {
+            let _g = perf.scope(PerfPhase::ResultProcessing);
+
+            // Build the world-wide foreign-player pool ONCE for this tick.
+            // `simulate_transfer_market` runs per country and previously
+            // rebuilt this pool on every call by walking every other
+            // country's players (O(N²) in countries × O(P) per country).
+            // The seller context is per-source-country, so a global
+            // snapshot is correct as long as we filter by buyer country
+            // at the read site. Cache lives on `data` so deep callers
+            // pick it up without a signature change.
+            let pool_date = data.date.date();
+            let world_pool: Vec<PlayerSummary> = data
+                .continents
+                .iter()
+                .flat_map(|cont| &cont.countries)
+                .flat_map(|c| PipelineProcessor::collect_player_pool(c, pool_date))
+                .collect();
+            data.daily_world_player_pool = Some(world_pool);
+
+            // Same trick for the global free-agent snapshot. The
+            // function mutates `data.free_agents` (idempotent on
+            // repeat with the same date) and previously fired once
+            // per country. Building once here drops it from N calls
+            // to 1.
+            let global_fa_snapshot: Vec<GlobalFreeAgentSummary> =
+                snapshot_global_free_agents(data, pool_date);
+            data.daily_global_free_agents = Some(global_fa_snapshot);
+
+            for continent_result in results {
+                continent_result.process(data, &mut result);
+            }
+
+            // Drop the caches so the next tick rebuilds — players move
+            // between clubs/countries and free-agent state evolves; the
+            // per-tick snapshot would otherwise grow stale.
+            data.daily_world_player_pool = None;
+            data.daily_global_free_agents = None;
         }
 
         // Phase D: world-level manager market. Order is load-bearing —
         // see `ManagerMarketTick::run` for the dependency rationale.
         let today = data.date.date();
-        manager_market::ManagerMarketTick::run(data, today);
+        {
+            let _g = perf.scope(PerfPhase::ManagerMarket);
+            manager_market::ManagerMarketTick::run(data, today);
+        }
 
         // Phase D2: parent-side loan wage settlement. Per-club monthly
         // finance runs inside Phase A and bills the borrower for the
@@ -207,32 +263,43 @@ impl FootballSimulator {
         }
 
         // Global competitions (Champions League, World Cup, etc.)
-        GlobalCompetitionSimulator::simulate(data);
+        {
+            let _g = perf.scope(PerfPhase::GlobalCompetitions);
+            GlobalCompetitionSimulator::simulate(data);
+        }
 
         // Release Int statuses AFTER all matches (continent + global) —
         // a tournament final on the release date should be played
         // before the squad's flags are cleared.
-        data.process_world_national_team_release();
+        let dirty_before_rebuild;
+        {
+            let _g = perf.scope(PerfPhase::Cleanup);
+            data.process_world_national_team_release();
 
-        // Move any player whose contract was cleared this tick (positional
-        // surplus, free-transfer release, contract expiry) off their old
-        // team's roster and into the global free-agent pool, so the player
-        // page header and contract panel agree.
-        data.sweep_released_to_free_agents();
+            // Move any player whose contract was cleared this tick (positional
+            // surplus, free-transfer release, contract expiry) off their old
+            // team's roster and into the global free-agent pool, so the player
+            // page header and contract panel agree.
+            data.sweep_released_to_free_agents();
 
-        // Refresh player indexes only if a transfer actually moved a player
-        // between clubs today. Walking the world every day is wasteful.
-        data.rebuild_indexes_if_dirty();
+            // Refresh player indexes only if a transfer actually moved a player
+            // between clubs today. Walking the world every day is wasteful.
+            dirty_before_rebuild = data.dirty_player_index;
+            data.rebuild_indexes_if_dirty();
+            if dirty_before_rebuild {
+                perf.mark_dirty_index_rebuild();
+            }
 
-        // Seed history for any players created today that haven't been seeded
-        // (youth intake, regens, new clubs) — catches them within one tick.
-        data.seed_missing_player_histories();
+            // Seed history for any players created today that haven't been seeded
+            // (youth intake, regens, new clubs) — catches them within one tick.
+            data.seed_missing_player_histories();
 
-        // Periodic prune of the global match store. Cadence lives on the
-        // config (default: first of every month). Cheap — BTreeMap range
-        // walk over evicted dates only.
-        if config.is_trim_day(current_date.date()) {
-            data.match_store.trim(current_date.date());
+            // Periodic prune of the global match store. Cadence lives on the
+            // config (default: first of every month). Cheap — BTreeMap range
+            // walk over evicted dates only.
+            if config.is_trim_day(current_date.date()) {
+                data.match_store.trim(current_date.date());
+            }
         }
 
         // Order: largest weekly award first so the centralised
@@ -246,36 +313,50 @@ impl FootballSimulator {
         // `MondayAwardCache` across all four — the previous design had
         // each tick re-aggregate the same week's matches independently.
         let today = data.date.date();
-        if today.weekday() == Weekday::Mon {
-            let week_end = today;
-            let week_start = today - Duration::days(7);
-            let cache = MondayAwardCache::build(data, week_start, week_end);
-            // Pick each league's Young Player of the Week (age ≤ 20).
-            YoungWeeklyAwardsTick::run(data, &cache);
-            // Pick each league's Player of the Week. Runs every Monday
-            // after the matchday pipeline has flushed last week's results
-            // into each league's MatchStorage.
-            WeeklyAwardsTick::run(data, &cache);
-            // Young Team of the Week (age ≤ 20). Same window as Team of
-            // the Week.
-            YoungTeamOfTheWeekTick::run(data, &cache);
-            // Team of the Week — one XI per league, every Monday.
-            TeamOfTheWeekTick::run(data, &cache);
+        {
+            let _g = perf.scope(PerfPhase::Awards);
+            if today.weekday() == Weekday::Mon {
+                let week_end = today;
+                let week_start = today - Duration::days(7);
+                let cache = MondayAwardCache::build(data, week_start, week_end);
+                // Pick each league's Young Player of the Week (age ≤ 20).
+                YoungWeeklyAwardsTick::run(data, &cache);
+                // Pick each league's Player of the Week. Runs every Monday
+                // after the matchday pipeline has flushed last week's results
+                // into each league's MatchStorage.
+                WeeklyAwardsTick::run(data, &cache);
+                // Young Team of the Week (age ≤ 20). Same window as Team of
+                // the Week.
+                YoungTeamOfTheWeekTick::run(data, &cache);
+                // Team of the Week — one XI per league, every Monday.
+                TeamOfTheWeekTick::run(data, &cache);
+            }
+            // Monthly awards — first day of each month, awarding the previous
+            // calendar month.
+            MonthlyAwardsTick::run(data);
+            // Drain any league-side pending season-awards snapshots and emit
+            // the player events while stats are still meaningful.
+            SeasonAwardsTick::run(data);
+            // Calendar-year XI per league — runs once on December 31.
+            TeamOfTheYearTick::run(data);
+            // World player of the year — runs once per year. Builds a global
+            // ranking from per-continent rankings so a top performer in any
+            // league can win.
+            WorldPlayerOfYearTick::run(data);
         }
-        // Monthly awards — first day of each month, awarding the previous
-        // calendar month.
-        MonthlyAwardsTick::run(data);
-        // Drain any league-side pending season-awards snapshots and emit
-        // the player events while stats are still meaningful.
-        SeasonAwardsTick::run(data);
-        // Calendar-year XI per league — runs once on December 31.
-        TeamOfTheYearTick::run(data);
-        // World player of the year — runs once per year. Builds a global
-        // ranking from per-continent rankings so a top performer in any
-        // league can win.
-        WorldPlayerOfYearTick::run(data);
 
         data.next_date();
+
+        let workload = data.workload_counts();
+        perf.end_tick(TickEndContext {
+            countries: workload.countries,
+            leagues: workload.leagues,
+            clubs: workload.clubs,
+            players: workload.players,
+            match_results_written: result.match_results.len() as u64,
+            panicked_continents: result.panicked_continents,
+            recording_mode: crate::is_match_recordings_mode(),
+        });
 
         result
     }
@@ -319,6 +400,23 @@ pub struct SimulatorData {
 
     /// Global match result storage — all match types (league, cup, national team) write here
     pub match_store: MatchStorage,
+
+    /// Per-tick scratch cache: every non-loaned player in the world,
+    /// summarised once at the top of Phase C so per-country transfer
+    /// markets reuse the snapshot instead of rebuilding it per call.
+    /// Reset (`= None`) at the end of each `simulate_with` tick;
+    /// readers fall back to a local rebuild when the cache is `None`
+    /// so test paths and one-off callers still work.
+    pub daily_world_player_pool: Option<Vec<PlayerSummary>>,
+
+    /// Per-tick scratch cache: snapshot of every globally-pooled free
+    /// agent. Same lifecycle as `daily_world_player_pool` —
+    /// `simulate_transfer_market` would otherwise call
+    /// `snapshot_global_free_agents` per country, which mutates each
+    /// player's `free_agent_state` (idempotent on repeat with the same
+    /// date) and walks every free agent. Crate-private because the
+    /// snapshot type is internal to the country/result module.
+    pub(crate) daily_global_free_agents: Option<Vec<GlobalFreeAgentSummary>>,
 }
 
 impl SimulatorData {
@@ -390,6 +488,8 @@ impl SimulatorData {
             global_competitions,
             country_info,
             match_store: MatchStorage::new(),
+            daily_world_player_pool: None,
+            daily_global_free_agents: None,
         };
 
         let mut indexes = SimulatorDataIndexes::new();
@@ -795,6 +895,31 @@ impl SimulatorData {
         self.date += Duration::days(1);
     }
 
+    /// Walk the world once to count countries, leagues, clubs and
+    /// players. Used by the perf dashboard at end-of-tick — single
+    /// linear pass, no allocation.
+    pub fn workload_counts(&self) -> WorldWorkloadCounts {
+        let mut counts = WorldWorkloadCounts {
+            countries: 0,
+            leagues: 0,
+            clubs: 0,
+            players: 0,
+        };
+        for continent in &self.continents {
+            for country in &continent.countries {
+                counts.countries += 1;
+                counts.leagues += country.leagues.leagues.len() as u64;
+                counts.clubs += country.clubs.len() as u64;
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        counts.players += team.players.players.len() as u64;
+                    }
+                }
+            }
+        }
+        counts
+    }
+
     /// World-level national-team call-ups. Runs at the start of each
     /// break/tournament window, before any continent simulates, so
     /// candidate visibility spans the entire world — a Brazilian
@@ -868,6 +993,14 @@ impl SimulatorData {
         }
         crate::NationalTeam::release_callup_statuses_across_world(&mut self.continents);
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WorldWorkloadCounts {
+    pub countries: u64,
+    pub leagues: u64,
+    pub clubs: u64,
+    pub players: u64,
 }
 
 pub struct SimulationResult {

@@ -1,0 +1,220 @@
+{% extends "layout.html" %}
+
+{% block html_title %}Performance | {{ i18n.t("site_name") }}{% endblock %}
+
+{% block content %}
+<div class="fm-page fm-perf-page">
+    <section class="fm-panel fm-perf-summary">
+        <div class="fm-panel-head">
+            <h3>Performance</h3>
+            {% if !view.has_run %}
+            <span class="fm-panel-count">No tick recorded yet</span>
+            {% endif %}
+        </div>
+        <div class="fm-perf-primary-grid">
+            <div class="fm-perf-primary-tile fm-perf-tile-process">
+                <div class="fm-perf-primary-icon"><i class="fa fa-bolt"></i></div>
+                <div class="fm-perf-primary-body">
+                    <div class="fm-perf-primary-value">{{ view.full_process_ms }} <span class="fm-perf-unit">ms</span></div>
+                    <div class="fm-perf-primary-label">Full Process Request</div>
+                    <div class="fm-perf-primary-sub">simulate endpoint duration</div>
+                </div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.full_process_pill }}">{{ view.full_process_pill }}</span>
+            </div>
+
+            <div class="fm-perf-primary-tile fm-perf-tile-nonmatch">
+                <div class="fm-perf-primary-icon"><i class="fa fa-leaf"></i></div>
+                <div class="fm-perf-primary-body">
+                    <div class="fm-perf-primary-value">{{ view.non_match_day_ms }} <span class="fm-perf-unit">ms</span></div>
+                    <div class="fm-perf-primary-label">Non-Match Day</div>
+                    <div class="fm-perf-primary-sub">Training · Transfers · Cleanup</div>
+                </div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.non_match_day_pill }}">{{ view.non_match_day_pill }}</span>
+            </div>
+
+            <div class="fm-perf-primary-tile fm-perf-tile-matchday">
+                <div class="fm-perf-primary-icon"><i class="fa fa-futbol"></i></div>
+                <div class="fm-perf-primary-body">
+                    <div class="fm-perf-primary-value">{{ view.match_day_ms }} <span class="fm-perf-unit">ms</span></div>
+                    <div class="fm-perf-primary-label">Match Day</div>
+                    <div class="fm-perf-primary-sub">Match processing</div>
+                </div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.match_day_pill }}">{{ view.match_day_pill }}</span>
+            </div>
+
+            <div class="fm-perf-primary-tile fm-perf-tile-tick">
+                <div class="fm-perf-primary-icon"><i class="fa fa-stopwatch"></i></div>
+                <div class="fm-perf-primary-body">
+                    <div class="fm-perf-primary-value">{{ view.tick_avg_ms }} <span class="fm-perf-unit">ms</span></div>
+                    <div class="fm-perf-primary-label">Match Tick Avg</div>
+                </div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.tick_avg_pill }}">{{ view.tick_avg_pill }}</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="fm-panel fm-perf-section mt-3">
+        <div class="fm-panel-head">
+            <h3>Daily Pipeline</h3>
+        </div>
+        <div class="fm-perf-rows">
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-flag"></i></div>
+                <div class="fm-perf-row-label">World national callups</div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.callups_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.callups_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.callups_pill }}">{{ view.callups_pill }}</span>
+            </div>
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-globe"></i></div>
+                <div class="fm-perf-row-label">World national matches</div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.world_matches_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.world_matches_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.world_matches_pill }}">{{ view.world_matches_pill }}</span>
+            </div>
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-network-wired"></i></div>
+                <div class="fm-perf-row-label">Parallel continents</div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.continents_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.continents_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.continents_pill }}">{{ view.continents_pill }}</span>
+            </div>
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-robot"></i></div>
+                <div class="fm-perf-row-label">AI batch <span class="fm-perf-row-hint">{% if view.ai_batch_active %}active{% else %}idle{% endif %}</span></div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.ai_batch_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.ai_batch_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.ai_batch_pill }}">{{ view.ai_batch_pill }}</span>
+            </div>
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-list-check"></i></div>
+                <div class="fm-perf-row-label">Result processing</div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.result_proc_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.result_proc_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.result_proc_pill }}">{{ view.result_proc_pill }}</span>
+            </div>
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-user-tie"></i></div>
+                <div class="fm-perf-row-label">Manager market</div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.manager_market_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.manager_market_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.manager_market_pill }}">{{ view.manager_market_pill }}</span>
+            </div>
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-trophy"></i></div>
+                <div class="fm-perf-row-label">Global competitions</div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.global_comp_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.global_comp_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.global_comp_pill }}">{{ view.global_comp_pill }}</span>
+            </div>
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-broom"></i></div>
+                <div class="fm-perf-row-label">Cleanup &amp; indexing</div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.cleanup_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.cleanup_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.cleanup_pill }}">{{ view.cleanup_pill }}</span>
+            </div>
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-medal"></i></div>
+                <div class="fm-perf-row-label">Awards ticks</div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.awards_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.awards_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.awards_pill }}">{{ view.awards_pill }}</span>
+            </div>
+            <div class="fm-perf-row">
+                <div class="fm-perf-row-icon"><i class="fa fa-database"></i></div>
+                <div class="fm-perf-row-label">Match result storage <span class="fm-perf-row-hint">last write</span></div>
+                <div class="fm-perf-row-bar"><div class="fm-perf-bar-fill" style="width:{{ view.match_storage_pct }}%"></div></div>
+                <div class="fm-perf-row-value">{{ view.match_storage_ms }} <span class="fm-perf-unit">ms</span></div>
+                <span class="fm-perf-pill fm-perf-pill-{{ view.match_storage_pill }}">{{ view.match_storage_pill }}</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="fm-panel fm-perf-section mt-3">
+        <div class="fm-panel-head">
+            <h3>Workload Counters</h3>
+            <span class="fm-panel-count">Last single-day run</span>
+        </div>
+        <div class="fm-perf-counters">
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Simulated days</div>
+                <div class="fm-perf-counter-value">{{ view.simulated_days_total }}</div>
+            </div>
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Matches simulated</div>
+                <div class="fm-perf-counter-value">{{ view.matches_simulated }}</div>
+            </div>
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Countries processed</div>
+                <div class="fm-perf-counter-value">{{ view.countries_processed }}</div>
+            </div>
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Leagues processed</div>
+                <div class="fm-perf-counter-value">{{ view.leagues_processed }}</div>
+            </div>
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Clubs processed</div>
+                <div class="fm-perf-counter-value">{{ view.clubs_processed }}</div>
+            </div>
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Players touched</div>
+                <div class="fm-perf-counter-value">{{ view.players_touched }}</div>
+            </div>
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Match results written</div>
+                <div class="fm-perf-counter-value">{{ view.match_results_written }}</div>
+            </div>
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Panicked continents</div>
+                <div class="fm-perf-counter-value">{{ view.panicked_continents }}</div>
+            </div>
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Dirty index rebuild</div>
+                <div class="fm-perf-counter-value fm-perf-counter-flag{% if !view.dirty_index_rebuild %} fm-perf-counter-flag-off{% endif %}">{% if view.dirty_index_rebuild %}Yes{% else %}No{% endif %}</div>
+            </div>
+            <div class="fm-perf-counter">
+                <div class="fm-perf-counter-label">Recording mode</div>
+                <div class="fm-perf-counter-value fm-perf-counter-flag{% if !view.recording_mode %} fm-perf-counter-flag-off{% endif %}">{% if view.recording_mode %}On{% else %}Off{% endif %}</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="fm-panel fm-perf-section mt-3">
+        <div class="fm-panel-head">
+            <h3>Match Engine</h3>
+        </div>
+        <div class="fm-perf-grid-2col">
+            <div class="fm-perf-stat">
+                <div class="fm-perf-stat-icon"><i class="fa fa-cogs"></i></div>
+                <div class="fm-perf-stat-body">
+                    <div class="fm-perf-stat-value">{{ view.match_sim_avg_ms }} <span class="fm-perf-unit">ms</span></div>
+                    <div class="fm-perf-stat-label">Match simulation average</div>
+                </div>
+            </div>
+            <div class="fm-perf-stat">
+                <div class="fm-perf-stat-icon"><i class="fa fa-stopwatch"></i></div>
+                <div class="fm-perf-stat-body">
+                    <div class="fm-perf-stat-value">{{ view.tick_avg_ms }} <span class="fm-perf-unit">ms</span></div>
+                    <div class="fm-perf-stat-label">Tick average</div>
+                </div>
+            </div>
+            <div class="fm-perf-stat">
+                <div class="fm-perf-stat-icon"><i class="fa fa-flag-checkered"></i></div>
+                <div class="fm-perf-stat-body">
+                    <div class="fm-perf-stat-value">{{ view.match_result_proc_ms }} <span class="fm-perf-unit">ms</span></div>
+                    <div class="fm-perf-stat-label">Match result processing</div>
+                </div>
+            </div>
+            <div class="fm-perf-stat">
+                <div class="fm-perf-stat-icon"><i class="fa fa-microchip"></i></div>
+                <div class="fm-perf-stat-body">
+                    <div class="fm-perf-stat-value">{{ view.match_pool_workers }}</div>
+                    <div class="fm-perf-stat-label">Match pool workers</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+</div>
+{% endblock %}

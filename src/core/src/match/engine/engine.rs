@@ -16,11 +16,13 @@ use crate::r#match::{
     GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState,
     PenaltyShootoutKick, Score, StateManager, SubstitutionInfo,
 };
+use crate::perf::PerfCounters;
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics, is_match_events_mode};
 #[cfg(feature = "match-logs")]
 use crate::{match_log_debug, match_log_info};
 use rand::RngExt;
 use std::collections::HashMap;
+use std::time::Instant;
 
 // ───────────────────────────────────────────────────────────────────────────────
 // FootballEngine — match orchestration
@@ -62,6 +64,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         is_friendly: bool,
         is_knockout: bool,
     ) -> MatchResultRaw {
+        let perf = PerfCounters::instance();
+        let match_start = Instant::now();
         let score = Score::new(left_squad.team_id, right_squad.team_id);
 
         // Snapshot starting tactics by team-id BEFORE the squads move
@@ -115,7 +119,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             StateManager::handle_state_finish(&mut context, &mut field, play_state_result);
         }
 
-        Self::build_result(field, context, match_position_data)
+        let result_start = Instant::now();
+        let result = Self::build_result(field, context, match_position_data);
+        perf.record_match_result_processing(result_start.elapsed());
+        perf.record_match_total(match_start.elapsed());
+        result
     }
 
     fn build_result(
@@ -541,6 +549,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         match_data: &mut ResultMatchPositionData,
     ) -> PlayMatchStateResult {
         let result = PlayMatchStateResult::default();
+        let inner_start = Instant::now();
+        let mut tick_count: u64 = 0;
 
         let mut next_sub_time_ms: u64 = 0;
         let mut sub_times_initialized = false;
@@ -555,6 +565,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         const TACTICAL_INTERVAL_TICKS: u32 = 10;
 
         while context.increment_time() {
+            tick_count += 1;
             tick_parity += 1;
             coach_eval_counter += 1;
             tactical_eval_counter += 1;
@@ -635,6 +646,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
 
+        PerfCounters::instance().record_play_inner(tick_count, inner_start.elapsed());
         result
     }
 

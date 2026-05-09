@@ -13,6 +13,7 @@ use crate::{MatchTacticType, Player, PlayerStatusType, Tactics, Team, TeamType};
 use chrono::NaiveDate;
 use log::debug;
 use std::borrow::Borrow;
+use std::collections::HashSet;
 
 use helpers::*;
 use scoring::ScoringEngine;
@@ -128,20 +129,27 @@ impl SquadSelector {
         // to the senior XI, so non-Main squads must drop them from every
         // entry path — both their own roster (a B-team player flagged for
         // the first team) and the cross-team reserve pool.
-        let mut available: Vec<&Player> = team
-            .players
-            .players()
-            .iter()
-            .filter(|&&p| is_available(p, ctx.is_friendly))
-            .filter(|&&p| is_main_team || !p.is_force_match_selection)
-            .copied()
-            .collect();
+        //
+        // Track membership in a side `HashSet<u32>` so reserve / keeper-
+        // fallback duplicate checks are O(1) instead of O(n) per probe.
+        let team_player_count = team.players.players().len();
+        let estimated = team_player_count + reserve_players.len();
+        let mut available: Vec<&Player> = Vec::with_capacity(estimated);
+        let mut available_ids: HashSet<u32> = HashSet::with_capacity(estimated);
+        for &p in team.players.players().iter() {
+            if is_available(p, ctx.is_friendly)
+                && (is_main_team || !p.is_force_match_selection)
+                && available_ids.insert(p.id)
+            {
+                available.push(p);
+            }
+        }
 
         for &rp in reserve_players {
             if !is_main_team && rp.is_force_match_selection {
                 continue;
             }
-            if is_available(rp, ctx.is_friendly) && !available.iter().any(|p| p.id == rp.id) {
+            if is_available(rp, ctx.is_friendly) && available_ids.insert(rp.id) {
                 available.push(rp);
             }
         }
@@ -168,7 +176,7 @@ impl SquadSelector {
                 if !is_main_team && p.is_force_match_selection {
                     continue;
                 }
-                if available.iter().any(|q| q.id == p.id) {
+                if !available_ids.insert(p.id) {
                     continue;
                 }
                 available.push(p);
@@ -255,9 +263,10 @@ impl SquadSelector {
             policy,
         );
 
+        let main_squad_ids: HashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
         let remaining: Vec<&Player> = available
             .iter()
-            .filter(|p| !main_squad.iter().any(|mp| mp.id == p.id))
+            .filter(|p| !main_squad_ids.contains(&p.id))
             .copied()
             .collect();
 
@@ -344,14 +353,18 @@ impl SquadSelector {
         let tactics = team.tactics();
         let is_main_team = team.team_type == TeamType::Main;
 
-        let mut available: Vec<&Player> = team
-            .players
-            .players()
-            .iter()
-            .filter(|&&p| is_available(p, ctx.is_friendly))
-            .filter(|&&p| is_main_team || !p.is_force_match_selection)
-            .copied()
-            .collect();
+        let team_player_count = team.players.players().len();
+        let estimated = team_player_count + reserve_players.len();
+        let mut available: Vec<&Player> = Vec::with_capacity(estimated);
+        let mut available_ids: HashSet<u32> = HashSet::with_capacity(estimated);
+        for &p in team.players.players().iter() {
+            if is_available(p, ctx.is_friendly)
+                && (is_main_team || !p.is_force_match_selection)
+                && available_ids.insert(p.id)
+            {
+                available.push(p);
+            }
+        }
 
         if available.len() < DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE {
             let needed = (DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE) - available.len();
@@ -361,7 +374,7 @@ impl SquadSelector {
                     if !is_main_team && rp.is_force_match_selection {
                         return false;
                     }
-                    is_available(rp, ctx.is_friendly) && !available.iter().any(|p| p.id == rp.id)
+                    is_available(rp, ctx.is_friendly) && !available_ids.contains(&rp.id)
                 })
                 .copied()
                 .collect();
@@ -373,7 +386,9 @@ impl SquadSelector {
             });
 
             for rp in supplements.into_iter().take(needed) {
-                available.push(rp);
+                if available_ids.insert(rp.id) {
+                    available.push(rp);
+                }
             }
 
             if available.len() < DEFAULT_SQUAD_SIZE {
@@ -389,9 +404,10 @@ impl SquadSelector {
         let main_squad =
             rotation::select_rotation_starting_eleven(team.id, &available, staff, tactics.borrow());
 
+        let main_squad_ids: HashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
         let remaining: Vec<&Player> = available
             .iter()
-            .filter(|p| !main_squad.iter().any(|mp| mp.id == p.id))
+            .filter(|p| !main_squad_ids.contains(&p.id))
             .copied()
             .collect();
 

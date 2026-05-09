@@ -304,6 +304,25 @@ impl SimulatorData {
     }
 
     pub fn league(&self, id: u32) -> Option<&League> {
+        if let Some((ci, coi, li)) = self
+            .indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get_league_position(id))
+        {
+            let (ci, coi, li) = (ci as usize, coi as usize, li as usize);
+            if let Some(league) = self
+                .continents
+                .get(ci)
+                .and_then(|c| c.countries.get(coi))
+                .and_then(|c| c.leagues.leagues.get(li))
+            {
+                if league.id == id {
+                    return Some(league);
+                }
+            }
+        }
+
+        // Fallback: ID-based walk for stale-index recovery.
         self.indexes
             .as_ref()
             .and_then(|indexes| indexes.get_league_location(id))
@@ -326,6 +345,28 @@ impl SimulatorData {
     }
 
     pub fn league_mut(&mut self, id: u32) -> Option<&mut League> {
+        if let Some((ci, coi, li)) = self
+            .indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get_league_position(id))
+        {
+            let (ci, coi, li) = (ci as usize, coi as usize, li as usize);
+            let resolved = self
+                .continents
+                .get(ci)
+                .and_then(|c| c.countries.get(coi))
+                .and_then(|c| c.leagues.leagues.get(li))
+                .map(|l| l.id == id)
+                .unwrap_or(false);
+            if resolved {
+                return self.continents[ci].countries[coi]
+                    .leagues
+                    .leagues
+                    .get_mut(li);
+            }
+        }
+
+        // Fallback: ID-based walk for stale-index recovery.
         self.indexes
             .as_ref()
             .and_then(|indexes| indexes.get_league_location(id))
@@ -427,6 +468,24 @@ impl SimulatorData {
     }
 
     pub fn club(&self, id: u32) -> Option<&Club> {
+        if let Some((ci, coi, cli)) = self
+            .indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get_club_position(id))
+        {
+            let (ci, coi, cli) = (ci as usize, coi as usize, cli as usize);
+            if let Some(club) = self
+                .continents
+                .get(ci)
+                .and_then(|c| c.countries.get(coi))
+                .and_then(|c| c.clubs.get(cli))
+            {
+                if club.id == id {
+                    return Some(club);
+                }
+            }
+        }
+
         self.indexes
             .as_ref()
             .and_then(|indexes| indexes.get_club_location(id))
@@ -442,6 +501,24 @@ impl SimulatorData {
     }
 
     pub fn club_mut(&mut self, id: u32) -> Option<&mut Club> {
+        if let Some((ci, coi, cli)) = self
+            .indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get_club_position(id))
+        {
+            let (ci, coi, cli) = (ci as usize, coi as usize, cli as usize);
+            let resolved = self
+                .continents
+                .get(ci)
+                .and_then(|c| c.countries.get(coi))
+                .and_then(|c| c.clubs.get(cli))
+                .map(|c| c.id == id)
+                .unwrap_or(false);
+            if resolved {
+                return self.continents[ci].countries[coi].clubs.get_mut(cli);
+            }
+        }
+
         self.indexes
             .as_ref()
             .and_then(|indexes| indexes.get_club_location(id))
@@ -457,6 +534,25 @@ impl SimulatorData {
     }
 
     pub fn team(&self, id: u32) -> Option<&Team> {
+        if let Some((ci, coi, cli, ti)) = self
+            .indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get_team_position(id))
+        {
+            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
+            if let Some(team) = self
+                .continents
+                .get(ci)
+                .and_then(|c| c.countries.get(coi))
+                .and_then(|c| c.clubs.get(cli))
+                .and_then(|c| c.teams.teams.get(ti))
+            {
+                if team.id == id {
+                    return Some(team);
+                }
+            }
+        }
+
         self.indexes
             .as_ref()
             .and_then(|indexes| indexes.get_team_location(id))
@@ -474,6 +570,28 @@ impl SimulatorData {
     }
 
     pub fn team_mut(&mut self, id: u32) -> Option<&mut Team> {
+        if let Some((ci, coi, cli, ti)) = self
+            .indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get_team_position(id))
+        {
+            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
+            let resolved = self
+                .continents
+                .get(ci)
+                .and_then(|c| c.countries.get(coi))
+                .and_then(|c| c.clubs.get(cli))
+                .and_then(|c| c.teams.teams.get(ti))
+                .map(|t| t.id == id)
+                .unwrap_or(false);
+            if resolved {
+                return self.continents[ci].countries[coi].clubs[cli]
+                    .teams
+                    .teams
+                    .get_mut(ti);
+            }
+        }
+
         self.indexes
             .as_ref()
             .and_then(|indexes| indexes.get_team_location(id))
@@ -496,31 +614,22 @@ impl SimulatorData {
     }
 
     pub fn player(&self, id: u32) -> Option<&Player> {
-        // Fast path: indexed lookup
-        if let Some((player_continent_id, player_country_id, player_club_id, player_team_id)) = self
+        // Fast path: positional lookup
+        if let Some((ci, coi, cli, ti)) = self
             .indexes
             .as_ref()
-            .and_then(|indexes| indexes.get_player_location(id))
+            .and_then(|indexes| indexes.get_player_position(id))
         {
-            let found = self
-                .continent(player_continent_id)
-                .and_then(|continent| {
-                    continent
-                        .countries
-                        .iter()
-                        .find(|country| country.id == player_country_id)
-                })
-                .and_then(|country| country.clubs.iter().find(|club| club.id == player_club_id))
-                .and_then(|club| {
-                    club.teams
-                        .teams
-                        .iter()
-                        .find(|team| team.id == player_team_id)
-                })
-                .and_then(|team| team.players.find(id));
-
-            if found.is_some() {
-                return found;
+            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
+            if let Some(player) = self
+                .continents
+                .get(ci)
+                .and_then(|c| c.countries.get(coi))
+                .and_then(|c| c.clubs.get(cli))
+                .and_then(|c| c.teams.teams.get(ti))
+                .and_then(|t| t.players.find(id))
+            {
+                return Some(player);
             }
         }
 
@@ -529,21 +638,23 @@ impl SimulatorData {
     }
 
     pub fn player_with_team(&self, player_id: u32) -> Option<(&Player, &Team)> {
-        // Fast path: indexed lookup
-        if let Some((continent_id, country_id, club_id, team_id)) = self
+        // Fast path: positional lookup
+        if let Some((ci, coi, cli, ti)) = self
             .indexes
             .as_ref()
-            .and_then(|idx| idx.get_player_location(player_id))
+            .and_then(|idx| idx.get_player_position(player_id))
         {
-            let result = self
-                .continent(continent_id)
-                .and_then(|c| c.countries.iter().find(|co| co.id == country_id))
-                .and_then(|co| co.clubs.iter().find(|cl| cl.id == club_id))
-                .and_then(|cl| cl.teams.find(team_id))
-                .and_then(|team| team.players.find(player_id).map(|p| (p, team)));
-
-            if result.is_some() {
-                return result;
+            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
+            if let Some(team) = self
+                .continents
+                .get(ci)
+                .and_then(|c| c.countries.get(coi))
+                .and_then(|c| c.clubs.get(cli))
+                .and_then(|c| c.teams.teams.get(ti))
+            {
+                if let Some(player) = team.players.find(player_id) {
+                    return Some((player, team));
+                }
             }
         }
 
@@ -622,33 +733,25 @@ impl SimulatorData {
     }
 
     pub fn find_player_position(&self, id: u32) -> Option<(usize, usize, usize, usize)> {
-        // Fast path: indexed lookup
-        if let Some((pc, pco, pcl, pt)) = self
+        // Fast path: positional lookup. Verify the path still resolves
+        // to a team that contains this player — array indices go stale
+        // when a Vec shrinks (retirement, dissolved club) before the
+        // next index refresh.
+        if let Some((ci, coi, cli, ti)) = self
             .indexes
             .as_ref()
-            .and_then(|indexes| indexes.get_player_location(id))
+            .and_then(|indexes| indexes.get_player_position(id))
         {
-            for (ci, continent) in self.continents.iter().enumerate() {
-                if continent.id != pc {
-                    continue;
-                }
-                for (coi, country) in continent.countries.iter().enumerate() {
-                    if country.id != pco {
-                        continue;
-                    }
-                    for (cli, club) in country.clubs.iter().enumerate() {
-                        if club.id != pcl {
-                            continue;
-                        }
-                        for (ti, team) in club.teams.iter().enumerate() {
-                            if team.id != pt {
-                                continue;
-                            }
-                            if team.players.contains(id) {
-                                return Some((ci, coi, cli, ti));
-                            }
-                        }
-                    }
+            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
+            if let Some(team) = self
+                .continents
+                .get(ci)
+                .and_then(|c| c.countries.get(coi))
+                .and_then(|c| c.clubs.get(cli))
+                .and_then(|c| c.teams.teams.get(ti))
+            {
+                if team.players.contains(id) {
+                    return Some((ci, coi, cli, ti));
                 }
             }
         }

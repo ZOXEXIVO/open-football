@@ -944,31 +944,48 @@ impl LeagueResult {
             }
 
             // ── Apply updates with cooldown / event budget ──────────
-            for upd in updates {
-                if let Some(player) = data.player_mut(upd.from) {
-                    let signed = match upd.change_type {
-                        ChangeType::PersonalConflict
-                        | ChangeType::TrainingFriction
-                        | ChangeType::CompetitionRivalry
-                        | ChangeType::ReputationTension => -upd.magnitude.abs(),
-                        _ => upd.magnitude.abs(),
-                    };
-                    let change = if signed >= 0.0 {
-                        RelationshipChange::positive(upd.change_type, signed.abs())
-                    } else {
-                        RelationshipChange::negative(upd.change_type, signed.abs())
-                    };
-                    player
-                        .relations
-                        .update_player_relationship(upd.to, change, now);
-                    if let Some((kind, mag)) = upd.event {
-                        if bump_event(&mut event_budget, upd.from) {
-                            player
-                                .happiness
-                                .add_event_with_partner(kind, mag, Some(upd.to));
+            // Sort by `from` so the player borrow happens once per
+            // unique source. Each match accumulates ~30–50 updates
+            // spread across ~11 players; without grouping we'd take
+            // ~30–50 mutable borrows. With grouping we take ~11.
+            updates.sort_by_key(|u| u.from);
+            let mut i = 0;
+            while i < updates.len() {
+                let from = updates[i].from;
+                let block_end = updates[i..]
+                    .iter()
+                    .position(|u| u.from != from)
+                    .map(|p| i + p)
+                    .unwrap_or(updates.len());
+
+                if let Some(player) = data.player_mut(from) {
+                    for upd in &updates[i..block_end] {
+                        let change_type = upd.change_type.clone();
+                        let signed = match change_type {
+                            ChangeType::PersonalConflict
+                            | ChangeType::TrainingFriction
+                            | ChangeType::CompetitionRivalry
+                            | ChangeType::ReputationTension => -upd.magnitude.abs(),
+                            _ => upd.magnitude.abs(),
+                        };
+                        let change = if signed >= 0.0 {
+                            RelationshipChange::positive(change_type, signed.abs())
+                        } else {
+                            RelationshipChange::negative(change_type, signed.abs())
+                        };
+                        player
+                            .relations
+                            .update_player_relationship(upd.to, change, now);
+                        if let Some((kind, mag)) = upd.event.clone() {
+                            if bump_event(&mut event_budget, upd.from) {
+                                player
+                                    .happiness
+                                    .add_event_with_partner(kind, mag, Some(upd.to));
+                            }
                         }
                     }
                 }
+                i = block_end;
             }
 
             // Win/loss generic team-mate cooperation lift — softer signal
@@ -976,20 +993,20 @@ impl LeagueResult {
             // skipped on losses; the captain block above captured the
             // emotional payload for heavy defeats. A team that just wins
             // narrowly doesn't accumulate dressing-room damage.
+            //
+            // One mutable borrow per player; the inner loop fans out the
+            // pairing updates so a winning XI does ~11 lookups instead
+            // of ~110.
             if team_won {
-                for i in 0..players.len() {
-                    for j in (i + 1)..players.len() {
-                        if let Some(player) = data.player_mut(players[i].id) {
+                let n = players.len();
+                for i in 0..n {
+                    if let Some(player) = data.player_mut(players[i].id) {
+                        for j in 0..n {
+                            if i == j {
+                                continue;
+                            }
                             player.relations.update_with_type(
                                 players[j].id,
-                                0.05,
-                                ChangeType::MatchCooperation,
-                                now,
-                            );
-                        }
-                        if let Some(player) = data.player_mut(players[j].id) {
-                            player.relations.update_with_type(
-                                players[i].id,
                                 0.05,
                                 ChangeType::MatchCooperation,
                                 now,
