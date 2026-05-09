@@ -85,6 +85,31 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         self.nearby_range(1.0, max_distance)
     }
 
+    /// Same as `nearby`, but scans around an arbitrary world position
+    /// instead of the player's own position. Routes through the spatial
+    /// grid so a small cell window replaces the previous full-team scan.
+    pub fn nearby_at(
+        &'b self,
+        center: nalgebra::Vector3<f32>,
+        max_distance: f32,
+    ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
+        self.ctx
+            .tick_context
+            .grid
+            .teammates_full(
+                self.ctx.player.id,
+                self.ctx.player.team_id,
+                center,
+                0.0,
+                max_distance,
+            )
+            .map(|(gp, _dist)| MatchPlayerLite {
+                id: gp.id,
+                position: gp.position,
+                tactical_positions: gp.tactical_position,
+            })
+    }
+
     pub fn nearby_range(
         &'b self,
         min_distance: f32,

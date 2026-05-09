@@ -66,9 +66,8 @@ impl<'b> TeamOperationsImpl<'b> {
         let goal_pos = ctx.player().opponent_goal_position();
         ctx.players()
             .teammates()
-            .all()
-            .filter(|t| t.tactical_positions.is_forward() || t.tactical_positions.is_midfielder())
-            .any(|t| (t.position - goal_pos).magnitude() <= 80.0)
+            .nearby_at(goal_pos, 80.0)
+            .any(|t| t.tactical_positions.is_forward() || t.tactical_positions.is_midfielder())
     }
 
     /// Should the team play in "possession mode" right now — i.e. slow

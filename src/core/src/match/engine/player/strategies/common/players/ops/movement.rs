@@ -256,19 +256,19 @@ impl<'p> MovementOperationsImpl<'p> {
         let player_pos = self.ctx.player.position;
         let goal_pos = self.ctx.ball().direction_to_own_goal();
 
-        // Find positions of nearby opponents creating pressure
-        let nearby_opponents: Vec<MatchPlayerLite> =
-            self.ctx.players().opponents().nearby(15.0).collect();
+        // Calculate average position of pressing opponents in a single pass
+        let (sum_pos, count) = self
+            .ctx
+            .players()
+            .opponents()
+            .nearby(15.0)
+            .fold((Vector3::zeros(), 0u32), |(s, c), p| (s + p.position, c + 1));
 
-        if nearby_opponents.is_empty() {
+        if count == 0 {
             return None;
         }
 
-        // Calculate average position of pressing opponents
-        let avg_opponent_pos = nearby_opponents
-            .iter()
-            .fold(Vector3::zeros(), |acc, p| acc + p.position)
-            / nearby_opponents.len() as f32;
+        let avg_opponent_pos = sum_pos / count as f32;
 
         // Calculate direction away from pressure and perpendicular to goal line
         let away_from_pressure = (player_pos - avg_opponent_pos).normalize();

@@ -74,9 +74,8 @@ impl MidfielderSwitchingPlayState {
         let forward_direction = (ball_position - player_position).normalize();
         let perpendicular_direction = Vector3::new(-forward_direction.y, forward_direction.x, 0.0);
 
-        // Find teammates on the opposite side of the field
-        let opposite_side_teammates: Vec<MatchPlayerLite> = ctx
-            .players()
+        // Find the teammate on the opposite side with the most space.
+        ctx.players()
             .teammates()
             .all()
             .filter(|teammate| {
@@ -84,20 +83,12 @@ impl MidfielderSwitchingPlayState {
                 let dot_product = teammate_to_player.dot(&perpendicular_direction);
                 dot_product > 0.0 // Teammate is on the opposite side
             })
-            .collect();
-
-        // Find the teammate with the most space
-        let best_teammate = opposite_side_teammates.iter().max_by(|a, b| {
-            let space_a = self.calculate_space_around_player(ctx, *a);
-            let space_b = self.calculate_space_around_player(ctx, *b);
-            space_a.partial_cmp(&space_b).unwrap()
-        });
-
-        if let Some(teammate) = best_teammate.map(|teammate| teammate) {
-            return Some((teammate.id, teammate.position));
-        }
-
-        None
+            .max_by(|a, b| {
+                let space_a = self.calculate_space_around_player(ctx, a);
+                let space_b = self.calculate_space_around_player(ctx, b);
+                space_a.partial_cmp(&space_b).unwrap()
+            })
+            .map(|teammate| (teammate.id, teammate.position))
     }
 
     fn calculate_space_around_player(

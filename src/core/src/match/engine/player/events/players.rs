@@ -2128,23 +2128,33 @@ impl PlayerEventDispatcher {
         // and the ball's `last_shot_xg` (for GK xg_prevented credit
         // when the shot resolves).
         let xg = {
+            // Mirrors `ShootingOperationsImpl::expected_xg` after the
+            // close-range recalibration so the post-hoc xG stat agrees
+            // with the pre-shot decision-time xG used by the willingness
+            // gates.
             let d = horizontal_distance;
             let distance_factor = if d <= 10.0 {
-                0.55
+                0.40
             } else if d <= 30.0 {
-                0.55 - (d - 10.0) / 20.0 * 0.30
+                0.40 - (d - 10.0) / 20.0 * 0.20
             } else if d <= 60.0 {
-                0.25 - (d - 30.0) / 30.0 * 0.18
+                0.20 - (d - 30.0) / 30.0 * 0.13
             } else if d <= 120.0 {
                 0.07 - (d - 60.0) / 60.0 * 0.05
             } else {
                 0.02
             };
-            let finishing = field
-                .get_player(shoot_event_model.from_player_id)
-                .map(|p| (p.skills.technical.finishing / 20.0).clamp(0.0, 1.0))
-                .unwrap_or(0.5);
-            let skill_mult = 0.7 + finishing * 0.6;
+            let player = field.get_player(shoot_event_model.from_player_id);
+            let (finishing, composure) = player
+                .map(|p| {
+                    (
+                        (p.skills.technical.finishing / 20.0).clamp(0.0, 1.0),
+                        (p.skills.mental.composure / 20.0).clamp(0.0, 1.0),
+                    )
+                })
+                .unwrap_or((0.5, 0.5));
+            let blend = (finishing * 0.7 + composure * 0.3).clamp(0.0, 1.0);
+            let skill_mult = (0.55 + blend * blend * 0.85).clamp(0.45, 1.30);
             let target_mult = if on_target { 1.0 } else { 0.15 };
             (distance_factor * skill_mult * target_mult).clamp(0.0, 0.90)
         };
@@ -3117,7 +3127,7 @@ impl PlayerEventDispatcher {
 
     fn pick_penalty_taker(field: &MatchField, victim_side: PlayerSide) -> Option<u32> {
         use crate::r#match::engine::set_pieces::{TakerScore, score_penalty_taker};
-        let candidates: Vec<TakerScore> = field
+        field
             .players
             .iter()
             .filter(|p| {
@@ -3137,9 +3147,6 @@ impl PlayerEventDispatcher {
                     0.0,
                 ),
             })
-            .collect();
-        candidates
-            .iter()
             .max_by(|a, b| {
                 a.score
                     .partial_cmp(&b.score)
@@ -3154,7 +3161,7 @@ impl PlayerEventDispatcher {
         restart_pos: Vector3<f32>,
     ) -> Option<u32> {
         use crate::r#match::engine::set_pieces::{TakerScore, score_free_kick_taker};
-        let candidates: Vec<TakerScore> = field
+        field
             .players
             .iter()
             .filter(|p| {
@@ -3184,9 +3191,6 @@ impl PlayerEventDispatcher {
                     score: base - dist_penalty,
                 }
             })
-            .collect();
-        candidates
-            .iter()
             .max_by(|a, b| {
                 a.score
                     .partial_cmp(&b.score)

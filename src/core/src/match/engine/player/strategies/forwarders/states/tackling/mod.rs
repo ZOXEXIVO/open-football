@@ -66,9 +66,8 @@ impl StateProcessingHandler for ForwardTacklingState {
         }
 
         let opponents = ctx.players().opponents();
-        let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
-        if let Some(opponent) = opponents_with_ball.first() {
+        if let Some(opponent) = opponents.with_ball().next() {
             let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
 
             // Immediate tackle if very close
@@ -77,7 +76,7 @@ impl StateProcessingHandler for ForwardTacklingState {
                 crate::tackle_stats::FWD_ATTEMPTS
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let (tackle_success, committed_foul, foul_severity) =
-                    self.attempt_tackle(ctx, opponent);
+                    self.attempt_tackle(ctx, &opponent);
 
                 if committed_foul {
                     let mut result = StateChangeResult::with_forward_state_and_event(
@@ -112,12 +111,12 @@ impl StateProcessingHandler for ForwardTacklingState {
             // If within tackle range but not close enough for immediate attempt
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
                 // Wait for better opportunity or attempt tackle based on situation
-                if self.should_attempt_tackle_now(ctx, opponent) {
+                if self.should_attempt_tackle_now(ctx, &opponent) {
                     #[cfg(feature = "match-logs")]
                     crate::tackle_stats::FWD_ATTEMPTS
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let (tackle_success, committed_foul, foul_severity) =
-                        self.attempt_tackle(ctx, opponent);
+                        self.attempt_tackle(ctx, &opponent);
 
                     if committed_foul {
                         let mut result = StateChangeResult::with_forward_state_and_event(
@@ -194,9 +193,8 @@ impl StateProcessingHandler for ForwardTacklingState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let opponents = ctx.players().opponents();
-        let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
-        if let Some(opponent) = opponents_with_ball.first() {
+        if let Some(opponent) = opponents.with_ball().next() {
             let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
 
             // If very close, move more carefully to avoid overrunning

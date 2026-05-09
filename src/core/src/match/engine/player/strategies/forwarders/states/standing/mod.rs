@@ -1,5 +1,8 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -23,42 +26,39 @@ impl StateProcessingHandler for ForwardStandingState {
             let has_settled = ownership_ticks >= 30;
             let can_shoot = ctx.team().can_shoot() && ctx.player().can_shoot();
 
-            // Point-blank (≤24u / ~12m) — shoot regardless of build-up;
-            // a defender closing or keeper right there means it's now or
-            // never. Still honours cooldowns.
+            // Point-blank (≤24u / ~12m) — defer to the centralised helper
+            // even though the geometric trigger is generous; the helper's
+            // 1v1 / sprint-balance / xG-floor gates still apply, and a
+            // panicked Composure-8 striker shouldn't auto-fire just
+            // because they're inside the box. Without this dispatch the
+            // legacy `with_shot_reason("FWD_STAND_POINT_BLANK")` path
+            // skipped every gate in `evaluate_forward_shot_decision`.
             if distance_to_goal <= 24.0 && can_shoot && ctx.player().shooting().in_shooting_range()
             {
-                return Some(
-                    StateChangeResult::with_forward_state(ForwardState::Shooting)
-                        .with_shot_reason("FWD_STAND_POINT_BLANK"),
-                );
+                if let Some(result) = dispatch_shot(ctx, "FWD_STAND_POINT_BLANK") {
+                    return Some(result);
+                }
             }
 
-            // Skill-gated trigger: see running/mod.rs for rationale.
-            // Poor finishers hesitate, elite finishers pull the trigger
-            // confidently. Linear curve + floor matches the loosened
-            // Running-state willingness so the two entry points don't
-            // disagree on when a forward should strike.
-            let finishing = ctx.player.skills.technical.finishing;
-            let fin_factor = (finishing / 20.0).clamp(0.0, 1.0);
-            let comp_factor = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-            let willingness = (fin_factor * 0.55 + comp_factor * 0.15 + 0.25).clamp(0.45, 0.95);
-            let shot_triggered = rand::random::<f32>() < willingness;
-
+            // Clear-shot trigger inside the standard shooting range.
+            // The helper performs the skill-aware willingness roll, so
+            // the bespoke `finishing*0.55 + composure*0.15 + 0.25` gate
+            // here was strictly redundant and used a different curve
+            // (floor 0.45, ceil 0.95) — much more aggressive than the
+            // helper's 0.10..0.60 range, which is exactly the kind of
+            // local override the polish pass is removing.
             if has_settled
                 && can_shoot
-                && shot_triggered
                 && distance_to_goal <= 60.0
                 && ctx.player().shooting().in_shooting_range()
                 && ctx.player().has_clear_shot()
             {
-                return Some(
-                    StateChangeResult::with_forward_state(ForwardState::Shooting)
-                        .with_shot_reason("FWD_STAND_CLEAR"),
-                );
+                if let Some(result) = dispatch_shot(ctx, "FWD_STAND_CLEAR") {
+                    return Some(result);
+                }
             }
 
-            // Cooldown for medium/long range shots to prevent rapid-fire spam
+            // Cooldown for medium/long range shots to prevent rapid-fire spam.
             const SHOOTING_COOLDOWN: u64 = 20;
 
             if has_settled
@@ -66,10 +66,9 @@ impl StateProcessingHandler for ForwardStandingState {
                 && ctx.player().should_attempt_shot()
                 && ctx.in_state_time > SHOOTING_COOLDOWN
             {
-                return Some(
-                    StateChangeResult::with_forward_state(ForwardState::Shooting)
-                        .with_shot_reason("FWD_STAND_RANGE"),
-                );
+                if let Some(result) = dispatch_shot(ctx, "FWD_STAND_RANGE") {
+                    return Some(result);
+                }
             }
 
             if let Some(_) = self.find_best_teammate_to_pass(ctx) {
@@ -205,5 +204,21 @@ impl ForwardStandingState {
         } else {
             false
         }
+    }
+}
+
+/// Route a candidate shot through the centralised gate stack. See the
+/// twin helper in forwarders/states/dribbling/mod.rs for rationale.
+fn dispatch_shot(
+    ctx: &StateProcessingContext,
+    tag: &'static str,
+) -> Option<StateChangeResult> {
+    match evaluate_forward_shot_decision(ctx, tag) {
+        ShotDecision::Shoot { reason } => Some(
+            StateChangeResult::with_forward_state(ForwardState::Shooting)
+                .with_shot_reason(reason),
+        ),
+        ShotDecision::Pass => Some(StateChangeResult::with_forward_state(ForwardState::Passing)),
+        ShotDecision::Hold => None,
     }
 }

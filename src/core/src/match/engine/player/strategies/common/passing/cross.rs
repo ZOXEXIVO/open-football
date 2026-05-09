@@ -160,7 +160,7 @@ fn pick_cross_type(
     target_heading_skill: f32,
 ) -> CrossType {
     let near_byline = crosser_dist_to_goal < 70.0;
-    let target_inside_box = (target_pos - goal_pos).magnitude() < 80.0;
+    let target_inside_box = (target_pos - goal_pos).norm_squared() < 80.0 * 80.0;
 
     if near_byline && target_inside_box {
         // Pulled-back option for a runner trailing the play.

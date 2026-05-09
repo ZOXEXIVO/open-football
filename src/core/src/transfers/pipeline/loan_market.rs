@@ -6,7 +6,7 @@ use crate::transfers::ScoutingRegion;
 use crate::transfers::market::{TransferListing, TransferListingStatus, TransferListingType};
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
-use crate::transfers::pipeline::{LoanOutStatus, TransferRequest, TransferRequestStatus};
+use crate::transfers::pipeline::{LoanOutStatus, TransferRequestStatus};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -190,17 +190,17 @@ impl PipelineProcessor {
             ]
             .iter()
             .map(|&(group, max)| {
-                let players_at_pos: Vec<u8> = team
+                let (count, best_ability) = team
                     .players
                     .iter()
                     .filter(|p| p.position().position_group() == group)
                     .map(|p| p.player_attributes.current_ability)
-                    .collect();
+                    .fold((0usize, 0u8), |(c, b), a| (c + 1, b.max(a)));
                 PositionDepth {
                     group,
-                    count: players_at_pos.len(),
+                    count,
                     max,
-                    best_ability: players_at_pos.iter().copied().max().unwrap_or(0),
+                    best_ability,
                 }
             })
             .collect();
@@ -219,16 +219,12 @@ impl PipelineProcessor {
             };
 
             // Check unfulfilled transfer requests first
-            let unfulfilled: Vec<&TransferRequest> = plan
-                .transfer_requests
-                .iter()
-                .filter(|r| {
-                    r.status != TransferRequestStatus::Fulfilled
-                        && r.status != TransferRequestStatus::Abandoned
-                })
-                .collect();
+            let unfulfilled = plan.transfer_requests.iter().filter(|r| {
+                r.status != TransferRequestStatus::Fulfilled
+                    && r.status != TransferRequestStatus::Abandoned
+            });
 
-            for request in &unfulfilled {
+            for request in unfulfilled {
                 if scans_this_club >= max_scans {
                     break;
                 }
@@ -547,14 +543,10 @@ impl PipelineProcessor {
                 .collect();
 
             // Check unfulfilled transfer requests
-            let unfulfilled: Vec<&TransferRequest> = plan
-                .transfer_requests
-                .iter()
-                .filter(|r| {
-                    r.status != TransferRequestStatus::Fulfilled
-                        && r.status != TransferRequestStatus::Abandoned
-                })
-                .collect();
+            let unfulfilled = plan.transfer_requests.iter().filter(|r| {
+                r.status != TransferRequestStatus::Fulfilled
+                    && r.status != TransferRequestStatus::Abandoned
+            });
 
             let mut scans = 0usize;
             let max_scans: usize = match rep_level {
@@ -567,7 +559,7 @@ impl PipelineProcessor {
             // for the same position (e.g. FormationGap + DepthCover for GK)
             let mut scanned_position_groups: Vec<PlayerFieldPositionGroup> = Vec::new();
 
-            for request in &unfulfilled {
+            for request in unfulfilled {
                 if scans >= max_scans {
                     break;
                 }
@@ -648,6 +640,7 @@ impl PipelineProcessor {
                             home_reputation: best.home_reputation,
                             world_reputation: best.world_reputation,
                             country_reputation: best.country_reputation,
+                            club_world_reputation: best.club_world_reputation,
                             is_injured: best.is_injured,
                             contract_months_remaining: best.contract_months_remaining,
                             salary: best.salary,

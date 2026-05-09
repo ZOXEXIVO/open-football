@@ -272,7 +272,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     .filter(|opp| {
                         let to_opp = (opp.position - player_pos).normalize();
                         to_opp.dot(&to_goal) > 0.3 // Opponent is ahead in our direction
-                            && (opp.position - player_pos).magnitude() < 35.0
+                            && (opp.position - player_pos).norm_squared() < 35.0 * 35.0
                     })
                     .count();
 
@@ -1362,12 +1362,7 @@ impl MidfielderRunningState {
 
         // Must have at least 1 teammate within 150 units of opponent goal
         let goal_pos = ctx.player().opponent_goal_position();
-        let teammates_in_box = ctx
-            .players()
-            .teammates()
-            .all()
-            .filter(|t| (t.position - goal_pos).magnitude() < 150.0)
-            .count();
+        let teammates_in_box = ctx.players().teammates().nearby_at(goal_pos, 150.0).count();
         if teammates_in_box < 1 {
             return false;
         }

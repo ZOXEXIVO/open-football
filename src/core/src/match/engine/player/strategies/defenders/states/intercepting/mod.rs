@@ -119,7 +119,7 @@ impl DefenderInterceptingState {
         let landing_position = ctx.tick_context.positions.ball.landing_position;
 
         // Check if ball is aerial (high enough that landing position differs significantly)
-        let is_aerial = (ball_position - landing_position).magnitude() > 5.0;
+        let is_aerial = (ball_position - landing_position).norm_squared() > 5.0 * 5.0;
 
         if is_aerial {
             // For aerial balls, target the landing position

@@ -474,12 +474,13 @@ impl MidfielderAttackSupportingState {
             0.0,
         );
 
-        // Check if forward space is clear — use nearby since forward_space is close to player
-        let forward_clear = !ctx
+        // Check if forward space is clear — scan around the candidate point
+        let forward_clear = ctx
             .players()
             .opponents()
-            .nearby(60.0)
-            .any(|opp| (opp.position - forward_space).magnitude() < 20.0);
+            .nearby_at(forward_space, 20.0)
+            .next()
+            .is_none();
 
         if forward_clear {
             // Drive forward with pace
@@ -807,12 +808,7 @@ impl MidfielderAttackSupportingState {
     /// Check if a position is valuable for attack
     fn is_position_valuable(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> bool {
         // Not too crowded
-        let opponents_nearby = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| (opp.position - position).magnitude() < 15.0)
-            .count();
+        let opponents_nearby = ctx.players().opponents().nearby_at(position, 15.0).count();
 
         // Has passing options
         let teammates_in_range = ctx

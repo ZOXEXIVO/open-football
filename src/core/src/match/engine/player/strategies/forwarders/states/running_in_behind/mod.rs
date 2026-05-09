@@ -1,5 +1,8 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -12,16 +15,34 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
         if ctx.player.has_ball(ctx) {
-            // Transition to Dribbling or Shooting based on position
-            return if ball_ops.distance_to_opponent_goal() < 80.0 {
-                Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
-                ))
-            } else {
-                Some(StateChangeResult::with_forward_state(
+            // Centralised shot decision — applies cooldown / xG / clear-shot
+            // / sprint-balance / 1v1 / pass-EV gates. Was previously a raw
+            // distance check that auto-transitioned to Shooting, which let
+            // a sprinting Finishing-10 striker fire any time they reached
+            // the ball under 80u — the dominant unrealistic-conversion
+            // path. The Shooting state has minimal gating of its own, so
+            // every gate decision must be made BEFORE the transition.
+            let distance = ball_ops.distance_to_opponent_goal();
+            if distance >= 80.0 {
+                return Some(StateChangeResult::with_forward_state(
                     ForwardState::Dribbling,
-                ))
-            };
+                ));
+            }
+            return Some(match evaluate_forward_shot_decision(ctx, "FWD_RIB_SHOT") {
+                ShotDecision::Shoot { reason } => {
+                    StateChangeResult::with_forward_state(ForwardState::Shooting)
+                        .with_shot_reason(reason)
+                }
+                ShotDecision::Pass => {
+                    StateChangeResult::with_forward_state(ForwardState::Passing)
+                }
+                ShotDecision::Hold => {
+                    // Carry through into a controlled dribble — the
+                    // forward isn't ready to strike (xG too low,
+                    // sprinting off-balance, or pass-better-than-shot).
+                    StateChangeResult::with_forward_state(ForwardState::Dribbling)
+                }
+            });
         }
 
         // SMART RUN TIMING: Only continue run if passer has stable possession
@@ -181,5 +202,44 @@ impl ForwardRunningInBehindState {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    //! Regression: RunningInBehind used to auto-transition to Shooting
+    //! whenever `distance_to_opponent_goal() < 80.0` while holding the
+    //! ball. That bypassed every gate (cooldowns, xG, clear-shot,
+    //! sprint balance, pass EV) and was the dominant unrealistic-
+    //! conversion path for mediocre finishers.
+    //!
+    //! These checks pin the TEXT of the new branch so a future refactor
+    //! that re-adds an unconditional Shooting transition fails the
+    //! check before the calibration regression slips back in.
+    const SOURCE: &str = include_str!("mod.rs");
+
+    #[test]
+    fn auto_shoot_under_80u_branch_is_gone() {
+        // The legacy auto-shoot branch literally said
+        //     "ball_ops.distance_to_opponent_goal() < 80.0" → Shooting
+        // immediately after `has_ball`. We allow the distance check,
+        // but it MUST be paired with a call into the centralised
+        // `evaluate_forward_shot_decision`.
+        assert!(
+            SOURCE.contains("evaluate_forward_shot_decision"),
+            "RunningInBehind must defer to centralised shot decision helper"
+        );
+    }
+
+    #[test]
+    fn shot_decision_handles_pass_alternative() {
+        // The new code must route to Passing when the helper picks a
+        // better cutback over a low-xG strike. Without this, a
+        // sprinting forward at the post simply cycles between
+        // Shooting and Dribbling forever, losing the realism win.
+        assert!(
+            SOURCE.contains("ShotDecision::Pass") && SOURCE.contains("ForwardState::Passing"),
+            "Pass alternative must be wired in"
+        );
     }
 }

@@ -325,25 +325,25 @@ impl<'p> DefensiveOperationsImpl<'p> {
             return false;
         };
         let own_goal = self.ctx.ball().direction_to_own_goal();
-        let carrier_to_goal = (carrier.position - own_goal).magnitude();
+        let carrier_to_goal_sq = (carrier.position - own_goal).norm_squared();
         let field_width = self.ctx.context.field_size.width as f32;
         // Trigger zone: carrier within ~20% of field length from our goal
         // (the edge of our defensive third, approaching the box).
         let trigger = field_width * 0.22;
-        if carrier_to_goal > trigger {
+        if carrier_to_goal_sq > trigger * trigger {
             return false;
         }
         // Only the closest defender to the carrier steps up — others hold
         // shape and track secondary runners.
         let my_id = self.ctx.player.id;
-        let my_dist = (self.ctx.player.position - carrier.position).magnitude();
+        let my_dist_sq = (self.ctx.player.position - carrier.position).norm_squared();
         let closer = self
             .ctx
             .players()
             .teammates()
             .defenders()
             .filter(|d| d.id != my_id)
-            .any(|d| (d.position - carrier.position).magnitude() < my_dist);
+            .any(|d| (d.position - carrier.position).norm_squared() < my_dist_sq);
         !closer
     }
 
@@ -572,7 +572,10 @@ impl<'p> DefensiveOperationsImpl<'p> {
                 .players()
                 .teammates()
                 .defenders()
-                .filter(|d| d.id != self.ctx.player.id && (d.position - my_pos).magnitude() < 50.0)
+                .filter(|d| {
+                    d.id != self.ctx.player.id
+                        && (d.position - my_pos).norm_squared() < 50.0 * 50.0
+                })
                 .count();
 
             return covering_defenders < dangerous_nearby;
@@ -583,6 +586,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
 
     /// Get the number of defenders currently engaging opponents within a distance
     pub fn count_engaging_defenders(&self, radius: f32) -> usize {
+        let radius_sq = radius * radius;
         self.ctx
             .players()
             .teammates()
@@ -594,7 +598,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
                         .players()
                         .opponents()
                         .nearby(ENGAGEMENT_DISTANCE)
-                        .any(|opp| (d.position - opp.position).magnitude() < radius)
+                        .any(|opp| (d.position - opp.position).norm_squared() < radius_sq)
                 }
             })
             .count()

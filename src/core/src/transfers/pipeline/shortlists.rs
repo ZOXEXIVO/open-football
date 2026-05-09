@@ -32,16 +32,16 @@ fn position_depth_for(club: &Club, group: PlayerFieldPositionGroup) -> Option<Po
         PlayerFieldPositionGroup::Midfielder => 8,
         PlayerFieldPositionGroup::Forward => 6,
     };
-    let abilities: Vec<u8> = main
+    let (count, best_ability) = main
         .players
         .iter()
         .filter(|p| p.position().position_group() == group)
         .map(|p| p.player_attributes.current_ability)
-        .collect();
+        .fold((0usize, 0u8), |(c, b), a| (c + 1, b.max(a)));
     Some(PositionDepth {
-        count: abilities.len(),
+        count,
         max,
-        best_ability: abilities.iter().copied().max().unwrap_or(0),
+        best_ability,
     })
 }
 

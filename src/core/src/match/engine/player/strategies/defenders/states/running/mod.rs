@@ -140,8 +140,9 @@ impl StateProcessingHandler for DefenderRunningState {
                 let teammate_engaging = ctx
                     .players()
                     .teammates()
-                    .nearby(30.0)
-                    .any(|t| (t.position - opponent.position).magnitude() < 20.0);
+                    .nearby_at(opponent.position, 20.0)
+                    .next()
+                    .is_some();
                 if ball_dist > 30.0 && teammate_engaging {
                     match ctx.player().defensive().defensive_role_for_ball_carrier() {
                         DefensiveRole::Cover => {
@@ -747,38 +748,32 @@ impl DefenderRunningState {
             None => return None,
         };
 
-        let mut open_teammates: Vec<MatchPlayerLite> =
-            ctx.players()
-                .teammates()
-                .nearby(200.0)
-                .filter(|teammate| {
-                    if teammate.tactical_positions.is_goalkeeper() {
-                        return false;
-                    }
+        ctx.players()
+            .teammates()
+            .nearby(200.0)
+            .filter(|teammate| {
+                if teammate.tactical_positions.is_goalkeeper() {
+                    return false;
+                }
 
-                    let is_on_opposite_side = match ctx.player.side {
-                        Some(PlayerSide::Left) => teammate.position.x > opposite_side_x,
-                        Some(PlayerSide::Right) => teammate.position.x < opposite_side_x,
-                        None => false,
-                    };
-                    let is_open =
-                        !ctx.players().opponents().all().any(|opponent| {
-                            (opponent.position - teammate.position).magnitude() < 20.0
-                        });
-                    is_on_opposite_side && is_open
-                })
-                .collect();
-
-        if open_teammates.is_empty() {
-            None
-        } else {
-            open_teammates.sort_by(|a, b| {
-                let dist_a = (a.position - player_position).magnitude();
-                let dist_b = (b.position - player_position).magnitude();
+                let is_on_opposite_side = match ctx.player.side {
+                    Some(PlayerSide::Left) => teammate.position.x > opposite_side_x,
+                    Some(PlayerSide::Right) => teammate.position.x < opposite_side_x,
+                    None => false,
+                };
+                let is_open = ctx
+                    .players()
+                    .opponents()
+                    .nearby_at(teammate.position, 20.0)
+                    .next()
+                    .is_none();
+                is_on_opposite_side && is_open
+            })
+            .min_by(|a, b| {
+                let dist_a = (a.position - player_position).norm_squared();
+                let dist_b = (b.position - player_position).norm_squared();
                 dist_a.partial_cmp(&dist_b).unwrap()
-            });
-            Some(open_teammates[0])
-        }
+            })
     }
 
     /// Detect if an opponent is sprinting toward this defender and will arrive soon.
@@ -1017,7 +1012,7 @@ impl DefenderRunningState {
                     if to_t.dot(&to_goal) <= 0.25 {
                         return false;
                     }
-                    if (t.position - teammate.position).magnitude() < 15.0 {
+                    if (t.position - teammate.position).norm_squared() < 15.0 * 15.0 {
                         return false;
                     }
                     let opp_near_t = ctx.tick_context.grid.opponents(t.id, 12.0).count();
@@ -1193,12 +1188,7 @@ impl DefenderRunningState {
             field_height * 0.9
         };
         let ahead_pos = Vector3::new(ball_pos.x + to_goal.x * 50.0, wing_y, 0.0);
-        let opponents_blocking = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| (opp.position - ahead_pos).magnitude() < 30.0)
-            .count();
+        let opponents_blocking = ctx.players().opponents().nearby_at(ahead_pos, 30.0).count();
 
         opponents_blocking == 0
     }

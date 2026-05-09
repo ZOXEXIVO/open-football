@@ -61,32 +61,20 @@ impl MidfielderDistributingState {
     ) -> Option<MatchPlayerLite> {
         let vision_range = ctx.player.skills.mental.vision * 10.0; // Adjust the factor as needed
 
-        let open_teammates: Vec<MatchPlayerLite> = ctx
-            .players()
+        ctx.players()
             .teammates()
             .nearby(vision_range)
             .filter(|t| !t.tactical_positions.is_goalkeeper())
             .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))
-            .collect();
-
-        if !open_teammates.is_empty() {
-            let best_option = open_teammates
-                .iter()
-                .max_by(|a, b| {
-                    let recency_a = ctx.ball().passer_recency_penalty(a.id);
-                    let recency_b = ctx.ball().passer_recency_penalty(b.id);
-                    let space_a = self.calculate_space_around_player(ctx, a) * recency_a;
-                    let space_b = self.calculate_space_around_player(ctx, b) * recency_b;
-                    space_a
-                        .partial_cmp(&space_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .cloned();
-
-            best_option
-        } else {
-            None
-        }
+            .max_by(|a, b| {
+                let recency_a = ctx.ball().passer_recency_penalty(a.id);
+                let recency_b = ctx.ball().passer_recency_penalty(b.id);
+                let space_a = self.calculate_space_around_player(ctx, a) * recency_a;
+                let space_b = self.calculate_space_around_player(ctx, b) * recency_b;
+                space_a
+                    .partial_cmp(&space_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     }
 
     fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {

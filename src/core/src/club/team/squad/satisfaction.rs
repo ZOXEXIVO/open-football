@@ -29,20 +29,17 @@ fn size_satisfaction(squad_size: usize) -> f32 {
 
 /// Based on average match rating of players with 4+ appearances.
 fn performance_satisfaction(players: &[Player]) -> f32 {
-    let experienced: Vec<_> = players
+    let (sum, count) = players
         .iter()
         .filter(|p| p.statistics.played + p.statistics.played_subs > 3)
-        .collect();
+        .map(|p| p.statistics.average_rating)
+        .fold((0.0_f32, 0u32), |(s, c), r| (s + r, c + 1));
 
-    if experienced.is_empty() {
+    if count == 0 {
         return 0.5;
     }
 
-    let avg_rating: f32 = experienced
-        .iter()
-        .map(|p| p.statistics.average_rating)
-        .sum::<f32>()
-        / experienced.len() as f32;
+    let avg_rating = sum / count as f32;
 
     // Map rating 5.5–7.5 onto 0.0–1.0
     ((avg_rating - 5.5) / 2.0).clamp(0.0, 1.0)
@@ -50,7 +47,7 @@ fn performance_satisfaction(players: &[Player]) -> f32 {
 
 /// Penalises large gaps between best and worst perceived quality.
 fn quality_spread_satisfaction(players: &[Player], state: &CoachDecisionState) -> f32 {
-    let qualities: Vec<f32> = players
+    let (count, max_q, min_q) = players
         .iter()
         .filter_map(|p| {
             state
@@ -58,14 +55,14 @@ fn quality_spread_satisfaction(players: &[Player], state: &CoachDecisionState) -
                 .get(&p.id)
                 .map(|imp| imp.perceived_quality)
         })
-        .collect();
+        .fold(
+            (0u32, f32::NEG_INFINITY, f32::INFINITY),
+            |(c, mx, mn), q| (c + 1, mx.max(q), mn.min(q)),
+        );
 
-    if qualities.len() < 2 {
+    if count < 2 {
         return 0.5;
     }
-
-    let max_q = qualities.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let min_q = qualities.iter().cloned().fold(f32::INFINITY, f32::min);
 
     // Gap of 10+ → 0.0, gap of 0 → 1.0
     (1.0 - (max_q - min_q) / 10.0).clamp(0.0, 1.0)

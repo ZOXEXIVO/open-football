@@ -203,9 +203,10 @@ impl ForwardCreatingSpaceState {
             .collect();
 
         // Collect relevant nearby opponents for gap-finding
+        const SPACE_SCAN_RADIUS_SQ: f32 = SPACE_SCAN_RADIUS * SPACE_SCAN_RADIUS;
         let opponents: Vec<Vector3<f32>> = all_opponent_positions
             .iter()
-            .filter(|&&pos| (pos - player_pos).magnitude() < SPACE_SCAN_RADIUS)
+            .filter(|&&pos| (pos - player_pos).norm_squared() < SPACE_SCAN_RADIUS_SQ)
             .copied()
             .collect();
 
@@ -435,7 +436,7 @@ impl ForwardCreatingSpaceState {
                     return false;
                 }
                 let projected_point = holder.position + direction * projection;
-                (opp_pos - projected_point).magnitude() < 4.0
+                (opp_pos - projected_point).norm_squared() < 4.0 * 4.0
             });
 
             if !lane_blocked {
@@ -940,19 +941,18 @@ impl ForwardCreatingSpaceState {
 
     fn get_defensive_line_height(&self, ctx: &StateProcessingContext) -> f32 {
         let field_width = ctx.context.field_size.width as f32;
-        let defenders: Vec<f32> = ctx
+        let (sum_x, count) = ctx
             .players()
             .opponents()
             .all()
             .filter(|p| p.tactical_positions.is_defender())
-            .map(|p| p.position.x)
-            .collect();
+            .fold((0.0_f32, 0u32), |(s, c), p| (s + p.position.x, c + 1));
 
-        if defenders.is_empty() {
+        if count == 0 {
             return 0.5;
         }
 
-        let avg_x = defenders.iter().sum::<f32>() / defenders.len() as f32;
+        let avg_x = sum_x / count as f32;
         avg_x / field_width
     }
 
@@ -998,19 +998,18 @@ impl ForwardCreatingSpaceState {
 
     fn detect_defensive_shift(&self, ctx: &StateProcessingContext) -> bool {
         // Simplified detection - check if defenders are shifting to one side
-        let defenders: Vec<f32> = ctx
+        let (sum_y, count) = ctx
             .players()
             .opponents()
             .all()
             .filter(|p| p.tactical_positions.is_defender())
-            .map(|p| p.position.y)
-            .collect();
+            .fold((0.0_f32, 0u32), |(s, c), p| (s + p.position.y, c + 1));
 
-        if defenders.is_empty() {
+        if count == 0 {
             return false;
         }
 
-        let avg_y = defenders.iter().sum::<f32>() / defenders.len() as f32;
+        let avg_y = sum_y / count as f32;
         let field_height = ctx.context.field_size.height as f32;
 
         (avg_y - field_height / 2.0).abs() > field_height * 0.15
@@ -1156,24 +1155,23 @@ impl ForwardCreatingSpaceState {
 
     /// Check if this forward should coordinate with other forwards to create space
     fn should_coordinate_with_other_forwards(&self, ctx: &StateProcessingContext) -> bool {
-        // Find other forwards on the team
-        let other_forwards: Vec<_> = ctx
+        // Single pass: track whether any other forwards exist and detect close pairs.
+        let mut has_any = false;
+        for forward in ctx
             .players()
             .teammates()
             .all()
             .filter(|t| t.tactical_positions.is_forward() && t.id != ctx.player.id)
-            .collect();
-
-        if other_forwards.is_empty() {
-            return false;
-        }
-
-        // Check if forwards are too close together (poor spacing)
-        for forward in &other_forwards {
+        {
+            has_any = true;
             let distance = (ctx.player.position - forward.position).magnitude();
             if distance < 25.0 {
                 return true; // Need to coordinate - too close
             }
+        }
+
+        if !has_any {
+            return false;
         }
 
         // Check if ball holder is looking for a pass
@@ -1191,14 +1189,14 @@ impl ForwardCreatingSpaceState {
         &self,
         ctx: &StateProcessingContext,
     ) -> Option<Vector3<f32>> {
-        let other_forwards: Vec<_> = ctx
+        let (sum_y, count) = ctx
             .players()
             .teammates()
             .all()
             .filter(|t| t.tactical_positions.is_forward() && t.id != ctx.player.id)
-            .collect();
+            .fold((0.0_f32, 0u32), |(s, c), f| (s + f.position.y, c + 1));
 
-        if other_forwards.is_empty() {
+        if count == 0 {
             return None;
         }
 
@@ -1206,8 +1204,7 @@ impl ForwardCreatingSpaceState {
         let player_pos = ctx.player.position;
 
         // Calculate average position of other forwards
-        let avg_forward_y: f32 =
-            other_forwards.iter().map(|f| f.position.y).sum::<f32>() / other_forwards.len() as f32;
+        let avg_forward_y: f32 = sum_y / count as f32;
 
         // Position ourselves on the opposite side for better width — push to flanks
         let target_y = if avg_forward_y < field_height / 2.0 {
@@ -1349,12 +1346,11 @@ impl ForwardCreatingSpaceState {
         let attacking_direction = self.get_attacking_direction(ctx);
         let check_position = player_position + attacking_direction * 40.0;
 
-        // Pre-filter: only check opponents within 55 units (40 ahead + 15 radius)
+        // Scan around the candidate point, not the player.
         let opponents_in_space = ctx
             .players()
             .opponents()
-            .nearby(55.0)
-            .filter(|opp| (opp.position - check_position).magnitude() < 15.0)
+            .nearby_at(check_position, 15.0)
             .count();
 
         opponents_in_space < 2

@@ -185,18 +185,15 @@ impl MidfielderCreatingSpaceState {
         let nearby_opponents: Vec<_> = ctx
             .players()
             .opponents()
-            .all()
-            .filter(|o| (o.position - scan_center).magnitude() < scan_radius)
+            .nearby_at(scan_center, scan_radius)
             .map(|o| (o.position, o.velocity(ctx)))
             .collect();
 
         let nearby_teammates: Vec<_> = ctx
             .players()
             .teammates()
-            .all()
-            .filter(|t| {
-                t.id != ctx.player.id && (t.position - scan_center).magnitude() < scan_radius
-            })
+            .nearby_at(scan_center, scan_radius)
+            .filter(|t| t.id != ctx.player.id)
             .map(|t| t.position)
             .collect();
 
@@ -831,19 +828,8 @@ impl MidfielderCreatingSpaceState {
         let mut congestion = 0.0;
 
         // Weight opponents more than teammates
-        let opponents = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|o| (o.position - position).magnitude() < 30.0)
-            .count();
-
-        let teammates = ctx
-            .players()
-            .teammates()
-            .all()
-            .filter(|t| (t.position - position).magnitude() < 20.0)
-            .count();
+        let opponents = ctx.players().opponents().nearby_at(position, 30.0).count();
+        let teammates = ctx.players().teammates().nearby_at(position, 20.0).count();
 
         congestion += opponents as f32 * 2.0;
         congestion += teammates as f32 * 0.5;

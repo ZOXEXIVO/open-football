@@ -2,6 +2,9 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -41,6 +44,26 @@ impl StateProcessingHandler for ForwardShootingState {
         let finishing = ctx.player.skills.technical.finishing / 20.0;
         if distance_to_goal > 80.0 && finishing < 0.5 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+        }
+
+        // Last-mile check via the centralised helper. Catches direct
+        // entries that didn't tag a `pending_shot_reason` AND any path
+        // where conditions changed in the tick between the deciding
+        // state and the Shooting state running. If the helper says the
+        // shot isn't on, drop back to Running rather than firing.
+        // Skip the helper when a `pending_shot_reason` was already set
+        // — those callers already evaluated their own gates and have
+        // committed to the strike (avoids double-rolling willingness).
+        if ctx.player.pending_shot_reason.is_none() {
+            match evaluate_forward_shot_decision(ctx, "FWD_SHOOTING_LASTMILE") {
+                ShotDecision::Shoot { .. } => {}
+                ShotDecision::Pass => {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                }
+                ShotDecision::Hold => {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+                }
+            }
         }
 
         // Use the transition-point reason if one was tagged. The

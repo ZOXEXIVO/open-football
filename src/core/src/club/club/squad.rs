@@ -76,14 +76,13 @@ impl Club {
         const DEPTH_GAP_FLOOR: u8 = 60;
 
         let group_stats = |group: PlayerFieldPositionGroup| -> (usize, u8) {
-            let cas: Vec<u8> = self.teams.teams[main_idx]
+            let (count, worst) = self.teams.teams[main_idx]
                 .players
                 .iter()
                 .filter(|p| p.position().position_group() == group)
                 .map(|p| p.player_attributes.current_ability)
-                .collect();
-            let worst = cas.iter().copied().min().unwrap_or(0);
-            (cas.len(), worst)
+                .fold((0usize, u8::MAX), |(c, w), a| (c + 1, w.min(a)));
+            (count, if count == 0 { 0 } else { worst })
         };
 
         let promotion_threshold = |group: PlayerFieldPositionGroup| -> u8 {

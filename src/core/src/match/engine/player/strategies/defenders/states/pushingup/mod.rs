@@ -204,11 +204,10 @@ impl DefenderPushingUpState {
 
         let attacking_third_center = Vector3::new(attacking_third_x, field_height * 0.5, 0.0);
 
-        let teammates = ctx.players().teammates();
-
-        let attacking_teammates: Vec<_> = teammates
+        let (sum_pos, count) = ctx
+            .players()
+            .teammates()
             .all()
-            .into_iter()
             .filter(|p| {
                 if is_left {
                     p.position.x > mid_x
@@ -216,13 +215,12 @@ impl DefenderPushingUpState {
                     p.position.x < mid_x
                 }
             })
-            .collect();
+            .fold((Vector3::zeros(), 0u32), |(acc, c), p| {
+                (acc + p.position, c + 1)
+            });
 
-        let avg_attacking_position = if !attacking_teammates.is_empty() {
-            attacking_teammates
-                .iter()
-                .fold(Vector3::zeros(), |acc, p| acc + p.position)
-                / attacking_teammates.len() as f32
+        let avg_attacking_position = if count > 0 {
+            sum_pos / count as f32
         } else {
             attacking_third_center
         };

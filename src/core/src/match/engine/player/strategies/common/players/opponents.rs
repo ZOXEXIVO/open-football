@@ -41,6 +41,30 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
             })
     }
 
+    /// Same as `nearby`, but scans around an arbitrary world position
+    /// instead of the player's own position. Routes through the spatial
+    /// grid so a small cell window replaces the previous full-team scan.
+    pub fn nearby_at(
+        &self,
+        center: nalgebra::Vector3<f32>,
+        distance: f32,
+    ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
+        self.ctx
+            .tick_context
+            .grid
+            .opponents_full(
+                self.ctx.player.id,
+                self.ctx.player.team_id,
+                center,
+                distance,
+            )
+            .map(|(gp, _dist)| MatchPlayerLite {
+                id: gp.id,
+                position: gp.position,
+                tactical_positions: gp.tactical_position,
+            })
+    }
+
     pub fn nearby_raw(&self, distance: f32) -> impl Iterator<Item = (u32, f32)> + 'b {
         self.ctx
             .tick_context

@@ -104,11 +104,14 @@ impl StateProcessingHandler for MidfielderPressingState {
         // But only if no teammate is closer (avoid chasing ball during teammate's pass)
         if !ctx.ball().is_owned() && ball_distance < 50.0 && ctx.ball().speed() < 3.0 {
             let ball_pos = ctx.tick_context.positions.ball.position;
-            let closer_teammate = ctx
-                .players()
-                .teammates()
-                .all()
-                .any(|t| (t.position - ball_pos).magnitude() < ball_distance - 5.0);
+            let cutoff = ball_distance - 5.0;
+            let closer_teammate = cutoff > 0.0
+                && ctx
+                    .players()
+                    .teammates()
+                    .nearby_at(ball_pos, cutoff)
+                    .next()
+                    .is_some();
 
             if !closer_teammate {
                 return Some(StateChangeResult::with_midfielder_state(

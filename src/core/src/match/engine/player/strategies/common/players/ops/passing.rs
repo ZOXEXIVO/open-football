@@ -35,25 +35,22 @@ impl<'p> PassingOperationsImpl<'p> {
         &self,
         max_distance: f32,
     ) -> Option<MatchPlayerLite> {
-        let teammates = self.ctx.players().teammates();
-
-        // Prioritize closest teammates with clear passing lanes
-        let safe_options: Vec<MatchPlayerLite> = teammates
+        // Prioritize closest teammates with clear passing lanes; pick the safest.
+        self.ctx
+            .players()
+            .teammates()
             .nearby(max_distance)
             .filter(|t| {
                 self.ctx.player().has_clear_pass(t.id) && !self.is_teammate_under_pressure(t)
             })
-            .collect();
-
-        // Find the safest option by direction and pressure
-        safe_options.into_iter().min_by(|a, b| {
-            // Compare how "away from danger" the pass would be
-            let a_safety = self.calculate_pass_safety(a);
-            let b_safety = self.calculate_pass_safety(b);
-            b_safety
-                .partial_cmp(&a_safety)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+            .min_by(|a, b| {
+                // Compare how "away from danger" the pass would be
+                let a_safety = self.calculate_pass_safety(a);
+                let b_safety = self.calculate_pass_safety(b);
+                b_safety
+                    .partial_cmp(&a_safety)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     }
 
     /// Find the best pass option using the PassEvaluator

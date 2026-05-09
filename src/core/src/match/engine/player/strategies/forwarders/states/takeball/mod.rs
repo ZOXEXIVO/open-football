@@ -91,13 +91,13 @@ impl StateProcessingHandler for ForwardTakeBallState {
         let mut neighbor_count = 0;
 
         // Check all nearby players (teammates and opponents)
-        let all_players: Vec<_> = ctx
-            .players()
-            .teammates()
+        let players_view = ctx.players();
+        let teammates_view = players_view.teammates();
+        let opponents_view = players_view.opponents();
+        let all_players = teammates_view
             .all()
-            .chain(ctx.players().opponents().all())
-            .filter(|p| p.id != ctx.player.id)
-            .collect();
+            .chain(opponents_view.all())
+            .filter(|p| p.id != ctx.player.id);
 
         for other_player in all_players {
             let to_player = ctx.player.position - other_player.position;

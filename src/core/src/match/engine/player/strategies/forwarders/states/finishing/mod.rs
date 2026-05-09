@@ -2,6 +2,9 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -23,20 +26,31 @@ impl StateProcessingHandler for ForwardFinishingState {
             ));
         }
 
-        // Calculate the shooting direction and power
-        let (shooting_direction, _) = self.calculate_shooting_parameters(ctx);
-
-        // Transition to Running state after taking the shot
-        Some(StateChangeResult::with_forward_state_and_event(
-            ForwardState::Running,
-            Event::PlayerEvent(PlayerEvent::Shoot(
-                ShootingEventContext::new()
-                    .with_player_id(ctx.player.id)
-                    .with_target(shooting_direction)
-                    .with_reason("FWD_FINISHING")
-                    .build(ctx),
+        // Centralised shot decision. The previous Finishing state fired
+        // a Shoot event with no skill / clarity / xG / pass-EV checks
+        // beyond a 150u distance gate — which is why mediocre finishers
+        // converted at near-elite rates from any cross or rebound.
+        match evaluate_forward_shot_decision(ctx, "FWD_FINISHING") {
+            ShotDecision::Shoot { reason } => {
+                let (shooting_direction, _) = self.calculate_shooting_parameters(ctx);
+                Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardState::Running,
+                    Event::PlayerEvent(PlayerEvent::Shoot(
+                        ShootingEventContext::new()
+                            .with_player_id(ctx.player.id)
+                            .with_target(shooting_direction)
+                            .with_reason(reason)
+                            .build(ctx),
+                    )),
+                ))
+            }
+            ShotDecision::Pass => Some(StateChangeResult::with_forward_state(
+                ForwardState::Passing,
             )),
-        ))
+            ShotDecision::Hold => Some(StateChangeResult::with_forward_state(
+                ForwardState::Dribbling,
+            )),
+        }
     }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {

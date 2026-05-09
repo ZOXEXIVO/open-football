@@ -48,7 +48,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
         // intercept state if predicted landing is inside our reach.
         if !ctx.ball().is_owned() && ctx.ball().is_in_flight() {
             let landing = ctx.tick_context.positions.ball.landing_position;
-            if (landing - ctx.player.position).magnitude() < 100.0 {
+            if (landing - ctx.player.position).norm_squared() < 100.0 * 100.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
                 ));

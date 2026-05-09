@@ -5,6 +5,9 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PassEvaluator, PlayerDistanceFromStartPosition,
     PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -292,39 +295,38 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // Priority 0: Point-blank range (≤36u, inside the 18-yard box).
-            // Per-tick willingness check — real strikers in the box still
-            // sometimes square the ball or take a touch; they don't fire
-            // 100% of the time. The previous "MUST shoot" path produced
-            // every box entry as a guaranteed shot, which was the dominant
-            // path for unrealistic 100% box conversion. Per-tick rate
-            // ~0.07-0.16 with shot_clarity + skill modulation: ≈40-70%
-            // cumulative across the 5-10 ticks a forward spends in the
-            // box, matching real-football "fires roughly once per 1-2
-            // box entries" — sometimes the cutback is the right play.
+            // Routed through the centralised `evaluate_forward_shot_decision`
+            // so the same xG / sprint-balance / 1v1 / pass-EV / willingness
+            // gates apply that the rest of the forward states use. The
+            // previous bespoke 0.025..0.10 per-tick curve here was the
+            // last in-tree willingness duplicate that diverged from the
+            // helper, and Shooting state's `pending_shot_reason.is_some()`
+            // skip meant nothing else was checking these gates after
+            // the transition.
             if distance_to_goal <= POINT_BLANK_DISTANCE {
-                if can_shoot {
-                    let pb_clarity = ctx.player().shot_clarity();
-                    let pb_fin = (ctx.player.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
-                    let pb_comp = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-                    let pb_willingness = (pb_fin * 0.06 + pb_comp * 0.02 + 0.025)
-                        .clamp(0.025, 0.10)
-                        * (0.50 + pb_clarity * 0.50);
-                    if rand::random::<f32>() < pb_willingness {
+                if !can_shoot {
+                    // Cooldown active — rebound scenario, don't chase the
+                    // keeper. Lay the ball off via a pass instead.
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                }
+                match evaluate_forward_shot_decision(ctx, "FWD_RUN_POINT_BLANK") {
+                    ShotDecision::Shoot { reason } => {
                         return Some(
                             StateChangeResult::with_forward_state(ForwardState::Shooting)
-                                .with_shot_reason("FWD_RUN_POINT_BLANK"),
+                                .with_shot_reason(reason),
                         );
                     }
-                    // Hesitated this tick — stay in Running and re-roll
-                    // next tick. With cumulative 40-70% over 5-10 ticks,
-                    // most box entries do produce a shot, but not every
-                    // tick. Critically, this gives the keeper time to
-                    // close the angle.
-                    return None;
+                    ShotDecision::Pass => {
+                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                    }
+                    ShotDecision::Hold => {
+                        // Hesitated this tick — stay in Running and re-roll
+                        // next tick. Inside-six floor (0.30) inside the helper
+                        // means most box entries still produce a shot across
+                        // the 5-10 ticks a forward spends inside.
+                        return None;
+                    }
                 }
-                // Cooldown active — rebound scenario, don't chase the
-                // keeper. Lay the ball off via a pass instead.
-                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
             // can_shoot CONTENTION SKIP. If we're in shooting range but
@@ -605,20 +607,35 @@ impl StateProcessingHandler for ForwardRunningState {
             // Same reasoning as Priority 0.5: the hold-ball branch above
             // already considered possession preference; here we're too
             // close to goal for tempo management to veto.
+            //
+            // Final commit goes through the centralised helper so the
+            // sprint-balance / 1v1 / pass-EV gates apply uniformly. The
+            // bespoke `shot_triggered` roll above is PRIO05's, not the
+            // helper's — leaving it as the gate here meant a sprinting
+            // forward off-balance still fired in the box without the
+            // composure penalty being applied.
             let box_shot_condition = can_shoot
                 && !defer_to_teammate
                 && distance_to_goal < 45.0
                 && distance_to_goal <= max_shot_distance
                 && ctx.player().has_clear_shot();
 
-            if box_shot_condition && shot_triggered {
-                return Some(
-                    StateChangeResult::with_forward_state(ForwardState::Shooting)
-                        .with_shot_reason("FWD_RUN_PRIO06_BOX"),
-                );
-            }
             if box_shot_condition {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                match evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO06_BOX") {
+                    ShotDecision::Shoot { reason } => {
+                        return Some(
+                            StateChangeResult::with_forward_state(ForwardState::Shooting)
+                                .with_shot_reason(reason),
+                        );
+                    }
+                    // Original Hold-fallback laid the ball off via a pass —
+                    // a forward who declines a clear box shot would cutback
+                    // rather than sit on the ball. Preserve that semantic so
+                    // we don't loiter with a chance available.
+                    ShotDecision::Pass | ShotDecision::Hold => {
+                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                    }
+                }
             }
 
             // If we deferred to a better-positioned teammate OR the
@@ -757,7 +774,15 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
-            // Prefer passing over shooting to maintain realistic play
+            // Prefer passing over shooting to maintain realistic play.
+            //
+            // The decision point used to fire a Shoot event directly when
+            // a competent finisher had a clear shot in close range. That
+            // bypassed every gate in the centralised helper because
+            // ForwardShootingState skips its own helper call when
+            // `pending_shot_reason` is Some. Now the final yes/no comes
+            // from the helper too — a sprinting Composure-8 striker no
+            // longer auto-fires just because we hit the 120-tick limit.
             if ctx.in_state_time > 120 {
                 let finishing = ctx.player.skills.technical.finishing / 20.0;
                 if can_shoot
@@ -766,10 +791,14 @@ impl StateProcessingHandler for ForwardRunningState {
                     && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
                 {
-                    return Some(
-                        StateChangeResult::with_forward_state(ForwardState::Shooting)
-                            .with_shot_reason("FWD_RUN_ANTI_OSCILLATION"),
-                    );
+                    if let ShotDecision::Shoot { reason } =
+                        evaluate_forward_shot_decision(ctx, "FWD_RUN_ANTI_OSCILLATION")
+                    {
+                        return Some(
+                            StateChangeResult::with_forward_state(ForwardState::Shooting)
+                                .with_shot_reason(reason),
+                        );
+                    }
                 }
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
@@ -1227,10 +1256,15 @@ impl ForwardRunningState {
 
         // Static or slow-moving ball nearby - only if nearest teammate
         if ball_distance < 30.0 && ball_speed < 2.0 {
+            let cutoff = ball_distance - 5.0;
             let ball_pos = ctx.tick_context.positions.ball.position;
-            let closer_teammate = ctx.players().teammates().all().any(|t| {
-                t.id != ctx.player.id && (t.position - ball_pos).magnitude() < ball_distance - 5.0
-            });
+            let closer_teammate = cutoff > 0.0 && {
+                let cutoff_sq = cutoff * cutoff;
+                ctx.players().teammates().all().any(|t| {
+                    t.id != ctx.player.id
+                        && (t.position - ball_pos).norm_squared() < cutoff_sq
+                })
+            };
             if !closer_teammate {
                 return true;
             }
@@ -1456,26 +1490,40 @@ impl ForwardRunningState {
 
     /// Find opponent defensive line position
     fn find_defensive_line(&self, ctx: &StateProcessingContext) -> f32 {
-        let defenders: Vec<f32> = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|p| p.tactical_positions.is_defender())
-            .map(|p| match ctx.player.side {
-                Some(PlayerSide::Left) => p.position.x,
-                Some(PlayerSide::Right) => p.position.x,
-                None => p.position.x,
-            })
-            .collect();
+        let players_view = ctx.players();
+        let opponents_view = players_view.opponents();
+        let defender_xs = || {
+            opponents_view
+                .all()
+                .filter(|p| p.tactical_positions.is_defender())
+                .map(|p| p.position.x)
+        };
 
-        if defenders.is_empty() {
-            ctx.context.field_size.width as f32 / 2.0
-        } else {
-            // Return the position of the last defender
-            match ctx.player.side {
-                Some(PlayerSide::Left) => defenders.iter().fold(f32::MIN, |a, &b| a.max(b)),
-                Some(PlayerSide::Right) => defenders.iter().fold(f32::MAX, |a, &b| a.min(b)),
-                None => defenders.iter().sum::<f32>() / defenders.len() as f32,
+        match ctx.player.side {
+            Some(PlayerSide::Left) => {
+                let max = defender_xs().fold(f32::MIN, f32::max);
+                if max == f32::MIN {
+                    ctx.context.field_size.width as f32 / 2.0
+                } else {
+                    max
+                }
+            }
+            Some(PlayerSide::Right) => {
+                let min = defender_xs().fold(f32::MAX, f32::min);
+                if min == f32::MAX {
+                    ctx.context.field_size.width as f32 / 2.0
+                } else {
+                    min
+                }
+            }
+            None => {
+                let (sum, count) =
+                    defender_xs().fold((0.0_f32, 0u32), |(s, c), x| (s + x, c + 1));
+                if count == 0 {
+                    ctx.context.field_size.width as f32 / 2.0
+                } else {
+                    sum / count as f32
+                }
             }
         }
     }
@@ -1861,12 +1909,7 @@ impl ForwardRunningState {
 
         // Must have teammates in the box to cross to
         let goal_pos = ctx.player().opponent_goal_position();
-        let teammates_in_box = ctx
-            .players()
-            .teammates()
-            .all()
-            .filter(|t| (t.position - goal_pos).magnitude() < 120.0)
-            .count();
+        let teammates_in_box = ctx.players().teammates().nearby_at(goal_pos, 120.0).count();
 
         let crossing = ctx.player.skills.technical.crossing / 20.0;
 
@@ -1888,7 +1931,8 @@ impl ForwardRunningState {
             .nearby(25.0)
             .filter(|opp| {
                 let to_opp = (opp.position - player_pos).normalize();
-                to_opp.dot(&to_goal) > 0.5 && (opp.position - player_pos).magnitude() < 20.0
+                to_opp.dot(&to_goal) > 0.5
+                    && (opp.position - player_pos).norm_squared() < 20.0 * 20.0
             })
             .count();
 

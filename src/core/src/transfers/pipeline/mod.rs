@@ -84,6 +84,11 @@ mod processor {
         pub home_reputation: i16,
         pub world_reputation: i16,
         pub country_reputation: u16,
+        /// World reputation of the player's current club (main team). Used
+        /// by scouting to skip targets whose club tier dwarfs the buyer's
+        /// — a second-tier club shouldn't be filing reports on a top-flight
+        /// starter they could never realistically sign.
+        pub club_world_reputation: i16,
         /// True if the player is currently injured.
         pub is_injured: bool,
         /// Months left on contract; 0 if no contract (free agent).

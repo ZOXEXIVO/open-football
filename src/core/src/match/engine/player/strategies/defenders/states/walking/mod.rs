@@ -3,8 +3,8 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions,
+    ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior, VectorExtensions,
 };
 use nalgebra::Vector3;
 
@@ -177,10 +177,17 @@ impl DefenderWalkingState {
     }
 
     fn calculate_team_center(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let all_teammates: Vec<MatchPlayerLite> = ctx.players().teammates().all().collect();
+        let (sum, count) = ctx
+            .players()
+            .teammates()
+            .all()
+            .fold((Vector3::zeros(), 0u32), |(s, c), p| (s + p.position, c + 1));
 
-        let sum: Vector3<f32> = all_teammates.iter().map(|p| p.position).sum();
-        sum / all_teammates.len() as f32
+        if count == 0 {
+            Vector3::zeros()
+        } else {
+            sum / count as f32
+        }
     }
 
     fn has_nearby_threats(&self, ctx: &StateProcessingContext) -> bool {

@@ -748,6 +748,7 @@ impl PipelineProcessor {
             // of the league/club they actually played for.
             let (seller_league_rep, seller_club_rep) =
                 PlayerValuationCalculator::seller_context(country, club);
+            let club_world_rep = Self::club_world_reputation(club);
 
             for team in &club.teams.teams {
                 for player in &team.players.players {
@@ -802,6 +803,7 @@ impl PipelineProcessor {
                         home_reputation: player.player_attributes.home_reputation,
                         world_reputation: player.player_attributes.world_reputation,
                         country_reputation,
+                        club_world_reputation: club_world_rep,
                         is_injured: player.player_attributes.is_injured,
                         contract_months_remaining,
                         salary,
@@ -839,6 +841,12 @@ impl PipelineProcessor {
 
         for club in &country.clubs {
             let plan = &club.transfer_plan;
+            // Multi-factor realism gate (see `ScoutingConfig::is_target_realistic`):
+            // blocks first-team regulars at much-bigger clubs from
+            // appearing in the candidate pool, while leaving listed,
+            // loan-listed, expiring-contract, youth, and fringe players
+            // attainable regardless of selling-club tier.
+            let buyer_world_rep = Self::club_world_reputation(club);
 
             for assignment in &plan.scouting_assignments {
                 if assignment.completed {
@@ -913,6 +921,9 @@ impl PipelineProcessor {
                         return false;
                     }
                     if club.transfer_plan.is_rejected(p.player_id, date) {
+                        return false;
+                    }
+                    if !config.is_target_realistic(buyer_world_rep, p) {
                         return false;
                     }
                     let effective_min =
@@ -1095,10 +1106,6 @@ impl PipelineProcessor {
                         }
                     }
 
-                    if is_new && !wanted_player_ids.contains(&target.player_id) {
-                        wanted_player_ids.push(target.player_id);
-                    }
-
                     let final_obs_count = obs_count + 1;
                     let confidence = config.pool_report_confidence(final_obs_count as u8);
                     let youth_bonus =
@@ -1152,6 +1159,13 @@ impl PipelineProcessor {
                     if recommendation == ScoutingRecommendation::Pass {
                         rejected_events.push((club.id, target.player_id));
                     } else {
+                        // Mark Wnt only on meaningful interest — a non-Pass
+                        // report from a real assignment. The previous gate
+                        // (first observation regardless of outcome) lit up
+                        // every player a scout glanced at, even rejections.
+                        if !wanted_player_ids.contains(&target.player_id) {
+                            wanted_player_ids.push(target.player_id);
+                        }
                         reports.push(ScoutingReportResult {
                             club_id: club.id,
                             report: DetailedScoutingReport {

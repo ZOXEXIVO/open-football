@@ -227,6 +227,7 @@ impl PipelineProcessor {
                         home_reputation: player.player_attributes.home_reputation,
                         world_reputation: player.player_attributes.world_reputation,
                         country_reputation: country.reputation,
+                        club_world_reputation: Self::club_world_reputation(club),
                         is_injured: player.player_attributes.is_injured,
                         contract_months_remaining,
                         salary,

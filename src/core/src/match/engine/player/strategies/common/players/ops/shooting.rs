@@ -37,19 +37,29 @@ impl<'p> ShootingOperationsImpl<'p> {
     /// would skip in favour of a pass.
     pub fn expected_xg(&self) -> f32 {
         let d = self.ctx.ball().distance_to_opponent_goal();
+        // Mirrors `ShotQualityEvaluator::distance_factor` after the
+        // close-range recalibration. Old curve overstated point-blank
+        // (0.55 → realistic 0.40) which let mediocre finishers post
+        // 1.7 goals/match by spamming rebounds.
         let distance_factor = if d <= 10.0 {
-            0.55
+            0.40
         } else if d <= 30.0 {
-            0.55 - (d - 10.0) / 20.0 * 0.30
+            0.40 - (d - 10.0) / 20.0 * 0.20
         } else if d <= 60.0 {
-            0.25 - (d - 30.0) / 30.0 * 0.18
+            0.20 - (d - 30.0) / 30.0 * 0.13
         } else if d <= 120.0 {
             0.07 - (d - 60.0) / 60.0 * 0.05
         } else {
             0.02
         };
         let finishing = (self.ctx.player.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
-        let skill_mult = 0.7 + finishing * 0.6; // 0.7 .. 1.3
+        let composure = (self.ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+        // Quadratic skill curve: same shape used in xg.rs `skill_factor`.
+        // Mediocre finishers (~0.5 finishing) sit near 0.66×, elite (~0.9)
+        // sit near 1.20×. Old linear (0.7 + 0.6×fin) gave the mediocre a
+        // free 0.96× ride.
+        let blend = (finishing * 0.7 + composure * 0.3).clamp(0.0, 1.0);
+        let skill_mult = (0.55 + blend * blend * 0.85).clamp(0.45, 1.30);
         // Penalise a pressured / blocked shot — matches the real gameplay
         // where a defender in the corridor drastically reduces xG.
         let clarity_mult = if self.ctx.player().has_clear_shot() {

@@ -127,9 +127,12 @@ impl ForwardPassingState {
         let vision_range = ctx.player.skills.mental.vision * 30.0;
         let vision_range_min = 100.0;
 
+        // Minimum score threshold — don't pass if best option is terrible
+        const MIN_FWD_PASS_SCORE: f32 = 5.0;
+
         // PRIORITY: First look for nearby forwards for quick combinations (25-80m range)
         // Minimum distance raised to 25 to prevent very short ping-pong passes
-        let nearby_forwards: Vec<MatchPlayerLite> = teammates
+        let best_forward = teammates
             .nearby_range(25.0, 80.0)
             .filter(|t| {
                 t.tactical_positions.is_forward()
@@ -138,50 +141,32 @@ impl ForwardPassingState {
                     // This prevents two forwards ping-ponging at close range
                     && !self.is_close_recent_passer(ctx, t)
             })
-            .collect();
+            .map(|teammate| {
+                let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
+                let congestion_penalty = self.calculate_congestion_penalty(ctx, &teammate);
+                let score = self.evaluate_forward_pass(ctx, &teammate)
+                    * recency_penalty
+                    * congestion_penalty;
+                (teammate, score)
+            })
+            .filter(|(_, score)| *score >= MIN_FWD_PASS_SCORE)
+            .max_by(|(_, score_a), (_, score_b)| {
+                score_a
+                    .partial_cmp(score_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(teammate, _)| teammate);
 
-        // Minimum score threshold — don't pass if best option is terrible
-        const MIN_FWD_PASS_SCORE: f32 = 5.0;
-
-        // If we have forwards nearby in good positions, prioritize them
-        if !nearby_forwards.is_empty() {
-            let best_forward = nearby_forwards
-                .into_iter()
-                .map(|teammate| {
-                    let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
-                    let congestion_penalty = self.calculate_congestion_penalty(ctx, &teammate);
-                    let score = self.evaluate_forward_pass(ctx, &teammate)
-                        * recency_penalty
-                        * congestion_penalty;
-                    (teammate, score)
-                })
-                .filter(|(_, score)| *score >= MIN_FWD_PASS_SCORE)
-                .max_by(|(_, score_a), (_, score_b)| {
-                    score_a
-                        .partial_cmp(score_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .map(|(teammate, _)| teammate);
-
-            if best_forward.is_some() {
-                return best_forward;
-            }
+        if best_forward.is_some() {
+            return best_forward;
         }
 
         // Fallback: Get all viable passing options within range
         // Minimum distance 25 to prevent very short passes between close players
-        let pass_options: Vec<MatchPlayerLite> = teammates
+        // Evaluate each option - forwards prioritize different passes than other positions
+        teammates
             .nearby_range(25.0, vision_range.max(vision_range_min))
             .filter(|t| self.is_viable_pass_target(ctx, t) && !self.is_close_recent_passer(ctx, t))
-            .collect();
-
-        if pass_options.is_empty() {
-            return None;
-        }
-
-        // Evaluate each option - forwards prioritize different passes than other positions
-        pass_options
-            .into_iter()
             .map(|teammate| {
                 let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
                 let congestion_penalty = self.calculate_congestion_penalty(ctx, &teammate);
@@ -506,12 +491,14 @@ impl ForwardPassingState {
             .opponents(player.id, space_radius)
             .count();
 
+        let space_radius_sq = space_radius * space_radius;
         let num_teammates_nearby = ctx
             .players()
             .teammates()
             .all()
             .filter(|t| {
-                t.id != player.id && (t.position - player.position).magnitude() <= space_radius
+                t.id != player.id
+                    && (t.position - player.position).norm_squared() <= space_radius_sq
             })
             .count();
 
@@ -601,12 +588,8 @@ impl ForwardPassingState {
         let nearby_teammates = ctx
             .players()
             .teammates()
-            .all()
-            .filter(|t| {
-                t.id != teammate.id
-                    && t.id != ctx.player.id
-                    && (t.position - teammate.position).magnitude() < 20.0
-            })
+            .nearby_at(teammate.position, 20.0)
+            .filter(|t| t.id != teammate.id)
             .count();
 
         let total_nearby = nearby_opponents + nearby_teammates;

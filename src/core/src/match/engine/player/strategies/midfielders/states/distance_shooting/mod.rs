@@ -140,7 +140,8 @@ impl MidfielderDistanceShootingState {
 
     fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         // Check if a teammate is open to receive a pass
-        let is_in_passing_range = (teammate.position - ctx.player.position).magnitude() <= 30.0;
+        let is_in_passing_range =
+            (teammate.position - ctx.player.position).norm_squared() <= 30.0 * 30.0;
         let has_clear_passing_lane = self.has_clear_passing_lane(ctx, teammate);
 
         is_in_passing_range && has_clear_passing_lane

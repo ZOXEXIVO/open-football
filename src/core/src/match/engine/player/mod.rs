@@ -41,16 +41,13 @@ impl<'p> GameFieldContextInput<'p> {
     }
 
     pub fn to_input(&self) -> Vec<f64> {
-        let players_positions: Vec<f64> = self
-            .object_positions
+        self.object_positions
             .players
             .as_slice()
             .iter()
             .sorted_by_key(|m| m.player_id)
-            .flat_map(|p| p.position.as_slice().to_vec())
+            .flat_map(|p| p.position.as_slice().iter().copied())
             .map(|m| m as f64)
-            .collect();
-
-        players_positions
+            .collect()
     }
 }
