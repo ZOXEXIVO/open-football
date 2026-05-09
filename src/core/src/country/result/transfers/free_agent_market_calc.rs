@@ -158,7 +158,10 @@ impl FreeAgentMarketCalculator {
         }
 
         let floor = Self::minimum_professional_wage(buyer_country_reputation) as f32;
-        let ceiling = (market_wage as f32) * 2.5; // sanity, no club tops 2.5× market
+        // Sanity ceiling never drops below the country's minimum professional
+        // wage — a low-CA player whose 2.5× market wage sits below the local
+        // pro-wage floor would otherwise produce floor > ceiling and panic.
+        let ceiling = ((market_wage as f32) * 2.5).max(floor);
         offer.clamp(floor, ceiling) as u32
     }
 
@@ -403,6 +406,22 @@ mod tests {
         let old_weak =
             FreeAgentMarketCalculator::retirement_probability_per_month(6, 36, 50, 0);
         assert!(old_weak > young_strong);
+    }
+
+    #[test]
+    fn offer_wage_does_not_panic_when_country_floor_exceeds_market_ceiling() {
+        // Low-ability player whose computed market wage is below the buyer
+        // country's minimum professional wage. Pre-fix this hit
+        // `f32::clamp(floor, ceiling)` with floor > ceiling and panicked.
+        let offer = FreeAgentMarketCalculator::offer_wage(
+            4_329,                       // market_wage — 2.5× = 10_822.5
+            BuyerRoleFit::Backup,
+            10,
+            4_768,                       // buyer_country_reputation → floor 18_304
+            5_000,
+            0.5,
+        );
+        assert!(offer >= 4_000);
     }
 
     #[test]
