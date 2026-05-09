@@ -848,9 +848,25 @@ impl SimulatorData {
     pub fn player_monitoring_details(&self, player_id: u32) -> Vec<PlayerMonitoringDetail> {
         let mut out: Vec<PlayerMonitoringDetail> = Vec::new();
 
+        // Hide the player's current host and loan parent — these clubs
+        // already hold his registration, so listing them as "watching"
+        // him is nonsensical.
+        let (host_club_id, parent_club_id) = self
+            .player_with_team(player_id)
+            .map(|(p, t)| {
+                (
+                    Some(t.club_id),
+                    p.contract_loan.as_ref().and_then(|l| l.loan_from_club_id),
+                )
+            })
+            .unwrap_or((None, None));
+
         for continent in &self.continents {
             for country in &continent.countries {
                 for club in &country.clubs {
+                    if host_club_id == Some(club.id) || parent_club_id == Some(club.id) {
+                        continue;
+                    }
                     let plan = &club.transfer_plan;
                     let team_slug = club
                         .teams
@@ -1092,9 +1108,24 @@ impl SimulatorData {
     pub fn clubs_interested_in_player(&self, player_id: u32) -> Vec<(u32, String, String)> {
         let mut interested = Vec::new();
 
+        // A club already linked to the player — current host or loan
+        // parent — is not "interested" in him: they already have him.
+        let (host_club_id, parent_club_id) = self
+            .player_with_team(player_id)
+            .map(|(p, t)| {
+                (
+                    Some(t.club_id),
+                    p.contract_loan.as_ref().and_then(|l| l.loan_from_club_id),
+                )
+            })
+            .unwrap_or((None, None));
+
         for continent in &self.continents {
             for country in &continent.countries {
                 for club in &country.clubs {
+                    if host_club_id == Some(club.id) || parent_club_id == Some(club.id) {
+                        continue;
+                    }
                     let mut is_interested = false;
 
                     // Check scouting assignments for observations of this player
