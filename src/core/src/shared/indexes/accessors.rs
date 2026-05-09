@@ -1102,10 +1102,22 @@ impl SimulatorData {
         )
     }
 
-    /// Find all clubs that have this player in their scouting assignments,
-    /// shortlists, or scouting reports (i.e. clubs interested in signing the player).
-    /// Returns Vec of (club_id, club_name, team_slug).
+    /// Find all clubs actively *pursuing* this player — i.e. clubs whose
+    /// recruitment pipeline shows intent to sign him, not merely passing
+    /// awareness. Returns Vec of (club_id, club_name, team_slug).
+    ///
+    /// Pursuit signals (any one is enough):
+    /// 1. Shortlisted with `Available` or `CurrentlyPursuing` status.
+    /// 2. Scouting report with `StrongBuy` or `Buy` recommendation.
+    /// 3. Staff recommendation with confidence ≥ 0.6.
+    ///
+    /// Deliberately *not* counted: bare scouting observations, persistent
+    /// `known_players` memory, and raw `scout_monitoring` rows. Those
+    /// represent awareness, not transfer intent, and previously caused
+    /// nearly every notable player to appear "wanted" by dozens of clubs.
     pub fn clubs_interested_in_player(&self, player_id: u32) -> Vec<(u32, String, String)> {
+        const STAFF_RECOMMENDATION_MIN_CONFIDENCE: f32 = 0.6;
+
         let mut interested = Vec::new();
 
         // A club already linked to the player — current host or loan
@@ -1126,88 +1138,34 @@ impl SimulatorData {
                     if host_club_id == Some(club.id) || parent_club_id == Some(club.id) {
                         continue;
                     }
-                    let mut is_interested = false;
 
-                    // Check scouting assignments for observations of this player
-                    for assignment in &club.transfer_plan.scouting_assignments {
-                        if assignment
-                            .observations
-                            .iter()
-                            .any(|o| o.player_id == player_id)
-                        {
-                            is_interested = true;
-                            break;
-                        }
-                    }
+                    let plan = &club.transfer_plan;
 
-                    // Check scouting reports
-                    if !is_interested {
-                        if club
-                            .transfer_plan
-                            .scouting_reports
-                            .iter()
-                            .any(|r| r.player_id == player_id)
-                        {
-                            is_interested = true;
-                        }
-                    }
+                    let on_active_shortlist = plan.shortlists.iter().any(|s| {
+                        s.candidates.iter().any(|c| {
+                            c.player_id == player_id
+                                && matches!(
+                                    c.status,
+                                    ShortlistCandidateStatus::Available
+                                        | ShortlistCandidateStatus::CurrentlyPursuing
+                                )
+                        })
+                    });
 
-                    // Check shortlists
-                    if !is_interested {
-                        for shortlist in &club.transfer_plan.shortlists {
-                            if shortlist
-                                .candidates
-                                .iter()
-                                .any(|c| c.player_id == player_id)
-                            {
-                                is_interested = true;
-                                break;
-                            }
-                        }
-                    }
+                    let has_buy_report = plan.scouting_reports.iter().any(|r| {
+                        r.player_id == player_id
+                            && matches!(
+                                r.recommendation,
+                                ScoutingRecommendation::StrongBuy | ScoutingRecommendation::Buy
+                            )
+                    });
 
-                    // Check staff recommendations
-                    if !is_interested {
-                        if club
-                            .transfer_plan
-                            .staff_recommendations
-                            .iter()
-                            .any(|r| r.player_id == player_id)
-                        {
-                            is_interested = true;
-                        }
-                    }
+                    let has_strong_staff_rec = plan.staff_recommendations.iter().any(|r| {
+                        r.player_id == player_id
+                            && r.confidence >= STAFF_RECOMMENDATION_MIN_CONFIDENCE
+                    });
 
-                    // Persistent scouting memory: clubs may know a player
-                    // from a past loan spell or observed match even after he
-                    // has returned to another country.
-                    if !is_interested {
-                        if club
-                            .transfer_plan
-                            .known_players
-                            .iter()
-                            .any(|m| m.player_id == player_id)
-                        {
-                            is_interested = true;
-                        }
-                    }
-
-                    // Active scout monitoring rows count too — a club
-                    // may have a scout watching the player even before
-                    // observations roll up into a `scouting_reports`
-                    // entry.
-                    if !is_interested {
-                        if club
-                            .transfer_plan
-                            .scout_monitoring
-                            .iter()
-                            .any(|m| m.player_id == player_id && m.is_active_interest())
-                        {
-                            is_interested = true;
-                        }
-                    }
-
-                    if is_interested {
+                    if on_active_shortlist || has_buy_report || has_strong_staff_rec {
                         let team_slug = club
                             .teams
                             .teams
@@ -1239,8 +1197,9 @@ impl SimulatorData {
 // ════════════════════════════════════════════════════════════════════
 
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, RecruitmentDecisionType, ScoutMonitoringStatus, ScoutVoteChoice,
-    ScoutingAssignment, TransferRequest,
+    DetailedScoutingReport, RecruitmentDecisionType, ScoutMonitoringStatus,
+    ScoutVoteChoice, ScoutingAssignment, ScoutingRecommendation, ShortlistCandidateStatus,
+    TransferRequest,
 };
 
 /// Holds references to the simulator, club, and pre-computed lookups
