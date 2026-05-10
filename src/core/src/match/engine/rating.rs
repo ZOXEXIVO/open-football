@@ -376,9 +376,13 @@ pub fn calculate_match_rating(
 
     // Errors carry weight regardless of position. Errors-to-goal are the
     // most damaging individual events in the rating, sitting just below a
-    // red card.
-    rating -= stats.errors_leading_to_shot as f32 * 0.35;
-    rating -= stats.errors_leading_to_goal as f32 * 0.90;
+    // red card. Both are capped per-match: a goalkeeper distributing
+    // under sustained pressure will see several long balls intercepted
+    // and an opponent shot within the response window — without a cap
+    // the per-event hit stacked unboundedly and pushed clean-sheet
+    // keepers into the 4-5 band, and conceding keepers to the 1.0 floor.
+    rating -= (stats.errors_leading_to_shot as f32 * 0.35).min(0.7);
+    rating -= (stats.errors_leading_to_goal as f32 * 0.90).min(1.8);
 
     // Cards — applied here in the post-pass so they affect the final
     // figure in the same place as errors.
@@ -523,12 +527,19 @@ pub fn calculate_match_rating(
     // xG per shot on target). Without this, GKs miss up to +1.4 of
     // designed-in upside on every match while still absorbing the full
     // conceded penalty — pushing season averages well below outfield
-    // positions. Negative excess is suppressed to .max(0.0) so the
-    // proxy never *adds* punishment to bad games (those are already
-    // covered by the conceded penalty + low save% bonus below).
+    // positions.
+    //
+    // Upside-only by design: bad shifts are already taxed by the
+    // conceded-goal penalty, the low-save% bonus, and (when the
+    // giveaway converts) errors_leading_to_goal. The live producer
+    // debits xg_prevented by `-shot_xg` on every concession, so taking
+    // the raw value through here would double-count the same goals
+    // and floor blowout keepers at 1.0. Clamp the input to [0, ∞)
+    // before scaling so the contribution stays a non-negative bonus.
     if pos == PlayerFieldPositionGroup::Goalkeeper {
-        let xg_p = if stats.xg_prevented != 0.0 {
-            stats.xg_prevented
+        let direct = stats.xg_prevented.max(0.0);
+        let xg_p = if direct > 0.0 {
+            direct
         } else {
             let shots = stats.shots_faced.max(stats.saves + opponent_goals as u16) as f32;
             if shots >= 3.0 {
@@ -538,7 +549,7 @@ pub fn calculate_match_rating(
                 0.0
             }
         };
-        rating += (xg_p * 0.45).clamp(-1.2, 1.4);
+        rating += (xg_p * 0.45).min(1.4);
     }
 
     // Cameo bound: a player who came on for under 15 minutes can't post
@@ -1242,6 +1253,79 @@ mod tests {
             "Elite GK ({}) should clearly outrate baseline ({}); proxy not lifting",
             elite_rating,
             baseline_rating
+        );
+    }
+
+    #[test]
+    fn clean_sheet_keeper_with_distribution_giveaways_holds_above_55() {
+        // Real symptom: a keeper in a 0-0 with several long balls that
+        // were intercepted and led to opponent shots within the
+        // response window posted ratings of 4-5. The per-event
+        // -0.35 errors_leading_to_shot was uncapped and crushed
+        // otherwise-clean shifts. With the cap, a clean sheet must
+        // sit above 5.5 even with five such giveaways.
+        let mut gk = make_gk(1, 1);
+        gk.errors_leading_to_shot = 5;
+        let rating = calculate_match_rating(&gk, 0, 0);
+        assert!(
+            rating >= 5.5,
+            "clean-sheet keeper with intercepted long balls rated {} — should hold above 5.5",
+            rating
+        );
+    }
+
+    #[test]
+    fn errors_to_shot_penalty_is_capped() {
+        // Two errors-to-shot already hit the cap; further events
+        // should not compound. Compare a player with 2 vs 8 such
+        // events — the rating delta must be at most a rounding
+        // difference, not 2.1 (six extra events × 0.35).
+        let mut few = make_stats(
+            0, 0, 30, 24, 0, 0, 0, 0, 0, 0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        few.errors_leading_to_shot = 2;
+        let mut many = few.clone();
+        many.errors_leading_to_shot = 8;
+        let few_rating = calculate_match_rating(&few, 1, 1);
+        let many_rating = calculate_match_rating(&many, 1, 1);
+        assert!(
+            (few_rating - many_rating).abs() < 0.05,
+            "errors-to-shot must cap: 2 events {} vs 8 events {} (delta {})",
+            few_rating,
+            many_rating,
+            few_rating - many_rating
+        );
+    }
+
+    #[test]
+    fn negative_xg_prevented_does_not_double_punish_blowout_keeper() {
+        // Live producer debits xg_prevented by `-shot_xg` on every
+        // conceded non-own-goal. Without an upside-only clamp, that
+        // negative ledger stacked with the conceded-goal penalty,
+        // the low-save% bonus, and (when a giveaway converted)
+        // errors_leading_to_goal — pushing realistic blowout keepers
+        // through the 1.0 floor. The rating in a 0-5 thrashing with
+        // 4 saves should land in the disaster band but stay above 1.0.
+        let mut gk = make_gk(4, 9);
+        gk.xg_prevented = -2.5; // five conceded shots averaging 0.5 xG each
+        let rating = calculate_match_rating(&gk, 0, 5);
+        assert!(
+            rating > 1.5,
+            "blowout keeper rated {} — negative xg_prevented must not double-tax",
+            rating
+        );
+        // And it must produce the same rating as a keeper whose
+        // xg_prevented hasn't been touched (proxy fallback returns 0
+        // because saves are below baseline).
+        let mut control = gk.clone();
+        control.xg_prevented = 0.0;
+        let control_rating = calculate_match_rating(&control, 0, 5);
+        assert!(
+            (rating - control_rating).abs() < 0.01,
+            "negative xg_prevented {} should match unset {} (upside-only)",
+            rating,
+            control_rating
         );
     }
 
