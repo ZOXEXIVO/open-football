@@ -4,6 +4,7 @@
 //! model is consistent across roles.
 
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, StateProcessingContext};
 use nalgebra::Vector3;
 
@@ -190,48 +191,26 @@ fn pick_cross_type(
 
 /// Resolve an aerial duel between an attacker and the closest defender.
 /// Returns true if the attacker wins the header.
-pub fn resolve_aerial_duel(attacker: &MatchPlayer, defender: Option<&MatchPlayer>) -> bool {
-    let attacker_score = aerial_attacker_score(attacker);
-    let defender_score = defender.map(aerial_defender_score).unwrap_or(0.40); // Empty box → easier for the attacker, but not a free win.
+///
+/// `minute` lets the duel feed through the engine's fatigue model: a
+/// tired CB late in the game genuinely loses more aerials. Routes
+/// both sides through the existing aerial composites
+/// (`aerial_outfield_attacker` weights `off_the_ball`,
+/// `aerial_outfield_defender` weights `positioning`) so the duel
+/// reads consistent with every other aerial composite read.
+pub fn resolve_aerial_duel(
+    attacker: &MatchPlayer,
+    defender: Option<&MatchPlayer>,
+    minute: u32,
+) -> bool {
+    let attacker_score = sc::aerial_outfield_attacker(attacker, minute);
+    let defender_score = defender
+        .map(|d| sc::aerial_outfield_defender(d, minute))
+        .unwrap_or(0.40); // Empty box → easier for the attacker, but not a free win.
 
     let diff = attacker_score - defender_score;
     let win_prob = sigmoid(diff * 2.2).clamp(0.18, 0.82);
     rand::random::<f32>() < win_prob
-}
-
-fn aerial_attacker_score(p: &MatchPlayer) -> f32 {
-    let heading = (p.skills.technical.heading / 20.0).clamp(0.0, 1.0);
-    let jumping = (p.skills.physical.jumping / 20.0).clamp(0.0, 1.0);
-    let strength = (p.skills.physical.strength / 20.0).clamp(0.0, 1.0);
-    let off_the_ball = (p.skills.mental.off_the_ball / 20.0).clamp(0.0, 1.0);
-    let bravery = (p.skills.mental.bravery / 20.0).clamp(0.0, 1.0);
-    let anticipation = (p.skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
-    // Strength as proxy for height — the engine doesn't model height.
-    let height_proxy = strength;
-    heading * 0.24
-        + jumping * 0.22
-        + strength * 0.14
-        + off_the_ball * 0.14
-        + bravery * 0.10
-        + anticipation * 0.10
-        + height_proxy * 0.06
-}
-
-fn aerial_defender_score(p: &MatchPlayer) -> f32 {
-    let marking = (p.skills.technical.tackling / 20.0).clamp(0.0, 1.0);
-    let jumping = (p.skills.physical.jumping / 20.0).clamp(0.0, 1.0);
-    let heading = (p.skills.technical.heading / 20.0).clamp(0.0, 1.0);
-    let strength = (p.skills.physical.strength / 20.0).clamp(0.0, 1.0);
-    let positioning = (p.skills.mental.positioning / 20.0).clamp(0.0, 1.0);
-    let bravery = (p.skills.mental.bravery / 20.0).clamp(0.0, 1.0);
-    let anticipation = (p.skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
-    marking * 0.22
-        + jumping * 0.20
-        + heading * 0.16
-        + strength * 0.14
-        + positioning * 0.14
-        + bravery * 0.08
-        + anticipation * 0.06
 }
 
 fn sigmoid(x: f32) -> f32 {

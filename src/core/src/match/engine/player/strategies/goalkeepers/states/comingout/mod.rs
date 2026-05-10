@@ -1,5 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -250,17 +251,16 @@ impl GoalkeeperComingOutState {
         let keeper_to_ball = (ball_position - keeper_position).magnitude();
         let opponent_to_ball = (ball_position - opponent_position).magnitude();
 
-        // Goalkeeper skills
-        let keeper_acceleration = ctx.player.skills.physical.acceleration / 20.0;
-        let keeper_anticipation = ctx.player.skills.mental.anticipation / 20.0;
-        let keeper_agility = ctx.player.skills.physical.agility / 20.0;
+        // Keeper sprint speed reads raw pace + acceleration — both are
+        // direct kinematic skills, fatigue is already folded in via the
+        // engine's `max_speed_with_condition` clamp. The keeper's
+        // *decision* to commit (anticipation, agility, hands) is folded
+        // into `gk_rush_out` below; this branch is the foot-race math.
         let keeper_pace = ctx.player.skills.physical.pace;
-
-        // Opponent skills
+        let keeper_acceleration = ctx.player.skills.physical.acceleration / 20.0;
         let opponent_pace = ctx.player().skills(opponent.id).physical.pace;
         let opponent_acceleration = ctx.player().skills(opponent.id).physical.acceleration / 20.0;
 
-        // Calculate effective sprint speeds (using our improved calculation)
         let keeper_sprint_speed = keeper_pace * (1.0 + keeper_acceleration * 0.5);
         let opponent_sprint_speed = opponent_pace * (1.0 + opponent_acceleration * 0.3);
 
@@ -288,15 +288,22 @@ impl GoalkeeperComingOutState {
         let keeper_time = keeper_distance / keeper_sprint_speed.max(1.0);
         let opponent_time = opponent_distance / opponent_sprint_speed.max(1.0);
 
-        // Goalkeeper advantages:
-        // 1. Anticipation - better reading of the game
-        // 2. Agility - quicker reactions
-        // 3. Can use hands - easier to claim
-        let anticipation_bonus = 1.0 + (keeper_anticipation * 0.3);
-        let agility_bonus = 1.0 + (keeper_agility * 0.15);
-        let hand_advantage = 1.2; // Can use hands to claim from further away
-
-        let total_advantage = anticipation_bonus * agility_bonus * hand_advantage;
+        // Keeper "I-can-get-there-first" advantage. Routes through
+        // `gk_rush_out` so the rushing-out skill, anticipation,
+        // bravery, and decision-making all contribute through one
+        // fatigue-aware composite. Keeps the constant 1.2 hand
+        // advantage (real rule — keepers use hands to claim from
+        // further away).
+        //
+        // Mapping per spec generic multiplier `0.85 + composite *
+        // 0.50` produces a 0.875..1.35 band; combined with the hand
+        // advantage that's a 1.05..1.62 total multiplier — close to
+        // the legacy 1.0..~1.69 band but bounded and consistent with
+        // every other GK skill read.
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let rush_out = sc::gk_rush_out(ctx.player, minute);
+        let hand_advantage = 1.2;
+        let total_advantage = hand_advantage * (0.85 + rush_out * 0.50);
 
         // Keeper wins if their time is less than opponent's time adjusted for advantages
         keeper_time < (opponent_time * total_advantage)

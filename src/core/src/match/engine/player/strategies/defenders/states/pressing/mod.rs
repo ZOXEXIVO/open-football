@@ -1,6 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::strategies::players::DefensiveRole;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -131,9 +132,20 @@ impl StateProcessingHandler for DefenderPressingState {
             let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
             let opp_speed = opp_velocity.magnitude();
             let pace = ctx.player.skills.physical.pace;
-            let aggression = ctx.player.skills.mental.aggression / 20.0;
-            let accel = ctx.player.skills.physical.acceleration / 20.0;
-            let press_boost = 1.15 + aggression * 0.25 + accel * 0.25; // 1.15x - 1.65x
+            // Press intensity blends `pressing` (work-rate, aggression,
+            // stamina, accel/pace) and `mobility` (raw speed/agility).
+            // Routing through composites means a tired or low-stamina
+            // chaser drops into a softer press and a high-press CB
+            // genuinely outsprints a journeyman attacker. Bounded
+            // multiplier per spec: low-impact tactical nudge band of
+            // 1.15..1.65 → recentered as `1.15 + (composite - 0.50) *
+            // 0.50` clamped to the original [1.15, 1.65] envelope so
+            // realism doesn't shift outside the existing calibration.
+            let minute = sc::minute_from_ms(ctx.context.total_match_time);
+            let press_composite =
+                0.6 * sc::pressing(ctx.player, minute) + 0.4 * sc::mobility(ctx.player, minute);
+            let press_boost =
+                (1.40 + (press_composite - 0.50) * 0.50).clamp(1.15, 1.65);
             let speed = pace * press_boost;
 
             // Crude lead time: distance / (our speed). If the carrier is

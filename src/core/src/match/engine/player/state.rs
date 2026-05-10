@@ -5,6 +5,7 @@ use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 
 use std::fmt::Display;
@@ -108,22 +109,30 @@ impl PlayerMatchState {
                     .max_speed_with_condition(player.player_attributes.condition)
             };
 
-            // Ball-carrier speed penalty. Real football: carrying the
-            // ball costs ~15-25% of top sprint — the player has to keep
-            // the ball in stride, look up, and protect it. Without this
-            // penalty attackers outrun every defender as soon as they
-            // take possession, which is why our sim produced 200+ shots
-            // per team: ball carriers could not be caught once they had
-            // a head start. Scaling by dribbling+technique means world-
-            // class carriers lose less (Mbappé/Messi dip from 100% →
-            // 85%), journeymen lose more (typical player dips to 75%).
+            // Ball-carrier speed multiplier. Real football: carrying
+            // the ball costs ~15-25% of top sprint for an average
+            // player — they keep the ball in stride, look up, protect
+            // it. Elite carriers (Mbappé/Messi) lose almost nothing.
+            //
+            // Routes through `movement_speed_with_ball` so dribbling +
+            // technique + pace + acceleration + agility + balance all
+            // contribute, and so fatigue/late-game effects propagate
+            // through `effective_skill`. Mapping per spec:
+            //
+            //   carry_mult = 0.78 + composite * 0.42
+            //
+            // Composite floor 0.05 → 0.80 (worst carrier under fatigue);
+            // composite 1.00 → 1.20 (elite carrier — no realistic
+            // penalty). Capped to existing `[0.75, 1.00]` band so the
+            // model stays a CARRY COST: an elite carrier matches their
+            // off-ball speed but doesn't go faster than it.
             if tick_context.ball.current_owner == Some(player.id)
                 && player_position_group != PlayerFieldPositionGroup::Goalkeeper
             {
-                let dribbling = player.skills.technical.dribbling / 20.0;
-                let technique = player.skills.technical.technique / 20.0;
-                let carry_retention = 0.75 + (dribbling * 0.5 + technique * 0.5) * 0.10;
-                max_speed *= carry_retention.clamp(0.75, 0.90);
+                let minute = sc::minute_from_ms(context.total_match_time);
+                let composite = sc::movement_speed_with_ball(player, minute);
+                let raw = 0.78 + composite * 0.42;
+                max_speed *= raw.clamp(0.75, 1.00);
             }
 
             // NaN/Inf guard: state velocity functions compose many

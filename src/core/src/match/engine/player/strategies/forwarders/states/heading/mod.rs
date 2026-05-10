@@ -53,8 +53,9 @@ impl StateProcessingHandler for ForwardHeadingState {
             })
             .and_then(|m| ctx.context.players.by_id(m.id));
 
+        let minute = (ctx.context.total_match_time / 60_000) as u32;
         let won_duel = match attacker_full {
-            Some(att) => resolve_aerial_duel(att, defender_full),
+            Some(att) => resolve_aerial_duel(att, defender_full, minute),
             None => self.attempt_heading(ctx),
         };
 

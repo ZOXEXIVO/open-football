@@ -33,21 +33,33 @@ use std::time::Instant;
 // FootballEngine — match orchestration
 // ───────────────────────────────────────────────────────────────────────────────
 
-/// Per-team rolling sum used to compute the skill-composite averages
-/// fed into `TacticalRefreshInputs`. Keeping the accumulator simple —
-/// add per-player contributions for each composite, then divide by the
-/// per-bucket counts in `finalize`. Counts differ across composites
-/// because some only apply to a subset (defenders/midfielders, GK,
-/// forwards/AMs).
+/// Per-team weighted accumulator for the skill-composite averages
+/// fed into `TacticalRefreshInputs`. Each per-player contribution
+/// carries a position weight so a midfielder counts less than a
+/// forward in `attacking_quality` and less than a defender in
+/// `defensive_quality` — reflects how much each role actually drives
+/// that phase of play.
+///
+/// The previous version added `mid_attack * 0.5` while still
+/// incrementing the slot count by 1, which quartered the AM
+/// contribution: half via the value, half via the denominator. A
+/// proper weighted denominator fixes the bias so attacking
+/// midfielders contribute meaningfully without overpowering forwards.
+///
+/// Position weights (per spec):
+///   * Forward      — attacking 1.00, build-up 0.00, press 0.80, defensive 0.35
+///   * Midfielder   — attacking 0.50, build-up 1.00, press 1.00, defensive 0.80
+///   * Defender     — attacking 0.00, build-up 0.70, press 0.70, defensive 1.00
+///   * Goalkeeper   — gk 1.00 only
 struct SkillAccumulator {
     build_up_sum: f32,
-    build_up_count: u32,
+    build_up_weight: f32,
     press_sum: f32,
-    press_count: u32,
+    press_weight: f32,
     defensive_sum: f32,
-    defensive_count: u32,
+    defensive_weight: f32,
     attacking_sum: f32,
-    attacking_count: u32,
+    attacking_weight: f32,
     gk_sum: f32,
     gk_count: u32,
     conc_team_sum: f32,
@@ -58,17 +70,25 @@ impl SkillAccumulator {
     fn new() -> Self {
         Self {
             build_up_sum: 0.0,
-            build_up_count: 0,
+            build_up_weight: 0.0,
             press_sum: 0.0,
-            press_count: 0,
+            press_weight: 0.0,
             defensive_sum: 0.0,
-            defensive_count: 0,
+            defensive_weight: 0.0,
             attacking_sum: 0.0,
-            attacking_count: 0,
+            attacking_weight: 0.0,
             gk_sum: 0.0,
             gk_count: 0,
             conc_team_sum: 0.0,
             conc_team_count: 0,
+        }
+    }
+
+    #[inline]
+    fn accumulate(sum: &mut f32, weight: &mut f32, value: f32, w: f32) {
+        if w > 0.0 {
+            *sum += value * w;
+            *weight += w;
         }
     }
 
@@ -79,7 +99,7 @@ impl SkillAccumulator {
                 // Per spec: shot_stopping 0.45 + aerial/claim_cross 0.30
                 // + distribution 0.25. `gk_claim_cross` is the active
                 // cross-claim composite; `gk_aerial` covers the broader
-                // aerial duel. We blend them 50/50 for the aerial slot
+                // aerial duel. Blend them 50/50 for the aerial slot
                 // so a strong cross-claimer with weak overall aerial
                 // duel still carries weight.
                 let aerial_blend = 0.5 * (sc::gk_claim_cross(p, minute) + sc::gk_aerial(p, minute));
@@ -91,8 +111,12 @@ impl SkillAccumulator {
                 self.add_conc_team(p, minute);
             }
             PlayerFieldPositionGroup::Defender => {
-                self.build_up_sum += sc::passing_execution(p, minute);
-                self.build_up_count += 1;
+                Self::accumulate(
+                    &mut self.build_up_sum,
+                    &mut self.build_up_weight,
+                    sc::passing_execution(p, minute),
+                    0.70,
+                );
                 // Defenders: defensive_duel + interception + positioning.
                 // Adding `defensive_positioning` so a CB who reads the
                 // game well lifts the team's defensive_quality even
@@ -101,55 +125,87 @@ impl SkillAccumulator {
                     + sc::interception(p, minute)
                     + sc::defensive_positioning(p, minute))
                     / 3.0;
-                self.defensive_sum += d;
-                self.defensive_count += 1;
-                self.press_sum += sc::pressing(p, minute);
-                self.press_count += 1;
+                Self::accumulate(
+                    &mut self.defensive_sum,
+                    &mut self.defensive_weight,
+                    d,
+                    1.00,
+                );
+                Self::accumulate(
+                    &mut self.press_sum,
+                    &mut self.press_weight,
+                    sc::pressing(p, minute),
+                    0.70,
+                );
                 self.add_conc_team(p, minute);
             }
             PlayerFieldPositionGroup::Midfielder => {
-                self.build_up_sum += sc::passing_execution(p, minute);
-                self.build_up_count += 1;
+                Self::accumulate(
+                    &mut self.build_up_sum,
+                    &mut self.build_up_weight,
+                    sc::passing_execution(p, minute),
+                    1.00,
+                );
                 let d = (sc::defensive_duel(p, minute)
                     + sc::interception(p, minute)
                     + sc::defensive_positioning(p, minute))
                     / 3.0;
-                self.defensive_sum += d;
-                self.defensive_count += 1;
-                self.press_sum += sc::pressing(p, minute);
-                self.press_count += 1;
-                // Box-to-box midfielders contribute partial attacking
-                // quality so an attacking-mid heavy side reads as more
-                // dangerous than a holding-mid heavy side.
+                Self::accumulate(
+                    &mut self.defensive_sum,
+                    &mut self.defensive_weight,
+                    d,
+                    0.80,
+                );
+                Self::accumulate(
+                    &mut self.press_sum,
+                    &mut self.press_weight,
+                    sc::pressing(p, minute),
+                    1.00,
+                );
+                // Attacking midfielders contribute partial attacking
+                // quality so an AM-heavy side reads as more dangerous
+                // than a holding-mid-heavy side. Weight 0.50 on the
+                // weighted denominator (was a buggy *0.5 + count++).
                 let mid_attack = (sc::shooting_medium(p, minute)
                     + sc::off_ball_attack(p, minute)
                     + sc::pass_selection(p, minute))
                     / 3.0;
-                // Half-weight: a midfielder isn't worth a forward in
-                // the attacking_quality average, but they shouldn't be
-                // ignored entirely.
-                self.attacking_sum += mid_attack * 0.5;
-                self.attacking_count += 1; // counts as half a slot via the *0.5 above? No — keep full slot but value halved
+                Self::accumulate(
+                    &mut self.attacking_sum,
+                    &mut self.attacking_weight,
+                    mid_attack,
+                    0.50,
+                );
                 self.add_conc_team(p, minute);
             }
             PlayerFieldPositionGroup::Forward => {
-                // Forwards: shooting + dribbling + off-ball attacking
-                // movement (replaces raw off_the_ball read).
                 let a = (sc::shooting_close(p, minute)
                     + sc::dribble_attack(p, minute)
                     + sc::off_ball_attack(p, minute))
                     / 3.0;
-                self.attacking_sum += a;
-                self.attacking_count += 1;
-                self.press_sum += sc::pressing(p, minute);
-                self.press_count += 1;
-                // Forwards still contribute to defensive_quality at
-                // half weight via their pressing + positioning — a
-                // hard-working striker raises the defensive baseline
-                // without being a CB.
+                Self::accumulate(
+                    &mut self.attacking_sum,
+                    &mut self.attacking_weight,
+                    a,
+                    1.00,
+                );
+                Self::accumulate(
+                    &mut self.press_sum,
+                    &mut self.press_weight,
+                    sc::pressing(p, minute),
+                    0.80,
+                );
+                // Forwards contribute to defensive_quality at lower
+                // weight via pressing + positioning — a hard-working
+                // striker raises the defensive baseline without being
+                // a CB.
                 let f_def = 0.5 * (sc::defensive_positioning(p, minute) + sc::pressing(p, minute));
-                self.defensive_sum += f_def * 0.5;
-                self.defensive_count += 1;
+                Self::accumulate(
+                    &mut self.defensive_sum,
+                    &mut self.defensive_weight,
+                    f_def,
+                    0.35,
+                );
                 self.add_conc_team(p, minute);
             }
         }
@@ -167,6 +223,13 @@ impl SkillAccumulator {
     }
 
     fn finalize(self) -> crate::r#match::TeamSkillAggregates {
+        let weighted = |sum: f32, weight: f32, default: f32| -> f32 {
+            if weight <= 0.0 {
+                default
+            } else {
+                (sum / weight).clamp(0.0, 1.0)
+            }
+        };
         let avg = |sum: f32, count: u32, default: f32| -> f32 {
             if count == 0 {
                 default
@@ -175,10 +238,10 @@ impl SkillAccumulator {
             }
         };
         crate::r#match::TeamSkillAggregates {
-            build_up_quality: avg(self.build_up_sum, self.build_up_count, 0.5),
-            press_quality: avg(self.press_sum, self.press_count, 0.5),
-            defensive_quality: avg(self.defensive_sum, self.defensive_count, 0.5),
-            attacking_quality: avg(self.attacking_sum, self.attacking_count, 0.5),
+            build_up_quality: weighted(self.build_up_sum, self.build_up_weight, 0.5),
+            press_quality: weighted(self.press_sum, self.press_weight, 0.5),
+            defensive_quality: weighted(self.defensive_sum, self.defensive_weight, 0.5),
+            attacking_quality: weighted(self.attacking_sum, self.attacking_weight, 0.5),
             gk_quality: avg(self.gk_sum, self.gk_count, 0.5),
             concentration_teamwork_avg: avg(self.conc_team_sum, self.conc_team_count, 0.5),
         }
@@ -482,6 +545,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         // Skill profile aggregation runs over the current XI only — sub-out
         // players' skills aren't retained on the field after they leave.
+        // Raw `.skills.*` reads here are intentional: this aggregator
+        // feeds the post-match log (a snapshot of "what skill profile
+        // does this XI have on paper?"), not a live decision — fatigue
+        // would only confuse the report.
         for player in players {
             let agg = if player.team_id == home_team_id {
                 &mut home_agg
@@ -1993,6 +2060,149 @@ pub struct PlayMatchStateResult {
 mod tests {
     use super::*;
     use crate::r#match::MatchCoach;
+    use crate::r#match::MatchPlayer;
+    use crate::PlayerSkills;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+    };
+    use chrono::NaiveDate;
+
+    fn build_test_player(skill_fill: f32, position: PlayerPositionType) -> MatchPlayer {
+        let mut attrs = PlayerAttributes::default();
+        attrs.condition = 9000;
+        attrs.jadedness = 0;
+        let mut skills = PlayerSkills::default();
+        skills.technical.passing = skill_fill;
+        skills.technical.technique = skill_fill;
+        skills.technical.first_touch = skill_fill;
+        skills.technical.finishing = skill_fill;
+        skills.technical.long_shots = skill_fill;
+        skills.technical.dribbling = skill_fill;
+        skills.technical.tackling = skill_fill;
+        skills.technical.marking = skill_fill;
+        skills.technical.heading = skill_fill;
+        skills.technical.crossing = skill_fill;
+        skills.mental.vision = skill_fill;
+        skills.mental.decisions = skill_fill;
+        skills.mental.composure = skill_fill;
+        skills.mental.concentration = skill_fill;
+        skills.mental.anticipation = skill_fill;
+        skills.mental.flair = skill_fill;
+        skills.mental.positioning = skill_fill;
+        skills.mental.off_the_ball = skill_fill;
+        skills.mental.work_rate = skill_fill;
+        skills.mental.aggression = skill_fill;
+        skills.mental.bravery = skill_fill;
+        skills.mental.teamwork = skill_fill;
+        skills.mental.determination = skill_fill;
+        skills.physical.balance = skill_fill;
+        skills.physical.agility = skill_fill;
+        skills.physical.acceleration = skill_fill;
+        skills.physical.pace = skill_fill;
+        skills.physical.strength = skill_fill;
+        skills.physical.jumping = skill_fill;
+        skills.physical.stamina = skill_fill;
+        skills.physical.natural_fitness = skill_fill;
+        skills.physical.match_readiness = skill_fill;
+        skills.goalkeeping.reflexes = skill_fill;
+        skills.goalkeeping.handling = skill_fill;
+        let player = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("T".to_string(), "P".to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(skills)
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position,
+                    level: 18,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        MatchPlayer::from_player(1, &player, position, false)
+    }
+
+    #[test]
+    fn weighted_aggregator_handles_midfielder_attacking_correctly() {
+        // A team of 1 forward (skill 14) + 1 attacking midfielder (skill 14)
+        // should produce an attacking_quality higher than a team of just
+        // the forward (since AM contributes positively at half weight),
+        // but lower than 1.0 (forwards still drive most of attacking).
+        // Critically, a team of 1 forward + 4 holding-mids (low attack)
+        // shouldn't have its attacking_quality crushed below the forward's
+        // own quality just because the AM slot got mis-counted.
+        let mut acc_fwd_only = SkillAccumulator::new();
+        acc_fwd_only.add(&build_test_player(14.0, PlayerPositionType::ForwardCenter), 30);
+        let fwd_only = acc_fwd_only.finalize().attacking_quality;
+
+        let mut acc_fwd_plus_am = SkillAccumulator::new();
+        acc_fwd_plus_am.add(&build_test_player(14.0, PlayerPositionType::ForwardCenter), 30);
+        acc_fwd_plus_am.add(
+            &build_test_player(14.0, PlayerPositionType::AttackingMidfielderCenter),
+            30,
+        );
+        let fwd_plus_am = acc_fwd_plus_am.finalize().attacking_quality;
+
+        // With equal skill, adding an AM at weight 0.5 alongside a
+        // forward at weight 1.0 should land near the forward-only value
+        // (averages out the same since both contribute the same skill).
+        // Crucially, it should NOT collapse to half the forward value
+        // (which the buggy non-weighted denominator produced).
+        assert!(
+            (fwd_plus_am - fwd_only).abs() < 0.05,
+            "fwd_only={fwd_only} fwd_plus_am={fwd_plus_am} — AM with same skill should preserve the level"
+        );
+
+        // Defender-only attacking should fall back to the 0.5 default
+        // (no eligible attackers contributed).
+        let mut acc_def_only = SkillAccumulator::new();
+        acc_def_only.add(&build_test_player(14.0, PlayerPositionType::DefenderCenter), 30);
+        assert!((acc_def_only.finalize().attacking_quality - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn weighted_aggregator_high_skill_lifts_attacking_quality() {
+        // Sanity: a team of an elite forward and an elite AM should
+        // produce significantly higher attacking_quality than the
+        // 0.5 default — confirms the weighted denominator isn't
+        // squashing real signal.
+        let mut acc = SkillAccumulator::new();
+        acc.add(&build_test_player(18.0, PlayerPositionType::ForwardCenter), 30);
+        acc.add(
+            &build_test_player(18.0, PlayerPositionType::AttackingMidfielderCenter),
+            30,
+        );
+        let aq = acc.finalize().attacking_quality;
+        assert!(aq > 0.7, "elite attackers should produce attacking_quality > 0.7, got {aq}");
+        assert!(aq <= 1.0);
+    }
+
+    #[test]
+    fn weighted_aggregator_defender_dominates_defensive_quality() {
+        // A team of 1 defender + 1 forward: defensive_quality should
+        // be much closer to the defender's contribution (weight 1.00)
+        // than the forward's (weight 0.35).
+        let mut acc = SkillAccumulator::new();
+        acc.add(&build_test_player(18.0, PlayerPositionType::DefenderCenter), 30);
+        acc.add(&build_test_player(6.0, PlayerPositionType::ForwardCenter), 30);
+        let dq = acc.finalize().defensive_quality;
+
+        let mut acc_d_only = SkillAccumulator::new();
+        acc_d_only.add(&build_test_player(18.0, PlayerPositionType::DefenderCenter), 30);
+        let dq_solo = acc_d_only.finalize().defensive_quality;
+
+        // The forward drags the average down a little, but should
+        // not exceed a 25% reduction from the defender-only baseline
+        // (forward weight is only 0.35, so its influence is bounded).
+        let drop = dq_solo - dq;
+        assert!(drop >= 0.0, "drop={drop} solo={dq_solo} blend={dq}");
+        assert!(drop < 0.25 * dq_solo, "drop {drop} too large from solo {dq_solo}");
+    }
 
     #[test]
     fn test_initialization() {

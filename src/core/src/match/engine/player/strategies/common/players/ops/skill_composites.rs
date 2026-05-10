@@ -503,6 +503,123 @@ pub fn gk_distribution(player: &MatchPlayer, minute: u32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
+// Generic mobility / decision / loose-ball composites
+// ---------------------------------------------------------------------------
+
+/// General mobility composite — how fast and balanced a player moves
+/// without the ball. Used by pressing chase speed, recovery runs,
+/// and movement-cost multipliers.
+/// `pace*0.25 + acceleration*0.25 + agility*0.20 + balance*0.12
+///  + stamina*0.10 + natural_fitness*0.08`
+pub fn mobility(player: &MatchPlayer, minute: u32) -> f32 {
+    let (tech, _, expl) = ctxs(minute);
+    let s = &player.skills;
+    let v = (n(eff(player, expl, |_| s.physical.pace)) * 0.25
+        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.25
+        + n(eff(player, expl, |_| s.physical.agility)) * 0.20
+        + n(eff(player, tech, |_| s.physical.balance)) * 0.12
+        + n(eff(player, expl, |_| s.physical.stamina)) * 0.10
+        + n(eff(player, expl, |_| s.physical.natural_fitness)) * 0.08)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+/// Generic decision-quality composite — used as the read-the-game
+/// signal in spots where no single execution composite fits.
+/// `decisions*0.32 + composure*0.18 + concentration*0.18
+///  + anticipation*0.14 + teamwork*0.10 + vision*0.08`
+pub fn decision_quality(player: &MatchPlayer, minute: u32) -> f32 {
+    let (_, mental, _) = ctxs(minute);
+    let s = &player.skills;
+    let v = (n(eff(player, mental, |_| s.mental.decisions)) * 0.32
+        + n(eff(player, mental, |_| s.mental.composure)) * 0.18
+        + n(eff(player, mental, |_| s.mental.concentration)) * 0.18
+        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.14
+        + n(eff(player, mental, |_| s.mental.teamwork)) * 0.10
+        + n(eff(player, mental, |_| s.mental.vision)) * 0.08)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+/// Carrying-with-ball speed composite — feeds the dribble-run movement
+/// speed multiplier. Slightly different from `dribble_attack` (which
+/// resolves the duel itself); this one models how fast the carry is.
+/// `dribbling*0.22 + technique*0.16 + pace*0.20 + acceleration*0.18
+///  + agility*0.14 + balance*0.10`
+pub fn movement_speed_with_ball(player: &MatchPlayer, minute: u32) -> f32 {
+    let (tech, _, expl) = ctxs(minute);
+    let s = &player.skills;
+    let v = (n(eff(player, tech, |_| s.technical.dribbling)) * 0.22
+        + n(eff(player, tech, |_| s.technical.technique)) * 0.16
+        + n(eff(player, expl, |_| s.physical.pace)) * 0.20
+        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.18
+        + n(eff(player, expl, |_| s.physical.agility)) * 0.14
+        + n(eff(player, tech, |_| s.physical.balance)) * 0.10)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+/// Loose-ball claim composite — who wins a 50/50 race for an unowned
+/// ball. Distinct from `defensive_duel` (which is challenging an
+/// opponent in possession). Heavily explosive with anticipation +
+/// bravery + strength weighting for the actual contact moment.
+/// `acceleration*0.24 + pace*0.18 + anticipation*0.18 + bravery*0.12
+///  + strength*0.10 + balance*0.08 + concentration*0.06 + decisions*0.04`
+pub fn loose_ball_claim(player: &MatchPlayer, minute: u32) -> f32 {
+    let (tech, mental, expl) = ctxs(minute);
+    let s = &player.skills;
+    let v = (n(eff(player, expl, |_| s.physical.acceleration)) * 0.24
+        + n(eff(player, expl, |_| s.physical.pace)) * 0.18
+        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.18
+        + n(eff(player, mental, |_| s.mental.bravery)) * 0.12
+        + n(eff(player, expl, |_| s.physical.strength)) * 0.10
+        + n(eff(player, tech, |_| s.physical.balance)) * 0.08
+        + n(eff(player, mental, |_| s.mental.concentration)) * 0.06
+        + n(eff(player, mental, |_| s.mental.decisions)) * 0.04)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+/// Tackle-timing composite — picks WHEN to slide / step in. Heavier
+/// on decisions + positioning than `defensive_duel` which weights the
+/// tackle itself. Used for ball-ownership challenger ranking.
+/// `tackling*0.30 + decisions*0.18 + positioning*0.14 + aggression*0.12
+///  + composure*0.10 + strength*0.08 + agility*0.05 + bravery*0.03`
+pub fn tackle_timing(player: &MatchPlayer, minute: u32) -> f32 {
+    let (tech, mental, expl) = ctxs(minute);
+    let s = &player.skills;
+    let v = (n(eff(player, tech, |_| s.technical.tackling)) * 0.30
+        + n(eff(player, mental, |_| s.mental.decisions)) * 0.18
+        + n(eff(player, mental, |_| s.mental.positioning)) * 0.14
+        + n(eff(player, mental, |_| s.mental.aggression)) * 0.12
+        + n(eff(player, mental, |_| s.mental.composure)) * 0.10
+        + n(eff(player, expl, |_| s.physical.strength)) * 0.08
+        + n(eff(player, expl, |_| s.physical.agility)) * 0.05
+        + n(eff(player, mental, |_| s.mental.bravery)) * 0.03)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+/// GK rush-out composite — sweeper-keeper decision to leave the line.
+/// Reads `rushing_out` as the primary skill plus the explosive burst
+/// to actually arrive in time, gated by decisions / anticipation.
+/// `rushing_out*0.26 + acceleration*0.18 + pace*0.12 + decisions*0.16
+///  + anticipation*0.12 + bravery*0.08 + one_on_ones*0.08`
+pub fn gk_rush_out(player: &MatchPlayer, minute: u32) -> f32 {
+    let (tech, mental, expl) = ctxs(minute);
+    let s = &player.skills;
+    let v = (n(eff(player, tech, |_| s.goalkeeping.rushing_out)) * 0.26
+        + n(eff(player, expl, |_| s.physical.acceleration)) * 0.18
+        + n(eff(player, expl, |_| s.physical.pace)) * 0.12
+        + n(eff(player, mental, |_| s.mental.decisions)) * 0.16
+        + n(eff(player, mental, |_| s.mental.anticipation)) * 0.12
+        + n(eff(player, mental, |_| s.mental.bravery)) * 0.08
+        + n(eff(player, tech, |_| s.goalkeeping.one_on_ones)) * 0.08)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+// ---------------------------------------------------------------------------
 // Re-exports for convenience
 // ---------------------------------------------------------------------------
 
@@ -839,6 +956,271 @@ mod tests {
         assert!(gk_claim_cross(&elite, 30) > gk_claim_cross(&weak, 30) + 0.05);
     }
 
+    // ── Weight-sum guard ───────────────────────────────────────────
+    //
+    // Every composite blends weighted normalised attribute reads. If
+    // any new composite's weights drift away from 1.0, the output
+    // band silently shifts (a 1.05-summing composite caps out below
+    // the COMPOSITE_CEIL on max-skill players, a 0.95-summing one
+    // never reaches it). Pin a saturated player to within rounding
+    // of `COMPOSITE_CEIL` so missed-by-0.01 bugs surface immediately.
+    #[test]
+    fn new_composite_weights_sum_to_one() {
+        let max = build_player(20.0, 9000);
+        let m = 30u32;
+        let composites: Vec<(&str, f32)> = vec![
+            ("mobility", mobility(&max, m)),
+            ("decision_quality", decision_quality(&max, m)),
+            ("movement_speed_with_ball", movement_speed_with_ball(&max, m)),
+            ("loose_ball_claim", loose_ball_claim(&max, m)),
+            ("tackle_timing", tackle_timing(&max, m)),
+            ("gk_rush_out", gk_rush_out(&max, m)),
+        ];
+        for (name, value) in composites {
+            assert!(
+                (value - COMPOSITE_CEIL).abs() < 1e-3,
+                "{name} max-skill output {value} should equal {COMPOSITE_CEIL} \
+                 — weights likely don't sum to 1.0"
+            );
+        }
+    }
+
+    // ── New composites + cross-composite ranking ───────────────────
+
+    #[test]
+    fn mobility_loads_pace_and_acceleration() {
+        let mut a = build_player(8.0, 9000);
+        a.skills.physical.pace = 18.0;
+        a.skills.physical.acceleration = 18.0;
+        a.skills.physical.agility = 16.0;
+        let weak = build_player(8.0, 9000);
+        assert!(mobility(&a, 30) > mobility(&weak, 30) + 0.10);
+    }
+
+    #[test]
+    fn loose_ball_claim_ranks_acceleration_and_anticipation() {
+        let mut fast = build_player(8.0, 9000);
+        fast.skills.physical.acceleration = 18.0;
+        fast.skills.physical.pace = 17.0;
+        fast.skills.mental.anticipation = 17.0;
+        let slow = build_player(8.0, 9000);
+        assert!(loose_ball_claim(&fast, 30) > loose_ball_claim(&slow, 30) + 0.10);
+    }
+
+    #[test]
+    fn tackle_timing_loads_tackling_and_decisions() {
+        let mut elite = build_player(8.0, 9000);
+        elite.skills.technical.tackling = 18.0;
+        elite.skills.mental.decisions = 17.0;
+        elite.skills.mental.positioning = 16.0;
+        let weak = build_player(8.0, 9000);
+        assert!(tackle_timing(&elite, 30) > tackle_timing(&weak, 30) + 0.10);
+    }
+
+    #[test]
+    fn movement_speed_with_ball_loads_dribbling_and_pace() {
+        let mut elite = build_player(8.0, 9000);
+        elite.skills.technical.dribbling = 18.0;
+        elite.skills.technical.technique = 16.0;
+        elite.skills.physical.pace = 17.0;
+        elite.skills.physical.acceleration = 17.0;
+        let weak = build_player(8.0, 9000);
+        assert!(movement_speed_with_ball(&elite, 30) > movement_speed_with_ball(&weak, 30) + 0.10);
+    }
+
+    #[test]
+    fn decision_quality_loads_decisions_composure_concentration() {
+        let mut elite = build_player(8.0, 9000);
+        elite.skills.mental.decisions = 18.0;
+        elite.skills.mental.composure = 17.0;
+        elite.skills.mental.concentration = 16.0;
+        let weak = build_player(8.0, 9000);
+        assert!(decision_quality(&elite, 30) > decision_quality(&weak, 30) + 0.10);
+    }
+
+    #[test]
+    fn gk_rush_out_loads_rushing_out_and_speed() {
+        let mut elite = build_player(8.0, 9000);
+        elite.skills.goalkeeping.rushing_out = 18.0;
+        elite.skills.physical.acceleration = 17.0;
+        elite.skills.mental.decisions = 16.0;
+        elite.skills.mental.anticipation = 15.0;
+        let weak = build_player(8.0, 9000);
+        assert!(gk_rush_out(&elite, 30) > gk_rush_out(&weak, 30) + 0.10);
+    }
+
+    #[test]
+    fn explosive_drops_more_than_technical_under_fatigue() {
+        // Same skill sheet, low condition. The mobility composite is
+        // entirely explosive-banded and should drop more than
+        // passing_execution (predominantly technical/mental) in the
+        // same player.
+        let fresh = build_player(15.0, 9500);
+        let tired = build_player(15.0, 2500);
+        let mob_drop = mobility(&fresh, 80) - mobility(&tired, 80);
+        let pass_drop = passing_execution(&fresh, 80) - passing_execution(&tired, 80);
+        assert!(mob_drop > 0.0);
+        assert!(pass_drop > 0.0);
+        assert!(
+            mob_drop > pass_drop,
+            "mobility drop {mob_drop} should exceed passing drop {pass_drop}"
+        );
+    }
+
+    #[test]
+    fn elite_stamina_preserves_late_game_skill() {
+        let mut elite_fit = build_player(15.0, 3500);
+        elite_fit.skills.physical.stamina = 19.0;
+        elite_fit.skills.physical.natural_fitness = 18.0;
+        let mut poor_fit = build_player(15.0, 3500);
+        poor_fit.skills.physical.stamina = 8.0;
+        poor_fit.skills.physical.natural_fitness = 8.0;
+        // Same base skill, same condition — the elite-fit player
+        // should retain more of their passing execution at minute 85.
+        let elite = passing_execution(&elite_fit, 85);
+        let poor = passing_execution(&poor_fit, 85);
+        assert!(elite > poor);
+    }
+
+    #[test]
+    fn elite_dribbler_outranks_poor_dribbler_under_same_conditions() {
+        let mut elite = build_player(8.0, 9000);
+        elite.skills.technical.dribbling = 19.0;
+        elite.skills.technical.technique = 18.0;
+        elite.skills.physical.agility = 17.0;
+        elite.skills.physical.acceleration = 17.0;
+        let poor = build_player(8.0, 9000);
+        assert!(dribble_attack(&elite, 30) > dribble_attack(&poor, 30) + 0.15);
+    }
+
+    #[test]
+    fn elite_defender_outranks_poor_defender_in_duel_and_claim() {
+        let mut elite = build_player(8.0, 9000);
+        elite.skills.technical.tackling = 18.0;
+        elite.skills.technical.marking = 17.0;
+        elite.skills.mental.positioning = 17.0;
+        elite.skills.mental.anticipation = 16.0;
+        elite.skills.physical.strength = 16.0;
+        elite.skills.physical.acceleration = 16.0;
+        let poor = build_player(8.0, 9000);
+        assert!(defensive_duel(&elite, 30) > defensive_duel(&poor, 30) + 0.15);
+        assert!(interception(&elite, 30) > interception(&poor, 30) + 0.10);
+        assert!(tackle_timing(&elite, 30) > tackle_timing(&poor, 30) + 0.10);
+    }
+
+    #[test]
+    fn new_composites_monotonic_across_skill_band() {
+        // Sweep poor/avg/elite for every new composite — confirms each
+        // is strictly increasing in skill (no spurious mid-curve dips
+        // from a botched weight).
+        let poor = build_player(6.0, 9000);
+        let avg = build_player(11.0, 9000);
+        let elite = build_player(18.0, 9000);
+        let m = 30u32;
+        let pairs: &[(&str, fn(&MatchPlayer, u32) -> f32)] = &[
+            ("mobility", mobility),
+            ("decision_quality", decision_quality),
+            ("movement_speed_with_ball", movement_speed_with_ball),
+            ("loose_ball_claim", loose_ball_claim),
+            ("tackle_timing", tackle_timing),
+            ("gk_rush_out", gk_rush_out),
+        ];
+        for (name, f) in pairs {
+            let p = f(&poor, m);
+            let a = f(&avg, m);
+            let e = f(&elite, m);
+            assert!(p < a, "{name}: poor {p} >= avg {a}");
+            assert!(a < e, "{name}: avg {a} >= elite {e}");
+        }
+    }
+
+    #[test]
+    fn tackle_timing_favours_smart_over_pure_aggression() {
+        // A "smart" defender (decisions + positioning + composure) must
+        // outscore a "pure brawler" (aggression + strength only) on
+        // tackle_timing — the spec's whole point is that snapping into
+        // tackles late is worse than reading the play.
+        let mut smart = build_player(8.0, 9000);
+        smart.skills.technical.tackling = 14.0;
+        smart.skills.mental.decisions = 18.0;
+        smart.skills.mental.positioning = 17.0;
+        smart.skills.mental.composure = 16.0;
+        let mut brawler = build_player(8.0, 9000);
+        brawler.skills.technical.tackling = 14.0;
+        brawler.skills.mental.aggression = 20.0;
+        brawler.skills.physical.strength = 19.0;
+        brawler.skills.mental.bravery = 18.0;
+        // Same tackling skill, but the smart defender's reading slot
+        // (decisions 0.18 + positioning 0.14 + composure 0.10 = 0.42 of
+        // weight) outweighs the brawler's slot (aggression 0.12 +
+        // strength 0.08 + bravery 0.03 = 0.23). The composite must
+        // reflect that.
+        assert!(
+            tackle_timing(&smart, 30) > tackle_timing(&brawler, 30),
+            "smart {} should beat brawler {} on tackle_timing",
+            tackle_timing(&smart, 30),
+            tackle_timing(&brawler, 30),
+        );
+    }
+
+    #[test]
+    fn loose_ball_claim_favours_fast_anticipator_over_strong_slow() {
+        // A fast/anticipating player (low strength) should beat a
+        // strong/slow player on loose-ball races. Acceleration 0.24 +
+        // pace 0.18 + anticipation 0.18 = 0.60 of weight outweighs
+        // strength 0.10 + bravery 0.12 = 0.22.
+        let mut sprinter = build_player(8.0, 9000);
+        sprinter.skills.physical.acceleration = 19.0;
+        sprinter.skills.physical.pace = 18.0;
+        sprinter.skills.mental.anticipation = 17.0;
+        let mut bruiser = build_player(8.0, 9000);
+        bruiser.skills.physical.strength = 19.0;
+        bruiser.skills.mental.bravery = 17.0;
+        assert!(
+            loose_ball_claim(&sprinter, 30) > loose_ball_claim(&bruiser, 30),
+            "sprinter {} should beat bruiser {} on loose-ball claim",
+            loose_ball_claim(&sprinter, 30),
+            loose_ball_claim(&bruiser, 30),
+        );
+    }
+
+    #[test]
+    fn movement_speed_with_ball_does_not_create_extreme_speeds() {
+        // The spec maps the composite to `0.78 + composite * 0.42` and
+        // then expects that band to land near 0.80..1.20. Verify the
+        // composite itself stays inside [0.05, 1.0] so the downstream
+        // multiplier never goes outside the calibrated band.
+        let m = 30u32;
+        // Saturated max-skill player
+        let max = build_player(20.0, 9000);
+        let v_max = movement_speed_with_ball(&max, m);
+        assert!(v_max <= 1.0, "max v = {v_max}");
+        // Worst player at low condition still bounded above the floor
+        let mut worst = build_player(1.0, 1500);
+        worst.skills.physical.stamina = 1.0;
+        worst.skills.physical.natural_fitness = 1.0;
+        let v_min = movement_speed_with_ball(&worst, m);
+        assert!(v_min >= COMPOSITE_FLOOR, "min v = {v_min}");
+        // Translate to the carry-multiplier band the engine actually uses.
+        let mult_max = (0.78 + v_max * 0.42).clamp(0.75, 1.00);
+        let mult_min = (0.78 + v_min * 0.42).clamp(0.75, 1.00);
+        // Final multiplier never exceeds 1.0 (no carrier *gains* speed)
+        // and never falls below 0.75 (the carry-cost ceiling).
+        assert!(mult_max <= 1.0 + 1e-6);
+        assert!(mult_min >= 0.75 - 1e-6);
+    }
+
+    #[test]
+    fn tired_elite_can_still_outperform_fresh_poor_when_gap_is_large() {
+        // Skill gap 18 vs 6 should beat a 15% fatigue penalty.
+        let mut tired_elite = build_player(18.0, 3500); // ~35% condition
+        tired_elite.skills.physical.stamina = 12.0;
+        tired_elite.skills.physical.natural_fitness = 12.0;
+        let fresh_poor = build_player(6.0, 9500);
+        assert!(passing_execution(&tired_elite, 80) > passing_execution(&fresh_poor, 80));
+        assert!(dribble_attack(&tired_elite, 80) > dribble_attack(&fresh_poor, 80));
+    }
+
     // ── Bounded-output sanity for every composite ──────────────────
 
     #[test]
@@ -939,6 +1321,32 @@ mod tests {
                 "gk_distribution",
                 gk_distribution(&zero, m),
                 gk_distribution(&max, m),
+            ),
+            ("mobility", mobility(&zero, m), mobility(&max, m)),
+            (
+                "decision_quality",
+                decision_quality(&zero, m),
+                decision_quality(&max, m),
+            ),
+            (
+                "movement_speed_with_ball",
+                movement_speed_with_ball(&zero, m),
+                movement_speed_with_ball(&max, m),
+            ),
+            (
+                "loose_ball_claim",
+                loose_ball_claim(&zero, m),
+                loose_ball_claim(&max, m),
+            ),
+            (
+                "tackle_timing",
+                tackle_timing(&zero, m),
+                tackle_timing(&max, m),
+            ),
+            (
+                "gk_rush_out",
+                gk_rush_out(&zero, m),
+                gk_rush_out(&max, m),
             ),
         ];
         for (name, lo, hi) in cases {

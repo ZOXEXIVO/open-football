@@ -3,6 +3,7 @@ use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondi
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::players::DefensiveRole;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -75,10 +76,15 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            // Defenders should almost always pass — only shoot if very close with clear shot
+            // Defenders should almost always pass — only shoot if very close with clear shot.
+            // Routes through `shooting_close` so the threshold reads
+            // fatigue-aware finishing/composure/decisions, not raw
+            // finishing alone — a tired CB makes a worse shoot/no-shoot
+            // call here.
             if self.is_in_shooting_range(ctx) {
-                let finishing = ctx.player.skills.technical.finishing / 20.0;
-                if finishing > 0.4 {
+                let minute = sc::minute_from_ms(ctx.context.total_match_time);
+                let shoot_quality = sc::shooting_close(ctx.player, minute);
+                if shoot_quality > 0.40 {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Shooting,
                     ));
@@ -482,10 +488,14 @@ impl DefenderRunningState {
         // No opponent within moderate range — safe to carry
         let has_space_ahead = !ctx.players().opponents().exists(25.0);
 
-        // Dribbling skill threshold — even average defenders can carry when safe
-        let dribbling = ctx.player.skills.technical.dribbling / 20.0;
-        let composure = ctx.player.skills.mental.composure / 20.0;
-        let carry_ability = dribbling * 0.6 + composure * 0.4;
+        // Dribbling skill threshold — even average defenders can carry when safe.
+        // Routed through `dribble_attack` so fatigue + late-game
+        // mental drift dampen a tired CB's willingness to carry. The
+        // 0.55 threshold preserves the pre-composite calibration; the
+        // composite floor (~0.05) keeps the decision well-defined for
+        // weak carriers.
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let carry_ability = sc::dribble_attack(ctx.player, minute);
 
         if has_space_ahead && carry_ability > 0.55 {
             return true;

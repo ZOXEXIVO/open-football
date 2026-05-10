@@ -2,6 +2,7 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -256,11 +257,15 @@ impl ForwardTacklingState {
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
     ) -> bool {
-        let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
-        let aggression = ctx.player.skills.mental.aggression / 20.0;
-
-        // More skilled/aggressive players tackle more readily
-        let tackle_eagerness = (tackling_skill * 0.7) + (aggression * 0.3);
+        // Tackle eagerness via `tackle_timing`: blends tackling +
+        // decisions + positioning + aggression + composure +
+        // strength + agility + bravery, all fatigue-folded. The
+        // composite produces values in roughly the same band as the
+        // legacy `tackling*0.7 + aggression*0.3` blend, but a tired
+        // forward late in the match no longer launches the same
+        // counter-press as he did fresh.
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let tackle_eagerness = sc::tackle_timing(ctx.player, minute);
 
         // Check opponent's situation
         let opponent_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
@@ -293,19 +298,13 @@ impl ForwardTacklingState {
     ) -> (bool, bool, FoulSeverity) {
         let mut rng = rand::rng();
 
-        // Player skills
-        let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
+        // Aggression and composure still feed the foul-risk path
+        // (they should — composure protects, aggression escalates),
+        // but the duel resolution itself routes through the duel
+        // composites so the tackler/carrier read consistent with the
+        // rest of the engine.
         let aggression = ctx.player.skills.mental.aggression / 20.0;
         let composure = ctx.player.skills.mental.composure / 20.0;
-        let pace = ctx.player.skills.physical.pace / 20.0;
-
-        // Opponent skills
-        let player = ctx.player();
-        let opponent_skills = player.skills(opponent.id);
-        let opponent_dribbling = opponent_skills.technical.dribbling / 20.0;
-        let opponent_agility = opponent_skills.physical.agility / 20.0;
-        let opponent_balance = opponent_skills.physical.balance / 20.0;
-        let opponent_composure = opponent_skills.mental.composure / 20.0;
 
         // Calculate relative positioning advantage
         let distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
@@ -325,12 +324,16 @@ impl ForwardTacklingState {
             0.8 // Stationary opponent - moderate advantage
         };
 
-        // Calculate tackle effectiveness
-        let player_tackle_ability = (tackling_skill * 0.5) + (pace * 0.2) + (composure * 0.3);
-        let opponent_evasion_ability = (opponent_dribbling * 0.4)
-            + (opponent_agility * 0.3)
-            + (opponent_balance * 0.2)
-            + (opponent_composure * 0.1);
+        // Duel resolution via shared composites. `defensive_duel`
+        // (tackler) vs `dribble_attack` (carrier) — both are 0..1 and
+        // already fatigue-folded, so the raw `base_success * 0.4`
+        // mapping below stays inside its calibrated band.
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let player_tackle_ability = sc::defensive_duel(ctx.player, minute);
+        let opponent_evasion_ability = match ctx.context.players.by_id(opponent.id) {
+            Some(opp) => sc::dribble_attack(opp, minute),
+            None => 0.50,
+        };
 
         // Final success calculation. Forward counter-press tackle
         // success in real football is the lowest of the three roles —

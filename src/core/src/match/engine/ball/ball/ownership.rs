@@ -5,6 +5,7 @@
 use super::Ball;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::events::EventCollection;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 #[cfg(feature = "match-logs")]
 use crate::match_log_debug;
@@ -740,6 +741,11 @@ impl Ball {
         };
         const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.25;
 
+        // Minute derived from cached tick — `current_tick_cached` is
+        // refreshed every tick via `update*`, so it tracks the same
+        // wall-clock minute that the engine's tactical refresh uses.
+        let minute = sc::minute_from_ticks(self.current_tick_cached);
+
         // Determine the best tackler from nearby players (no Vec allocation)
         let best_tackler = if nearby_count == 1 {
             players.iter().find(|p| p.id == nearby_ids[0])
@@ -748,7 +754,7 @@ impl Ball {
             let mut best_score: f32 = -1.0;
             for &pid in nearby_slice {
                 if let Some(p) = players.iter().find(|p| p.id == pid) {
-                    let score = Self::calculate_tackling_score(p);
+                    let score = Self::calculate_tackling_score(p, minute);
                     if score > best_score {
                         best_score = score;
                         best = Some(p);
@@ -774,9 +780,9 @@ impl Ball {
                                 context.players.by_id(player.id),
                             ) {
                                 let current_score =
-                                    Self::calculate_tackling_score(current_owner_full);
+                                    Self::calculate_tackling_score(current_owner_full, minute);
                                 let challenger_score =
-                                    Self::calculate_tackling_score(challenger_full);
+                                    Self::calculate_tackling_score(challenger_full, minute);
 
                                 // Require challenger to be significantly better
                                 if challenger_score < current_score * TAKEOVER_ADVANTAGE_THRESHOLD {
@@ -821,21 +827,31 @@ impl Ball {
         }
     }
 
-    fn calculate_tackling_score(player: &MatchPlayer) -> f32 {
-        let technical_skills = &player.skills.technical;
-        let mental_skills = &player.skills.mental;
-        let physical_skills = &player.skills.physical;
-
-        let tackling_weight = 0.45;
-        let aggression_weight = 0.15;
-        let bravery_weight = 0.10;
-        let strength_weight = 0.20;
-        let agility_weight = 0.10;
-
-        technical_skills.tackling * tackling_weight
-            + mental_skills.aggression * aggression_weight
-            + mental_skills.bravery * bravery_weight
-            + physical_skills.strength * strength_weight
-            + physical_skills.agility * agility_weight
+    /// Per-tick ranking of who wins a contested ball claim. Blends:
+    ///
+    ///   * `tackle_timing`     — challenging an opponent in possession.
+    ///   * `loose_ball_claim`  — sprint/anticipation/strength on a 50/50.
+    ///   * `defensive_duel`    — raw tackling/marking/bravery duel.
+    ///
+    /// Routing through composites means fatigue, late-game mental
+    /// drift, and stamina mitigation all apply consistently with the
+    /// rest of the engine — a tired right-back loses the same
+    /// percentage of their challenge ability whether they are
+    /// pressing, dribbling, or contesting a loose ball.
+    ///
+    /// Output stays in roughly the same scale as the legacy raw-skill
+    /// formula (≈0..20) so the `TAKEOVER_ADVANTAGE_THRESHOLD` ratio
+    /// continues to behave as before.
+    fn calculate_tackling_score(player: &MatchPlayer, minute: u32) -> f32 {
+        let timing = sc::tackle_timing(player, minute);
+        let claim = sc::loose_ball_claim(player, minute);
+        let duel = sc::defensive_duel(player, minute);
+        // Blend favours `tackle_timing` (active challenge) but keeps
+        // `loose_ball_claim` heavy enough that a fast/anticipating
+        // player without elite tackling can still win a foot-race.
+        let composite = timing * 0.50 + duel * 0.30 + claim * 0.20;
+        // Map composite (0..1) to the historical 0..20 range so the
+        // takeover-advantage threshold continues to work.
+        composite * 20.0
     }
 }
