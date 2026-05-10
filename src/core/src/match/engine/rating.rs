@@ -461,8 +461,14 @@ pub fn calculate_match_rating(
     // the opponent; in your own box it's a near-goal scenario. These
     // already feed `errors_leading_to_*` when they convert to a shot,
     // but they also dent the rating on their own.
-    rating += z.dangerous_turnovers_own_third as f32 * ZoneCoeffs::TURNOVER_OWN_THIRD;
-    rating += z.dangerous_turnovers_own_box as f32 * ZoneCoeffs::TURNOVER_OWN_BOX;
+    //
+    // Capped per-match: every intercepted long ball from a goalkeeper
+    // distributing under pressure stamps an own-third (or own-box)
+    // turnover. Uncapped, three or four such events compose with the
+    // conceded-goal penalty and floor the rating at 1.0. The caps
+    // mirror the errors-leading-to-shot/goal cap pattern.
+    rating += (z.dangerous_turnovers_own_third as f32 * ZoneCoeffs::TURNOVER_OWN_THIRD).max(-0.9);
+    rating += (z.dangerous_turnovers_own_box as f32 * ZoneCoeffs::TURNOVER_OWN_BOX).max(-1.2);
 
     // Errors-to-goal that originated from an own-box giveaway carry an
     // additional hit on top of the base error penalty — a goal-mouth
@@ -1295,6 +1301,38 @@ mod tests {
             few_rating,
             many_rating,
             few_rating - many_rating
+        );
+    }
+
+    #[test]
+    fn dangerous_turnovers_penalty_is_capped() {
+        // A goalkeeper distributing under pressure can have 8+ long
+        // balls intercepted in their own third / own box across a
+        // match. Without a cap, -0.20 per own-third turnover and
+        // -0.45 per own-box turnover compose with the conceded-goal
+        // penalty and floor the rating at 1.0 even after a single
+        // conceded goal. The caps must hold.
+        let mut gk = make_gk(2, 3);
+        gk.zone_stats.dangerous_turnovers_own_third = 10;
+        gk.zone_stats.dangerous_turnovers_own_box = 5;
+        let rating = calculate_match_rating(&gk, 0, 1);
+        assert!(
+            rating > 3.0,
+            "GK with capped turnovers + 1 conceded should not floor — got {}",
+            rating
+        );
+        // Doubling the turnover counts past the cap should not
+        // materially change the rating.
+        let mut worse = gk.clone();
+        worse.zone_stats.dangerous_turnovers_own_third = 20;
+        worse.zone_stats.dangerous_turnovers_own_box = 10;
+        let worse_rating = calculate_match_rating(&worse, 0, 1);
+        assert!(
+            (rating - worse_rating).abs() < 0.05,
+            "turnover penalty must cap: 10/5 events {} vs 20/10 events {} (delta {})",
+            rating,
+            worse_rating,
+            rating - worse_rating
         );
     }
 
