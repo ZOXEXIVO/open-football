@@ -1,8 +1,11 @@
+pub mod defender_skill;
 pub mod defensive;
 pub mod dribble_duel;
 pub mod effective_skill;
 pub mod first_touch;
 pub mod forward_shot_decision;
+pub mod goalkeeper_skill;
+pub mod midfielder_skill;
 pub mod movement;
 pub mod panic;
 pub mod passing;
@@ -12,11 +15,14 @@ pub mod skill_composites;
 pub mod traits_bias;
 pub mod xg;
 
+pub use defender_skill::*;
 pub use defensive::*;
 pub use dribble_duel::*;
 pub use effective_skill::*;
 pub use first_touch::*;
 pub use forward_shot_decision::*;
+pub use goalkeeper_skill::*;
+pub use midfielder_skill::*;
 pub use movement::*;
 pub use panic::*;
 pub use passing::*;

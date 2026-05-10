@@ -2,6 +2,7 @@ use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -82,21 +83,27 @@ impl GoalkeeperDivingState {
     fn calculate_dive_direction(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
-        // Predict ball position based on reflexes (better GK = better prediction)
-        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
-        let anticipation = ctx.player.skills.mental.anticipation / 20.0;
-        let prediction_time = 0.3 + (reflexes * 0.3 + anticipation * 0.2); // 0.3-0.8 seconds ahead
+        // Prediction time scales with positioning + reaction quality.
+        let prediction_time =
+            (0.12 + prof.positioning * 0.26 + prof.shot_stopping * 0.22).clamp(0.10, 0.52);
         let future_ball_position = ball_position + ball_velocity * prediction_time;
 
         let to_future_ball = future_ball_position - ctx.player.position;
-        let mut dive_direction = to_future_ball.normalize();
+        let mut dive_direction = if to_future_ball.norm() > f32::EPSILON {
+            to_future_ball.normalize()
+        } else {
+            Vector3::x()
+        };
 
-        // Small randomness based on skill — elite GKs barely deviate
-        // Squared so elite keepers are dramatically more accurate
-        let skill_factor = (1.0 - reflexes) * (1.0 - reflexes);
-        let max_deviation = skill_factor * std::f32::consts::PI / 10.0; // 0-18 degrees max, elite ~0
-        let random_angle = (rand::random::<f32>() - 0.5) * max_deviation;
+        // Direction error scales with poor skill and fatigue, eased by
+        // good positioning. Range: ~0..0.6 rad band; elite stays tight.
+        let direction_error = (0.05 + prof.poor_skill_penalty * 0.34
+            + (1.0 - prof.condition_mult) * 0.16
+            - prof.positioning * 0.10)
+            .clamp(0.0, 0.55);
+        let random_angle = (rand::random::<f32>() - 0.5) * direction_error;
         dive_direction = nalgebra::Rotation3::new(Vector3::z() * random_angle) * dive_direction;
 
         dive_direction
@@ -104,13 +111,12 @@ impl GoalkeeperDivingState {
 
     fn calculate_dive_speed(&self, ctx: &StateProcessingContext) -> f32 {
         let urgency = self.calculate_urgency(ctx);
-        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
-        let agility = ctx.player.skills.physical.agility / 20.0;
-        // Explosive dive speed — reflexes and agility are primary drivers
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let base_speed =
             (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.5;
-        // Elite: 1.1 + 0.9 + 0.5 = 2.5x, mediocre: 1.1 + 0.41 + 0.23 = 1.74x
-        let skill_boost = 1.1 + reflexes * 0.9 + agility * 0.5;
+        // Elite: 0.70 + 0.95 = 1.65x, weak: ~0.75x. `explosive_mult` is
+        // already folded into `dive_reach` so don't double-apply it.
+        let skill_boost = 0.70 + prof.dive_reach * 0.95;
         base_speed * urgency * skill_boost
     }
 
@@ -131,45 +137,36 @@ impl GoalkeeperDivingState {
 
     fn is_ball_caught(&self, ctx: &StateProcessingContext) -> bool {
         let ball_distance = ctx.ball().distance();
-        // Must be flying toward the GK or very close
+        // Must be flying toward the GK or very close.
         if ball_distance > 5.0 && !ctx.ball().is_towards_player_with_angle(0.6) {
             return false;
         }
 
         let ball_speed = ctx.tick_context.positions.ball.velocity.magnitude();
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
-        let handling = ctx.player.skills.goalkeeping.handling / 20.0;
-        let agility = ctx.player.skills.physical.agility / 20.0;
-        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
-        let positioning = ctx.player.skills.mental.anticipation / 20.0;
-
-        // Catch distance: elite ~18, mediocre ~11
-        let catch_distance = 6.0 + agility * 6.0 + handling * 3.0 + reflexes * 3.0;
-
+        // Effective dive radius scales with skill: weak ~12u, elite
+        // ~30u. Beyond that the keeper cannot get a hand on the ball.
+        let catch_distance = 6.0
+            + prof.dive_reach * 10.0
+            + prof.handling_profile * 4.0
+            + prof.shot_stopping * 4.0;
         if ball_distance > catch_distance {
             return false;
         }
 
-        // Catch probability — strong skill differentiation
-        let skill_blend = handling * 0.35 + reflexes * 0.30 + agility * 0.20 + positioning * 0.15;
+        // Catch difficulty: stretch + power + fatigue + poor position.
+        let stretch = (ball_distance / catch_distance).clamp(0.0, 1.0);
+        let power = ((ball_speed - 1.5) / 6.0).clamp(0.0, 1.0);
+        let catch_difficulty = (power * 0.36
+            + stretch * 0.30
+            + (1.0 - prof.condition_mult) * 0.14
+            + (1.0 - prof.positioning) * 0.10
+            + prof.poor_skill_penalty * 0.10)
+            .clamp(0.0, 1.0);
 
-        // Stretch penalty: further from center = harder
-        let stretch_penalty = (ball_distance / catch_distance) * 0.25;
-
-        // Shot speed penalty: fast shots are harder — reflexes mitigate
-        let speed_penalty = (ball_speed / 5.0).min(0.40) * (1.0 - reflexes * 0.5);
-
-        // Calibrated for ~67% real-world overall save rate. Old curve
-        // landed elite-vs-fast-shot at 0.74 and mediocre at 0.26 with
-        // a 0.95 cap — combined with the Catching-state formula, sim
-        // saves/on-target ran 91%+. New curve: cap pulled to 0.82,
-        // base offset 0.15 → 0.05, skill scale 0.80 → 0.75 — elite
-        // diving save lands ~0.65, mediocre ~0.20, top end can't
-        // exceed 0.82.
-        let catch_probability =
-            (0.05 + skill_blend * 0.75 - stretch_penalty - speed_penalty).clamp(0.05, 0.82);
-
-        rand::random::<f32>() < catch_probability
+        let catch_prob = prof.catch_probability(catch_difficulty);
+        rand::random::<f32>() < catch_prob
     }
 
     fn is_ball_nearby(&self, ctx: &StateProcessingContext) -> bool {

@@ -3,6 +3,7 @@ use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -80,9 +81,14 @@ impl GoalkeeperDistributingState {
         &'a self,
         ctx: &'a StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        const MAX_SEARCH: f32 = 560.0; // ~70m, elite GK punt
         const MIN_RECEIVE_DISTANCE: f32 = 30.0; // no back-passes / tap-outs
         const BLOCK_CORRIDOR: f32 = 8.0; // lane width for interception check
+
+        // Maximum search range scales with distribution skill: weak
+        // keepers can't reliably hit a 70m punt, so they shouldn't even
+        // look that far. Range 380..620u (~47..78m).
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let max_search = 380.0 + prof.distribution * 240.0;
 
         let field_width = ctx.context.field_size.width as f32;
         let halfway_x = field_width * 0.5;
@@ -90,7 +96,7 @@ impl GoalkeeperDistributingState {
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
-        for teammate in ctx.players().teammates().nearby(MAX_SEARCH) {
+        for teammate in ctx.players().teammates().nearby(max_search) {
             if teammate.tactical_positions.position_group() == PlayerFieldPositionGroup::Goalkeeper
             {
                 continue;
@@ -159,7 +165,18 @@ impl GoalkeeperDistributingState {
                 PlayerFieldPositionGroup::Goalkeeper => 0.0,
             };
 
-            let score = halfway_score * space_bonus * position_bonus * recency_penalty;
+            // Turnover risk: long, traffic-heavy passes by weak keepers
+            // are punished. `pass_difficulty` proxied by distance and
+            // pressure on the receiver.
+            let pass_difficulty = (distance / max_search).clamp(0.0, 1.0);
+            let pressure = (nearby_opponents as f32 / 4.0).clamp(0.0, 1.0);
+            let turnover = prof.turnover_risk(pass_difficulty, pressure, 0.0);
+            let safety_factor = (1.0 - turnover * 0.6).max(0.2);
+            let score = halfway_score
+                * space_bonus
+                * position_bonus
+                * recency_penalty
+                * safety_factor;
 
             if score > best_score {
                 best_score = score;

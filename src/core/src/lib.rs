@@ -53,6 +53,8 @@ pub use crate::r#match::engine::player::events::players::save_accounting_stats;
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::shot_gate_stats;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::helper_diag;
 
 pub mod config;
 pub mod perf;

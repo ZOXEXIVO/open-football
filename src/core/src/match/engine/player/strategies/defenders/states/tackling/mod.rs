@@ -2,6 +2,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -173,10 +174,11 @@ impl StateProcessingHandler for DefenderTacklingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let target = self.calculate_intelligent_target(ctx);
 
-        let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
-        let acceleration = ctx.player.skills.physical.acceleration / 20.0;
-        // Explosive closing speed — skilled defenders close gaps faster
-        let speed_boost = 1.4 + tackling_skill * 0.3 + acceleration * 0.3; // 1.4x - 2.0x
+        // Closing-speed boost driven by the unified defender profile —
+        // press_profile + tackle_profile already combine acceleration,
+        // anticipation, work_rate, tackling, balance with fatigue.
+        let def_profile = DefenderSkillProfile::from_ctx(ctx);
+        let speed_boost = def_profile.tackle_speed_boost();
 
         Some(
             SteeringBehavior::Pursuit {
@@ -231,35 +233,19 @@ impl DefenderTacklingState {
         let mut rng = rand::rng();
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
 
-        // Per-tackle skill reads still need a few raw values for the
-        // foul-rate model below, so route them through `effective_skill`
-        // via the `eff` helper rather than reading the raw 1..20 values.
-        let tackling_skill = sc::n(sc::eff(
-            ctx.player,
-            sc::EffActionContext::technical(minute),
-            |p| p.skills.technical.tackling,
-        ));
-        let aggression = sc::n(sc::eff(
-            ctx.player,
-            sc::EffActionContext::mental(minute),
-            |p| p.skills.mental.aggression,
-        ));
-        let composure = sc::n(sc::eff(
-            ctx.player,
-            sc::EffActionContext::mental(minute),
-            |p| p.skills.mental.composure,
-        ));
+        // Unified defender profile drives both the success and the foul
+        // model. tackle_profile blends tackling/positioning/anticipation/
+        // composure/strength/balance/agility; discipline is the
+        // composure/decisions/concentration blend that suppresses fouls.
+        let def_profile = DefenderSkillProfile::from_ctx(ctx);
+        let aggression01 = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
 
-        // Duel scoring uses the shared `defensive_duel` and
-        // `dribble_attack` composites — the same helpers that resolve
-        // 1v1s in dribble_duel, so the engine speaks one language for
-        // attacker-vs-defender rolls.
-        let overall_skill = sc::defensive_duel(ctx.player, minute);
+        // Opponent carry score — composite-led for registered attackers,
+        // skill blend fallback when the opponent is missing from the
+        // registry.
         let attacker_score = if let Some(att) = ctx.context.players.by_id(opponent.id) {
             sc::dribble_attack(att, minute)
         } else {
-            // Fallback to lite-skill blend if the attacker is no
-            // longer in the registry (subbed out, stale grid hit).
             let dribbling;
             let agility;
             {
@@ -271,53 +257,37 @@ impl DefenderTacklingState {
             (dribbling + agility) * 0.5
         };
 
-        let skill_difference = overall_skill - attacker_score;
+        // Logistic success: tackle_profile vs attacker carry. The 3.2
+        // scale gives a ~0.30 skill edge ≈ 70% success. Clamped to
+        // 0.06..0.72 so even mismatched duels have variance.
+        let raw_diff = def_profile.tackle_profile - attacker_score;
+        let success_chance = (1.0 / (1.0 + (-raw_diff * 3.2).exp())).clamp(0.06, 0.72);
 
-        // Total tackles/team/match converges on real football's ~18 by
-        // suppressing both attempt rate (10u distance + 30s cooldown)
-        // and per-attempt success (0.25 base). At 174 attempts × 0.25
-        // = ~43, then with skill_diff distribution and the tighter
-        // attempt gate landing closer to ~80 attempts × 0.25 ≈ 20.
-        // The skill_diff spread (±0.20 around base) preserves the
-        // elite-vs-journeyman gap.
-        let success_chance = 0.25 + skill_difference * 0.40;
-        let clamped_success_chance = success_chance.clamp(0.08, 0.65);
+        let tackle_success = rng.random::<f32>() < success_chance;
 
-        let tackle_success = rng.random::<f32>() < clamped_success_chance;
-
-        // Foul chance is skill-driven. Calibrated against real football
-        // foul rates: ~12-15 fouls per team per match, on top of a
-        // tackle-attempt rate of ~80-100 per team. That's ~8-10% per
-        // attempt for average players. The previous 3-5% baseline was
-        // calibrated when tackle attempts ran much higher (300+/match).
-        //
-        // Drivers (all 0..1 normalized):
-        //   aggression   — dominant positive factor
-        //   composure    — strong protective factor (picks the moment)
-        //   tackling     — clean technical tackler doesn't need to foul
-        // 1% floor so even an elite defender has some risk on a 50/50.
-        let base_foul = 0.05 + aggression * 0.14 - composure * 0.04 - tackling_skill * 0.04;
-        let base_foul = base_foul.max(0.010);
-
-        // Clean successful tackles rarely foul — you won the ball
-        // first. Missed tackles are the trailing-foot / mistimed-slide
-        // scenario where fouls mostly happen.
-        let foul_chance = if tackle_success {
-            base_foul * 0.40
-        } else {
-            base_foul * 1.60
-        };
+        // Foul chance driven by discipline (composure/decisions/
+        // concentration/tackling blend) instead of raw composure +
+        // aggression. Tired defenders foul more (low def_condition_mult
+        // adds to foul rate). Failed tackles roughly double the rate.
+        let mut base_foul =
+            0.030 + aggression01 * 0.11 - def_profile.discipline * 0.075;
+        if !tackle_success {
+            base_foul *= 1.80;
+        }
+        base_foul += (1.0 - def_profile.def_condition_mult).max(0.0) * 0.08;
+        let foul_chance = base_foul.clamp(0.006, 0.28);
 
         let committed_foul = rng.random::<f32>() < foul_chance;
 
-        // Classify the foul. Missed tackles by aggressive players are
-        // reckless; clean-skilled tackles that still trip up an opponent
-        // are normal. Rare violent = very late + high-aggression.
+        // Severity classification stays driven by aggression — discipline
+        // already gates whether a foul fires at all, so we don't need to
+        // double-dip here. Reckless/violent stay tied to aggression +
+        // miss-context the same as before.
         let severity = if !committed_foul {
             FoulSeverity::Normal
-        } else if aggression > 0.75 && !tackle_success && rng.random::<f32>() < 0.12 {
+        } else if aggression01 > 0.75 && !tackle_success && rng.random::<f32>() < 0.12 {
             FoulSeverity::Violent
-        } else if !tackle_success && aggression > 0.55 {
+        } else if !tackle_success && aggression01 > 0.55 {
             FoulSeverity::Reckless
         } else {
             FoulSeverity::Normal

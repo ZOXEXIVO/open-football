@@ -114,6 +114,7 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
         vice_captain_id: None,
         penalty_taker_id: None,
         free_kick_taker_id: None,
+        selection_omissions: Vec::new(),
     }
 }
 
@@ -188,6 +189,7 @@ fn make_squad_viewer(
         vice_captain_id: None,
         penalty_taker_id: None,
         free_kick_taker_id: None,
+        selection_omissions: Vec::new(),
     };
 
     (squad, players_json)
@@ -331,6 +333,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::shot_gate_stats::reset();
     core::tackle_stats::reset();
     core::save_accounting_stats::reset();
+    core::helper_diag::reset();
     {
         use std::sync::atomic::Ordering;
         core::save_accounting_stats::SAVE_TICKS_REACHED.store(0, Ordering::Relaxed);
@@ -500,6 +503,47 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // forward has the ball in range. Print it separately so the
     // waterfall drops reflect the real gate chain.
     let s = core::shot_gate_stats::snapshot();
+
+    // Helper-diagnostic counters: written by `evaluate_forward_shot_decision`
+    // every time a forward state asks "should this be a shot?". `helper_diag`
+    // catalogues which gate killed the call (xG floor / pass-EV / clear shot)
+    // vs how many actually rolled the willingness die. The avg-at-roll
+    // values are the population means of xG and willingness for the calls
+    // that *reached* the willingness roll — invaluable when calibrating
+    // the floor / willingness-curve coefficients in isolation.
+    println!();
+    println!("--- HELPER (evaluate_forward_shot_decision) ---");
+    println!(
+        "  outcomes: shoot={}  pass={}  hold={}",
+        s[9], s[10], s[11]
+    );
+    {
+        use std::sync::atomic::Ordering;
+        let calls = core::helper_diag::CALLS.load(Ordering::Relaxed);
+        let h_hg = core::helper_diag::HOLD_HARDGATE.load(Ordering::Relaxed);
+        let h_far = core::helper_diag::HOLD_FAR.load(Ordering::Relaxed);
+        let h_xg = core::helper_diag::HOLD_XG.load(Ordering::Relaxed);
+        let h_i6 = core::helper_diag::HOLD_INSIDE_SIX_XG.load(Ordering::Relaxed);
+        let h_nc = core::helper_diag::HOLD_NO_CLEAR.load(Ordering::Relaxed);
+        let p_def = core::helper_diag::PASS_DEFERRAL.load(Ordering::Relaxed);
+        let reach = core::helper_diag::REACHED_ROLL.load(Ordering::Relaxed);
+        let rolled = core::helper_diag::ROLL_PASSED.load(Ordering::Relaxed);
+        let sum_xg = core::helper_diag::SUM_XG_X1000.load(Ordering::Relaxed);
+        let sum_w = core::helper_diag::SUM_WILLINGNESS_X1000.load(Ordering::Relaxed);
+        println!(
+            "  calls={}  hold_hardgate={}  hold_far={}  hold_xg={}  hold_inside_six_xg={}  hold_no_clear={}  pass_defer={}  reached_roll={}  rolled_yes={}",
+            calls, h_hg, h_far, h_xg, h_i6, h_nc, p_def, reach, rolled
+        );
+        if reach > 0 {
+            let avg_xg = sum_xg as f64 / reach as f64 / 1000.0;
+            let avg_w = sum_w as f64 / reach as f64 / 1000.0;
+            println!(
+                "  avg-at-roll: xG≈{:.3}  willingness≈{:.4}",
+                avg_xg, avg_w
+            );
+        }
+    }
+
     let chain_order = [0usize, 1, 2, 4, 5, 6, 7, 8];
     let chain_labels = [
         "has_ball_in_range (dist <= 90)",

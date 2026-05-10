@@ -3,6 +3,7 @@ use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -53,24 +54,21 @@ impl GoalkeeperKickingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<(MatchPlayerLite, &'static str)> {
-        // Kicking allows for extreme long passes - search maximum range including 300m+
-        let max_distance = ctx.context.field_size.width as f32 * 3.0;
+        // Kicking range scales with the unified distribution profile —
+        // weak keepers can't reliably reach 300m, so cap the search.
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let max_distance =
+            ctx.context.field_size.width as f32 * (1.2 + prof.distribution * 1.6);
 
-        // Get goalkeeper's kicking and vision skills
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
         let kicking_skill = ctx.player.skills.goalkeeping.kicking / 20.0;
-        let technique_skill = ctx.player.skills.goalkeeping.kicking / 20.0;
-        let anticipation_skill = ctx.player.skills.mental.anticipation / 20.0;
 
-        // Calculate extreme pass capability (kicking emphasized)
-        let extreme_capability = (kicking_skill * 0.5)
-            + (vision_skill * 0.3)
-            + (technique_skill * 0.15)
-            + (anticipation_skill * 0.05);
-
-        // Determine if goalkeeper should attempt extreme clearances
-        let can_attempt_extreme = extreme_capability > 0.7;
-        let prefers_extreme = extreme_capability > 0.8;
+        // Extreme-kick capability is now the unified distribution
+        // composite — concentration / decisions / composure already
+        // baked in.
+        let extreme_capability = prof.distribution;
+        let can_attempt_extreme = extreme_capability > 0.62;
+        let prefers_extreme = extreme_capability > 0.78;
 
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;

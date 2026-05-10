@@ -1,6 +1,31 @@
 use crate::r#match::StateProcessingContext;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
+#[cfg(feature = "match-logs")]
+pub mod helper_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    pub static CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static HOLD_HARDGATE: AtomicU64 = AtomicU64::new(0);
+    pub static HOLD_FAR: AtomicU64 = AtomicU64::new(0);
+    pub static HOLD_XG: AtomicU64 = AtomicU64::new(0);
+    pub static HOLD_INSIDE_SIX_XG: AtomicU64 = AtomicU64::new(0);
+    pub static HOLD_NO_CLEAR: AtomicU64 = AtomicU64::new(0);
+    pub static PASS_DEFERRAL: AtomicU64 = AtomicU64::new(0);
+    pub static REACHED_ROLL: AtomicU64 = AtomicU64::new(0);
+    pub static ROLL_PASSED: AtomicU64 = AtomicU64::new(0);
+    pub static SUM_XG_X1000: AtomicU64 = AtomicU64::new(0);
+    pub static SUM_WILLINGNESS_X1000: AtomicU64 = AtomicU64::new(0);
+    pub fn reset() {
+        for c in [
+            &CALLS, &HOLD_HARDGATE, &HOLD_FAR, &HOLD_XG, &HOLD_INSIDE_SIX_XG,
+            &HOLD_NO_CLEAR, &PASS_DEFERRAL, &REACHED_ROLL, &ROLL_PASSED,
+            &SUM_XG_X1000, &SUM_WILLINGNESS_X1000,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Outcome of `evaluate_forward_shot_decision`.
 ///
 /// Centralised so every forward state (Running, RunningInBehind,
@@ -45,10 +70,18 @@ pub fn evaluate_forward_shot_decision(
     ctx: &StateProcessingContext,
     tag: &'static str,
 ) -> ShotDecision {
+    #[cfg(feature = "match-logs")]
+    {
+        use std::sync::atomic::Ordering;
+        helper_diag::CALLS.fetch_add(1, Ordering::Relaxed);
+    }
     // ── Hard gates ────────────────────────────────────────────────────
     let can_team = ctx.team().can_shoot();
     let can_player = ctx.player().can_shoot();
     if !can_team || !can_player {
+        #[cfg(feature = "match-logs")]
+        helper_diag::HOLD_HARDGATE
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -56,23 +89,34 @@ pub fn evaluate_forward_shot_decision(
     // Anything beyond the absolute long-range cap is hopeless even
     // for elite long-shooters — keep the ball.
     if distance > 110.0 {
+        #[cfg(feature = "match-logs")]
+        helper_diag::HOLD_FAR
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
     let skills = &ctx.player.skills;
     let minute = sc::minute_from_ms(ctx.context.total_match_time);
-    // `shot_selection` drives the decision — composure + decisions
-    // weighted heavily, with finishing/long_shots/vision/teamwork
-    // mixed in. Used to gate the xG floor and willingness roll so a
-    // pure poacher with weak decisions doesn't smash the same shots a
-    // smart forward declines.
-    let selection = sc::shot_selection(ctx.player, minute);
+    // Unified shot profile — single source of truth for execution_skill,
+    // selection_skill, body_control, poor_penalty, etc. The
+    // `shooting().shot_profile()` helper builds this from the same
+    // inputs `handle_shoot_event` will see in-flight, so the gate and
+    // the strike agree on what the shooter can actually do.
+    let shooting_ops = ctx.player().shooting();
+    let profile = shooting_ops.shot_profile();
+    let selection = profile.selection_skill;
+    let execution_skill = profile.execution_skill;
+    let composure_skill = profile.composure_skill;
+    let body_control = profile.body_control;
+    let _poor_penalty = profile.poor_penalty;
+    let pressure_penalty = profile.pressure_penalty;
+    let low_condition_penalty = profile.low_condition_penalty;
+
     let tech = sc::EffActionContext::technical(minute);
     let mental = sc::EffActionContext::mental(minute);
-    // A few execution-quality reads still need the raw band (used in
-    // willingness shaping and 1v1 cool-headedness). Routed through
-    // `effective_skill` so they fade with fatigue.
-    let finishing = sc::n(sc::eff(ctx.player, tech, |p| p.skills.technical.finishing));
+    // A few raw-band reads still drive 1v1 cool-headedness; routed
+    // through effective_skill so fatigue applies.
+    let _finishing = sc::n(sc::eff(ctx.player, tech, |p| p.skills.technical.finishing));
     let composure = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.composure));
     let _technique = (skills.technical.technique / 20.0).clamp(0.0, 1.0);
     let first_touch = sc::n(sc::eff(ctx.player, tech, |p| {
@@ -82,30 +126,74 @@ pub fn evaluate_forward_shot_decision(
 
     // ── xG quality ────────────────────────────────────────────────────
     // Pre-shot xG (matches `handle_shoot_event`'s formula). Low-xG
-    // attempts are rejected outright unless we're inside the 6-yard
-    // box where ANY shot has a meaningful chance.
-    let xg = ctx.player().shooting().expected_xg();
-    // Skill-aware xG floor:
-    //   * elite finisher (>=0.80) -- accepts 0.06 xG  (will speculate)
-    //   * average     (~0.50)     -- accepts 0.09 xG
-    //   * poor       (<=0.30)     -- needs 0.13 xG
-    // The `shot_selection` composite adds a small correction on top:
-    // a low-decisions forward with the same finishing speculates more
-    // (lower floor); a high-decisions forward with the same finishing
-    // demands a slightly higher floor. Capped at +/-0.02 so the
-    // finishing-driven baseline stays the dominant signal.
-    let baseline = 0.13 - finishing * 0.08;
-    let selection_adj = (selection - 0.5) * 0.04;
-    let mut min_xg = baseline + selection_adj;
-    min_xg = min_xg.clamp(0.06, 0.13);
+    // attempts are rejected outright; the inside-six bypass below
+    // applies a skill-graded floor instead of letting any tap-in pass.
+    let xg = profile.expected_xg(distance, ctx.player().has_clear_shot());
+    // Skill-graded xG floor — heavy penalty for poor finishers, soft
+    // ceiling for elites. The floor must accommodate THREE distance
+    // bands: inside-box (<= 36u, xG 0.10–0.40), mid-range (36..60u,
+    // xG 0.05–0.13), and long-distance (60..90u, xG 0.03–0.07). A
+    // single fixed floor that fits the box rejects every realistic
+    // long-shot (the 0-0 bug). Distance-aware base eases the floor as
+    // the player moves out — the helper still rejects the genuinely
+    // hopeless (>90u or sub-xG-floor) shots, but lets long-distance
+    // attempts through to the willingness roll where skill-graded
+    // chance quality finally decides.
+    let sprint_penalty_term = if ctx.in_state_time > 30 { 1.0 } else { 0.0 };
+    // The xG floor is a "is this attempt worth the cooldown" gate, not
+    // a quality filter — that's the willingness roll's job. Real
+    // football xG distribution: most shots are 0.03–0.10, with the
+    // population average ~0.10. The floor must let 0.025–0.04 shots
+    // through (long-range, low-quality looks) so the population shot
+    // count lands near 13/team, with the willingness roll suppressing
+    // most of those cheap looks. Earlier 0.07–0.22 floors blocked 99%
+    // of attempts and produced the 0-0 epidemic.
+    let distance_floor_base = if distance <= 36.0 {
+        0.090
+    } else if distance <= 60.0 {
+        0.075
+    } else {
+        0.050
+    };
+    let mut min_xg = distance_floor_base
+        - execution_skill * 0.020
+        + pressure_penalty * 0.020
+        + sprint_penalty_term * 0.015
+        + low_condition_penalty * 0.015;
+    // Selection nudge: a high-selection player demands a slightly
+    // higher floor (better chooser); a low-selection player gambles.
+    min_xg += (selection - 0.5) * 0.018;
+    // Clamp by skill tier (distance-relative).
+    let (lo, hi) = if execution_skill < 0.25 {
+        if distance > 60.0 { (0.040, 0.075) } else { (0.075, 0.125) }
+    } else if execution_skill < 0.55 {
+        if distance > 60.0 { (0.032, 0.062) } else { (0.062, 0.105) }
+    } else {
+        if distance > 60.0 { (0.025, 0.052) } else { (0.052, 0.090) }
+    };
+    min_xg = min_xg.clamp(lo, hi);
     let inside_six = distance <= 18.0;
+    // Inside-six floor: skill-graded, so a 5/20 player floors near 0.15
+    // instead of inheriting the unconditional 0.30 free pass.
+    let inside_six_floor = 0.12 + execution_skill * 0.28;
     if !inside_six && xg < min_xg {
+        #[cfg(feature = "match-logs")]
+        helper_diag::HOLD_XG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return ShotDecision::Hold;
+    }
+    if inside_six && xg < (inside_six_floor.min(min_xg)) {
+        #[cfg(feature = "match-logs")]
+        helper_diag::HOLD_INSIDE_SIX_XG
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
     // ── Clear shot ────────────────────────────────────────────────────
     let clarity = ctx.player().shot_clarity();
     if !ctx.player().has_clear_shot() && !inside_six {
+        #[cfg(feature = "match-logs")]
+        helper_diag::HOLD_NO_CLEAR
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -162,63 +250,107 @@ pub fn evaluate_forward_shot_decision(
             let carrier_d = (opp_goal - ctx.player.position).magnitude();
             let receiver_d = (opp_goal - t.position).magnitude();
             let progression = ((carrier_d - receiver_d) / carrier_d.max(1.0)).clamp(-0.5, 1.0);
-            // Receiver-xG approximation: closer to goal + clear of
-            // markers = higher value pass.
-            let pass_xg = if receiver_d < 40.0 {
-                0.45
+            // Receiver-xG approximation. The receiver still has to
+            // control the ball, turn, beat their marker and pick a
+            // shot — most "nearby teammates" are NOT a tap-in chance.
+            // Earlier values (0.45 close / 0.30 mid / 0.18 long) fed
+            // the deferral check a fantasy cutback EV that beat every
+            // realistic 0.05–0.10 long-shot, so the helper returned
+            // Pass on every clear-shot tick and not a single shot
+            // fired through PRIO 0.5. New scale matches the receiver-
+            // xg-after-control reality (a striker with an open net
+            // gets ~0.30 not 0.45; a 30u teammate gets ~0.12).
+            let pass_xg = if receiver_d < 24.0 {
+                0.28
+            } else if receiver_d < 40.0 {
+                0.16
             } else if receiver_d < 60.0 {
-                0.30
+                0.09
             } else if receiver_d < 80.0 {
-                0.18
+                0.05
             } else {
-                0.10
+                0.03
             };
             (pass_xg * mark_factor) * (0.6 + progression * 0.4)
         })
         .unwrap_or(0.0);
 
+    // Margin tightened — even a smart-passing forward should not
+    // lay off a viable shot every time a teammate is somewhere upfield.
     let margin = if teamwork > 0.75 {
-        0.04
+        0.06
     } else if teamwork < 0.40 {
-        0.12
+        0.14
     } else {
-        0.08
+        0.10
     };
     // Cap pass EV so a fantasy cutback doesn't talk us out of a real shot.
     let capped_pass_ev = best_pass_ev.min(0.55);
     let point_blank = distance < 24.0 && xg >= 0.18;
     if !point_blank && capped_pass_ev > xg + margin {
+        #[cfg(feature = "match-logs")]
+        helper_diag::PASS_DEFERRAL
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Pass;
     }
 
     // ── Willingness roll ──────────────────────────────────────────────
-    // Per-tick base 0.10 (poor) ... 0.35 (elite). Modulated by clarity,
-    // sprint balance, GK proximity, and xG quality. Inside the six-yard
-    // box willingness floors at 0.30 so a scuffed bobble there still
-    // resolves into a strike most of the time.
+    // Skill-curved willingness — weighted heavily on `selection` so a
+    // smart forward pulls the trigger on the right chance, not just any
+    // chance. Composure and execution add some lift; the rest comes
+    // from chance quality (xg_boost, clarity, body control, GK).
     //
-    // `selection` shifts willingness inversely to the xG floor: a
-    // high-selection forward shoots LESS often on marginal chances
-    // (avoids bad shots) but the inside-six floor protects easy ones.
-    let base = (finishing * 0.22 + composure * 0.06 + decisions * 0.04 + 0.07).clamp(0.10, 0.35);
-    let xg_boost = (xg / 0.30).clamp(0.30, 1.20);
+    // Calibration target: ~13 shots/team/match. With ~440
+    // reach-roll ticks/team/match (the count of clear-shot-in-range
+    // ticks that pass min_xg and pass-EV), required mean willingness ≈
+    // 0.030. Earlier coefficients produced mean 0.018 (floor-bound)
+    // → ~5 shots/team. New coefficients land mean ~0.035 across the
+    // skill distribution while keeping low-skill shots rare and elite
+    // shots ~3× more frequent than poor.
+    let base_willingness =
+        0.06 + selection * 0.22 + composure_skill * 0.10 + execution_skill * 0.12;
+    // xg_boost — lift the floor on the multiplicative chain so a 0.04
+    // xG shot still has ~50% of the elite-chance willingness,
+    // not 30%. Real football: even speculative long shots get fired
+    // every other minute when the lane is open.
+    let xg_boost = (xg / 0.20).clamp(0.50, 1.40);
+    let clarity_mult = 0.50 + clarity * 0.50;
+    let body_control_mult = (0.65 + body_control * 0.40).clamp(0.60, 1.05);
+    let condition_mult = (1.0 - low_condition_penalty * 0.55).clamp(0.40, 1.05);
+    let gk_context_mult = gk_proximity;
     // Marginal-chance gate: when xg < min_xg + 0.05 a high-selection
-    // player damps willingness 10%; a low-selection player lifts it
-    // 10%. Bounded so the dominant willingness math still holds shape.
+    // player damps willingness; a low-selection player lifts it.
     let marginal = (xg < min_xg + 0.05) as i32 as f32;
     let selection_marginal_adj = marginal * (0.5 - selection) * 0.20;
-    let mut willingness = base
-        * (0.40 + clarity * 0.60)
-        * balance_factor
+    let mut willingness = base_willingness
         * xg_boost
-        * gk_proximity
+        * clarity_mult
+        * body_control_mult
+        * condition_mult
+        * gk_context_mult
+        * balance_factor
         * (1.0 + selection_marginal_adj);
     if inside_six {
-        willingness = willingness.max(0.30);
+        // Inside-six floor scales with execution_skill so a 5/20
+        // player floors near 0.15, not 0.30.
+        let inside_six_will_floor = (0.10 + execution_skill * 0.30).clamp(0.10, 0.45);
+        willingness = willingness.max(inside_six_will_floor);
     }
-    willingness = willingness.clamp(0.0, 0.60);
+    let cap = if xg >= 0.35 { 0.60 } else { 0.48 };
+    willingness = willingness.clamp(0.012, cap);
+
+    #[cfg(feature = "match-logs")]
+    {
+        use std::sync::atomic::Ordering;
+        helper_diag::REACHED_ROLL.fetch_add(1, Ordering::Relaxed);
+        helper_diag::SUM_XG_X1000.fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
+        helper_diag::SUM_WILLINGNESS_X1000
+            .fetch_add((willingness * 1000.0) as u64, Ordering::Relaxed);
+    }
 
     if rand::random::<f32>() < willingness {
+        #[cfg(feature = "match-logs")]
+        helper_diag::ROLL_PASSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         ShotDecision::Shoot { reason: tag }
     } else {
         ShotDecision::Hold
@@ -227,63 +359,103 @@ pub fn evaluate_forward_shot_decision(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Test the pure scoring math via parameterised helpers. We can't
+    // easily fixture a `StateProcessingContext` so we extract the
+    // willingness / floor formulas and verify monotonicity directly.
 
-    // Test the pure scoring math via a small parameterised helper. We
-    // can't easily fixture a `StateProcessingContext` so we extract the
-    // willingness formula and verify monotonicity directly.
     fn willingness(
-        finishing: f32,
-        composure: f32,
-        decisions: f32,
+        selection: f32,
+        execution_skill: f32,
+        composure_skill: f32,
+        body_control: f32,
         clarity: f32,
         balance_factor: f32,
         xg: f32,
         gk_proximity: f32,
+        low_condition_penalty: f32,
         inside_six: bool,
     ) -> f32 {
-        let base =
-            (finishing * 0.22 + composure * 0.06 + decisions * 0.04 + 0.07).clamp(0.10, 0.35);
-        let xg_boost = (xg / 0.30f32).clamp(0.30, 1.20);
-        let mut w = base * (0.40 + clarity * 0.60) * balance_factor * xg_boost * gk_proximity;
+        let base = 0.06 + selection * 0.22 + composure_skill * 0.10 + execution_skill * 0.12;
+        let xg_boost = (xg / 0.20_f32).clamp(0.50, 1.40);
+        let clarity_mult = 0.50 + clarity * 0.50;
+        let body_control_mult = (0.65 + body_control * 0.40).clamp(0.60, 1.05);
+        let condition_mult = (1.0 - low_condition_penalty * 0.55).clamp(0.40, 1.05);
+        let mut w = base
+            * xg_boost
+            * clarity_mult
+            * body_control_mult
+            * condition_mult
+            * gk_proximity
+            * balance_factor;
         if inside_six {
-            w = w.max(0.30);
+            let floor = (0.10 + execution_skill * 0.30).clamp(0.10, 0.45);
+            w = w.max(floor);
         }
-        w.clamp(0.0, 0.60)
+        let cap = if xg >= 0.35 { 0.60 } else { 0.48 };
+        w.clamp(0.012, cap)
+    }
+
+    fn min_xg(execution_skill: f32, selection: f32, distance: f32) -> f32 {
+        let distance_floor_base = if distance <= 36.0 {
+            0.13
+        } else if distance <= 60.0 {
+            0.13 - (distance - 36.0) / 24.0 * 0.07
+        } else {
+            0.045
+        };
+        let mut x = distance_floor_base
+            - execution_skill * 0.06
+            + (selection - 0.5) * 0.025;
+        let (lo, hi) = if execution_skill < 0.25 {
+            if distance > 60.0 { (0.05, 0.10) } else { (0.10, 0.18) }
+        } else if execution_skill < 0.55 {
+            if distance > 60.0 { (0.035, 0.08) } else { (0.07, 0.13) }
+        } else {
+            if distance > 60.0 { (0.025, 0.07) } else { (0.045, 0.10) }
+        };
+        x = x.clamp(lo, hi);
+        x
     }
 
     #[test]
     fn elite_finisher_more_willing_than_mediocre() {
-        // Same chance, same context — elite striker pulls the trigger
-        // about twice as often as the mediocre one.
-        let mediocre = willingness(0.50, 0.40, 0.35, 0.6, 1.0, 0.10, 1.0, false);
-        let elite = willingness(0.85, 0.75, 0.70, 0.6, 1.0, 0.10, 1.0, false);
+        // Same chance — elite (high execution + selection) pulls the
+        // trigger materially more often than mediocre.
+        let mediocre = willingness(0.45, 0.30, 0.35, 0.50, 0.6, 1.0, 0.10, 1.0, 0.0, false);
+        let elite = willingness(0.80, 0.80, 0.80, 0.85, 0.6, 1.0, 0.10, 1.0, 0.0, false);
         assert!(elite > mediocre * 1.4, "elite={elite} mediocre={mediocre}");
     }
 
     #[test]
-    fn xg_floor_scales_with_finishing() {
-        // Skill-aware xG floor: poor finishers need ~0.13, elite need ~0.06.
-        // Selection adjustment is +/-0.02 around the finishing-driven baseline
-        // (small correction so the test compares baselines at neutral selection).
-        let baseline = |finishing: f32, selection: f32| -> f32 {
-            ((0.13_f32 - finishing * 0.08) + (selection - 0.5) * 0.04).clamp(0.06, 0.13)
-        };
-        let poor = baseline(0.30, 0.50);
-        let elite = baseline(0.85, 0.50);
-        assert!(poor > elite + 0.04);
+    fn xg_floor_scales_with_execution_skill_in_box() {
+        // Inside-box distance (30u). Poor finisher demands a
+        // meaningfully higher floor than an elite.
+        let poor = min_xg(0.10, 0.50, 30.0);
+        let elite = min_xg(0.80, 0.50, 30.0);
+        assert!(poor >= 0.10, "poor in-box too low={poor}");
+        assert!(elite <= 0.10 + 0.001, "elite in-box too high={elite}");
+        assert!(poor > elite, "poor={poor} elite={elite}");
+    }
+
+    #[test]
+    fn long_distance_floor_relaxes_for_speculative_shots() {
+        // 70u shot. Real football: ~38% of shots are from outside the
+        // box, so the long-distance floor must allow xG ~0.04-0.05
+        // attempts through. Earlier the box floor (0.10..0.22) blocked
+        // every long-shot — that was the 0-0 bug.
+        let elite_long = min_xg(0.80, 0.50, 70.0);
+        let avg_long = min_xg(0.40, 0.50, 70.0);
+        assert!(elite_long <= 0.07, "elite long-shot floor too high={elite_long}");
+        assert!(avg_long <= 0.08, "avg long-shot floor too high={avg_long}");
     }
 
     #[test]
     fn smart_forward_demands_higher_floor_than_poacher() {
-        // Same finishing, different shot_selection: the smart pick
-        // (high decisions/composure) raises the xG floor.
-        let baseline = |finishing: f32, selection: f32| -> f32 {
-            ((0.13_f32 - finishing * 0.08) + (selection - 0.5) * 0.04).clamp(0.06, 0.13)
-        };
-        let smart = baseline(0.65, 0.85);
-        let poacher = baseline(0.65, 0.30);
-        assert!(smart > poacher, "smart={smart} poacher={poacher}");
+        // Same execution_skill / distance, different selection: smart
+        // picks demand a slightly higher xG floor.
+        let smart = min_xg(0.40, 0.85, 30.0);
+        let poacher = min_xg(0.40, 0.30, 30.0);
+        assert!(smart >= poacher - 0.001, "smart={smart} poacher={poacher}");
     }
 
     #[test]
@@ -297,12 +469,13 @@ mod tests {
     }
 
     #[test]
-    fn inside_six_floors_willingness() {
-        // Even hopeless context (clarity 0.0, xg 0.05, balance 0.55):
-        // inside-six floor lifts to 0.30 so a scuffed close-range
-        // chance still becomes a shot most of the time.
-        let w = willingness(0.30, 0.30, 0.30, 0.0, 0.55, 0.05, 1.0, true);
-        assert!(w >= 0.30 - f32::EPSILON, "w={w}");
+    fn inside_six_floor_scales_with_execution_skill() {
+        // 5/20 player floors near 0.16; elite near 0.40. The poor
+        // player should NOT inherit the elite floor.
+        let poor = willingness(0.20, 0.10, 0.20, 0.30, 0.0, 0.55, 0.05, 1.0, 0.0, true);
+        let elite = willingness(0.85, 0.85, 0.85, 0.85, 0.0, 0.55, 0.05, 1.0, 0.0, true);
+        assert!(poor < 0.20, "poor floor too high: {poor}");
+        assert!(elite > 0.30, "elite floor too low: {elite}");
     }
 
     #[test]

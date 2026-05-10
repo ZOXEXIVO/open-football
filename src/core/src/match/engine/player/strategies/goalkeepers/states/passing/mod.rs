@@ -3,6 +3,7 @@ use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -131,7 +132,6 @@ impl StateProcessingHandler for GoalkeeperPassingState {
 impl GoalkeeperPassingState {
     /// Decide which type of distribution to use based on pressure and situation
     fn decide_distribution_type(&self, ctx: &StateProcessingContext) -> GoalkeeperDistributionType {
-        // Check for immediate pressure
         let opponents_nearby = ctx
             .players()
             .opponents()
@@ -140,54 +140,57 @@ impl GoalkeeperPassingState {
         let under_heavy_pressure = opponents_nearby >= 2;
         let under_pressure = opponents_nearby >= 1;
 
-        // Goalkeeper skills
-        let vision = ctx.player.skills.mental.vision / 20.0;
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        // Per-skill reads kept for finer branches below.
         let kicking_power = ctx.player.skills.goalkeeping.kicking / 20.0;
         let passing = ctx.player.skills.goalkeeping.passing / 20.0;
-        let _decisions = ctx.player.skills.mental.decisions / 20.0;
 
-        // Under heavy pressure - clear it!
         if under_heavy_pressure {
             return GoalkeeperDistributionType::Clearance;
         }
 
-        // Check available options at different ranges
         let has_short_option = self.count_safe_teammates(ctx, SAFE_PASS_DISTANCE) > 0;
         let has_medium_option = self.count_safe_teammates(ctx, MEDIUM_PASS_DISTANCE) > 0;
         let has_long_option = self.count_teammates_in_space(ctx, LONG_KICK_MIN_DISTANCE) > 0;
 
-        // Decision logic based on pressure and skills
         if under_pressure {
-            // Some pressure - prefer quick throw or short pass to safe defender
-            if kicking_power > 0.7 && has_medium_option {
+            // Weak keepers under pressure refuse the medium throw —
+            // turnover risk is too high. Strong, composed ones can
+            // still launch a quick throw to the wing.
+            let pressure_turnover = prof.turnover_risk(0.5, 0.7, 0.0);
+            if prof.distribution > 0.55
+                && pressure_turnover < 0.55
+                && kicking_power > 0.6
+                && has_medium_option
+            {
                 return GoalkeeperDistributionType::Throw;
-            } else if has_short_option {
+            } else if has_short_option && prof.distribution > 0.30 {
                 return GoalkeeperDistributionType::ShortPass;
             } else {
                 return GoalkeeperDistributionType::Clearance;
             }
         }
 
-        // No immediate pressure - use vision and decision making
         let mut rng = rand::rng();
         let decision_random: f32 = rng.random();
 
-        // Better vision = more likely to attempt long distribution
-        if vision > 0.7 && has_long_option && decision_random < (vision * 0.6) {
+        // Long kicks gated by overall distribution profile, not just
+        // raw vision. Weak keepers stay in build-up.
+        if prof.distribution > 0.62
+            && has_long_option
+            && decision_random < (prof.distribution * 0.7)
+        {
             return GoalkeeperDistributionType::LongKick;
         }
 
-        // Good kicking - prefer throws for medium range
         if kicking_power > 0.6 && has_medium_option && decision_random < 0.4 {
             return GoalkeeperDistributionType::Throw;
         }
 
-        // Good passing - prefer build-up play
         if passing > 0.6 && has_medium_option && decision_random < (passing * 0.7) {
             return GoalkeeperDistributionType::MediumPass;
         }
 
-        // Default: safe short pass if available, otherwise medium
         if has_short_option {
             GoalkeeperDistributionType::ShortPass
         } else if has_medium_option {

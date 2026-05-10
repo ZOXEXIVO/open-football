@@ -2,6 +2,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -651,8 +652,12 @@ impl DefenderRunningState {
             }
         }
 
-        // High vision: switch play to opposite flank
-        if ctx.player.skills.mental.vision >= 14.0 {
+        // Switch play to opposite flank — gated on the defender switch
+        // profile (passing/vision/technique/decisions blend) instead of
+        // a raw `vision >= 14.0` threshold so technique/composure also
+        // count and a fatigued reading drops the gate.
+        let def_profile = DefenderSkillProfile::from_ctx(ctx);
+        if def_profile.allows_switch() {
             if let Some(target) = self.find_open_teammate_on_opposite_side(ctx) {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
@@ -911,11 +916,10 @@ impl DefenderRunningState {
         let pressers_on_me = ctx.tick_context.grid.opponents(ctx.player.id, 18.0).count();
         let under_heavy_press = pressers_on_me >= 2;
 
-        // Skill signal: high passing + vision = attempt more ambitious
-        // diagonals; low passers stick to short safe options.
-        let pass_skill = ctx.player.skills.technical.passing / 20.0;
-        let vision_skill = ctx.player.skills.mental.vision / 20.0;
-        let creativity = (pass_skill + vision_skill) * 0.5;
+        // Skill signal: build-up profile (passing/technique/composure/
+        // decisions/vision blend, condition-aware) drives how ambitious
+        // the diagonals get. Replaces the raw (passing+vision)/2.
+        let creativity = DefenderSkillProfile::from_ctx(ctx).buildup_profile;
 
         let mut best_target: Option<(MatchPlayerLite, f32)> = None;
 
@@ -1120,11 +1124,17 @@ impl DefenderRunningState {
             return false;
         }
 
-        // Player must have the legs and willingness for a 50-60m sprint.
-        if ctx.player.player_attributes.condition_percentage() <= 55 {
-            return false;
-        }
-        if ctx.player.skills.mental.work_rate <= 10.0 {
+        // Skill-aware overlap gate: stamina/work_rate/pace/off_the_ball
+        // composite + late-lead branch handled by the profile helpers.
+        // Replaces raw condition <= 55 / work_rate <= 10 cut-offs.
+        let def_profile = DefenderSkillProfile::from_ctx(ctx);
+        let minute_now = (ctx.context.total_match_time as f32) / 60_000.0;
+        let late_lead = minute_now > 75.0 && ctx.team().score_diff() > 0;
+        if late_lead {
+            if !def_profile.allows_late_lead_overlap() {
+                return false;
+            }
+        } else if !def_profile.allows_overlap() {
             return false;
         }
 

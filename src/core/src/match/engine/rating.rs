@@ -19,8 +19,59 @@ pub fn calculate_match_rating(
 
     // ── Attacking contributions ──────────────────────────────────────────
 
-    // Goals: +1.0 each, capped at +3.0
-    rating += (stats.goals as f32 * 1.0).min(3.0);
+    // Goals: +0.75 each, capped at +2.4. Down from a flat +1.0/+3.0 cap
+    // because the engine was rewarding lucky / variance-driven goals
+    // identically to genuine quality finishes — a 5/20 striker who
+    // scuffed in two rebounds still posted an 8.0. The post-shot xG
+    // delta below adds +0..0.20 for clinical conversions, and the
+    // cap-busting "decisive" bonus rewards a goal that flipped the
+    // scoreline.
+    let goal_count = stats.goals as f32;
+    let base_goal_credit = (goal_count * 0.75).min(2.4);
+    rating += base_goal_credit;
+
+    // Decisive goal bonus: a goal that put the team into a winning /
+    // drawing position (or pulled them level) still earns extra credit
+    // beyond the base. Flat +0.20 per goal-scoring forward when the
+    // team won — cheap proxy for "actually mattered to the result"
+    // without re-deriving per-goal scoreline state.
+    if stats.goals > 0 && team_goals > opponent_goals {
+        rating += 0.20;
+    }
+
+    // High-xG over-conversion: only awarded when the player out-scored
+    // their xG by a meaningful margin. Capped at +0.20.
+    if stats.xg > 0.05 && goal_count > 0.0 {
+        let over = (goal_count - stats.xg).max(0.0);
+        rating += (over * 0.10).min(0.20);
+    }
+
+    // Low-xG goals dampener: if the goals came from very low-quality
+    // chances (e.g. one tap-in worth 0.10 xG), reduce the goal credit
+    // a touch — the variance-finished goal still counts but not the
+    // same as a genuinely difficult conversion.
+    if stats.goals > 0 && stats.xg < goal_count * 0.35 {
+        rating -= 0.15 * goal_count;
+    }
+
+    // Wasted high xG: created premium chances and scored none.
+    if stats.goals == 0 && stats.xg >= 0.8 {
+        let waste = ((stats.xg - 0.8) * 0.20).min(0.35);
+        rating -= waste;
+    }
+
+    // Shot-spam penalty: high shot volume with very poor xG-per-shot
+    // means the player kept firing low-quality attempts.
+    if stats.shots_total > 4 {
+        let xg_per_shot = if stats.shots_total > 0 {
+            stats.xg / stats.shots_total as f32
+        } else {
+            0.0
+        };
+        if xg_per_shot < 0.08 {
+            rating -= ((stats.shots_total as f32 - 4.0) * 0.035).min(0.30);
+        }
+    }
 
     // Assists: +0.5 each, capped at +1.5
     rating += (stats.assists as f32 * 0.5).min(1.5);
@@ -184,17 +235,14 @@ pub fn calculate_match_rating(
         _ => {}
     }
 
-    // ── xG-based finishing quality ───────────────────────────────────────
-
-    if stats.xg > 0.5 {
-        let xg_delta = stats.goals as f32 - stats.xg;
-        if xg_delta > 0.0 {
-            // Clinical finisher — scored more than expected
-            rating += (xg_delta * 0.15).min(0.3);
-        } else if stats.goals == 0 && stats.xg > 1.0 {
-            // Unlucky — created good chances but didn't convert
-            rating += 0.1;
-        }
+    // ── xG-based unlucky finisher ────────────────────────────────────────
+    //
+    // Clinical-finisher bonus is now folded into the per-goal block
+    // above (high_xg_conversion_bonus). We keep the small "unlucky"
+    // bump here for forwards who manufactured genuine chances without
+    // converting any.
+    if stats.goals == 0 && stats.xg > 1.0 {
+        rating += 0.1;
     }
 
     // ── Modern build-up / chance creation contributions ──────────────────
@@ -505,6 +553,135 @@ pub fn calculate_match_rating(
         rating = rating.clamp(5.8, 7.2);
     }
 
+    // ── Low-involvement caps ─────────────────────────────────────────────
+    //
+    // Stops the "all-5 forward who didn't actually do much" from
+    // posting 8.0 because of one lucky 0.10-xG poke. Goalkeepers are
+    // exempt — their job is shot-stopping, not tackles or key passes.
+    //
+    // 1) 60+ minutes with no goal/assist/key pass and minimal
+    //    defensive output: cap at 6.4.
+    // 2) Single goal off a low-xG chance with otherwise low
+    //    involvement: cap at 7.2.
+    if !matches!(pos, PlayerFieldPositionGroup::Goalkeeper) {
+        let total_defensive_actions = stats.tackles
+            .saturating_add(stats.interceptions)
+            .saturating_add(stats.successful_pressures)
+            .saturating_add(stats.blocks)
+            .saturating_add(stats.clearances);
+        let creative_actions =
+            stats.key_passes.saturating_add(stats.progressive_passes / 3);
+
+        if stats.minutes_played >= 60
+            && stats.goals == 0
+            && stats.assists == 0
+            && creative_actions == 0
+            && total_defensive_actions < 4
+        {
+            rating = rating.min(6.4);
+        }
+
+        // Low-involvement single-goal cap.
+        let positive_events = (stats.assists as u32)
+            + (stats.key_passes as u32)
+            + (stats.progressive_passes as u32) / 3
+            + (stats.successful_dribbles as u32)
+            + (stats.tackles as u32)
+            + (stats.interceptions as u32)
+            + (stats.successful_pressures as u32) / 2
+            + (stats.blocks as u32)
+            + (stats.clearances as u32);
+        if stats.goals == 1 && stats.xg < 0.20 && positive_events < 5 {
+            rating = rating.min(7.2);
+        }
+    }
+
+    // ── Defender quality / volume separation ────────────────────────────
+    //
+    // Defender ratings should reward quality of defending, not raw
+    // volume. The base rating already credits tackles/interceptions/
+    // clearances/blocks per event with reasonable weights, and the zone
+    // bonus separates own-box from midfield. The block below adds:
+    //
+    //   * a "clean duels" bonus that pays only for tackles produced
+    //     without an accompanying foul,
+    //   * a small block-quality lift when the defender contributes
+    //     meaningful blocks on top of base credit,
+    //   * a clearance-quality split so a defender who completes some
+    //     controlled clearances earns a small extra above pure volume,
+    //   * a low-skill volume cap that stops a defender drifting to 8.0+
+    //     purely on routine clearances/tackles when no clean sheet,
+    //     no clutch intervention, and no goal/assist were produced.
+    if pos == PlayerFieldPositionGroup::Defender {
+        // Clean-duel bonus: tackles produced beyond the foul count.
+        // Approximates "tackles without a foul" — fouls already carry
+        // a base penalty, so subtracting them rewards the cleanly-won
+        // ball-winners separately.
+        let tackles_u32 = stats.tackles as u32;
+        let fouls_u32 = stats.fouls as u32;
+        let clean_tackles = tackles_u32.saturating_sub(fouls_u32);
+        rating += (clean_tackles as f32 * 0.055).min(0.28) * minute_damp;
+
+        // Block-quality lift — proportional to total blocks in the
+        // match. Base credit already pays per-block; this small extra
+        // separates a defender who blocked 4 shots from one who blocked
+        // a single low-danger effort.
+        let extra_blocks = (stats.blocks as i32 - 1).max(0) as f32;
+        rating += (extra_blocks * 0.05).min(0.40) * minute_damp;
+
+        // Low-skill volume cap. Without a clean sheet, a goal or
+        // assist, multiple blocks, or a major clutch intervention
+        // (errors_to_goal == 0 implied), routine event volume should
+        // not push a defender above 7.1.
+        let major_intervention = stats.blocks >= 2;
+        let attacking_contribution = stats.goals > 0 || stats.assists > 0;
+        let clean_sheet = opponent_goals == 0;
+        if stats.minutes_played >= 60
+            && !clean_sheet
+            && !attacking_contribution
+            && !major_intervention
+            && stats.errors_leading_to_goal == 0
+        {
+            rating = rating.min(7.1);
+        }
+    }
+
+    // ── Midfielder quality / volume separation ──────────────────────────
+    //
+    // Midfielder ratings should reward quality, not raw pass volume. The
+    // generic creative bonuses above already credit progressive passes
+    // and key passes, but a low-skill midfielder racking up 70 safe
+    // sideways passes can still drift into 7.5+ via passing accuracy +
+    // win bonus + light defensive credit. The cap below stops the
+    // "safe-recycler 8.0" outcome unless the midfielder produced real
+    // attacking, defensive, or chance-creation output.
+    if pos == PlayerFieldPositionGroup::Midfielder {
+        // Pressing-quality bump — sustained successful pressures + raw
+        // pressing volume.
+        let pressing_quality = (stats.successful_pressures as f32 * 0.030
+            + (stats.pressures.saturating_sub(stats.successful_pressures)) as f32 * 0.006)
+            .min(0.32);
+        rating += pressing_quality * minute_damp;
+
+        // Switch-of-play bonus already applied above (capped). Add a
+        // small extra per high-value key pass via xg_chain_buildup —
+        // already covered by `xg_buildup` block. Nothing new here.
+
+        // Safe-recycle cap: high pass volume, no progressive value, no
+        // shot/key-pass involvement, minimal defensive contribution.
+        if stats.minutes_played >= 60
+            && stats.passes_attempted >= 30
+            && stats.goals == 0
+            && stats.assists == 0
+            && stats.key_passes == 0
+            && stats.progressive_passes <= 2
+            && stats.shots_total == 0
+            && (stats.tackles + stats.interceptions + stats.successful_pressures) < 5
+        {
+            rating = rating.min(6.7);
+        }
+    }
+
     rating.clamp(1.0, 10.0)
 }
 
@@ -609,22 +786,27 @@ mod tests {
 
     #[test]
     fn goals_add_up_to_cap() {
-        let stats = make_stats(
+        // Five-goal forward with realistic xG (the goals weren't lucky).
+        // New goal-credit model caps base at +2.4, adds +0.20 decisive
+        // win, +0.20 clinical bonus when goals exceed xG. Spec
+        // explicitly removes the flat +1.0/goal — high output still
+        // produces an elite rating, just not a runaway one.
+        let mut stats = make_stats(
             5,
             0,
             0,
             0,
             0,
+            5,
             0,
             0,
             0,
-            0,
-            0.0,
+            3.5,
             PlayerFieldPositionGroup::Forward,
         );
+        stats.shots_on_target = 5;
         let rating = calculate_match_rating(&stats, 5, 0);
-        // goals capped at +3.0, plus win bonus +0.3, clean sheet not applicable for forward
-        assert!(rating >= 9.0);
+        assert!(rating >= 8.4, "rating={rating}");
     }
 
     #[test]
@@ -1081,34 +1263,37 @@ mod tests {
 
     #[test]
     fn high_volume_passing_bonus() {
-        // Few passes, good accuracy
-        let few = make_stats(
+        // Both midfielders have a baseline tackle/interception so the
+        // low-involvement cap doesn't fire (real high-volume passers
+        // have other involvement; the test isolates the volume bonus).
+        let mut few = make_stats(
             0,
             0,
             15,
             14,
             0,
             0,
-            0,
+            4,
             0,
             0,
             0.0,
             PlayerFieldPositionGroup::Midfielder,
         );
-        // Many passes, good accuracy
-        let many = make_stats(
+        few.key_passes = 1;
+        let mut many = make_stats(
             0,
             0,
             55,
             50,
             0,
             0,
-            0,
+            4,
             0,
             0,
             0.0,
             PlayerFieldPositionGroup::Midfielder,
         );
+        many.key_passes = 1;
 
         let few_rating = calculate_match_rating(&few, 1, 1);
         let many_rating = calculate_match_rating(&many, 1, 1);
@@ -1760,13 +1945,14 @@ mod tests {
                 34,
                 0,
                 0,
-                0,
+                4,
                 0,
                 0,
                 0.0,
                 PlayerFieldPositionGroup::Midfielder,
             );
             s.passes_into_box = 4;
+            s.key_passes = 1;
             s
         };
         let neutral = make_mid();
@@ -1829,12 +2015,13 @@ mod tests {
             34,
             0,
             0,
-            0,
+            4,
             0,
             0,
             0.0,
             PlayerFieldPositionGroup::Midfielder,
         );
+        s.key_passes = 1;
         let baseline = calculate_match_rating(&s, 1, 1);
         s.zone_stats.switches_of_play = 10;
         let rating = calculate_match_rating(&s, 1, 1);
@@ -1894,19 +2081,20 @@ mod tests {
         // signal — large buildup should lift a midfielder visibly.
         // The producer wiring (in shoot handler) is tested indirectly
         // via the rating's response to populated values.
-        let plain = make_stats(
+        let mut plain = make_stats(
             0,
             0,
             40,
             34,
             0,
             0,
-            0,
+            4,
             0,
             0,
             0.0,
             PlayerFieldPositionGroup::Midfielder,
         );
+        plain.key_passes = 1;
         let mut chained = plain.clone();
         chained.xg_buildup = 0.6;
         let plain_rating = calculate_match_rating(&plain, 1, 1);

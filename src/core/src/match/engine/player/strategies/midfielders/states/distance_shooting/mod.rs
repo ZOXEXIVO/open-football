@@ -2,6 +2,7 @@ use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
+use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -102,18 +103,31 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
 impl MidfielderDistanceShootingState {
     fn is_favorable_shooting_opportunity(&self, ctx: &StateProcessingContext) -> bool {
         let distance_to_goal = ctx.player().goal_distance();
-        let long_shots = ctx.player.skills.technical.long_shots / 20.0;
-
-        // Use the proper clear-shot check that excludes the goalkeeper
         let has_clear_shot = ctx.player().has_clear_shot();
+        let close_opponents = ctx.tick_context.grid.opponents(ctx.player.id, 10.0).count();
+        if !has_clear_shot || close_opponents >= 2 {
+            return false;
+        }
 
-        let distance_threshold = 100.0; // ~50m for long shots
-        let heavily_marked = ctx.tick_context.grid.opponents(ctx.player.id, 10.0).count() >= 2;
+        let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+        let shot_profile = ctx.player().shooting().shot_profile();
 
-        distance_to_goal <= distance_threshold
-            && has_clear_shot
-            && long_shots > 0.5
-            && !heavily_marked
+        // Tier the distance gates by midfielder shot selection — only
+        // genuine long-shot specialists should fire from beyond the box.
+        if distance_to_goal <= 42.0 {
+            mid_profile.mid_shot_selection >= 0.42
+                && shot_profile.expected_xg(distance_to_goal, true) >= 0.09
+        } else if distance_to_goal <= 65.0 {
+            mid_profile.mid_shot_selection >= 0.58
+                && close_opponents <= 1
+                && shot_profile.expected_xg(distance_to_goal, true) >= 0.055
+        } else if distance_to_goal <= 80.0 {
+            mid_profile.mid_shot_selection >= 0.72
+                && shot_profile.execution_skill >= 0.55
+                && shot_profile.expected_xg(distance_to_goal, true) >= 0.045
+        } else {
+            false
+        }
     }
 
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {

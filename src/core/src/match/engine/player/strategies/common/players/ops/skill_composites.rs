@@ -152,53 +152,59 @@ pub fn receiving_first_touch(player: &MatchPlayer, minute: u32) -> f32 {
 // Shooting
 // ---------------------------------------------------------------------------
 
-/// Close-range shooting composite.
-/// `finishing*0.34 + composure*0.22 + first_touch*0.14 + technique*0.12
-///  + decisions*0.10 + balance*0.05 + concentration*0.03`
+/// Apply the low-skill-punishing power curve used across the shooting
+/// composites. A 5/20 input (0.25) maps to ~0.10 instead of staying at
+/// 0.25, so a player with all-5 skills no longer behaves like half an
+/// elite shooter when the components are summed.
+#[inline]
+fn curve(skill01: f32, exp: f32) -> f32 {
+    skill01.clamp(0.0, 1.0).powf(exp)
+}
+
+/// Close-range shooting composite (skill-curved).
+/// `finishing^1.65*0.42 + composure^1.45*0.22 + first_touch^1.45*0.13
+///  + technique^1.45*0.10 + decisions^1.35*0.08 + balance^1.25*0.05`
 pub fn shooting_close(player: &MatchPlayer, minute: u32) -> f32 {
     let (tech, mental, _) = ctxs(minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.finishing)) * 0.34
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.22
-        + n(eff(player, tech, |_| s.technical.first_touch)) * 0.14
-        + n(eff(player, tech, |_| s.technical.technique)) * 0.12
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.10
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.05
-        + n(eff(player, mental, |_| s.mental.concentration)) * 0.03)
+    let v = (curve(n(eff(player, tech, |_| s.technical.finishing)), 1.65) * 0.42
+        + curve(n(eff(player, mental, |_| s.mental.composure)), 1.45) * 0.22
+        + curve(n(eff(player, tech, |_| s.technical.first_touch)), 1.45) * 0.13
+        + curve(n(eff(player, tech, |_| s.technical.technique)), 1.45) * 0.10
+        + curve(n(eff(player, mental, |_| s.mental.decisions)), 1.35) * 0.08
+        + curve(n(eff(player, tech, |_| s.physical.balance)), 1.25) * 0.05)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
 
-/// Medium-range shooting composite.
-/// `finishing*0.28 + technique*0.20 + composure*0.17 + decisions*0.13
-///  + long_shots*0.12 + first_touch*0.05 + balance*0.05`
+/// Medium-range shooting composite (skill-curved).
+/// `finishing^1.65*0.30 + technique^1.55*0.22 + long_shots^1.65*0.18
+///  + composure^1.45*0.14 + decisions^1.35*0.10 + balance^1.25*0.06`
 pub fn shooting_medium(player: &MatchPlayer, minute: u32) -> f32 {
     let (tech, mental, _) = ctxs(minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.finishing)) * 0.28
-        + n(eff(player, tech, |_| s.technical.technique)) * 0.20
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.17
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.13
-        + n(eff(player, tech, |_| s.technical.long_shots)) * 0.12
-        + n(eff(player, tech, |_| s.technical.first_touch)) * 0.05
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.05)
+    let v = (curve(n(eff(player, tech, |_| s.technical.finishing)), 1.65) * 0.30
+        + curve(n(eff(player, tech, |_| s.technical.technique)), 1.55) * 0.22
+        + curve(n(eff(player, tech, |_| s.technical.long_shots)), 1.65) * 0.18
+        + curve(n(eff(player, mental, |_| s.mental.composure)), 1.45) * 0.14
+        + curve(n(eff(player, mental, |_| s.mental.decisions)), 1.35) * 0.10
+        + curve(n(eff(player, tech, |_| s.physical.balance)), 1.25) * 0.06)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
 
-/// Long-shot composite.
-/// `long_shots*0.34 + technique*0.24 + composure*0.14 + decisions*0.12
-///  + finishing*0.08 + strength*0.04 + balance*0.04`
+/// Long-shot composite (skill-curved).
+/// `long_shots^1.75*0.38 + technique^1.60*0.24 + composure^1.45*0.13
+///  + decisions^1.40*0.11 + strength^1.25*0.07 + balance^1.25*0.07`
 pub fn long_shot(player: &MatchPlayer, minute: u32) -> f32 {
     let (tech, mental, expl) = ctxs(minute);
     let s = &player.skills;
-    let v = (n(eff(player, tech, |_| s.technical.long_shots)) * 0.34
-        + n(eff(player, tech, |_| s.technical.technique)) * 0.24
-        + n(eff(player, mental, |_| s.mental.composure)) * 0.14
-        + n(eff(player, mental, |_| s.mental.decisions)) * 0.12
-        + n(eff(player, tech, |_| s.technical.finishing)) * 0.08
-        + n(eff(player, expl, |_| s.physical.strength)) * 0.04
-        + n(eff(player, tech, |_| s.physical.balance)) * 0.04)
+    let v = (curve(n(eff(player, tech, |_| s.technical.long_shots)), 1.75) * 0.38
+        + curve(n(eff(player, tech, |_| s.technical.technique)), 1.60) * 0.24
+        + curve(n(eff(player, mental, |_| s.mental.composure)), 1.45) * 0.13
+        + curve(n(eff(player, mental, |_| s.mental.decisions)), 1.40) * 0.11
+        + curve(n(eff(player, expl, |_| s.physical.strength)), 1.25) * 0.07
+        + curve(n(eff(player, tech, |_| s.physical.balance)), 1.25) * 0.07)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }

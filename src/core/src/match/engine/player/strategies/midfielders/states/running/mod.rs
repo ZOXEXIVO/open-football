@@ -4,6 +4,7 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
+use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -136,14 +137,39 @@ impl StateProcessingHandler for MidfielderRunningState {
                 return None;
             }
 
-            // Priority 0: Point-blank range - MUST shoot regardless of clear shot check
-            // This prevents players from colliding with goalkeeper instead of shooting
+            // Priority 0: Point-blank range — skill-graded willingness
+            // instead of an unconditional must-shoot. A 5/20 finisher
+            // hesitates / mishits at point blank far more often than an
+            // elite striker; the random roll stays bounded so even a
+            // poor midfielder still picks the shot most of the time.
             if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE
             {
-                return Some(
-                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                        .with_shot_reason("MID_RUN_POINT_BLANK"),
-                );
+                let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+                let shot_profile = ctx.player().shooting().shot_profile();
+                let point_blank_willingness = (0.10
+                    + shot_profile.selection_skill * 0.30
+                    + mid_profile.mid_shot_selection * 0.20
+                    + shot_profile.composure_skill * 0.10)
+                    .clamp(0.18, 0.85);
+                if rand::random::<f32>() < point_blank_willingness {
+                    return Some(
+                        StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                            .with_shot_reason("MID_RUN_POINT_BLANK"),
+                    );
+                }
+                // Roll failed — try cutback / pass before holding.
+                if let Some((target, _)) = self.find_best_pass_option(ctx) {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(target.id)
+                                .with_reason("MID_RUN_POINT_BLANK_CUTBACK")
+                                .build(ctx),
+                        )),
+                    ));
+                }
             }
 
             // Priority: Clear ball if congested anywhere (not just boundaries)
@@ -202,18 +228,23 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Shooting evaluation for midfielders — much more restrictive than forwards
+            // Shooting evaluation for midfielders — gated on the
+            // unified shot profile + midfielder shot selection composite
+            // rather than raw long_shots / finishing thresholds.
             let goal_dist = ctx.ball().distance_to_opponent_goal();
-            let long_shots = ctx.player.skills.technical.long_shots / 20.0;
-            let finishing = ctx.player.skills.technical.finishing / 20.0;
+            let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+            let shot_profile = ctx.player().shooting().shot_profile();
 
-            // Standard shooting - close range only, with clear shot and good angle
+            // Standard shooting — close range with clear shot, good
+            // angle, and an xG floor that scales with shot selection.
             if can_shoot
                 && coach.shooting_reluctance() < 0.3
                 && goal_dist <= STANDARD_SHOOTING_DISTANCE
-                && ctx.player().shooting().in_shooting_range()
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
+                && shot_profile.expected_xg(goal_dist, true) >= 0.13
+                && (mid_profile.mid_shot_selection >= 0.40
+                    || shot_profile.execution_skill >= 0.55)
             {
                 return Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
@@ -221,11 +252,12 @@ impl StateProcessingHandler for MidfielderRunningState {
                 );
             }
 
-            // Distance shooting - long range with good long shot skills
+            // Distance shooting — long range only with high midfielder
+            // shot selection (long_shots / technique / composure curve).
             if can_shoot
                 && goal_dist <= MAX_SHOOTING_DISTANCE
-                && long_shots > 0.55
-                && finishing > 0.45
+                && mid_profile.mid_shot_selection >= 0.58
+                && shot_profile.execution_skill >= 0.45
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
             {
@@ -234,33 +266,28 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
-            // CARRY FORWARD: Open path to goal — only skilled/brave players carry forward
-            // Average midfielders should prefer passing to maintain team play
+            // CARRY FORWARD: Open path to goal — gate on carry_selection
+            // (dribbling / decisions / composure / acceleration / agility
+            // composite). Replaces the ad-hoc dribbling+composure+pace
+            // blend with the unified midfielder profile.
             let field_width = ctx.context.field_size.width as f32;
             if goal_dist > POINT_BLANK_DISTANCE
                 && goal_dist < field_width * 0.45
                 && self.has_open_space_ahead(ctx)
+                && mid_profile.allows_carry_into_space()
             {
-                let dribbling = ctx.player.skills.technical.dribbling / 20.0;
-                let composure = ctx.player.skills.mental.composure / 20.0;
-                let determination = ctx.player.skills.mental.determination / 20.0;
-                let pace = ctx.player.skills.physical.pace / 20.0;
-                let carry_quality =
-                    dribbling * 0.35 + composure * 0.25 + determination * 0.2 + pace * 0.2;
-                if carry_quality > 0.6 {
-                    return None;
-                }
+                return None;
             }
 
             // Minimum carry time before considering passes — let midfielders run with the ball
             let ownership_ticks = ctx.tick_context.ball.ownership_duration;
 
-            // DRIBBLE: If there's space ahead and player has dribbling skill, beat opponents
+            // DRIBBLE: If there's space ahead and player has carry skill,
+            // beat opponents. Gated by carry_selection thresholds:
+            //   * `allows_take_on_one`  → at most 1 opponent ahead.
+            //   * `allows_take_on_two`  → up to 2.
+            //   * lower → never dribble into opponents.
             if ownership_ticks > 5 && ownership_ticks < 60 {
-                let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
-                let pace = ctx.player.skills.physical.pace / 20.0;
-
-                // Check if there's space to dribble into (no opponent blocking ahead)
                 let goal_pos = ctx.player().opponent_goal_position();
                 let player_pos = ctx.player.position;
                 let to_goal = (goal_pos - player_pos).normalize();
@@ -271,24 +298,21 @@ impl StateProcessingHandler for MidfielderRunningState {
                     .nearby(40.0)
                     .filter(|opp| {
                         let to_opp = (opp.position - player_pos).normalize();
-                        to_opp.dot(&to_goal) > 0.3 // Opponent is ahead in our direction
+                        to_opp.dot(&to_goal) > 0.3
                             && (opp.position - player_pos).norm_squared() < 35.0 * 35.0
                     })
                     .count();
 
-                // Dribbling is for beating opponents — NOT for running into empty space.
-                // Open space = keep running (faster). Only dribble when opponents to beat.
                 let should_dribble = if opponents_ahead == 0 {
-                    false // No one ahead — just run, don't dribble
-                } else if dribbling_skill > 0.7 && pace > 0.6 {
-                    opponents_ahead <= 2 // Skilled: take on 1-2 opponents
-                } else if dribbling_skill > 0.5 {
-                    opponents_ahead == 1 // Decent: take on 1 opponent
+                    false
+                } else if mid_profile.allows_take_on_two() {
+                    opponents_ahead <= 2
+                } else if mid_profile.allows_take_on_one() {
+                    opponents_ahead == 1
                 } else {
-                    false // Poor dribbler: never dribble into opponents
+                    false
                 };
 
-                // Don't dribble in own defensive third — too risky
                 let goal_dist_from_opp = ctx.ball().distance_to_opponent_goal();
                 let field_width = ctx.context.field_size.width as f32;
 
@@ -390,14 +414,10 @@ impl StateProcessingHandler for MidfielderRunningState {
                 let should_switch =
                     teammates_on_side >= 3 || ctx.player().movement().is_congested();
 
-                if should_switch {
-                    let vision = ctx.player.skills.mental.vision / 20.0;
-                    let passing = ctx.player.skills.technical.passing / 20.0;
-                    if vision > 0.4 && passing > 0.4 {
-                        return Some(StateChangeResult::with_midfielder_state(
-                            MidfielderState::SwitchingPlay,
-                        ));
-                    }
+                if should_switch && mid_profile.allows_switch_play() {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::SwitchingPlay,
+                    ));
                 }
             }
 
@@ -591,12 +611,16 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
             // Only shoot as fallback at point-blank range with clear shot
+            // AND a midfielder with adequate shot selection.
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             if distance_to_goal < 25.0 && ctx.player().has_clear_shot() {
-                return Some(
-                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                        .with_shot_reason("MID_RUN_ANTI_OSCILLATION"),
-                );
+                let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+                if mid_profile.mid_shot_selection >= 0.40 {
+                    return Some(
+                        StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                            .with_shot_reason("MID_RUN_ANTI_OSCILLATION"),
+                    );
+                }
             }
             // Last resort: pass to any nearby teammate ahead of the ball (toward opponent goal)
             let player_pos = ctx.player.position;
@@ -903,62 +927,49 @@ impl MidfielderRunningState {
         .velocity
     }
 
-    /// Enhanced passing decision that considers player skills and pressing intensity
+    /// Enhanced passing decision driven by the unified midfielder
+    /// skill profile (pass execution, progressive selection, press
+    /// resistance) instead of raw vision/passing/decisions thresholds.
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
-        // Get player skills
-        let vision = ctx.player.skills.mental.vision / 20.0;
-        let passing = ctx.player.skills.technical.passing / 20.0;
-        let decisions = ctx.player.skills.mental.decisions / 20.0;
-        let composure = ctx.player.skills.mental.composure / 20.0;
-        let teamwork = ctx.player.skills.mental.teamwork / 20.0;
-
-        // Assess pressing situation
+        let profile = MidfielderSkillProfile::from_ctx(ctx);
         let pressing_intensity = self.calculate_pressing_intensity(ctx);
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-        // 1. MUST PASS: Heavy pressing (multiple opponents very close)
+        // 1. MUST PASS: Heavy pressing — low press_resistance forces a
+        // release; high resistance lets us carry/shield briefly.
         if pressing_intensity > 0.7 {
-            // Even low-skilled players should pass under heavy pressure
-            return passing > 0.3 || composure < 0.5;
+            return profile.press_resistance < 0.55 || profile.pass_execution > 0.30;
         }
 
-        // 2. FORCED PASS: Under moderate pressure with limited skills
-        if pressing_intensity > 0.5 && (passing < 0.6 || composure < 0.6) {
+        // 2. FORCED PASS: Moderate pressure + middling press resistance.
+        if pressing_intensity > 0.5 && profile.press_resistance < 0.60 {
             return true;
         }
 
-        // 3. TACTICAL PASS: Skilled players looking for opportunities
-        // Players with high vision and passing can spot good passes even without pressure
-        if vision > 0.7 && passing > 0.7 {
-            // Check if there's a better-positioned teammate
-            if self.has_better_positioned_teammate(ctx, distance_to_goal) {
-                return true;
-            }
+        // 3. TACTICAL PASS: Elite progressive playmakers look for the
+        // line-breaking option even without pressure.
+        if profile.allows_killer_ball()
+            && self.has_better_positioned_teammate(ctx, distance_to_goal)
+        {
+            return true;
         }
 
-        // 4. TEAM PLAY: High teamwork players distribute more
-        if teamwork > 0.7 && decisions > 0.6 && pressing_intensity > 0.3 {
-            // Midfielders with good teamwork pass to maintain possession and tempo
+        // 4. TEAM PLAY: Good distributors (decent execution + high
+        // teamwork curve via pass_execution) pass to maintain tempo.
+        if pressing_intensity > 0.3 && profile.pass_execution > 0.55 {
             return self.find_best_pass_option(ctx).is_some();
         }
 
-        // 5. UNDER LIGHT PRESSURE: Decide based on skills and options
+        // 5. LIGHT PRESSURE: continuous pass likelihood from execution.
         if pressing_intensity > 0.2 {
-            let pass_likelihood = (decisions * 0.4) + (vision * 0.3) + (passing * 0.3);
-            return pass_likelihood > 0.5;
+            return profile.pass_execution > 0.45;
         }
 
-        // 6. NO PRESSURE: Midfielders should still distribute — it's their primary role
-        // Look for a well-positioned teammate even without pressure
-        if distance_to_goal > 200.0 {
-            // Good passers actively look for passing options
-            let distribution_quality = vision * 0.4 + passing * 0.3 + teamwork * 0.3;
-            if distribution_quality > 0.5 {
-                return self.has_better_positioned_teammate(ctx, distance_to_goal);
-            }
+        // 6. NO PRESSURE: midfielders distribute — gate on execution.
+        if distance_to_goal > 200.0 && profile.pass_execution > 0.45 {
+            return self.has_better_positioned_teammate(ctx, distance_to_goal);
         }
 
-        // Even average midfielders should pass if they've been carrying too long
         let ownership_ticks = ctx.tick_context.ball.ownership_duration;
         if ownership_ticks > 60 {
             return true;

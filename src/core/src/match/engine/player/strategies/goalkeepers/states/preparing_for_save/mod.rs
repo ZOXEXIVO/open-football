@@ -1,5 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -97,13 +98,11 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
-        let agility = ctx.player.skills.physical.agility / 20.0;
-        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
-
-        // Sprint speed boost — GK must react explosively to shots.
-        // Reflexes + agility determine reaction speed.
-        let speed_boost = 1.8 + agility * 0.6 + reflexes * 0.5; // 1.8x - 2.9x
+        // Sprint speed boost — gated by explosive multiplier.
+        let speed_boost = (1.6 + prof.shot_stopping * 0.6 + prof.dive_reach * 0.5)
+            * prof.explosive_mult;
 
         // If a shot has been fired, the projected goal-line crossing is
         // cached on the ball. Commit to that line instead of chasing
@@ -131,13 +130,13 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         // back to the angle-narrowing behaviour.
         let ball_distance = ctx.ball().distance();
         let goal_pos = ctx.ball().direction_to_own_goal();
-        let prediction_time = 0.2 + reflexes * 0.4;
+        let prediction_time = 0.2 + prof.shot_stopping * 0.4;
         let predicted_ball = ball_position + ball_velocity * prediction_time;
         let goal_to_predicted = predicted_ball - goal_pos;
         let intercept_distance = if ball_speed > 1.2 {
-            10.0 + reflexes * 8.0 + agility * 3.0
+            10.0 + prof.shot_stopping * 8.0 + prof.dive_reach * 3.0
         } else {
-            18.0 + reflexes * 10.0 + agility * 4.0
+            18.0 + prof.shot_stopping * 10.0 + prof.dive_reach * 4.0
         };
         let target = if goal_to_predicted.norm() > 1.0 {
             goal_pos + goal_to_predicted.normalize() * intercept_distance.min(ball_distance * 0.5)
@@ -174,11 +173,6 @@ impl GoalkeeperPreparingForSaveState {
             return false;
         }
 
-        // Goalkeeper skills
-        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
-        let agility = ctx.player.skills.physical.agility / 20.0;
-        let bravery = ctx.player.skills.mental.bravery / 20.0;
-
         // Check if ball is heading toward goal
         let toward_goal = self.is_ball_toward_goal(ctx);
         if !toward_goal {
@@ -190,20 +184,20 @@ impl GoalkeeperPreparingForSaveState {
             return false;
         }
 
-        // Calculate time to reach
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let time_to_ball = ball_distance / ball_speed.max(0.5);
 
-        // Dive decisions — elite GKs react from much further out and faster
+        // Skill-driven distances. Effective dive distance already
+        // bakes in dive_reach + positioning so it can scale with
+        // condition; ball-speed branches differ in reaction window.
+        let effective = prof.effective_dive_distance;
         if ball_speed > 1.5 {
-            // Strong shot — dive immediately (skilled keepers react further out)
-            ball_distance < (30.0 + reflexes * 25.0 + agility * 10.0)
-                && time_to_ball < (18.0 + reflexes * 22.0)
+            ball_distance < effective
+                && time_to_ball < (18.0 + prof.shot_stopping * 22.0)
         } else if ball_speed > 0.8 {
-            // Medium speed — dive if in range
-            ball_distance < (25.0 + agility * 18.0 + reflexes * 10.0) && bravery > 0.10
+            ball_distance < (effective * 0.85)
         } else {
-            // Slow rolling ball — dive if close
-            ball_distance < (20.0 + agility * 10.0) && (reflexes + agility) > 0.2
+            ball_distance < (effective * 0.65)
         }
     }
 
@@ -214,43 +208,38 @@ impl GoalkeeperPreparingForSaveState {
         let ball_speed = ball_velocity.norm();
         let ball_position = ctx.tick_context.positions.ball.position;
 
-        // Don't punch if ball is too far
         if ball_distance > PUNCH_DISTANCE {
             return false;
         }
 
-        // Goalkeeper skills
-        // Use first_touch as proxy for handling, physical.jumping for aerial reach
-        let handling = ctx.player.skills.goalkeeping.handling / 20.0;
-
-        // Check if ball is high (would need to punch rather than catch)
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let ball_height = ball_position.z;
-        let is_high_ball = ball_height > 2.0; // Ball above head height
+        let is_high_ball = ball_height > 2.0;
 
-        // Punch conditions:
-        // 1. Ball is high and moving fast (hard to catch)
+        let crowd = if ball_distance < 10.0 {
+            (ctx.players().opponents().nearby(8.0).count() as f32 / 4.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let power_factor = ((ball_speed - 4.0) / 8.0).clamp(0.0, 1.0);
+        // Build a synthetic catch_prob: aerial command + handling
+        // discounted by crowd + power.
+        let synthetic_catch = (prof.handling_profile * 0.55
+            + prof.aerial_command * 0.45
+            - power_factor * 0.20
+            - crowd * 0.20)
+            .clamp(0.0, 1.0);
+
         if is_high_ball && ball_speed > 8.0 {
             return true;
         }
-
-        // 2. Ball is in crowded area (safer to punch)
-        // Check if there are opponents near the ball (within 8m of goalkeeper who is near ball)
-        let opponents_nearby = if ball_distance < 10.0 {
-            ctx.players().opponents().nearby(8.0).count()
-        } else {
-            0
-        };
-
-        if opponents_nearby >= 2 && ball_distance < 10.0 {
-            // Crowded - punch for safety unless handling is excellent
-            return handling < 0.8;
+        if crowd >= 0.5 && ball_distance < 10.0 {
+            return prof.should_punch(synthetic_catch, crowd, power_factor);
         }
-
-        // 3. Goalkeeper has low handling confidence
-        if handling < 0.5 && ball_speed > 6.0 && is_high_ball {
+        if prof.handling_profile < 0.5 && ball_speed > 6.0 && is_high_ball {
             return true;
         }
-
         false
     }
 
@@ -283,33 +272,21 @@ impl GoalkeeperPreparingForSaveState {
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();
         let goal_position = ctx.ball().direction_to_own_goal();
-
-        // Goalkeeper skills
-        let positioning = ctx.player.skills.mental.positioning / 20.0;
-        let anticipation = ctx.player.skills.mental.anticipation / 20.0;
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
         // If ball is moving, predict where it will be
         let predicted_ball_position = if ball_speed > 1.0 {
-            // Predict ball position based on goalkeeper's anticipation
-            let prediction_time = 0.3 + (anticipation * 0.3); // 0.3-0.6 seconds ahead
+            let prediction_time = 0.3 + prof.positioning * 0.3;
             ball_position + ball_velocity * prediction_time
         } else {
             ball_position
         };
 
-        // Calculate position between ball and goal center
         let goal_line_position = goal_position;
-
-        // Positioning ratio: how far from goal line (better positioning = better ratio)
-        // Stay closer to goal line but move toward ball trajectory
-        let positioning_ratio = 0.15 + (positioning * 0.15); // 15-30% toward ball
-
-        // Calculate optimal position on the line between goal and ball
+        let positioning_ratio = 0.15 + prof.positioning * 0.15;
         let optimal_position =
             goal_line_position + (predicted_ball_position - goal_line_position) * positioning_ratio;
-
-        // Ensure goalkeeper stays near the goal line (don't go too far out)
-        let max_distance_from_goal = 8.0 + (positioning * 4.0); // 8-12 units
+        let max_distance_from_goal = 8.0 + prof.positioning * 4.0;
         let distance_from_goal = (optimal_position - goal_line_position).magnitude();
 
         if distance_from_goal > max_distance_from_goal {

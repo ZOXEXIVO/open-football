@@ -36,6 +36,9 @@ pub mod shot_gate_stats {
     pub static PASSED_CLEAR_SHOT: AtomicU64 = AtomicU64::new(0);
     pub static PASSED_WILLINGNESS: AtomicU64 = AtomicU64::new(0);
     pub static FIRED: AtomicU64 = AtomicU64::new(0);
+    pub static HELPER_SHOOT: AtomicU64 = AtomicU64::new(0);
+    pub static HELPER_PASS: AtomicU64 = AtomicU64::new(0);
+    pub static HELPER_HOLD: AtomicU64 = AtomicU64::new(0);
 
     pub fn reset() {
         for c in [
@@ -48,12 +51,15 @@ pub mod shot_gate_stats {
             &PASSED_CLEAR_SHOT,
             &PASSED_WILLINGNESS,
             &FIRED,
+            &HELPER_SHOOT,
+            &HELPER_PASS,
+            &HELPER_HOLD,
         ] {
             c.store(0, Ordering::Relaxed);
         }
     }
 
-    pub fn snapshot() -> [u64; 9] {
+    pub fn snapshot() -> [u64; 12] {
         [
             HAS_BALL_IN_RANGE.load(Ordering::Relaxed),
             PASSED_CAN_SHOOT.load(Ordering::Relaxed),
@@ -64,6 +70,9 @@ pub mod shot_gate_stats {
             PASSED_CLEAR_SHOT.load(Ordering::Relaxed),
             PASSED_WILLINGNESS.load(Ordering::Relaxed),
             FIRED.load(Ordering::Relaxed),
+            HELPER_SHOOT.load(Ordering::Relaxed),
+            HELPER_PASS.load(Ordering::Relaxed),
+            HELPER_HOLD.load(Ordering::Relaxed),
         ]
     }
 }
@@ -362,115 +371,33 @@ impl StateProcessingHandler for ForwardRunningState {
             // the rest become assists.
             let defer_to_teammate = self.has_teammate_with_much_better_shot(ctx, distance_to_goal);
 
-            // Skill-aware shot distance AND willingness. Real football:
-            //   * Low-finishing forwards rarely shoot from distance
-            //   * Low-finishing forwards also hesitate more in general
-            //     (they know their limitations) and pass more often.
-            // These combine into a per-tick "will I pull the trigger"
-            // bias so our 100+ shots / team pattern drops toward the
-            // realistic 13 — especially for poorly-skilled squads that
-            // were otherwise spraying low-xG blasts every possession.
-            let finishing = ctx.player.skills.technical.finishing;
-            let long_shots = ctx.player.skills.technical.long_shots;
-            // Flat 90u ceiling — was a skill-stratified cap (45/60/75/…)
-            // that double-punished low-fin strikers: they already get
-            // penalised by the per-tick xG calculation and the willingness
-            // roll, but the hard distance cap additionally vetoed them
-            // before those softer filters could discriminate. Waterfall
-            // diagnostic showed 85% of settled in-range ticks were lost
-            // here. A single 90u ceiling (~real-football halfway-line)
-            // lets every forward attempt, and the xG/accuracy maths
-            // downstream decides whether it's a good shot.
-            let _ = long_shots;
+            // Flat 90u ceiling — every forward attempts, and the
+            // xG/accuracy maths inside the helper decides whether the
+            // shot is good. Skill-stratified caps double-punished low-fin
+            // strikers (penalised by xG already and by willingness, then
+            // additionally vetoed by a hard distance cap).
             let max_shot_distance = 90.0f32;
-
-            // Willingness: a per-tick trigger for "I shoot now."
-            //
-            // The willingness ROLL fires every tick a forward has the
-            // ball in shooting range and the structural gates pass. With
-            // base ~0.50/tick the cumulative chance over a 5-tick window
-            // is >97%, which is why historic populations ran at 50+
-            // shots/team. Real football: a striker carrying the ball in
-            // shooting range fires roughly once per ~1-2 seconds, NOT
-            // ~5x per second. Calibrated against the per-tick rate so
-            // the cumulative-over-100-ticks chance lands near 50-70%.
-            //
-            // Per-tick base (after gates): ~0.005 (poor) … ~0.030 (elite).
-            //   fin 5,  comp 8 : 0.013
-            //   fin 10, comp 10: 0.018
-            //   fin 14, comp 12: 0.024
-            //   fin 18, comp 15: 0.029
-            //
-            // The shot-clarity factor (from `has_clear_shot()`'s
-            // continuous model) further modulates this so an elite
-            // striker through a clogged-but-passable corridor fires far
-            // less often than the same striker with a yawning lane.
-            let fin_factor = (finishing / 20.0).clamp(0.0, 1.0);
-            let comp_factor = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-            let clarity = ctx.player().shot_clarity();
-            // Per-tick base 0.008 (poor) … 0.025 (elite). With shots
-            // landing in 11-16 / team band and on-target ~35%, the
-            // population-level conversion holds at ~30% of SOT —
-            // matching real Premier League aggregates.
-            let base_willingness = (fin_factor * 0.020 + comp_factor * 0.005 + 0.006)
-                .clamp(0.008, 0.025)
-                * (0.40 + clarity * 0.60);
-
-            // GAME-MANAGEMENT SHOT SUPPRESSION. When the team is protecting
-            // a score (lead, late, underdog clinging to a draw) the coach
-            // wants the squad to STOP forcing shots and keep the ball.
-            // `gm_intensity` already models this as a [0, 1] signal; here
-            // we translate it into per-tick shot willingness directly so
-            // the "stop shooting, defend the score" instruction actually
-            // reaches the striker. Scale kicks in from 0.40 — earlier than
-            // the old 0.55 prefer_possession threshold — so a 1-goal late
-            // lead (~0.50 intensity) noticeably dampens shot rate.
-            // Point-blank shots are unaffected (they ran their own branch
-            // well above this block).
+            // GAME-MANAGEMENT SHOT SUPPRESSION (PRIO 0.5 only). The
+            // unified helper does NOT scale by gm_intensity — that's a
+            // tempo decision the coach makes, not the helper's
+            // chance-quality calculus. Apply it as a willingness
+            // post-multiplier so a leading team late still recycles
+            // through PRIO 0.5 without firing every possession.
             let gm_suppression = if gm_intensity > 0.40 {
                 (1.0 - (gm_intensity - 0.40) / 0.60 * 0.70).clamp(0.30, 1.0)
             } else {
                 1.0
             };
-            // Shot-quality gate: scale willingness by expected xG.
-            // Real strikers don't fire from low-xG positions when alternatives
-            // exist — they look for a pass. Without this gate, the willingness
-            // floor (0.70) made forwards blast from anywhere they had a clear
-            // sight, producing 35+ shots per team per match with most below
-            // 0.05 xG. xG curve: 0.55 at 6yd, 0.08 at 20yd, 0.02 beyond 60yd.
-            //   xg ≥ 0.20  → quality_mult 1.00 (premium chances always taken)
-            //   xg = 0.10  → quality_mult 0.70
-            //   xg = 0.05  → quality_mult 0.45
-            //   xg ≤ 0.02  → quality_mult 0.15 (hopeful blasts discouraged)
-            let exp_xg = ctx.player().shooting().expected_xg();
-            let quality_mult = (0.15 + exp_xg * 4.25).clamp(0.15, 1.0);
 
-            // Risk-appetite multiplier — chasing late raises the floor on
-            // hopeful shots (the team needs a goal NOW), leading-late
-            // suppresses them further. risk_appetite is in [0.05, 1.0].
-            // Centred around 0.5 so a "neutral" 0.0-0.0 minute-30 game
-            // sits roughly where the legacy curve put it.
-            let risk_appetite = ctx.team().risk_appetite();
-            let risk_mult = (0.65 + risk_appetite * 0.60).clamp(0.55, 1.20);
-
-            let willingness = base_willingness * gm_suppression * quality_mult * risk_mult;
-            let shot_triggered = rand::random::<f32>() < willingness;
-
-            // Gate waterfall instrumentation (match-logs only). Counts how
-            // many forward-has-ball ticks survive each independent gate.
-            // Each subsequent counter is a strict subset of the prior one —
-            // so the drop between adjacent counters tells us which gate is
-            // the dominant shot-suppressor.
+            // Gate waterfall instrumentation (match-logs only). Counts
+            // how many forward-has-ball ticks survive each independent
+            // pre-gate (everything except the final helper roll, which
+            // is bumped after the helper returns Shoot).
             #[cfg(feature = "match-logs")]
             {
                 use std::sync::atomic::Ordering;
                 if distance_to_goal <= 90.0 {
                     shot_gate_stats::HAS_BALL_IN_RANGE.fetch_add(1, Ordering::Relaxed);
-                    // Informational: `prefer_possession` is NOT a gate on
-                    // shot_condition_met anymore (see note above), but we
-                    // still observe it here to see how often the team is
-                    // in tempo-management mode when a forward has the
-                    // ball in range.
                     if !prefer_possession {
                         shot_gate_stats::PASSED_NOT_POSSESSION.fetch_add(1, Ordering::Relaxed);
                     }
@@ -486,10 +413,6 @@ impl StateProcessingHandler for ForwardRunningState {
                                     if ctx.player().has_clear_shot() {
                                         shot_gate_stats::PASSED_CLEAR_SHOT
                                             .fetch_add(1, Ordering::Relaxed);
-                                        if shot_triggered {
-                                            shot_gate_stats::PASSED_WILLINGNESS
-                                                .fetch_add(1, Ordering::Relaxed);
-                                        }
                                     }
                                 }
                             }
@@ -498,108 +421,90 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 0.5: Clear shot within skill-permitted range.
-            // Note: `prefer_possession` is NOT re-checked here. The
-            // hold-ball branch at line ~89 already decided whether to
-            // recycle based on distance and hold-time; once we reach a
-            // settled in-range clear-shot opportunity, team tempo
-            // preference doesn't veto the attempt. Previously a tired
-            // team in a 0-0 match flipped the coach to `SlowDown`, which
-            // made `prefer_possession()` true and silently killed 94%
-            // of the remaining shot pipeline.
-            // Hopeless-shot reject. Modern football: a forward only
-            // pulls the trigger when the chance is genuinely there.
-            // We use a phase-aware threshold:
-            //   * baseline 0.08 — premium chance, anyone fires
-            //   * 0.04..0.075 — only if risk_appetite says we need a
-            //     goal NOW (chasing late, attacking tactic)
-            //   * point-blank (<28u) — always allowed, the older
-            //     branch above handled that mandatorily already
-            // Floor is 0.035 — below that the shot is hopeless under
-            // ANY game state (real strikers don't waste possession on
-            // it). The legacy single threshold of 0.04 let too many
-            // 0.04-0.05 xG hopefuls through under non-chasing states.
-            let min_xg: f32 = if risk_appetite >= 0.75 {
-                0.04
-            } else if risk_appetite >= 0.55 {
-                0.06
-            } else {
-                0.08
-            };
-            let min_xg = min_xg.max(0.035);
-            let viable_shot = exp_xg >= min_xg || distance_to_goal < 28.0;
-
-            // === PASS-vs-SHOT EXPECTED-VALUE COMPARISON ===
-            // Even with a viable shot, the right play is often a
-            // cutback or central feed. Compare best pass's expected
-            // value (success_probability × tactical_value, already
-            // computed by the evaluator) to current shot xG, with a
-            // skill-graded margin. Polish-spec margins:
-            //   teamwork > 0.75 → 0.05  (unselfish ball-players)
-            //   normal          → 0.09
-            //   ShootsFromDistance OR teamwork < 0.4 → 0.14  (shoot-first)
-            let teamwork = ctx.player.skills.mental.teamwork / 20.0;
-            let prefers_shot = ctx.player.has_trait(PlayerTrait::ShootsFromDistance);
-            let pass_margin = pass_deferral_margin(teamwork, prefers_shot);
-
-            // Look ~80u for a better pass option — covers cutback /
-            // square / through-ball range without dragging in long
-            // diagonals. Two adjustments fold in here:
-            //   * If the candidate receiver is heavily marked
-            //     (≥2 opponents within 12u), the "pass" is mostly an
-            //     interception waiting to happen — halve its EV before
-            //     comparing against the shot.
-            //   * The deferral comparison caps pass EV at 0.55 so a
-            //     spectacular cutback EV doesn't override every viable
-            //     shot in the box.
-            let best_pass_ev = ctx
-                .player()
-                .passing()
-                .find_best_pass_option_with_distance(80.0)
-                .map(|(t, _)| {
-                    let eval = PassEvaluator::evaluate_pass(ctx, ctx.player, &t);
-                    let receiver_opps = ctx.tick_context.grid.opponents(t.id, 12.0).count();
-                    apply_marked_pass_discount(eval.expected_value, receiver_opps)
-                })
-                .unwrap_or(0.0);
-
-            let defer_to_pass =
-                should_defer_to_pass(exp_xg, best_pass_ev, pass_margin, distance_to_goal);
-
-            let shot_condition_met = has_settled
+            // Priority 0.5: Clear shot in range — route through the
+            // unified `evaluate_forward_shot_decision` helper so PRIO 0.5,
+            // PRIO 0.6 (box), point-blank, RunningInBehind, and Finishing
+            // ALL share the same per-tick shot decision (xG floor,
+            // clarity, sprint/balance, GK proximity, pass-EV, willingness
+            // roll). Previous version kept a parallel inline willingness
+            // calc that drifted ~14× too low after `shot_profile()` was
+            // recalibrated, killing 99.7% of in-range clear-shot ticks
+            // and turning every match into 0-0.
+            //
+            // Pre-gates kept locally:
+            //   * has_settled        — anti spam-fire on first-touch
+            //   * !defer_to_teammate — open-net teammate gets the cutback
+            //   * dist <= max_shot_distance / has_clear_shot()
+            //
+            // GM suppression is applied as a probability gate on top of
+            // the helper's Shoot decision so a leading-late team still
+            // game-manages without dropping the helper's calibration.
+            let pre_gate_passed = has_settled
                 && can_shoot
                 && !defer_to_teammate
-                && !defer_to_pass
                 && distance_to_goal <= max_shot_distance
-                && viable_shot
                 && ctx.player().has_clear_shot();
 
-            if shot_condition_met && shot_triggered {
+            if pre_gate_passed {
+                let _decision = evaluate_forward_shot_decision(ctx, "FWD_RUN_PRIO05_CLEAR");
                 #[cfg(feature = "match-logs")]
-                shot_gate_stats::FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Some(
-                    StateChangeResult::with_forward_state(ForwardState::Shooting)
-                        .with_shot_reason("FWD_RUN_PRIO05_CLEAR"),
-                );
-            }
-
-            // Willingness failed — don't force a pass in open field. Just
-            // keep running/dribbling and let the next tick re-evaluate.
-            // Previously this routed to Passing which made forwards hand
-            // off an open-field shot to a teammate for no reason. The
-            // willingness gate still reduces total shot rate (each tick
-            // is an independent roll, so hesitation lasts multiple ticks
-            // on average) without burning the opportunity to a teammate.
-            // We DO force a pass under pressure (teammate better
-            // positioned OR prefer_possession active), handled elsewhere.
-            if shot_condition_met {
-                let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
-                if under_pressure {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                {
+                    use std::sync::atomic::Ordering;
+                    match _decision {
+                        ShotDecision::Shoot { .. } => shot_gate_stats::HELPER_SHOOT.fetch_add(1, Ordering::Relaxed),
+                        ShotDecision::Pass => shot_gate_stats::HELPER_PASS.fetch_add(1, Ordering::Relaxed),
+                        ShotDecision::Hold => shot_gate_stats::HELPER_HOLD.fetch_add(1, Ordering::Relaxed),
+                    };
                 }
-                // Open field, hesitation this tick — return None to stay
-                // in Running; re-evaluate next tick.
-                return None;
+                match _decision {
+                    ShotDecision::Shoot { reason } => {
+                        // GM suppression veto — protect-a-result teams
+                        // recycle even with a clear shot. Scale tail
+                        // beyond gm > 0.40; under that, no suppression.
+                        if gm_suppression < 1.0
+                            && rand::random::<f32>() >= gm_suppression
+                        {
+                            // Suppressed by game-management — under
+                            // pressure, lay off; otherwise keep running.
+                            let under_pressure =
+                                ctx.player().pressure().is_under_immediate_pressure();
+                            return if under_pressure {
+                                Some(StateChangeResult::with_forward_state(ForwardState::Passing))
+                            } else {
+                                None
+                            };
+                        }
+                        #[cfg(feature = "match-logs")]
+                        {
+                            use std::sync::atomic::Ordering;
+                            shot_gate_stats::PASSED_WILLINGNESS.fetch_add(1, Ordering::Relaxed);
+                            shot_gate_stats::FIRED.fetch_add(1, Ordering::Relaxed);
+                        }
+                        return Some(
+                            StateChangeResult::with_forward_state(ForwardState::Shooting)
+                                .with_shot_reason(reason),
+                        );
+                    }
+                    ShotDecision::Pass => {
+                        // Helper decided pass-EV beat the shot — defer.
+                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                    }
+                    ShotDecision::Hold => {
+                        // Helper said "not now" — under pressure lay off,
+                        // otherwise keep running and re-evaluate next tick.
+                        let under_pressure =
+                            ctx.player().pressure().is_under_immediate_pressure();
+                        if under_pressure {
+                            return Some(StateChangeResult::with_forward_state(
+                                ForwardState::Passing,
+                            ));
+                        }
+                        // Stay in Running — keep dribbling toward goal.
+                        // Don't return None unconditionally: fall through
+                        // to PRIO 0.6 / 0.8 below so close-range or
+                        // open-path branches still trigger.
+                    }
+                }
             }
 
             // Priority 0.6: Close-range shot (≤45u) — drop the settled-time
@@ -638,10 +543,11 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // If we deferred to a better-positioned teammate OR the
-            // pass-EV check beat the shot xG, route through Passing —
-            // the pass state will pick the target.
-            if (defer_to_teammate || defer_to_pass) && has_settled {
+            // If we deferred to a better-positioned teammate, route
+            // through Passing — the pass state picks the target. The
+            // pass-EV-beats-shot-xG case is now handled inside the
+            // unified helper (returns ShotDecision::Pass).
+            if defer_to_teammate && has_settled {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 

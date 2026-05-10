@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -25,9 +26,16 @@ pub struct DefenderPressingState {}
 
 impl StateProcessingHandler for DefenderPressingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // 1. Check if the defender has enough stamina to continue pressing
+        // 1. Skill-aware fatigue gate. Stop pressing when the defender's
+        // condition multiplier (stamina/natural_fitness/match_readiness/
+        // determination blend with the fatigue curve) drops below the
+        // sustainable-press floor. Floors map roughly to 25% raw
+        // condition for a baseline-fitness CB and lower for elite-fit
+        // ones — preserving the previous hysteresis with Resting's
+        // crisis re-entry but skill-graded.
+        let def_profile = DefenderSkillProfile::from_ctx(ctx);
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
-        if stamina < STAMINA_THRESHOLD {
+        if stamina < STAMINA_THRESHOLD || def_profile.def_condition_mult < 0.55 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Resting,
             ));
@@ -54,17 +62,23 @@ impl StateProcessingHandler for DefenderPressingState {
                 ));
             }
 
-            // Scale pressing distance by the team-shared press intensity
-            // (folds tactic + counter-press + condition + game-management).
+            // Pressing distance scales with team intensity AND the
+            // defender's own press_profile — work-rate/anticipation/
+            // stamina/positioning blend with condition fatigue baked in.
+            // Poor pressers run a smaller bubble; elite pressers commit
+            // a bit further. Replaces the static base + intensity formula.
             let intensity = ctx.team().press_intensity();
+            let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            let profile_bonus = def_profile.press_profile * 18.0;
             let pressing_threshold = if ctx.ball().on_own_side()
                 && ctx.ball().distance_to_own_goal()
                     < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD
             {
                 BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD
                     + MAX_PRESSING_BONUS_DEFENSIVE_THIRD * intensity
+                    + profile_bonus
             } else {
-                BASE_PRESSING_DISTANCE + MAX_PRESSING_BONUS * intensity
+                BASE_PRESSING_DISTANCE + MAX_PRESSING_BONUS * intensity + profile_bonus
             };
 
             // If the opponent is too far away, stop pressing
@@ -132,18 +146,15 @@ impl StateProcessingHandler for DefenderPressingState {
             let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
             let opp_speed = opp_velocity.magnitude();
             let pace = ctx.player.skills.physical.pace;
-            // Press intensity blends `pressing` (work-rate, aggression,
-            // stamina, accel/pace) and `mobility` (raw speed/agility).
-            // Routing through composites means a tired or low-stamina
-            // chaser drops into a softer press and a high-press CB
-            // genuinely outsprints a journeyman attacker. Bounded
-            // multiplier per spec: low-impact tactical nudge band of
-            // 1.15..1.65 → recentered as `1.15 + (composite - 0.50) *
-            // 0.50` clamped to the original [1.15, 1.65] envelope so
-            // realism doesn't shift outside the existing calibration.
+            // Press boost from the unified profile (press_profile +
+            // mobility composite). Tired / low-stamina chasers drop
+            // into a softer press; elite pressers genuinely outsprint
+            // journeyman carriers. Stays bounded by the original
+            // calibrated envelope.
             let minute = sc::minute_from_ms(ctx.context.total_match_time);
-            let press_composite =
-                0.6 * sc::pressing(ctx.player, minute) + 0.4 * sc::mobility(ctx.player, minute);
+            let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            let mobility = sc::mobility(ctx.player, minute);
+            let press_composite = 0.65 * def_profile.press_profile + 0.35 * mobility;
             let press_boost =
                 (1.40 + (press_composite - 0.50) * 0.50).clamp(1.15, 1.65);
             let speed = pace * press_boost;

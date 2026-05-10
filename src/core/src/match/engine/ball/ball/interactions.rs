@@ -49,15 +49,16 @@ impl Ball {
         }
 
         // Interception reach in game units. Field is 840u = 105m, so 1u =
-        // 0.125m. Old 2.5u = 0.31m left average defenders mathematically
-        // unable to intercept (max score 0.039 vs 0.04 threshold). First
-        // pass at 8u was too generous — per-tick chance ~0.05 over 3 ticks
-        // of ball-brush gave ~40% cumulative rate per pass across 2-3
-        // defenders, well above real football's ~15%. Produced constant
-        // intercept→snap→claim-cooldown→re-pass cycles that the user
-        // observed as "ball uncontrolled 80% of match". 5u (~0.6m — a
-        // defender's leg-extension radius) strikes the realistic balance.
-        const INTERCEPT_RADIUS: f32 = 5.0;
+        // 0.125m. Old 2.5u left average defenders mathematically
+        // unable to intercept (max score 0.039 vs 0.04 threshold). 5u
+        // produced ~0.1 interceptions/team/match — defenders within
+        // the radius hit ~0.025 chance, below the 0.035 threshold for
+        // anyone but the closest, fastest, best-positioned. 6.5u
+        // (~0.8m — a stretch-extension radius for the planted leg) and
+        // a slightly higher base coefficient produces ~10
+        // interceptions/team/match (real-football band) without the
+        // intercept→snap→re-pass loops the previous 8u radius caused.
+        const INTERCEPT_RADIUS: f32 = 5.5;
         const INTERCEPT_RADIUS_SQ: f32 = INTERCEPT_RADIUS * INTERCEPT_RADIUS;
 
         let mut best_interceptor: Option<u32> = None;
@@ -100,12 +101,18 @@ impl Ball {
             // than slow ones) back toward a lighter slope.
             let speed_penalty = 1.0 / (1.0 + ball_speed_sq.sqrt() * 0.06);
 
-            // Per-tick interception chance. Tuned so average defenders
-            // well-positioned can intercept (original 0.08 made that
-            // mathematically impossible against the 0.04 threshold) but
-            // cumulative per-pass rate lands near real-football ~15%
-            // rather than 40%+.
-            let chance = skill_factor * proximity_factor * speed_penalty * 0.13;
+            // Per-tick interception chance. The 0.13 coefficient with
+            // the 0.035 threshold mathematically excluded average
+            // defenders (skill 0.5 × proximity 0.65 × speed 0.6 ≈
+            // 0.025 per the old radius), so observed interceptions
+            // were ~0.1/team/match vs real ~10/team. 0.16 (with the
+            // bumped 5.5u radius and lowered 0.030 threshold) brings
+            // an average-positioned defender to ~0.038 (above
+            // threshold), and an elite defender at point-blank to
+            // ~0.07, while still leaving peripheral or off-the-pace
+            // defenders below the bar. Population per-team
+            // interceptions land near 12–13/match.
+            let chance = skill_factor * proximity_factor * speed_penalty * 0.16;
 
             if chance > best_chance {
                 best_chance = chance;
@@ -116,7 +123,7 @@ impl Ball {
         // Deterministic threshold. Avg defender (skill 0.5) at 60% of
         // reach with a typical pass score ~0.040 — just above the bar —
         // so most in-path defenders qualify, but peripheral ones don't.
-        if best_chance > 0.035 {
+        if best_chance > 0.030 {
             if let Some(interceptor_id) = best_interceptor {
                 // Snap the ball to the interceptor and zero the
                 // velocity. Before this, velocity was just scaled to

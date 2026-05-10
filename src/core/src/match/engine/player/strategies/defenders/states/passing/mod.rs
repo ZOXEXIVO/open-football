@@ -2,6 +2,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -28,6 +29,16 @@ impl StateProcessingHandler for DefenderPassingState {
         // clearances per match came from this branch firing whenever a
         // short passing option was available but too close.
         if ctx.player().pressure().is_under_heavy_pressure() {
+            // Profile-driven branch: a low buildup_profile defender is
+            // told to clear directly under heavy pressure (the spec's
+            // `must_clear_under_pressure`). Higher buildup_profile +
+            // press_resistance lets us play out via a safe pass.
+            let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            if def_profile.must_clear_under_pressure() {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Clearing,
+                ));
+            }
             return if let Some(safe_option) = ctx.player().passing().find_safe_pass_option() {
                 Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
@@ -40,7 +51,6 @@ impl StateProcessingHandler for DefenderPassingState {
                     )),
                 ))
             } else {
-                // No safe option at all — hoof it.
                 Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ))

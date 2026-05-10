@@ -1,6 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -57,11 +57,12 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             ));
         }
 
-        // Check if ball is too far - be more generous with command of area.
-        // Old code aliased this to `mental.vision`; the dedicated GK
-        // attribute is `goalkeeping.command_of_area`.
-        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
-        let max_pursuit_distance = MAX_COMING_OUT_DISTANCE * (1.0 + command_of_area * 0.5);
+        // Check if ball is too far. Maximum sweeper-keeper pursuit
+        // distance now scales with the unified rushing-out profile so
+        // weak keepers don't roam.
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let max_pursuit_distance =
+            MAX_COMING_OUT_DISTANCE * (0.85 + prof.rushing_out_profile * 0.55);
         if ball_distance > max_pursuit_distance {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
@@ -134,7 +135,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
 
         // Check distance from goal — GK must not wander far
         let goal_distance = ctx.player().distance_from_start_position();
-        let max_goal_distance = 40.0 * (1.0 + command_of_area * 0.3);
+        let max_goal_distance =
+            40.0 * (0.85 + prof.rushing_out_profile * 0.35 + prof.communication * 0.15);
 
         if goal_distance > max_goal_distance {
             // Getting far from goal - only continue if ball is very close and loose
@@ -155,13 +157,12 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_distance = ctx.ball().distance();
         let ball_speed = ball_velocity.norm();
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
-        // Use acceleration skill to determine sprint speed
-        let acceleration = ctx.player.skills.physical.acceleration / 20.0;
-
-        // Goalkeepers should sprint aggressively when coming out
-        // Speed multiplier: 1.4 to 2.0 (much faster than before)
-        let speed_multiplier = 1.4 + (acceleration * 0.6);
+        // Speed multiplier (1.2..2.05) gated by explosive multiplier
+        // and rushing-out skill so weak/tired keepers arrive late.
+        let speed_multiplier =
+            (1.2 + prof.rushing_out_profile * 0.85) * prof.explosive_mult;
 
         // Add urgency bonus based on ball distance and speed
         let urgency_multiplier = if ball_distance < 20.0 {
@@ -174,14 +175,11 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
 
         // Calculate interception point for moving balls
         let target_position = if ball_speed > 1.0 {
-            // Ball is moving - predict interception point
-            let keeper_sprint_speed = ctx.player.skills.physical.pace * (1.0 + acceleration * 0.5);
+            let keeper_sprint_speed = ctx.player.skills.physical.pace
+                * (1.0 + prof.rushing_out_profile * 0.55);
             let time_to_intercept = ball_distance / keeper_sprint_speed.max(1.0);
-
-            // Predict where ball will be, with slight underprediction for safety (0.8x)
             ball_position + ball_velocity * time_to_intercept * 0.8
         } else {
-            // Ball is stationary - go directly to it
             ball_position
         };
 
@@ -288,22 +286,13 @@ impl GoalkeeperComingOutState {
         let keeper_time = keeper_distance / keeper_sprint_speed.max(1.0);
         let opponent_time = opponent_distance / opponent_sprint_speed.max(1.0);
 
-        // Keeper "I-can-get-there-first" advantage. Routes through
-        // `gk_rush_out` so the rushing-out skill, anticipation,
-        // bravery, and decision-making all contribute through one
-        // fatigue-aware composite. Keeps the constant 1.2 hand
-        // advantage (real rule — keepers use hands to claim from
-        // further away).
-        //
-        // Mapping per spec generic multiplier `0.85 + composite *
-        // 0.50` produces a 0.875..1.35 band; combined with the hand
-        // advantage that's a 1.05..1.62 total multiplier — close to
-        // the legacy 1.0..~1.69 band but bounded and consistent with
-        // every other GK skill read.
-        let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let rush_out = sc::gk_rush_out(ctx.player, minute);
+        // Keeper foot-race advantage routed through the unified
+        // rushing-out profile. Keeps the constant 1.2 hand advantage
+        // (real rule — keepers use hands to claim from further away).
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let hand_advantage = 1.2;
-        let total_advantage = hand_advantage * (0.85 + rush_out * 0.50);
+        let total_advantage =
+            hand_advantage * (0.85 + prof.rushing_out_profile * 0.50);
 
         // Keeper wins if their time is less than opponent's time adjusted for advantages
         keeper_time < (opponent_time * total_advantage)
@@ -315,13 +304,14 @@ impl GoalkeeperComingOutState {
         let ball_speed = ball_velocity.norm();
         let ball_position = ctx.tick_context.positions.ball.position;
         let keeper_position = ctx.player.position;
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
-        // Goalkeeper skills
-        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
-        let agility = ctx.player.skills.physical.agility / 20.0;
-        let bravery = ctx.player.skills.mental.bravery / 20.0;
-        let anticipation = ctx.player.skills.mental.anticipation / 20.0;
-        let positioning = ctx.player.skills.goalkeeping.command_of_area / 20.0;
+        // Reuse profile fields for the dive-decision branches below.
+        let reflexes = prof.shot_stopping;
+        let agility = prof.dive_reach;
+        let bravery = prof.one_v_one;
+        let anticipation = prof.positioning;
+        let positioning = prof.positioning;
 
         // Ball must be moving with reasonable speed to consider diving
         if ball_speed < 2.5 {

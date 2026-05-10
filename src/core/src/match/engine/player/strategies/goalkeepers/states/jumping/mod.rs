@@ -1,6 +1,7 @@
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -62,10 +63,13 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         let combined_velocity =
             jump_vector + diving_vector + Vector3::new(0.0, 0.0, vertical_component);
 
-        // Explosive scaling — jumping/diving must be very fast
-        let attribute_scaling = (ctx.player.skills.physical.jumping as f32
-            + ctx.player.skills.physical.agility as f32)
-            / 25.0; // was /40.0 — 60% faster
+        // Explosive scaling — gated by the unified explosive multiplier
+        // and aerial command so weak keepers can't cover the full goal.
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let attribute_scaling = (0.55
+            + prof.aerial_command * 0.45
+            + prof.dive_reach * 0.25)
+            * prof.explosive_mult;
 
         Some(combined_velocity * attribute_scaling)
     }
@@ -82,37 +86,38 @@ impl GoalkeeperJumpingState {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let keeper_pos = ctx.player.position;
         let distance = (ball_pos - keeper_pos).magnitude();
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
-        let jumping = ctx.player.skills.physical.jumping / 20.0;
-        let agility = ctx.player.skills.physical.agility / 20.0;
-        let handling = ctx.player.skills.goalkeeping.handling / 20.0;
-        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
-
-        // Reach based on jumping + agility
-        let max_reach = JUMP_HEIGHT * (jumping * 0.6 + agility * 0.4);
+        // Vertical reach is jumping + aerial-command driven; weak GKs
+        // cannot cover the full crossbar even though JUMP_HEIGHT is
+        // generous.
+        let max_reach = JUMP_HEIGHT
+            * (0.40
+                + prof.aerial_command * 0.45
+                + prof.dive_reach * 0.25);
         let vertical_reach = (ball_pos.z - keeper_pos.z).abs() <= max_reach;
-        let horizontal_reach = distance <= MAX_DIVING_DISTANCE + agility * 4.0;
-
+        let horizontal_max = MAX_DIVING_DISTANCE + prof.dive_reach * 6.0
+            + prof.aerial_command * 2.0;
+        let horizontal_reach = distance <= horizontal_max;
         if !vertical_reach || !horizontal_reach {
             return false;
         }
 
-        // Skill-based catch probability
-        let skill_blend = handling * 0.35 + reflexes * 0.30 + agility * 0.20 + jumping * 0.15;
-
-        // Distance penalty — further stretch = harder catch
-        let stretch_ratio = distance / (MAX_DIVING_DISTANCE + agility * 4.0);
-        let distance_penalty = stretch_ratio * 0.25;
-
-        // Ball speed penalty — fast shots are harder to hold
+        let stretch = (distance / horizontal_max).clamp(0.0, 1.0);
         let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-        let speed_penalty = (ball_speed / 5.0).min(0.3) * (1.0 - reflexes * 0.5);
+        let power = ((ball_speed - 1.5) / 6.0).clamp(0.0, 1.0);
+        let height_diff = (ball_pos.z - keeper_pos.z).abs();
+        let height_factor = (height_diff / max_reach.max(0.1)).clamp(0.0, 1.0);
 
-        // Elite: 0.20 + 0.95*0.75 = 0.91, mediocre: 0.20 + 0.47*0.75 = 0.55
-        let catch_probability =
-            (0.20 + skill_blend * 0.75 - distance_penalty - speed_penalty).clamp(0.10, 0.95);
+        let catch_difficulty = (power * 0.30
+            + stretch * 0.24
+            + height_factor * 0.18
+            + (1.0 - prof.condition_mult) * 0.14
+            + prof.poor_skill_penalty * 0.10)
+            .clamp(0.0, 1.0);
 
-        rand::random::<f32>() < catch_probability
+        let catch_prob = prof.catch_probability(catch_difficulty);
+        rand::random::<f32>() < catch_prob
     }
 
     /// Calculate the base jump vector towards the ball

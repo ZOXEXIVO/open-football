@@ -1837,28 +1837,98 @@ impl PlayerEventDispatcher {
 
         let mut rng = rand::rng();
 
-        // Get player skills for power and accuracy calculations
-        let player = field.get_player(shoot_event_model.from_player_id).unwrap();
+        // Build the unified shot profile from the same inputs the
+        // pre-shot decision saw — the post-hoc xG, the trajectory error
+        // budget, the on-target probability and the miskick odds all
+        // come from this single object. Replaces the prior
+        // (compress_high + raw skill) reads that let a 5/20 player
+        // inherit elite conversion through linear blends.
+        let minute = sc::minute_from_ticks(shoot_event_model.tick);
+        let pre_distance = (shoot_event_model.target - field.ball.position).magnitude();
 
-        // Compressed scaling above skill 17 — elite strikers still
-        // have an edge, but the Finishing-20 "generational talent" isn't
-        // 5% better than a Finishing-17 top-flight striker at every
-        // shot. Without this dampener a single elite finisher in a
-        // real-data squad ran at ~1.7 goals/match (Vlahović line),
-        // roughly 2× real-world top-scorer rates. Linear 0-17 → 0-0.85,
-        // then compressed 17-20 → 0.85-0.94.
-        let compress_high = |raw: f32| -> f32 {
-            if raw > 17.0 {
-                (0.85 + (raw - 17.0) * 0.03).min(0.94)
-            } else {
-                (raw / 20.0).clamp(0.1, 1.0)
-            }
+        // Snapshot the bits of state we need from `field` so we can
+        // build the profile without juggling overlapping borrows.
+        let (condition_pct, shooter_position, shooter_side, technique_skill, finishing_skill, long_shot_skill) = {
+            let player = field.get_player(shoot_event_model.from_player_id).unwrap();
+            (
+                (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0),
+                player.position,
+                player.side,
+                (player.skills.technical.technique / 20.0).clamp(0.1, 1.0),
+                (player.skills.technical.finishing / 20.0).clamp(0.1, 1.0),
+                (player.skills.technical.long_shots / 20.0).clamp(0.1, 1.0),
+            )
         };
-        let finishing_skill = compress_high(player.skills.technical.finishing);
-        let technique_skill = compress_high(player.skills.technical.technique);
-        let long_shot_skill = compress_high(player.skills.technical.long_shots);
-        let composure_skill = (player.skills.mental.composure / 20.0).clamp(0.1, 1.0);
-        let decisions_skill = (player.skills.mental.decisions / 20.0).clamp(0.1, 1.0);
+
+        // Pressure counts: scan opposing-side players close to the
+        // shooter. We don't have the StateProcessingContext grid here,
+        // so a small linear scan is used; the population of opponents
+        // is bounded (<=11) so the cost is negligible.
+        let mut pressure_5u: u32 = 0;
+        let mut pressure_10u: u32 = 0;
+        if let Some(side) = shooter_side {
+            for other in field.players.iter() {
+                if other.id == shoot_event_model.from_player_id {
+                    continue;
+                }
+                if other.side == Some(side) {
+                    continue;
+                }
+                let d = (other.position - shooter_position).magnitude();
+                if d <= 5.0 {
+                    pressure_5u += 1;
+                }
+                if d <= 10.0 {
+                    pressure_10u += 1;
+                }
+            }
+        }
+
+        // Distance to opposing GK (any opponent goalkeeper).
+        let gk_distance = field
+            .players
+            .iter()
+            .filter(|p| p.side != shooter_side)
+            .find(|p| {
+                matches!(
+                    p.tactical_position.current_position.position_group(),
+                    PlayerFieldPositionGroup::Goalkeeper
+                )
+            })
+            .map(|gk| (gk.position - shooter_position).magnitude());
+
+        let inputs = crate::r#match::player::strategies::players::ShotSkillInputs {
+            distance: pre_distance,
+            minute,
+            condition_pct,
+            pressure_count_5u: pressure_5u,
+            pressure_count_10u: pressure_10u,
+            // We don't have shot_clarity here, but `has_clear_shot` is
+            // the gating signal the pre-shot xG used too.
+            shot_clarity: 1.0,
+            has_clear_shot: true,
+            gk_distance,
+            is_sprinting_or_recent_sprint: false,
+        };
+        let profile = {
+            let player = field.get_player(shoot_event_model.from_player_id).unwrap();
+            crate::r#match::player::strategies::players::ShotSkillProfile::from_player(
+                player, &inputs,
+            )
+        };
+
+        // Skill bands derived from the unified profile.
+        let execution_skill = profile.execution_skill;
+        let placement_skill = profile.placement_skill;
+        let body_control = profile.body_control;
+        let technique_curve = profile.technique_curve;
+        let poor_penalty = profile.poor_penalty;
+        let low_condition_penalty = profile.low_condition_penalty;
+        let pressure_penalty = profile.pressure_penalty;
+        let on_target_skill_multiplier = profile.on_target_skill_multiplier;
+        let random_error_scale = profile.random_error_scale;
+        let miskick_probability = profile.miskick_probability;
+        let power_skill = profile.power_skill;
 
         // Determine which goal we're shooting at
         let goal_center = shoot_event_model.target;
@@ -1887,50 +1957,22 @@ impl PlayerEventDispatcher {
             return;
         }
 
-        // Calculate overall shooting accuracy (0.0 to 1.0).
-        // Squared skill terms steepen the curve so mediocre finishers (skill 6-9)
-        // are genuinely inaccurate even at close range. Without this, a fast
-        // striker with Finishing 8 converts at ~elite rates simply by getting
-        // into position — linear weighting flattens the skill gap too much.
-        let base_accuracy = if horizontal_distance > 100.0 {
-            // Long shots depend more on long_shot skill and technique
-            (long_shot_skill.powi(2) * 0.5
-                + technique_skill.powi(2) * 0.3
-                + finishing_skill.powi(2) * 0.2)
-                * composure_skill
-                * 0.85
-        } else if horizontal_distance > 50.0 {
-            // Medium range - balanced
-            (finishing_skill.powi(2) * 0.4
-                + technique_skill.powi(2) * 0.3
-                + long_shot_skill.powi(2) * 0.3)
-                * composure_skill
-                * 0.90
-        } else {
-            // Close range - finishing is key, but still imperfect
-            (finishing_skill.powi(2) * 0.55
-                + technique_skill.powi(2) * 0.2
-                + composure_skill.powi(2) * 0.25)
-                * 0.92
-        };
+        // Overall shot accuracy now flows from the unified profile —
+        // execution_skill is already skill-curved, fatigue-aware, and
+        // pressure-discounted, so a 5/20 finisher tops out around
+        // ~0.10 instead of inheriting elite spread through linear
+        // blends. `on_target_skill_multiplier` adds the smoothstep
+        // poor/elite shaping (poor_penalty knocks 20% off, elite_lift
+        // adds 5%).
+        let base_accuracy = on_target_skill_multiplier * execution_skill;
 
-        // Calculate target point within goal — skill-weighted.
-        // Elite finishers deliberately aim for the corners where the GK
-        // can't reach; poor finishers shoot central ("hit the keeper")
-        // far more often. Real per-shot placement data (StatsBomb,
-        // Opta) shows ~70% of elite-striker shots target the corners
-        // and ~50% of replacement-level shots end up central-ish.
-        //
-        // `central_rate` scales inversely with finishing + decisions:
-        //   finishing 1.0, decisions 1.0 → ~12% central shots
-        //   finishing 0.3, decisions 0.3 → ~55% central shots
-        let quality = (finishing_skill + decisions_skill) * 0.5;
-        let central_rate = (0.60 - quality * 0.50).clamp(0.10, 0.55);
+        // Target placement — now driven by `placement_skill`. Spec:
+        //   central_rate = clamp(0.68 - placement_skill * 0.58, 0.10, 0.68)
+        //   corner_reach = GOAL_WIDTH * (0.42 + placement_skill * 0.48)
+        let central_rate = (0.68 - placement_skill * 0.58).clamp(0.10, 0.68);
         let side_rate = (1.0 - central_rate) * 0.5;
         let target_preference = rng.random_range(0.0..1.0);
-        // Corner placement depth — elite players find the post;
-        // poor players land central even when "aiming" side.
-        let corner_reach = GOAL_WIDTH * (0.55 + decisions_skill * 0.35);
+        let corner_reach = GOAL_WIDTH * (0.42 + placement_skill * 0.48);
         let ideal_y_target = if target_preference < side_rate {
             goal_center.y - corner_reach
         } else if target_preference < side_rate * 2.0 {
@@ -1939,11 +1981,6 @@ impl PlayerEventDispatcher {
             goal_center.y + rng.random_range(-GOAL_WIDTH * 0.3..GOAL_WIDTH * 0.3)
         };
 
-        // Add shooting error based on skills and distance
-        // Error increases with distance and decreases with skill
-        let distance_error_factor = (horizontal_distance / 80.0).clamp(0.8, 3.0);
-
-        // Calculate positional error (how far from intended target)
         // Distance penalty multiplier for base_accuracy — close range should be very accurate
         let distance_penalty = if horizontal_distance > 200.0 {
             0.10
@@ -1964,65 +2001,76 @@ impl PlayerEventDispatcher {
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        // Base error: elite close-range ±3-7 units, poor long-range ±25-55 units.
-        // After the upstream `has_clear_shot()` clarity gate filtered
-        // out blind shots, on-target % crept up to ~47% because the
-        // surviving shots were too well-aimed. Real Opta data shows
-        // ~33% on-target across the population. Bumping the multiplier
-        // 30 → 38 and the floor errors gives the surviving (filtered)
-        // shots a realistic accuracy spread without re-introducing
-        // hopeless blasts.
-        let base_position_error = 38.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let min_error = if horizontal_distance < 30.0 {
-            3.5
+        // Base error: scaled by the unified profile's
+        // `random_error_scale`, the per-shot pressure / body / condition
+        // multipliers, and a distance term. Min-error floors are
+        // boosted by `poor_penalty` so a 5/20 player has a hard floor
+        // they can't aim under even at 6u.
+        let distance_error = (horizontal_distance / 80.0).clamp(0.75, 3.0);
+        let pressure_error =
+            1.0 + pressure_penalty * 0.55 + (pressure_5u as f32) * 0.04;
+        let body_error = 1.0 + (1.0 - body_control) * 0.30;
+        let condition_error = 1.0 + low_condition_penalty * 0.45;
+        // Base y-error tightened progressively: 34 → 22 → 16. Goal
+        // half-width 29u. With pressure / body / distance multipliers
+        // stacking up to ~2.5×, even 22u resolved to a 35-50u random
+        // band for many long shots — wider than the goal — and the
+        // resulting on-target rate sat at ~22% vs real ~33%. 16u with
+        // damped pressure / body / condition multipliers keeps spread
+        // realistic for both clean strikes and scrambling ones.
+        let max_y_error_raw = 16.0
+            * distance_error
+            * pressure_error
+            * body_error
+            * condition_error
+            * random_error_scale
+            * (1.0 - adjusted_accuracy * 0.55);
+        let min_error = if horizontal_distance < 18.0 {
+            3.0 + poor_penalty * 3.0
+        } else if horizontal_distance < 30.0 {
+            4.0 + poor_penalty * 4.0
         } else if horizontal_distance < 60.0 {
-            6.0
+            6.0 + poor_penalty * 5.5
         } else {
-            10.0
+            8.5 + poor_penalty * 7.5
         };
-        let max_y_error = base_position_error.clamp(min_error, 60.0);
+        let max_y_error = max_y_error_raw.clamp(min_error, 60.0);
 
         // Add random error to y-coordinate
         let y_error = rng.random_range(-max_y_error..max_y_error);
         let mut actual_y_target = ideal_y_target + y_error;
 
-        // Wide miss chance: distance-dependent. Calibrated to real-
-        // football shot data — Opta/Statsbomb have ~33% of shots on
-        // target overall. After the prior cut (0.06/0.12/0.20/0.28 →
-        // 0.04/0.08/0.14/0.20) on-target landed at ~19% — still well
-        // below real. The y-error noise (line ~1248) already
-        // randomises around the aimed point; the wide_miss_chance
-        // is an additional "force the ball off-frame" path that was
-        // adding ~25-30% of misses on top. Halving bases again and
-        // pulling scaling 0.22 → 0.14 should move on-target toward
-        // 30%.
-        // Wide-miss baseline bumped to bring on-target % from ~47 toward
-        // the real 33-40% band. Most increase lands at medium range
-        // (30-60u, just outside the 18-yard box) where real strikers
-        // pull shots wide most often.
-        let wide_miss_base = if horizontal_distance < 30.0 {
-            0.05
+        // Wide-miss chance now leans on the unified profile so a
+        // 5/20 finisher pulls shots wide far more often than an elite.
+        // Real Opta on-target rate is ~33% across all distances;
+        // calibrated downward to land population on-target near that.
+        let wide_base = if horizontal_distance < 30.0 {
+            0.030
         } else if horizontal_distance < 60.0 {
-            0.10
+            0.060
         } else if horizontal_distance < 100.0 {
-            0.16
+            0.100
         } else {
-            0.22
+            0.150
         };
-        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.18 + wide_miss_base;
+        let wide_miss_chance = wide_base
+            + (1.0 - execution_skill) * 0.07
+            + poor_penalty * 0.05
+            + pressure_penalty * 0.04
+            + low_condition_penalty * 0.03;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
-            // Shot goes wide — force y outside goal posts
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
             if rng.random_range(0.0f32..1.0) < 0.5 {
-                actual_y_target = goal_right_post + extra_wide; // Wide right
+                actual_y_target = goal_right_post + extra_wide;
             } else {
-                actual_y_target = goal_left_post - extra_wide; // Wide left
+                actual_y_target = goal_left_post - extra_wide;
             }
         }
 
-        // Miskick chance for very low-technique players — shot goes way off target
-        let miskick_chance = (1.0 - technique_skill).powi(3) * 0.3;
-        if rng.random_range(0.0f32..1.0) < miskick_chance {
+        // Miskick chance — sourced from the unified profile so it
+        // includes the smoothstep poor-penalty contribution rather
+        // than a single technique^3 read.
+        if rng.random_range(0.0f32..1.0) < miskick_probability {
             actual_y_target += rng.random_range(-GOAL_WIDTH * 1.5..GOAL_WIDTH * 1.5);
         }
 
@@ -2037,10 +2085,10 @@ impl PlayerEventDispatcher {
         let actual_target = Vector3::new(goal_center.x, clamped_y_target, 0.0);
         let shot_vector = actual_target - field.ball.position;
 
-        // Calculate skill-based power multiplier (better players shoot harder)
-        let power_skill_factor =
-            (finishing_skill * 0.5) + (technique_skill * 0.3) + (long_shot_skill * 0.2);
-        let power_multiplier = 0.95 + (power_skill_factor * 0.35); // Range: 0.95 to 1.30
+        // Skill-based power multiplier — sourced from the unified
+        // profile's `power_skill` so a low-strength / low-technique
+        // shot can't accidentally inherit the same power as an elite.
+        let power_multiplier = 0.95 + (power_skill * 0.35); // Range: 0.95 to 1.30
 
         // Calculate horizontal velocity with skill-based power
         let horizontal_direction = Vector3::new(shot_vector.x, shot_vector.y, 0.0).normalize();
@@ -2096,15 +2144,18 @@ impl PlayerEventDispatcher {
         // bases ~40% and scaling 0.20 → 0.12 so the on-target rate can
         // recover toward the real ~33%.
         let over_bar_base = if horizontal_distance < 30.0 {
-            0.025
+            0.015
         } else if horizontal_distance < 60.0 {
-            0.05
+            0.030
         } else if horizontal_distance < 100.0 {
-            0.09
+            0.055
         } else {
-            0.13
+            0.080
         };
-        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.12 + over_bar_base;
+        let over_bar_chance = over_bar_base
+            + (1.0 - technique_curve).max(0.0) * 0.04
+            + poor_penalty * 0.04
+            + low_condition_penalty * 0.03;
         let shot_goes_over_bar = rng.random_range(0.0f32..1.0) < over_bar_chance;
         let z_velocity = if shot_goes_over_bar {
             // Shot goes over the bar — set z high enough to clear crossbar (GOAL_HEIGHT = 8.0)
@@ -2149,41 +2200,26 @@ impl PlayerEventDispatcher {
         let on_target = clamped_y_target >= goal_left_post
             && clamped_y_target <= goal_right_post
             && !shot_goes_over_bar;
-        // Quick xG from distance + finishing skill. Computed once and
-        // shared between the shooter's memory (for striker xG totals)
-        // and the ball's `last_shot_xg` (for GK xg_prevented credit
-        // when the shot resolves).
-        let xg = {
-            // Mirrors `ShootingOperationsImpl::expected_xg` after the
-            // close-range recalibration so the post-hoc xG stat agrees
-            // with the pre-shot decision-time xG used by the willingness
-            // gates.
-            let d = horizontal_distance;
-            let distance_factor = if d <= 10.0 {
-                0.40
-            } else if d <= 30.0 {
-                0.40 - (d - 10.0) / 20.0 * 0.20
-            } else if d <= 60.0 {
-                0.20 - (d - 30.0) / 30.0 * 0.13
-            } else if d <= 120.0 {
-                0.07 - (d - 60.0) / 60.0 * 0.05
-            } else {
-                0.02
-            };
-            let player = field.get_player(shoot_event_model.from_player_id);
-            let (finishing, composure) = player
-                .map(|p| {
-                    (
-                        (p.skills.technical.finishing / 20.0).clamp(0.0, 1.0),
-                        (p.skills.mental.composure / 20.0).clamp(0.0, 1.0),
-                    )
-                })
-                .unwrap_or((0.5, 0.5));
-            let blend = (finishing * 0.7 + composure * 0.3).clamp(0.0, 1.0);
-            let skill_mult = (0.55 + blend * blend * 0.85).clamp(0.45, 1.30);
-            let target_mult = if on_target { 1.0 } else { 0.15 };
-            (distance_factor * skill_mult * target_mult).clamp(0.0, 0.90)
-        };
+        // xG is a location-based chance value (Opta convention), so the
+        // shooter's per-shot xG records the BASE chance regardless of
+        // whether the strike actually threatened the goal — a skied
+        // 0.78xG penalty still counts as 0.78 xG. Earlier code scaled
+        // this by 0.15 for off-target shots, which collapsed
+        // population xG to 0.2/team (real Opta ~1.3) and inflated
+        // goals-vs-xG dramatically because actual conversion ran on
+        // the unweighted shot count.
+        //
+        // The keeper's `xg_prevented` ledger is a different concept: a
+        // GK only "prevents" goals from shots that threatened the goal.
+        // Off-target shots produce no prevented xG (the keeper didn't
+        // make a save). That's why `last_shot_xg` uses the on-target
+        // adjustment — it's the value the keeper can earn or lose, not
+        // the value attributed to the shooter.
+        let base_xg = profile
+            .expected_xg(horizontal_distance, true)
+            .clamp(0.0, 0.82);
+        let xg = base_xg;
+        let prevented_xg = if on_target { base_xg } else { base_xg * 0.15 };
         if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
             shooter
                 .memory
@@ -2231,8 +2267,10 @@ impl PlayerEventDispatcher {
 
         // Stash the in-flight shot's xG and shooter so the GK xG-prevented
         // hook (in save / catch / parry / goal handlers) can credit /
-        // debit the keeper without re-deriving the value.
-        field.ball.last_shot_xg = xg;
+        // debit the keeper without re-deriving the value. Use the
+        // target-adjusted value here — an off-target shot doesn't
+        // require the keeper to save anything.
+        field.ball.last_shot_xg = prevented_xg;
         field.ball.last_shot_shooter_id = Some(shoot_event_model.from_player_id);
 
         field.ball.previous_owner = Some(shoot_event_model.from_player_id);

@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -221,7 +222,10 @@ impl StateProcessingHandler for DefenderCoveringState {
                 }
 
                 let direction = to_target.normalize();
-                let speed = ctx.player.skills.physical.pace * 0.9;
+                // Recovery_run_mult bakes pace/stamina/condition into a
+                // realistic 0.58..1.05 multiplier on the chase speed.
+                let def_profile = DefenderSkillProfile::from_ctx(ctx);
+                let speed = ctx.player.skills.physical.pace * 0.9 * def_profile.recovery_run_mult;
                 let urgency = (distance / 20.0).clamp(0.7, 1.4);
                 return Some(
                     direction * speed * urgency + ctx.player().separation_velocity() * 0.2,

@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -206,8 +207,11 @@ impl StateProcessingHandler for DefenderGuardingState {
 
             let direction = to_desired.normalize();
 
-            // Speed based on how far off position — must keep pace with fast attackers
-            let base_speed = ctx.player.skills.physical.pace * 0.8;
+            // Speed scaled by recovery_run_mult so tired/poor-fitness
+            // guards can't keep up with fast attackers. Replaces a
+            // fixed 0.8 multiplier on raw pace.
+            let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            let base_speed = ctx.player.skills.physical.pace * 0.8 * def_profile.recovery_run_mult;
             let urgency = (distance / GUARD_DISTANCE).clamp(0.6, 1.5);
 
             Some(direction * base_speed * urgency + ctx.player().separation_velocity() * 0.2)
@@ -277,13 +281,21 @@ impl DefenderGuardingState {
             let dist_to_us = opponent.distance(ctx);
             score += (60.0 - dist_to_us.min(60.0)) / 3.0; // Max 20 points
 
-            // Factor 6: Opponent attacking skill
+            // Factor 6: Receiver-threat blend (off_the_ball + finishing
+            // + pace + acceleration + anticipation, skill-curved). A
+            // pacy poacher scores materially above a midfielder of the
+            // same total skill, replacing the simple pace+finishing+
+            // off_the_ball average.
             let player_ops = ctx.player();
             let skills = player_ops.skills(opponent.id);
-            let attacking_quality =
-                (skills.physical.pace + skills.technical.finishing + skills.mental.off_the_ball)
-                    / 3.0;
-            score += attacking_quality / 4.0; // Max ~5 points
+            let receiver_threat = ((skills.mental.off_the_ball / 20.0).powf(1.45) * 0.22
+                + (skills.physical.pace / 20.0).powf(1.25) * 0.14
+                + (skills.physical.acceleration / 20.0).powf(1.25) * 0.12
+                + (skills.technical.finishing / 20.0).powf(1.45) * 0.16
+                + (skills.mental.anticipation / 20.0).powf(1.30) * 0.14
+                + (skills.mental.composure / 20.0).powf(1.20) * 0.08)
+                .clamp(0.0, 1.0);
+            score += receiver_threat * 12.0;
 
             if score > best_score {
                 best_score = score;

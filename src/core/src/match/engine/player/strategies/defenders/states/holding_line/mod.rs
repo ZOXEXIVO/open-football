@@ -2,6 +2,7 @@ use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -221,9 +222,13 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         const MIN_DISTANCE_THRESHOLD: f32 = 1.0;
         const SLOWING_DISTANCE: f32 = 5.0;
 
-        // Base movement speed - jogging pace for positional adjustments
+        // Base movement speed — line_holding_mult bakes condition,
+        // concentration curve, and fatigue into a 0.75..1.03 multiplier.
+        // Replaces the raw pace/20 clamp so a tired CB shuffles slower
+        // and a fresh, concentrated CB holds the line crisply.
+        let def_profile = DefenderSkillProfile::from_ctx(ctx);
         let pace_influence = (ctx.player.skills.physical.pace / 20.0).clamp(0.6, 1.2);
-        let base_speed = 3.0 * pace_influence;
+        let base_speed = 3.0 * pace_influence * def_profile.line_holding_mult;
 
         if distance > MIN_DISTANCE_THRESHOLD {
             let direction = to_target.normalize();

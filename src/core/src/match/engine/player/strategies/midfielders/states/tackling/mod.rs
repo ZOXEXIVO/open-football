@@ -2,6 +2,7 @@ use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -152,6 +153,8 @@ impl StateProcessingHandler for MidfielderTacklingState {
 
 impl MidfielderTacklingState {
     /// Attempts a tackle and returns whether it was successful and if a foul was committed.
+    /// Uses the unified midfielder profile's `tackle_profile` and
+    /// `discipline` instead of raw `(tackling+composure)/2` blends.
     fn attempt_tackle(
         &self,
         ctx: &StateProcessingContext,
@@ -159,45 +162,50 @@ impl MidfielderTacklingState {
     ) -> (bool, bool, FoulSeverity) {
         let mut rng = rand::rng();
 
-        let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
-        let aggression = ctx.player.skills.mental.aggression / 20.0;
-        let composure = ctx.player.skills.mental.composure / 20.0;
+        let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+        let aggression01 = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
 
-        let overall_skill = (tackling_skill + composure) / 2.0;
-
-        let opponent_dribbling = ctx.player().skills(opponent.id).technical.dribbling / 20.0;
-        let opponent_agility = ctx.player().skills(opponent.id).physical.agility / 20.0;
-
-        let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
-
-        // Midfielders contest rather than commit — base anchored 0.05
-        // below the defender's. Tracks the second defender base drop
-        // 0.35→0.25 to keep MID/DEF success ratios stable while total
-        // tackles converge on the real ~18/team/match.
-        let success_chance = 0.20 + skill_difference * 0.35;
-        let clamped_success_chance = success_chance.clamp(0.05, 0.62);
-
-        let tackle_success = rng.random::<f32>() < clamped_success_chance;
-
-        // Skill-driven foul rate — see defender tackling for the rationale.
-        // Same curve, applied to midfielders because they also tackle
-        // frequently during pressing.
-        let base_foul = 0.02 + aggression * 0.10 - composure * 0.05 - tackling_skill * 0.03;
-        let base_foul = base_foul.max(0.005);
-
-        let foul_chance = if tackle_success {
-            base_foul * 0.40
-        } else {
-            base_foul * 1.60
+        // Opponent carry profile via a dribble_attack-shaped blend.
+        // Without a direct MatchPlayer ref for the opponent we read the
+        // skill snapshot via the helper and apply the composite weights
+        // in-place; mirrors the structure of `sc::dribble_attack`.
+        let opp_helper = ctx.player();
+        let opponent_carry = {
+            let opp_skills = opp_helper.skills(opponent.id);
+            ((opp_skills.technical.dribbling / 20.0) * 0.30
+                + (opp_skills.technical.technique / 20.0) * 0.20
+                + (opp_skills.physical.agility / 20.0) * 0.20
+                + (opp_skills.physical.acceleration / 20.0) * 0.12
+                + (opp_skills.physical.balance / 20.0) * 0.10
+                + (opp_skills.mental.composure / 20.0) * 0.08)
+                .clamp(0.0, 1.0)
         };
+
+        // Logistic success: tackle_profile vs opponent carry. Scale
+        // tightens the gap so a +0.30 skill edge produces ~70% success.
+        let raw_diff = mid_profile.tackle_profile - opponent_carry;
+        let logistic = 1.0 / (1.0 + (-raw_diff * 3.0).exp());
+        let success_chance = logistic.clamp(0.06, 0.70);
+        let tackle_success = rng.random::<f32>() < success_chance;
+
+        // Foul model driven by discipline (composure/decisions/tackling/
+        // concentration blend) instead of raw composure/aggression.
+        let mut base_foul =
+            0.025 + aggression01 * 0.10 - mid_profile.discipline * 0.07;
+        if !tackle_success {
+            base_foul *= 1.75;
+        }
+        // Tired midfielders foul more.
+        base_foul += (1.0 - mid_profile.mid_condition_mult).max(0.0) * 0.08;
+        let foul_chance = base_foul.max(0.005);
 
         let committed_foul = rng.random::<f32>() < foul_chance;
 
         let severity = if !committed_foul {
             FoulSeverity::Normal
-        } else if aggression > 0.75 && !tackle_success && rng.random::<f32>() < 0.10 {
+        } else if aggression01 > 0.75 && !tackle_success && rng.random::<f32>() < 0.10 {
             FoulSeverity::Violent
-        } else if !tackle_success && aggression > 0.55 {
+        } else if !tackle_success && aggression01 > 0.55 {
             FoulSeverity::Reckless
         } else {
             FoulSeverity::Normal

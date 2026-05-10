@@ -2,6 +2,7 @@ use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -104,9 +105,13 @@ impl StateProcessingHandler for MidfielderPassingState {
             // a pass should DRIBBLE or HOLD — shooting in that spot is
             // the desperation long-shot real football strictly limits
             // to specialists in ideal conditions.
+            let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+            let shot_profile = ctx.player().shooting().shot_profile();
             return if goal_dist < 30.0
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
+                && shot_profile.expected_xg(goal_dist, true) >= 0.13
+                && mid_profile.mid_shot_selection >= 0.42
             {
                 Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
@@ -115,11 +120,11 @@ impl StateProcessingHandler for MidfielderPassingState {
             } else if goal_dist < 55.0
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
-                && ctx.player.skills.technical.long_shots >= 14.0
-                && ctx.player.skills.technical.finishing >= 11.0
+                && mid_profile.mid_shot_selection >= 0.58
+                && shot_profile.execution_skill >= 0.45
             {
-                // Long-shot specialists (long_shots 13+) can try from
-                // 25-32m with a clear lane.
+                // Long-shot specialists only — gated by mid_shot_selection
+                // (skill-curved long_shots/technique/composure blend).
                 Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::DistanceShooting)
                         .with_shot_reason("MID_PASS_BAILOUT_DISTANCE"),
@@ -182,15 +187,14 @@ impl MidfielderPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let vision_skill = ctx.player.skills.mental.vision;
-        let passing_skill = ctx.player.skills.technical.passing;
-
-        // Lowered thresholds from 15.0/14.0 to allow more players to attempt through balls
-        if vision_skill < 12.0 || passing_skill < 11.0 {
+        let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+        // Continuous gate: only midfielders whose progressive selection
+        // crosses the through-ball threshold (vision/decisions/passing
+        // blend curved against poor finishers).
+        if !mid_profile.allows_through_ball() {
             return None;
         }
-
-        let vision_range = vision_skill * 20.0;
+        let vision_range = ctx.player.skills.mental.vision * 20.0;
         let teammates = ctx.players().teammates();
 
         // Fused filter + max_by — no intermediate Vec allocation.
@@ -287,11 +291,11 @@ impl MidfielderPassingState {
             .count();
 
         if opponents_between >= 2 {
-            let vision_skill = ctx.player.skills.mental.vision / 20.0;
-            let passing_skill = ctx.player.skills.technical.passing / 20.0;
-            let skill_factor = (vision_skill + passing_skill) / 2.0;
-            let max_opponents = 2.0 + (skill_factor * 2.0);
-
+            let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+            // Skill-curved tolerance: elite playmakers accept tighter
+            // windows, poor passers should be capped at 2 even with a
+            // generous geometry.
+            let max_opponents = 2.0 + mid_profile.progressive_selection * 2.5;
             return opponents_between as f32 <= max_opponents;
         }
 
@@ -416,8 +420,10 @@ impl MidfielderPassingState {
 
         if is_backward_pass {
             let under_pressure = self.is_under_heavy_pressure(ctx);
-            let has_good_vision = ctx.player.skills.mental.vision > 15.0;
-            return under_pressure || has_good_vision;
+            let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+            // Backward passes require either pressure escape or genuine
+            // long-pass profile (switch / recycle judgement, not raw vision).
+            return under_pressure || mid_profile.allows_switch_play();
         }
 
         let teammate_will_be_pressured =
@@ -438,25 +444,28 @@ impl MidfielderPassingState {
     /// Determine if should shoot instead of pass
     fn should_shoot_instead_of_pass(&self, ctx: &StateProcessingContext) -> bool {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        let long_shots = ctx.player.skills.technical.long_shots;
-        let finishing = ctx.player.skills.technical.finishing;
+        let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+        let shot_profile = ctx.player().shooting().shot_profile();
 
-        // Midfielders pivot from Passing to Shooting only when they're
-        // ACTUALLY in a high-value shooting position. Tight gates:
-        //   * Elite long-shooter in the D (60u = 30m) — yes.
-        //   * Decent long-shooter at edge of box (35u) — yes.
-        //   * Average mid inside the box (20u = 10m) — yes.
-        //   * Anything else — pass.
-        // Previously any mid with fin≥8 and a clear lane from 30u
-        // would pivot — that path was 27% of all shots. Now only
-        // genuine shooting positions trigger the pivot.
-        let max_range = if long_shots >= 15.0 && finishing >= 13.0 {
-            50.0 // Elite long-shooter — top of the box
-        } else if long_shots >= 13.0 && finishing >= 11.0 {
-            35.0 // Decent shooter — edge of the 18-yard box
+        // Pivot from passing only when both the midfielder's shot
+        // selection profile AND the unified shot quality profile agree
+        // it's a real chance. Distance bands scale with selection,
+        // replacing the raw long_shots/finishing thresholds.
+        let max_range = if mid_profile.mid_shot_selection >= 0.72 {
+            50.0
+        } else if mid_profile.mid_shot_selection >= 0.55 {
+            35.0
+        } else if mid_profile.mid_shot_selection >= 0.40 {
+            25.0
         } else {
-            20.0 // Average — must be inside the box
+            20.0
         };
+        if distance_to_goal >= max_range {
+            return false;
+        }
+        if shot_profile.expected_xg(distance_to_goal, true) < 0.10 {
+            return false;
+        }
 
         // Additionally require the shooter not to be running across
         // goal (velocity must be roughly goal-ward). Prevents passing-

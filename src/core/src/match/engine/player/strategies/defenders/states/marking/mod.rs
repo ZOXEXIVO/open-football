@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -7,13 +8,11 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const MARKING_DISTANCE_THRESHOLD: f32 = 8.0; // Reduced from 10.0 - tighter marking
 const TACKLING_DISTANCE_THRESHOLD: f32 = 10.0; // Aggressive tackle when marking — don't let attacker turn
 const STAMINA_THRESHOLD: f32 = 20.0; // Minimum stamina to continue marking
 const BALL_PROXIMITY_THRESHOLD: f32 = 15.0; // Increased from 10.0 - react earlier to ball
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
-const GOAL_SIDE_WEIGHT: f32 = 0.6; // How much to prioritize being goal-side
 
 #[derive(Default, Clone)]
 pub struct DefenderMarkingState {}
@@ -88,8 +87,13 @@ impl StateProcessingHandler for DefenderMarkingState {
                 }
             }
 
-            // If opponent is too far, switch to running to catch up
-            if distance_to_opponent > MARKING_DISTANCE_THRESHOLD * 2.0 {
+            // If opponent is too far, switch to running to catch up.
+            // The "too far" threshold is the marking_profile-driven
+            // ideal_marking_distance scaled 2x, so a poor marker has a
+            // wider tolerance (he stands further off anyway) and an
+            // elite marker breaks contact earlier.
+            let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            if distance_to_opponent > def_profile.ideal_marking_distance * 2.0 {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Running,
                 ));
@@ -130,44 +134,46 @@ impl StateProcessingHandler for DefenderMarkingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Move to maintain goal-side position relative to the opponent being marked
-
+        // Profile-driven marking: ideal distance and goal-side weight
+        // both scale with marking_profile / positioning curve, so an
+        // elite defender stands closer and more goal-side, while a
+        // poor marker stays at arm's length and gets shrugged off runs.
         if let Some(opponent_to_mark) = self.find_best_marking_target(ctx) {
+            let def_profile = DefenderSkillProfile::from_ctx(ctx);
             let own_goal = ctx.ball().direction_to_own_goal();
             let opponent_velocity = opponent_to_mark.velocity(ctx);
 
-            // Predict opponent's future position
-            let prediction_time = 0.3; // Look ahead 300ms
+            let prediction_time = 0.3;
             let opponent_future_position =
                 opponent_to_mark.position + opponent_velocity * prediction_time;
 
-            // Calculate goal-side marking position
-            // Position between opponent and own goal (goal-side = toward our goal)
-            let to_goal = (own_goal - opponent_future_position).normalize();
-            let goal_side_offset = to_goal * MARKING_DISTANCE_THRESHOLD * GOAL_SIDE_WEIGHT;
+            let mark_dist = def_profile.ideal_marking_distance;
+            let goal_side_w = def_profile.goal_side_weight;
 
-            // Also consider ball-side positioning
+            let to_goal = (own_goal - opponent_future_position).normalize();
+            let goal_side_offset = to_goal * mark_dist * goal_side_w;
+
             let ball_position = ctx.tick_context.positions.ball.position;
             let to_ball = (ball_position - opponent_future_position).normalize();
-            let ball_side_offset = to_ball * MARKING_DISTANCE_THRESHOLD * (1.0 - GOAL_SIDE_WEIGHT);
+            let ball_side_offset = to_ball * mark_dist * (1.0 - goal_side_w);
 
-            // Blend goal-side and ball-side positioning
             let desired_position = opponent_future_position + goal_side_offset + ball_side_offset;
 
             let to_desired = desired_position - ctx.player.position;
             let distance = to_desired.magnitude();
 
             if distance < 1.0 {
-                // Close enough, minimal adjustment
                 return Some(to_desired * 0.5);
             }
 
             let direction = to_desired.normalize();
-            // Speed based on urgency — must keep up with fast attackers
-            let urgency = (distance / MARKING_DISTANCE_THRESHOLD).clamp(0.6, 2.0);
-            let speed = ctx.player.skills.physical.pace * urgency;
+            // Urgency relative to the profile-driven mark distance.
+            let urgency = (distance / mark_dist.max(4.0)).clamp(0.6, 2.0);
+            // Recovery-run mult bakes pace/stamina/condition into a
+            // 0.58..1.05 multiplier so tired markers can't keep up
+            // with fast attackers.
+            let speed = ctx.player.skills.physical.pace * urgency * def_profile.recovery_run_mult;
 
-            // Extra burst when opponent has ball and is close
             let threat_boost = if opponent_to_mark.has_ball(ctx) && distance < 20.0 {
                 1.3
             } else {
@@ -254,12 +260,20 @@ impl DefenderMarkingState {
                 danger_score += (50.0 - distance_to_ball.min(50.0)) / 5.0;
             }
 
+            // Receiver threat — weights off_the_ball, finishing,
+            // anticipation, pace + composure heavily, replacing the
+            // simple (pace+dribbling+finishing)/3 average. A pacy poacher
+            // (high finishing + off_ball) is now scored materially above
+            // a midfield carrier with the same average skill total.
             let opponent_skills = player_ops.skills(opponent.id);
-            let attacking_skill = (opponent_skills.physical.pace
-                + opponent_skills.technical.dribbling
-                + opponent_skills.technical.finishing)
-                / 3.0;
-            danger_score += attacking_skill / 20.0;
+            let receiver_threat = ((opponent_skills.mental.off_the_ball / 20.0).powf(1.45) * 0.22
+                + (opponent_skills.physical.pace / 20.0).powf(1.25) * 0.14
+                + (opponent_skills.physical.acceleration / 20.0).powf(1.25) * 0.12
+                + (opponent_skills.technical.finishing / 20.0).powf(1.45) * 0.16
+                + (opponent_skills.mental.anticipation / 20.0).powf(1.30) * 0.14
+                + (opponent_skills.mental.composure / 20.0).powf(1.20) * 0.08)
+                .clamp(0.0, 1.0);
+            danger_score += receiver_threat * 30.0;
 
             if danger_score > best_score {
                 best_score = danger_score;

@@ -1,6 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
+use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -45,11 +46,14 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
-        // Scale max press time by the team-shared press intensity
-        // (60-120 tick range). Tired or game-managing sides therefore
-        // press for shorter bursts than fresh ones.
+        // Press time budget: combines the team-shared press intensity
+        // with the midfielder's own pressing_profile (work_rate/stamina/
+        // anticipation/positioning blend, dampened by condition). Poor
+        // pressers and tired midfielders give up earlier; elite pressers
+        // sustain longer hunts.
         let intensity = ctx.team().press_intensity();
-        let max_press_time = (60.0 + 60.0 * intensity) as u64;
+        let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
+        let max_press_time = mid_profile.press_time_ticks(intensity);
         if ctx.in_state_time > max_press_time {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
