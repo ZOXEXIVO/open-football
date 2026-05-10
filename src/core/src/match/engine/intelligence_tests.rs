@@ -449,7 +449,16 @@ fn gk_rating_uses_xg_prevented() {
     base.xg_prevented = 1.0;
     let lifted = calculate_match_rating(&base, 1, 1);
     assert!(lifted > baseline);
+    // Negative xg_prevented is the live ledger after conceding goals.
+    // It must NOT subtract from the rating: the conceded-goal penalty
+    // and low-save% bonus already cover bad shifts, and double-
+    // counting was flooring blowout keepers at 1.0.
     base.xg_prevented = -1.0;
-    let dropped = calculate_match_rating(&base, 1, 1);
-    assert!(dropped < baseline);
+    let neutral = calculate_match_rating(&base, 1, 1);
+    assert!(
+        (neutral - baseline).abs() < 0.01,
+        "negative xg_prevented must be upside-only — got {} vs baseline {}",
+        neutral,
+        baseline
+    );
 }
