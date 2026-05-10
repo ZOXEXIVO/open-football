@@ -1195,7 +1195,23 @@ fn compute_effective_ratings(
             })
             .unwrap_or((10.0, 10.0, 10.0, 50.0));
 
-        let mut adjusted = stats.match_rating * mult;
+        // Anchor settlement form around the neutral baseline (6.0)
+        // and only dampen the upside. Multiplying the absolute rating
+        // compressed the entire 1..10 band toward 0, so a settling
+        // keeper who posted a baseline "did-nothing" 6.0 was scaled to
+        // 5.1 purely from the multiplier — and a clean-sheet 7.0
+        // landed at 5.95. The multiplier represents reduced peak
+        // effectiveness, so above-baseline shifts get the deviation
+        // dampened; below-baseline shifts pass through (the bad-day
+        // signal already reflects how the player performed and
+        // shouldn't be artificially softened by their settling
+        // status either).
+        const BASELINE: f32 = 6.0;
+        let mut adjusted = if stats.match_rating > BASELINE {
+            BASELINE + (stats.match_rating - BASELINE) * mult
+        } else {
+            stats.match_rating
+        };
 
         // Team chemistry shifts individual performance. Neutral at 50;
         // ±2.5% of baseline rating at the extremes. Not huge — the lion's
