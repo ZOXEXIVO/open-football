@@ -104,9 +104,17 @@ impl ContractRenewalManager {
                 .and_then(|p| p.contract.as_ref().map(|c| c.salary))
                 .unwrap_or(0);
 
+            let player_ref = match teams[main_idx]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == candidate.player_id)
+            {
+                Some(p) => p,
+                None => continue,
+            };
             let built = Self::build_offer(
-                &teams[main_idx],
-                candidate.player_id,
+                player_ref,
                 negotiation_skill,
                 judging_ability,
                 date,
@@ -334,7 +342,27 @@ impl ContractRenewalManager {
     }
 
     fn evaluate(player: &Player, date: NaiveDate) -> Option<RenewalCandidate> {
-        if player.is_on_loan() {
+        Self::evaluate_inner(player, date, false)
+    }
+
+    /// Same evaluation as [`Self::evaluate`] but skips the borrower-side
+    /// "loaned-in" gate so a parent club can decide whether to renew a
+    /// player who is currently away on loan. The permanent contract still
+    /// lives on `player.contract`; the loan agreement on `contract_loan`
+    /// is incidental to the renewal question.
+    fn evaluate_for_parent(player: &Player, date: NaiveDate) -> Option<RenewalCandidate> {
+        Self::evaluate_inner(player, date, true)
+    }
+
+    fn evaluate_inner(
+        player: &Player,
+        date: NaiveDate,
+        for_parent_loanee: bool,
+    ) -> Option<RenewalCandidate> {
+        // Borrower-side: a loaned-in player isn't the borrower's to renew.
+        // Parent-side: the player is OUR loanee — proceed against the
+        // permanent contract on `player.contract`.
+        if !for_parent_loanee && player.is_on_loan() {
             return None;
         }
 
@@ -439,8 +467,7 @@ impl ContractRenewalManager {
     }
 
     fn build_offer(
-        team: &Team,
-        player_id: u32,
+        player: &Player,
         negotiation_skill: u8,
         judging_ability: u8,
         date: NaiveDate,
@@ -452,7 +479,6 @@ impl ContractRenewalManager {
         candidate: &RenewalCandidate,
         match_highest_already_used: bool,
     ) -> Option<PlayerContractProposal> {
-        let player = team.players.find(player_id)?;
         let contract = player.contract.as_ref()?;
 
         let ability = player.player_attributes.current_ability;
@@ -612,6 +638,62 @@ impl ContractRenewalManager {
         }
 
         Some(proposal)
+    }
+
+    /// Build a renewal proposal for a player whose permanent contract is
+    /// owned by `parent_team`'s club but who currently lives at another
+    /// club because of an active loan. Returns the proposal and the
+    /// parent coach's name to stamp into the player's decision history.
+    ///
+    /// The caller is expected to:
+    ///   1. Have established `parent_team` is the loanee's parent main team
+    ///      (via `Player::is_loaned_out_from(parent_team.club_id)`).
+    ///   2. Push the returned proposal into the loanee's mailbox and
+    ///      append the decision-history row — same wire-up the in-house
+    ///      `run_with_budget` loop performs. The loanee sits in another
+    ///      club's roster, so we can't take a mut-borrow on him here
+    ///      without violating the country-level borrow plan.
+    pub fn try_build_loanee_offer(
+        parent_team: &Team,
+        loanee: &Player,
+        date: NaiveDate,
+        wage_budget: Option<u32>,
+        league_reputation: u16,
+        structure: &WageStructureSnapshot,
+    ) -> Option<(PlayerContractProposal, String)> {
+        let candidate = Self::evaluate_for_parent(loanee, date)?;
+
+        let attempts = loanee
+            .decision_history
+            .items
+            .iter()
+            .filter(|d| d.decision == DECISION_LABEL && (date - d.date).num_days() < 365)
+            .count();
+        if attempts >= MAX_RENEWAL_ATTEMPTS_PER_YEAR && !candidate.override_attempts_cap {
+            return None;
+        }
+
+        let (coach_name, negotiation_skill, judging_ability) = Self::resolve_staff(parent_team);
+        let team_rep_factor = parent_team.reputation.overall_score();
+
+        let proposal = Self::build_offer(
+            loanee,
+            negotiation_skill,
+            judging_ability,
+            date,
+            attempts,
+            team_rep_factor,
+            league_reputation,
+            wage_budget,
+            structure,
+            &candidate,
+            // Loanee offers run one-at-a-time on the country pass, so
+            // match-highest-earner is allowed in isolation. The parent's
+            // monthly proactive pass already used (or didn't use) the slot
+            // for in-house candidates; loanees shouldn't be starved of it.
+            false,
+        )?;
+        Some((proposal, coach_name))
     }
 }
 
@@ -1046,5 +1128,79 @@ mod wage_structure_tests {
         let b = reserve(&mut s, 100_000, asked, budget);
         assert_eq!(b, 100_000, "budget should already be exhausted");
         assert_eq!(s.current_bill, 1_200_000);
+    }
+}
+
+#[cfg(test)]
+mod loanee_evaluate_tests {
+    //! Borrower-side renewal must ignore loaned-in players (they aren't
+    //! the borrower's to renew). Parent-side renewal — exposed via
+    //! `evaluate_for_parent` — must still pick the same player up when
+    //! his parent contract is approaching expiry.
+
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn make_loanee(parent_expiration: NaiveDate, loan_end: NaiveDate) -> Player {
+        let mut p = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Test".into(), "Loanee".into()))
+            .birth_date(d(1998, 1, 1))
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 20,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        let mut contract = PlayerClubContract::new(100_000, parent_expiration);
+        contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        p.contract = Some(contract);
+        // Parent club id = 99, loan agreement at borrower club id = 2.
+        p.contract_loan = Some(PlayerClubContract::new_loan(50_000, loan_end, 99, 1, 2));
+        p
+    }
+
+    #[test]
+    fn evaluate_skips_loaned_in_player() {
+        let today = d(2026, 5, 13);
+        // Parent contract expires in ~110 days — would normally fire
+        // final-panic / bosman pressure, but borrower-side evaluate must
+        // still return None because the player isn't theirs to renew.
+        let p = make_loanee(d(2026, 8, 31), d(2026, 7, 31));
+        assert!(ContractRenewalManager::evaluate(&p, today).is_none());
+    }
+
+    #[test]
+    fn evaluate_for_parent_picks_up_loaned_out_near_expiry() {
+        let today = d(2026, 5, 13);
+        // Same player, parent perspective: the renewal manager must
+        // produce a candidate so the country-level pass can build an
+        // offer at the parent's wage hierarchy.
+        let p = make_loanee(d(2026, 8, 31), d(2026, 7, 31));
+        assert!(ContractRenewalManager::evaluate_for_parent(&p, today).is_some());
+    }
+
+    #[test]
+    fn evaluate_for_parent_silent_when_parent_contract_has_long_runway() {
+        let today = d(2026, 5, 13);
+        // Parent contract still has ~4 years to run — well past every
+        // squad-status threshold. No renewal pressure even on parent side.
+        let p = make_loanee(d(2030, 6, 30), d(2027, 5, 31));
+        assert!(ContractRenewalManager::evaluate_for_parent(&p, today).is_none());
     }
 }

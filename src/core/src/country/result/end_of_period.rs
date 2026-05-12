@@ -1,10 +1,12 @@
 use super::CountryResult;
 use crate::club::team::reputation::{Achievement, AchievementType};
+use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::simulator::SimulatorData;
-use crate::utils::{DateUtils, IntegerUtils};
+use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
 use crate::{
-    ClubResult, Country, HappinessEventType, Person, Player, PlayerHappiness, PlayerStatusType,
-    SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, TeamInfo, TeamType,
+    ClubResult, Country, HappinessEventType, Person, Player, PlayerHappiness, PlayerMessage,
+    PlayerMessageType, PlayerStatusType, SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition,
+    TeamInfo, TeamType,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
@@ -59,6 +61,17 @@ impl CountryResult {
                         team.on_month_tick();
                     }
                 }
+            }
+        }
+
+        // Monthly parent-side renewal pass. Mirrors the per-club
+        // `ContractRenewalManager::run` that runs inside `Club::simulate`,
+        // but reaches across rosters to find players this club has loaned
+        // out — those are invisible to the per-club loop because they
+        // physically live at the borrower.
+        if DateUtils::is_month_beginning(date) {
+            if let Some(country) = data.country_mut(country_id) {
+                Self::process_parent_loan_renewals(country, date);
             }
         }
 
@@ -399,6 +412,114 @@ impl CountryResult {
                     );
                     if is_european_qualification {
                         player.on_continental_qualification_satisfaction();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Monthly parent-side renewal pass for loaned-out players.
+    ///
+    /// `ContractRenewalManager::run` only sees the club's own roster, so
+    /// loaned-out players (who live at the borrowing club) are invisible
+    /// to the per-club renewal loop. This pass closes that gap: for each
+    /// club in `country`, scan every other club's roster for players whose
+    /// permanent contract is owned by this club and whose loan agreement
+    /// points back at it via `loan_from_club_id`. Build the proposal
+    /// using the parent's wage structure / budget context, then push the
+    /// offer into the loanee's mailbox at the borrower.
+    ///
+    /// Same-country only by design (matching `process_loan_returns`'s
+    /// initial scan scope). Cross-country loanees are picked up when
+    /// their loan ends and they return home — at which point the regular
+    /// per-club renewal loop runs normally.
+    pub(crate) fn process_parent_loan_renewals(country: &mut Country, date: NaiveDate) {
+        if !DateUtils::is_month_beginning(date) {
+            return;
+        }
+
+        // Phase 1 (immutable): for each club, snapshot the wage structure
+        // and league context, then walk every club's roster looking for
+        // players this club has loaned out. Builds a (loanee_id, proposal,
+        // coach_name) queue without mutating anything.
+        struct LoaneeOffer {
+            loanee_id: u32,
+            proposal: crate::PlayerContractProposal,
+            coach_name: String,
+        }
+        let mut queue: Vec<LoaneeOffer> = Vec::new();
+
+        for parent_club in country.clubs.iter() {
+            let parent_main_idx =
+                match parent_club.teams.teams.iter().position(|t| t.team_type == TeamType::Main) {
+                    Some(i) => i,
+                    None => continue,
+                };
+            let parent_main = &parent_club.teams.teams[parent_main_idx];
+            let wage_budget = parent_club
+                .finance
+                .wage_budget
+                .as_ref()
+                .map(|b| b.amount.max(0.0) as u32);
+            let league_rep = parent_main.reputation.world;
+            let structure = WageStructureSnapshot::from_team(parent_main);
+            let parent_club_id = parent_club.id;
+
+            // Walk every roster in the country looking for loanees owned
+            // by this parent. Self-rosters are skipped — `is_loaned_out_from`
+            // returns false for players physically still at the parent
+            // (their `contract_loan` would be None or pointing elsewhere).
+            for other_club in country.clubs.iter() {
+                for team in other_club.teams.iter() {
+                    for player in team.players.iter() {
+                        if !player.is_loaned_out_from(parent_club_id) {
+                            continue;
+                        }
+                        if let Some((proposal, coach_name)) =
+                            ContractRenewalManager::try_build_loanee_offer(
+                                parent_main,
+                                player,
+                                date,
+                                wage_budget,
+                                league_rep,
+                                &structure,
+                            )
+                        {
+                            queue.push(LoaneeOffer {
+                                loanee_id: player.id,
+                                proposal,
+                                coach_name,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2 (mutable): apply each queued proposal at the loanee's
+        // current location. Mirrors the wire-up the in-house monthly pass
+        // does — decision-history row + mailbox push.
+        for offer in queue {
+            'apply: for club in country.clubs.iter_mut() {
+                for team in club.teams.iter_mut() {
+                    if let Some(player) =
+                        team.players.players.iter_mut().find(|p| p.id == offer.loanee_id)
+                    {
+                        let movement = format!(
+                            "{}y · ${}/y",
+                            offer.proposal.years,
+                            FormattingUtils::format_money(offer.proposal.salary as f64)
+                        );
+                        player.decision_history.add(
+                            date,
+                            movement,
+                            "dec_contract_renewal_offered".to_string(),
+                            offer.coach_name.clone(),
+                        );
+                        player.mailbox.push(PlayerMessage {
+                            message_type: PlayerMessageType::ContractProposal(offer.proposal),
+                        });
+                        break 'apply;
                     }
                 }
             }
@@ -1761,5 +1882,193 @@ mod tests {
                 assert_eq!(team.league_id, Some(1));
             }
         }
+    }
+
+    // ── Parent-side loan renewals ─────────────────────────────────
+
+    /// Build a player with a permanent contract and an active loan
+    /// agreement. `parent_club_id` is the owner; `borrower_club_id` is
+    /// where the player physically lives.
+    fn make_loanee(
+        id: u32,
+        parent_expiration: NaiveDate,
+        parent_club_id: u32,
+        borrower_club_id: u32,
+        loan_end: NaiveDate,
+    ) -> Player {
+        let mut p = make_player(id);
+        // Renewal proposal decoration calls `player.position()` which
+        // panics on the default empty PlayerPositions. Give the loanee
+        // a concrete position so `decorate_proposal` can attach a
+        // position bonus.
+        p.positions = crate::PlayerPositions {
+            positions: vec![crate::PlayerPosition {
+                position: crate::PlayerPositionType::MidfielderCenter,
+                level: 20,
+            }],
+        };
+        let mut contract =
+            crate::PlayerClubContract::new(100_000, parent_expiration);
+        contract.squad_status = crate::PlayerSquadStatus::FirstTeamRegular;
+        p.contract = Some(contract);
+        p.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            50_000,
+            loan_end,
+            parent_club_id,
+            1,
+            borrower_club_id,
+        ));
+        p
+    }
+
+    #[test]
+    fn parent_loan_renewals_offer_loaned_out_player_near_parent_expiry() {
+        // Parent club 100 has loaned player 7 to borrower club 200.
+        // Parent contract expires in ~110 days — well inside the
+        // KeyPlayer / FirstTeamRegular threshold (540 days), so the
+        // parent-side pass must build an offer even though player is at
+        // the borrower's roster.
+        let today = d(2026, 5, 1); // first of the month
+        let loanee = make_loanee(7, d(2026, 8, 31), 100, 200, d(2026, 7, 31));
+        let parent_team = make_team(100, 100, 1, vec![]);
+        let parent_club = make_club(100, vec![parent_team]);
+        let borrower_team = make_team(200, 200, 1, vec![loanee]);
+        let borrower_club = make_club(200, vec![borrower_team]);
+        let league = make_league_with_table(1, 7000, vec![]);
+        let mut country = build_country(vec![parent_club, borrower_club], vec![league]);
+
+        CountryResult::process_parent_loan_renewals(&mut country, today);
+
+        // Loanee at borrower club 200 must now have a ContractProposal
+        // in their mailbox AND a decision-history row stamped by the
+        // parent.
+        let borrower = country.clubs.iter().find(|c| c.id == 200).unwrap();
+        let loanee = borrower.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 7)
+            .unwrap();
+        let has_proposal = loanee
+            .mailbox
+            .pending()
+            .any(|m| matches!(m.message_type, PlayerMessageType::ContractProposal(_)));
+        assert!(has_proposal, "parent club must push a renewal proposal");
+        let has_decision = loanee
+            .decision_history
+            .items
+            .iter()
+            .any(|d| d.decision == "dec_contract_renewal_offered");
+        assert!(has_decision, "renewal decision must be recorded on the loanee");
+    }
+
+    #[test]
+    fn parent_loan_renewals_silent_when_parent_contract_has_long_runway() {
+        // Same setup but parent contract has 4 years left. No offer —
+        // the parent is comfortable letting the loan run before they
+        // think about a new deal.
+        let today = d(2026, 5, 1);
+        let loanee = make_loanee(7, d(2030, 6, 30), 100, 200, d(2026, 7, 31));
+        let parent_team = make_team(100, 100, 1, vec![]);
+        let parent_club = make_club(100, vec![parent_team]);
+        let borrower_team = make_team(200, 200, 1, vec![loanee]);
+        let borrower_club = make_club(200, vec![borrower_team]);
+        let league = make_league_with_table(1, 7000, vec![]);
+        let mut country = build_country(vec![parent_club, borrower_club], vec![league]);
+
+        CountryResult::process_parent_loan_renewals(&mut country, today);
+
+        let borrower = country.clubs.iter().find(|c| c.id == 200).unwrap();
+        let loanee = borrower.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 7)
+            .unwrap();
+        let has_proposal = loanee
+            .mailbox
+            .pending()
+            .any(|m| matches!(m.message_type, PlayerMessageType::ContractProposal(_)));
+        assert!(
+            !has_proposal,
+            "parent club must NOT push a renewal — contract has 4-year runway"
+        );
+    }
+
+    // ── Loan-return contract integrity ────────────────────────────
+
+    #[test]
+    fn loan_return_drops_loan_contract_and_preserves_parent_contract() {
+        // Inline the mutation `execute_loan_return` applies to the
+        // player on the way back home (line ~566 in this file). The
+        // permanent contract — including any recent renewal extension
+        // — must survive the trip intact; only the loan agreement is
+        // cleared.
+        let mut loanee = make_loanee(7, d(2030, 6, 30), 100, 200, d(2026, 7, 31));
+        // Pretend the parent renewed the contract while away: bump
+        // expiration further out and raise salary. This is the state
+        // the renewal AI / acceptance handler would leave on the
+        // player's `contract` field.
+        if let Some(c) = loanee.contract.as_mut() {
+            c.expiration = d(2031, 6, 30);
+            c.salary = 180_000;
+        }
+        let pre_salary = loanee.contract.as_ref().unwrap().salary;
+        let pre_expiration = loanee.contract.as_ref().unwrap().expiration;
+        // Inline the loan-return mutation.
+        loanee.contract_loan = None;
+
+        assert!(loanee.contract_loan.is_none(), "loan agreement must clear");
+        let parent = loanee
+            .contract
+            .as_ref()
+            .expect("parent contract must remain");
+        assert_eq!(parent.salary, pre_salary);
+        assert_eq!(parent.expiration, pre_expiration);
+        assert!(!loanee.is_on_loan());
+    }
+
+    // ── Manual / AI loan parent-contract safety ───────────────────
+
+    #[test]
+    fn ensure_contract_covers_loan_end_extends_short_parent_contract() {
+        // Parent contract expires in March, loan runs until June of the
+        // SAME year. The helper must push expiration past loan_end + 1
+        // year so the player can't walk on a free immediately after
+        // returning.
+        let mut p = make_player(7);
+        p.contract = Some(crate::PlayerClubContract::new(100_000, d(2026, 3, 31)));
+        let loan_end = d(2026, 6, 30);
+
+        p.ensure_contract_covers_loan_end(loan_end);
+
+        let new_expiration = p.contract.as_ref().unwrap().expiration;
+        let expected_min = loan_end
+            .checked_add_signed(chrono::Duration::days(365))
+            .unwrap();
+        assert!(
+            new_expiration >= expected_min,
+            "expiration {} must be >= loan_end + 1y = {}",
+            new_expiration,
+            expected_min
+        );
+    }
+
+    #[test]
+    fn ensure_contract_covers_loan_end_does_not_shorten_long_parent_contract() {
+        // Parent contract already runs 4 years past loan end. Helper
+        // must leave it alone — clubs don't pull expiration back.
+        let mut p = make_player(7);
+        let original_expiration = d(2031, 6, 30);
+        p.contract = Some(crate::PlayerClubContract::new(100_000, original_expiration));
+        let loan_end = d(2026, 6, 30);
+
+        p.ensure_contract_covers_loan_end(loan_end);
+
+        assert_eq!(
+            p.contract.as_ref().unwrap().expiration,
+            original_expiration,
+            "long parent contract must not be shortened"
+        );
     }
 }

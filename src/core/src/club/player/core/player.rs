@@ -982,6 +982,37 @@ impl Player {
         self.contract_loan.is_some()
     }
 
+    /// True when the player is physically present at `club_id` because of
+    /// a loan agreement — i.e. the borrowing-side view. Used by squad
+    /// management to disable renewal / release / transfer-listing for
+    /// players the club doesn't actually own.
+    pub fn is_loaned_in_at(&self, club_id: u32) -> bool {
+        self.contract_loan
+            .as_ref()
+            .and_then(|c| c.loan_to_club_id)
+            == Some(club_id)
+    }
+
+    /// True when the player's permanent contract belongs to `club_id`
+    /// and they are currently away on loan elsewhere. Parent-side view —
+    /// the renewal manager uses this to find loaned-out players that
+    /// don't live in the parent's own roster.
+    pub fn is_loaned_out_from(&self, club_id: u32) -> bool {
+        self.contract_loan
+            .as_ref()
+            .and_then(|c| c.loan_from_club_id)
+            == Some(club_id)
+    }
+
+    /// The club that owns the player's permanent contract. For loaned-out
+    /// players this is the parent (`loan_from_club_id`); otherwise None
+    /// — the caller already knows which club's roster they were iterating.
+    pub fn parent_club_id(&self) -> Option<u32> {
+        self.contract_loan
+            .as_ref()
+            .and_then(|c| c.loan_from_club_id)
+    }
+
     pub fn is_ready_for_match(&self) -> bool {
         !self.player_attributes.is_injured
             && !self.player_attributes.is_banned

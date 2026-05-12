@@ -190,4 +190,18 @@ impl PlayerMailbox {
     pub fn push(&mut self, message: PlayerMessage) {
         self.messages.push_back(message);
     }
+
+    /// Number of unprocessed messages — drained by the next mailbox
+    /// tick. Useful for assertions in unit tests where a side-effecting
+    /// pass should (or should not) have pushed a proposal.
+    pub fn len(&self) -> usize {
+        self.messages.len()
+    }
+
+    /// Read-only view of pending messages. The mailbox processes
+    /// messages by draining, so this is intended for inspection — not
+    /// for the production hot path.
+    pub fn pending(&self) -> impl Iterator<Item = &PlayerMessage> {
+        self.messages.iter()
+    }
 }

@@ -602,6 +602,12 @@ pub async fn loan_action(
         let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
         // Match fee based on player salary — parent club pays per official appearance
         let match_fee = (salary / 4).max(500);
+        // Mirror AI loan execution: extend the parent contract so it
+        // outlives the loan end. Without this a player can be loaned out
+        // until June and have his parent contract expire in March, leaving
+        // the parent with no recall leverage and an inevitable free-agent
+        // walk-out at loan return.
+        player.ensure_contract_covers_loan_end(expiration);
         player.contract_loan = Some(
             PlayerClubContract::new_loan(
                 salary,
