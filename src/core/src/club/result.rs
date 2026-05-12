@@ -1,18 +1,51 @@
 use crate::ai::PendingAiRequest;
 use crate::club::academy::result::ClubAcademyResult;
 use crate::club::player::calculators::{ContractValuation, ValuationContext};
+use crate::club::player::contract::{
+    AffordabilityInput, ContractStalemate, RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL,
+};
 use crate::club::{BoardResult, ClubFinanceResult};
+use crate::shared::{Currency, CurrencyValue};
 use crate::simulator::SimulatorData;
-use crate::transfers::CompletedTransfer;
-use crate::utils::DateUtils;
+use crate::transfers::{CompletedTransfer, TransferListing, TransferListingType};
+use crate::utils::{DateUtils, FormattingUtils};
 use crate::{
     Player, PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerResult,
-    PlayerSquadStatus, PlayerStatusType, SimulationResult, StaffStatus, TeamResult,
+    PlayerSquadStatus, PlayerStatusType, SimulationResult, StaffStatus, TeamResult, TransferItem,
 };
 
 enum UnresolvedSalaryDecision {
     TransferList,
     FreeTransfer,
+}
+
+/// Why the salary fallback was invoked. Drives decision_history reason
+/// and listing pricing so the player page surfaces "contract talks
+/// stalled" instead of an opaque "transfer listed".
+#[derive(Debug, Clone, Copy)]
+enum UnresolvedSalaryTrigger {
+    /// Player rejected a renewal offer enough times that the stalemate
+    /// assessment now permits listing.
+    FailedRenewal,
+    /// Player wants a raise but is `NotNeeded` in the squad plan — club
+    /// won't sink wages into someone they want to move on anyway.
+    NotNeededWantsRaise,
+}
+
+impl UnresolvedSalaryTrigger {
+    fn list_reason(self) -> &'static str {
+        match self {
+            UnresolvedSalaryTrigger::FailedRenewal => "dec_reason_contract_stalemate",
+            UnresolvedSalaryTrigger::NotNeededWantsRaise => "dec_reason_surplus_squad",
+        }
+    }
+
+    fn release_reason(self) -> &'static str {
+        match self {
+            UnresolvedSalaryTrigger::FailedRenewal => "dec_reason_released_failed_renewal",
+            UnresolvedSalaryTrigger::NotNeededWantsRaise => "dec_reason_released_free",
+        }
+    }
 }
 
 pub struct ClubResult {
@@ -66,7 +99,7 @@ impl ClubResult {
         }
     }
 
-    fn process_player_contract_interaction(
+    pub(crate) fn process_player_contract_interaction(
         result: &PlayerResult,
         data: &mut SimulatorData,
         club_id: u32,
@@ -76,12 +109,23 @@ impl ClubResult {
             .map(|p| p.is_on_loan())
             .unwrap_or(false);
 
-        // Contract rejected — club decides: keep trying, transfer list, or release
-        // Loaned players can't be transfer-listed remotely by the parent club
+        // Contract rejected — escalation is gated on the rolling
+        // contract-stalemate assessment, NOT on a single rejection.
+        // Loaned players can't be transfer-listed remotely by the parent
+        // club; the rejection still records in history so the parent
+        // sees the failed talk next assessment.
         if result.contract.contract_rejected {
-            if !is_on_loan {
-                Self::handle_unresolved_salary(result.player_id, data, club_id);
+            if !is_on_loan && Self::stalemate_permits_listing(result.player_id, data, club_id) {
+                Self::handle_unresolved_salary(
+                    result.player_id,
+                    data,
+                    club_id,
+                    UnresolvedSalaryTrigger::FailedRenewal,
+                );
             }
+            // First / mid-stalemate rejections: the renewal manager will
+            // come back next cycle with an improved offer informed by
+            // `pending_contract_ask`. No listing yet.
             return;
         }
 
@@ -96,19 +140,14 @@ impl ClubResult {
         const OFFER_COOLDOWN_DAYS: i64 = 60;
         const REJECT_COOLDOWN_DAYS: i64 = 120;
         const MAX_ATTEMPTS_PER_YEAR: usize = 3;
-        const OFFERED_LABEL: &str = "dec_contract_renewal_offered";
-        const REJECTED_LABEL: &str = "dec_contract_renewal_rejected";
         let today = data.date.date();
         if let Some(player) = data.player(result.player_id) {
-            let last = player
-                .decision_history
-                .items
-                .iter()
-                .rev()
-                .find(|d| d.decision == OFFERED_LABEL || d.decision == REJECTED_LABEL);
+            let last = player.decision_history.items.iter().rev().find(|d| {
+                d.decision == RENEWAL_OFFERED_LABEL || d.decision == RENEWAL_REJECTED_LABEL
+            });
             if let Some(d) = last {
                 let days = (today - d.date).num_days();
-                let cooldown = if d.decision == REJECTED_LABEL {
+                let cooldown = if d.decision == RENEWAL_REJECTED_LABEL {
                     REJECT_COOLDOWN_DAYS
                 } else {
                     OFFER_COOLDOWN_DAYS
@@ -121,7 +160,9 @@ impl ClubResult {
                 .decision_history
                 .items
                 .iter()
-                .filter(|d| d.decision == OFFERED_LABEL && (today - d.date).num_days() < 365)
+                .filter(|d| {
+                    d.decision == RENEWAL_OFFERED_LABEL && (today - d.date).num_days() < 365
+                })
                 .count();
             if attempts >= MAX_ATTEMPTS_PER_YEAR {
                 return;
@@ -239,9 +280,20 @@ impl ClubResult {
                 .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
             let is_not_needed = matches!(squad_status, PlayerSquadStatus::NotNeeded);
 
-            // Not needed players don't get raises — transfer list or release instead
+            // Not needed players don't get raises — transfer list or
+            // release instead. This path doesn't require a prior
+            // rejection: the squad plan already says "we don't want
+            // this player", and they're asking for more money. Going
+            // through the stalemate gate would be a no-op (NotNeeded
+            // permits listing at Emerging, which a fresh "wants raise"
+            // signal satisfies).
             if !is_on_loan && result.contract.want_improve_contract && is_not_needed {
-                Self::handle_unresolved_salary(result.player_id, data, club_id);
+                Self::handle_unresolved_salary(
+                    result.player_id,
+                    data,
+                    club_id,
+                    UnresolvedSalaryTrigger::NotNeededWantsRaise,
+                );
                 return;
             }
 
@@ -288,11 +340,32 @@ impl ClubResult {
             }
             let _ = ability; // silence unused-warning if future logic drops it
 
-            // Converge toward the player's own ask when we have it — same
-            // split-the-gap heuristic as the proactive path.
+            // Converge toward the player's own ask when we have it. When
+            // affordability evidence says the ask fits wage headroom, match
+            // it outright — repeated split-the-gap underbids let the
+            // rejection cap fire long before either side compromises, and
+            // the stalemate escalates to a listing for a deal the club
+            // could have closed.
             if let Some(ask) = &player.pending_contract_ask {
                 if ask.desired_salary > offered_salary {
-                    offered_salary = (offered_salary + ask.desired_salary) / 2;
+                    let headroom = if wage_budget > 0 {
+                        Some(wage_budget.saturating_sub(current_wage_bill))
+                    } else {
+                        None
+                    };
+                    let stalemate = ContractStalemate::assess(
+                        player,
+                        data.date.date(),
+                        AffordabilityInput {
+                            wage_budget_headroom: headroom,
+                            current_salary,
+                        },
+                    );
+                    if stalemate.should_improve_offer() {
+                        offered_salary = ask.desired_salary;
+                    } else {
+                        offered_salary = (offered_salary + ask.desired_salary) / 2;
+                    }
                 }
             }
 
@@ -304,13 +377,19 @@ impl ClubResult {
                     // Over budget: cap the offer to what the budget allows
                     let remaining = wage_budget.saturating_sub(current_wage_bill);
                     let capped_salary = current_salary + remaining;
-                    // If we can't even match current salary, decide what to do with the player
-                    // Loaned players can't be transfer-listed remotely
+                    // If we can't even match current salary the renewal
+                    // is structurally unaffordable. We don't auto-list
+                    // here — that would skip the rejection ladder. Skip
+                    // the offer this tick instead; the player stays
+                    // salary-unhappy, may eventually go UNH/REQ, and the
+                    // country pipeline picks that up explicitly. Listing
+                    // from this branch would jump straight to "club
+                    // forced him out" without the negotiation history
+                    // the stalemate model is built to track.
                     if capped_salary <= current_salary
                         && result.contract.want_improve_contract
                         && !is_on_loan
                     {
-                        Self::handle_unresolved_salary(result.player_id, data, club_id);
                         return;
                     }
                     capped_salary.max(current_salary)
@@ -369,7 +448,7 @@ impl ClubResult {
                 player_mut.decision_history.add(
                     offer_date,
                     movement,
-                    "dec_contract_renewal_offered".to_string(),
+                    RENEWAL_OFFERED_LABEL.to_string(),
                     String::new(),
                 );
             }
@@ -492,18 +571,70 @@ impl ClubResult {
         }
     }
 
+    /// Wage budget headroom for the club's main team. Used to evaluate
+    /// affordability of the player's `pending_contract_ask`; missing
+    /// when the board hasn't set season targets (test fixtures, edge
+    /// cases) — in which case the stalemate falls back to its
+    /// rejection-count based rules without an affordability signal.
+    fn wage_budget_headroom(data: &SimulatorData, club_id: u32) -> Option<u32> {
+        let club = data.club(club_id)?;
+        let budget = club
+            .board
+            .season_targets
+            .as_ref()
+            .map(|t| t.wage_budget as u32)?;
+        let total_wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
+        Some(budget.saturating_sub(total_wages))
+    }
+
+    /// Run the stalemate gate against a player so the club only acts on
+    /// a renewal rejection when the negotiation has genuinely failed.
+    fn stalemate_permits_listing(player_id: u32, data: &SimulatorData, club_id: u32) -> bool {
+        let today = data.date.date();
+        let headroom = Self::wage_budget_headroom(data, club_id);
+        let Some(player) = data.player(player_id) else {
+            return false;
+        };
+        let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+        let stalemate = ContractStalemate::assess(
+            player,
+            today,
+            AffordabilityInput {
+                wage_budget_headroom: headroom,
+                current_salary,
+            },
+        );
+        stalemate.permits_listing()
+    }
+
     /// When club can't resolve salary unhappiness (rejected proposal, over budget, not needed):
     /// decide whether to transfer list, release on free transfer, or do nothing.
-    fn handle_unresolved_salary(player_id: u32, data: &mut SimulatorData, club_id: u32) {
+    fn handle_unresolved_salary(
+        player_id: u32,
+        data: &mut SimulatorData,
+        club_id: u32,
+        trigger: UnresolvedSalaryTrigger,
+    ) {
         let date = data.date.date();
 
         // Gather decision info from immutable access
-        let decision = {
-            let squad_avg = data
-                .club(club_id)
-                .and_then(|club| club.teams.teams.first())
-                .map(|team| team.players.current_ability_avg() as i16)
-                .unwrap_or(0);
+        let (decision, asking_price, team_id) = {
+            let club = match data.club(club_id) {
+                Some(c) => c,
+                None => return,
+            };
+            let main_team = match club.teams.teams.first() {
+                Some(t) => t,
+                None => return,
+            };
+            let squad_avg = main_team.players.current_ability_avg() as i16;
+            let team_id = main_team.id;
+            let club_rep = main_team.reputation.market_value_score();
+            let league_rep = main_team
+                .league_id
+                .and_then(|lid| data.league(lid))
+                .map(|l| l.reputation)
+                .unwrap_or(5_000);
 
             let player = match data.player(player_id) {
                 Some(p) => p,
@@ -521,6 +652,14 @@ impl ClubResult {
             // Manager-pinned players: skip the salary-dispute fallback
             // entirely. Neither transfer-list nor free-release applies.
             if player.is_force_match_selection {
+                return;
+            }
+
+            // Defence in depth: loaned players are handled by their
+            // parent club, never the borrower. The rejection path above
+            // already filters this out, but `handle_unresolved_salary`
+            // is also reachable from the NotNeeded branch and tests.
+            if player.is_on_loan() {
                 return;
             }
 
@@ -557,34 +696,107 @@ impl ClubResult {
 
             // Low ability: release on free transfer
             // Only release for age if truly past it (35+) or far below average
-            if ability < squad_avg - 25 || (age >= 35 && ability < squad_avg - 10) {
+            let decision = if ability < squad_avg - 25
+                || (age >= 35 && ability < squad_avg - 10)
+            {
                 UnresolvedSalaryDecision::FreeTransfer
             } else {
                 UnresolvedSalaryDecision::TransferList
-            }
+            };
+
+            let asking_price = CurrencyValue {
+                amount: FormattingUtils::round_fee(player.value(date, league_rep, club_rep)),
+                currency: Currency::Usd,
+            };
+            (decision, asking_price, team_id)
         };
 
-        // Apply decision with mutable access through club
-        let club = match data.club_mut(club_id) {
-            Some(c) => c,
-            None => return,
-        };
+        let listed_now = matches!(decision, UnresolvedSalaryDecision::TransferList);
 
-        for team in &mut club.teams.teams {
-            if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
-                match decision {
-                    UnresolvedSalaryDecision::FreeTransfer => {
-                        player.statuses.add(date, PlayerStatusType::Frt);
-                        player.contract = None;
-                    }
-                    UnresolvedSalaryDecision::TransferList => {
-                        player.statuses.add(date, PlayerStatusType::Lst);
-                        if let Some(ref mut contract) = player.contract {
-                            contract.is_transfer_listed = true;
+        // Apply player-side state under club_mut. The mirror into
+        // `team.transfer_list` keeps the web team-transfers page in sync
+        // with the country-level market: the buying pipeline reads the
+        // country market, the team UI reads its own list, and both must
+        // see the same listing or the player effectively disappears from
+        // half the surface. Both writes are idempotent (`Transfers::add`
+        // and `TransferMarket::add_listing` both skip duplicates), so
+        // repeated cycles don't create stutter.
+        {
+            let club = match data.club_mut(club_id) {
+                Some(c) => c,
+                None => return,
+            };
+            // Coach name is resolved from the main team so the decision
+            // history attributes the listing to the manager, not the
+            // stub. Falls back to the board key when the seat is empty.
+            let mut coach_name = String::new();
+            for team in &mut club.teams.teams {
+                if team.id == team_id {
+                    coach_name = team.staffs.head_coach_name();
+                }
+                if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
+                    let decided_by = if coach_name.is_empty() {
+                        "dec_decided_board".to_string()
+                    } else {
+                        coach_name.clone()
+                    };
+                    match decision {
+                        UnresolvedSalaryDecision::FreeTransfer => {
+                            player.statuses.add(date, PlayerStatusType::Frt);
+                            player.contract = None;
+                            player.decision_history.add(
+                                date,
+                                "dec_free_transfer_listed".to_string(),
+                                trigger.release_reason().to_string(),
+                                decided_by,
+                            );
+                        }
+                        UnresolvedSalaryDecision::TransferList => {
+                            player.statuses.add(date, PlayerStatusType::Lst);
+                            if let Some(ref mut contract) = player.contract {
+                                contract.is_transfer_listed = true;
+                            }
+                            player.decision_history.add(
+                                date,
+                                "dec_transfer_listed".to_string(),
+                                trigger.list_reason().to_string(),
+                                decided_by,
+                            );
                         }
                     }
+                    break;
                 }
-                break;
+            }
+
+            // Mirror the listing onto the team's own transfer_list so the
+            // web team-transfers page surfaces stalemate listings. Only
+            // the actual selling team carries the item; loaned players
+            // were filtered out earlier, so the parent team is always the
+            // current team.
+            if listed_now {
+                if let Some(team) = club.teams.teams.iter_mut().find(|t| t.id == team_id) {
+                    team.transfer_list
+                        .add(TransferItem::new(player_id, asking_price.clone()));
+                }
+            }
+        }
+
+        // Push the listing into the country transfer market so the
+        // buying pipeline can actually discover it. Without this step
+        // the country pipeline's "already listed" guard short-circuits
+        // and the listing never reaches the market.
+        if listed_now {
+            if let Some(country_id) = data.country_by_club(club_id).map(|c| c.id) {
+                if let Some(country) = data.country_mut(country_id) {
+                    country.transfer_market.add_listing(TransferListing::new(
+                        player_id,
+                        club_id,
+                        team_id,
+                        asking_price,
+                        date,
+                        TransferListingType::Transfer,
+                    ));
+                }
             }
         }
     }
@@ -606,5 +818,405 @@ impl ClubResult {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::board::SeasonTargets;
+    use crate::club::player::contract::{
+        RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL,
+    };
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
+    use crate::club::player::personality::PlayerDecisionHistory;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        Club, ClubColors, ClubFinances, ClubStatus, Country, PersonAttributes, Player,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder, TeamCollection,
+        TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn make_decision_history(items: &[(NaiveDate, &str)]) -> PlayerDecisionHistory {
+        let mut h = PlayerDecisionHistory::new();
+        for (date, decision) in items {
+            h.add(
+                *date,
+                "test".to_string(),
+                decision.to_string(),
+                "tester".to_string(),
+            );
+        }
+        h
+    }
+
+    fn make_contract(
+        salary: u32,
+        squad_status: PlayerSquadStatus,
+        expiration: NaiveDate,
+    ) -> PlayerClubContract {
+        let mut c = PlayerClubContract::new(salary, expiration);
+        c.squad_status = squad_status;
+        c
+    }
+
+    fn make_player(
+        id: u32,
+        ability: u8,
+        birth_date: NaiveDate,
+        decisions: PlayerDecisionHistory,
+        contract: Option<PlayerClubContract>,
+    ) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.current_ability = ability;
+        attrs.potential_ability = ability;
+        PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Test".into(), format!("Player{}", id)))
+            .birth_date(birth_date)
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .decision_history(decisions)
+            .contract(contract)
+            .build()
+            .unwrap()
+    }
+
+    fn training_schedule() -> TrainingSchedule {
+        use chrono::NaiveTime;
+        TrainingSchedule::new(
+            NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+        )
+    }
+
+    fn make_team(id: u32, club_id: u32, players: Vec<Player>) -> crate::Team {
+        TeamBuilder::new()
+            .id(id)
+            .league_id(Some(1))
+            .club_id(club_id)
+            .name("Main".to_string())
+            .slug("main".to_string())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(500, 500, 500))
+            .training_schedule(training_schedule())
+            .build()
+            .unwrap()
+    }
+
+    fn make_club(id: u32, team: crate::Team, wage_budget: Option<i32>) -> Club {
+        let mut club = Club::new(
+            id,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(10_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![team]),
+            crate::ClubFacilities::default(),
+        );
+        if let Some(budget) = wage_budget {
+            club.board.season_targets = Some(SeasonTargets {
+                transfer_budget: 0,
+                wage_budget: budget,
+                max_squad_size: 30,
+                min_squad_size: 18,
+                expected_position: 5,
+                min_acceptable_position: 10,
+            });
+        }
+        club
+    }
+
+    fn make_country(club: Club) -> Country {
+        let league = League::new(
+            1,
+            "L".to_string(),
+            "l".to_string(),
+            1,
+            500,
+            LeagueSettings {
+                season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                tier: 1,
+                promotion_spots: 0,
+                relegation_spots: 0,
+                league_group: None,
+            },
+            false,
+        );
+        Country::builder()
+            .id(1)
+            .code("EN".to_string())
+            .slug("en".to_string())
+            .name("England".to_string())
+            .continent_id(1)
+            .leagues(LeagueCollection::new(vec![league]))
+            .clubs(vec![club])
+            .build()
+            .unwrap()
+    }
+
+    fn make_sim(country: Country, today: NaiveDate) -> SimulatorData {
+        let continent =
+            crate::continent::Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+        SimulatorData::new(
+            today.and_hms_opt(12, 0, 0).unwrap(),
+            vec![continent],
+            GlobalCompetitions::new(Vec::new()),
+        )
+    }
+
+    fn rejected_result(player_id: u32) -> PlayerResult {
+        let mut r = PlayerResult::new(player_id);
+        r.contract.contract_rejected = true;
+        r
+    }
+
+    // ── Tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn first_rejection_does_not_list_useful_player() {
+        let today = d(2026, 5, 1);
+        // One rejection, FirstTeamRegular — stalemate is Emerging, must
+        // not list.
+        let history = make_decision_history(&[
+            (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 4, 15), RENEWAL_REJECTED_LABEL),
+        ]);
+        let contract = make_contract(50_000, PlayerSquadStatus::FirstTeamRegular, d(2027, 7, 1));
+        let player = make_player(101, 120, d(1995, 1, 1), history, Some(contract));
+        let team = make_team(10, 100, vec![player]);
+        let club = make_club(100, team, Some(5_000_000));
+        let country = make_country(club);
+        let mut sim = make_sim(country, today);
+
+        ClubResult::process_player_contract_interaction(&rejected_result(101), &mut sim, 100);
+
+        let p = sim.player(101).expect("player still present");
+        assert!(
+            !p.statuses.get().contains(&PlayerStatusType::Lst),
+            "first rejection must not transfer-list"
+        );
+        let country = sim.country(1).unwrap();
+        assert!(country.transfer_market.listings.is_empty());
+        assert!(country.clubs[0].teams.teams[0]
+            .transfer_list
+            .listed_player_ids()
+            .is_empty());
+    }
+
+    #[test]
+    fn three_unaffordable_rejections_list_into_market_and_team() {
+        let today = d(2026, 5, 1);
+        let history = make_decision_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+            (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 4, 25), RENEWAL_REJECTED_LABEL),
+        ]);
+        let contract = make_contract(50_000, PlayerSquadStatus::MainBackupPlayer, d(2027, 7, 1));
+        // Player with low ability so the TransferList routing (rather
+        // than FreeTransfer) is chosen and squad-protection gates don't
+        // fire — squad_avg is the only-other player's ability.
+        let player = make_player(101, 75, d(1995, 1, 1), history, Some(contract));
+        let teammate = make_player(
+            102,
+            125,
+            d(1993, 1, 1),
+            PlayerDecisionHistory::new(),
+            Some(make_contract(
+                60_000,
+                PlayerSquadStatus::FirstTeamRegular,
+                d(2027, 7, 1),
+            )),
+        );
+        let team = make_team(10, 100, vec![player, teammate]);
+        // Tight budget so the affordability signal is "ask unaffordable"
+        // — but the rejection-count alone already pushes to Exhausted
+        // when there's no pending ask, which is the case here.
+        let club = make_club(100, team, Some(120_000));
+        let country = make_country(club);
+        let mut sim = make_sim(country, today);
+
+        ClubResult::process_player_contract_interaction(&rejected_result(101), &mut sim, 100);
+
+        let p = sim.player(101).expect("player still present");
+        assert!(
+            p.statuses.get().contains(&PlayerStatusType::Lst),
+            "exhausted stalemate must transfer-list"
+        );
+        let listing_reason = p
+            .decision_history
+            .items
+            .iter()
+            .find(|d| d.movement == "dec_transfer_listed")
+            .expect("decision_history must record dec_transfer_listed");
+        assert_eq!(listing_reason.decision, "dec_reason_contract_stalemate");
+
+        let country = sim.country(1).unwrap();
+        assert_eq!(
+            country.transfer_market.listings.len(),
+            1,
+            "country market must contain the listing"
+        );
+        assert_eq!(country.transfer_market.listings[0].player_id, 101);
+        let team_list_ids = country.clubs[0].teams.teams[0]
+            .transfer_list
+            .listed_player_ids();
+        assert_eq!(
+            team_list_ids,
+            vec![101],
+            "team transfer_list must mirror the market listing"
+        );
+    }
+
+    #[test]
+    fn affordable_pending_ask_does_not_list_protected_player() {
+        let today = d(2026, 5, 1);
+        let history = make_decision_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+            (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 4, 25), RENEWAL_REJECTED_LABEL),
+        ]);
+        let contract = make_contract(50_000, PlayerSquadStatus::FirstTeamRegular, d(2027, 7, 1));
+        let mut player = make_player(101, 120, d(1995, 1, 1), history, Some(contract));
+        // Affordable ask: 70k vs current 50k, headroom 200k → fits.
+        player.pending_contract_ask = Some(PlayerContractAsk {
+            desired_salary: 70_000,
+            desired_years: 3,
+            recorded_on: d(2026, 4, 25),
+            demanded_status: None,
+            demanded_release_clause: None,
+            demanded_signing_bonus: None,
+            rejection_reason: Some(RejectionReason::LowSalary),
+        });
+        let team = make_team(10, 100, vec![player]);
+        // wage_budget = 250k, current_wage_bill = 50k, headroom = 200k.
+        let club = make_club(100, team, Some(250_000));
+        let country = make_country(club);
+        let mut sim = make_sim(country, today);
+
+        ClubResult::process_player_contract_interaction(&rejected_result(101), &mut sim, 100);
+
+        let p = sim.player(101).unwrap();
+        assert!(
+            !p.statuses.get().contains(&PlayerStatusType::Lst),
+            "affordable ask must NOT escalate FirstTeamRegular to a listing"
+        );
+        let country = sim.country(1).unwrap();
+        assert!(country.transfer_market.listings.is_empty());
+    }
+
+    #[test]
+    fn force_selected_player_is_not_listed() {
+        let today = d(2026, 5, 1);
+        let history = make_decision_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+            (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 4, 25), RENEWAL_REJECTED_LABEL),
+        ]);
+        let contract = make_contract(50_000, PlayerSquadStatus::MainBackupPlayer, d(2027, 7, 1));
+        let mut player = make_player(101, 75, d(1995, 1, 1), history, Some(contract));
+        player.is_force_match_selection = true;
+        let teammate = make_player(
+            102,
+            125,
+            d(1993, 1, 1),
+            PlayerDecisionHistory::new(),
+            Some(make_contract(
+                60_000,
+                PlayerSquadStatus::FirstTeamRegular,
+                d(2027, 7, 1),
+            )),
+        );
+        let team = make_team(10, 100, vec![player, teammate]);
+        let club = make_club(100, team, Some(120_000));
+        let country = make_country(club);
+        let mut sim = make_sim(country, today);
+
+        ClubResult::process_player_contract_interaction(&rejected_result(101), &mut sim, 100);
+
+        let p = sim.player(101).unwrap();
+        assert!(
+            !p.statuses.get().contains(&PlayerStatusType::Lst),
+            "force-selected player must never be auto-listed"
+        );
+    }
+
+    #[test]
+    fn loaned_player_is_not_listed_by_borrower() {
+        let today = d(2026, 5, 1);
+        let history = make_decision_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+            (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 4, 25), RENEWAL_REJECTED_LABEL),
+        ]);
+        // Contract with the borrowing club (the team the player is in).
+        let contract = make_contract(50_000, PlayerSquadStatus::MainBackupPlayer, d(2027, 7, 1));
+        let mut player = make_player(101, 75, d(1995, 1, 1), history, Some(contract));
+        // Loan flag from parent club id = 999 (does not exist in sim,
+        // which is fine — we're testing the borrower side).
+        let mut loan_contract = PlayerClubContract::new(50_000, d(2027, 7, 1));
+        loan_contract.loan_from_club_id = Some(999);
+        player.contract_loan = Some(loan_contract);
+        let teammate = make_player(
+            102,
+            125,
+            d(1993, 1, 1),
+            PlayerDecisionHistory::new(),
+            Some(make_contract(
+                60_000,
+                PlayerSquadStatus::FirstTeamRegular,
+                d(2027, 7, 1),
+            )),
+        );
+        let team = make_team(10, 100, vec![player, teammate]);
+        let club = make_club(100, team, Some(120_000));
+        let country = make_country(club);
+        let mut sim = make_sim(country, today);
+
+        ClubResult::process_player_contract_interaction(&rejected_result(101), &mut sim, 100);
+
+        let p = sim.player(101).unwrap();
+        assert!(
+            !p.statuses.get().contains(&PlayerStatusType::Lst),
+            "loaned player cannot be transfer-listed by the borrowing club"
+        );
+        let country = sim.country(1).unwrap();
+        assert!(country.transfer_market.listings.is_empty());
     }
 }

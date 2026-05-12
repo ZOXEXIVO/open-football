@@ -28,6 +28,15 @@ Use the data fields to judge each player:
 - squad_status: club's view of this player — KeyPlayer, FirstTeamRegular, FirstTeamSquadRotation, MainBackupPlayer, HotProspectForTheFuture, DecentYoungster, NotNeeded
 - contract_months_left: months remaining on current contract (informational ONLY — see rules below)
 - annual_wage: current wage (informational)
+- contract_stalemate: structured renewal-negotiation state
+  - offers_12m: club's renewal offers in the last 12 months
+  - rejections_12m: player's rejections in the last 12 months
+  - last_rejection_days_ago: days since the most recent rejection (null if none)
+  - level: one of "none", "emerging", "severe", "exhausted" — escalating severity of failed renewal talks
+  - pending_ask: present when the player has counter-proposed terms
+    - desired_salary / desired_years: what the player asked for
+    - rejection_reason: why the last offer was turned down (low_salary, short_contract, status_below_expectation, no_release_clause, no_sweetener, ambition_mismatch)
+    - affordable: true/false when wage budget context is available, null when unknown
 
 [LISTING RULES]
 TRANSFER LIST when:
@@ -40,11 +49,21 @@ TRANSFER LIST when:
 - UNH/REQ caused by an explicit desire for European competition (Champions / Europa / Conference) when this club cannot offer it is a valid reason to consider listing for an ambitious senior player
 - UNH/REQ caused by a South American player's desire to play Copa Libertadores when this club is outside that path is a valid reason to consider listing
 
-CONTRACT EXPIRY IS NOT A LISTING REASON:
+CONTRACT EXPIRY ALONE IS NOT A LISTING REASON:
 - Never list a player citing "contract expiring", "soon-to-expire contract", "avoid free transfer", or anything similar
 - Contract renewals are handled by a separate ContractRenewalManager — assume it will act on valuable players automatically
-- `contract_months_left` is informational only; do NOT use it to justify listing
+- `contract_months_left` is informational only; do NOT use it to justify listing on its own
 - If a player with few months remaining is ALSO surplus/unhappy/declining, list on THOSE grounds and say so explicitly
+
+FAILED RENEWAL TALKS CAN BE A LISTING REASON:
+- Repeated failed renewal negotiations (see `contract_stalemate`) are a legitimate listing trigger when the player is unlikely to sign or their terms are unaffordable
+- Use `contract_stalemate.level`:
+  - `none` / `emerging`: do NOT list — renewal talks are still alive
+  - `severe`: may list fringe / rotation / surplus / unhappy players (NEVER KeyPlayer or FirstTeamRegular unless they also have REQ/UNH)
+  - `exhausted`: list permitted across all squad statuses if no other reason holds; talks are clearly over
+- If `pending_ask.affordable == false`, the player's demands are out of reach — count this as evidence supporting a stalemate-driven listing
+- If `pending_ask.affordable == true`, do NOT list for renewal reasons — the renewal manager will make a converged offer
+- In reason text, write "contract talks stalled", "failed renewal talks", or "demands beyond what club can afford". Do NOT write "contract expiring" or similar.
 
 NEVER LIST:
 - KeyPlayer or FirstTeamRegular (squad_status) unless they have REQ or UNH status

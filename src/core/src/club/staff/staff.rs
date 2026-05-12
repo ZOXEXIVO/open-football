@@ -127,6 +127,22 @@ impl StaffCollection {
         }
     }
 
+    /// Display name for the head coach, used wherever a decision is
+    /// attributed to a person in the UI (decision history, transfer
+    /// listing reasons, contract proposals). Falls back to the
+    /// `dec_decided_board` i18n key when manager / caretaker / assistant
+    /// are all vacant — otherwise `head_coach()` returns the internal
+    /// stub and the player page renders "stub stub stub" in the Who
+    /// column.
+    pub fn head_coach_name(&self) -> String {
+        let hc = self.head_coach();
+        if hc.id == 0 {
+            "dec_decided_board".to_string()
+        } else {
+            hc.full_name.to_string()
+        }
+    }
+
     pub fn contract_resolver(&self, team_type: TeamType) -> &Staff {
         let staff_id = match team_type {
             TeamType::Main => {

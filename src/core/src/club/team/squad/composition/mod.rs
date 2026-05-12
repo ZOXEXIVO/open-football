@@ -207,7 +207,7 @@ impl SquadComposition {
         date: NaiveDate,
     ) {
         let valid_indices: Vec<usize> = team_indices.iter().map(|(idx, _)| *idx).collect();
-        let coach_name = teams[main_idx].staffs.head_coach().full_name.to_string();
+        let coach_name = teams[main_idx].staffs.head_coach_name();
         let mut any_move = false;
 
         for m in &advice.moves {

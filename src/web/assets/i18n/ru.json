@@ -171,6 +171,8 @@
   "dec_reason_club_listed": "Клуб выставил игрока на трансфер",
   "dec_reason_contract_expired": "Контракт истёк — отпущен как свободный агент",
   "dec_reason_contract_expiring": "Контракт истекает, поиск трансферной компенсации",
+  "dec_reason_contract_stalemate": "Переговоры о продлении сорваны — выставлен после серии отказов",
+  "dec_reason_released_failed_renewal": "Освобождён после провала переговоров о продлении",
   "dec_reason_financial_relief": "Аренда для снижения зарплатной ведомости",
   "dec_reason_lack_playing_time": "Недостаточно игрового времени в этом сезоне",
   "dec_reason_loan_playing_time": "Аренда для получения регулярного игрового времени",

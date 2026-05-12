@@ -1,3 +1,6 @@
+use crate::club::player::contract::{
+    AffordabilityInput, ContractStalemate, rejection_reason_token,
+};
 use crate::club::player::player::Player;
 use crate::club::staff::staff::Staff;
 use crate::utils::DateUtils;
@@ -33,6 +36,38 @@ struct PlayerHistoryLlm {
     average_rating: f32,
 }
 
+#[derive(Serialize)]
+struct PendingAskLlm {
+    desired_salary: u32,
+    desired_years: u8,
+    /// Snake-case token derived from `RejectionReason` — `low_salary`,
+    /// `short_contract`, `status_below_expectation`, etc. Stable string so
+    /// the prompt can match on it without leaking enum names.
+    rejection_reason: Option<&'static str>,
+    /// True when wage budget headroom is known and the ask fits inside it.
+    /// `None` when the caller did not supply budget context — in that case
+    /// the prompt should treat affordability as unknown rather than
+    /// inferring from the salary value alone.
+    affordable: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ContractStalemateLlm {
+    /// Rolling 12-month count of renewal offers extended by the club.
+    offers_12m: u32,
+    /// Rolling 12-month count of renewal offers rejected by the player.
+    rejections_12m: u32,
+    /// Days since the most recent rejection. Missing when no rejection
+    /// in the 12-month window.
+    last_rejection_days_ago: Option<i64>,
+    /// One of `none`, `emerging`, `severe`, `exhausted`. Mirrors
+    /// `StalemateLevel` so the prompt can branch without re-deriving.
+    level: &'static str,
+    /// Outstanding ask from the player's side captured after the last
+    /// rejection. None when there is no pending ask.
+    pending_ask: Option<PendingAskLlm>,
+}
+
 // ─── as_llm() struct ────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -65,6 +100,11 @@ struct PlayerLlm {
     training_trend: Option<PlayerTrainingTrendLlm>,
     club_history: Vec<PlayerHistoryLlm>,
     staff_opinion: String,
+    /// Renewal-stalemate snapshot. Tells the AI whether listing for
+    /// "failed renewal talks" is structurally justified — and how
+    /// severely. Always present; `level == "none"` means no relevant
+    /// rejection history.
+    contract_stalemate: ContractStalemateLlm,
 }
 
 #[derive(Serialize)]
@@ -132,6 +172,20 @@ fn pct(val: f32) -> String {
 
 impl Player {
     pub fn as_llm(&self, staff: &Staff, sim_date: chrono::NaiveDate) -> String {
+        self.as_llm_with_affordability(staff, sim_date, None)
+    }
+
+    /// Build the same LLM payload as `as_llm`, but with affordability
+    /// context so the `contract_stalemate.pending_ask.affordable` field
+    /// can be filled in. Callers with wage-budget info (TransferList AI)
+    /// should prefer this overload; callers without it can keep using
+    /// `as_llm` and the prompt will treat affordability as unknown.
+    pub fn as_llm_with_affordability(
+        &self,
+        staff: &Staff,
+        sim_date: chrono::NaiveDate,
+        affordability_headroom: Option<u32>,
+    ) -> String {
         let age = DateUtils::age(self.birth_date, sim_date);
         let positions: BTreeMap<String, String> = self
             .positions
@@ -205,6 +259,28 @@ impl Player {
                 (months, wage, status)
             }
             None => (None, None, None),
+        };
+
+        let current_salary = self.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+        let stalemate = ContractStalemate::assess(
+            self,
+            sim_date,
+            AffordabilityInput {
+                wage_budget_headroom: affordability_headroom,
+                current_salary,
+            },
+        );
+        let contract_stalemate = ContractStalemateLlm {
+            offers_12m: stalemate.offers_12m,
+            rejections_12m: stalemate.rejections_12m,
+            last_rejection_days_ago: stalemate.last_rejection_days_ago,
+            level: stalemate.level.as_key(),
+            pending_ask: stalemate.pending_ask.as_ref().map(|ask| PendingAskLlm {
+                desired_salary: ask.desired_salary,
+                desired_years: ask.desired_years,
+                rejection_reason: ask.rejection_reason.map(rejection_reason_token),
+                affordable: stalemate.ask_affordable,
+            }),
         };
 
         let player = PlayerLlm {
@@ -295,6 +371,7 @@ impl Player {
             training_trend: self.training_trend_llm(),
             club_history: self.club_history_vec(),
             staff_opinion: Self::staff_relationship_llm(staff, self.id),
+            contract_stalemate,
         };
 
         serde_json::to_string(&player).unwrap()

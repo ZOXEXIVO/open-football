@@ -299,7 +299,7 @@ impl ContractRenewalManager {
     }
 
     fn resolve_staff(team: &Team) -> (String, u8, u8) {
-        let coach_name = team.staffs.head_coach().full_name.to_string();
+        let coach_name = team.staffs.head_coach_name();
 
         let resolver = team
             .staffs

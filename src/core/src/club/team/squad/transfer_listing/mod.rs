@@ -49,9 +49,20 @@ pub struct TransferListManager;
 
 impl TransferListManager {
     /// Build AI prompt without calling AI (read-only teams).
-    pub fn prepare_request(teams: &[Team], main_idx: usize, date: NaiveDate) -> (String, String) {
+    ///
+    /// `wage_budget_headroom` is the club's remaining annual wage capacity
+    /// (board wage budget minus current wage bill). When supplied, the
+    /// LLM payload labels each player's `contract_stalemate.pending_ask.affordable`
+    /// against it; without it (callers that don't have a board context),
+    /// affordability surfaces as `null` and the prompt treats it as unknown.
+    pub fn prepare_request(
+        teams: &[Team],
+        main_idx: usize,
+        date: NaiveDate,
+        wage_budget_headroom: Option<u32>,
+    ) -> (String, String) {
         let team_indices = Self::collect_team_indices(teams);
-        let query = Self::build_prompt(teams, main_idx, &team_indices, date);
+        let query = Self::build_prompt(teams, main_idx, &team_indices, date, wage_budget_headroom);
         let format = Self::response_format();
         (query, format)
     }
@@ -94,9 +105,17 @@ impl TransferListManager {
         main_idx: usize,
         team_indices: &[(usize, &str)],
         sim_date: NaiveDate,
+        wage_budget_headroom: Option<u32>,
     ) -> String {
         let staff_data = teams[main_idx].staffs.head_coach().as_llm();
-        let data_json = Self::build_data_json(teams, main_idx, team_indices, &staff_data, sim_date);
+        let data_json = Self::build_data_json(
+            teams,
+            main_idx,
+            team_indices,
+            &staff_data,
+            sim_date,
+            wage_budget_headroom,
+        );
         let teams_section = Self::build_teams_section(teams, team_indices);
         let previous_decisions_section = Self::build_previous_decisions(teams, team_indices);
         let current_tl = Self::build_current_transfer_list_section(teams, main_idx, &data_json);
@@ -119,6 +138,7 @@ impl TransferListManager {
         team_indices: &[(usize, &str)],
         staff_data: &str,
         sim_date: NaiveDate,
+        wage_budget_headroom: Option<u32>,
     ) -> String {
         let staff_json: serde_json::Value = serde_json::from_str(staff_data).unwrap();
 
@@ -132,6 +152,12 @@ impl TransferListManager {
             })
             .collect();
 
+        // Wage budget headroom for the club — supplied by the club-level
+        // caller. Used to label `contract_stalemate.pending_ask.affordable`
+        // in the AI payload so the prompt can distinguish "player wants
+        // more, we can pay" from "player wants more than we can afford".
+        // None when the caller has no board context (tests, fixtures).
+        let headroom = wage_budget_headroom;
         let squad_teams: Vec<TeamPlayersLlm> = team_indices
             .iter()
             .map(|&(idx, label)| {
@@ -141,7 +167,12 @@ impl TransferListManager {
                     .players
                     .players
                     .iter()
-                    .map(|p| serde_json::from_str(&p.as_llm(head_coach, sim_date)).unwrap())
+                    .map(|p| {
+                        serde_json::from_str(
+                            &p.as_llm_with_affordability(head_coach, sim_date, headroom),
+                        )
+                        .unwrap()
+                    })
                     .collect();
                 TeamPlayersLlm {
                     label: label.to_string(),
@@ -248,7 +279,7 @@ impl TransferListManager {
         advice: &AiTransferListAdvice,
         date: NaiveDate,
     ) {
-        let coach_name = teams[main_idx].staffs.head_coach().full_name.to_string();
+        let coach_name = teams[main_idx].staffs.head_coach_name();
 
         let transfer_ids: Vec<u32> = advice.transfer_list.iter().map(|d| d.player_id).collect();
         let loan_ids: Vec<u32> = advice.loan_list.iter().map(|d| d.player_id).collect();

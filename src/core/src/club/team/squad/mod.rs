@@ -29,7 +29,7 @@ impl SquadManager {
         reserve_idx: usize,
         date: NaiveDate,
     ) {
-        let coach_name = teams[main_idx].staffs.head_coach().full_name.to_string();
+        let coach_name = teams[main_idx].staffs.head_coach_name();
         let demotions = Self::identify_administrative_demotions(&teams[main_idx]);
         let max_age = teams[reserve_idx].team_type.max_age();
         let mut demotions = filter_by_age(demotions, &teams[main_idx], max_age, date);

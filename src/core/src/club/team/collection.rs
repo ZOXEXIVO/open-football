@@ -232,7 +232,17 @@ impl TeamCollection {
     /// Called during simulate() phase; actual AI calls happen in batch later.
     /// Each request carries its own handler closure — adding new request types
     /// only requires changes here.
-    pub fn prepare_ai_requests(&self, date: NaiveDate, club_id: u32) -> Vec<PendingAiRequest> {
+    ///
+    /// `wage_budget_headroom` is the club-level remaining wage capacity used
+    /// to surface `contract_stalemate.pending_ask.affordable` in the
+    /// transfer-list AI payload. `None` when the board hasn't set season
+    /// targets; the prompt then treats affordability as unknown.
+    pub fn prepare_ai_requests(
+        &self,
+        date: NaiveDate,
+        club_id: u32,
+        wage_budget_headroom: Option<u32>,
+    ) -> Vec<PendingAiRequest> {
         if self.teams.len() < 2 {
             return Vec::new();
         }
@@ -278,7 +288,12 @@ impl TeamCollection {
 
         // Transfer listing (priority 1)
         {
-            let (query, format) = TransferListManager::prepare_request(&self.teams, main_idx, date);
+            let (query, format) = TransferListManager::prepare_request(
+                &self.teams,
+                main_idx,
+                date,
+                wage_budget_headroom,
+            );
             requests.push(PendingAiRequest {
                 club_id,
                 priority: 1,

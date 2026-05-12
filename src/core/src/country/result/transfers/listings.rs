@@ -1,4 +1,5 @@
 use super::types::{SquadAnalysis, TransferActivitySummary};
+use crate::club::player::contract::{AffordabilityInput, ContractStalemate};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
@@ -11,7 +12,8 @@ use chrono::NaiveDate;
 use log::debug;
 use std::collections::HashMap;
 
-enum ListingDecision {
+#[cfg_attr(test, derive(Debug))]
+pub(crate) enum ListingDecision {
     Keep,
     Transfer { reason: String },
     Loan { reason: String },
@@ -57,7 +59,7 @@ impl CountryResult {
             // a club with strong domestic standing but limited continental
             // exposure should still command a domestic premium.
             let club_reputation = main_team.reputation.market_value_score();
-            let decided_by = main_team.staffs.head_coach().full_name.to_string();
+            let decided_by = main_team.staffs.head_coach_name();
 
             for player in &main_team.players.players {
                 match Self::evaluate_player_listing(
@@ -386,7 +388,7 @@ impl CountryResult {
         }
     }
 
-    fn evaluate_player_listing(
+    pub(crate) fn evaluate_player_listing(
         player: &Player,
         analysis: &SquadAnalysis,
         club: &Club,
@@ -594,18 +596,36 @@ impl CountryResult {
             );
         }
 
-        // Contract expiring within 6 months. ContractRenewalManager runs
-        // monthly and targets players 12-18 months out, so only pull this
-        // trigger after that system has had a chance — and failed — to
-        // lock the player down. Earlier than 6 months and we pre-empt the
-        // renewal flow on players the club actually wants to keep.
-        if let Some(ref contract) = player.contract {
-            let days_remaining = (contract.expiration - date).num_days();
-            if days_remaining < 180 && days_remaining > 0 {
-                return ListingDecision::Transfer {
-                    reason: "dec_reason_contract_expiring".to_string(),
-                };
-            }
+        // Contract stalemate. The renewal manager has already had its
+        // window to lock this player down; if it has tried and failed
+        // (rejections in the last 365 days) we treat that — not the
+        // bare expiry date — as the listing trigger. Pure expiry
+        // without failed renewal evidence is intentionally NOT a
+        // listing reason: that would conflict with the AI transfer-list
+        // prompt and pre-empt the renewal flow on players the club
+        // actually wants to keep.
+        let headroom = club
+            .board
+            .season_targets
+            .as_ref()
+            .map(|t| t.wage_budget as u32)
+            .map(|budget| {
+                let total_wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
+                budget.saturating_sub(total_wages)
+            });
+        let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+        let stalemate = ContractStalemate::assess(
+            player,
+            date,
+            AffordabilityInput {
+                wage_budget_headroom: headroom,
+                current_salary,
+            },
+        );
+        if stalemate.rejections_12m > 0 && stalemate.permits_listing() {
+            return ListingDecision::Transfer {
+                reason: "dec_reason_contract_stalemate".to_string(),
+            };
         }
 
         ListingDecision::Keep
@@ -855,5 +875,108 @@ fn min_squad_for_group(group: PlayerFieldPositionGroup) -> usize {
         PlayerFieldPositionGroup::Defender => 6,
         PlayerFieldPositionGroup::Midfielder => 6,
         PlayerFieldPositionGroup::Forward => 3,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes, PlayerClubContract,
+        PlayerCollection, PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder,
+        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn training_schedule() -> TrainingSchedule {
+        use chrono::NaiveTime;
+        TrainingSchedule::new(
+            NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+        )
+    }
+
+    fn make_player(id: u32) -> Player {
+        use crate::{PlayerPosition, PlayerPositionType};
+        let mut attrs = PlayerAttributes::default();
+        attrs.current_ability = 130;
+        attrs.potential_ability = 140;
+        let mut contract = PlayerClubContract::new(50_000, d(2026, 9, 1));
+        contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Test".into(), format!("Player{}", id)))
+            .birth_date(d(1995, 1, 1))
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .contract(Some(contract))
+            .build()
+            .unwrap()
+    }
+
+    fn make_club_with_player(player: Player) -> Club {
+        let team = TeamBuilder::new()
+            .id(10)
+            .league_id(Some(1))
+            .club_id(100)
+            .name("Main".to_string())
+            .slug("main".to_string())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(vec![player]))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(500, 500, 500))
+            .training_schedule(training_schedule())
+            .build()
+            .unwrap();
+        Club::new(
+            100,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(1_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(vec![team]),
+            crate::ClubFacilities::default(),
+        )
+    }
+
+    /// Regression guard: a contract that's about to expire is NOT, on its
+    /// own, a reason to transfer-list the player. The contract-stalemate
+    /// path requires actual renewal-rejection history (recorded in
+    /// `decision_history`), and bare proximity to expiry does not satisfy
+    /// that condition.
+    #[test]
+    fn pure_expiry_without_rejection_history_does_not_list() {
+        let today = d(2026, 5, 1);
+        let player = make_player(101);
+        let club = make_club_with_player(player);
+        let analysis =
+            CountryResult::analyze_squad_needs(&club, today);
+        let player_ref = &club.teams.teams[0].players.players[0];
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref, &analysis, &club, today, None,
+        );
+        assert!(
+            matches!(decision, ListingDecision::Keep),
+            "pure expiry must not list — saw {:?}",
+            decision
+        );
     }
 }

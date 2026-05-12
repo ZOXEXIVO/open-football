@@ -309,9 +309,25 @@ impl Club {
                 .unwrap_or(5_000);
             self.teams
                 .run_contract_renewals_with_budget(date, wage_budget, league_rep);
-            result
-                .pending_ai_requests
-                .extend(self.teams.prepare_ai_requests(date, self.id));
+
+            // Wage budget headroom (annual basis) for the transfer-list AI
+            // payload — matches the rest of the stalemate pipeline so the
+            // LLM sees the same affordability signal the country pipeline
+            // and reactive renewal use.
+            let wage_budget_headroom = self
+                .board
+                .season_targets
+                .as_ref()
+                .map(|t| t.wage_budget as u32)
+                .map(|budget| {
+                    let total_wages: u32 = self.teams.iter().map(|t| t.get_annual_salary()).sum();
+                    budget.saturating_sub(total_wages)
+                });
+            result.pending_ai_requests.extend(self.teams.prepare_ai_requests(
+                date,
+                self.id,
+                wage_budget_headroom,
+            ));
 
             // Monthly: process wages (annual salary / 12) and income
             self.process_monthly_finances(ctx.clone());
