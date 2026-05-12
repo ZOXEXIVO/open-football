@@ -1,5 +1,4 @@
 use crate::IntegerUtils;
-use crate::club::player::traits::PlayerTrait;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
@@ -9,7 +8,7 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::{
-    ConditionContext, GamePhase, MatchPlayerLite, PassEvaluator, PlayerDistanceFromStartPosition,
+    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition,
     PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
@@ -2139,113 +2138,5 @@ impl ForwardRunningState {
 
         // If 3 or more players nearby (congestion), need to clear
         total_nearby >= 3
-    }
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Pure helpers extracted from the shot-vs-pass comparison so the polish
-// guards can be unit-tested without spinning up an engine fixture. Keep
-// them top-level + `pub(crate)` so the tests below cover the same code
-// paths the live state machine uses.
-// ──────────────────────────────────────────────────────────────────────
-
-/// Margin (in EV units) by which the best pass option must beat the
-/// current shot xG before a forward defers. Polish-spec curve:
-///   teamwork > 0.75            → 0.05
-///   ShootsFromDistance OR teamwork < 0.4 → 0.14
-///   otherwise                  → 0.09
-pub(crate) fn pass_deferral_margin(teamwork: f32, prefers_shot: bool) -> f32 {
-    if prefers_shot || teamwork < 0.4 {
-        0.14
-    } else if teamwork > 0.75 {
-        0.05
-    } else {
-        0.09
-    }
-}
-
-/// Apply the marked-receiver discount to a candidate pass's expected
-/// value. ≥2 opponents within 12u of the receiver halves the EV — a
-/// pass into that traffic is mostly an interception waiting to happen
-/// and shouldn't talk a forward out of a real shot.
-pub(crate) fn apply_marked_pass_discount(
-    pass_ev: f32,
-    receiver_opponents_within_12u: usize,
-) -> f32 {
-    let marked_factor = if receiver_opponents_within_12u >= 2 {
-        0.5
-    } else {
-        1.0
-    };
-    pass_ev * marked_factor
-}
-
-/// Decide whether to defer a viable shot to a pass. Caps the pass EV
-/// used in the comparison at 0.55 (no spectacular cutback EV can talk
-/// a striker out of every shot) and never defers a real point-blank
-/// chance (`distance < 24` && `xg >= 0.18`).
-pub(crate) fn should_defer_to_pass(
-    shot_xg: f32,
-    raw_pass_ev: f32,
-    margin: f32,
-    distance_to_goal: f32,
-) -> bool {
-    let point_blank = distance_to_goal < 24.0 && shot_xg >= 0.18;
-    if point_blank {
-        return false;
-    }
-    let pass_ev_for_deferral = raw_pass_ev.min(0.55);
-    pass_ev_for_deferral > shot_xg + margin
-}
-
-#[cfg(test)]
-mod shot_pass_tests {
-    use super::*;
-
-    #[test]
-    fn point_blank_shot_is_never_deferred() {
-        // Even with an absurd 1.0 pass EV, a point-blank chance shoots.
-        assert!(!should_defer_to_pass(0.18, 1.0, 0.05, 23.9));
-        assert!(!should_defer_to_pass(0.20, 1.0, 0.14, 12.0));
-    }
-
-    #[test]
-    fn low_xg_shot_defers_to_clear_cutback() {
-        // 0.05 xG long shot, clean cutback at EV 0.30, normal margin.
-        assert!(should_defer_to_pass(0.05, 0.30, 0.09, 60.0));
-    }
-
-    #[test]
-    fn high_risk_marked_pass_does_not_suppress_good_shot() {
-        // Two markers → discounted pass EV. Even with raw EV 0.6, the
-        // discounted (0.30) doesn't beat a 0.25 shot by the 0.09 margin.
-        let discounted = apply_marked_pass_discount(0.6, 2);
-        assert_eq!(discounted, 0.30);
-        assert!(!should_defer_to_pass(0.25, discounted, 0.09, 35.0));
-    }
-
-    #[test]
-    fn marked_factor_applies_only_with_two_or_more_markers() {
-        assert_eq!(apply_marked_pass_discount(0.6, 0), 0.6);
-        assert_eq!(apply_marked_pass_discount(0.6, 1), 0.6);
-        assert_eq!(apply_marked_pass_discount(0.6, 2), 0.30);
-        assert_eq!(apply_marked_pass_discount(0.6, 3), 0.30);
-    }
-
-    #[test]
-    fn pass_ev_caps_at_zero_point_five_five_for_deferral() {
-        // Raw pass EV 1.5 is unrealistic but should still cap at 0.55,
-        // which doesn't beat a 0.55 xG by the 0.05 high-teamwork margin.
-        assert!(!should_defer_to_pass(0.55, 1.5, 0.05, 30.0));
-        // Same EV easily beats a 0.10 xG, however.
-        assert!(should_defer_to_pass(0.10, 1.5, 0.05, 30.0));
-    }
-
-    #[test]
-    fn margins_match_polish_spec() {
-        assert_eq!(pass_deferral_margin(0.80, false), 0.05);
-        assert_eq!(pass_deferral_margin(0.50, false), 0.09);
-        assert_eq!(pass_deferral_margin(0.30, false), 0.14);
-        assert_eq!(pass_deferral_margin(0.90, true), 0.14);
     }
 }
