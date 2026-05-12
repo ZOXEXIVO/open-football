@@ -4,8 +4,11 @@ use log::debug;
 use crate::SimulatorData;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
-use crate::transfers::market::{TransferListing, TransferListingType};
+use crate::transfers::market::{TransferListing, TransferListingOrigin, TransferListingType};
 use crate::transfers::offer::{TransferClause, TransferOffer};
+use crate::transfers::pipeline::plausibility::{
+    TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
+};
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
     ShortlistCandidateStatus, TransferApproach, TransferNeedPriority, TransferNeedReason,
@@ -52,9 +55,20 @@ struct NegotiationAction {
     is_rival: bool,
 }
 
+/// Candidate culled by the plausibility gate immediately before
+/// negotiation creation. Pass 2 marks the shortlist candidate as
+/// unavailable so the next pursuit cycle skips it rather than retrying
+/// the same impossible move.
+struct PlausibilityReject {
+    club_id: u32,
+    player_id: u32,
+    shortlist_request_id: u32,
+}
+
 impl PipelineProcessor {
     pub fn initiate_negotiations(country: &mut Country, date: NaiveDate) {
         let mut actions: Vec<NegotiationAction> = Vec::new();
+        let mut plausibility_rejected: Vec<PlausibilityReject> = Vec::new();
         let price_level = country.settings.pricing.price_level;
         let window_mgr = TransferWindowManager::new();
         let current_window = window_mgr.current_window_dates(country.id, date);
@@ -322,6 +336,32 @@ impl PipelineProcessor {
 
                     let reason = Self::build_transfer_reason(request, scout_report);
 
+                    // Final plausibility check immediately before creating
+                    // the negotiation action. Rejected candidates are
+                    // marked unavailable here and a synthetic listing is
+                    // never created downstream — see Pass 2 for the
+                    // matching skip.
+                    let plausibility_inputs = TransferPlausibilityBuilder::from_clubs(
+                        country,
+                        club,
+                        selling_club,
+                        player,
+                        candidate.estimated_fee,
+                        is_loan,
+                        true, // unsolicited at the negotiation-entry point
+                        date,
+                    );
+                    if let TransferPlausibilityVerdict::HardReject(_reason) =
+                        TransferPlausibilityEvaluator::evaluate(&plausibility_inputs)
+                    {
+                        plausibility_rejected.push(PlausibilityReject {
+                            club_id: club.id,
+                            player_id,
+                            shortlist_request_id: shortlist.transfer_request_id,
+                        });
+                        continue;
+                    }
+
                     actions.push(NegotiationAction {
                         club_id: club.id,
                         player_id,
@@ -379,13 +419,17 @@ impl PipelineProcessor {
                     currency: Currency::Usd,
                 };
 
-                let listing = TransferListing::new(
+                // Tag this as synthetic — the parent club did not list
+                // the player; the negotiation resolver must not grant
+                // the "is_listed" acceptance bonus to bids backed by it.
+                let listing = TransferListing::new_with_origin(
                     action.player_id,
                     action.selling_club_id,
                     selling_team_id,
                     asking,
                     date,
                     listing_type,
+                    TransferListingOrigin::SyntheticUnsolicited,
                 );
                 country.transfer_market.add_listing(listing);
             }
@@ -449,6 +493,32 @@ impl PipelineProcessor {
                     if action.is_loan { "loan" } else { "transfer" }
                 );
             }
+        }
+
+        // Apply plausibility rejects: mark each shortlist candidate as
+        // unavailable, advance the shortlist past the dud, and notify
+        // the pipeline so monitoring rows / request status update. No
+        // synthetic listing is created for these — they never reach
+        // start_negotiation.
+        for reject in plausibility_rejected {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == reject.club_id) {
+                if let Some(shortlist) = club
+                    .transfer_plan
+                    .shortlists
+                    .iter_mut()
+                    .find(|s| s.transfer_request_id == reject.shortlist_request_id)
+                {
+                    if let Some(candidate) = shortlist
+                        .candidates
+                        .iter_mut()
+                        .find(|c| c.player_id == reject.player_id)
+                    {
+                        candidate.status = ShortlistCandidateStatus::Unavailable;
+                    }
+                    shortlist.advance_to_next();
+                }
+            }
+            Self::on_negotiation_resolved(country, reject.club_id, reject.player_id, false);
         }
 
         Self::process_loan_out_listings(country, date);
@@ -1189,7 +1259,7 @@ impl PipelineProcessor {
                 None => continue,
             };
 
-            let listing = TransferListing::new(
+            let listing = TransferListing::new_with_origin(
                 action.player_id,
                 action.selling_club_id,
                 0,
@@ -1200,6 +1270,7 @@ impl PipelineProcessor {
                 } else {
                     TransferListingType::Transfer
                 },
+                TransferListingOrigin::SyntheticUnsolicited,
             );
             country.transfer_market.add_listing(listing);
 

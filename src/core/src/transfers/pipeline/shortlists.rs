@@ -3,6 +3,9 @@ use log::debug;
 use std::collections::HashMap;
 
 use crate::club::BoardTransferProposal;
+use crate::transfers::pipeline::plausibility::{
+    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
+};
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
     DetailedScoutingReport, ReportRiskFlag, ScoutingAssignment, ScoutingRecommendation,
@@ -79,6 +82,7 @@ impl PipelineProcessor {
 
         for club in &country.clubs {
             let plan = &club.transfer_plan;
+            let buyer_ctx = BuyerPlausibilityContext::build(country, club);
 
             let existing_shortlist_request_ids: Vec<u32> = plan
                 .shortlists
@@ -121,7 +125,26 @@ impl PipelineProcessor {
                 let mut candidates: Vec<ShortlistCandidate> = reports
                     .iter()
                     .filter(|r| budget_alloc <= 0.0 || r.estimated_value <= budget_alloc * 2.0)
-                    .map(|r| {
+                    .filter_map(|r| {
+                        // Plausibility veto — drop HardReject candidates
+                        // before scoring so they never become shortlist
+                        // entries. Soft Allow adjustments dampen score.
+                        let summary =
+                            Self::find_player_summary_in_country(country, r.player_id, date);
+                        let plausibility = summary.as_ref().and_then(|p| {
+                            TransferPlausibilityBuilder::evaluate_summary(
+                                country, &buyer_ctx, p, false, true,
+                            )
+                        });
+                        if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
+                            return None;
+                        }
+                        let plausibility_mult = plausibility
+                            .map(|v| v.adjustment().shortlist_score_multiplier)
+                            .unwrap_or(1.0);
+                        Some((r, plausibility_mult))
+                    })
+                    .map(|(r, plausibility_mult)| {
                         let ability_score = r.assessed_ability as f32 / 200.0;
                         let potential_score = r.assessed_potential as f32 / 200.0;
                         let value_fit = if budget_alloc > 0.0 {
@@ -187,8 +210,12 @@ impl PipelineProcessor {
                         } else {
                             1.0
                         };
-                        let score =
-                            base_score * depth_mult * risk_multiplier * role_mult * meeting_mult;
+                        let score = base_score
+                            * depth_mult
+                            * risk_multiplier
+                            * role_mult
+                            * meeting_mult
+                            * plausibility_mult;
 
                         ShortlistCandidate {
                             player_id: r.player_id,
@@ -244,6 +271,7 @@ impl PipelineProcessor {
                     .get_available_listings()
                     .iter()
                     .filter(|l| l.club_id != club.id)
+                    .filter(|l| l.is_seller_advertised())
                     .filter_map(|l| {
                         Self::find_player_summary_in_country(country, l.player_id, date).and_then(
                             |p| {
@@ -251,6 +279,20 @@ impl PipelineProcessor {
                                     && p.skill_ability >= request.min_ability
                                     && p.estimated_value <= request.budget_allocation * 2.0
                                 {
+                                    // Plausibility veto: drop HardReject
+                                    // entries, soft-dampen the rest.
+                                    let plausibility =
+                                        TransferPlausibilityBuilder::evaluate_summary(
+                                            country, &buyer_ctx, &p, false, false,
+                                        );
+                                    if let Some(TransferPlausibilityVerdict::HardReject(_)) =
+                                        plausibility
+                                    {
+                                        return None;
+                                    }
+                                    let plausibility_mult = plausibility
+                                        .map(|v| v.adjustment().shortlist_score_multiplier)
+                                        .unwrap_or(1.0);
                                     let rival_penalty =
                                         if club.is_rival(l.club_id) { 0.75 } else { 1.0 };
                                     let budget_fit = if request.budget_allocation > 0.0 {
@@ -266,7 +308,8 @@ impl PipelineProcessor {
                                         player_id: p.player_id,
                                         score: (p.skill_ability as f32 / 200.0)
                                             * budget_fit
-                                            * rival_penalty,
+                                            * rival_penalty
+                                            * plausibility_mult,
                                         estimated_fee: p.estimated_value,
                                         status: ShortlistCandidateStatus::Available,
                                     })

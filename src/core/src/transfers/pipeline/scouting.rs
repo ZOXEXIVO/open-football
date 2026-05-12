@@ -2,6 +2,9 @@ use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 use crate::transfers::ScoutingRegion;
+use crate::transfers::pipeline::plausibility::{
+    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
+};
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::recruitment::{ScoutMonitoringSource, ScoutPlayerMonitoring};
 use crate::transfers::pipeline::scouting_config::ScoutingConfig;
@@ -847,6 +850,11 @@ impl PipelineProcessor {
             // loan-listed, expiring-contract, youth, and fringe players
             // attainable regardless of selling-club tier.
             let buyer_world_rep = Self::club_world_reputation(club);
+            // Shared plausibility gate: augments `is_target_realistic`
+            // with the player-importance + sporting-drop checks so a
+            // first-choice prime-age GK at a peer-tier club (where the
+            // simpler club-rep-gap test passes) still gets blocked.
+            let buyer_plausibility_ctx = BuyerPlausibilityContext::build(country, club);
 
             for assignment in &plan.scouting_assignments {
                 if assignment.completed {
@@ -924,6 +932,21 @@ impl PipelineProcessor {
                         return false;
                     }
                     if !config.is_target_realistic(buyer_world_rep, p) {
+                        return false;
+                    }
+                    // Shared plausibility veto — closes the importance
+                    // and step-down holes left open by the simpler
+                    // scouting-config gate above. Unsolicited (we're
+                    // scouting, not responding to a listing).
+                    if let Some(TransferPlausibilityVerdict::HardReject(_)) =
+                        TransferPlausibilityBuilder::evaluate_summary(
+                            country,
+                            &buyer_plausibility_ctx,
+                            p,
+                            false,
+                            true,
+                        )
+                    {
                         return false;
                     }
                     let effective_min =

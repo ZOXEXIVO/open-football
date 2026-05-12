@@ -2,6 +2,9 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 
 use crate::transfers::TransferWindowManager;
+use crate::transfers::pipeline::plausibility::{
+    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
+};
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
     RecommendationSource, RecommendationType, ShortlistCandidate, ShortlistCandidateStatus,
@@ -404,6 +407,30 @@ impl PipelineProcessor {
                 .map(|b| b.amount.max(0.0) as u32)
                 .unwrap_or(club_total_wages.saturating_mul(11) / 10);
 
+            // Buyer context for the plausibility gate. Built once per
+            // club so each recommendation sub-path can veto unrealistic
+            // targets without re-walking reputation / wage data.
+            let buyer_plaus_ctx = BuyerPlausibilityContext::build(country, club);
+            // Closure shorthand: true when adding `player_id` to the
+            // recommendation list would push an impossible move (Maximenko-
+            // class step-down) into the pipeline.
+            let plausibility_rejects = |player_id: u32, is_loan: bool| -> bool {
+                let summary = match Self::find_player_summary_in_country(country, player_id, date) {
+                    Some(s) => s,
+                    None => return false,
+                };
+                matches!(
+                    TransferPlausibilityBuilder::evaluate_summary(
+                        country,
+                        &buyer_plaus_ctx,
+                        &summary,
+                        is_loan,
+                        true,
+                    ),
+                    Some(TransferPlausibilityVerdict::HardReject(_))
+                )
+            };
+
             let already_recommended: Vec<u32> = plan
                 .staff_recommendations
                 .iter()
@@ -448,6 +475,9 @@ impl PipelineProcessor {
                         continue;
                     }
                     if memory.assessed_ability < avg_ability.saturating_sub(12) {
+                        continue;
+                    }
+                    if plausibility_rejects(memory.player_id, false) {
                         continue;
                     }
 
@@ -521,6 +551,7 @@ impl PipelineProcessor {
                             && !actions
                                 .iter()
                                 .any(|a| a.club_id == club.id && a.recommendation.player_id == p.id)
+                            && !plausibility_rejects(p.id, false)
                     })
                     .collect();
 
@@ -721,6 +752,9 @@ impl PipelineProcessor {
                     {
                         return None;
                     }
+                    if plausibility_rejects(p.id, false) {
+                        return None;
+                    }
 
                     let view = ListedTargetView {
                         ability: p.ability,
@@ -821,6 +855,7 @@ impl PipelineProcessor {
                                 && !actions.iter().any(|a| {
                                     a.club_id == club.id && a.recommendation.player_id == p.id
                                 })
+                                && !plausibility_rejects(p.id, false)
                         })
                         .collect();
 
@@ -896,6 +931,7 @@ impl PipelineProcessor {
                                 && !actions.iter().any(|a| {
                                     a.club_id == club.id && a.recommendation.player_id == p.id
                                 })
+                                && !plausibility_rejects(p.id, true)
                         })
                         .collect();
                     loan_targets.sort_by(|a, b| b.ability.cmp(&a.ability));
@@ -955,6 +991,7 @@ impl PipelineProcessor {
                                     && !actions.iter().any(|a| {
                                         a.club_id == club.id && a.recommendation.player_id == p.id
                                     })
+                                    && !plausibility_rejects(p.id, false)
                             })
                             .collect();
                         free_targets.sort_by(|a, b| b.ability.cmp(&a.ability));
@@ -1014,6 +1051,7 @@ impl PipelineProcessor {
                                     && !actions.iter().any(|a| {
                                         a.club_id == club.id && a.recommendation.player_id == p.id
                                     })
+                                    && !plausibility_rejects(p.id, true)
                             })
                             .collect();
                         game_time_seekers
@@ -1157,6 +1195,7 @@ impl PipelineProcessor {
             if !plan.initialized {
                 continue;
             }
+            let buyer_ctx = BuyerPlausibilityContext::build(country, club);
 
             let recent_recs: Vec<&StaffRecommendation> = plan
                 .staff_recommendations
@@ -1175,6 +1214,20 @@ impl PipelineProcessor {
                     } else {
                         continue;
                     };
+
+                // Re-check plausibility before promoting a stale
+                // recommendation. Player status and seller balance may
+                // have shifted since the recommendation was filed.
+                if let Some(summary) =
+                    Self::find_player_summary_in_country(country, rec.player_id, date)
+                {
+                    let plausibility = TransferPlausibilityBuilder::evaluate_summary(
+                        country, &buyer_ctx, &summary, false, true,
+                    );
+                    if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
+                        continue;
+                    }
+                }
 
                 // Check if an existing unfulfilled request covers the same position group
                 let matching_request = plan.transfer_requests.iter().find(|r| {

@@ -29,6 +29,12 @@ pub struct TransferListing {
     pub last_decay_date: NaiveDate,
     pub listing_type: TransferListingType,
     pub status: TransferListingStatus,
+    /// Why this listing exists. Synthetic listings created to back an
+    /// unsolicited approach must NOT confer the "player is listed"
+    /// acceptance bonus when the negotiation resolver evaluates the
+    /// seller's willingness to deal — that bonus is only earned when
+    /// the parent club actually advertised the player.
+    pub origin: TransferListingOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +42,21 @@ pub enum TransferListingType {
     Transfer,
     Loan,
     EndOfContract,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferListingOrigin {
+    /// Selling club listed the player for permanent transfer.
+    SellerListed,
+    /// Selling club listed the player for loan-out.
+    LoanOutListed,
+    /// Contract ran out — listing exists so the player surfaces in the
+    /// free-agent market.
+    EndOfContract,
+    /// Created on-the-fly by the pipeline so a buyer's unsolicited
+    /// approach has something to negotiate against. Does not represent
+    /// a genuine willingness to sell — must not earn the listed bonus.
+    SyntheticUnsolicited,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +76,34 @@ impl TransferListing {
         listed_date: NaiveDate,
         listing_type: TransferListingType,
     ) -> Self {
+        let origin = match listing_type {
+            TransferListingType::Transfer => TransferListingOrigin::SellerListed,
+            TransferListingType::Loan => TransferListingOrigin::LoanOutListed,
+            TransferListingType::EndOfContract => TransferListingOrigin::EndOfContract,
+        };
+        Self::new_with_origin(
+            player_id,
+            club_id,
+            team_id,
+            asking_price,
+            listed_date,
+            listing_type,
+            origin,
+        )
+    }
+
+    /// Build a listing with an explicit origin tag. Used by the
+    /// pipeline to mark synthetic listings backing unsolicited bids so
+    /// the negotiation resolver doesn't grant them the listed bonus.
+    pub fn new_with_origin(
+        player_id: u32,
+        club_id: u32,
+        team_id: u32,
+        asking_price: CurrencyValue,
+        listed_date: NaiveDate,
+        listing_type: TransferListingType,
+        origin: TransferListingOrigin,
+    ) -> Self {
         TransferListing {
             player_id,
             club_id,
@@ -65,7 +114,15 @@ impl TransferListing {
             last_decay_date: listed_date,
             listing_type,
             status: TransferListingStatus::Available,
+            origin,
         }
+    }
+
+    /// True when this listing reflects a genuine seller-side decision
+    /// to part with the player (Lst/Loa or EndOfContract). Synthetic
+    /// listings backing unsolicited approaches return false.
+    pub fn is_seller_advertised(&self) -> bool {
+        !matches!(self.origin, TransferListingOrigin::SyntheticUnsolicited)
     }
 }
 

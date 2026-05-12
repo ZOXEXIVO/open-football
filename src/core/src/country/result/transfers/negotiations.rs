@@ -12,9 +12,13 @@ use crate::club::player::events::transfer_social::{
 use crate::country::result::CountryResult;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferWindowManager;
+use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
 use crate::transfers::offer::TransferClause;
 use crate::transfers::pipeline::PipelineProcessor;
+use crate::transfers::pipeline::plausibility::{
+    TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
+};
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::utils::{FloatUtils, FormattingUtils};
 use crate::{
@@ -43,21 +47,65 @@ impl CountryResult {
         for neg_id in ready_to_resolve {
             let neg_data = match country.transfer_market.negotiations.get(&neg_id) {
                 Some(n) => {
-                    let asking_price = country
-                        .transfer_market
-                        .listings
-                        .get(n.listing_id as usize)
-                        .map(|l| l.asking_price.amount)
-                        .unwrap_or(0.0);
-                    let is_listed = country
-                        .transfer_market
-                        .listings
-                        .get(n.listing_id as usize)
+                    let listing_ref = country.transfer_market.listings.get(n.listing_id as usize);
+                    let asking_price = listing_ref.map(|l| l.asking_price.amount).unwrap_or(0.0);
+                    // A market listing exists when the listing row is
+                    // Available or InNegotiation. Used for plumbing —
+                    // not for acceptance scoring.
+                    let has_market_listing = listing_ref
                         .map(|l| {
                             l.status == TransferListingStatus::InNegotiation
                                 || l.status == TransferListingStatus::Available
                         })
                         .unwrap_or(false);
+                    let listing_origin = listing_ref.map(|l| l.origin);
+
+                    // True availability is driven by the player's own
+                    // status (Lst/Loa/Req/Unh/NotNeeded) or by a
+                    // genuinely-seller-advertised listing. Synthetic
+                    // listings created to back unsolicited approaches
+                    // are explicitly excluded so that the bonuses
+                    // downstream don't reward stale plumbing.
+                    let player_is_available = {
+                        let from_statuses =
+                            super::types::find_player_in_country(country, n.player_id)
+                                .map(|p| {
+                                    let statuses = p.statuses.get();
+                                    let listed_for_permanent =
+                                        statuses.contains(&PlayerStatusType::Lst);
+                                    let loaned_listed = statuses.contains(&PlayerStatusType::Loa);
+                                    let requested = statuses.contains(&PlayerStatusType::Req);
+                                    let unhappy = statuses.contains(&PlayerStatusType::Unh);
+                                    let not_needed = p
+                                        .contract
+                                        .as_ref()
+                                        .map(|c| {
+                                            matches!(c.squad_status, PlayerSquadStatus::NotNeeded)
+                                        })
+                                        .unwrap_or(false);
+                                    // Permanent vs loan listings count
+                                    // for the corresponding move only.
+                                    let listing_supports = match (n.is_loan, listed_for_permanent, loaned_listed) {
+                                        (false, true, _) => true,
+                                        (true, _, true) => true,
+                                        _ => false,
+                                    };
+                                    listing_supports || requested || unhappy || not_needed
+                                })
+                                .unwrap_or(false);
+                        let from_listing = listing_origin
+                            .map(|o| {
+                                matches!(
+                                    o,
+                                    TransferListingOrigin::SellerListed
+                                        | TransferListingOrigin::LoanOutListed
+                                        | TransferListingOrigin::EndOfContract
+                                )
+                            })
+                            .unwrap_or(false);
+                        from_statuses || from_listing
+                    };
+
                     let sell_on_percentage = n.current_offer.clauses.iter().find_map(|c| {
                         if let TransferClause::SellOnClause(pct) = c {
                             Some(*pct)
@@ -79,7 +127,9 @@ impl CountryResult {
                         player_age: n.player_age,
                         player_ambition: n.player_ambition,
                         asking_price,
-                        is_listed,
+                        has_market_listing,
+                        player_is_available,
+                        listing_origin,
                         selling_country_id: n.selling_country_id,
                         selling_continent_id: n.selling_continent_id,
                         selling_country_code: n.selling_country_code.clone(),
@@ -246,13 +296,26 @@ impl CountryResult {
             }
         }
 
+        // Pull the shared plausibility verdict here — drives the seller
+        // acceptance delta and the minimum-fee floor used below. Foreign
+        // negotiations skip the verdict (we don't have the player in
+        // this country's clubs to inspect).
+        let plausibility = Self::plausibility_for(country, neg_data, date);
+        let (seller_delta, min_fee_multiplier, importance) = match &plausibility {
+            Some(TransferPlausibilityVerdict::Allow(adj)) => {
+                let importance = Self::plausibility_importance(country, neg_data, date);
+                (adj.seller_acceptance_delta, adj.minimum_fee_multiplier, importance)
+            }
+            _ => (0.0_f32, 1.0_f64, 0.0_f32),
+        };
+
         let ratio = if neg_data.asking_price > 0.0 {
             neg_data.offer_amount / neg_data.asking_price
         } else {
             1.0
         };
 
-        let mut chance: f32 = if neg_data.is_listed {
+        let mut chance: f32 = if neg_data.player_is_available {
             80.0
         } else if neg_data.is_unsolicited {
             35.0
@@ -275,6 +338,36 @@ impl CountryResult {
             );
             return;
         }
+
+        // Important-player floor: if the player counts as important and
+        // the offer doesn't clear the plausibility-driven minimum-fee
+        // multiplier, the seller refuses up front. Listed or distressed
+        // players slip past via the availability exemption in the
+        // plausibility evaluator (min_fee_multiplier shrinks back to 1).
+        if !neg_data.is_loan
+            && importance >= 0.78
+            && min_fee_multiplier > 1.0
+            && ratio < min_fee_multiplier
+        {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                let reason = if importance >= 0.90 {
+                    NegotiationRejectionReason::PlayerTooImportant
+                } else {
+                    NegotiationRejectionReason::AskingPriceTooHigh
+                };
+                negotiation.reject_with_reason(reason);
+            }
+            Self::reopen_listing_for_player(country, neg_data.player_id);
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                false,
+            );
+            return;
+        }
+
+        chance += seller_delta;
 
         if ratio >= 1.15 {
             chance += 30.0;
@@ -395,7 +488,7 @@ impl CountryResult {
         } else {
             1.0
         };
-        let mut seller_reservation = if neg_data.is_listed { 0.82 } else { 1.08 };
+        let mut seller_reservation = if neg_data.player_is_available { 0.82 } else { 1.08 };
 
         // For domestic transfers, check player importance. Important players
         // require a real premium; depth players and listed players can move
@@ -533,6 +626,16 @@ impl CountryResult {
             60.0
         };
 
+        // Apply the player-side adjustment from the shared plausibility
+        // layer — prime-age starters stepping down inside the same
+        // domestic market get a sharp negative delta here unless the
+        // availability exemption (Req/Unh/etc.) softens it.
+        if let Some(TransferPlausibilityVerdict::Allow(adj)) =
+            Self::plausibility_for(country, neg_data, date)
+        {
+            chance += adj.player_terms_delta;
+        }
+
         // Release clause: the player almost always welcomes the move they
         // negotiated the escape route for. Overrides downward-move and
         // salary resistance below.
@@ -544,7 +647,7 @@ impl CountryResult {
         // expired negotiation that drops them back into limbo.
         chance += Self::deadline_urgency(country.id, date) * 15.0;
 
-        if neg_data.is_listed {
+        if neg_data.player_is_available {
             chance += 10.0;
         }
 
@@ -1068,6 +1171,70 @@ impl CountryResult {
         contract
             .release_clause_triggered(neg_data.offer_amount, buyer_is_foreign)
             .is_some()
+    }
+
+    /// Build the plausibility verdict for the current negotiation.
+    /// Returns `None` for cross-country deals (we don't carry the
+    /// selling-side context here) or when the buying / selling club /
+    /// player can't be located in this country.
+    fn plausibility_for(
+        country: &Country,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> Option<TransferPlausibilityVerdict> {
+        if neg_data.selling_country_id.is_some() {
+            return None;
+        }
+        let buyer = country.clubs.iter().find(|c| c.id == neg_data.buying_club_id)?;
+        let seller = country.clubs.iter().find(|c| c.id == neg_data.selling_club_id)?;
+        let player = find_player_in_country(country, neg_data.player_id)?;
+        let inputs = TransferPlausibilityBuilder::from_clubs(
+            country,
+            buyer,
+            seller,
+            player,
+            neg_data.asking_price.max(neg_data.offer_amount),
+            neg_data.is_loan,
+            neg_data.is_unsolicited,
+            date,
+        );
+        Some(TransferPlausibilityEvaluator::evaluate(&inputs))
+    }
+
+    /// Convenience: rebuild the same inputs and read off the importance
+    /// score. Used by the initial-approach floor that protects key
+    /// players from cheap bids.
+    fn plausibility_importance(
+        country: &Country,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> f32 {
+        if neg_data.selling_country_id.is_some() {
+            return 0.0;
+        }
+        let buyer = match country.clubs.iter().find(|c| c.id == neg_data.buying_club_id) {
+            Some(c) => c,
+            None => return 0.0,
+        };
+        let seller = match country.clubs.iter().find(|c| c.id == neg_data.selling_club_id) {
+            Some(c) => c,
+            None => return 0.0,
+        };
+        let player = match find_player_in_country(country, neg_data.player_id) {
+            Some(p) => p,
+            None => return 0.0,
+        };
+        let inputs = TransferPlausibilityBuilder::from_clubs(
+            country,
+            buyer,
+            seller,
+            player,
+            neg_data.asking_price.max(neg_data.offer_amount),
+            neg_data.is_loan,
+            neg_data.is_unsolicited,
+            date,
+        );
+        TransferPlausibilityEvaluator::player_importance(&inputs)
     }
 
     /// How close are we to the transfer window slamming shut? 0 when at

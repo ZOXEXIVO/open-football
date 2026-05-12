@@ -1,3 +1,4 @@
+use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::negotiation::NegotiationPhase;
 use crate::{Club, Country, Player, PlayerPositionType};
 
@@ -51,7 +52,22 @@ pub(crate) struct NegotiationData {
     pub(crate) player_age: u8,
     pub(crate) player_ambition: f32,
     pub(crate) asking_price: f64,
-    pub(crate) is_listed: bool,
+    /// True when ANY listing exists for the player at the selling club.
+    /// Includes synthetic listings created by the pipeline to back an
+    /// unsolicited approach — useful for plumbing, not for acceptance
+    /// scoring (use [`player_is_available`] for that).
+    #[allow(dead_code)]
+    pub(crate) has_market_listing: bool,
+    /// True when the player is genuinely available — covers explicit
+    /// status flags (Lst/Loa/Req/Unh), `NotNeeded` squad status, and
+    /// seller-advertised listings (Lst/Loa/EndOfContract). Synthetic
+    /// listings backing unsolicited approaches do NOT set this to true.
+    pub(crate) player_is_available: bool,
+    /// Why the active listing exists (if any). None when there is no
+    /// listing at all. Resolver uses this to distinguish seller-listed
+    /// players from those carried only by a synthetic stub.
+    #[allow(dead_code)]
+    pub(crate) listing_origin: Option<TransferListingOrigin>,
     /// Country the player is sold from (None = same as buying country)
     pub(crate) selling_country_id: Option<u32>,
     /// Selling country's continent_id (for geographic preference)

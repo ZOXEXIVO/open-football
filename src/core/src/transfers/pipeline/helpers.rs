@@ -268,6 +268,52 @@ impl PipelineProcessor {
             .unwrap_or(0)
     }
 
+    /// 0-indexed position-group rank of a player within their main
+    /// team, ordered by current ability (descending). Used by the
+    /// plausibility layer — first-choice GKs are protected by rank in
+    /// a way average + status alone don't capture.
+    /// Returns `u8::MAX` when the player is not on the club's main
+    /// team — callers should treat that as "unknown" and avoid using
+    /// the rank-driven importance bump.
+    pub(crate) fn position_group_rank(
+        club: &Club,
+        player_id: u32,
+        group: PlayerFieldPositionGroup,
+    ) -> u8 {
+        let team = match club.teams.iter().find(|t| matches!(t.team_type, TeamType::Main)) {
+            Some(t) => t,
+            None => return u8::MAX,
+        };
+        let mut peers: Vec<(u32, u8)> = team
+            .players
+            .players
+            .iter()
+            .filter(|p| p.position().position_group() == group)
+            .map(|p| (p.id, p.player_attributes.current_ability))
+            .collect();
+        peers.sort_by(|a, b| b.1.cmp(&a.1));
+        peers
+            .iter()
+            .position(|(pid, _)| *pid == player_id)
+            .map(|idx| idx.min(u8::MAX as usize - 1) as u8)
+            .unwrap_or(u8::MAX)
+    }
+
+    /// Best CA at the given position group on the club's main team.
+    pub(crate) fn best_ca_in_group(club: &Club, group: PlayerFieldPositionGroup) -> u8 {
+        let team = match club.teams.iter().find(|t| matches!(t.team_type, TeamType::Main)) {
+            Some(t) => t,
+            None => return 0,
+        };
+        team.players
+            .players
+            .iter()
+            .filter(|p| p.position().position_group() == group)
+            .map(|p| p.player_attributes.current_ability)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Best `judging_player_data` across the club's scouting staff.
     /// Drives how aggressively the data department narrows the scout pool.
     /// Defaults from `ScoutingConfig::data_prefilter::default_data_skill`
