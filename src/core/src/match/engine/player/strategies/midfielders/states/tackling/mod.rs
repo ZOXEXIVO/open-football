@@ -190,8 +190,7 @@ impl MidfielderTacklingState {
 
         // Foul model driven by discipline (composure/decisions/tackling/
         // concentration blend) instead of raw composure/aggression.
-        let mut base_foul =
-            0.025 + aggression01 * 0.10 - mid_profile.discipline * 0.07;
+        let mut base_foul = 0.025 + aggression01 * 0.10 - mid_profile.discipline * 0.07;
         if !tackle_success {
             base_foul *= 1.75;
         }

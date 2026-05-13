@@ -696,9 +696,7 @@ impl ClubResult {
 
             // Low ability: release on free transfer
             // Only release for age if truly past it (35+) or far below average
-            let decision = if ability < squad_avg - 25
-                || (age >= 35 && ability < squad_avg - 10)
-            {
+            let decision = if ability < squad_avg - 25 || (age >= 35 && ability < squad_avg - 10) {
                 UnresolvedSalaryDecision::FreeTransfer
             } else {
                 UnresolvedSalaryDecision::TransferList
@@ -826,9 +824,7 @@ mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::board::SeasonTargets;
-    use crate::club::player::contract::{
-        RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL,
-    };
+    use crate::club::player::contract::{RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL};
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
     use crate::club::player::personality::PlayerDecisionHistory;
@@ -1022,10 +1018,12 @@ mod tests {
         );
         let country = sim.country(1).unwrap();
         assert!(country.transfer_market.listings.is_empty());
-        assert!(country.clubs[0].teams.teams[0]
-            .transfer_list
-            .listed_player_ids()
-            .is_empty());
+        assert!(
+            country.clubs[0].teams.teams[0]
+                .transfer_list
+                .listed_player_ids()
+                .is_empty()
+        );
     }
 
     #[test]

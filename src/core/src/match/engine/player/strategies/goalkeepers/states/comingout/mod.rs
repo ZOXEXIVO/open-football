@@ -161,8 +161,7 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
 
         // Speed multiplier (1.2..2.05) gated by explosive multiplier
         // and rushing-out skill so weak/tired keepers arrive late.
-        let speed_multiplier =
-            (1.2 + prof.rushing_out_profile * 0.85) * prof.explosive_mult;
+        let speed_multiplier = (1.2 + prof.rushing_out_profile * 0.85) * prof.explosive_mult;
 
         // Add urgency bonus based on ball distance and speed
         let urgency_multiplier = if ball_distance < 20.0 {
@@ -175,8 +174,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
 
         // Calculate interception point for moving balls
         let target_position = if ball_speed > 1.0 {
-            let keeper_sprint_speed = ctx.player.skills.physical.pace
-                * (1.0 + prof.rushing_out_profile * 0.55);
+            let keeper_sprint_speed =
+                ctx.player.skills.physical.pace * (1.0 + prof.rushing_out_profile * 0.55);
             let time_to_intercept = ball_distance / keeper_sprint_speed.max(1.0);
             ball_position + ball_velocity * time_to_intercept * 0.8
         } else {
@@ -291,8 +290,7 @@ impl GoalkeeperComingOutState {
         // (real rule — keepers use hands to claim from further away).
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let hand_advantage = 1.2;
-        let total_advantage =
-            hand_advantage * (0.85 + prof.rushing_out_profile * 0.50);
+        let total_advantage = hand_advantage * (0.85 + prof.rushing_out_profile * 0.50);
 
         // Keeper wins if their time is less than opponent's time adjusted for advantages
         keeper_time < (opponent_time * total_advantage)

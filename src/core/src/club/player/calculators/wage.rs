@@ -276,11 +276,7 @@ impl ContractValuation {
     }
 }
 
-fn compute_leverage(
-    player: &Player,
-    ctx: &ValuationContext,
-    agent: &PlayerAgent,
-) -> f32 {
+fn compute_leverage(player: &Player, ctx: &ValuationContext, agent: &PlayerAgent) -> f32 {
     let mut score = 0.0_f32;
 
     // Months remaining — out-of-contract is maximum leverage; >24mo is

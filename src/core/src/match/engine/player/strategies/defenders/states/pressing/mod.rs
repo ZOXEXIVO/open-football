@@ -155,8 +155,7 @@ impl StateProcessingHandler for DefenderPressingState {
             let def_profile = DefenderSkillProfile::from_ctx(ctx);
             let mobility = sc::mobility(ctx.player, minute);
             let press_composite = 0.65 * def_profile.press_profile + 0.35 * mobility;
-            let press_boost =
-                (1.40 + (press_composite - 0.50) * 0.50).clamp(1.15, 1.65);
+            let press_boost = (1.40 + (press_composite - 0.50) * 0.50).clamp(1.15, 1.65);
             let speed = pace * press_boost;
 
             // Crude lead time: distance / (our speed). If the carrier is

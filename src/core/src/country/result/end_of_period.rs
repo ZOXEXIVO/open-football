@@ -450,11 +450,15 @@ impl CountryResult {
         let mut queue: Vec<LoaneeOffer> = Vec::new();
 
         for parent_club in country.clubs.iter() {
-            let parent_main_idx =
-                match parent_club.teams.teams.iter().position(|t| t.team_type == TeamType::Main) {
-                    Some(i) => i,
-                    None => continue,
-                };
+            let parent_main_idx = match parent_club
+                .teams
+                .teams
+                .iter()
+                .position(|t| t.team_type == TeamType::Main)
+            {
+                Some(i) => i,
+                None => continue,
+            };
             let parent_main = &parent_club.teams.teams[parent_main_idx];
             let wage_budget = parent_club
                 .finance
@@ -502,8 +506,11 @@ impl CountryResult {
         for offer in queue {
             'apply: for club in country.clubs.iter_mut() {
                 for team in club.teams.iter_mut() {
-                    if let Some(player) =
-                        team.players.players.iter_mut().find(|p| p.id == offer.loanee_id)
+                    if let Some(player) = team
+                        .players
+                        .players
+                        .iter_mut()
+                        .find(|p| p.id == offer.loanee_id)
                     {
                         let movement = format!(
                             "{}y · ${}/y",
@@ -1907,8 +1914,7 @@ mod tests {
                 level: 20,
             }],
         };
-        let mut contract =
-            crate::PlayerClubContract::new(100_000, parent_expiration);
+        let mut contract = crate::PlayerClubContract::new(100_000, parent_expiration);
         contract.squad_status = crate::PlayerSquadStatus::FirstTeamRegular;
         p.contract = Some(contract);
         p.contract_loan = Some(crate::PlayerClubContract::new_loan(
@@ -1959,7 +1965,10 @@ mod tests {
             .items
             .iter()
             .any(|d| d.decision == "dec_contract_renewal_offered");
-        assert!(has_decision, "renewal decision must be recorded on the loanee");
+        assert!(
+            has_decision,
+            "renewal decision must be recorded on the loanee"
+        );
     }
 
     #[test]

@@ -85,11 +85,12 @@ impl CountryResult {
                                         .unwrap_or(false);
                                     // Permanent vs loan listings count
                                     // for the corresponding move only.
-                                    let listing_supports = match (n.is_loan, listed_for_permanent, loaned_listed) {
-                                        (false, true, _) => true,
-                                        (true, _, true) => true,
-                                        _ => false,
-                                    };
+                                    let listing_supports =
+                                        match (n.is_loan, listed_for_permanent, loaned_listed) {
+                                            (false, true, _) => true,
+                                            (true, _, true) => true,
+                                            _ => false,
+                                        };
                                     listing_supports || requested || unhappy || not_needed
                                 })
                                 .unwrap_or(false);
@@ -304,7 +305,11 @@ impl CountryResult {
         let (seller_delta, min_fee_multiplier, importance) = match &plausibility {
             Some(TransferPlausibilityVerdict::Allow(adj)) => {
                 let importance = Self::plausibility_importance(country, neg_data, date);
-                (adj.seller_acceptance_delta, adj.minimum_fee_multiplier, importance)
+                (
+                    adj.seller_acceptance_delta,
+                    adj.minimum_fee_multiplier,
+                    importance,
+                )
             }
             _ => (0.0_f32, 1.0_f64, 0.0_f32),
         };
@@ -488,7 +493,11 @@ impl CountryResult {
         } else {
             1.0
         };
-        let mut seller_reservation = if neg_data.player_is_available { 0.82 } else { 1.08 };
+        let mut seller_reservation = if neg_data.player_is_available {
+            0.82
+        } else {
+            1.08
+        };
 
         // For domestic transfers, check player importance. Important players
         // require a real premium; depth players and listed players can move
@@ -1185,8 +1194,14 @@ impl CountryResult {
         if neg_data.selling_country_id.is_some() {
             return None;
         }
-        let buyer = country.clubs.iter().find(|c| c.id == neg_data.buying_club_id)?;
-        let seller = country.clubs.iter().find(|c| c.id == neg_data.selling_club_id)?;
+        let buyer = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)?;
+        let seller = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)?;
         let player = find_player_in_country(country, neg_data.player_id)?;
         let inputs = TransferPlausibilityBuilder::from_clubs(
             country,
@@ -1212,11 +1227,19 @@ impl CountryResult {
         if neg_data.selling_country_id.is_some() {
             return 0.0;
         }
-        let buyer = match country.clubs.iter().find(|c| c.id == neg_data.buying_club_id) {
+        let buyer = match country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)
+        {
             Some(c) => c,
             None => return 0.0,
         };
-        let seller = match country.clubs.iter().find(|c| c.id == neg_data.selling_club_id) {
+        let seller = match country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)
+        {
             Some(c) => c,
             None => return 0.0,
         };

@@ -987,10 +987,7 @@ impl Player {
     /// management to disable renewal / release / transfer-listing for
     /// players the club doesn't actually own.
     pub fn is_loaned_in_at(&self, club_id: u32) -> bool {
-        self.contract_loan
-            .as_ref()
-            .and_then(|c| c.loan_to_club_id)
-            == Some(club_id)
+        self.contract_loan.as_ref().and_then(|c| c.loan_to_club_id) == Some(club_id)
     }
 
     /// True when the player's permanent contract belongs to `club_id`

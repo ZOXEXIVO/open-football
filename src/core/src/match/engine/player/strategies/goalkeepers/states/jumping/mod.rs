@@ -66,10 +66,8 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         // Explosive scaling — gated by the unified explosive multiplier
         // and aerial command so weak keepers can't cover the full goal.
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-        let attribute_scaling = (0.55
-            + prof.aerial_command * 0.45
-            + prof.dive_reach * 0.25)
-            * prof.explosive_mult;
+        let attribute_scaling =
+            (0.55 + prof.aerial_command * 0.45 + prof.dive_reach * 0.25) * prof.explosive_mult;
 
         Some(combined_velocity * attribute_scaling)
     }
@@ -91,13 +89,10 @@ impl GoalkeeperJumpingState {
         // Vertical reach is jumping + aerial-command driven; weak GKs
         // cannot cover the full crossbar even though JUMP_HEIGHT is
         // generous.
-        let max_reach = JUMP_HEIGHT
-            * (0.40
-                + prof.aerial_command * 0.45
-                + prof.dive_reach * 0.25);
+        let max_reach = JUMP_HEIGHT * (0.40 + prof.aerial_command * 0.45 + prof.dive_reach * 0.25);
         let vertical_reach = (ball_pos.z - keeper_pos.z).abs() <= max_reach;
-        let horizontal_max = MAX_DIVING_DISTANCE + prof.dive_reach * 6.0
-            + prof.aerial_command * 2.0;
+        let horizontal_max =
+            MAX_DIVING_DISTANCE + prof.dive_reach * 6.0 + prof.aerial_command * 2.0;
         let horizontal_reach = distance <= horizontal_max;
         if !vertical_reach || !horizontal_reach {
             return false;

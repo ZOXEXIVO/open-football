@@ -977,7 +977,10 @@ mod tests {
         let composites: Vec<(&str, f32)> = vec![
             ("mobility", mobility(&max, m)),
             ("decision_quality", decision_quality(&max, m)),
-            ("movement_speed_with_ball", movement_speed_with_ball(&max, m)),
+            (
+                "movement_speed_with_ball",
+                movement_speed_with_ball(&max, m),
+            ),
             ("loose_ball_claim", loose_ball_claim(&max, m)),
             ("tackle_timing", tackle_timing(&max, m)),
             ("gk_rush_out", gk_rush_out(&max, m)),
@@ -1349,11 +1352,7 @@ mod tests {
                 tackle_timing(&zero, m),
                 tackle_timing(&max, m),
             ),
-            (
-                "gk_rush_out",
-                gk_rush_out(&zero, m),
-                gk_rush_out(&max, m),
-            ),
+            ("gk_rush_out", gk_rush_out(&zero, m), gk_rush_out(&max, m)),
         ];
         for (name, lo, hi) in cases {
             assert!(

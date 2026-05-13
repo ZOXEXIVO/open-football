@@ -84,8 +84,8 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         // Sprint reaction speed: 1.6..2.6x band, gated by explosive_mult.
-        let speed_boost = (1.6 + prof.shot_stopping * 0.5 + prof.dive_reach * 0.5)
-            * prof.explosive_mult;
+        let speed_boost =
+            (1.6 + prof.shot_stopping * 0.5 + prof.dive_reach * 0.5) * prof.explosive_mult;
 
         // Shot in flight → commit to the intercept line, don't chase
         // the current ball position (it's moving at 5.6 u/tick and
@@ -150,8 +150,7 @@ impl GoalkeeperCatchingState {
                 return false;
             }
             // Effective reach in game units: weak ~14u, elite ~30u.
-            let reach =
-                10.0 + prof.dive_reach * 12.0 + prof.shot_stopping * 4.0;
+            let reach = 10.0 + prof.dive_reach * 12.0 + prof.shot_stopping * 4.0;
             let lateral_error = (ctx.player.position.y - target.goal_line_y).abs();
             if lateral_error > reach {
                 return false;

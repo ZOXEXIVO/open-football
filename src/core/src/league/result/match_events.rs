@@ -1,5 +1,4 @@
 use super::LeagueResult;
-use chrono::Datelike;
 use crate::club::StaffPosition;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
@@ -17,6 +16,7 @@ use crate::r#match::{FieldSquad, MatchResult};
 use crate::simulator::SimulatorData;
 use crate::transfers::pipeline::KnownPlayerMemory;
 use crate::transfers::window::PlayerValuationCalculator;
+use chrono::Datelike;
 use std::collections::HashMap;
 
 impl LeagueResult {

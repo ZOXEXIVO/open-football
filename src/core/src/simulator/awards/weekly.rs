@@ -103,10 +103,7 @@ impl WeeklyAwardsTick {
     /// winning player. Falls back to empty values if the player isn't on
     /// a roster (free agent at award time — extremely unlikely
     /// Monday-morning, but guarded against).
-    pub(super) fn resolve_club_card(
-        data: &SimulatorData,
-        player_id: u32,
-    ) -> (u32, String, String) {
+    pub(super) fn resolve_club_card(data: &SimulatorData, player_id: u32) -> (u32, String, String) {
         let location = data
             .indexes
             .as_ref()

@@ -93,9 +93,7 @@ impl TransferPlausibilityVerdict {
     pub fn adjustment(&self) -> TransferPlausibilityAdjustment {
         match self {
             TransferPlausibilityVerdict::Allow(adj) => *adj,
-            TransferPlausibilityVerdict::HardReject(_) => {
-                TransferPlausibilityAdjustment::neutral()
-            }
+            TransferPlausibilityVerdict::HardReject(_) => TransferPlausibilityAdjustment::neutral(),
         }
     }
 }
@@ -281,157 +279,158 @@ fn ability_score(player_ca: u8, best_group_ca: u8) -> f32 {
 pub struct TransferPlausibilityEvaluator;
 
 impl TransferPlausibilityEvaluator {
-/// Importance of the player to the selling club (0.0..1.0). The
-/// goalkeeper variant weights rank more heavily because there is only
-/// one starting slot — a first-choice GK is materially harder to sell
-/// down than a first-choice winger with a deputy ready to slot in.
-pub fn player_importance(inputs: &TransferPlausibilityInputs) -> f32 {
-    let s = status_score(&inputs.squad_status);
-    let r = rank_score(inputs.seller_position_rank);
-    let a = appearance_score(inputs.player_appearances);
-    let ab = ability_score(inputs.player_ca, inputs.best_group_ca_at_seller);
+    /// Importance of the player to the selling club (0.0..1.0). The
+    /// goalkeeper variant weights rank more heavily because there is only
+    /// one starting slot — a first-choice GK is materially harder to sell
+    /// down than a first-choice winger with a deputy ready to slot in.
+    pub fn player_importance(inputs: &TransferPlausibilityInputs) -> f32 {
+        let s = status_score(&inputs.squad_status);
+        let r = rank_score(inputs.seller_position_rank);
+        let a = appearance_score(inputs.player_appearances);
+        let ab = ability_score(inputs.player_ca, inputs.best_group_ca_at_seller);
 
-    let raw = if inputs.position_group == PlayerFieldPositionGroup::Goalkeeper {
-        0.36 * s + 0.34 * r + 0.18 * a + 0.12 * ab
-    } else {
-        0.34 * s + 0.25 * r + 0.25 * a + 0.16 * ab
-    };
-    raw.clamp(0.0, 1.0)
-}
-
-/// Sporting "drop" the move represents for the player. Positive when
-/// the buyer is below the seller, zero when peer, negative when the
-/// buyer is above. Returned in [-1, +1] roughly; values above ~0.16
-/// are treated as meaningful step-downs.
-pub fn sporting_drop(inputs: &TransferPlausibilityInputs) -> f32 {
-    let rep_gap = inputs.seller_rep - inputs.buyer_rep;
-    let league_gap = (inputs.seller_league_rep as f32 - inputs.buyer_league_rep as f32) / 10_000.0;
-    let world_gap = (inputs.seller_world_rep as f32 - inputs.buyer_world_rep as f32) / 10_000.0;
-    0.55 * rep_gap + 0.30 * league_gap + 0.15 * world_gap
-}
-
-/// Single entry point: evaluate a (buyer, seller, player) tuple and
-/// return either a hard reject reason or a soft-adjustment bundle.
-/// The evaluator is pure — no I/O, no randomness, fully deterministic
-/// from `inputs`.
-pub fn evaluate(
-    inputs: &TransferPlausibilityInputs,
-) -> TransferPlausibilityVerdict {
-    let importance = Self::player_importance(inputs);
-    let drop = Self::sporting_drop(inputs);
-    let exemption = inputs.availability_exemption();
-
-    let important = importance >= thresholds::IMPORTANT;
-    let very_important = importance >= thresholds::VERY_IMPORTANT;
-    let prime_age = inputs.player_age >= thresholds::PRIME_AGE_MIN
-        && inputs.player_age <= thresholds::PRIME_AGE_MAX;
-    let big_drop = drop >= thresholds::BIG_SPORTING_DROP;
-    let huge_drop = drop >= thresholds::HUGE_SPORTING_DROP;
-    let same_domestic_market = inputs.same_country || inputs.same_league_or_division;
-
-    // ── Hard rejects ──
-
-    // Important first-team type at much stronger club, unsolicited, no
-    // availability flag: blocked outright. This is the canonical case
-    // — first-team GK at a top club approached out of the blue by a
-    // mid-table same-division side.
-    if !exemption && inputs.is_unsolicited && important && big_drop {
-        return TransferPlausibilityVerdict::HardReject(
-            TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub,
-        );
+        let raw = if inputs.position_group == PlayerFieldPositionGroup::Goalkeeper {
+            0.36 * s + 0.34 * r + 0.18 * a + 0.12 * ab
+        } else {
+            0.34 * s + 0.25 * r + 0.25 * a + 0.16 * ab
+        };
+        raw.clamp(0.0, 1.0)
     }
 
-    // Same-domestic-market step-down for prime-age starter. Even with
-    // a real listing somewhere else, top players don't move sideways
-    // or downward in their own division/country to materially weaker
-    // clubs at peak career.
-    if !exemption
-        && same_domestic_market
-        && prime_age
-        && important
-        && drop >= thresholds::DOMESTIC_STEP_DOWN_DROP
-    {
-        return TransferPlausibilityVerdict::HardReject(
-            TransferPlausibilityReason::DomesticStepDownForPrimeStarter,
-        );
+    /// Sporting "drop" the move represents for the player. Positive when
+    /// the buyer is below the seller, zero when peer, negative when the
+    /// buyer is above. Returned in [-1, +1] roughly; values above ~0.16
+    /// are treated as meaningful step-downs.
+    pub fn sporting_drop(inputs: &TransferPlausibilityInputs) -> f32 {
+        let rep_gap = inputs.seller_rep - inputs.buyer_rep;
+        let league_gap =
+            (inputs.seller_league_rep as f32 - inputs.buyer_league_rep as f32) / 10_000.0;
+        let world_gap = (inputs.seller_world_rep as f32 - inputs.buyer_world_rep as f32) / 10_000.0;
+        0.55 * rep_gap + 0.30 * league_gap + 0.15 * world_gap
     }
 
-    // Loan from a smaller club to a bigger one is plausible; the
-    // reverse for an important player isn't — the parent wouldn't risk
-    // sending a key contributor to a sub-tier suitor.
-    if inputs.is_loan
-        && !exemption
-        && importance >= thresholds::LOAN_IMPORTANCE_BLOCK
-        && (inputs.seller_rep - inputs.buyer_rep) > thresholds::LOAN_REP_GAP_BLOCK
-    {
-        return TransferPlausibilityVerdict::HardReject(TransferPlausibilityReason::LoanNotCredible);
+    /// Single entry point: evaluate a (buyer, seller, player) tuple and
+    /// return either a hard reject reason or a soft-adjustment bundle.
+    /// The evaluator is pure — no I/O, no randomness, fully deterministic
+    /// from `inputs`.
+    pub fn evaluate(inputs: &TransferPlausibilityInputs) -> TransferPlausibilityVerdict {
+        let importance = Self::player_importance(inputs);
+        let drop = Self::sporting_drop(inputs);
+        let exemption = inputs.availability_exemption();
+
+        let important = importance >= thresholds::IMPORTANT;
+        let very_important = importance >= thresholds::VERY_IMPORTANT;
+        let prime_age = inputs.player_age >= thresholds::PRIME_AGE_MIN
+            && inputs.player_age <= thresholds::PRIME_AGE_MAX;
+        let big_drop = drop >= thresholds::BIG_SPORTING_DROP;
+        let huge_drop = drop >= thresholds::HUGE_SPORTING_DROP;
+        let same_domestic_market = inputs.same_country || inputs.same_league_or_division;
+
+        // ── Hard rejects ──
+
+        // Important first-team type at much stronger club, unsolicited, no
+        // availability flag: blocked outright. This is the canonical case
+        // — first-team GK at a top club approached out of the blue by a
+        // mid-table same-division side.
+        if !exemption && inputs.is_unsolicited && important && big_drop {
+            return TransferPlausibilityVerdict::HardReject(
+                TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub,
+            );
+        }
+
+        // Same-domestic-market step-down for prime-age starter. Even with
+        // a real listing somewhere else, top players don't move sideways
+        // or downward in their own division/country to materially weaker
+        // clubs at peak career.
+        if !exemption
+            && same_domestic_market
+            && prime_age
+            && important
+            && drop >= thresholds::DOMESTIC_STEP_DOWN_DROP
+        {
+            return TransferPlausibilityVerdict::HardReject(
+                TransferPlausibilityReason::DomesticStepDownForPrimeStarter,
+            );
+        }
+
+        // Loan from a smaller club to a bigger one is plausible; the
+        // reverse for an important player isn't — the parent wouldn't risk
+        // sending a key contributor to a sub-tier suitor.
+        if inputs.is_loan
+            && !exemption
+            && importance >= thresholds::LOAN_IMPORTANCE_BLOCK
+            && (inputs.seller_rep - inputs.buyer_rep) > thresholds::LOAN_REP_GAP_BLOCK
+        {
+            return TransferPlausibilityVerdict::HardReject(
+                TransferPlausibilityReason::LoanNotCredible,
+            );
+        }
+
+        // Affordability — fee. Release clauses bypass.
+        let max_fee = inputs.buyer_transfer_budget * 1.40;
+        if !inputs.release_clause_triggered
+            && !inputs.is_loan
+            && inputs.estimated_value > max_fee
+            && max_fee > 0.0
+        {
+            return TransferPlausibilityVerdict::HardReject(
+                TransferPlausibilityReason::UnaffordableFee,
+            );
+        }
+
+        // Affordability — wages. Available exemption (the player wants the
+        // move) gives the buyer leeway; otherwise the soft cap applies.
+        let wage_headroom =
+            (inputs.buyer_wage_budget as i64 - inputs.buyer_total_wages as i64).max(0);
+        let soft_wage_cap =
+            ((inputs.current_salary as f64 * 1.15).max(wage_headroom as f64 * 1.30)).max(0.0);
+        if !exemption && soft_wage_cap > 0.0 && (inputs.expected_annual_wage as f64) > soft_wage_cap
+        {
+            return TransferPlausibilityVerdict::HardReject(
+                TransferPlausibilityReason::UnaffordableWages,
+            );
+        }
+
+        // ── Soft adjustments ──
+
+        let mut adj = TransferPlausibilityAdjustment::neutral();
+
+        if drop > 0.0 {
+            adj.shortlist_score_multiplier *= (1.0_f32 - drop * 1.8).clamp(0.35, 1.0);
+            adj.seller_acceptance_delta -= drop * 35.0;
+            adj.player_terms_delta -= drop * 45.0;
+            adj.minimum_fee_multiplier += drop as f64 * 0.9;
+        }
+
+        if importance >= 0.75 {
+            adj.shortlist_score_multiplier *= 0.55;
+            adj.seller_acceptance_delta -= 18.0;
+            adj.minimum_fee_multiplier += 0.25;
+        }
+
+        if very_important {
+            adj.shortlist_score_multiplier *= 0.45;
+            adj.seller_acceptance_delta -= 28.0;
+            adj.minimum_fee_multiplier += 0.45;
+        }
+
+        if huge_drop {
+            // Extra dampener for huge sporting drops that escaped the hard
+            // gate (e.g. listed/requested player from a much bigger club).
+            adj.shortlist_score_multiplier *= 0.75;
+        }
+
+        if exemption {
+            // Player welcoming the move counterbalances the soft penalties
+            // so the buyer can actually finish a deal.
+            adj.shortlist_score_multiplier = adj.shortlist_score_multiplier.max(0.75);
+            adj.seller_acceptance_delta += 15.0;
+            adj.player_terms_delta += 10.0;
+            adj.minimum_fee_multiplier = (adj.minimum_fee_multiplier - 0.20).max(1.0);
+        }
+
+        TransferPlausibilityVerdict::Allow(adj)
     }
-
-    // Affordability — fee. Release clauses bypass.
-    let max_fee = inputs.buyer_transfer_budget * 1.40;
-    if !inputs.release_clause_triggered
-        && !inputs.is_loan
-        && inputs.estimated_value > max_fee
-        && max_fee > 0.0
-    {
-        return TransferPlausibilityVerdict::HardReject(TransferPlausibilityReason::UnaffordableFee);
-    }
-
-    // Affordability — wages. Available exemption (the player wants the
-    // move) gives the buyer leeway; otherwise the soft cap applies.
-    let wage_headroom = (inputs.buyer_wage_budget as i64 - inputs.buyer_total_wages as i64).max(0);
-    let soft_wage_cap = ((inputs.current_salary as f64 * 1.15)
-        .max(wage_headroom as f64 * 1.30))
-        .max(0.0);
-    if !exemption
-        && soft_wage_cap > 0.0
-        && (inputs.expected_annual_wage as f64) > soft_wage_cap
-    {
-        return TransferPlausibilityVerdict::HardReject(
-            TransferPlausibilityReason::UnaffordableWages,
-        );
-    }
-
-    // ── Soft adjustments ──
-
-    let mut adj = TransferPlausibilityAdjustment::neutral();
-
-    if drop > 0.0 {
-        adj.shortlist_score_multiplier *= (1.0_f32 - drop * 1.8).clamp(0.35, 1.0);
-        adj.seller_acceptance_delta -= drop * 35.0;
-        adj.player_terms_delta -= drop * 45.0;
-        adj.minimum_fee_multiplier += drop as f64 * 0.9;
-    }
-
-    if importance >= 0.75 {
-        adj.shortlist_score_multiplier *= 0.55;
-        adj.seller_acceptance_delta -= 18.0;
-        adj.minimum_fee_multiplier += 0.25;
-    }
-
-    if very_important {
-        adj.shortlist_score_multiplier *= 0.45;
-        adj.seller_acceptance_delta -= 28.0;
-        adj.minimum_fee_multiplier += 0.45;
-    }
-
-    if huge_drop {
-        // Extra dampener for huge sporting drops that escaped the hard
-        // gate (e.g. listed/requested player from a much bigger club).
-        adj.shortlist_score_multiplier *= 0.75;
-    }
-
-    if exemption {
-        // Player welcoming the move counterbalances the soft penalties
-        // so the buyer can actually finish a deal.
-        adj.shortlist_score_multiplier = adj.shortlist_score_multiplier.max(0.75);
-        adj.seller_acceptance_delta += 15.0;
-        adj.player_terms_delta += 10.0;
-        adj.minimum_fee_multiplier = (adj.minimum_fee_multiplier - 0.20).max(1.0);
-    }
-
-    TransferPlausibilityVerdict::Allow(adj)
-}
 }
 
 // ============================================================
@@ -469,7 +468,9 @@ impl BuyerPlausibilityContext {
             .teams
             .iter()
             .find(|t| matches!(t.team_type, TeamType::Main));
-        let buyer_rep = main_team.map(|t| t.reputation.overall_score()).unwrap_or(0.3);
+        let buyer_rep = main_team
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.3);
         let buyer_world_rep = main_team.map(|t| t.reputation.world as i16).unwrap_or(0);
         let buyer_league_id = main_team.and_then(|t| t.league_id);
         let buyer_league_rep = buyer_league_id
@@ -509,231 +510,238 @@ impl BuyerPlausibilityContext {
 pub(crate) struct TransferPlausibilityBuilder;
 
 impl TransferPlausibilityBuilder {
-/// Build plausibility inputs from a `PlayerSummary` (the unit used by
-/// process_scouting / shortlists / build_shortlists). Looks up the
-/// selling club to compute rank and best-CA-in-group; returns `None`
-/// if the selling club can't be resolved.
-pub(crate) fn from_summary(
-    country: &Country,
-    buyer_ctx: &BuyerPlausibilityContext,
-    target: &PlayerSummary,
-    is_loan: bool,
-    is_unsolicited: bool,
-) -> Option<TransferPlausibilityInputs> {
-    let selling_club = country.clubs.iter().find(|c| c.id == target.club_id)?;
-    let main_team = selling_club
-        .teams
-        .iter()
-        .find(|t| matches!(t.team_type, TeamType::Main));
-    let seller_rep = main_team.map(|t| t.reputation.overall_score()).unwrap_or(0.3);
-    let seller_world_rep = main_team.map(|t| t.reputation.world as i16).unwrap_or(0);
-    let seller_league_id = main_team.and_then(|t| t.league_id);
-    let seller_league_rep = seller_league_id
-        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-        .map(|l| l.reputation)
-        .unwrap_or(0);
+    /// Build plausibility inputs from a `PlayerSummary` (the unit used by
+    /// process_scouting / shortlists / build_shortlists). Looks up the
+    /// selling club to compute rank and best-CA-in-group; returns `None`
+    /// if the selling club can't be resolved.
+    pub(crate) fn from_summary(
+        country: &Country,
+        buyer_ctx: &BuyerPlausibilityContext,
+        target: &PlayerSummary,
+        is_loan: bool,
+        is_unsolicited: bool,
+    ) -> Option<TransferPlausibilityInputs> {
+        let selling_club = country.clubs.iter().find(|c| c.id == target.club_id)?;
+        let main_team = selling_club
+            .teams
+            .iter()
+            .find(|t| matches!(t.team_type, TeamType::Main));
+        let seller_rep = main_team
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.3);
+        let seller_world_rep = main_team.map(|t| t.reputation.world as i16).unwrap_or(0);
+        let seller_league_id = main_team.and_then(|t| t.league_id);
+        let seller_league_rep = seller_league_id
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
 
-    let player_ca = target.skill_ability;
-    let position_group = target.position_group;
-    let rank = PipelineProcessor::position_group_rank(selling_club, target.player_id, position_group);
-    let rank = if rank == u8::MAX { 1 } else { rank };
-    let best_group_ca =
-        PipelineProcessor::best_ca_in_group(selling_club, position_group).max(player_ca);
+        let player_ca = target.skill_ability;
+        let position_group = target.position_group;
+        let rank =
+            PipelineProcessor::position_group_rank(selling_club, target.player_id, position_group);
+        let rank = if rank == u8::MAX { 1 } else { rank };
+        let best_group_ca =
+            PipelineProcessor::best_ca_in_group(selling_club, position_group).max(player_ca);
 
-    let same_country = target.country_id == buyer_ctx.buyer_country_id;
-    let same_league_or_division = same_country
-        && match (buyer_ctx.buyer_league_id, seller_league_id) {
-            (Some(a), Some(b)) => a == b,
-            _ => false,
-        };
+        let same_country = target.country_id == buyer_ctx.buyer_country_id;
+        let same_league_or_division = same_country
+            && match (buyer_ctx.buyer_league_id, seller_league_id) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
 
-    // Squad status / contract data — we may not have the full Player
-    // here, so fall back to `NotYetSet` if unavailable. Status flags
-    // already on PlayerSummary cover the listing/requested/unhappy
-    // signals we care about for the exemption.
-    let player = PipelineProcessor::find_player_in_country(country, target.player_id);
-    let squad_status = player
-        .and_then(|p| p.contract.as_ref().map(|c| c.squad_status.clone()))
-        .unwrap_or(crate::PlayerSquadStatus::NotYetSet);
+        // Squad status / contract data — we may not have the full Player
+        // here, so fall back to `NotYetSet` if unavailable. Status flags
+        // already on PlayerSummary cover the listing/requested/unhappy
+        // signals we care about for the exemption.
+        let player = PipelineProcessor::find_player_in_country(country, target.player_id);
+        let squad_status = player
+            .and_then(|p| p.contract.as_ref().map(|c| c.squad_status.clone()))
+            .unwrap_or(crate::PlayerSquadStatus::NotYetSet);
 
-    // Real availability signals from the player's own status — never
-    // from a market listing (which may be synthetic).
-    let is_transfer_requested = player
-        .map(|p| p.statuses.get().contains(&PlayerStatusType::Req))
-        .unwrap_or(false);
-    let is_unhappy = player
-        .map(|p| p.statuses.get().contains(&PlayerStatusType::Unh))
-        .unwrap_or(false);
-    let seller_in_debt = selling_club.finance.balance.balance < 0;
+        // Real availability signals from the player's own status — never
+        // from a market listing (which may be synthetic).
+        let is_transfer_requested = player
+            .map(|p| p.statuses.get().contains(&PlayerStatusType::Req))
+            .unwrap_or(false);
+        let is_unhappy = player
+            .map(|p| p.statuses.get().contains(&PlayerStatusType::Unh))
+            .unwrap_or(false);
+        let seller_in_debt = selling_club.finance.balance.balance < 0;
 
-    let expected_annual_wage = WageCalculator::expected_annual_wage_raw(
-        player_ca,
-        target.current_reputation,
-        matches!(position_group, PlayerFieldPositionGroup::Forward),
-        matches!(position_group, PlayerFieldPositionGroup::Goalkeeper),
-        target.age,
-        buyer_ctx.buyer_rep,
-        buyer_ctx.buyer_league_rep,
-    );
+        let expected_annual_wage = WageCalculator::expected_annual_wage_raw(
+            player_ca,
+            target.current_reputation,
+            matches!(position_group, PlayerFieldPositionGroup::Forward),
+            matches!(position_group, PlayerFieldPositionGroup::Goalkeeper),
+            target.age,
+            buyer_ctx.buyer_rep,
+            buyer_ctx.buyer_league_rep,
+        );
 
-    Some(TransferPlausibilityInputs {
-        buyer_rep: buyer_ctx.buyer_rep,
-        seller_rep,
-        buyer_league_rep: buyer_ctx.buyer_league_rep,
-        seller_league_rep,
-        buyer_world_rep: buyer_ctx.buyer_world_rep,
-        seller_world_rep,
-        player_world_rep: target.world_reputation,
-        player_current_rep: target.current_reputation,
-        player_home_rep: target.home_reputation,
-        player_age: target.age,
-        position_group,
-        is_listed: target.is_listed,
-        is_loan_listed: target.is_loan_listed,
-        is_transfer_requested,
-        is_unhappy,
-        squad_status,
-        contract_months_remaining: target.contract_months_remaining,
-        current_salary: target.salary,
-        estimated_value: target.estimated_value,
-        player_appearances: target.appearances,
-        seller_position_rank: rank,
-        player_ca,
-        best_group_ca_at_seller: best_group_ca,
-        is_loan,
-        is_unsolicited,
-        seller_in_debt,
-        release_clause_triggered: false,
-        same_country,
-        same_league_or_division,
-        buyer_transfer_budget: buyer_ctx.buyer_transfer_budget,
-        buyer_wage_budget: buyer_ctx.buyer_wage_budget,
-        buyer_total_wages: buyer_ctx.buyer_total_wages,
-        expected_annual_wage,
-    })
-}
-
-/// Convenience wrapper for callers who already have a `PlayerSummary`
-/// and a buyer context: returns the verdict directly.
-pub(crate) fn evaluate_summary(
-    country: &Country,
-    buyer_ctx: &BuyerPlausibilityContext,
-    target: &PlayerSummary,
-    is_loan: bool,
-    is_unsolicited: bool,
-) -> Option<TransferPlausibilityVerdict> {
-    Self::from_summary(country, buyer_ctx, target, is_loan, is_unsolicited)
-        .map(|i| TransferPlausibilityEvaluator::evaluate(&i))
-}
-
-/// Build plausibility inputs at negotiation-start time when the buyer
-/// already has the live `Club` + `Player` references. Most accurate
-/// path — uses the player's squad status and statuses straight from
-/// the contract / squad records rather than a snapshot.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn from_clubs(
-    country: &Country,
-    buyer_club: &Club,
-    selling_club: &Club,
-    player: &crate::Player,
-    estimated_value: f64,
-    is_loan: bool,
-    is_unsolicited: bool,
-    date: NaiveDate,
-) -> TransferPlausibilityInputs {
-    let buyer_ctx = BuyerPlausibilityContext::build(country, buyer_club);
-
-    let main_team = selling_club
-        .teams
-        .iter()
-        .find(|t| matches!(t.team_type, TeamType::Main));
-    let seller_rep = main_team.map(|t| t.reputation.overall_score()).unwrap_or(0.3);
-    let seller_world_rep = main_team.map(|t| t.reputation.world as i16).unwrap_or(0);
-    let seller_league_id = main_team.and_then(|t| t.league_id);
-    let seller_league_rep = seller_league_id
-        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-        .map(|l| l.reputation)
-        .unwrap_or(0);
-
-    let position = player.position();
-    let position_group = position.position_group();
-    let player_ca = player.player_attributes.current_ability;
-    let rank = PipelineProcessor::position_group_rank(selling_club, player.id, position_group);
-    let rank = if rank == u8::MAX { 1 } else { rank };
-    let best_group_ca = PipelineProcessor::best_ca_in_group(selling_club, position_group).max(player_ca);
-
-    let statuses = player.statuses.get();
-    let is_listed = statuses.contains(&PlayerStatusType::Lst);
-    let is_loan_listed = statuses.contains(&PlayerStatusType::Loa);
-    let is_transfer_requested = statuses.contains(&PlayerStatusType::Req);
-    let is_unhappy = statuses.contains(&PlayerStatusType::Unh);
-
-    let (squad_status, contract_months_remaining, current_salary) = player
-        .contract
-        .as_ref()
-        .map(|c| {
-            let months = ((c.expiration - date).num_days().max(0) / 30).min(i16::MAX as i64) as i16;
-            (c.squad_status.clone(), months, c.salary)
+        Some(TransferPlausibilityInputs {
+            buyer_rep: buyer_ctx.buyer_rep,
+            seller_rep,
+            buyer_league_rep: buyer_ctx.buyer_league_rep,
+            seller_league_rep,
+            buyer_world_rep: buyer_ctx.buyer_world_rep,
+            seller_world_rep,
+            player_world_rep: target.world_reputation,
+            player_current_rep: target.current_reputation,
+            player_home_rep: target.home_reputation,
+            player_age: target.age,
+            position_group,
+            is_listed: target.is_listed,
+            is_loan_listed: target.is_loan_listed,
+            is_transfer_requested,
+            is_unhappy,
+            squad_status,
+            contract_months_remaining: target.contract_months_remaining,
+            current_salary: target.salary,
+            estimated_value: target.estimated_value,
+            player_appearances: target.appearances,
+            seller_position_rank: rank,
+            player_ca,
+            best_group_ca_at_seller: best_group_ca,
+            is_loan,
+            is_unsolicited,
+            seller_in_debt,
+            release_clause_triggered: false,
+            same_country,
+            same_league_or_division,
+            buyer_transfer_budget: buyer_ctx.buyer_transfer_budget,
+            buyer_wage_budget: buyer_ctx.buyer_wage_budget,
+            buyer_total_wages: buyer_ctx.buyer_total_wages,
+            expected_annual_wage,
         })
-        .unwrap_or((crate::PlayerSquadStatus::NotYetSet, 0, 0));
-
-    let release_clause_triggered = player
-        .contract
-        .as_ref()
-        .map(|c| c.release_clause_triggered(0.0, false).is_some())
-        .unwrap_or(false);
-
-    let same_country = player.country_id == buyer_ctx.buyer_country_id;
-    let buyer_league_id = buyer_ctx.buyer_league_id;
-    let same_league_or_division = same_country
-        && match (buyer_league_id, seller_league_id) {
-            (Some(a), Some(b)) => a == b,
-            _ => false,
-        };
-
-    let expected_annual_wage = WageCalculator::expected_annual_wage(
-        player,
-        player.age(date),
-        buyer_ctx.buyer_rep,
-        buyer_ctx.buyer_league_rep,
-    );
-
-    TransferPlausibilityInputs {
-        buyer_rep: buyer_ctx.buyer_rep,
-        seller_rep,
-        buyer_league_rep: buyer_ctx.buyer_league_rep,
-        seller_league_rep,
-        buyer_world_rep: buyer_ctx.buyer_world_rep,
-        seller_world_rep,
-        player_world_rep: player.player_attributes.world_reputation,
-        player_current_rep: player.player_attributes.current_reputation,
-        player_home_rep: player.player_attributes.home_reputation,
-        player_age: player.age(date),
-        position_group,
-        is_listed,
-        is_loan_listed,
-        is_transfer_requested,
-        is_unhappy,
-        squad_status,
-        contract_months_remaining,
-        current_salary,
-        estimated_value,
-        player_appearances: player.statistics.total_games(),
-        seller_position_rank: rank,
-        player_ca,
-        best_group_ca_at_seller: best_group_ca,
-        is_loan,
-        is_unsolicited,
-        seller_in_debt: selling_club.finance.balance.balance < 0,
-        release_clause_triggered,
-        same_country,
-        same_league_or_division,
-        buyer_transfer_budget: buyer_ctx.buyer_transfer_budget,
-        buyer_wage_budget: buyer_ctx.buyer_wage_budget,
-        buyer_total_wages: buyer_ctx.buyer_total_wages,
-        expected_annual_wage,
     }
-}
+
+    /// Convenience wrapper for callers who already have a `PlayerSummary`
+    /// and a buyer context: returns the verdict directly.
+    pub(crate) fn evaluate_summary(
+        country: &Country,
+        buyer_ctx: &BuyerPlausibilityContext,
+        target: &PlayerSummary,
+        is_loan: bool,
+        is_unsolicited: bool,
+    ) -> Option<TransferPlausibilityVerdict> {
+        Self::from_summary(country, buyer_ctx, target, is_loan, is_unsolicited)
+            .map(|i| TransferPlausibilityEvaluator::evaluate(&i))
+    }
+
+    /// Build plausibility inputs at negotiation-start time when the buyer
+    /// already has the live `Club` + `Player` references. Most accurate
+    /// path — uses the player's squad status and statuses straight from
+    /// the contract / squad records rather than a snapshot.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_clubs(
+        country: &Country,
+        buyer_club: &Club,
+        selling_club: &Club,
+        player: &crate::Player,
+        estimated_value: f64,
+        is_loan: bool,
+        is_unsolicited: bool,
+        date: NaiveDate,
+    ) -> TransferPlausibilityInputs {
+        let buyer_ctx = BuyerPlausibilityContext::build(country, buyer_club);
+
+        let main_team = selling_club
+            .teams
+            .iter()
+            .find(|t| matches!(t.team_type, TeamType::Main));
+        let seller_rep = main_team
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.3);
+        let seller_world_rep = main_team.map(|t| t.reputation.world as i16).unwrap_or(0);
+        let seller_league_id = main_team.and_then(|t| t.league_id);
+        let seller_league_rep = seller_league_id
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+
+        let position = player.position();
+        let position_group = position.position_group();
+        let player_ca = player.player_attributes.current_ability;
+        let rank = PipelineProcessor::position_group_rank(selling_club, player.id, position_group);
+        let rank = if rank == u8::MAX { 1 } else { rank };
+        let best_group_ca =
+            PipelineProcessor::best_ca_in_group(selling_club, position_group).max(player_ca);
+
+        let statuses = player.statuses.get();
+        let is_listed = statuses.contains(&PlayerStatusType::Lst);
+        let is_loan_listed = statuses.contains(&PlayerStatusType::Loa);
+        let is_transfer_requested = statuses.contains(&PlayerStatusType::Req);
+        let is_unhappy = statuses.contains(&PlayerStatusType::Unh);
+
+        let (squad_status, contract_months_remaining, current_salary) = player
+            .contract
+            .as_ref()
+            .map(|c| {
+                let months =
+                    ((c.expiration - date).num_days().max(0) / 30).min(i16::MAX as i64) as i16;
+                (c.squad_status.clone(), months, c.salary)
+            })
+            .unwrap_or((crate::PlayerSquadStatus::NotYetSet, 0, 0));
+
+        let release_clause_triggered = player
+            .contract
+            .as_ref()
+            .map(|c| c.release_clause_triggered(0.0, false).is_some())
+            .unwrap_or(false);
+
+        let same_country = player.country_id == buyer_ctx.buyer_country_id;
+        let buyer_league_id = buyer_ctx.buyer_league_id;
+        let same_league_or_division = same_country
+            && match (buyer_league_id, seller_league_id) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
+
+        let expected_annual_wage = WageCalculator::expected_annual_wage(
+            player,
+            player.age(date),
+            buyer_ctx.buyer_rep,
+            buyer_ctx.buyer_league_rep,
+        );
+
+        TransferPlausibilityInputs {
+            buyer_rep: buyer_ctx.buyer_rep,
+            seller_rep,
+            buyer_league_rep: buyer_ctx.buyer_league_rep,
+            seller_league_rep,
+            buyer_world_rep: buyer_ctx.buyer_world_rep,
+            seller_world_rep,
+            player_world_rep: player.player_attributes.world_reputation,
+            player_current_rep: player.player_attributes.current_reputation,
+            player_home_rep: player.player_attributes.home_reputation,
+            player_age: player.age(date),
+            position_group,
+            is_listed,
+            is_loan_listed,
+            is_transfer_requested,
+            is_unhappy,
+            squad_status,
+            contract_months_remaining,
+            current_salary,
+            estimated_value,
+            player_appearances: player.statistics.total_games(),
+            seller_position_rank: rank,
+            player_ca,
+            best_group_ca_at_seller: best_group_ca,
+            is_loan,
+            is_unsolicited,
+            seller_in_debt: selling_club.finance.balance.balance < 0,
+            release_clause_triggered,
+            same_country,
+            same_league_or_division,
+            buyer_transfer_budget: buyer_ctx.buyer_transfer_budget,
+            buyer_wage_budget: buyer_ctx.buyer_wage_budget,
+            buyer_total_wages: buyer_ctx.buyer_total_wages,
+            expected_annual_wage,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -785,13 +793,17 @@ mod tests {
         // not listed, not unhappy — must reject.
         let inputs = base_inputs();
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(
-            v,
-            TransferPlausibilityVerdict::HardReject(
-                TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub
-                    | TransferPlausibilityReason::DomesticStepDownForPrimeStarter
-            )
-        ), "got {:?}", v);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub
+                        | TransferPlausibilityReason::DomesticStepDownForPrimeStarter
+                )
+            ),
+            "got {:?}",
+            v
+        );
     }
 
     #[test]
@@ -819,7 +831,11 @@ mod tests {
         inputs.is_loan_listed = true;
         inputs.is_unsolicited = false;
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(v, TransferPlausibilityVerdict::Allow(_)), "{:?}", v);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
     }
 
     #[test]
@@ -843,7 +859,11 @@ mod tests {
         inputs.estimated_value = 1_000_000.0;
         inputs.expected_annual_wage = 600_000;
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(v, TransferPlausibilityVerdict::Allow(_)), "{:?}", v);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
     }
 
     #[test]
@@ -855,7 +875,11 @@ mod tests {
         inputs.squad_status = PlayerSquadStatus::MainBackupPlayer;
         inputs.player_ca = 110;
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(v, TransferPlausibilityVerdict::Allow(_)), "{:?}", v);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
     }
 
     #[test]
@@ -867,10 +891,16 @@ mod tests {
         inputs.seller_world_rep = 4000;
         inputs.expected_annual_wage = 50_000_000;
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(
-            v,
-            TransferPlausibilityVerdict::HardReject(TransferPlausibilityReason::UnaffordableWages)
-        ), "{:?}", v);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::UnaffordableWages
+                )
+            ),
+            "{:?}",
+            v
+        );
     }
 
     #[test]
@@ -879,13 +909,18 @@ mod tests {
         inputs.is_loan = true;
         inputs.is_unsolicited = false; // not blocking via the unsolicited rule
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(
-            v,
-            TransferPlausibilityVerdict::HardReject(TransferPlausibilityReason::LoanNotCredible)
-                | TransferPlausibilityVerdict::HardReject(
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                ) | TransferPlausibilityVerdict::HardReject(
                     TransferPlausibilityReason::DomesticStepDownForPrimeStarter
                 )
-        ), "{:?}", v);
+            ),
+            "{:?}",
+            v
+        );
     }
 
     #[test]
@@ -899,7 +934,11 @@ mod tests {
         inputs.buyer_league_rep = 5500;
         inputs.seller_league_rep = 5500;
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(v, TransferPlausibilityVerdict::Allow(_)), "{:?}", v);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
     }
 
     #[test]
@@ -909,7 +948,11 @@ mod tests {
         let mut inputs = base_inputs();
         inputs.is_listed = true;
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(v, TransferPlausibilityVerdict::Allow(_)), "{:?}", v);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
     }
 
     #[test]
@@ -1006,7 +1049,11 @@ mod tests {
         let mut inputs = base_inputs();
         inputs.squad_status = PlayerSquadStatus::NotNeeded;
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(v, TransferPlausibilityVerdict::Allow(_)), "{:?}", v);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
     }
 
     #[test]
@@ -1017,7 +1064,11 @@ mod tests {
         inputs.seller_in_debt = true;
         // estimated_value 5M; buyer_transfer_budget*1.40 = 14M; ratio 2.8 → >= 1.35
         let v = TransferPlausibilityEvaluator::evaluate(&inputs);
-        assert!(matches!(v, TransferPlausibilityVerdict::Allow(_)), "{:?}", v);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
     }
 
     #[test]

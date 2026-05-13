@@ -49,8 +49,7 @@ impl StateProcessingHandler for DefenderClearingState {
         // halfway-line target.
         let def_profile = DefenderSkillProfile::from_ctx(ctx);
         let mut rng = rand::rng();
-        let poor_clearance =
-            rng.random::<f32>() < def_profile.poor_clearance_chance.min(0.95);
+        let poor_clearance = rng.random::<f32>() < def_profile.poor_clearance_chance.min(0.95);
 
         let halfway_x = field_width * 0.5;
         let nominal_target_x = if is_left_side {
@@ -65,7 +64,11 @@ impl StateProcessingHandler for DefenderClearingState {
             + (ctx.player.skills.physical.strength / 20.0).powf(1.20) * 0.25
             + (ctx.player.skills.technical.technique / 20.0).powf(1.30) * 0.15)
             .clamp(0.55, 1.20);
-        let distance_mult = if poor_clearance { distance_mult * 0.55 } else { distance_mult };
+        let distance_mult = if poor_clearance {
+            distance_mult * 0.55
+        } else {
+            distance_mult
+        };
         let signed_dx = nominal_target_x - ball_position.x;
         let target_x = ball_position.x + signed_dx * distance_mult;
 
@@ -89,13 +92,13 @@ impl StateProcessingHandler for DefenderClearingState {
         // trajectory (controlled outlet); poor ones produce a weak
         // skewed strike that rolls back into trouble.
         let base_speed = if at_boundary { 5.0 } else { 4.0 };
-        let speed_mult = (0.85 + def_profile.clearance_profile * 0.30) * def_profile.clearance_condition_mult;
+        let speed_mult =
+            (0.85 + def_profile.clearance_profile * 0.30) * def_profile.clearance_condition_mult;
         let clear_speed = base_speed * speed_mult * if poor_clearance { 0.65 } else { 1.0 };
         let horizontal_velocity = direction_to_target * clear_speed;
 
         let z_base = if at_boundary { 6.0 } else { 5.0 };
-        let z_mult = 0.85
-            + (ctx.player.skills.technical.technique / 20.0).powf(1.30) * 0.15;
+        let z_mult = 0.85 + (ctx.player.skills.technical.technique / 20.0).powf(1.30) * 0.15;
         let z_velocity = z_base * z_mult * if poor_clearance { 0.80 } else { 1.0 };
 
         let ball_velocity = Vector3::new(horizontal_velocity.x, horizontal_velocity.y, z_velocity);

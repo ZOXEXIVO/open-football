@@ -226,12 +226,12 @@ impl PlayerTrainingResult {
                     .clamp(0.4, 2.0);
             let in_recovery = player.player_attributes.is_in_recovery();
             let chance = player.compute_injury_risk(InjuryRiskInputs {
-                    base_rate: self.effects.injury_risk.max(0.0),
-                    intensity: intensity_factor,
-                    in_recovery,
-                    medical_multiplier: 1.0,
-                    now: current_date,
-                });
+                base_rate: self.effects.injury_risk.max(0.0),
+                intensity: intensity_factor,
+                in_recovery,
+                medical_multiplier: 1.0,
+                now: current_date,
+            });
             if rand::random::<f32>() < chance {
                 let age = DateUtils::age(player.birth_date, current_date);
                 let condition_pct = player.player_attributes.condition_percentage();

@@ -17,9 +17,17 @@ pub mod helper_diag {
     pub static SUM_WILLINGNESS_X1000: AtomicU64 = AtomicU64::new(0);
     pub fn reset() {
         for c in [
-            &CALLS, &HOLD_HARDGATE, &HOLD_FAR, &HOLD_XG, &HOLD_INSIDE_SIX_XG,
-            &HOLD_NO_CLEAR, &PASS_DEFERRAL, &REACHED_ROLL, &ROLL_PASSED,
-            &SUM_XG_X1000, &SUM_WILLINGNESS_X1000,
+            &CALLS,
+            &HOLD_HARDGATE,
+            &HOLD_FAR,
+            &HOLD_XG,
+            &HOLD_INSIDE_SIX_XG,
+            &HOLD_NO_CLEAR,
+            &PASS_DEFERRAL,
+            &REACHED_ROLL,
+            &ROLL_PASSED,
+            &SUM_XG_X1000,
+            &SUM_WILLINGNESS_X1000,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -80,8 +88,7 @@ pub fn evaluate_forward_shot_decision(
     let can_player = ctx.player().can_shoot();
     if !can_team || !can_player {
         #[cfg(feature = "match-logs")]
-        helper_diag::HOLD_HARDGATE
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::HOLD_HARDGATE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -90,8 +97,7 @@ pub fn evaluate_forward_shot_decision(
     // for elite long-shooters — keep the ball.
     if distance > 110.0 {
         #[cfg(feature = "match-logs")]
-        helper_diag::HOLD_FAR
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::HOLD_FAR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -155,8 +161,7 @@ pub fn evaluate_forward_shot_decision(
     } else {
         0.050
     };
-    let mut min_xg = distance_floor_base
-        - execution_skill * 0.020
+    let mut min_xg = distance_floor_base - execution_skill * 0.020
         + pressure_penalty * 0.020
         + sprint_penalty_term * 0.015
         + low_condition_penalty * 0.015;
@@ -165,11 +170,23 @@ pub fn evaluate_forward_shot_decision(
     min_xg += (selection - 0.5) * 0.018;
     // Clamp by skill tier (distance-relative).
     let (lo, hi) = if execution_skill < 0.25 {
-        if distance > 60.0 { (0.040, 0.075) } else { (0.075, 0.125) }
+        if distance > 60.0 {
+            (0.040, 0.075)
+        } else {
+            (0.075, 0.125)
+        }
     } else if execution_skill < 0.55 {
-        if distance > 60.0 { (0.032, 0.062) } else { (0.062, 0.105) }
+        if distance > 60.0 {
+            (0.032, 0.062)
+        } else {
+            (0.062, 0.105)
+        }
     } else {
-        if distance > 60.0 { (0.025, 0.052) } else { (0.052, 0.090) }
+        if distance > 60.0 {
+            (0.025, 0.052)
+        } else {
+            (0.052, 0.090)
+        }
     };
     min_xg = min_xg.clamp(lo, hi);
     let inside_six = distance <= 18.0;
@@ -183,8 +200,7 @@ pub fn evaluate_forward_shot_decision(
     }
     if inside_six && xg < (inside_six_floor.min(min_xg)) {
         #[cfg(feature = "match-logs")]
-        helper_diag::HOLD_INSIDE_SIX_XG
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::HOLD_INSIDE_SIX_XG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -192,8 +208,7 @@ pub fn evaluate_forward_shot_decision(
     let clarity = ctx.player().shot_clarity();
     if !ctx.player().has_clear_shot() && !inside_six {
         #[cfg(feature = "match-logs")]
-        helper_diag::HOLD_NO_CLEAR
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::HOLD_NO_CLEAR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -289,8 +304,7 @@ pub fn evaluate_forward_shot_decision(
     let point_blank = distance < 24.0 && xg >= 0.18;
     if !point_blank && capped_pass_ev > xg + margin {
         #[cfg(feature = "match-logs")]
-        helper_diag::PASS_DEFERRAL
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::PASS_DEFERRAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return ShotDecision::Pass;
     }
 
@@ -403,15 +417,25 @@ mod tests {
         } else {
             0.045
         };
-        let mut x = distance_floor_base
-            - execution_skill * 0.06
-            + (selection - 0.5) * 0.025;
+        let mut x = distance_floor_base - execution_skill * 0.06 + (selection - 0.5) * 0.025;
         let (lo, hi) = if execution_skill < 0.25 {
-            if distance > 60.0 { (0.05, 0.10) } else { (0.10, 0.18) }
+            if distance > 60.0 {
+                (0.05, 0.10)
+            } else {
+                (0.10, 0.18)
+            }
         } else if execution_skill < 0.55 {
-            if distance > 60.0 { (0.035, 0.08) } else { (0.07, 0.13) }
+            if distance > 60.0 {
+                (0.035, 0.08)
+            } else {
+                (0.07, 0.13)
+            }
         } else {
-            if distance > 60.0 { (0.025, 0.07) } else { (0.045, 0.10) }
+            if distance > 60.0 {
+                (0.025, 0.07)
+            } else {
+                (0.045, 0.10)
+            }
         };
         x = x.clamp(lo, hi);
         x
@@ -445,7 +469,10 @@ mod tests {
         // every long-shot — that was the 0-0 bug.
         let elite_long = min_xg(0.80, 0.50, 70.0);
         let avg_long = min_xg(0.40, 0.50, 70.0);
-        assert!(elite_long <= 0.07, "elite long-shot floor too high={elite_long}");
+        assert!(
+            elite_long <= 0.07,
+            "elite long-shot floor too high={elite_long}"
+        );
         assert!(avg_long <= 0.08, "avg long-shot floor too high={avg_long}");
     }
 

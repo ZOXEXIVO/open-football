@@ -172,11 +172,8 @@ impl GoalkeeperDistributingState {
             let pressure = (nearby_opponents as f32 / 4.0).clamp(0.0, 1.0);
             let turnover = prof.turnover_risk(pass_difficulty, pressure, 0.0);
             let safety_factor = (1.0 - turnover * 0.6).max(0.2);
-            let score = halfway_score
-                * space_bonus
-                * position_bonus
-                * recency_penalty
-                * safety_factor;
+            let score =
+                halfway_score * space_bonus * position_bonus * recency_penalty * safety_factor;
 
             if score > best_score {
                 best_score = score;

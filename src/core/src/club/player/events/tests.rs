@@ -8,7 +8,6 @@
 
 use super::types::{MatchOutcome, MatchParticipation};
 use crate::club::player::builder::PlayerBuilder;
-use InjuryRiskInputs;
 use crate::club::player::player::Player;
 use crate::r#match::engine::result::PlayerMatchEndStats;
 use crate::shared::fullname::FullName;
@@ -17,6 +16,7 @@ use crate::{
     PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType,
     PlayerPositions, PlayerSkills,
 };
+use InjuryRiskInputs;
 use chrono::NaiveDate;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {

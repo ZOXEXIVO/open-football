@@ -27,8 +27,7 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
 
         // Crowd / pressure from nearby opponents — high crowd punishes
         // weak claim quality more.
-        let crowd =
-            (ctx.players().opponents().nearby(8.0).count() as f32 / 4.0).clamp(0.0, 1.0);
+        let crowd = (ctx.players().opponents().nearby(8.0).count() as f32 / 4.0).clamp(0.0, 1.0);
         let claim_quality = (prof.aerial_command * 0.46
             + prof.positioning * 0.18
             + prof.rushing_out_profile * 0.12
@@ -41,8 +40,7 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
         // Punch success rolls between ~0.40 (weak in heavy traffic) and
         // ~0.92 (elite in space).
         let punch_success_prob =
-            (claim_quality * 0.85 - claim_difficulty * 0.30 + prof.elite_lift)
-                .clamp(0.20, 0.95);
+            (claim_quality * 0.85 - claim_difficulty * 0.30 + prof.elite_lift).clamp(0.20, 0.95);
         let punch_success = rand::random::<f32>() < punch_success_prob;
 
         if punch_success {

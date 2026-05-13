@@ -243,8 +243,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
                 && shot_profile.expected_xg(goal_dist, true) >= 0.13
-                && (mid_profile.mid_shot_selection >= 0.40
-                    || shot_profile.execution_skill >= 0.55)
+                && (mid_profile.mid_shot_selection >= 0.40 || shot_profile.execution_skill >= 0.55)
             {
                 return Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)

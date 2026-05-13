@@ -115,8 +115,7 @@ impl DefenderSkillProfile {
     pub fn from_ctx(ctx: &StateProcessingContext) -> Self {
         let player = ctx.player;
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let condition_pct =
-            (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
+        let condition_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
 
         let mut pressure_5u: u32 = 0;
         let mut pressure_10u: u32 = 0;
@@ -223,13 +222,10 @@ impl DefenderSkillProfile {
         let nat_fit01 = norm01(s.physical.natural_fitness);
         let match_readiness01 = norm01(s.physical.match_readiness);
         let determination01 = norm01(s.mental.determination);
-        let fitness = stamina01 * 0.40
-            + nat_fit01 * 0.30
-            + match_readiness01 * 0.20
-            + determination01 * 0.10;
+        let fitness =
+            stamina01 * 0.40 + nat_fit01 * 0.30 + match_readiness01 * 0.20 + determination01 * 0.10;
         let fatigue = (1.0 - cond).max(0.0).powf(1.30);
-        let jadedness =
-            (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
+        let jadedness = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
         let jadedness_penalty = jadedness * 0.16;
         let fitness_recovery = 1.0 - fatigue * (0.17 + fitness * 0.22);
         let mental_fatigue = 1.0 - fatigue * (0.08 + poor_penalty * 0.20);
@@ -239,9 +235,8 @@ impl DefenderSkillProfile {
         } else {
             1.0
         };
-        let def_condition_mult = (fitness_recovery * mental_fatigue * late_drop
-            - jadedness_penalty)
-            .clamp(0.50, 1.03);
+        let def_condition_mult =
+            (fitness_recovery * mental_fatigue * late_drop - jadedness_penalty).clamp(0.50, 1.03);
 
         let stamina_curve = pow_curve(stamina01, 1.20);
         let composure_curve = pow_curve(composure01, 1.30);
@@ -300,13 +295,12 @@ impl DefenderSkillProfile {
             * marking_condition_mult)
             .clamp(0.0, 1.0);
         let ideal_marking_distance = lerp(14.0, 7.0, marking_profile);
-        let lost_runner_chance = (0.22 - marking_profile * 0.18 + fatigue * 0.12
-            + poor_penalty * 0.10)
-            .clamp(0.02, 0.35);
-        let goal_side_weight = (0.45
-            + pow_curve(positioning01, 1.30) * 0.30
-            + pow_curve(decisions01, 1.30) * 0.15)
-            .clamp(0.45, 0.85);
+        let lost_runner_chance =
+            (0.22 - marking_profile * 0.18 + fatigue * 0.12 + poor_penalty * 0.10)
+                .clamp(0.02, 0.35);
+        let goal_side_weight =
+            (0.45 + pow_curve(positioning01, 1.30) * 0.30 + pow_curve(decisions01, 1.30) * 0.15)
+                .clamp(0.45, 0.85);
 
         // ── Cover ────────────────────────────────────────────────────
         let cover_profile = (pow_curve(positioning01, 1.50) * 0.24
@@ -368,9 +362,9 @@ impl DefenderSkillProfile {
             + pow_curve(bravery01, 1.10) * 0.06)
             .clamp(0.0, 1.0);
         let interception_radius = 3.0 + interception_profile * 6.0;
-        let shot_block_reaction = (0.08 + interception_profile * 0.38
-            + pow_curve(bravery01, 1.10) * 0.08)
-            .clamp(0.05, 0.58);
+        let shot_block_reaction =
+            (0.08 + interception_profile * 0.38 + pow_curve(bravery01, 1.10) * 0.08)
+                .clamp(0.05, 0.58);
 
         // ── Aerial defense ───────────────────────────────────────────
         let aerial_defense = (pow_curve(heading01, 1.55) * 0.24
@@ -396,9 +390,9 @@ impl DefenderSkillProfile {
             + pow_curve(vision01, 1.15) * 0.06)
             * clearance_condition_mult)
             .clamp(0.0, 1.0);
-        let poor_clearance_chance = (0.18 - clearance_profile * 0.12
-            + pressure_penalty * 0.08 + fatigue * 0.08)
-            .clamp(0.03, 0.35);
+        let poor_clearance_chance =
+            (0.18 - clearance_profile * 0.12 + pressure_penalty * 0.08 + fatigue * 0.08)
+                .clamp(0.03, 0.35);
 
         // ── Build-up ─────────────────────────────────────────────────
         let buildup_profile = ((pow_curve(passing01, 1.45) * 0.24
@@ -557,8 +551,7 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType,
-        PlayerPositions,
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
     };
     use chrono::NaiveDate;
 
@@ -687,16 +680,22 @@ mod tests {
     fn fatigue_drops_pressing_and_clearance() {
         let fresh_p = build_player(15.0, 9500);
         let tired_p = build_player(15.0, 2500);
-        let fresh = DefenderSkillProfile::from_player(&fresh_p, &DefenderSkillInputs {
-            minute: 80,
-            condition_pct: 0.95,
-            ..default_inputs()
-        });
-        let tired = DefenderSkillProfile::from_player(&tired_p, &DefenderSkillInputs {
-            minute: 80,
-            condition_pct: 0.25,
-            ..default_inputs()
-        });
+        let fresh = DefenderSkillProfile::from_player(
+            &fresh_p,
+            &DefenderSkillInputs {
+                minute: 80,
+                condition_pct: 0.95,
+                ..default_inputs()
+            },
+        );
+        let tired = DefenderSkillProfile::from_player(
+            &tired_p,
+            &DefenderSkillInputs {
+                minute: 80,
+                condition_pct: 0.25,
+                ..default_inputs()
+            },
+        );
         assert!(fresh.press_profile > tired.press_profile);
         assert!(fresh.clearance_profile > tired.clearance_profile);
         assert!(fresh.def_condition_mult > tired.def_condition_mult);
@@ -712,10 +711,8 @@ mod tests {
         reckless.skills.mental.composure = 7.0;
         reckless.skills.mental.decisions = 7.0;
         reckless.skills.mental.aggression = 18.0;
-        let cd = DefenderSkillProfile::from_player(&composed, &default_inputs())
-            .discipline;
-        let rd = DefenderSkillProfile::from_player(&reckless, &default_inputs())
-            .discipline;
+        let cd = DefenderSkillProfile::from_player(&composed, &default_inputs()).discipline;
+        let rd = DefenderSkillProfile::from_player(&reckless, &default_inputs()).discipline;
         assert!(cd > rd + 0.10);
     }
 

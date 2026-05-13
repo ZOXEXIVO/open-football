@@ -125,12 +125,7 @@ impl SkillAccumulator {
                     + sc::interception(p, minute)
                     + sc::defensive_positioning(p, minute))
                     / 3.0;
-                Self::accumulate(
-                    &mut self.defensive_sum,
-                    &mut self.defensive_weight,
-                    d,
-                    1.00,
-                );
+                Self::accumulate(&mut self.defensive_sum, &mut self.defensive_weight, d, 1.00);
                 Self::accumulate(
                     &mut self.press_sum,
                     &mut self.press_weight,
@@ -150,12 +145,7 @@ impl SkillAccumulator {
                     + sc::interception(p, minute)
                     + sc::defensive_positioning(p, minute))
                     / 3.0;
-                Self::accumulate(
-                    &mut self.defensive_sum,
-                    &mut self.defensive_weight,
-                    d,
-                    0.80,
-                );
+                Self::accumulate(&mut self.defensive_sum, &mut self.defensive_weight, d, 0.80);
                 Self::accumulate(
                     &mut self.press_sum,
                     &mut self.press_weight,
@@ -183,12 +173,7 @@ impl SkillAccumulator {
                     + sc::dribble_attack(p, minute)
                     + sc::off_ball_attack(p, minute))
                     / 3.0;
-                Self::accumulate(
-                    &mut self.attacking_sum,
-                    &mut self.attacking_weight,
-                    a,
-                    1.00,
-                );
+                Self::accumulate(&mut self.attacking_sum, &mut self.attacking_weight, a, 1.00);
                 Self::accumulate(
                     &mut self.press_sum,
                     &mut self.press_weight,
@@ -2059,10 +2044,10 @@ pub struct PlayMatchStateResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::r#match::MatchCoach;
-    use crate::r#match::MatchPlayer;
     use crate::PlayerSkills;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::r#match::MatchCoach;
+    use crate::r#match::MatchPlayer;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -2137,11 +2122,17 @@ mod tests {
         // shouldn't have its attacking_quality crushed below the forward's
         // own quality just because the AM slot got mis-counted.
         let mut acc_fwd_only = SkillAccumulator::new();
-        acc_fwd_only.add(&build_test_player(14.0, PlayerPositionType::ForwardCenter), 30);
+        acc_fwd_only.add(
+            &build_test_player(14.0, PlayerPositionType::ForwardCenter),
+            30,
+        );
         let fwd_only = acc_fwd_only.finalize().attacking_quality;
 
         let mut acc_fwd_plus_am = SkillAccumulator::new();
-        acc_fwd_plus_am.add(&build_test_player(14.0, PlayerPositionType::ForwardCenter), 30);
+        acc_fwd_plus_am.add(
+            &build_test_player(14.0, PlayerPositionType::ForwardCenter),
+            30,
+        );
         acc_fwd_plus_am.add(
             &build_test_player(14.0, PlayerPositionType::AttackingMidfielderCenter),
             30,
@@ -2161,7 +2152,10 @@ mod tests {
         // Defender-only attacking should fall back to the 0.5 default
         // (no eligible attackers contributed).
         let mut acc_def_only = SkillAccumulator::new();
-        acc_def_only.add(&build_test_player(14.0, PlayerPositionType::DefenderCenter), 30);
+        acc_def_only.add(
+            &build_test_player(14.0, PlayerPositionType::DefenderCenter),
+            30,
+        );
         assert!((acc_def_only.finalize().attacking_quality - 0.5).abs() < 1e-3);
     }
 
@@ -2172,13 +2166,19 @@ mod tests {
         // 0.5 default — confirms the weighted denominator isn't
         // squashing real signal.
         let mut acc = SkillAccumulator::new();
-        acc.add(&build_test_player(18.0, PlayerPositionType::ForwardCenter), 30);
+        acc.add(
+            &build_test_player(18.0, PlayerPositionType::ForwardCenter),
+            30,
+        );
         acc.add(
             &build_test_player(18.0, PlayerPositionType::AttackingMidfielderCenter),
             30,
         );
         let aq = acc.finalize().attacking_quality;
-        assert!(aq > 0.7, "elite attackers should produce attacking_quality > 0.7, got {aq}");
+        assert!(
+            aq > 0.7,
+            "elite attackers should produce attacking_quality > 0.7, got {aq}"
+        );
         assert!(aq <= 1.0);
     }
 
@@ -2188,12 +2188,21 @@ mod tests {
         // be much closer to the defender's contribution (weight 1.00)
         // than the forward's (weight 0.35).
         let mut acc = SkillAccumulator::new();
-        acc.add(&build_test_player(18.0, PlayerPositionType::DefenderCenter), 30);
-        acc.add(&build_test_player(6.0, PlayerPositionType::ForwardCenter), 30);
+        acc.add(
+            &build_test_player(18.0, PlayerPositionType::DefenderCenter),
+            30,
+        );
+        acc.add(
+            &build_test_player(6.0, PlayerPositionType::ForwardCenter),
+            30,
+        );
         let dq = acc.finalize().defensive_quality;
 
         let mut acc_d_only = SkillAccumulator::new();
-        acc_d_only.add(&build_test_player(18.0, PlayerPositionType::DefenderCenter), 30);
+        acc_d_only.add(
+            &build_test_player(18.0, PlayerPositionType::DefenderCenter),
+            30,
+        );
         let dq_solo = acc_d_only.finalize().defensive_quality;
 
         // The forward drags the average down a little, but should
@@ -2201,7 +2210,10 @@ mod tests {
         // (forward weight is only 0.35, so its influence is bounded).
         let drop = dq_solo - dq;
         assert!(drop >= 0.0, "drop={drop} solo={dq_solo} blend={dq}");
-        assert!(drop < 0.25 * dq_solo, "drop {drop} too large from solo {dq_solo}");
+        assert!(
+            drop < 0.25 * dq_solo,
+            "drop {drop} too large from solo {dq_solo}"
+        );
     }
 
     #[test]

@@ -1,9 +1,9 @@
-﻿use crate::{MatchTacticType, PlayerFieldPositionGroup};
 use crate::league::LeagueMatch;
 use crate::r#match::engine::zones::ZoneStats;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::squad::OmittedPlayer;
 use crate::r#match::{MatchSquad, ResultMatchPositionData};
+use crate::{MatchTacticType, PlayerFieldPositionGroup};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 

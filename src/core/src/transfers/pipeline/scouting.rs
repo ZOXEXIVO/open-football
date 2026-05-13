@@ -79,11 +79,7 @@ struct MonitoringUpdate {
 /// upserts an existing row for `(scout_staff_id, player_id)` or
 /// creates a fresh one. Pure-state mutation — no side effects beyond
 /// the plan.
-fn apply_monitoring_update(
-    plan: &mut ClubTransferPlan,
-    update: MonitoringUpdate,
-    date: NaiveDate,
-) {
+fn apply_monitoring_update(plan: &mut ClubTransferPlan, update: MonitoringUpdate, date: NaiveDate) {
     if let Some(existing) = plan.find_monitoring_mut(update.scout_staff_id, update.player_id) {
         // Refresh linkage if monitoring originated from a different
         // request and now matches an active one — prefer the newer

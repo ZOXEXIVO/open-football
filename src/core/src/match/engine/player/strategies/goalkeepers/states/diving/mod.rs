@@ -99,10 +99,10 @@ impl GoalkeeperDivingState {
 
         // Direction error scales with poor skill and fatigue, eased by
         // good positioning. Range: ~0..0.6 rad band; elite stays tight.
-        let direction_error = (0.05 + prof.poor_skill_penalty * 0.34
-            + (1.0 - prof.condition_mult) * 0.16
-            - prof.positioning * 0.10)
-            .clamp(0.0, 0.55);
+        let direction_error =
+            (0.05 + prof.poor_skill_penalty * 0.34 + (1.0 - prof.condition_mult) * 0.16
+                - prof.positioning * 0.10)
+                .clamp(0.0, 0.55);
         let random_angle = (rand::random::<f32>() - 0.5) * direction_error;
         dive_direction = nalgebra::Rotation3::new(Vector3::z() * random_angle) * dive_direction;
 
@@ -147,10 +147,8 @@ impl GoalkeeperDivingState {
 
         // Effective dive radius scales with skill: weak ~12u, elite
         // ~30u. Beyond that the keeper cannot get a hand on the ball.
-        let catch_distance = 6.0
-            + prof.dive_reach * 10.0
-            + prof.handling_profile * 4.0
-            + prof.shot_stopping * 4.0;
+        let catch_distance =
+            6.0 + prof.dive_reach * 10.0 + prof.handling_profile * 4.0 + prof.shot_stopping * 4.0;
         if ball_distance > catch_distance {
             return false;
         }

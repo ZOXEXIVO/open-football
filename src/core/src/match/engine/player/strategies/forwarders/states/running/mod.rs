@@ -8,9 +8,8 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::{
-    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition,
-    PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
+    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -450,9 +449,15 @@ impl StateProcessingHandler for ForwardRunningState {
                 {
                     use std::sync::atomic::Ordering;
                     match _decision {
-                        ShotDecision::Shoot { .. } => shot_gate_stats::HELPER_SHOOT.fetch_add(1, Ordering::Relaxed),
-                        ShotDecision::Pass => shot_gate_stats::HELPER_PASS.fetch_add(1, Ordering::Relaxed),
-                        ShotDecision::Hold => shot_gate_stats::HELPER_HOLD.fetch_add(1, Ordering::Relaxed),
+                        ShotDecision::Shoot { .. } => {
+                            shot_gate_stats::HELPER_SHOOT.fetch_add(1, Ordering::Relaxed)
+                        }
+                        ShotDecision::Pass => {
+                            shot_gate_stats::HELPER_PASS.fetch_add(1, Ordering::Relaxed)
+                        }
+                        ShotDecision::Hold => {
+                            shot_gate_stats::HELPER_HOLD.fetch_add(1, Ordering::Relaxed)
+                        }
                     };
                 }
                 match _decision {
@@ -460,9 +465,7 @@ impl StateProcessingHandler for ForwardRunningState {
                         // GM suppression veto — protect-a-result teams
                         // recycle even with a clear shot. Scale tail
                         // beyond gm > 0.40; under that, no suppression.
-                        if gm_suppression < 1.0
-                            && rand::random::<f32>() >= gm_suppression
-                        {
+                        if gm_suppression < 1.0 && rand::random::<f32>() >= gm_suppression {
                             // Suppressed by game-management — under
                             // pressure, lay off; otherwise keep running.
                             let under_pressure =
@@ -491,8 +494,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     ShotDecision::Hold => {
                         // Helper said "not now" — under pressure lay off,
                         // otherwise keep running and re-evaluate next tick.
-                        let under_pressure =
-                            ctx.player().pressure().is_under_immediate_pressure();
+                        let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
                         if under_pressure {
                             return Some(StateChangeResult::with_forward_state(
                                 ForwardState::Passing,

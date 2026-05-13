@@ -97,8 +97,7 @@ impl MidfielderSkillProfile {
     pub fn from_ctx(ctx: &StateProcessingContext) -> Self {
         let player = ctx.player;
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let condition_pct =
-            (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
+        let condition_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
 
         let mut pressure_5u: u32 = 0;
         let mut pressure_10u: u32 = 0;
@@ -188,10 +187,12 @@ impl MidfielderSkillProfile {
         // Use a blended "midfielder skill" centred on passing/decisions/
         // vision so the poor_penalty / elite_lift represent the core
         // midfielder package, not a single attribute.
-        let core01 =
-            (passing01 * 0.30 + decisions01 * 0.25 + vision01 * 0.20 + composure01 * 0.15
-                + technique01 * 0.10)
-                .clamp(0.0, 1.0);
+        let core01 = (passing01 * 0.30
+            + decisions01 * 0.25
+            + vision01 * 0.20
+            + composure01 * 0.15
+            + technique01 * 0.10)
+            .clamp(0.0, 1.0);
         let poor_penalty = smoothstep(0.45, 0.18, core01);
         let elite_lift = smoothstep(0.72, 0.95, core01);
 
@@ -201,8 +202,7 @@ impl MidfielderSkillProfile {
         let match_readiness01 = norm01(s.physical.match_readiness);
         let fitness = stamina01 * 0.45 + nat_fit01 * 0.35 + match_readiness01 * 0.20;
         let fatigue = (1.0 - cond).max(0.0).powf(1.25);
-        let jadedness =
-            (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
+        let jadedness = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
         let jadedness_penalty = jadedness * 0.18;
         let fitness_recovery = 1.0 - fatigue * (0.16 + fitness * 0.20);
         let mental_fatigue = 1.0 - fatigue * (0.10 + poor_penalty * 0.18);
@@ -212,9 +212,8 @@ impl MidfielderSkillProfile {
         } else {
             1.0
         };
-        let mid_condition_mult = (fitness_recovery * mental_fatigue * late_drop
-            - jadedness_penalty)
-            .clamp(0.52, 1.03);
+        let mid_condition_mult =
+            (fitness_recovery * mental_fatigue * late_drop - jadedness_penalty).clamp(0.52, 1.03);
 
         let stamina_curve = pow_curve(stamina01, 1.20);
         let composure_curve = pow_curve(composure01, 1.30);
@@ -453,8 +452,7 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType,
-        PlayerPositions,
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
     };
     use chrono::NaiveDate;
 
@@ -589,16 +587,22 @@ mod tests {
     fn fatigue_reduces_pressing() {
         let fresh_skills = build_player(15.0, 9500);
         let tired_skills = build_player(15.0, 2500);
-        let fresh = MidfielderSkillProfile::from_player(&fresh_skills, &MidfielderSkillInputs {
-            minute: 80,
-            condition_pct: 0.95,
-            ..default_inputs()
-        });
-        let tired = MidfielderSkillProfile::from_player(&tired_skills, &MidfielderSkillInputs {
-            minute: 80,
-            condition_pct: 0.25,
-            ..default_inputs()
-        });
+        let fresh = MidfielderSkillProfile::from_player(
+            &fresh_skills,
+            &MidfielderSkillInputs {
+                minute: 80,
+                condition_pct: 0.95,
+                ..default_inputs()
+            },
+        );
+        let tired = MidfielderSkillProfile::from_player(
+            &tired_skills,
+            &MidfielderSkillInputs {
+                minute: 80,
+                condition_pct: 0.25,
+                ..default_inputs()
+            },
+        );
         assert!(fresh.pressing_profile > tired.pressing_profile);
         assert!(fresh.mid_condition_mult > tired.mid_condition_mult);
     }
@@ -613,10 +617,8 @@ mod tests {
         reckless.skills.mental.composure = 7.0;
         reckless.skills.mental.decisions = 7.0;
         reckless.skills.mental.aggression = 18.0;
-        let cd = MidfielderSkillProfile::from_player(&composed, &default_inputs())
-            .discipline;
-        let rd = MidfielderSkillProfile::from_player(&reckless, &default_inputs())
-            .discipline;
+        let cd = MidfielderSkillProfile::from_player(&composed, &default_inputs()).discipline;
+        let rd = MidfielderSkillProfile::from_player(&reckless, &default_inputs()).discipline;
         assert!(cd > rd + 0.10, "composed={cd} reckless={rd}");
     }
 }

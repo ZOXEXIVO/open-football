@@ -57,8 +57,7 @@ impl GoalkeeperKickingState {
         // Kicking range scales with the unified distribution profile —
         // weak keepers can't reliably reach 300m, so cap the search.
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-        let max_distance =
-            ctx.context.field_size.width as f32 * (1.2 + prof.distribution * 1.6);
+        let max_distance = ctx.context.field_size.width as f32 * (1.2 + prof.distribution * 1.6);
 
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
         let kicking_skill = ctx.player.skills.goalkeeping.kicking / 20.0;

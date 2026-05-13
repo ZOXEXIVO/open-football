@@ -116,8 +116,7 @@ impl GoalkeeperSkillProfile {
     pub fn from_ctx(ctx: &StateProcessingContext) -> Self {
         let player = ctx.player;
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let condition_pct =
-            (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
+        let condition_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
         Self::from_player(
             player,
             &GoalkeeperSkillInputs {
@@ -144,8 +143,7 @@ impl GoalkeeperSkillProfile {
         let gk_passing_eff = effective_skill(player, s.goalkeeping.passing, tech);
         let gk_first_touch_eff = effective_skill(player, s.goalkeeping.first_touch, tech);
         let rushing_out_eff = effective_skill(player, s.goalkeeping.rushing_out, tech);
-        let command_of_area_eff =
-            effective_skill(player, s.goalkeeping.command_of_area, mental);
+        let command_of_area_eff = effective_skill(player, s.goalkeeping.command_of_area, mental);
         let communication_eff = effective_skill(player, s.goalkeeping.communication, mental);
 
         // ── Mental reads ─────────────────────────────────────────────
@@ -216,8 +214,7 @@ impl GoalkeeperSkillProfile {
         // ── Conditioning ─────────────────────────────────────────────
         let condition = inputs.condition_pct.clamp(0.0, 1.0);
         let fatigue = (1.0 - condition).max(0.0).powf(1.25);
-        let jaded =
-            (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
+        let jaded = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
 
         let fitness_base = stamina01 * 0.30
             + nat_fitness01 * 0.25
@@ -225,16 +222,12 @@ impl GoalkeeperSkillProfile {
             + concentration01 * 0.15
             + determination01 * 0.10;
 
-        let condition_mult = (1.03
-            - fatigue * (0.34 + (1.0 - fitness_base) * 0.24)
-            - jaded * 0.18)
+        let condition_mult = (1.03 - fatigue * (0.34 + (1.0 - fitness_base) * 0.24) - jaded * 0.18)
             .clamp(0.52, 1.03);
 
         let explosive_mult = (condition_mult - fatigue * 0.10).clamp(0.45, 1.02);
-        let handling_mult =
-            (condition_mult - fatigue * 0.07 - jaded * 0.06).clamp(0.50, 1.02);
-        let decision_mult =
-            (condition_mult - fatigue * 0.08 - jaded * 0.10).clamp(0.48, 1.02);
+        let handling_mult = (condition_mult - fatigue * 0.07 - jaded * 0.06).clamp(0.50, 1.02);
+        let decision_mult = (condition_mult - fatigue * 0.08 - jaded * 0.10).clamp(0.48, 1.02);
 
         // ── Composite profiles ───────────────────────────────────────
         let shot_stopping_raw = reaction_curve(reflexes01) * 0.28
@@ -245,8 +238,7 @@ impl GoalkeeperSkillProfile {
             + handling_curve(handling01) * 0.08
             + keeper_curve(concentration01) * 0.06
             + keeper_curve(composure01) * 0.04;
-        let shot_stopping = (shot_stopping_raw * condition_mult
-            - poor_skill_penalty * 0.10
+        let shot_stopping = (shot_stopping_raw * condition_mult - poor_skill_penalty * 0.10
             + elite_lift)
             .clamp(0.0, 1.0);
 
@@ -304,8 +296,7 @@ impl GoalkeeperSkillProfile {
             + keeper_curve(composure01) * 0.08
             + keeper_curve(one_on_ones01) * 0.08
             + keeper_curve(bravery01) * 0.04;
-        let rushing_out_profile =
-            (rushing_out_raw * explosive_mult).clamp(0.0, 1.0);
+        let rushing_out_profile = (rushing_out_raw * explosive_mult).clamp(0.0, 1.0);
 
         let one_v_one = (reaction_curve(one_on_ones01) * 0.26
             + reaction_curve(reflexes01) * 0.18
@@ -337,12 +328,9 @@ impl GoalkeeperSkillProfile {
         // Effective ranges in game units. The legacy code used fixed
         // 35..40u catch / dive distances regardless of skill; here, weak
         // keepers shrink to ~14..16u while elite ones extend to ~42..48u.
-        let effective_dive_distance =
-            14.0 + dive_reach * 28.0 + positioning_profile * 6.0;
-        let effective_catch_distance =
-            10.0 + handling_profile * 16.0 + positioning_profile * 5.0;
-        let effective_punch_distance =
-            8.0 + aerial_command * 14.0 + parry_control * 6.0;
+        let effective_dive_distance = 14.0 + dive_reach * 28.0 + positioning_profile * 6.0;
+        let effective_catch_distance = 10.0 + handling_profile * 16.0 + positioning_profile * 5.0;
+        let effective_punch_distance = 8.0 + aerial_command * 14.0 + parry_control * 6.0;
 
         GoalkeeperSkillProfile {
             shot_stopping,
@@ -439,12 +427,7 @@ impl GoalkeeperSkillProfile {
     }
 
     /// Whether the keeper should punch instead of catch.
-    pub fn should_punch(
-        &self,
-        catch_prob: f32,
-        crowd_factor: f32,
-        shot_power_factor: f32,
-    ) -> bool {
+    pub fn should_punch(&self, catch_prob: f32, crowd_factor: f32, shot_power_factor: f32) -> bool {
         self.aerial_command > 0.30
             && (catch_prob < 0.44 || crowd_factor > 0.55 || shot_power_factor > 0.65)
     }
@@ -479,8 +462,7 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType,
-        PlayerPositions,
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
     };
     use chrono::NaiveDate;
 
@@ -578,14 +560,9 @@ mod tests {
 
     #[test]
     fn weak_keeper_concedes_high_quality_shots() {
-        let weak = GoalkeeperSkillProfile::from_player(
-            &build_keeper(5.0, 9000),
-            &default_inputs(),
-        );
-        let elite = GoalkeeperSkillProfile::from_player(
-            &build_keeper(17.0, 9000),
-            &default_inputs(),
-        );
+        let weak = GoalkeeperSkillProfile::from_player(&build_keeper(5.0, 9000), &default_inputs());
+        let elite =
+            GoalkeeperSkillProfile::from_player(&build_keeper(17.0, 9000), &default_inputs());
         // High shot difficulty (well-placed, powerful shot).
         let weak_save = weak.save_probability(0.85);
         let elite_save = elite.save_probability(0.85);
@@ -595,14 +572,9 @@ mod tests {
 
     #[test]
     fn weak_keeper_creates_more_dangerous_rebounds() {
-        let weak = GoalkeeperSkillProfile::from_player(
-            &build_keeper(5.0, 9000),
-            &default_inputs(),
-        );
-        let elite = GoalkeeperSkillProfile::from_player(
-            &build_keeper(17.0, 9000),
-            &default_inputs(),
-        );
+        let weak = GoalkeeperSkillProfile::from_player(&build_keeper(5.0, 9000), &default_inputs());
+        let elite =
+            GoalkeeperSkillProfile::from_player(&build_keeper(17.0, 9000), &default_inputs());
         let pressure = 0.4;
         assert!(
             weak.dangerous_rebound_probability(pressure)
@@ -633,16 +605,9 @@ mod tests {
 
     #[test]
     fn distribution_skill_lowers_turnover_risk() {
-        let weak = GoalkeeperSkillProfile::from_player(
-            &build_keeper(5.0, 9000),
-            &default_inputs(),
-        );
-        let elite = GoalkeeperSkillProfile::from_player(
-            &build_keeper(17.0, 9000),
-            &default_inputs(),
-        );
-        assert!(
-            weak.turnover_risk(0.4, 0.4, 0.2) > elite.turnover_risk(0.4, 0.4, 0.2) + 0.10
-        );
+        let weak = GoalkeeperSkillProfile::from_player(&build_keeper(5.0, 9000), &default_inputs());
+        let elite =
+            GoalkeeperSkillProfile::from_player(&build_keeper(17.0, 9000), &default_inputs());
+        assert!(weak.turnover_risk(0.4, 0.4, 0.2) > elite.turnover_risk(0.4, 0.4, 0.2) + 0.10);
     }
 }

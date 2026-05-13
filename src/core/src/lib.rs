@@ -1,81 +1,46 @@
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
-static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(false);
-
-pub fn set_match_events_mode(enabled: bool) {
-    STORE_MATCH_EVENTS_MODE.store(enabled, Ordering::SeqCst);
-}
-
-pub fn is_match_events_mode() -> bool {
-    STORE_MATCH_EVENTS_MODE.load(Ordering::SeqCst)
-}
-
-pub fn set_match_recordings_mode(enabled: bool) {
-    MATCH_RECORDINGS_MODE.store(enabled, Ordering::SeqCst);
-}
-
-pub fn is_match_recordings_mode() -> bool {
-    MATCH_RECORDINGS_MODE.load(Ordering::SeqCst)
-}
-
-static MATCH_STORE_MAX_THREADS: AtomicUsize = AtomicUsize::new(4);
-
-pub fn set_match_store_max_threads(n: usize) {
-    MATCH_STORE_MAX_THREADS.store(n, Ordering::SeqCst);
-}
-
-pub fn match_store_max_threads() -> usize {
-    MATCH_STORE_MAX_THREADS.load(Ordering::SeqCst)
-}
-
-static MATCH_ENGINE_POOL: OnceLock<r#match::MatchPlayEnginePool> = OnceLock::new();
-
-pub fn init_match_engine_pool(num_threads: usize) {
-    MATCH_ENGINE_POOL.get_or_init(|| r#match::MatchPlayEnginePool::new(num_threads));
-}
-
-pub fn match_engine_pool() -> &'static r#match::MatchPlayEnginePool {
-    MATCH_ENGINE_POOL.get_or_init(|| {
-        let cpus = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-        r#match::MatchPlayEnginePool::new(cpus)
-    })
-}
-
-// Re-export shot-gate diagnostic counters for the dev stats harness.
-// Only compiled with the `match-logs` feature.
-#[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::player::events::players::save_accounting_stats;
-#[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::player::strategies::forwarders::states::running::shot_gate_stats;
-#[cfg(feature = "match-logs")]
-pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
-#[cfg(feature = "match-logs")]
-pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::helper_diag;
-
-pub mod config;
-pub mod performance;
-pub mod simulator;
-pub use config::SimulatorConfig;
-pub use continent::national::world::emergency_callups_total;
-pub use performance::{PerfCounters, PerfPhase, PerfSnapshot, PhaseScope, TickEndContext};
-pub use simulator::*;
-
+pub mod ai;
 pub mod club;
 pub mod competitions;
+pub mod config;
 pub mod context;
 pub mod continent;
 pub mod country;
 pub mod league;
 pub mod r#match;
-pub mod transfers;
-
-pub mod ai;
+pub mod performance;
 pub mod shared;
+pub mod simulator;
+pub mod transfers;
 pub mod utils;
+
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+pub use ai::*;
+pub use competitions::*;
+pub use config::SimulatorConfig;
+pub use continent::national::world::emergency_callups_total;
+pub use continent::national::{
+    CompetitionPhase, CompetitionScope, FixtureResult, GroupFixture, GroupStanding,
+    KnockoutBracket, KnockoutFixture, KnockoutResult, KnockoutRound, NationalCompetitionConfig,
+    NationalCompetitionFixture, NationalCompetitionPhase, NationalTeamCompetition,
+    NationalTeamCompetitions, QualifyingConfig, QualifyingGroup, QualifyingPosition,
+    QualifyingZoneConfig, ScheduleConfig, ScheduleDate, TournamentConfig,
+};
+// Namespace conflicting CompetitionType enums
+// Country's CompetitionType is for continental competitions (ChampionsLeague, etc.)
+pub use country::CompetitionType as ContinentalCompetitionType;
+pub use country::{
+    CallUpReason, Country, CountryContext, CountryEconomicFactors, CountryGeneratorData,
+    CountryPricing, CountryRegulations, CountryResult, CountrySettings, InternationalCompetition,
+    MediaCoverage, MediaStory, NationalSquadPlayer, NationalTeam, NationalTeamFixture,
+    NationalTeamMatchResult, NationalTeamStaffMember, NationalTeamStaffRole,
+    PeopleNameGeneratorData, SkinColorDistribution, SquadPick, StoryType,
+};
+pub use nalgebra::*;
+pub use performance::{PerfCounters, PerfPhase, PerfSnapshot, PhaseScope, TickEndContext};
+pub use simulator::*;
+pub use utils::*;
 
 // Re-export club items
 pub use club::{
@@ -398,29 +363,55 @@ pub use club::{
     transfers as club_transfers,
 };
 
-// Re-export country items
-pub use country::{
-    CallUpReason, Country, CountryContext, CountryEconomicFactors, CountryGeneratorData,
-    CountryPricing, CountryRegulations, CountryResult, CountrySettings, InternationalCompetition,
-    MediaCoverage, MediaStory, NationalSquadPlayer, NationalTeam, NationalTeamFixture,
-    NationalTeamMatchResult, NationalTeamStaffMember, NationalTeamStaffRole,
-    PeopleNameGeneratorData, SkinColorDistribution, SquadPick, StoryType,
-};
+// Re-export shot-gate diagnostic counters for the dev stats harness.
+// Only compiled with the `match-logs` feature.
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::player::events::players::save_accounting_stats;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::player::strategies::forwarders::states::running::shot_gate_stats;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::helper_diag;
 
-pub use continent::national::{
-    CompetitionPhase, CompetitionScope, FixtureResult, GroupFixture, GroupStanding,
-    KnockoutBracket, KnockoutFixture, KnockoutResult, KnockoutRound, NationalCompetitionConfig,
-    NationalCompetitionFixture, NationalCompetitionPhase, NationalTeamCompetition,
-    NationalTeamCompetitions, QualifyingConfig, QualifyingGroup, QualifyingPosition,
-    QualifyingZoneConfig, ScheduleConfig, ScheduleDate, TournamentConfig,
-};
+static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
+static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(false);
+static MATCH_STORE_MAX_THREADS: AtomicUsize = AtomicUsize::new(4);
+static MATCH_ENGINE_POOL: OnceLock<r#match::MatchPlayEnginePool> = OnceLock::new();
 
-pub use competitions::*;
+pub fn set_match_events_mode(enabled: bool) {
+    STORE_MATCH_EVENTS_MODE.store(enabled, Ordering::SeqCst);
+}
 
-// Namespace conflicting CompetitionType enums
-// Country's CompetitionType is for continental competitions (ChampionsLeague, etc.)
-pub use country::CompetitionType as ContinentalCompetitionType;
+pub fn is_match_events_mode() -> bool {
+    STORE_MATCH_EVENTS_MODE.load(Ordering::SeqCst)
+}
 
-pub use ai::*;
-pub use nalgebra::*;
-pub use utils::*;
+pub fn set_match_recordings_mode(enabled: bool) {
+    MATCH_RECORDINGS_MODE.store(enabled, Ordering::SeqCst);
+}
+
+pub fn is_match_recordings_mode() -> bool {
+    MATCH_RECORDINGS_MODE.load(Ordering::SeqCst)
+}
+
+pub fn set_match_store_max_threads(n: usize) {
+    MATCH_STORE_MAX_THREADS.store(n, Ordering::SeqCst);
+}
+
+pub fn match_store_max_threads() -> usize {
+    MATCH_STORE_MAX_THREADS.load(Ordering::SeqCst)
+}
+
+pub fn init_match_engine_pool(num_threads: usize) {
+    MATCH_ENGINE_POOL.get_or_init(|| r#match::MatchPlayEnginePool::new(num_threads));
+}
+
+pub fn match_engine_pool() -> &'static r#match::MatchPlayEnginePool {
+    MATCH_ENGINE_POOL.get_or_init(|| {
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        r#match::MatchPlayEnginePool::new(cpus)
+    })
+}

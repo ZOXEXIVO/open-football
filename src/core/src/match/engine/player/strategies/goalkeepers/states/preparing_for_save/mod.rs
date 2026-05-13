@@ -101,8 +101,8 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
         // Sprint speed boost — gated by explosive multiplier.
-        let speed_boost = (1.6 + prof.shot_stopping * 0.6 + prof.dive_reach * 0.5)
-            * prof.explosive_mult;
+        let speed_boost =
+            (1.6 + prof.shot_stopping * 0.6 + prof.dive_reach * 0.5) * prof.explosive_mult;
 
         // If a shot has been fired, the projected goal-line crossing is
         // cached on the ball. Commit to that line instead of chasing
@@ -192,8 +192,7 @@ impl GoalkeeperPreparingForSaveState {
         // condition; ball-speed branches differ in reaction window.
         let effective = prof.effective_dive_distance;
         if ball_speed > 1.5 {
-            ball_distance < effective
-                && time_to_ball < (18.0 + prof.shot_stopping * 22.0)
+            ball_distance < effective && time_to_ball < (18.0 + prof.shot_stopping * 22.0)
         } else if ball_speed > 0.8 {
             ball_distance < (effective * 0.85)
         } else {
@@ -225,8 +224,7 @@ impl GoalkeeperPreparingForSaveState {
         let power_factor = ((ball_speed - 4.0) / 8.0).clamp(0.0, 1.0);
         // Build a synthetic catch_prob: aerial command + handling
         // discounted by crowd + power.
-        let synthetic_catch = (prof.handling_profile * 0.55
-            + prof.aerial_command * 0.45
+        let synthetic_catch = (prof.handling_profile * 0.55 + prof.aerial_command * 0.45
             - power_factor * 0.20
             - crowd * 0.20)
             .clamp(0.0, 1.0);

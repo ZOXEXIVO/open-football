@@ -886,9 +886,9 @@ mod tests {
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
-        ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes, PlayerClubContract,
-        PlayerCollection, PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder,
-        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerClubContract, PlayerCollection, PlayerPositions, PlayerSkills, StaffCollection,
+        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::NaiveDate;
 
@@ -967,12 +967,10 @@ mod tests {
         let today = d(2026, 5, 1);
         let player = make_player(101);
         let club = make_club_with_player(player);
-        let analysis =
-            CountryResult::analyze_squad_needs(&club, today);
+        let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
-            player_ref, &analysis, &club, today, None,
-        );
+        let decision =
+            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
         assert!(
             matches!(decision, ListingDecision::Keep),
             "pure expiry must not list — saw {:?}",

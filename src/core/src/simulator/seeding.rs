@@ -51,10 +51,7 @@ pub(super) struct ClubSeedingContext {
 }
 
 impl ClubSeedingContext {
-    pub(super) fn resolve(
-        club: &Club,
-        league_lookup: &HashMap<u32, (String, String)>,
-    ) -> Self {
+    pub(super) fn resolve(club: &Club, league_lookup: &HashMap<u32, (String, String)>) -> Self {
         let main_team = club.teams.main();
         let main_name = main_team.map(|t| t.name.clone());
         let main_slug = main_team.map(|t| t.slug.clone());

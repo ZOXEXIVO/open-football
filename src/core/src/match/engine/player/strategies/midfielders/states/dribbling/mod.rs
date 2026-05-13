@@ -30,8 +30,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
         if has_clear_shot
             && distance_to_goal <= 32.0
             && shot_profile.expected_xg(distance_to_goal, true) >= 0.13
-            && (mid_profile.mid_shot_selection >= 0.42
-                || shot_profile.execution_skill >= 0.55)
+            && (mid_profile.mid_shot_selection >= 0.42 || shot_profile.execution_skill >= 0.55)
         {
             return Some(
                 StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
@@ -44,9 +43,10 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // miscueing the easy chance. Real point-blank shots succeed for
         // composed finishers; panicked low-skill players hit the keeper.
         if distance_to_goal < 22.0 {
-            let point_blank_willingness =
-                (0.10 + shot_profile.selection_skill * 0.30 + mid_profile.mid_shot_selection * 0.20)
-                    .clamp(0.12, 0.65);
+            let point_blank_willingness = (0.10
+                + shot_profile.selection_skill * 0.30
+                + mid_profile.mid_shot_selection * 0.20)
+                .clamp(0.12, 0.65);
             if rand::random::<f32>() < point_blank_willingness {
                 return Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
@@ -71,10 +71,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // a hurried release.
         let close_opponents = ctx.players().opponents().nearby(15.0).count();
         if close_opponents >= 2 {
-            if distance_to_goal < 32.0
-                && has_clear_shot
-                && mid_profile.mid_shot_selection >= 0.50
-            {
+            if distance_to_goal < 32.0 && has_clear_shot && mid_profile.mid_shot_selection >= 0.50 {
                 return Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                         .with_shot_reason("MID_DRIB_PRESSURED_SHOOT"),

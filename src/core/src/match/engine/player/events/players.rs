@@ -1848,7 +1848,14 @@ impl PlayerEventDispatcher {
 
         // Snapshot the bits of state we need from `field` so we can
         // build the profile without juggling overlapping borrows.
-        let (condition_pct, shooter_position, shooter_side, technique_skill, finishing_skill, long_shot_skill) = {
+        let (
+            condition_pct,
+            shooter_position,
+            shooter_side,
+            technique_skill,
+            finishing_skill,
+            long_shot_skill,
+        ) = {
             let player = field.get_player(shoot_event_model.from_player_id).unwrap();
             (
                 (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0),
@@ -2007,8 +2014,7 @@ impl PlayerEventDispatcher {
         // boosted by `poor_penalty` so a 5/20 player has a hard floor
         // they can't aim under even at 6u.
         let distance_error = (horizontal_distance / 80.0).clamp(0.75, 3.0);
-        let pressure_error =
-            1.0 + pressure_penalty * 0.55 + (pressure_5u as f32) * 0.04;
+        let pressure_error = 1.0 + pressure_penalty * 0.55 + (pressure_5u as f32) * 0.04;
         let body_error = 1.0 + (1.0 - body_control) * 0.30;
         let condition_error = 1.0 + low_condition_penalty * 0.45;
         // Base y-error tightened progressively: 34 → 22 → 16. Goal

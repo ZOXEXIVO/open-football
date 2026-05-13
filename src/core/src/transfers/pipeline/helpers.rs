@@ -280,7 +280,11 @@ impl PipelineProcessor {
         player_id: u32,
         group: PlayerFieldPositionGroup,
     ) -> u8 {
-        let team = match club.teams.iter().find(|t| matches!(t.team_type, TeamType::Main)) {
+        let team = match club
+            .teams
+            .iter()
+            .find(|t| matches!(t.team_type, TeamType::Main))
+        {
             Some(t) => t,
             None => return u8::MAX,
         };
@@ -301,7 +305,11 @@ impl PipelineProcessor {
 
     /// Best CA at the given position group on the club's main team.
     pub(crate) fn best_ca_in_group(club: &Club, group: PlayerFieldPositionGroup) -> u8 {
-        let team = match club.teams.iter().find(|t| matches!(t.team_type, TeamType::Main)) {
+        let team = match club
+            .teams
+            .iter()
+            .find(|t| matches!(t.team_type, TeamType::Main))
+        {
             Some(t) => t,
             None => return 0,
         };

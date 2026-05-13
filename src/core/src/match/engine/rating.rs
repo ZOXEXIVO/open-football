@@ -604,13 +604,15 @@ pub fn calculate_match_rating(
     // 2) Single goal off a low-xG chance with otherwise low
     //    involvement: cap at 7.2.
     if !matches!(pos, PlayerFieldPositionGroup::Goalkeeper) {
-        let total_defensive_actions = stats.tackles
+        let total_defensive_actions = stats
+            .tackles
             .saturating_add(stats.interceptions)
             .saturating_add(stats.successful_pressures)
             .saturating_add(stats.blocks)
             .saturating_add(stats.clearances);
-        let creative_actions =
-            stats.key_passes.saturating_add(stats.progressive_passes / 3);
+        let creative_actions = stats
+            .key_passes
+            .saturating_add(stats.progressive_passes / 3);
 
         if stats.minutes_played >= 60
             && stats.goals == 0
@@ -629,9 +631,8 @@ pub fn calculate_match_rating(
         // strict defensive gate (< 4) so a 4-tackle deep-lying playmaker
         // is still recognised as having done meaningful work.
         let carries_into_box = stats.zone_stats.carries_into_box as u32;
-        let ball_carrying = stats.successful_dribbles as u32
-            + stats.passes_into_box as u32
-            + carries_into_box;
+        let ball_carrying =
+            stats.successful_dribbles as u32 + stats.passes_into_box as u32 + carries_into_box;
         if stats.minutes_played >= 60
             && stats.goals == 0
             && stats.assists == 0
@@ -1355,7 +1356,16 @@ mod tests {
         // events — the rating delta must be at most a rounding
         // difference, not 2.1 (six extra events × 0.35).
         let mut few = make_stats(
-            0, 0, 30, 24, 0, 0, 0, 0, 0, 0.0,
+            0,
+            0,
+            30,
+            24,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
             PlayerFieldPositionGroup::Midfielder,
         );
         few.errors_leading_to_shot = 2;

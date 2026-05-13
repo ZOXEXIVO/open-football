@@ -269,8 +269,7 @@ impl DefenderTacklingState {
         // concentration/tackling blend) instead of raw composure +
         // aggression. Tired defenders foul more (low def_condition_mult
         // adds to foul rate). Failed tackles roughly double the rate.
-        let mut base_foul =
-            0.030 + aggression01 * 0.11 - def_profile.discipline * 0.075;
+        let mut base_foul = 0.030 + aggression01 * 0.11 - def_profile.discipline * 0.075;
         if !tackle_success {
             base_foul *= 1.80;
         }

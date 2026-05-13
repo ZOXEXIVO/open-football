@@ -300,8 +300,7 @@ fn compute_level(
     // negotiation has actually broken down. When the pending ask fits
     // wage headroom we stay at Severe and let the reactive renewal pass
     // converge on the ask instead.
-    let count_alone_exhausts =
-        rejections >= REJECTIONS_FOR_EXHAUSTED && !affordable_actionable;
+    let count_alone_exhausts = rejections >= REJECTIONS_FOR_EXHAUSTED && !affordable_actionable;
     if count_alone_exhausts
         || (rejections >= REJECTIONS_FOR_SEVERE && critical_expiry && !affordable_actionable)
         || (recent && ask_clearly_unaffordable && is_unrest)

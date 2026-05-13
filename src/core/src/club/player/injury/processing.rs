@@ -130,14 +130,13 @@ impl Player {
             // Phase 2: Recovery — post-injury low match fitness phase.
             // Setback risk now uses the unified recipe so workload
             // spikes during rehab actually leak into recurrence chance.
-            let setback_chance =
-                self.compute_injury_risk(InjuryRiskInputs {
-                    base_rate: 0.001,
-                    intensity: 0.5,
-                    in_recovery: true,
-                    medical_multiplier: medical.setback_multiplier(),
-                    now,
-                });
+            let setback_chance = self.compute_injury_risk(InjuryRiskInputs {
+                base_rate: 0.001,
+                intensity: 0.5,
+                in_recovery: true,
+                medical_multiplier: medical.setback_multiplier(),
+                now,
+            });
             if rand::random::<f32>() < setback_chance {
                 if let Some(body_part) =
                     BodyPart::from_u8(self.player_attributes.last_injury_body_part)
@@ -167,14 +166,13 @@ impl Player {
             // condition, NF, jadedness, workload spike, congestion,
             // proneness and medical multipliers consistently with the
             // match/training paths.
-            let injury_chance =
-                self.compute_injury_risk(InjuryRiskInputs {
-                    base_rate: 0.0001,
-                    intensity: 0.6,
-                    in_recovery: false,
-                    medical_multiplier: medical.risk_multiplier(),
-                    now,
-                });
+            let injury_chance = self.compute_injury_risk(InjuryRiskInputs {
+                base_rate: 0.0001,
+                intensity: 0.6,
+                in_recovery: false,
+                medical_multiplier: medical.risk_multiplier(),
+                now,
+            });
 
             if rand::random::<f32>() < injury_chance {
                 let injury = InjuryType::random_spontaneous_injury(injury_proneness);

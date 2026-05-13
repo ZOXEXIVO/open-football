@@ -225,11 +225,10 @@ impl ShotSkillProfile {
         // 0.50-anchor with a tighter linear shape pulls the avg-tier
         // population xG into the 0.10/shot real-football band while
         // preserving the elite/poor spread.
-        let shot_quality_multiplier =
-            (0.50 + execution_skill * 0.85).clamp(0.50, 1.30);
-        let on_target_skill_multiplier =
-            (0.55 + execution_skill * 0.85 - poor_penalty * 0.20 + elite_lift * 0.05)
-                .clamp(0.30, 1.10);
+        let shot_quality_multiplier = (0.50 + execution_skill * 0.85).clamp(0.50, 1.30);
+        let on_target_skill_multiplier = (0.55 + execution_skill * 0.85 - poor_penalty * 0.20
+            + elite_lift * 0.05)
+            .clamp(0.30, 1.10);
         let random_error_scale =
             (1.15 - execution_skill * 0.85 + poor_penalty * 0.15).clamp(0.30, 1.50);
 
@@ -289,8 +288,7 @@ impl ShotSkillProfile {
         };
 
         let clarity_mult = if has_clear_shot { 1.0 } else { 0.35 };
-        let pressure_mult =
-            (1.0 - self.pressure_penalty * 0.85).clamp(0.20, 1.0);
+        let pressure_mult = (1.0 - self.pressure_penalty * 0.85).clamp(0.20, 1.0);
         let mut xg = distance_factor
             * self.shot_quality_multiplier
             * self.shooting_condition_mult
@@ -359,8 +357,7 @@ impl<'p> ShootingOperationsImpl<'p> {
         let player = self.ctx.player;
         let distance = self.ctx.ball().distance_to_opponent_goal();
         let minute = sc::minute_from_ms(self.ctx.context.total_match_time);
-        let condition_pct =
-            (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
+        let condition_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
 
         // Pressure counts (5u and 10u).
         let mut pressure_5u: u32 = 0;
