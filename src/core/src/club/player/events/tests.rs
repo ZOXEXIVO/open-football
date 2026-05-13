@@ -8,6 +8,7 @@
 
 use super::types::{MatchOutcome, MatchParticipation};
 use crate::club::player::builder::PlayerBuilder;
+use InjuryRiskInputs;
 use crate::club::player::player::Player;
 use crate::r#match::engine::result::PlayerMatchEndStats;
 use crate::shared::fullname::FullName;
@@ -2151,14 +2152,14 @@ fn returning_from_injury_player_carries_elevated_match_risk() {
     returning.load.physical_load_30 = 300.0;
 
     let date = d(2025, 9, 14);
-    let inputs_h = crate::club::player::condition::InjuryRiskInputs {
+    let inputs_h = InjuryRiskInputs {
         base_rate: 0.005,
         intensity: 1.0,
         in_recovery: false,
         medical_multiplier: 1.0,
         now: date,
     };
-    let inputs_r = crate::club::player::condition::InjuryRiskInputs {
+    let inputs_r = InjuryRiskInputs {
         base_rate: 0.005,
         intensity: 1.0,
         in_recovery: true,

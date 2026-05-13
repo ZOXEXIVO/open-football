@@ -3,7 +3,7 @@ use crate::club::board::BoardMoodState;
 use crate::club::board::manager_market;
 use crate::club::staff::free_pool;
 use crate::simulator::SimulatorData;
-use crate::{StaffEventType, TeamType};
+use crate::{Staff, StaffEventType, TeamType};
 use chrono::Datelike;
 use log::{debug, info};
 
@@ -80,7 +80,7 @@ impl BoardResult {
         // to the global free-agent pool *after* the club borrow ends —
         // `data.free_agent_staff` is on the same `data` and the borrow
         // checker won't allow both mut paths simultaneously.
-        let mut sacked_staff: Option<crate::Staff> = None;
+        let mut sacked_staff: Option<Staff> = None;
         // Mirror for confirm-new-manager: the appointment runs in
         // `manager_market::execute_appointment` after the club borrow
         // ends because it needs concurrent access to the pool.

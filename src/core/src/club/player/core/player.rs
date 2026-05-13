@@ -2,7 +2,7 @@ use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::development::CoachingEffect;
-use crate::club::player::happiness::TeamSeasonState;
+use crate::club::player::happiness::{ClubMoraleContext, TeamSeasonState};
 use crate::club::player::injury::processing::MedicalStaffQuality;
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::language::PlayerLanguage;
@@ -11,6 +11,7 @@ use crate::club::player::mailbox::PlayerContractAsk;
 use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
+use crate::club::player::transfer::free_agent_market::FreeAgentMarketState;
 use crate::club::player::transfer::processing::TransferDesireContext;
 use crate::club::player::utils::PlayerUtils;
 use crate::club::{
@@ -191,8 +192,7 @@ pub struct Player {
     /// agent. Read via `Player::free_agent_state()`. Mutation is owner-
     /// side via `on_release` / `on_offer_received` / `clear_free_agent_state`
     /// — defined in `crate::club::player::transfer::free_agent_market`.
-    pub(crate) free_agent_state:
-        Option<crate::club::player::transfer::free_agent_market::FreeAgentMarketState>,
+    pub(crate) free_agent_state: Option<FreeAgentMarketState>,
 
     /// Snapshot of compatriot / shared-language teammate counts written
     /// by the team's weekly pre-tick. Read by the desire pipeline; not
@@ -869,7 +869,7 @@ impl Player {
             let club_morale_ctx = ctx
                 .club
                 .as_ref()
-                .map(|c| crate::club::player::happiness::ClubMoraleContext {
+                .map(|c| ClubMoraleContext {
                     coach_best_technical: c.coach_best_technical,
                     coach_best_mental: c.coach_best_mental,
                     coach_best_fitness: c.coach_best_fitness,
@@ -1146,7 +1146,7 @@ impl Player {
 /// Sensible per-kind default for `target_value` when callers don't
 /// supply one. Reads the player's contract so the threshold matches
 /// their stated squad role.
-fn default_target(kind: ManagerPromiseKind, contract: &Option<crate::PlayerClubContract>) -> u16 {
+fn default_target(kind: ManagerPromiseKind, contract: &Option<PlayerClubContract>) -> u16 {
     use crate::PlayerSquadStatus::*;
     match kind {
         ManagerPromiseKind::PlayingTime => 0,

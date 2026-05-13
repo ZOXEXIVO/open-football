@@ -1301,7 +1301,7 @@ mod tests {
             let mut s = skills_with_known_values();
             // Overwrite every field to the requested constant. Easier
             // than enumerating each field — `iter_all` confirms shape.
-            s.technical = crate::club::player::skills::Technical {
+            s.technical = Technical {
                 corners: value,
                 crossing: value,
                 dribbling: value,
@@ -1317,7 +1317,7 @@ mod tests {
                 tackling: value,
                 technique: value,
             };
-            s.mental = crate::club::player::skills::Mental {
+            s.mental = Mental {
                 aggression: value,
                 anticipation: value,
                 bravery: value,
@@ -1333,7 +1333,7 @@ mod tests {
                 vision: value,
                 work_rate: value,
             };
-            s.physical = crate::club::player::skills::Physical {
+            s.physical = Physical {
                 acceleration: value,
                 agility: value,
                 balance: value,
@@ -1344,7 +1344,7 @@ mod tests {
                 strength: value,
                 match_readiness: value,
             };
-            s.goalkeeping = crate::club::player::skills::Goalkeeping {
+            s.goalkeeping = Goalkeeping {
                 aerial_reach: value,
                 command_of_area: value,
                 communication: value,

@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
@@ -697,8 +698,7 @@ impl PlayerEventDispatcher {
         player: &MatchPlayer,
         position: Vector3<f32>,
         context: &MatchContext,
-    ) -> Option<crate::r#match::engine::zones::MatchZone> {
-        use crate::r#match::engine::zones::MatchZone;
+    ) -> Option<MatchZone> {
         let side = player.side?;
         let field_w = context.field_size.width as f32;
         let is_home = side == PlayerSide::Left;

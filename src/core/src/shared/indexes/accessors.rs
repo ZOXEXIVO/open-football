@@ -4,6 +4,7 @@ use crate::country::Country;
 use crate::league::League;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::negotiation::NegotiationStatus;
+use crate::transfers::pipeline::{ClubTransferPlan, ScoutPlayerMonitoring};
 use crate::{Club, Player, SimulatorData, Staff, Team};
 use chrono::NaiveDate;
 
@@ -875,7 +876,7 @@ impl SimulatorData {
                         .map(|t| t.slug.clone())
                         .unwrap_or_default();
 
-                    let monitorings: Vec<&crate::transfers::pipeline::ScoutPlayerMonitoring> =
+                    let monitorings: Vec<&ScoutPlayerMonitoring> =
                         plan.monitorings_for_player(player_id);
                     let on_shortlist = plan
                         .shortlists
@@ -1004,7 +1005,7 @@ impl SimulatorData {
             for country in &continent.countries {
                 for club in &country.clubs {
                     let plan = &club.transfer_plan;
-                    let mut rows: Vec<&crate::transfers::pipeline::ScoutPlayerMonitoring> = plan
+                    let mut rows: Vec<&ScoutPlayerMonitoring> = plan
                         .scout_monitoring
                         .iter()
                         .filter(|m| m.scout_staff_id == staff_id)
@@ -1296,7 +1297,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
         }
     }
 
-    fn plan(&self) -> &'a crate::transfers::pipeline::ClubTransferPlan {
+    fn plan(&self) -> &'a ClubTransferPlan {
         &self.club.transfer_plan
     }
 

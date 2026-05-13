@@ -1,3 +1,4 @@
+use crate::club::team::tactics::decision::{TacticalDecisionEngine, TacticalDecisionResult};
 use crate::r#match::EnhancedTacticsSelector;
 use crate::{
     Player, RecommendationPriority, TacticSelectionReason, Tactics, TacticsSelector, Team,
@@ -70,13 +71,8 @@ impl Team {
     }
 
     /// Run comprehensive tactical analysis during team simulation
-    pub fn run_tactical_analysis(
-        &mut self,
-    ) -> crate::club::team::tactics::decision::TacticalDecisionResult {
-        let decisions =
-            crate::club::team::tactics::decision::TacticalDecisionEngine::make_tactical_decisions(
-                self,
-            );
+    pub fn run_tactical_analysis(&mut self) -> TacticalDecisionResult {
+        let decisions = TacticalDecisionEngine::make_tactical_decisions(self);
 
         // Apply formation change if recommended with high confidence
         if let Some(ref change) = decisions.formation_change {

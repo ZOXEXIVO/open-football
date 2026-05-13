@@ -9,9 +9,9 @@ use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::recruitment::{ScoutMonitoringSource, ScoutPlayerMonitoring};
 use crate::transfers::pipeline::scouting_config::ScoutingConfig;
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, PlayerObservation, ReportRiskFlag, ScoutMatchAssignment,
-    ScoutingAssignment, ScoutingRecommendation, TransferNeedPriority, TransferRequest,
-    TransferRequestStatus,
+    ClubTransferPlan, DetailedScoutingReport, PlayerObservation, ReportRiskFlag,
+    ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation, TransferNeedPriority,
+    TransferRequest, TransferRequestStatus,
 };
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
@@ -72,7 +72,7 @@ struct MonitoringUpdate {
     estimated_value: f64,
     risk_flags: Vec<ReportRiskFlag>,
     is_match: bool,
-    region: Option<crate::transfers::ScoutingRegion>,
+    region: Option<ScoutingRegion>,
 }
 
 /// Apply a monitoring update against a `ClubTransferPlan`. Either
@@ -80,7 +80,7 @@ struct MonitoringUpdate {
 /// creates a fresh one. Pure-state mutation — no side effects beyond
 /// the plan.
 fn apply_monitoring_update(
-    plan: &mut crate::transfers::pipeline::ClubTransferPlan,
+    plan: &mut ClubTransferPlan,
     update: MonitoringUpdate,
     date: NaiveDate,
 ) {

@@ -1,4 +1,5 @@
 use crate::PlayerSquadStatus;
+use crate::club::player::agent::PlayerAgent;
 use crate::club::player::player::Player;
 
 /// Wage expectations and club willingness-to-pay.
@@ -278,7 +279,7 @@ impl ContractValuation {
 fn compute_leverage(
     player: &Player,
     ctx: &ValuationContext,
-    agent: &crate::club::player::agent::PlayerAgent,
+    agent: &PlayerAgent,
 ) -> f32 {
     let mut score = 0.0_f32;
 

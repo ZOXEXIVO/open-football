@@ -1,5 +1,5 @@
 use crate::handlers::ProcessContractHandler;
-use crate::{Player, PlayerMailboxResult, PlayerResult};
+use crate::{Player, PlayerMailboxResult, PlayerResult, PlayerSquadStatus};
 use chrono::NaiveDate;
 use std::collections::VecDeque;
 
@@ -30,7 +30,7 @@ pub struct PlayerContractProposal {
 
     // ── Extended package (all optional; None = not offered). ──
     /// Squad role the club is promising. None = keep current.
-    pub squad_status_promise: Option<crate::PlayerSquadStatus>,
+    pub squad_status_promise: Option<PlayerSquadStatus>,
     pub appearance_fee: Option<u32>,
     pub unused_sub_fee: Option<u32>,
     pub goal_bonus: Option<u32>,
@@ -136,7 +136,7 @@ pub struct PlayerContractAsk {
     pub desired_years: u8,
     pub recorded_on: chrono::NaiveDate,
     /// Status the player wants if role was the deal-breaker.
-    pub demanded_status: Option<crate::PlayerSquadStatus>,
+    pub demanded_status: Option<PlayerSquadStatus>,
     /// Fee threshold the player wants on a release clause.
     pub demanded_release_clause: Option<u32>,
     /// Signing/loyalty sweetener the player wants if base wage couldn't budge.

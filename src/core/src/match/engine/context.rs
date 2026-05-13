@@ -1,3 +1,4 @@
+use crate::MatchTacticType;
 use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
 use crate::r#match::engine::environment::MatchEnvironment;
 use crate::r#match::engine::psychology::PsychologyState;
@@ -118,8 +119,8 @@ pub struct MatchContext {
     /// result can show "started 4-4-2 → finished 4-3-3" without the
     /// engine needing to thread the squads through every state
     /// transition.
-    pub starting_home_tactic: Option<crate::MatchTacticType>,
-    pub starting_away_tactic: Option<crate::MatchTacticType>,
+    pub starting_home_tactic: Option<MatchTacticType>,
+    pub starting_away_tactic: Option<MatchTacticType>,
 }
 
 impl MatchContext {

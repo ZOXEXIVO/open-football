@@ -3,6 +3,7 @@ use log::debug;
 use std::collections::HashMap;
 
 use crate::club::BoardTransferProposal;
+use crate::club::board::BoardDossierSummary;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
@@ -456,7 +457,7 @@ impl PipelineProcessor {
                     })
                     .map(|m| m.scout_staff_id);
                 let dossier_summary = if dossier.scout_votes > 0 || dossier.matches_watched > 0 {
-                    Some(crate::club::board::BoardDossierSummary {
+                    Some(BoardDossierSummary {
                         scout_votes: dossier.scout_votes,
                         chief_scout_support: dossier.chief_scout_support,
                         avg_confidence: dossier.avg_confidence,

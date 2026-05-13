@@ -1,3 +1,4 @@
+use crate::club::player::language::Language;
 use crate::club::player::training::result::PlayerTrainingResult;
 use crate::{
     ChangeType, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerTraining,
@@ -337,9 +338,9 @@ impl TeamTraining {
         // mutations afterwards without aliasing the player borrow.
         struct Snap {
             id: u32,
-            position_group: crate::PlayerFieldPositionGroup,
-            primary_lang: Option<crate::club::player::language::Language>,
-            languages: Vec<(crate::club::player::language::Language, u8)>,
+            position_group: PlayerFieldPositionGroup,
+            primary_lang: Option<Language>,
+            languages: Vec<(Language, u8)>,
             morale: f32,
             controversy: f32,
             professionalism: f32,

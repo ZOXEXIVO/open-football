@@ -1,4 +1,5 @@
 use crate::HappinessEventType;
+use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::injury::{BodyPart, InjuryType};
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
@@ -130,7 +131,7 @@ impl Player {
             // Setback risk now uses the unified recipe so workload
             // spikes during rehab actually leak into recurrence chance.
             let setback_chance =
-                self.compute_injury_risk(crate::club::player::condition::InjuryRiskInputs {
+                self.compute_injury_risk(InjuryRiskInputs {
                     base_rate: 0.001,
                     intensity: 0.5,
                     in_recovery: true,
@@ -167,7 +168,7 @@ impl Player {
             // proneness and medical multipliers consistently with the
             // match/training paths.
             let injury_chance =
-                self.compute_injury_risk(crate::club::player::condition::InjuryRiskInputs {
+                self.compute_injury_risk(InjuryRiskInputs {
                     base_rate: 0.0001,
                     intensity: 0.6,
                     in_recovery: false,

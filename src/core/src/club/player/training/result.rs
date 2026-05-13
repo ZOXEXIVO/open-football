@@ -1,3 +1,4 @@
+use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::injury::InjuryType;
 use crate::utils::DateUtils;
 use crate::{
@@ -224,8 +225,7 @@ impl PlayerTrainingResult {
                 ((self.effects.fatigue_change.abs() + self.effects.physical_load_units) / 60.0)
                     .clamp(0.4, 2.0);
             let in_recovery = player.player_attributes.is_in_recovery();
-            let chance =
-                player.compute_injury_risk(crate::club::player::condition::InjuryRiskInputs {
+            let chance = player.compute_injury_risk(InjuryRiskInputs {
                     base_rate: self.effects.injury_risk.max(0.0),
                     intensity: intensity_factor,
                     in_recovery,

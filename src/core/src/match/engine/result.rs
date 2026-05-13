@@ -1,4 +1,4 @@
-﻿use crate::PlayerFieldPositionGroup;
+﻿use crate::{MatchTacticType, PlayerFieldPositionGroup};
 use crate::league::LeagueMatch;
 use crate::r#match::engine::zones::ZoneStats;
 use crate::r#match::player::statistics::MatchStatisticType;
@@ -128,8 +128,8 @@ pub struct MatchResultRaw {
     /// downstream `MatchHistory` show a "starting → final" tactical
     /// summary instead of just "what shape was on the pitch at the
     /// final whistle".
-    pub starting_home_tactic: Option<crate::MatchTacticType>,
-    pub starting_away_tactic: Option<crate::MatchTacticType>,
+    pub starting_home_tactic: Option<MatchTacticType>,
+    pub starting_away_tactic: Option<MatchTacticType>,
     /// The shape each team finished the match in. Differs from the
     /// starting shape when the in-match coach probed a situational
     /// override (`evaluate_situational_shape`) — e.g. 4-4-2 → 4-3-3
@@ -137,8 +137,8 @@ pub struct MatchResultRaw {
     /// the league pipeline can record it on `MatchHistory` and the
     /// web tactics view can render "Plan: 4-4-2 — Last used: 4-3-3
     /// (chase) vs Spurs".
-    pub final_home_tactic: Option<crate::MatchTacticType>,
-    pub final_away_tactic: Option<crate::MatchTacticType>,
+    pub final_home_tactic: Option<MatchTacticType>,
+    pub final_away_tactic: Option<MatchTacticType>,
     /// Sim-minute at which the FIRST shape change fired for either
     /// side (whichever came first). `None` when neither side changed
     /// shape during the match. Stored as the marker the web view uses

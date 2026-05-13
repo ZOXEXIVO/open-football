@@ -1,11 +1,12 @@
-use crate::TeamInfo;
+use crate::club::Team;
+use crate::{Club, Country, TeamInfo};
 use std::collections::HashMap;
 
 /// Collect every team id that participates in `league_id` across the
 /// given clubs. Extracted so `init_league_tables`'s outer loop reads as
 /// "for each league, install a table from the team ids" without an inline
 /// `flat_map` chain.
-pub(super) fn team_ids_for_league(clubs: &[crate::Club], league_id: u32) -> Vec<u32> {
+pub(super) fn team_ids_for_league(clubs: &[Club], league_id: u32) -> Vec<u32> {
     clubs
         .iter()
         .flat_map(|c| c.teams.with_league(league_id))
@@ -14,7 +15,7 @@ pub(super) fn team_ids_for_league(clubs: &[crate::Club], league_id: u32) -> Vec<
 
 /// Per-country `league_id -> (name, slug)` cache. Built once at the start
 /// of a country's seeding sweep so the per-club main-team lookup is O(1).
-pub(super) fn build_league_lookup(country: &crate::Country) -> HashMap<u32, (String, String)> {
+pub(super) fn build_league_lookup(country: &Country) -> HashMap<u32, (String, String)> {
     country
         .leagues
         .leagues
@@ -25,11 +26,11 @@ pub(super) fn build_league_lookup(country: &crate::Country) -> HashMap<u32, (Str
 
 /// True if any team in the club has at least one player needing a current-
 /// season seed entry. Cheap traversal — exits as soon as one is found.
-pub(super) fn club_has_players_needing_seed(club: &crate::Club) -> bool {
+pub(super) fn club_has_players_needing_seed(club: &Club) -> bool {
     club.teams.iter().any(|t| team_has_players_needing_seed(t))
 }
 
-pub(super) fn team_has_players_needing_seed(team: &crate::club::Team) -> bool {
+pub(super) fn team_has_players_needing_seed(team: &Team) -> bool {
     team.players
         .iter()
         .any(|p| p.statistics_history.needs_current_season_seed())
@@ -51,7 +52,7 @@ pub(super) struct ClubSeedingContext {
 
 impl ClubSeedingContext {
     pub(super) fn resolve(
-        club: &crate::Club,
+        club: &Club,
         league_lookup: &HashMap<u32, (String, String)>,
     ) -> Self {
         let main_team = club.teams.main();
@@ -77,7 +78,7 @@ impl ClubSeedingContext {
     /// history. Main, B and Second teams keep their own identity (each
     /// competes in a real league); youth and Reserve squads inherit the
     /// main brand so synthetic sub-league stats aggregate under the club.
-    pub(super) fn team_info_for(&self, team: &crate::club::Team) -> TeamInfo {
+    pub(super) fn team_info_for(&self, team: &Team) -> TeamInfo {
         let keeps_own_identity = team.team_type.is_own_team();
         if keeps_own_identity {
             let (league_name, league_slug) = team

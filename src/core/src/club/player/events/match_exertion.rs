@@ -9,6 +9,8 @@
 use chrono::NaiveDate;
 
 use crate::PlayerStatusType;
+use crate::club::PlayerFieldPositionGroup;
+use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::injury::InjuryType;
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
@@ -213,7 +215,7 @@ impl Player {
 
         let intensity = (match_load / 90.0).clamp(0.4, 2.0);
 
-        let chance = self.compute_injury_risk(crate::club::player::condition::InjuryRiskInputs {
+        let chance = self.compute_injury_risk(InjuryRiskInputs {
             base_rate,
             intensity,
             in_recovery,
@@ -268,7 +270,7 @@ impl PositionLoad {
     /// Share of physical load that comes from high-intensity actions
     /// (sprints, presses, repeated accelerations). Forwards and wide
     /// midfielders sprint more than holding mids; keepers very little.
-    fn high_intensity_share(group: crate::club::PlayerFieldPositionGroup) -> f32 {
+    fn high_intensity_share(group: PlayerFieldPositionGroup) -> f32 {
         use crate::club::PlayerFieldPositionGroup::*;
         match group {
             Goalkeeper => 0.05,

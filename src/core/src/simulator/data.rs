@@ -5,6 +5,7 @@ use super::seeding::{
     team_has_players_needing_seed,
 };
 use crate::PlayerSquadStatus;
+use crate::club::board::manager_market::ManagerApproach;
 use crate::club::player::calculators::WageCalculator;
 use crate::competitions::GlobalCompetitions;
 use crate::continent::Continent;
@@ -48,7 +49,7 @@ pub struct SimulatorData {
     /// requesting-club ↔ candidate ↔ source-club triplet that
     /// progresses through `ApproachState` over ~5 daily ticks before
     /// either resolving in a signing (with cascade) or being rejected.
-    pub pending_manager_approaches: Vec<crate::club::board::manager_market::ManagerApproach>,
+    pub pending_manager_approaches: Vec<ManagerApproach>,
 
     pub watchlist: Vec<u32>,
 

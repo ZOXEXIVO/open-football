@@ -34,8 +34,8 @@ use crate::transfers::pipeline::recruitment::{
     ScoutMonitoringStatus, ScoutPlayerMonitoring, ScoutVote, ScoutVoteChoice, ScoutVoteReason,
 };
 use crate::transfers::pipeline::{
-    ReportRiskFlag, ShortlistCandidate, ShortlistCandidateStatus, TransferRequest,
-    TransferRequestStatus, TransferShortlist,
+    ClubTransferPlan, ReportRiskFlag, ShortlistCandidate, ShortlistCandidateStatus,
+    TransferRequest, TransferRequestStatus, TransferShortlist,
 };
 use crate::utils::IntegerUtils;
 use crate::{Country, StaffEventType};
@@ -612,7 +612,7 @@ impl PipelineProcessor {
     /// shortlist. Stays alongside the rest of the recruitment helpers
     /// so callers don't need to know the meeting internals.
     pub fn build_board_dossier(
-        plan: &crate::transfers::pipeline::ClubTransferPlan,
+        plan: &ClubTransferPlan,
         player_id: u32,
         request_id: u32,
     ) -> BoardRecruitmentDossier {
@@ -685,7 +685,7 @@ impl PipelineProcessor {
 /// inserted with a meeting-stamped score multiplier reflecting the
 /// scout consensus. If no shortlist exists yet we create one (mirrors
 /// the staff-recommendation path).
-fn apply_promotion(plan: &mut crate::transfers::pipeline::ClubTransferPlan, promo: PromotionPlan) {
+fn apply_promotion(plan: &mut ClubTransferPlan, promo: PromotionPlan) {
     let request_exists = plan
         .transfer_requests
         .iter()

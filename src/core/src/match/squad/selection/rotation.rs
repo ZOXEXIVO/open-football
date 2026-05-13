@@ -1,4 +1,4 @@
-use crate::club::PlayerPositionType;
+use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
 use crate::r#match::player::MatchPlayer;
 use crate::{Player, Staff, Tactics};
 
@@ -151,7 +151,7 @@ pub(crate) fn select_rotation_substitutes(
 fn rotation_score_for_slot(
     player: &Player,
     slot_position: PlayerPositionType,
-    slot_group: crate::club::PlayerFieldPositionGroup,
+    slot_group: PlayerFieldPositionGroup,
     _staff: &Staff,
     _tactics: &Tactics,
 ) -> f32 {
