@@ -18,7 +18,7 @@ use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::ContinentResult;
 use crate::continent::national::world as national_world;
 use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
-use crate::perf::{PerfCounters, PerfPhase, TickEndContext};
+use crate::performance::{PerfCounters, PerfPhase, TickEndContext};
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use awards::{
     MondayAwardCache, MonthlyAwardsTick, SeasonAwardsTick, TeamOfTheWeekTick, TeamOfTheYearTick,

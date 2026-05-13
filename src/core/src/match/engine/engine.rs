@@ -21,7 +21,7 @@ use crate::r#match::{
     MatchState, PenaltyShootoutKick, Score, StateManager, SubstitutionInfo, TacticalRefreshInputs,
     TeamTacticalState,
 };
-use crate::perf::PerfCounters;
+use crate::performance::PerfCounters;
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics, is_match_events_mode};
 #[cfg(feature = "match-logs")]
 use crate::{match_log_debug, match_log_info};
