@@ -25,7 +25,7 @@ use crate::r#match::player::strategies::players::ops::first_touch::{
     PassContext, ReceiverPressure, resolve_first_touch,
 };
 use crate::r#match::player::strategies::players::ops::traits_bias::{movement_bias, passing_bias};
-use crate::r#match::{MatchPlayer, calculate_match_rating};
+use crate::r#match::{MatchPlayer, RatingContext};
 use crate::shared::fullname::FullName;
 use crate::{
     PersonAttributes, PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition,
@@ -394,9 +394,9 @@ fn match_rating_penalises_error_leading_to_goal() {
         own_goals: 0,
         zone_stats: Default::default(),
     };
-    let clean_rating = calculate_match_rating(&clean, 1, 1);
+    let clean_rating = RatingContext::new(&clean, 1, 1).calculate();
     clean.errors_leading_to_goal = 1;
-    let with_error = calculate_match_rating(&clean, 1, 1);
+    let with_error = RatingContext::new(&clean, 1, 1).calculate();
     assert!(with_error < clean_rating - 0.5);
 }
 
@@ -445,16 +445,16 @@ fn gk_rating_uses_xg_prevented() {
         own_goals: 0,
         zone_stats: Default::default(),
     };
-    let baseline = calculate_match_rating(&base, 1, 1);
+    let baseline = RatingContext::new(&base, 1, 1).calculate();
     base.xg_prevented = 1.0;
-    let lifted = calculate_match_rating(&base, 1, 1);
+    let lifted = RatingContext::new(&base, 1, 1).calculate();
     assert!(lifted > baseline);
     // Negative xg_prevented is the live ledger after conceding goals.
     // It must NOT subtract from the rating: the conceded-goal penalty
     // and low-save% bonus already cover bad shifts, and double-
     // counting was flooring blowout keepers at 1.0.
     base.xg_prevented = -1.0;
-    let neutral = calculate_match_rating(&base, 1, 1);
+    let neutral = RatingContext::new(&base, 1, 1).calculate();
     assert!(
         (neutral - baseline).abs() < 0.01,
         "negative xg_prevented must be upside-only — got {} vs baseline {}",

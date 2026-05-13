@@ -5,7 +5,7 @@ use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
-use crate::r#match::engine::rating::calculate_match_rating;
+use crate::r#match::engine::rating::RatingContext;
 use crate::r#match::engine::set_pieces::{
     penalty_conversion_prob, score_keeper_save, score_penalty_taker,
 };
@@ -409,7 +409,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             let minutes = player.minutes_played_at(context.total_match_time);
             let mut stats = player.to_match_end_stats(minutes);
-            stats.match_rating = calculate_match_rating(&stats, player_team_goals, opponent_goals);
+            stats.match_rating = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
 
             result.player_stats.insert(player.id, stats);
         }
@@ -428,7 +428,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 (away_goals, home_goals)
             };
 
-            stats.match_rating = calculate_match_rating(&stats, player_team_goals, opponent_goals);
+            stats.match_rating = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
 
             result.player_stats.insert(player_id, stats);
         }
