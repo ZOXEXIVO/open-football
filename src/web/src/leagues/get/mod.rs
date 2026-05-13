@@ -300,31 +300,40 @@ pub async fn league_get_action(
         )
         .collect();
 
-    // League-scoped goal & assist tally — count from this league's
-    // own match results, not from `player.statistics` (which is the
-    // player's full competitive bucket and would also include any
-    // other league spell from the same season). Also: a force-pinned
-    // youth player only appears in goal-detail records of THIS
-    // league's matches when he actually played here, so this is the
-    // single source that gets him on the right top-scorer list.
+    // League-scoped tallies — read goals / assists / apps from this
+    // league's own match records, not from `player.statistics`.
+    // `player.statistics` is the player's live competitive bucket and
+    // gets wiped on mid-season transfer, on the season-end country
+    // snapshot, and on `reset_match_stats` for non-senior squads
+    // (force-pinned youth) — while the league's match records keep
+    // the goal events and the lineups. Reading apps from
+    // `player.statistics.played` produced the "0 Apps – 22 Goals"
+    // top-scorer row when the stats bucket got reset under a player
+    // whose goal events still sat in this league's history.
+    //
+    // `league.matches` is reset at season start (see `League::simulate`)
+    // and trimmed to a 3-season window globally, so every entry walked
+    // here belongs to the current season.
     let mut goals_per_player: HashMap<u32, u16> = HashMap::new();
     let mut assists_per_player: HashMap<u32, u16> = HashMap::new();
     let mut apps_per_player: HashMap<u32, u16> = HashMap::new();
 
-    for tour in &league.schedule.tours {
-        for item in &tour.items {
-            let Some(score) = &item.result else {
-                continue;
-            };
-            for d in &score.details {
-                match d.stat_type {
-                    MatchStatisticType::Goal if !d.is_auto_goal => {
-                        *goals_per_player.entry(d.player_id).or_insert(0) += 1;
-                    }
-                    MatchStatisticType::Assist => {
-                        *assists_per_player.entry(d.player_id).or_insert(0) += 1;
-                    }
-                    _ => {}
+    for mr in league.matches.iter() {
+        for d in &mr.score.details {
+            match d.stat_type {
+                MatchStatisticType::Goal if !d.is_auto_goal => {
+                    *goals_per_player.entry(d.player_id).or_insert(0) += 1;
+                }
+                MatchStatisticType::Assist => {
+                    *assists_per_player.entry(d.player_id).or_insert(0) += 1;
+                }
+                _ => {}
+            }
+        }
+        if let Some(details) = &mr.details {
+            for side in [&details.left_team_players, &details.right_team_players] {
+                for &pid in side.main.iter().chain(side.substitutes_used.iter()) {
+                    *apps_per_player.entry(pid).or_insert(0) += 1;
                 }
             }
         }
@@ -359,8 +368,7 @@ pub async fn league_get_action(
         let Some((team_name, team_slug)) = resolve_team_for_player(pid) else {
             continue;
         };
-        let played = player.statistics.played + player.statistics.played_subs;
-        apps_per_player.insert(pid, played);
+        let played = apps_per_player.get(&pid).copied().unwrap_or(0);
         scorer_data.push((
             pid,
             player.full_name.to_string(),
@@ -378,9 +386,7 @@ pub async fn league_get_action(
         let Some((team_name, team_slug)) = resolve_team_for_player(pid) else {
             continue;
         };
-        let played = *apps_per_player
-            .entry(pid)
-            .or_insert_with(|| player.statistics.played + player.statistics.played_subs);
+        let played = apps_per_player.get(&pid).copied().unwrap_or(0);
         assister_data.push((
             pid,
             player.full_name.to_string(),
@@ -423,7 +429,11 @@ pub async fn league_get_action(
                 if !seen_in_table.insert(player.id) {
                     continue;
                 }
-                let played = player.statistics.played + player.statistics.played_subs;
+                // Use league-scoped apps from `apps_per_player` so the
+                // count matches the top-scorers/assisters columns.
+                // Roster members who haven't featured score 0 here and
+                // are excluded by the `played > 0` filter below.
+                let played = apps_per_player.get(&player.id).copied().unwrap_or(0);
                 if played > 0 && player.statistics.average_rating > 0.0 {
                     rating_data.push((
                         player.id,
@@ -437,6 +447,14 @@ pub async fn league_get_action(
             }
         }
     }
+
+    // Gate top_rated on a minimum appearance count so a single
+    // standout match doesn't outrank a season of consistent play.
+    // Threshold scales with the league's leader so the cut adapts
+    // to season progress (low early, strict late).
+    let max_played_in_league = apps_per_player.values().copied().max().unwrap_or(0);
+    let min_rated_apps = std::cmp::max(5, max_played_in_league / 2);
+    rating_data.retain(|(_, _, _, _, played, _)| *played >= min_rated_apps);
 
     scorer_data.sort_by(|a, b| b.5.cmp(&a.5));
     assister_data.sort_by(|a, b| b.5.cmp(&a.5));

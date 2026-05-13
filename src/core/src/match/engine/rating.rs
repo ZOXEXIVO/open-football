@@ -19,31 +19,30 @@ pub fn calculate_match_rating(
 
     // ── Attacking contributions ──────────────────────────────────────────
 
-    // Goals: +0.75 each, capped at +2.4. Down from a flat +1.0/+3.0 cap
-    // because the engine was rewarding lucky / variance-driven goals
-    // identically to genuine quality finishes — a 5/20 striker who
-    // scuffed in two rebounds still posted an 8.0. The post-shot xG
-    // delta below adds +0..0.20 for clinical conversions, and the
-    // cap-busting "decisive" bonus rewards a goal that flipped the
-    // scoreline.
+    // Goals: +0.65 each, capped at +2.4. The previous +0.75/goal pushed
+    // a 1-goal-and-won striker to 7.5+ and a hat-trick to 9.4 routinely,
+    // which compounded across early-season small-sample averages into
+    // top-of-table ratings of 8.5+ after only 2-3 apps. Real-football
+    // WhoScored references: a 1-goal match averages ~7.4; 2 goals ~8.1;
+    // hat-trick ~8.8-9.0. Per-goal credit alone has to track that curve.
     let goal_count = stats.goals as f32;
-    let base_goal_credit = (goal_count * 0.75).min(2.4);
+    let base_goal_credit = (goal_count * 0.65).min(2.4);
     rating += base_goal_credit;
 
     // Decisive goal bonus: a goal that put the team into a winning /
     // drawing position (or pulled them level) still earns extra credit
-    // beyond the base. Flat +0.20 per goal-scoring forward when the
+    // beyond the base. Flat +0.15 per goal-scoring forward when the
     // team won — cheap proxy for "actually mattered to the result"
     // without re-deriving per-goal scoreline state.
     if stats.goals > 0 && team_goals > opponent_goals {
-        rating += 0.20;
+        rating += 0.15;
     }
 
     // High-xG over-conversion: only awarded when the player out-scored
-    // their xG by a meaningful margin. Capped at +0.20.
+    // their xG by a meaningful margin. Capped at +0.15.
     if stats.xg > 0.05 && goal_count > 0.0 {
         let over = (goal_count - stats.xg).max(0.0);
-        rating += (over * 0.10).min(0.20);
+        rating += (over * 0.10).min(0.15);
     }
 
     // Low-xG goals dampener: if the goals came from very low-quality
@@ -73,24 +72,30 @@ pub fn calculate_match_rating(
         }
     }
 
-    // Assists: +0.5 each, capped at +1.5
-    rating += (stats.assists as f32 * 0.5).min(1.5);
+    // Assists: +0.40 each, capped at +1.2. Trimmed from +0.5/+1.5 so a
+    // single assist no longer matches the impact of a clean defensive
+    // shift, and three assists no longer add the equivalent of a
+    // shot-stopping master class.
+    rating += (stats.assists as f32 * 0.40).min(1.2);
 
     // ── Passing quality ──────────────────────────────────────────────────
 
     if stats.passes_attempted > 10 {
         let pass_pct = stats.passes_completed as f32 / stats.passes_attempted as f32;
 
-        // 70% = neutral, 90%+ = +0.5, below 50% = -0.4
+        // 70% = neutral, 90%+ = +0.35, below 50% = -0.4
         let mut pass_bonus = (pass_pct - 0.70) * 2.0;
-        pass_bonus = pass_bonus.clamp(-0.4, 0.5);
+        pass_bonus = pass_bonus.clamp(-0.4, 0.35);
 
-        // Volume bonus: high-volume accurate passing shows sustained involvement
+        // Volume bonus: high-volume accurate passing shows sustained
+        // involvement. Tighter than before — a 60-pass shift used to
+        // stack +0.30 on top of pass quality, which routinely pushed
+        // midfielders into the high 7s on safe sideways recycling.
         if stats.passes_attempted > 30 && pass_pct > 0.80 {
-            pass_bonus += 0.15;
+            pass_bonus += 0.08;
         }
         if stats.passes_attempted > 50 && pass_pct > 0.85 {
-            pass_bonus += 0.15;
+            pass_bonus += 0.08;
         }
 
         rating += pass_bonus;
@@ -101,7 +106,7 @@ pub fn calculate_match_rating(
     if stats.shots_total > 0 {
         let shot_accuracy = stats.shots_on_target as f32 / stats.shots_total as f32;
         let shot_bonus = (shot_accuracy - 0.4) * 0.6;
-        rating += shot_bonus.clamp(-0.2, 0.3);
+        rating += shot_bonus.clamp(-0.2, 0.20);
     }
 
     // ── Defensive contributions (position-weighted) ──────────────────────
@@ -177,20 +182,31 @@ pub fn calculate_match_rating(
     }
 
     // ── Team result ──────────────────────────────────────────────────────
-
+    //
+    // Unconditional team-result credit was the single biggest source of
+    // season-average inflation: a top-of-the-table starter banked +0.30
+    // every match they played in just for being on the winning side,
+    // pushing 30+-appearance averages 0.20-0.25 above their real shape.
+    // Halve it so the per-match floor still nudges in the right direction
+    // without dominating the rolling average. Loss penalty drops in step.
     if team_goals > opponent_goals {
-        rating += 0.3; // Win bonus
+        rating += 0.12;
     } else if team_goals < opponent_goals {
-        rating -= 0.2; // Loss penalty
+        rating -= 0.15;
     }
 
     // ── Clean sheet bonus ────────────────────────────────────────────────
-
+    //
+    // Clean sheets used to drop +0.30 on a GK/Defender and +0.10 on a
+    // midfielder for every shutout. Dominant teams that keep 15+ clean
+    // sheets a season were therefore lifting their entire back six by
+    // ~+0.13 across the year. Trim so the bump still rewards a shutout
+    // without becoming a flat ratings escalator.
     if opponent_goals == 0 {
         match pos {
-            PlayerFieldPositionGroup::Goalkeeper => rating += 0.3,
-            PlayerFieldPositionGroup::Defender => rating += 0.3,
-            PlayerFieldPositionGroup::Midfielder => rating += 0.1,
+            PlayerFieldPositionGroup::Goalkeeper => rating += 0.20,
+            PlayerFieldPositionGroup::Defender => rating += 0.20,
+            PlayerFieldPositionGroup::Midfielder => rating += 0.05,
             _ => {}
         }
     }
@@ -262,16 +278,23 @@ pub fn calculate_match_rating(
         1.0
     };
 
-    rating += (stats.key_passes as f32 * 0.12).min(0.6) * minute_damp;
-    rating += (stats.progressive_passes as f32 * 0.025).min(0.35) * minute_damp;
-    rating += (stats.progressive_carries as f32 * 0.04).min(0.40) * minute_damp;
+    // Per-event creator bonuses. A single attacking pass commonly ticks
+    // several of these counters at once (a progressive pass into the box
+    // that becomes a key pass and feeds xG buildup hits four of them).
+    // Caps tightened a second time: even after the first round of trims
+    // the stacked combined ceiling left "active but not scoring" players
+    // in the 7.8-8.0 band, lifting top-10 league tables to unrealistic
+    // levels after only 4 apps.
+    rating += (stats.key_passes as f32 * 0.10).min(0.35) * minute_damp;
+    rating += (stats.progressive_passes as f32 * 0.020).min(0.18) * minute_damp;
+    rating += (stats.progressive_carries as f32 * 0.030).min(0.18) * minute_damp;
 
     // Successful dribbles — modest bonus, scaled by position group.
     let dribble_weight = match pos {
-        PlayerFieldPositionGroup::Forward | PlayerFieldPositionGroup::Midfielder => 0.08,
-        _ => 0.04,
+        PlayerFieldPositionGroup::Forward | PlayerFieldPositionGroup::Midfielder => 0.06,
+        _ => 0.03,
     };
-    rating += (stats.successful_dribbles as f32 * dribble_weight).min(0.45) * minute_damp;
+    rating += (stats.successful_dribbles as f32 * dribble_weight).min(0.22) * minute_damp;
 
     // Failed dribbles — small penalty cap. Reduced for forwards / wide
     // attackers because attempting take-ons is part of their job.
@@ -285,14 +308,14 @@ pub fn calculate_match_rating(
         rating -= (failed * fail_w).min(0.30) * minute_damp;
     }
 
-    rating += (stats.successful_pressures as f32 * 0.035).min(0.35) * minute_damp;
+    rating += (stats.successful_pressures as f32 * 0.025).min(0.18) * minute_damp;
 
     // Raw pressing volume — applying pressure even when it doesn't
     // immediately force a turnover is still graft. Worth a third of a
     // successful pressure each, with a tight cap so a high-volume
     // presser doesn't outscore a creative midfielder by spamming.
     let raw_pressure_volume = stats.pressures.saturating_sub(stats.successful_pressures);
-    rating += (raw_pressure_volume as f32 * 0.012).min(0.20) * minute_damp;
+    rating += (raw_pressure_volume as f32 * 0.008).min(0.10) * minute_damp;
 
     // Blocks count more for defenders, less for attackers.
     let block_w = match pos {
@@ -315,10 +338,10 @@ pub fn calculate_match_rating(
         let (cross_cap, miss_cap) = match pos {
             PlayerFieldPositionGroup::Midfielder
             | PlayerFieldPositionGroup::Forward
-            | PlayerFieldPositionGroup::Defender => (0.30, 0.20),
-            _ => (0.12, 0.08),
+            | PlayerFieldPositionGroup::Defender => (0.15, 0.15),
+            _ => (0.06, 0.06),
         };
-        rating += (completed * 0.08).min(cross_cap) * minute_damp;
+        rating += (completed * 0.05).min(cross_cap) * minute_damp;
         rating -= (failed * 0.012).min(miss_cap) * minute_damp;
     }
 
@@ -328,11 +351,11 @@ pub fn calculate_match_rating(
     // in a shot (so it's not subsumed by `key_passes`). Caps small —
     // moving the ball into the box matters but should not dominate.
     let pib_w = match pos {
-        PlayerFieldPositionGroup::Midfielder | PlayerFieldPositionGroup::Forward => 0.06,
-        PlayerFieldPositionGroup::Defender => 0.04,
-        _ => 0.02,
+        PlayerFieldPositionGroup::Midfielder | PlayerFieldPositionGroup::Forward => 0.035,
+        PlayerFieldPositionGroup::Defender => 0.025,
+        _ => 0.015,
     };
-    rating += (stats.passes_into_box as f32 * pib_w).min(0.30) * minute_damp;
+    rating += (stats.passes_into_box as f32 * pib_w).min(0.16) * minute_damp;
 
     // ── xG buildup credit ───────────────────────────────────────────────
     //
@@ -342,12 +365,12 @@ pub fn calculate_match_rating(
     // their xG involvement is the shot itself, already rewarded.
     if stats.xg_buildup > 0.1 {
         let buildup_w = match pos {
-            PlayerFieldPositionGroup::Midfielder => 0.30,
-            PlayerFieldPositionGroup::Defender => 0.22,
-            PlayerFieldPositionGroup::Forward => 0.10,
-            _ => 0.05,
+            PlayerFieldPositionGroup::Midfielder => 0.18,
+            PlayerFieldPositionGroup::Defender => 0.12,
+            PlayerFieldPositionGroup::Forward => 0.06,
+            _ => 0.03,
         };
-        rating += (stats.xg_buildup * buildup_w).min(0.30) * minute_damp;
+        rating += (stats.xg_buildup * buildup_w).min(0.16) * minute_damp;
     }
 
     // ── Carry distance (tie-breaker) ────────────────────────────────────
@@ -598,6 +621,28 @@ pub fn calculate_match_rating(
             rating = rating.min(6.4);
         }
 
+        // Soft involvement cap. The hard 6.4 cap above demands a player
+        // be near-invisible (zero creative actions). In practice an
+        // attacking-mid almost always picks up one key pass and escapes
+        // it, even when nothing else happened. This second tier catches
+        // "one moment, no follow-through" shifts — and uses the SAME
+        // strict defensive gate (< 4) so a 4-tackle deep-lying playmaker
+        // is still recognised as having done meaningful work.
+        let carries_into_box = stats.zone_stats.carries_into_box as u32;
+        let ball_carrying = stats.successful_dribbles as u32
+            + stats.passes_into_box as u32
+            + carries_into_box;
+        if stats.minutes_played >= 60
+            && stats.goals == 0
+            && stats.assists == 0
+            && stats.shots_on_target == 0
+            && creative_actions <= 1
+            && ball_carrying <= 2
+            && total_defensive_actions < 4
+        {
+            rating = rating.min(6.8);
+        }
+
         // Low-involvement single-goal cap.
         let positive_events = (stats.assists as u32)
             + (stats.key_passes as u32)
@@ -686,6 +731,9 @@ pub fn calculate_match_rating(
 
         // Safe-recycle cap: high pass volume, no progressive value, no
         // shot/key-pass involvement, minimal defensive contribution.
+        // The wider "one creative moment, nothing else" case is handled
+        // by the outfielder soft cap above (which fires at the same
+        // strict defensive gate but allows up to one key pass).
         if stats.minutes_played >= 60
             && stats.passes_attempted >= 30
             && stats.goals == 0
@@ -697,6 +745,25 @@ pub fn calculate_match_rating(
         {
             rating = rating.min(6.7);
         }
+    }
+
+    // ── Top-end soft compression ────────────────────────────────────────
+    //
+    // Real WhoScored references: an individual match peaks at ~9.5-9.8
+    // for once-a-season performances; a season-long top average caps at
+    // ~7.85. Without compression the per-event ladder produces 8.2-8.5
+    // ratings for a single goal + active shift, which over 2-4 game
+    // small samples anchors early-season league leaderboards above
+    // realistic levels (mid-tier attribute players showing 8+ averages
+    // after a couple of scoring matches). Pull raw ratings above 7.0
+    // toward a softer ceiling so a single goal + good shift lands at
+    // ~7.5 and an outstanding 3-goal performance lands at ~8.1 instead
+    // of 9.0+. Floor caps (6.4, 6.7, 6.8, 7.1, 7.2) are all below the
+    // threshold, so they remain authoritative; the compressor only
+    // touches the high-end tail.
+    if rating > 7.0 {
+        let excess = rating - 7.0;
+        rating = 7.0 + excess * 0.60;
     }
 
     rating.clamp(1.0, 10.0)
@@ -804,10 +871,11 @@ mod tests {
     #[test]
     fn goals_add_up_to_cap() {
         // Five-goal forward with realistic xG (the goals weren't lucky).
-        // New goal-credit model caps base at +2.4, adds +0.20 decisive
-        // win, +0.20 clinical bonus when goals exceed xG. Spec
-        // explicitly removes the flat +1.0/goal — high output still
-        // produces an elite rating, just not a runaway one.
+        // High output still produces an elite rating, but the top-end
+        // compressor pulls the runaway raw-9.0 into a realistic ~8.0
+        // band so per-match peaks track WhoScored references (~9.5-9.8
+        // for the very best individual matches, ~8.0-8.5 for "scored
+        // a bag in a win").
         let mut stats = make_stats(
             5,
             0,
@@ -823,7 +891,7 @@ mod tests {
         );
         stats.shots_on_target = 5;
         let rating = calculate_match_rating(&stats, 5, 0);
-        assert!(rating >= 8.4, "rating={rating}");
+        assert!(rating >= 7.9, "rating={rating}");
     }
 
     #[test]

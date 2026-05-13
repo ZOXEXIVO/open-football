@@ -76,6 +76,14 @@ impl MatchStorage {
             .filter_map(move |id| self.results.get(id))
     }
 
+    /// Borrowed walk over every stored result, regardless of date. Use
+    /// this when the caller wants the full retained window (per-league
+    /// stores are reset on season-start, so "all stored" already means
+    /// "this season").
+    pub fn iter(&self) -> impl Iterator<Item = &MatchResult> {
+        self.results.values()
+    }
+
     /// Drop every match recorded before `today − retention_days`. O(K log N)
     /// in the number of evicted dates; cheap to call on season boundaries.
     pub fn trim(&mut self, today: NaiveDate) {

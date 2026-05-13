@@ -1,4 +1,5 @@
 use super::LeagueResult;
+use chrono::Datelike;
 use crate::club::StaffPosition;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
@@ -1221,13 +1222,29 @@ fn compute_effective_ratings(
         let chem_shift = ((chemistry - 50.0) / 50.0).clamp(-1.0, 1.0) * 0.15;
         adjusted += chem_shift;
 
-        // Consistency narrows noise around baseline 6.0. A high-consistency
-        // player drifts LESS from their stat-derived rating; low consistency
-        // adds a small random swing (±0.4 at consistency 0; ±0.05 at 20).
-        let variance_band = (1.0 - (consistency / 20.0)).clamp(0.0, 1.0) * 0.4;
+        // Consistency drives match-to-match volatility. A high-consistency
+        // player drifts LESS from their stat-derived rating; a low-
+        // consistency ("streaky") player swings widely match-to-match —
+        // one excellent game, three quiet ones. Real football: a Finishing-7
+        // / Consistency-8 striker has the *occasional* hot match but
+        // can't string two 8.0s in a row.
+        //
+        // Previous implementation keyed the seed only on `player_id`, so
+        // a streaky player got the SAME swing every single game (a static
+        // bias compounding in one direction across the season). Combining
+        // with the match date produces a different swing per fixture —
+        // genuine volatility that averages toward zero over many apps.
+        //
+        // Band widened to ±0.6 max because the old ±0.4 wasn't enough to
+        // produce the "scored 2 in match A, anonymous in match B" shape
+        // that's the hallmark of low-consistency players.
+        let variance_band = (1.0 - (consistency / 20.0)).clamp(0.0, 1.0) * 0.6;
         if variance_band > 0.01 {
-            // Deterministic noise from player_id so tests are stable.
-            let seed = (*player_id as f32 * 0.618033).fract(); // 0..1
+            // Per-match deterministic seed: player_id + date so the same
+            // player gets a different swing every fixture, but a given
+            // (player, date) pair is reproducible for tests.
+            let date_seed = now.num_days_from_ce() as f32;
+            let seed = ((*player_id as f32 * 0.618033) + (date_seed * 0.381966)).fract();
             let swing = (seed - 0.5) * 2.0 * variance_band;
             adjusted += swing;
         }

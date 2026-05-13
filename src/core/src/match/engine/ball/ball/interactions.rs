@@ -610,17 +610,19 @@ impl Ball {
         // Per-tick save rate. This save check runs every tick the ball
         // is within reach of the goal line, AND the GK state-machine
         // (Catching, Diving) runs its OWN per-tick save roll. Both
-        // compound across the 5-15 ticks of shot flight, so per-tick
-        // rates need to be calibrated to give a CUMULATIVE ~67% save
-        // rate (real-world). Old skill_mult 0.72-1.07 + cap 0.96 left
-        // the cumulative chance >95% for any centred shot. New
-        // calibration: skill_mult 0.45-0.80, cap 0.55, so a centred
-        // shot (base 0.88) at average skill (mult 0.6) lands per-tick
-        // at 0.50, cumulative ~75% across the contact window — the
-        // catching-state rolls add another tick and drop the leak rate
-        // toward the realistic 30%.
-        let skill_mult = 0.45 + skill * 0.35;
-        let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.05, 0.55);
+        // compound across the 5-15 ticks of shot flight.
+        //
+        // Calibration target: per-shot conversion ~12-15% (real Opta
+        // ~12% of shots are goals, ~33% on target with 30-35% of those
+        // being saves). Earlier `0.45 + 0.35*skill` clamped at 0.55
+        // produced top-scorer rates of 1.5+ goals/match — too generous.
+        // New `0.55 + 0.40*skill` clamped at 0.68 lifts the per-tick
+        // floor for any GK on the pitch (a Reflexes-5 keeper still
+        // makes routine saves) and raises the ceiling so elite GKs
+        // stop the centred power shots they're paid to stop. Skill
+        // gap stays 10pt → ~30% save-rate gap.
+        let skill_mult = 0.55 + skill * 0.40;
+        let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.05, 0.68);
 
         #[cfg(feature = "match-logs")]
         save_accounting_stats::SAVE_PHYSICS_FIRED
