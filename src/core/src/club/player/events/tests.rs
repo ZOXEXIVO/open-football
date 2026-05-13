@@ -16,7 +16,7 @@ use crate::{
     PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType,
     PlayerPositions, PlayerSkills,
 };
-use InjuryRiskInputs;
+use crate::club::player::condition::InjuryRiskInputs;
 use chrono::NaiveDate;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {

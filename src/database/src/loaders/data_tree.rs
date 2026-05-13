@@ -92,8 +92,8 @@ mod tests {
         let countries = CountryLoader::load();
         let tree = DataTreeLoader::load(&countries);
         // Snapshot counts of enabled leagues and their clubs in the compiled data.
-        assert_eq!(tree.leagues.len(), 73, "enabled league count changed");
-        assert_eq!(tree.clubs.len(), 1076, "enabled club count changed");
+        assert_eq!(tree.leagues.len(), 90, "enabled league count changed");
+        assert_eq!(tree.clubs.len(), 1321, "enabled club count changed");
     }
 
     #[test]
