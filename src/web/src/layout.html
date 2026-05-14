@@ -19,15 +19,28 @@
                 <nav class="fm-sidebar-scroll">
                     {% for section in menu_sections %}
                     {% if !loop.last %}
-                    <ul class="fm-nav-section">
+                    {% let is_collapsible = section.collapsible && section.items.len() > 2 %}
+                    <ul class="fm-nav-section{% if is_collapsible %} fm-nav-collapsible{% if section.expanded %} fm-nav-expanded{% endif %}{% endif %}">
                         {% for item in section.items %}
-                        <li
-                                {% if item.active %} class="active" {% endif %}>
+                        <li class="{% if item.active %}active{% endif %}{% if is_collapsible && loop.index0 >= 2 %} fm-nav-overflow{% endif %}">
                             <a href="{{ item.url }}">
                                 <i class="fa {{ item.icon }}"></i>
                                 <span>{{ item.title }}</span>
                             </a>
                         </li>
+                        {% if is_collapsible && loop.index0 == 1 %}
+                        <li class="fm-nav-toggle">
+                            <button type="button" aria-label="Toggle more leagues"
+                                    aria-expanded="{% if section.expanded %}true{% else %}false{% endif %}"
+                                    onclick="(function(b){var ul=b.closest('.fm-nav-collapsible');var open=ul.classList.toggle('fm-nav-expanded');b.setAttribute('aria-expanded',open);})(this)">
+                                <span class="fm-nav-toggle-spacer"></span>
+                                <span class="fm-nav-toggle-label">
+                                    <i class="fa fa-ellipsis fm-nav-toggle-icon fm-nav-toggle-icon-more"></i>
+                                    <i class="fa fa-chevron-up fm-nav-toggle-icon fm-nav-toggle-icon-less"></i>
+                                </span>
+                            </button>
+                        </li>
+                        {% endif %}
                         {% endfor %}
                     </ul>
                     {% endif %}

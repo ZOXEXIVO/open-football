@@ -54,6 +54,31 @@ pub fn league_display_name(league: &League, i18n: &I18n, simulator_data: &Simula
 
 pub struct MenuSection {
     pub items: Vec<MenuItem>,
+    pub collapsible: bool,
+    pub expanded: bool,
+}
+
+impl MenuSection {
+    fn plain(items: Vec<MenuItem>) -> Self {
+        Self {
+            items,
+            collapsible: false,
+            expanded: false,
+        }
+    }
+
+    /// Build a section whose items collapse to the first 2 when there are
+    /// more than 2 entries. Expands on initial render if the active item
+    /// would otherwise be hidden.
+    fn collapsible_after_two(items: Vec<MenuItem>) -> Self {
+        let collapsible = items.len() > 2;
+        let expanded = collapsible && items.iter().skip(2).any(|i| i.active);
+        Self {
+            items,
+            collapsible,
+            expanded,
+        }
+    }
 }
 
 pub struct MenuItem {
@@ -76,39 +101,33 @@ impl<'a> MenuParams<'a> {
         vec![
             home_section(self.i18n, self.lang),
             search_section(self.i18n, self.lang, self.current_path),
-            MenuSection {
-                items: vec![MenuItem {
-                    title: self.country_name.to_string(),
-                    url: format!("/{}/countries/{}/leagues", self.lang, self.country_slug),
-                    icon: "fa-home".to_string(),
-                    active: false,
-                }],
-            },
+            MenuSection::plain(vec![MenuItem {
+                title: self.country_name.to_string(),
+                url: format!("/{}/countries/{}/leagues", self.lang, self.country_slug),
+                icon: "fa-home".to_string(),
+                active: false,
+            }]),
         ]
     }
 }
 
 fn home_section(i18n: &I18n, lang: &str) -> MenuSection {
-    MenuSection {
-        items: vec![MenuItem {
-            title: i18n.t("home").to_string(),
-            url: format!("/{}", lang),
-            icon: "fa-home".to_string(),
-            active: false,
-        }],
-    }
+    MenuSection::plain(vec![MenuItem {
+        title: i18n.t("home").to_string(),
+        url: format!("/{}", lang),
+        icon: "fa-home".to_string(),
+        active: false,
+    }])
 }
 
 fn search_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
     let search_url = format!("/{}/search", lang);
-    MenuSection {
-        items: vec![MenuItem {
-            active: current_path == search_url,
-            title: i18n.t("search").to_string(),
-            url: search_url,
-            icon: "fa-search".to_string(),
-        }],
-    }
+    MenuSection::plain(vec![MenuItem {
+        active: current_path == search_url,
+        title: i18n.t("search").to_string(),
+        url: search_url,
+        icon: "fa-search".to_string(),
+    }])
 }
 
 pub fn ai_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
@@ -116,14 +135,12 @@ pub fn ai_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> 
     vec![
         home_section(i18n, lang),
         search_section(i18n, lang, current_path),
-        MenuSection {
-            items: vec![MenuItem {
-                active: current_path == ai_url,
-                title: i18n.t("ai_management").to_string(),
-                url: ai_url,
-                icon: "fa-robot".to_string(),
-            }],
-        },
+        MenuSection::plain(vec![MenuItem {
+            active: current_path == ai_url,
+            title: i18n.t("ai_management").to_string(),
+            url: ai_url,
+            icon: "fa-robot".to_string(),
+        }]),
         source_code_section(),
     ]
 }
@@ -146,66 +163,58 @@ pub fn search_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSecti
 }
 
 fn source_code_section() -> MenuSection {
-    MenuSection {
-        items: vec![MenuItem {
-            active: false,
-            title: "Source code".to_string(),
-            url: "https://github.com/ZOXEXIVO/open-football".to_string(),
-            icon: "fa-brands fa-github".to_string(),
-        }],
-    }
+    MenuSection::plain(vec![MenuItem {
+        active: false,
+        title: "Source code".to_string(),
+        url: "https://github.com/ZOXEXIVO/open-football".to_string(),
+        icon: "fa-brands fa-github".to_string(),
+    }])
 }
 
 fn continental_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
     let cl_url = format!("/{}/champions-league", lang);
     let el_url = format!("/{}/europa-league", lang);
     let conf_url = format!("/{}/conference-league", lang);
-    MenuSection {
-        items: vec![
-            MenuItem {
-                active: current_path == cl_url,
-                title: i18n.t("champions_league").to_string(),
-                url: cl_url,
-                icon: "fa-star".to_string(),
-            },
-            MenuItem {
-                active: current_path == el_url,
-                title: i18n.t("europa_league").to_string(),
-                url: el_url,
-                icon: "fa-star".to_string(),
-            },
-            MenuItem {
-                active: current_path == conf_url,
-                title: i18n.t("conference_league").to_string(),
-                url: conf_url,
-                icon: "fa-star".to_string(),
-            },
-        ],
-    }
+    MenuSection::plain(vec![
+        MenuItem {
+            active: current_path == cl_url,
+            title: i18n.t("champions_league").to_string(),
+            url: cl_url,
+            icon: "fa-star".to_string(),
+        },
+        MenuItem {
+            active: current_path == el_url,
+            title: i18n.t("europa_league").to_string(),
+            url: el_url,
+            icon: "fa-star".to_string(),
+        },
+        MenuItem {
+            active: current_path == conf_url,
+            title: i18n.t("conference_league").to_string(),
+            url: conf_url,
+            icon: "fa-star".to_string(),
+        },
+    ])
 }
 
 fn national_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
     let nat_url = format!("/{}/national-competitions", lang);
-    MenuSection {
-        items: vec![MenuItem {
-            active: current_path == nat_url,
-            title: i18n.t("national_competitions").to_string(),
-            url: nat_url,
-            icon: "fa-flag".to_string(),
-        }],
-    }
+    MenuSection::plain(vec![MenuItem {
+        active: current_path == nat_url,
+        title: i18n.t("national_competitions").to_string(),
+        url: nat_url,
+        icon: "fa-flag".to_string(),
+    }])
 }
 
 fn watchlist_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
     let watchlist_url = format!("/{}/watchlist", lang);
-    MenuSection {
-        items: vec![MenuItem {
-            active: current_path == watchlist_url,
-            title: i18n.t("watchlist").to_string(),
-            url: watchlist_url,
-            icon: "fa-eye".to_string(),
-        }],
-    }
+    MenuSection::plain(vec![MenuItem {
+        active: current_path == watchlist_url,
+        title: i18n.t("watchlist").to_string(),
+        url: watchlist_url,
+        icon: "fa-eye".to_string(),
+    }])
 }
 
 pub fn league_menu(
@@ -217,8 +226,8 @@ pub fn league_menu(
     let awards_url = format!("/{}/leagues/{}/awards", p.lang, league_slug);
     let mut sections = p.home_and_country_sections();
 
-    sections.push(MenuSection {
-        items: country_leagues
+    sections.push(MenuSection::collapsible_after_two(
+        country_leagues
             .iter()
             .map(|(name, slug)| {
                 let url = format!("/{}/leagues/{}", p.lang, slug);
@@ -232,24 +241,22 @@ pub fn league_menu(
                 }
             })
             .collect(),
-    });
+    ));
 
-    sections.push(MenuSection {
-        items: vec![
-            MenuItem {
-                active: p.current_path == transfers_url,
-                title: p.i18n.t("transfers").to_string(),
-                url: transfers_url,
-                icon: "fa-exchange".to_string(),
-            },
-            MenuItem {
-                active: p.current_path == awards_url,
-                title: p.i18n.t("awards").to_string(),
-                url: awards_url,
-                icon: "fa-medal".to_string(),
-            },
-        ],
-    });
+    sections.push(MenuSection::plain(vec![
+        MenuItem {
+            active: p.current_path == transfers_url,
+            title: p.i18n.t("transfers").to_string(),
+            url: transfers_url,
+            icon: "fa-exchange".to_string(),
+        },
+        MenuItem {
+            active: p.current_path == awards_url,
+            title: p.i18n.t("awards").to_string(),
+            url: awards_url,
+            icon: "fa-medal".to_string(),
+        },
+    ]));
 
     sections.push(continental_section(p.i18n, p.lang, p.current_path));
     sections.push(national_section(p.i18n, p.lang, p.current_path));
@@ -268,8 +275,8 @@ pub fn team_menu(
     let mut sections = p.home_and_country_sections();
 
     if !leagues.is_empty() {
-        sections.push(MenuSection {
-            items: leagues
+        sections.push(MenuSection::collapsible_after_two(
+            leagues
                 .iter()
                 .map(|(league_name, league_slug)| {
                     let league_url = format!("/{}/leagues/{}", p.lang, league_slug);
@@ -281,12 +288,12 @@ pub fn team_menu(
                     }
                 })
                 .collect(),
-        });
+        ));
     }
 
     if !neighbor_teams.is_empty() {
-        sections.push(MenuSection {
-            items: neighbor_teams
+        sections.push(MenuSection::plain(
+            neighbor_teams
                 .iter()
                 .map(|(name, slug)| {
                     let url = format!("/{}/teams/{}", p.lang, slug);
@@ -300,19 +307,17 @@ pub fn team_menu(
                     }
                 })
                 .collect(),
-        });
+        ));
     }
 
     let staff_url = format!("/{}/teams/{}/staff", p.lang, team_slug);
 
-    sections.push(MenuSection {
-        items: vec![MenuItem {
-            active: p.current_path == staff_url,
-            title: p.i18n.t("staff").to_string(),
-            url: staff_url,
-            icon: "fa-id-badge".to_string(),
-        }],
-    });
+    sections.push(MenuSection::plain(vec![MenuItem {
+        active: p.current_path == staff_url,
+        title: p.i18n.t("staff").to_string(),
+        url: staff_url,
+        icon: "fa-id-badge".to_string(),
+    }]));
 
     let tactics_url = format!("/{}/teams/{}/tactics", p.lang, team_slug);
     let schedule_url = format!("/{}/teams/{}/schedule", p.lang, team_slug);
@@ -362,7 +367,7 @@ pub fn team_menu(
         icon: "fa-exchange".to_string(),
     });
 
-    sections.push(MenuSection { items });
+    sections.push(MenuSection::plain(items));
 
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
     sections.push(source_code_section());
@@ -374,8 +379,8 @@ pub fn country_menu(p: &MenuParams, country_leagues: &[(&str, &str)]) -> Vec<Men
     let mut sections = p.home_and_country_sections();
 
     if !country_leagues.is_empty() {
-        sections.push(MenuSection {
-            items: country_leagues
+        sections.push(MenuSection::collapsible_after_two(
+            country_leagues
                 .iter()
                 .map(|(name, slug)| {
                     let url = format!("/{}/leagues/{}", p.lang, slug);
@@ -389,18 +394,16 @@ pub fn country_menu(p: &MenuParams, country_leagues: &[(&str, &str)]) -> Vec<Men
                     }
                 })
                 .collect(),
-        });
+        ));
 
         let first_league_slug = country_leagues[0].1;
         let transfers_url = format!("/{}/leagues/{}/transfers", p.lang, first_league_slug);
-        sections.push(MenuSection {
-            items: vec![MenuItem {
-                active: p.current_path == transfers_url,
-                title: p.i18n.t("transfers").to_string(),
-                url: transfers_url,
-                icon: "fa-exchange".to_string(),
-            }],
-        });
+        sections.push(MenuSection::plain(vec![MenuItem {
+            active: p.current_path == transfers_url,
+            title: p.i18n.t("transfers").to_string(),
+            url: transfers_url,
+            icon: "fa-exchange".to_string(),
+        }]));
     }
 
     sections.push(continental_section(p.i18n, p.lang, p.current_path));
@@ -428,36 +431,32 @@ fn continental_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) ->
     vec![
         home_section(i18n, lang),
         search_section(i18n, lang, current_path),
-        MenuSection {
-            items: vec![
-                MenuItem {
-                    active: current_path == cl_url,
-                    title: i18n.t("champions_league").to_string(),
-                    url: cl_url,
-                    icon: "fa-trophy".to_string(),
-                },
-                MenuItem {
-                    active: current_path == el_url,
-                    title: i18n.t("europa_league").to_string(),
-                    url: el_url,
-                    icon: "fa-trophy".to_string(),
-                },
-                MenuItem {
-                    active: current_path == conf_url,
-                    title: i18n.t("conference_league").to_string(),
-                    url: conf_url,
-                    icon: "fa-trophy".to_string(),
-                },
-            ],
-        },
-        MenuSection {
-            items: vec![MenuItem {
-                active: current_path == nat_url,
-                title: i18n.t("national_competitions").to_string(),
-                url: nat_url,
-                icon: "fa-flag".to_string(),
-            }],
-        },
+        MenuSection::plain(vec![
+            MenuItem {
+                active: current_path == cl_url,
+                title: i18n.t("champions_league").to_string(),
+                url: cl_url,
+                icon: "fa-trophy".to_string(),
+            },
+            MenuItem {
+                active: current_path == el_url,
+                title: i18n.t("europa_league").to_string(),
+                url: el_url,
+                icon: "fa-trophy".to_string(),
+            },
+            MenuItem {
+                active: current_path == conf_url,
+                title: i18n.t("conference_league").to_string(),
+                url: conf_url,
+                icon: "fa-trophy".to_string(),
+            },
+        ]),
+        MenuSection::plain(vec![MenuItem {
+            active: current_path == nat_url,
+            title: i18n.t("national_competitions").to_string(),
+            url: nat_url,
+            icon: "fa-flag".to_string(),
+        }]),
         watchlist_section(i18n, lang, current_path),
         source_code_section(),
     ]

@@ -677,9 +677,18 @@ impl LeagueResult {
         home_team_id: u32,
         best_player_id: Option<u32>,
     ) {
+        use crate::ConflictLocation;
         use crate::club::ChangeType;
+        use crate::club::HappinessEventChangeKind;
+        use crate::club::HappinessEventContext;
+        use crate::club::HappinessEventEvidence;
+        use crate::club::HappinessEventFollowUp;
+        use crate::club::HappinessEventScope;
+        use crate::club::HappinessEventSeverity;
         use crate::club::HappinessEventType;
         use crate::club::RelationshipChange;
+        use crate::club::TeammateConflictContext;
+        use crate::club::TeammateConflictReason;
         use crate::r#match::player::statistics::MatchStatisticType;
 
         let home_goals = result.score.home_team.get();
@@ -704,6 +713,8 @@ impl LeagueResult {
                 temperament: f32,
                 controversy: f32,
                 professionalism: f32,
+                sportsmanship: f32,
+                leadership: f32,
                 is_captain: bool,
             }
 
@@ -732,6 +743,8 @@ impl LeagueResult {
                         temperament: p.attributes.temperament,
                         controversy: p.attributes.controversy,
                         professionalism: p.attributes.professionalism,
+                        sportsmanship: p.attributes.sportsmanship,
+                        leadership: p.skills.mental.leadership,
                         is_captain: Some(*pid) == team_captain_id,
                     });
                 }
@@ -760,15 +773,6 @@ impl LeagueResult {
 
             // Track per-player visible event count so we cap at 2.
             let mut event_budget: HashMap<u32, u8> = HashMap::new();
-            let bump_event = |budget: &mut HashMap<u32, u8>, id: u32| -> bool {
-                let slot = budget.entry(id).or_insert(0);
-                if *slot >= 2 {
-                    false
-                } else {
-                    *slot += 1;
-                    true
-                }
-            };
 
             // Pending updates — applied after the read pass.
             struct Update {
@@ -776,7 +780,14 @@ impl LeagueResult {
                 to: u32,
                 change_type: ChangeType,
                 magnitude: f32,
-                event: Option<(HappinessEventType, f32)>,
+                event: Option<VisiblePairEvent>,
+            }
+
+            #[derive(Clone)]
+            struct VisiblePairEvent {
+                kind: HappinessEventType,
+                magnitude: f32,
+                evidence: Vec<HappinessEventEvidence>,
             }
             let mut updates: Vec<Update> = Vec::new();
 
@@ -876,6 +887,57 @@ impl LeagueResult {
                     Some(p) => p.group,
                     None => continue,
                 };
+
+                let mut visible_reactors: Vec<(u32, f32, Vec<HappinessEventEvidence>)> = players
+                    .iter()
+                    .filter(|p| p.id != offender && p.group == group)
+                    .map(|p| {
+                        let rel = data
+                            .player(p.id)
+                            .and_then(|player| player.relations.get_player(offender));
+                        let relation_level = rel.map(|r| r.level).unwrap_or(0.0);
+
+                        let mut score = 0.0;
+                        let mut evidence = vec![HappinessEventEvidence::DressingRoomRow];
+
+                        if relation_level <= -25.0 {
+                            score += 2.0;
+                            evidence.push(HappinessEventEvidence::AlreadyStrainedRelationship);
+                        }
+                        if p.is_captain || p.leadership >= 15.0 {
+                            score += 1.8;
+                            evidence.push(HappinessEventEvidence::CaptainOrLeaderInfluence);
+                        }
+                        if p.professionalism >= 14.0 {
+                            score += 1.1;
+                            evidence.push(HappinessEventEvidence::HighProfessionalism);
+                        }
+                        if p.sportsmanship >= 14.0 {
+                            score += 0.8;
+                        }
+                        if p.controversy >= 14.0 {
+                            score += (p.controversy - 13.0) * 0.25;
+                            evidence.push(HappinessEventEvidence::HighControversy);
+                        }
+                        if p.temperament <= 8.0 {
+                            score += (9.0 - p.temperament) * 0.25;
+                            evidence.push(HappinessEventEvidence::LowTemperament);
+                        }
+
+                        (p.id, score, evidence)
+                    })
+                    .collect();
+
+                visible_reactors
+                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                let visible_reactors: std::collections::HashMap<u32, Vec<HappinessEventEvidence>> =
+                    visible_reactors
+                        .into_iter()
+                        .filter(|(_, score, _)| *score >= 1.5)
+                        .take(2)
+                        .map(|(id, _, evidence)| (id, evidence))
+                        .collect();
+
                 for p in players
                     .iter()
                     .filter(|p| p.id != offender && p.group == group)
@@ -885,7 +947,13 @@ impl LeagueResult {
                         to: offender,
                         change_type: ChangeType::PersonalConflict,
                         magnitude: 0.20,
-                        event: Some((HappinessEventType::ConflictWithTeammate, -0.8)),
+                        event: visible_reactors
+                            .get(&p.id)
+                            .map(|evidence| VisiblePairEvent {
+                                kind: HappinessEventType::ConflictWithTeammate,
+                                magnitude: -1.5,
+                                evidence: evidence.clone(),
+                            }),
                     });
                 }
             }
@@ -961,6 +1029,13 @@ impl LeagueResult {
 
                 if let Some(player) = data.player_mut(from) {
                     for upd in &updates[i..block_end] {
+                        let relation_before = upd.event.as_ref().map(|_| {
+                            player
+                                .relations
+                                .get_player(upd.to)
+                                .map(|r| (r.level, r.trust, r.friendship, r.professional_respect))
+                                .unwrap_or((0.0, 50.0, 30.0, 50.0))
+                        });
                         let change_type = upd.change_type.clone();
                         let signed = match change_type {
                             ChangeType::PersonalConflict
@@ -977,11 +1052,92 @@ impl LeagueResult {
                         player
                             .relations
                             .update_player_relationship(upd.to, change, now);
-                        if let Some((kind, mag)) = upd.event.clone() {
-                            if bump_event(&mut event_budget, upd.from) {
-                                player
+                        if let Some(event) = upd.event.clone() {
+                            let slot = event_budget.entry(upd.from).or_insert(0);
+                            if *slot < 2 {
+                                let (level_before, trust, friendship, professional_respect) =
+                                    relation_before.unwrap_or((0.0, 50.0, 30.0, 50.0));
+                                let level_after = player
+                                    .relations
+                                    .get_player(upd.to)
+                                    .map(|r| r.level)
+                                    .unwrap_or(level_before);
+
+                                let mut evidence = event.evidence.clone();
+                                if level_before <= -25.0
+                                    && !evidence.contains(
+                                        &HappinessEventEvidence::AlreadyStrainedRelationship,
+                                    )
+                                {
+                                    evidence
+                                        .push(HappinessEventEvidence::AlreadyStrainedRelationship);
+                                } else if level_before.abs() < 25.0
+                                    && !evidence.contains(&HappinessEventEvidence::WeakExistingBond)
+                                {
+                                    evidence.push(HappinessEventEvidence::WeakExistingBond);
+                                }
+                                if trust <= 35.0
+                                    && !evidence.contains(&HappinessEventEvidence::LowTrust)
+                                {
+                                    evidence.push(HappinessEventEvidence::LowTrust);
+                                }
+                                if friendship <= 25.0
+                                    && !evidence.contains(&HappinessEventEvidence::LowFriendship)
+                                {
+                                    evidence.push(HappinessEventEvidence::LowFriendship);
+                                }
+                                if professional_respect <= 35.0
+                                    && !evidence
+                                        .contains(&HappinessEventEvidence::LowProfessionalRespect)
+                                {
+                                    evidence.push(HappinessEventEvidence::LowProfessionalRespect);
+                                }
+                                if player.happiness.has_recent_event_with_partner(
+                                    &event.kind,
+                                    upd.to,
+                                    90,
+                                ) && !evidence
+                                    .contains(&HappinessEventEvidence::RepeatedIncident)
+                                {
+                                    evidence.push(HappinessEventEvidence::RepeatedIncident);
+                                }
+
+                                let follow_up = if level_before <= -25.0
+                                    || evidence.contains(&HappinessEventEvidence::RepeatedIncident)
+                                {
+                                    HappinessEventFollowUp::DressingRoomDamageRisk
+                                } else {
+                                    HappinessEventFollowUp::LikelyToSettle
+                                };
+                                let context = HappinessEventContext::new(
+                                    crate::club::HappinessEventCause::PersonalityClash,
+                                    HappinessEventSeverity::from_magnitude(event.magnitude),
+                                    HappinessEventScope::DressingRoom,
+                                )
+                                .with_relationship_levels(level_before, level_after)
+                                .with_relationship_axes(trust, friendship, professional_respect)
+                                .with_change_kind(HappinessEventChangeKind::from_change_type(
+                                    &upd.change_type,
+                                ))
+                                .with_evidence_iter(evidence)
+                                .with_follow_up(follow_up)
+                                .with_teammate_conflict_context(TeammateConflictContext::new(
+                                    TeammateConflictReason::PersonalityClash,
+                                    ConflictLocation::DressingRoom,
+                                ));
+
+                                if player
                                     .happiness
-                                    .add_event_with_partner(kind, mag, Some(upd.to));
+                                    .add_event_with_partner_context_and_cooldown(
+                                        event.kind,
+                                        event.magnitude,
+                                        upd.to,
+                                        context,
+                                        45,
+                                    )
+                                {
+                                    *slot += 1;
+                                }
                             }
                         }
                     }

@@ -289,6 +289,62 @@ a:link, a:visited, a:hover, a:active {
     font-size: 13px;
 }
 
+/* Collapsible league list — show first 2, hide the rest behind a toggle */
+.fm-nav-collapsible .fm-nav-overflow {
+    display: none;
+}
+
+.fm-nav-collapsible.fm-nav-expanded .fm-nav-overflow {
+    display: block;
+}
+
+.fm-nav-collapsible .fm-nav-toggle {
+    list-style: none;
+}
+
+.fm-nav-collapsible .fm-nav-toggle button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 6px 16px;
+    border: 0;
+    background: transparent;
+    color: #4a5663;
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s;
+}
+
+.fm-nav-collapsible .fm-nav-toggle button:hover {
+    color: #c8d0d8;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.fm-nav-toggle-spacer {
+    width: 18px;
+    flex-shrink: 0;
+}
+
+.fm-nav-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.fm-nav-toggle-icon {
+    font-size: 12px;
+}
+
+.fm-nav-collapsible .fm-nav-toggle-icon-less,
+.fm-nav-collapsible.fm-nav-expanded .fm-nav-toggle-icon-more {
+    display: none;
+}
+
+.fm-nav-collapsible.fm-nav-expanded .fm-nav-toggle-icon-less {
+    display: inline-block;
+}
+
 /* ============================================
    HEADER
    ============================================ */
