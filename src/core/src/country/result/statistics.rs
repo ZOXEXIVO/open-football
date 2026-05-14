@@ -81,14 +81,11 @@ impl CountryResult {
                 };
 
                 for player in &mut team.players.players {
-                    if keeps_own_identity {
-                        player.on_season_end(ended_season.clone(), &team_info, date);
-                    } else {
-                        // Non-senior squads (Reserve, U18..U23) don't
-                        // contribute to career history — drain stats so
-                        // they don't carry over, but skip the snapshot.
-                        player.reset_match_stats();
-                    }
+                    // Every squad snapshots — `team_info` already aliases
+                    // Reserve / U18..U23 to the main-team brand, so youth
+                    // seasons land in career history under the parent club
+                    // and the player page always shows a row per season.
+                    player.on_season_end(ended_season.clone(), &team_info, date);
                     player.evaluate_favorite_club(club.id, &team_info.slug, date);
                 }
             }
@@ -259,11 +256,10 @@ mod tests {
     }
 
     #[test]
-    fn reserve_players_skip_history_snapshot() {
-        // Only Main / B / Second contribute to player career history.
-        // Reserve / U18..U23 squads still have their accumulated stats
-        // drained at season-end so they don't carry over, but no
-        // frozen history row is written.
+    fn reserve_players_snapshot_under_main_team_alias() {
+        // Reserve / U18..U23 stats roll up under the main-team brand so a
+        // player who spends the season on the reserve squad still gets a
+        // career-history row pointing at the parent club's main team.
         let player = make_player(1, 10, 2);
         let main_team = make_team(
             10,
@@ -294,7 +290,14 @@ mod tests {
         let country = data.country_mut(1).unwrap();
         let reserve_player = &country.clubs[0].teams.teams[1].players.players[0];
         assert_eq!(reserve_player.statistics.played, 0);
-        assert!(reserve_player.statistics_history.items.is_empty());
+        let entry = reserve_player
+            .statistics_history
+            .items
+            .iter()
+            .find(|i| i.season.start_year == 2031)
+            .expect("Frozen 2031 row missing for reserve player");
+        assert_eq!(entry.team_slug, "juventus");
+        assert_eq!(entry.statistics.played, 10);
     }
 
     #[test]
@@ -353,7 +356,11 @@ mod tests {
 
         let reserve_player = &country.clubs[0].teams.teams[1].players.players[0];
         assert_eq!(reserve_player.statistics.played, 0);
-        assert!(reserve_player.statistics_history.items.is_empty());
+        // Reserve squads now roll up under the main team — the player
+        // gets a "Roma" row even though they played for Roma B.
+        let reserve_entry = &reserve_player.statistics_history.items[0];
+        assert_eq!(reserve_entry.team_slug, "roma");
+        assert_eq!(reserve_entry.statistics.played, 5);
     }
 
     #[test]
@@ -452,10 +459,10 @@ mod tests {
     }
 
     #[test]
-    fn youth_squad_player_skips_history_snapshot() {
-        // U21 sits outside the senior bracket, so its season-end pass
-        // resets stats but never lands a row in the player's career
-        // history table.
+    fn youth_squad_player_snapshots_under_main_team_alias() {
+        // U21 stats roll up under the parent club's main-team identity
+        // so every season the player is on the books produces a row in
+        // career history — even seasons played entirely at U21.
         let player = make_player(1, 12, 3);
         let main_team = make_team(10, 100, "Napoli", "napoli", TeamType::Main, Some(1), vec![]);
         let u21 = make_team(
@@ -477,6 +484,13 @@ mod tests {
         let country = data.country_mut(1).unwrap();
         let u21_player = &country.clubs[0].teams.teams[1].players.players[0];
         assert_eq!(u21_player.statistics.played, 0);
-        assert!(u21_player.statistics_history.items.is_empty());
+        let entry = u21_player
+            .statistics_history
+            .items
+            .iter()
+            .find(|i| i.season.start_year == 2031)
+            .expect("Frozen 2031 row missing for U21 player");
+        assert_eq!(entry.team_slug, "napoli");
+        assert_eq!(entry.statistics.played, 12);
     }
 }
