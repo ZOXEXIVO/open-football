@@ -3,7 +3,9 @@ mod match_events;
 mod physical;
 mod types;
 
-pub use data_access::{CountryProcessCtx, DeferredGlobalOps, LeagueProcessAccess, WorldSnapshot};
+pub use data_access::{
+    CountryLookupIndex, CountryProcessCtx, DeferredGlobalOps, LeagueProcessAccess, WorldSnapshot,
+};
 
 pub use types::*;
 

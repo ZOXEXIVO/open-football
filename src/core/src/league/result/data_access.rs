@@ -166,6 +166,55 @@ impl LeagueProcessAccess for SimulatorData {
     }
 }
 
+/// Per-country positional index for O(1) accessor lookups during the
+/// result-processing fan-out. Maps `player_id`/`team_id`/`club_id` to
+/// the `(club_idx, team_idx, player_idx)` triple inside `Country::clubs`
+/// so `LeagueProcessAccess::player(id)` etc. don't linear-scan
+/// thousands of players per call.
+///
+/// Built once before `LeagueResult::process_local` / `ClubResult::process`
+/// and dropped before any path that mutates rosters (transfer market,
+/// retirements). The accessors validate the slot's `player.id` after
+/// indexing so a stale entry still returns `None` rather than the wrong
+/// player — keeps the index advisory.
+pub struct CountryLookupIndex {
+    pub players: HashMap<u32, (u16, u8, u16)>,
+    pub teams: HashMap<u32, (u16, u8)>,
+    pub clubs: HashMap<u32, u16>,
+}
+
+impl CountryLookupIndex {
+    pub fn build(country: &Country) -> Self {
+        let player_cap: usize = country
+            .clubs
+            .iter()
+            .flat_map(|c| &c.teams.teams)
+            .map(|t| t.players.players.len())
+            .sum();
+        let team_cap: usize = country.clubs.iter().map(|c| c.teams.teams.len()).sum();
+        let mut players = HashMap::with_capacity(player_cap);
+        let mut teams = HashMap::with_capacity(team_cap);
+        let mut clubs = HashMap::with_capacity(country.clubs.len());
+        for (ci, club) in country.clubs.iter().enumerate() {
+            let ci16 = ci.min(u16::MAX as usize) as u16;
+            clubs.insert(club.id, ci16);
+            for (ti, team) in club.teams.teams.iter().enumerate() {
+                let ti8 = ti.min(u8::MAX as usize) as u8;
+                teams.insert(team.id, (ci16, ti8));
+                for (pi, player) in team.players.players.iter().enumerate() {
+                    let pi16 = pi.min(u16::MAX as usize) as u16;
+                    players.insert(player.id, (ci16, ti8, pi16));
+                }
+            }
+        }
+        CountryLookupIndex {
+            players,
+            teams,
+            clubs,
+        }
+    }
+}
+
 /// Country-local data-access wrapper for the parallel Phase-A pass.
 ///
 /// Owns `&mut Country` (the one country whose results are being
@@ -180,6 +229,9 @@ pub struct CountryProcessCtx<'a> {
     pub country_info_ref: &'a HashMap<u32, CountryInfo>,
     pub indexes_ref: Option<&'a SimulatorDataIndexes>,
     pub deferred: &'a mut DeferredGlobalOps,
+    /// O(1) lookup index for this country's players/teams/clubs.
+    /// `None` falls back to linear scans via `Country::player(id)` etc.
+    pub lookup: Option<&'a CountryLookupIndex>,
 }
 
 impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
@@ -232,21 +284,87 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
         self.country.league_mut(id)
     }
     fn club(&self, id: u32) -> Option<&Club> {
+        if let Some(idx) = self.lookup {
+            if let Some(&ci) = idx.clubs.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get(ci as usize)
+                    .filter(|c| c.id == id);
+            }
+            return None;
+        }
         self.country.club(id)
     }
     fn club_mut(&mut self, id: u32) -> Option<&mut Club> {
+        if let Some(idx) = self.lookup {
+            if let Some(&ci) = idx.clubs.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get_mut(ci as usize)
+                    .filter(|c| c.id == id);
+            }
+            return None;
+        }
         self.country.club_mut(id)
     }
     fn team(&self, id: u32) -> Option<&Team> {
+        if let Some(idx) = self.lookup {
+            if let Some(&(ci, ti)) = idx.teams.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get(ci as usize)
+                    .and_then(|c| c.teams.teams.get(ti as usize))
+                    .filter(|t| t.id == id);
+            }
+            return None;
+        }
         self.country.team(id)
     }
     fn team_mut(&mut self, id: u32) -> Option<&mut Team> {
+        if let Some(idx) = self.lookup {
+            if let Some(&(ci, ti)) = idx.teams.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get_mut(ci as usize)
+                    .and_then(|c| c.teams.teams.get_mut(ti as usize))
+                    .filter(|t| t.id == id);
+            }
+            return None;
+        }
         self.country.team_mut(id)
     }
     fn player(&self, id: u32) -> Option<&Player> {
+        if let Some(idx) = self.lookup {
+            if let Some(&(ci, ti, pi)) = idx.players.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get(ci as usize)
+                    .and_then(|c| c.teams.teams.get(ti as usize))
+                    .and_then(|t| t.players.players.get(pi as usize))
+                    .filter(|p| p.id == id);
+            }
+            return None;
+        }
         self.country.player(id)
     }
     fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
+        if let Some(idx) = self.lookup {
+            if let Some(&(ci, ti, pi)) = idx.players.get(&id) {
+                return self
+                    .country
+                    .clubs
+                    .get_mut(ci as usize)
+                    .and_then(|c| c.teams.teams.get_mut(ti as usize))
+                    .and_then(|t| t.players.players.get_mut(pi as usize))
+                    .filter(|p| p.id == id);
+            }
+            return None;
+        }
         self.country.player_mut(id)
     }
     fn admit_free_agent_staff(&mut self, staff: crate::Staff) {

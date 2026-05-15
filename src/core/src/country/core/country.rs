@@ -5,7 +5,9 @@ use crate::country::CountryResult;
 use crate::country::core::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
 use crate::league::LeagueCollection;
-use crate::league::result::{CountryProcessCtx, DeferredGlobalOps, WorldSnapshot};
+use crate::league::result::{
+    CountryLookupIndex, CountryProcessCtx, DeferredGlobalOps, WorldSnapshot,
+};
 use crate::r#match::MatchResult;
 use crate::transfers::market::TransferMarket;
 use crate::{Club, ClubResult, Player};
@@ -251,6 +253,15 @@ impl Country {
         let mut deferred = DeferredGlobalOps::new();
         let mut processed: Vec<(u32, Vec<MatchResult>)> = Vec::new();
         let mut league_results_after = Vec::with_capacity(league_results.len());
+        // Build the per-country positional index once and share it
+        // across both result-processing loops. The fan-out
+        // (`TeamBehaviourResult::process` etc.) calls
+        // `data.player(id)` / `player_mut(id)` thousands of times per
+        // tick — without this index each call linear-scans every team
+        // and player in the country, dominating wall-time on big
+        // countries. Drop before `simulate_transfer_market_local`
+        // since the transfer pipeline mutates rosters.
+        let lookup = CountryLookupIndex::build(self);
         for lr in league_results {
             let league_id = lr.league_id;
             if lr.match_results.is_some() {
@@ -260,6 +271,7 @@ impl Country {
                     country_info_ref: world.country_info,
                     indexes_ref: world.indexes,
                     deferred: &mut deferred,
+                    lookup: Some(&lookup),
                 };
                 let mut out: Vec<MatchResult> = Vec::new();
                 // Take match_results out so process_local can consume
@@ -308,6 +320,7 @@ impl Country {
                 country_info_ref: world.country_info,
                 indexes_ref: world.indexes,
                 deferred: &mut deferred,
+                lookup: Some(&lookup),
             };
             // ClubResult::process consumes self; we don't need the
             // returned shell after applying. Reconstruct a stripped
@@ -334,6 +347,11 @@ impl Country {
                 self.transfer_market.transfer_history.push(transfer);
             }
         }
+
+        // Drop the lookup index before the transfer market runs — the
+        // pipeline mutates rosters (signings, free agents) and the
+        // index would go stale.
+        drop(lookup);
 
         // Phase 1d (NEW PARALLEL PATH): run the country-local transfer
         // market pipeline here. The heavy work — scouting, negotiations,
