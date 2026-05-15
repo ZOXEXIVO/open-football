@@ -3,13 +3,14 @@ use crate::club::player::interaction::{
     InteractionOutcome, InteractionTone, InteractionTopic, ManagerInteraction,
     default_cooldown_days,
 };
+use crate::league::result::LeagueProcessAccess;
 use crate::{
     ChangeType, ConflictLocation, HappinessEventCause, HappinessEventChangeKind,
     HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
     HappinessEventSeverity, HappinessEventType, LoanEventContext, LoanEventKind,
     ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic, Player,
     PlayerAcceptance, PlayerPositionType, PlayerSquadStatus, PlayerStatusType, PromiseKind,
-    RelationshipChange, SimulatorData, TeammateConflictContext, TeammateConflictReason,
+    RelationshipChange, TeammateConflictContext, TeammateConflictReason,
 };
 use chrono::{Duration, NaiveDate};
 
@@ -43,18 +44,17 @@ impl TeamBehaviourResult {
         }
     }
 
-    pub fn process(&self, data: &mut SimulatorData) {
+    pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         self.players.process(data);
         self.process_manager_talks(data);
         self.process_contract_terminations(data);
     }
 
-    fn process_contract_terminations(&self, data: &mut SimulatorData) {
-        let date = data.date.date();
+    fn process_contract_terminations<D: LeagueProcessAccess>(&self, data: &mut D) {
+        let date = data.date().date();
         for termination in &self.contract_terminations {
             let (country_id, club_id) = match data
-                .indexes
-                .as_ref()
+                .indexes()
                 .and_then(|i| i.get_player_location(termination.player_id))
             {
                 Some((_, country_id, club_id, _)) => (country_id, club_id),
@@ -89,8 +89,8 @@ impl TeamBehaviourResult {
         }
     }
 
-    fn process_manager_talks(&self, data: &mut SimulatorData) {
-        let sim_date = data.date.date();
+    fn process_manager_talks<D: LeagueProcessAccess>(&self, data: &mut D) {
+        let sim_date = data.date().date();
 
         for talk in &self.manager_talks {
             if let Some(player) = data.player_mut(talk.player_id) {
@@ -331,8 +331,8 @@ impl PlayerBehaviourResult {
         }
     }
 
-    pub fn process(&self, data: &mut SimulatorData) {
-        let sim_date = data.date.date();
+    pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
+        let sim_date = data.date().date();
 
         for relationship_result in &self.relationship_result {
             // Look up partner-side personality / squad info BEFORE we take

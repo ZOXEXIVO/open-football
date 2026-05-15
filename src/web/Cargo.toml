@@ -4,6 +4,14 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 
+[features]
+# Pass-throughs for the match engine features defined in `core`.
+# Lets the parent binary forward `--features match-stub` etc. without
+# spelling out `core/match-stub` on the command line.
+match = ["match-logs", "match-stub"]
+match-logs = ["core/match-logs"]
+match-stub = ["core/match-stub"]
+
 [dependencies]
 core = { path = "../core" }
 database = { path = "../database" }

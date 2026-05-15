@@ -1,11 +1,11 @@
 use crate::club::player::condition::{ConditionRecoveryModel, InjuryRiskInputs};
 use crate::club::player::injury::InjuryType;
+use crate::league::result::LeagueProcessAccess;
 use crate::utils::DateUtils;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
-    HappinessEventType, MentalGains, PhysicalGains, PlayerStatusType, SimulatorData,
-    TechnicalGains, TrainingEffects, TrainingEventContext, TrainingEventEvidence,
-    TrainingEventReason,
+    HappinessEventType, MentalGains, PhysicalGains, PlayerStatusType, TechnicalGains,
+    TrainingEffects, TrainingEventContext, TrainingEventEvidence, TrainingEventReason,
 };
 
 /// Per-session outcome breakdown built by `PlayerTraining::train`.
@@ -70,8 +70,8 @@ impl PlayerTrainingResult {
 
     /// Apply the training effects to the player
     /// This is where the actual skill updates happen with mutable references
-    pub fn process(&self, data: &mut SimulatorData) {
-        let current_date = data.date.date();
+    pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
+        let current_date = data.date().date();
         // Get mutable reference to the player
         if let Some(player) = data.player_mut(self.player_id) {
             self.apply_to_player(player, current_date);

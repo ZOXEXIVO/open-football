@@ -7,6 +7,7 @@ mod negotiations;
 pub(crate) mod types;
 
 use super::CountryResult;
+use crate::Country;
 use crate::simulator::SimulatorData;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
@@ -15,9 +16,239 @@ use config::TransferConfig;
 use free_agents::{GlobalFreeAgentSigning, execute_global_free_agent_signing};
 pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use log::debug;
+use types::DeferredTransfer;
 use types::TransferActivitySummary;
 
+/// Cross-country tail of the transfer market — populated by
+/// `simulate_transfer_market_local` running on `&mut Country` inside
+/// Phase A, drained by `apply_deferred_transfer_ops` on `&mut
+/// SimulatorData` in Phase C. Keeps the heavy per-country pipeline
+/// (scouting, negotiations, squad eval, shadow reports, …) on the
+/// parallel side; the global writes that reach into other countries
+/// or `data.free_agents` stay serial.
+pub struct DeferredTransferOps {
+    pub country_id: u32,
+    pub window_open: bool,
+    /// Per-country sweep targets — every domestic signing in Phase A
+    /// needs `cleanup_player_transfer_interest` to run against *every*
+    /// other country's shortlists. Serial in Phase C.
+    pub domestic_signed_ids: Vec<u32>,
+    /// Free-agent (`data.free_agents` global pool) candidates that
+    /// fielded an offer today; bumps the 30-day window counter.
+    pub global_offered_ids: Vec<u32>,
+    /// Subset of `global_offered_ids` whose acceptance roll failed;
+    /// bumps the rejected-total counter.
+    pub global_rejected_ids: Vec<u32>,
+    /// Free-agent signings to execute against `data.free_agents` after
+    /// the parallel pass joins.
+    pub global_signings: Vec<GlobalFreeAgentSigning>,
+    /// Domestic + cross-country transfers ready for the unified
+    /// `execution::execute_transfer` path.
+    pub deferred_transfers: Vec<DeferredTransfer>,
+    /// `summary.completed_transfers` at the start of this country's
+    /// local pass — Phase C compares against `completed_after` to
+    /// decide whether to flag `data.dirty_player_index`.
+    pub completed_before: u32,
+    /// Roster mutations from `handle_free_agents` that already
+    /// landed in Phase A. Phase C checks this against `completed_before`
+    /// so it can dirty the player index without re-counting.
+    pub completed_after: u32,
+}
+
+impl DeferredTransferOps {
+    pub fn empty(country_id: u32) -> Self {
+        DeferredTransferOps {
+            country_id,
+            window_open: false,
+            domestic_signed_ids: Vec::new(),
+            global_offered_ids: Vec::new(),
+            global_rejected_ids: Vec::new(),
+            global_signings: Vec::new(),
+            deferred_transfers: Vec::new(),
+            completed_before: 0,
+            completed_after: 0,
+        }
+    }
+}
+
 impl CountryResult {
+    /// Phase-A entry: runs the country-local transfer market pipeline
+    /// (negotiations, free agents, listings, scouting, recruitment
+    /// meetings, board approvals, shadow reports) on `&mut Country`.
+    /// Cross-country writes — `data.free_agents` mutation, the
+    /// per-country shortlist sweep, transfer execution that moves
+    /// players between countries, foreign-negotiation initiation —
+    /// land in the returned `DeferredTransferOps` and the simulator
+    /// drains them serially in Phase C via `apply_deferred_transfer_ops`.
+    pub(crate) fn simulate_transfer_market_local(
+        country: &mut Country,
+        current_date: NaiveDate,
+        world_pool: &[PlayerSummary],
+        global_free_agents: &[GlobalFreeAgentSummary],
+    ) -> DeferredTransferOps {
+        let country_id = country.id;
+        let mut summary = TransferActivitySummary::new();
+        let window_manager = TransferWindowManager::new();
+        let window_open = window_manager.is_window_open(country_id, current_date);
+        let config = TransferConfig::default();
+
+        // Filter foreign players from the pre-built world snapshot.
+        let foreign_players: Vec<PlayerSummary> = if window_open {
+            world_pool
+                .iter()
+                .filter(|s| s.country_id != country_id)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let completed_before = summary.completed_transfers;
+        let mut ops = DeferredTransferOps::empty(country_id);
+        ops.window_open = window_open;
+        ops.completed_before = completed_before;
+
+        // Sync market's window flag. On open→closed transitions this cancels
+        // any stranded listings and expires pending negotiations.
+        country.transfer_market.check_transfer_window(window_open);
+
+        // Resolve pending negotiations — returns all completed transfers for deferred execution
+        let deferred =
+            Self::resolve_pending_negotiations(country, current_date, &mut summary);
+        ops.deferred_transfers = deferred;
+
+        // Expire stale negotiations
+        let expired = country.transfer_market.update(current_date);
+        for (buying_club_id, player_id) in expired {
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                buying_club_id,
+                player_id,
+                false,
+            );
+        }
+
+        // Free agents and contract expirations. Returns deferred
+        // signings sourced from the global pool (`data.free_agents`),
+        // which we execute after the country borrow ends.
+        ops.global_signings = Self::handle_free_agents(
+            country,
+            current_date,
+            &mut summary,
+            global_free_agents,
+            &config,
+            &mut ops.domestic_signed_ids,
+            &mut ops.global_offered_ids,
+            &mut ops.global_rejected_ids,
+        );
+
+        if window_open {
+            debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
+            Self::list_players_from_pipeline(country, current_date, &mut summary);
+            PipelineProcessor::evaluate_squads(country, current_date);
+            PipelineProcessor::generate_staff_recommendations(country, current_date);
+            PipelineProcessor::process_staff_recommendations(country, current_date);
+            PipelineProcessor::assign_scouts(country, current_date);
+            PipelineProcessor::assign_scouts_to_matches(country, current_date);
+            PipelineProcessor::process_match_scouting(country, current_date);
+            PipelineProcessor::process_scouting(country, &foreign_players, current_date);
+            PipelineProcessor::run_recruitment_meetings(country, current_date);
+            PipelineProcessor::build_shortlists(country, current_date);
+            PipelineProcessor::evaluate_board_approvals(country, current_date);
+            PipelineProcessor::initiate_negotiations(country, current_date);
+            PipelineProcessor::scan_loan_market(country, current_date);
+            PipelineProcessor::scan_foreign_loan_market(
+                country,
+                &foreign_players,
+                current_date,
+            );
+        }
+
+        PipelineProcessor::refresh_shadow_reports(country, current_date);
+        PipelineProcessor::sync_wanted_status(country);
+
+        ops.completed_after = summary.completed_transfers;
+        debug!(
+            "Transfer Activity (Phase A) - Listings: {}, Negotiations: {}, Completed: {}",
+            summary.total_listings, summary.active_negotiations, summary.completed_transfers
+        );
+
+        ops
+    }
+
+    /// Phase-C tail: apply the cross-country mutations the parallel
+    /// Phase-A pass stashed into `DeferredTransferOps`. Runs against
+    /// `&mut SimulatorData` so it can sweep every country's shortlist
+    /// for a signed player, mutate `data.free_agents`, and execute
+    /// transfers that move players between countries.
+    pub(crate) fn apply_deferred_transfer_ops(
+        data: &mut SimulatorData,
+        ops: DeferredTransferOps,
+        current_date: NaiveDate,
+    ) {
+        let config = TransferConfig::default();
+
+        // Cross-country interest sweep for the in-country free-agent
+        // signings that just executed.
+        for signed_id in &ops.domestic_signed_ids {
+            PipelineProcessor::cleanup_player_transfer_interest(data, *signed_id);
+        }
+
+        // Apply free-agent market state — bump 30-day window / rejected
+        // counters on each global-pool player that fielded an offer.
+        if !ops.global_offered_ids.is_empty() || !ops.global_rejected_ids.is_empty() {
+            for player in data.free_agents.iter_mut() {
+                if ops.global_offered_ids.contains(&player.id) {
+                    player.on_offer_received(current_date);
+                }
+                if ops.global_rejected_ids.contains(&player.id) {
+                    player.on_offer_rejected();
+                }
+            }
+        }
+
+        // Execute global free-agent signings (Move-on-Free players from
+        // `data.free_agents`).
+        let mut completed = ops.completed_after;
+        for signing in &ops.global_signings {
+            if execute_global_free_agent_signing(data, signing, current_date, &config) {
+                completed += 1;
+            }
+        }
+
+        // If anything moved this tick the global indexes need refreshing.
+        if completed > ops.completed_before {
+            data.dirty_player_index = true;
+        }
+
+        // Phase 2: Execute all completed transfers (domestic + foreign).
+        for transfer in &ops.deferred_transfers {
+            let success = execution::execute_transfer(data, transfer, current_date);
+            if success {
+                data.dirty_player_index = true;
+            }
+            if !success {
+                if let Some(country) = data.country_mut(transfer.buying_country_id) {
+                    country.transfer_market.transfer_history.retain(|t| {
+                        !(t.player_id == transfer.player_id
+                            && t.to_club_id == transfer.buying_club_id
+                            && t.transfer_date == current_date)
+                    });
+                }
+            }
+        }
+
+        // Phase 3: Foreign negotiation initiation (domestic priority).
+        if ops.window_open {
+            PipelineProcessor::initiate_foreign_negotiations(data, ops.country_id, current_date);
+        }
+    }
+
+    /// Legacy monolithic path — kept only for tests / external
+    /// callers that don't go through the parallel Phase-A split.
+    /// Production callers should use `simulate_transfer_market_local`
+    /// + `apply_deferred_transfer_ops`.
+    #[allow(dead_code)]
     pub(super) fn simulate_transfer_market(
         data: &mut SimulatorData,
         country_id: u32,

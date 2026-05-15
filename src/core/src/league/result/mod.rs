@@ -1,6 +1,9 @@
+pub mod data_access;
 mod match_events;
 mod physical;
 mod types;
+
+pub use data_access::{CountryProcessCtx, DeferredGlobalOps, LeagueProcessAccess, WorldSnapshot};
 
 pub use types::*;
 
@@ -50,14 +53,36 @@ impl LeagueResult {
         }
     }
 
+    /// Country-local entry point. Same per-match pipeline as `process`,
+    /// but driven through a `CountryProcessCtx` so it can run inside
+    /// `Country::simulate` (Phase A) without `&mut SimulatorData`. The
+    /// processed match results are pushed onto `out_match_results`; the
+    /// simulator's serial Phase C drains them into
+    /// `SimulationResult.match_results` after the parallel pass joins.
+    pub fn process_local(
+        self,
+        ctx: &mut CountryProcessCtx<'_>,
+        out_match_results: &mut Vec<MatchResult>,
+    ) {
+        if let Some(match_results) = self.match_results {
+            for mut match_result in match_results {
+                Self::process_match_results(&mut match_result, ctx);
+                out_match_results.push(match_result);
+            }
+        }
+    }
+
     /// Process a cup match result (Champions League, etc.) through the stat pipeline.
     /// Called from continental competition processing.
     pub fn process_cup_match(result: &mut MatchResult, data: &mut SimulatorData) {
         Self::process_match_results(result, data);
     }
 
-    fn process_match_results(result: &mut MatchResult, data: &mut SimulatorData) {
-        let now = data.date;
+    fn process_match_results<D: data_access::LeagueProcessAccess>(
+        result: &mut MatchResult,
+        data: &mut D,
+    ) {
+        let now = data.date();
 
         // Update league schedule (skip for friendlies without a league)
         if let Some(league) = data.league_mut(result.league_id) {

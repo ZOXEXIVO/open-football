@@ -93,7 +93,7 @@ pub(crate) struct NegotiationData {
 
 /// A completed negotiation that needs execution at SimulatorData level.
 /// Used for ALL transfers — both domestic and cross-country.
-pub(crate) struct DeferredTransfer {
+pub struct DeferredTransfer {
     pub(crate) player_id: u32,
     pub(crate) selling_country_id: u32,
     pub(crate) selling_club_id: u32,

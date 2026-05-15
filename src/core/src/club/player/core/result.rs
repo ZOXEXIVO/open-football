@@ -1,5 +1,5 @@
 use crate::club::player::injury::InjuryType;
-use crate::simulator::SimulatorData;
+use crate::league::result::LeagueProcessAccess;
 
 pub struct PlayerCollectionResult {
     pub players: Vec<PlayerResult>,
@@ -10,7 +10,7 @@ impl PlayerCollectionResult {
         PlayerCollectionResult { players }
     }
 
-    pub fn process(&self, data: &mut SimulatorData) {
+    pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         for player in &self.players {
             player.process(data);
         }
@@ -54,7 +54,7 @@ impl PlayerResult {
         }
     }
 
-    pub fn process(&self, _: &mut SimulatorData) {}
+    pub fn process<D: LeagueProcessAccess>(&self, _: &mut D) {}
 
     pub fn request_transfer(&mut self, player_id: u32) {
         self.transfer_requests.push(player_id);

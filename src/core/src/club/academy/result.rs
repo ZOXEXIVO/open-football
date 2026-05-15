@@ -1,4 +1,5 @@
-use crate::{Player, PlayerCollectionResult, SimulatorData};
+use crate::league::result::LeagueProcessAccess;
+use crate::{Player, PlayerCollectionResult};
 
 pub struct ClubAcademyResult {
     pub players: PlayerCollectionResult,
@@ -9,7 +10,7 @@ impl ClubAcademyResult {
         ClubAcademyResult { players }
     }
 
-    pub fn process(&self, _: &mut SimulatorData) {}
+    pub fn process<D: LeagueProcessAccess>(&self, _: &mut D) {}
 }
 
 pub struct ProduceYouthPlayersResult {
@@ -21,5 +22,5 @@ impl ProduceYouthPlayersResult {
         ProduceYouthPlayersResult { players }
     }
 
-    pub fn process(&self, _: &mut SimulatorData) {}
+    pub fn process<D: LeagueProcessAccess>(&self, _: &mut D) {}
 }

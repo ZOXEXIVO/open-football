@@ -1,8 +1,12 @@
+use crate::club::academy::result::ClubAcademyResult;
+use crate::club::{BoardResult, ClubFinanceResult, PlayerCollectionResult};
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
 use crate::country::core::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
 use crate::league::LeagueCollection;
+use crate::league::result::{CountryProcessCtx, DeferredGlobalOps, WorldSnapshot};
+use crate::r#match::MatchResult;
 use crate::transfers::market::TransferMarket;
 use crate::{Club, ClubResult, Player};
 use chrono::{Datelike, NaiveDate};
@@ -84,6 +88,78 @@ impl Country {
         CountryBuilder::default()
     }
 
+    // ── Country-local accessors ─────────────────────────────────────
+    // Linear-scan lookups scoped to a single country. Used by the
+    // post-Phase-A result processors that run inside
+    // `countries.par_iter_mut()` — they only have `&mut Country`, not
+    // `&mut SimulatorData`. Linear scan is fine for the world sizes
+    // we care about (≤ 30 clubs, ≤ 150 teams, ≤ 700 players); if a
+    // profile flags any of these as hot we promote them to per-country
+    // HashMap indexes.
+    pub fn club(&self, id: u32) -> Option<&Club> {
+        self.clubs.iter().find(|c| c.id == id)
+    }
+    pub fn club_mut(&mut self, id: u32) -> Option<&mut Club> {
+        self.clubs.iter_mut().find(|c| c.id == id)
+    }
+    pub fn team(&self, id: u32) -> Option<&crate::Team> {
+        for club in &self.clubs {
+            for team in &club.teams.teams {
+                if team.id == id {
+                    return Some(team);
+                }
+            }
+        }
+        None
+    }
+    pub fn team_mut(&mut self, id: u32) -> Option<&mut crate::Team> {
+        for club in &mut self.clubs {
+            for team in &mut club.teams.teams {
+                if team.id == id {
+                    return Some(team);
+                }
+            }
+        }
+        None
+    }
+    pub fn player(&self, id: u32) -> Option<&Player> {
+        for club in &self.clubs {
+            for team in &club.teams.teams {
+                for player in &team.players.players {
+                    if player.id == id {
+                        return Some(player);
+                    }
+                }
+            }
+        }
+        None
+    }
+    pub fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
+        for club in &mut self.clubs {
+            for team in &mut club.teams.teams {
+                for player in &mut team.players.players {
+                    if player.id == id {
+                        return Some(player);
+                    }
+                }
+            }
+        }
+        None
+    }
+    pub fn league(&self, id: u32) -> Option<&crate::league::League> {
+        self.leagues.leagues.iter().find(|l| l.id == id)
+    }
+    pub fn league_mut(&mut self, id: u32) -> Option<&mut crate::league::League> {
+        self.leagues.leagues.iter_mut().find(|l| l.id == id)
+    }
+
+    /// True iff `club_id` belongs to this country. Used as a cheap
+    /// guard for "is this entity in my country" checks that were
+    /// previously `data.country_by_club(id).map(|c| c.id) == Some(self.id)`.
+    pub fn owns_club(&self, club_id: u32) -> bool {
+        self.clubs.iter().any(|c| c.id == club_id)
+    }
+
     /// Get season dates from the country's primary (tier-1, non-friendly) league.
     /// Falls back to May 31 / Aug 20 if no league is found.
     pub fn season_dates(&self) -> SeasonDates {
@@ -101,7 +177,11 @@ impl Country {
             .unwrap_or_default()
     }
 
-    pub(crate) fn simulate(&mut self, ctx: GlobalContext<'_>) -> CountryResult {
+    pub(crate) fn simulate(
+        &mut self,
+        ctx: GlobalContext<'_>,
+        world: WorldSnapshot<'_>,
+    ) -> CountryResult {
         let country_name = self.name.clone();
 
         debug!(
@@ -135,9 +215,151 @@ impl Country {
         };
         let clubs_results = self.simulate_clubs(&ctx);
 
+        // Per-country local result processing — used to run serially in
+        // Phase C after the parallel continent pass joined. Moved into
+        // `Country::simulate` so it runs inside the existing
+        // `countries.par_iter_mut()` (see `continent.rs`), parallel
+        // across every country in the world. Only the truly
+        // country-local pieces are here; cross-country work (transfer
+        // market, loan returns, club result fan-out into the global
+        // match store) stays in `CountryResult::process` until that
+        // work is sharded too.
+        let current_date = ctx.simulation.date.date();
+        CountryResult::simulate_media_coverage(self, &league_results);
+        // End-of-period must run BEFORE downstream Phase C work that
+        // reads player rosters — it retires players and triggers
+        // season awards. Order-equivalent to its old position in Phase
+        // C (which was before league_result.process). It uses
+        // club_results so it runs after `simulate_clubs`.
+        CountryResult::process_end_of_period(self, current_date, &clubs_results);
+        CountryResult::update_country_reputation(self);
+        CountryResult::simulate_international_competitions(self, current_date);
+        CountryResult::update_economic_factors(self, current_date);
+        if self.season_dates().is_off_season(current_date) {
+            CountryResult::simulate_preseason_activities(self, current_date);
+        }
+
+        // Phase 1b (NEW PARALLEL PATH): drive each LeagueResult's per-match
+        // stat / morale / discipline fan-out through `process_local`
+        // here, inside the parallel `countries.par_iter_mut()`. The
+        // existing `LeagueResult::process` (the global path) stays in
+        // place for `process_cup_match` (continental cups cross country
+        // boundaries). Match results consumed by `process_local` are
+        // captured into `processed_match_results` and folded back into
+        // the LeagueResult so the simulator's serial Phase C drains
+        // them into the world `SimulationResult`.
+        let mut deferred = DeferredGlobalOps::new();
+        let mut processed: Vec<(u32, Vec<MatchResult>)> = Vec::new();
+        let mut league_results_after = Vec::with_capacity(league_results.len());
+        for lr in league_results {
+            let league_id = lr.league_id;
+            if lr.match_results.is_some() {
+                let mut ctx_local = CountryProcessCtx {
+                    country: self,
+                    date: world.date,
+                    country_info_ref: world.country_info,
+                    indexes_ref: world.indexes,
+                    deferred: &mut deferred,
+                };
+                let mut out: Vec<MatchResult> = Vec::new();
+                // Take match_results out so process_local can consume
+                // them, then we restore the shell of the LeagueResult.
+                let new_season_started = lr.new_season_started;
+                lr.process_local(&mut ctx_local, &mut out);
+                processed.push((league_id, out));
+                // Rebuild a stripped LeagueResult — `match_results`
+                // already fanned out, so the serial Phase C only needs
+                // to push them into `SimulationResult.match_results`.
+                // `LeagueTableResult` is a unit-like marker so there's
+                // no state to copy from the consumed result.
+                let mut placeholder = crate::league::LeagueResult::new(
+                    league_id,
+                    crate::league::LeagueTableResult {},
+                );
+                placeholder.new_season_started = new_season_started;
+                league_results_after.push(placeholder);
+            } else {
+                league_results_after.push(lr);
+            }
+        }
+        // Phase 1c (NEW PARALLEL PATH): drive each ClubResult's
+        // sub-processors (finance, board, teams' players/staffs/training/
+        // behaviour, academy) here, inside the parallel
+        // `countries.par_iter_mut()`. The contracts / discipline /
+        // training / morale fan-out is now country-local — global
+        // cross-cuts (sacked staff joining the global free-agent pool,
+        // pending manager appointments) are queued on
+        // `deferred_global_ops` and drained serially in Phase C.
+        let mut clubs_results_after: Vec<ClubResult> = Vec::with_capacity(clubs_results.len());
+        // Collect academy transfers up front while we still own the
+        // ClubResult slice — they're appended to the country's transfer
+        // history below in a single pass after the parallel work.
+        let mut academy_transfers = Vec::new();
+        for cr in &clubs_results {
+            if !cr.academy_transfers.is_empty() {
+                academy_transfers.extend(cr.academy_transfers.iter().cloned());
+            }
+        }
+        for cr in clubs_results {
+            let club_id = cr.club_id;
+            let mut ctx_local = CountryProcessCtx {
+                country: self,
+                date: world.date,
+                country_info_ref: world.country_info,
+                indexes_ref: world.indexes,
+                deferred: &mut deferred,
+            };
+            // ClubResult::process consumes self; we don't need the
+            // returned shell after applying. Reconstruct a stripped
+            // placeholder for Phase C's iteration cost-of-bookkeeping.
+            // (Phase C no longer calls ClubResult::process — the shell
+            // is just for typing.)
+            cr.process(&mut ctx_local, &mut crate::SimulationResult::new());
+            // Keep a placeholder ClubResult to satisfy the existing
+            // CountryResult.clubs surface. The data Phase C cares about
+            // (academy_transfers, pending_ai_requests) were already
+            // extracted upstream — we just need the type.
+            clubs_results_after.push(ClubResult::new(
+                club_id,
+                ClubFinanceResult::new(),
+                Vec::new(),
+                BoardResult::new(),
+                ClubAcademyResult::new(PlayerCollectionResult::new(Vec::new())),
+            ));
+        }
+        // Push academy transfers to country transfer history here — no
+        // longer needs Phase C since we own &mut self.
+        if !academy_transfers.is_empty() {
+            for transfer in academy_transfers {
+                self.transfer_market.transfer_history.push(transfer);
+            }
+        }
+
+        // Phase 1d (NEW PARALLEL PATH): run the country-local transfer
+        // market pipeline here. The heavy work — scouting, negotiations,
+        // squad evaluation, recruitment meetings, shadow reports —
+        // takes &mut Country already, so it lifts cleanly into Phase A.
+        // Cross-country writes (sweeps, data.free_agents mutation,
+        // transfer execution, foreign negotiations) go through the
+        // returned DeferredTransferOps, drained by Phase C.
+        let transfer_ops = CountryResult::simulate_transfer_market_local(
+            self,
+            current_date,
+            world.world_pool,
+            world.global_free_agents,
+        );
+
+        // Stash the processed matches and any deferred global ops on
+        // CountryResult so the serial Phase C can apply them.
+        let mut country_result =
+            CountryResult::new(self.id, league_results_after, clubs_results_after);
+        country_result.processed_match_results = processed;
+        country_result.deferred_global_ops = deferred;
+        country_result.deferred_transfer_ops = Some(transfer_ops);
+
         debug!("Country {} simulation complete", country_name);
 
-        CountryResult::new(self.id, league_results, clubs_results)
+        country_result
     }
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {

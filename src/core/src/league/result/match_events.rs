@@ -1,4 +1,5 @@
 use super::LeagueResult;
+use super::data_access::LeagueProcessAccess;
 use crate::club::StaffPosition;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
@@ -13,14 +14,16 @@ use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, 
 use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult};
-use crate::simulator::SimulatorData;
 use crate::transfers::pipeline::KnownPlayerMemory;
 use crate::transfers::window::PlayerValuationCalculator;
 use chrono::Datelike;
 use std::collections::HashMap;
 
 impl LeagueResult {
-    pub(super) fn process_match_events(result: &mut MatchResult, data: &mut SimulatorData) {
+    pub(super) fn process_match_events<D: LeagueProcessAccess>(
+        result: &mut MatchResult,
+        data: &mut D,
+    ) {
         let details = match &result.details {
             Some(d) => d,
             None => return,
@@ -47,7 +50,7 @@ impl LeagueResult {
         // Players inside their post-transfer settlement window play at a
         // reduced level. Dampened rating feeds into season averages, POM
         // selection, debriefs, and reputation.
-        let now_date = data.date.date();
+        let now_date = data.date().date();
         let effective_ratings = compute_effective_ratings(details, data, now_date);
         let best_player_id = pick_player_of_the_match(details, &effective_ratings);
 
@@ -146,9 +149,9 @@ impl LeagueResult {
     /// This is especially important for foreign loanees: once they return
     /// home, active country-local scouting can no longer see them, but clubs
     /// should still remember the player by id and profile.
-    fn record_match_scouting_memory(
+    fn record_match_scouting_memory<D: LeagueProcessAccess>(
         details: &MatchResultRaw,
-        data: &mut SimulatorData,
+        data: &mut D,
         is_friendly: bool,
         date: chrono::NaiveDate,
         home_team_id: u32,
@@ -291,9 +294,9 @@ impl LeagueResult {
     /// Feed the completed match into both teams' `TeamReputation`. Friendlies
     /// don't drift reputation; cups and league games do, with competition
     /// weighting handled inside `process_weekly_update`.
-    fn apply_post_match_reputation(
+    fn apply_post_match_reputation<D: LeagueProcessAccess>(
         result: &MatchResult,
-        data: &mut SimulatorData,
+        data: &mut D,
         is_friendly: bool,
         is_cup: bool,
     ) {
@@ -331,7 +334,7 @@ impl LeagueResult {
 
         let (home_pos, away_pos, total_teams) =
             league_standings(result.league_id, home_team_id, away_team_id, data);
-        let date = data.date.date();
+        let date = data.date().date();
 
         if let Some(team) = data.team_mut(home_team_id) {
             team.on_match_completed(
@@ -357,10 +360,10 @@ impl LeagueResult {
     ///   CleanSheetFee  → flat bonus for GK on a clean sheet
     ///
     /// Bonuses are charged to the employing club as a player-wage expense.
-    fn process_contract_bonuses(
+    fn process_contract_bonuses<D: LeagueProcessAccess>(
         result: &MatchResult,
         details: &MatchResultRaw,
-        data: &mut SimulatorData,
+        data: &mut D,
     ) {
         // Count this match's goals per player.
         let mut goals_per_player: HashMap<u32, u8> = HashMap::new();
@@ -431,8 +434,7 @@ impl LeagueResult {
                 // players' borrower id is the same lookup result; we
                 // override below for parent-contract bonuses.
                 let borrower_club_id = match data
-                    .indexes
-                    .as_ref()
+                    .indexes()
                     .and_then(|i| i.get_player_location(*pid))
                 {
                     Some((_, _, club_id, _)) => club_id,
@@ -509,8 +511,7 @@ impl LeagueResult {
         for pid in &unused_sub_ids {
             if let Some(player) = data.player(*pid) {
                 let borrower_club_id = match data
-                    .indexes
-                    .as_ref()
+                    .indexes()
                     .and_then(|i| i.get_player_location(*pid))
                 {
                     Some((_, _, club_id, _)) => club_id,
@@ -563,10 +564,10 @@ impl LeagueResult {
     /// attributes drive effectiveness. The actual magnitude-per-player uses
     /// personality (pressure, temperament, important_matches) via
     /// `club::team::team_talks::apply_team_talk`.
-    fn apply_full_time_team_talks(
+    fn apply_full_time_team_talks<D: LeagueProcessAccess>(
         result: &MatchResult,
         details: &MatchResultRaw,
-        data: &mut SimulatorData,
+        data: &mut D,
     ) {
         let score = &result.score;
         let home_goals = score.home_team.get() as i8;
@@ -612,8 +613,7 @@ impl LeagueResult {
             }
             // Resolve club id from the first player's index entry.
             let club_id = data
-                .indexes
-                .as_ref()
+                .indexes()
                 .and_then(|i| i.get_player_location(*pids.first().unwrap()))
                 .map(|(_, _, c, _)| c)
                 .unwrap_or(0);
@@ -624,7 +624,7 @@ impl LeagueResult {
             });
         }
 
-        let now = data.date.date();
+        let now = data.date().date();
         for side in sides {
             // Find the head coach (Manager) for this club. Scans each team's
             // staff collection via StaffCollection::find_by_position — the
@@ -669,10 +669,10 @@ impl LeagueResult {
     /// We update underlying relations and emit at most two visible
     /// happiness events per player per match, so the player history
     /// surfaces meaningful incidents without overwhelming readers.
-    fn apply_match_relationship_updates(
+    fn apply_match_relationship_updates<D: LeagueProcessAccess>(
         result: &MatchResult,
         details: &MatchResultRaw,
-        data: &mut SimulatorData,
+        data: &mut D,
         now: chrono::NaiveDate,
         home_team_id: u32,
         best_player_id: Option<u32>,
@@ -728,8 +728,7 @@ impl LeagueResult {
 
             // Resolve captain id — read team metadata via player location.
             let team_captain_id: Option<u32> = data
-                .indexes
-                .as_ref()
+                .indexes()
                 .and_then(|i| i.get_player_location(*appeared.first()?))
                 .and_then(|(_, _, _, team_id)| data.team(team_id))
                 .and_then(|t| t.captain_id);
@@ -1258,10 +1257,10 @@ impl LeagueResult {
     /// appear (i.e. they sat out — the ban ticks down). Friendlies are
     /// excluded by the caller — friendly cards don't ban a player from
     /// the next competitive match in this model.
-    fn apply_post_match_discipline(
+    fn apply_post_match_discipline<D: LeagueProcessAccess>(
         result: &MatchResult,
         details: &MatchResultRaw,
-        data: &mut SimulatorData,
+        data: &mut D,
     ) {
         // Pull the league's accumulation threshold up-front so we don't
         // hold a borrow on `data` while mutating players. Continental
@@ -1342,7 +1341,7 @@ impl LeagueResult {
         }
     }
 
-    fn process_loan_match_fees(details: &MatchResultRaw, data: &mut SimulatorData) {
+    fn process_loan_match_fees<D: LeagueProcessAccess>(details: &MatchResultRaw, data: &mut D) {
         // Collect fee transfers: (parent_club_id, borrowing_club_id, fee)
         let mut fee_transfers: Vec<(u32, u32, u32)> = Vec::new();
 
@@ -1383,19 +1382,18 @@ impl LeagueResult {
     }
 }
 
-fn compute_effective_ratings(
+fn compute_effective_ratings<D: LeagueProcessAccess>(
     details: &MatchResultRaw,
-    data: &SimulatorData,
+    data: &D,
     now: chrono::NaiveDate,
 ) -> HashMap<u32, f32> {
     let mut out = HashMap::with_capacity(details.player_stats.len());
     for (player_id, stats) in &details.player_stats {
         let location = data
-            .indexes
-            .as_ref()
+            .indexes()
             .and_then(|i| i.get_player_location(*player_id));
         let country_code = location
-            .and_then(|(_, country_id, _, _)| data.country_info.get(&country_id))
+            .and_then(|(_, country_id, _, _)| data.country_info().get(&country_id))
             .map(|ci| ci.code.clone())
             .unwrap_or_default();
         let club_rep = location
@@ -1521,7 +1519,11 @@ fn pick_player_of_the_match(
     best
 }
 
-fn reputation_weights(result: &MatchResult, is_cup: bool, data: &SimulatorData) -> (f32, f32) {
+fn reputation_weights<D: LeagueProcessAccess>(
+    result: &MatchResult,
+    is_cup: bool,
+    data: &D,
+) -> (f32, f32) {
     if result.league_id == CHAMPIONS_LEAGUE_ID {
         (1.5, 1.2)
     } else if result.league_id == EUROPA_LEAGUE_ID {
@@ -1541,12 +1543,12 @@ fn reputation_weights(result: &MatchResult, is_cup: bool, data: &SimulatorData) 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn dispatch_match_outcomes(
+fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     side: &FieldSquad,
     team_scored: u8,
     team_conceded: u8,
     details: &MatchResultRaw,
-    data: &mut SimulatorData,
+    data: &mut D,
     effective_ratings: &HashMap<u32, f32>,
     best_player_id: Option<u32>,
     is_friendly: bool,
@@ -1641,11 +1643,11 @@ fn overall_score_to_u16(score: f32) -> u16 {
 /// Look up league-table positions for both teams and the total number of
 /// teams. Cup and continental competitions fall back to 1/1/1 — the
 /// position factor is meaningless there but still needs a valid denominator.
-fn league_standings(
+fn league_standings<D: LeagueProcessAccess>(
     league_id: u32,
     home_team_id: u32,
     away_team_id: u32,
-    data: &SimulatorData,
+    data: &D,
 ) -> (u8, u8, u8) {
     let league = match data.league(league_id) {
         Some(l) => l,

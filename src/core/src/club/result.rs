@@ -5,8 +5,8 @@ use crate::club::player::contract::{
     AffordabilityInput, ContractStalemate, RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL,
 };
 use crate::club::{BoardResult, ClubFinanceResult};
+use crate::league::result::LeagueProcessAccess;
 use crate::shared::{Currency, CurrencyValue};
-use crate::simulator::SimulatorData;
 use crate::transfers::{CompletedTransfer, TransferListing, TransferListingType};
 use crate::utils::{DateUtils, FormattingUtils};
 use crate::{
@@ -80,14 +80,18 @@ impl ClubResult {
         }
     }
 
-    pub fn process(self, data: &mut SimulatorData, _result: &mut SimulationResult) {
+    pub fn process<D: LeagueProcessAccess>(
+        self,
+        data: &mut D,
+        _result: &mut SimulationResult,
+    ) {
         self.finance.process(data);
         self.process_teams(data);
         self.board.process(data);
         self.academy.process(data);
     }
 
-    fn process_teams(&self, data: &mut SimulatorData) {
+    fn process_teams<D: LeagueProcessAccess>(&self, data: &mut D) {
         for team_result in &self.teams {
             for player_result in &team_result.players.players {
                 if player_result.has_contract_actions() {
@@ -99,9 +103,9 @@ impl ClubResult {
         }
     }
 
-    pub(crate) fn process_player_contract_interaction(
+    pub(crate) fn process_player_contract_interaction<D: LeagueProcessAccess>(
         result: &PlayerResult,
-        data: &mut SimulatorData,
+        data: &mut D,
         club_id: u32,
     ) {
         let is_on_loan = data
@@ -140,7 +144,7 @@ impl ClubResult {
         const OFFER_COOLDOWN_DAYS: i64 = 60;
         const REJECT_COOLDOWN_DAYS: i64 = 120;
         const MAX_ATTEMPTS_PER_YEAR: usize = 3;
-        let today = data.date.date();
+        let today = data.date().date();
         if let Some(player) = data.player(result.player_id) {
             let last = player.decision_history.items.iter().rev().find(|d| {
                 d.decision == RENEWAL_OFFERED_LABEL || d.decision == RENEWAL_REJECTED_LABEL
@@ -267,7 +271,7 @@ impl ClubResult {
 
             let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
             let ability = player.player_attributes.current_ability;
-            let age = DateUtils::age(player.birth_date, data.date.date());
+            let age = DateUtils::age(player.birth_date, data.date().date());
 
             // Reactive renewal salary now flows through ContractValuation,
             // the same model used by the proactive renewal pass and salary
@@ -300,7 +304,7 @@ impl ClubResult {
             let months_remaining = player
                 .contract
                 .as_ref()
-                .map(|c| ((c.expiration - data.date.date()).num_days() / 30).max(0) as i32)
+                .map(|c| ((c.expiration - data.date().date()).num_days() / 30).max(0) as i32)
                 .unwrap_or(0);
             let has_market_interest = player.statuses.get().iter().any(|s| {
                 matches!(
@@ -355,7 +359,7 @@ impl ClubResult {
                     };
                     let stalemate = ContractStalemate::assess(
                         player,
-                        data.date.date(),
+                        data.date().date(),
                         AffordabilityInput {
                             wage_budget_headroom: headroom,
                             current_salary,
@@ -443,7 +447,7 @@ impl ClubResult {
                 years,
                 crate::utils::FormattingUtils::format_money(final_salary as f64)
             );
-            let offer_date = data.date.date();
+            let offer_date = data.date().date();
             if let Some(player_mut) = data.player_mut(result.player_id) {
                 player_mut.decision_history.add(
                     offer_date,
@@ -576,7 +580,7 @@ impl ClubResult {
     /// when the board hasn't set season targets (test fixtures, edge
     /// cases) — in which case the stalemate falls back to its
     /// rejection-count based rules without an affordability signal.
-    fn wage_budget_headroom(data: &SimulatorData, club_id: u32) -> Option<u32> {
+    fn wage_budget_headroom<D: LeagueProcessAccess>(data: &D, club_id: u32) -> Option<u32> {
         let club = data.club(club_id)?;
         let budget = club
             .board
@@ -589,8 +593,12 @@ impl ClubResult {
 
     /// Run the stalemate gate against a player so the club only acts on
     /// a renewal rejection when the negotiation has genuinely failed.
-    fn stalemate_permits_listing(player_id: u32, data: &SimulatorData, club_id: u32) -> bool {
-        let today = data.date.date();
+    fn stalemate_permits_listing<D: LeagueProcessAccess>(
+        player_id: u32,
+        data: &D,
+        club_id: u32,
+    ) -> bool {
+        let today = data.date().date();
         let headroom = Self::wage_budget_headroom(data, club_id);
         let Some(player) = data.player(player_id) else {
             return false;
@@ -609,13 +617,13 @@ impl ClubResult {
 
     /// When club can't resolve salary unhappiness (rejected proposal, over budget, not needed):
     /// decide whether to transfer list, release on free transfer, or do nothing.
-    fn handle_unresolved_salary(
+    fn handle_unresolved_salary<D: LeagueProcessAccess>(
         player_id: u32,
-        data: &mut SimulatorData,
+        data: &mut D,
         club_id: u32,
         trigger: UnresolvedSalaryTrigger,
     ) {
-        let date = data.date.date();
+        let date = data.date().date();
 
         // Gather decision info from immutable access
         let (decision, asking_price, team_id) = {
@@ -799,8 +807,8 @@ impl ClubResult {
         }
     }
 
-    fn deliver_message(
-        data: &mut SimulatorData,
+    fn deliver_message<D: LeagueProcessAccess>(
+        data: &mut D,
         club_id: u32,
         player_id: u32,
         message: PlayerMessage,
@@ -822,6 +830,7 @@ impl ClubResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simulator::SimulatorData;
     use crate::academy::ClubAcademy;
     use crate::club::board::SeasonTargets;
     use crate::club::player::contract::{RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL};

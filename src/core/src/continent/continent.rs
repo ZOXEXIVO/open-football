@@ -6,6 +6,7 @@ use crate::continent::{
     ContinentalCompetitions, ContinentalRankings, ContinentalRegulations, EconomicZone,
 };
 use crate::country::CountryResult;
+use crate::league::result::WorldSnapshot;
 use crate::utils::Logging;
 use log::debug;
 use rayon::iter::ParallelIterator;
@@ -43,7 +44,11 @@ impl Continent {
         }
     }
 
-    pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ContinentResult {
+    pub fn simulate(
+        &mut self,
+        ctx: GlobalContext<'_>,
+        world: WorldSnapshot<'_>,
+    ) -> ContinentResult {
         let continent_name = self.name.clone();
 
         debug!(
@@ -59,26 +64,33 @@ impl Continent {
         // squads can include foreign-based players and stat updates can
         // span continents. The continent's parallel pass is now country
         // simulation only.
-        let country_results = self.simulate_countries(&ctx);
+        let country_results = self.simulate_countries(&ctx, world);
 
         debug!("Continent {} simulation complete", continent_name);
 
         ContinentResult::new(self.id, country_results, Vec::new())
     }
 
-    fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {
+    fn simulate_countries(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        world: WorldSnapshot<'_>,
+    ) -> Vec<CountryResult> {
         self.countries
             .par_iter_mut()
             .map(|country| {
                 let message = &format!("simulate country: {}", &country.name);
                 Logging::estimate_result(
                     || {
-                        country.simulate(ctx.with_country_and_names(
-                            country.id,
-                            country.code.clone(),
-                            country.generator_data.people_names.clone(),
-                            country.season_dates(),
-                        ))
+                        country.simulate(
+                            ctx.with_country_and_names(
+                                country.id,
+                                country.code.clone(),
+                                country.generator_data.people_names.clone(),
+                                country.season_dates(),
+                            ),
+                            world,
+                        )
                     },
                     message,
                 )

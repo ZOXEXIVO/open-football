@@ -1,7 +1,7 @@
 use crate::ReputationLevel;
 use crate::club::finance::balance::DistressLevel;
 use crate::club::{ClubSponsorshipContract, SponsorPerformance, SponsorRenewalContext};
-use crate::simulator::SimulatorData;
+use crate::league::result::LeagueProcessAccess;
 use log::debug;
 
 pub struct ClubFinanceResult {
@@ -28,7 +28,7 @@ impl ClubFinanceResult {
         self
     }
 
-    pub fn process(&self, data: &mut SimulatorData) {
+    pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         if self.club_id == 0 {
             return;
         }
@@ -67,7 +67,7 @@ impl ClubFinanceResult {
             // Read inputs first (immutable), then re-acquire the club
             // mutably to push the renewals — keeps `country_by_club` and
             // the mutable club borrow off each other.
-            let date = data.date.date();
+            let date = data.date().date();
             let market_strength = data
                 .country_by_club(self.club_id)
                 .map(|c| c.economic_factors.sponsorship_market_strength)

@@ -1,18 +1,11 @@
 use super::CountryResult;
 use crate::Country;
-use crate::simulator::SimulatorData;
 use chrono::NaiveDate;
 
 impl CountryResult {
-    pub(super) fn simulate_preseason_activities(
-        data: &mut SimulatorData,
-        country_id: u32,
-        date: NaiveDate,
-    ) {
-        if let Some(country) = data.country_mut(country_id) {
-            Self::run_training_camps(country, date);
-            Self::run_preseason_conditioning(country, date);
-        }
+    pub(crate) fn simulate_preseason_activities(country: &mut Country, date: NaiveDate) {
+        Self::run_training_camps(country, date);
+        Self::run_preseason_conditioning(country, date);
     }
 
     /// Training camps: boost player condition and match readiness during off-season.

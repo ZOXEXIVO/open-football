@@ -1,8 +1,7 @@
 use crate::club::StaffPosition;
 use crate::club::board::BoardMoodState;
 use crate::club::board::manager_market;
-use crate::club::staff::free_pool;
-use crate::simulator::SimulatorData;
+use crate::league::result::LeagueProcessAccess;
 use crate::{Staff, StaffEventType, TeamType};
 use chrono::Datelike;
 use log::{debug, info};
@@ -68,13 +67,13 @@ impl BoardResult {
         }
     }
 
-    pub fn process(&self, data: &mut SimulatorData) {
+    pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         if self.club_id == 0 {
             return;
         }
 
         // Grab the sim date before we take a mutable club borrow.
-        let today = data.date.date();
+        let today = data.date().date();
 
         // Sacked staff is collected during the club-mut block and admitted
         // to the global free-agent pool *after* the club borrow ends —
@@ -232,18 +231,16 @@ impl BoardResult {
             }
         } // end of `club` mutable-borrow scope
 
-        // The club borrow has ended — we can now mutate the global
-        // free-agent pool that lives on the same `data` value.
+        // The club borrow has ended — routes the cross-cutting writes
+        // through the trait. SimulatorData applies them inline (same
+        // semantics as before); CountryProcessCtx pushes onto its
+        // DeferredGlobalOps queue and the simulator drains it
+        // serially after the parallel pass joins.
         if let Some(staff) = sacked_staff {
-            free_pool::admit_to_pool(&mut data.free_agent_staff, staff, today);
+            data.admit_free_agent_staff(staff);
         }
-
-        // Permanent appointment: free-agent hire (preferred) or
-        // caretaker promotion (fallback). Lives in `manager_market`
-        // because it needs to weave between the global pool and the
-        // club's staff collection across multiple short borrows.
         if do_confirm {
-            manager_market::ManagerMarketTick::execute_appointment(data, self.club_id, today);
+            data.queue_manager_appointment(self.club_id);
         }
     }
 }

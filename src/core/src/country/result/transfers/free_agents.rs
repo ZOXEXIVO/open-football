@@ -28,7 +28,7 @@ use std::collections::HashMap;
 /// nationality reputation and a Russian free agent would stay "too good
 /// for Malta" forever, even after a year of unemployment.
 #[derive(Clone)]
-pub(crate) struct GlobalFreeAgentSummary {
+pub struct GlobalFreeAgentSummary {
     pub player_id: u32,
     pub player_name: String,
     pub ability: u8,
@@ -63,7 +63,7 @@ pub(crate) struct GlobalFreeAgentSummary {
 /// is deferred to the caller because removing the player from
 /// `sim.free_agents` requires `&mut SimulatorData` access, which the
 /// per-country handler doesn't have.
-pub(crate) struct GlobalFreeAgentSigning {
+pub struct GlobalFreeAgentSigning {
     pub player_id: u32,
     pub player_name: String,
     pub buying_country_id: u32,

@@ -6,7 +6,11 @@ mod statistics;
 pub mod transfers;
 
 use crate::ai::PendingAiRequest;
+use crate::country::result::transfers::DeferredTransferOps;
 use crate::league::LeagueResult;
+use crate::league::result::DeferredGlobalOps;
+use crate::performance::{ResultProcBreakdown, ResultProcSubphase};
+use crate::r#match::MatchResult;
 use crate::simulator::SimulatorData;
 use crate::{ClubResult, SimulationResult};
 
@@ -18,6 +22,21 @@ pub struct CountryResult {
     /// during the parallel tick. Drained by the simulator before
     /// Phase B (`AiBatchProcessor::execute`).
     pub pending_ai_requests: Vec<PendingAiRequest>,
+    /// MatchResults already fanned through `LeagueResult::process_local`
+    /// during Phase A. Phase C just pushes them into the world
+    /// `SimulationResult.match_results` — no further per-match work
+    /// remains. The tuple keys are league_id, kept so callers can
+    /// inspect provenance without re-resolving.
+    pub processed_match_results: Vec<(u32, Vec<MatchResult>)>,
+    /// Global mutations the parallel pass couldn't apply in place
+    /// (sacked-staff free-agent admittances, cross-country club
+    /// updates, …). Phase C drains them on `&mut SimulatorData`.
+    pub deferred_global_ops: DeferredGlobalOps,
+    /// Transfer-market cross-country tail. Phase A runs the per-country
+    /// scouting / negotiation / shadow-report pipeline; this carries
+    /// the deferred global writes (sweeps, free-agent state, transfer
+    /// execution, foreign-negotiation kickoff) to Phase C.
+    pub deferred_transfer_ops: Option<DeferredTransferOps>,
 }
 
 impl CountryResult {
@@ -33,29 +52,59 @@ impl CountryResult {
             leagues,
             clubs,
             pending_ai_requests,
+            processed_match_results: Vec::new(),
+            deferred_global_ops: DeferredGlobalOps::new(),
+            deferred_transfer_ops: None,
         }
     }
 
     pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
         let current_date = data.date.date();
         let country_id = self.get_country_id(data);
+        let breakdown = ResultProcBreakdown::instance();
 
-        let season_dates = data
-            .country(country_id)
-            .map(|c| c.season_dates())
-            .unwrap_or_default();
+        // Country-local subphases (media coverage, country reputation,
+        // end-of-period, international competitions, economic factors,
+        // preseason) all moved into `Country::simulate` (Phase A) so
+        // they parallelize across countries via the existing
+        // `countries.par_iter_mut()`.
 
-        // Phases that need &self.leagues / &self.clubs references run BEFORE the consuming loops
-        Self::simulate_media_coverage(data, country_id, &self.leagues);
-        Self::process_end_of_period(data, country_id, current_date, &self.clubs);
-        Self::update_country_reputation(data, country_id, &self.leagues, &self.clubs);
-
-        // Phase 1: Process league results — apply match stats, injuries, condition
-        // before transfers or club sim act on player state
+        // Phase 1: Drain match results that `LeagueResult::process_local`
+        // already fanned through in Phase A. The per-match stat /
+        // morale / discipline pipeline has run inside the parallel
+        // pass; here we just publish the results into the world
+        // SimulationResult so callers downstream of the simulator
+        // (UI, match storage) see them.
         let any_new_season = self.leagues.iter().any(|l| l.new_season_started);
 
-        for league_result in self.leagues {
-            league_result.process(data, result);
+        {
+            let _g = breakdown.scope(ResultProcSubphase::LeagueProcess);
+            for (_lid, match_results) in self.processed_match_results {
+                for mr in match_results {
+                    result.match_results.push(mr);
+                }
+            }
+            // Apply deferred global ops emitted by Phase A. Currently
+            // these are sacked staff awaiting admittance to the global
+            // free-agent pool and pending manager appointments —
+            // populated by ClubResult's board path. Until that path is
+            // also routed through CountryProcessCtx, this drain is a
+            // no-op; left in place so the Phase-A ↔ Phase-C handshake
+            // is wired end-to-end.
+            for staff in self.deferred_global_ops.free_agent_staff {
+                crate::club::staff::free_pool::admit_to_pool(
+                    &mut data.free_agent_staff,
+                    staff,
+                    current_date,
+                );
+            }
+            for club_id in self.deferred_global_ops.pending_appointments {
+                crate::club::board::manager_market::ManagerMarketTick::execute_appointment(
+                    data,
+                    club_id,
+                    current_date,
+                );
+            }
         }
 
         // Snapshot BEFORE loan returns: this ensures cross-country loan players
@@ -64,8 +113,14 @@ impl CountryResult {
         // Loan returns then move the player back — if both clubs are in the same
         // country, the snapshot already captured the loan entry correctly.
         if any_new_season {
-            Self::snapshot_player_season_statistics(data, self.country_id);
-            Self::process_loan_returns(data, country_id, current_date);
+            {
+                let _g = breakdown.scope(ResultProcSubphase::SnapshotSeasonStats);
+                Self::snapshot_player_season_statistics(data, self.country_id);
+            }
+            {
+                let _g = breakdown.scope(ResultProcSubphase::LoanReturns);
+                Self::process_loan_returns(data, country_id, current_date);
+            }
             // Retirement already runs inside process_end_of_period above,
             // via Self::process_player_retirements when the season ends.
 
@@ -74,50 +129,41 @@ impl CountryResult {
             // omitted players receive the SquadRegistrationOmitted
             // happiness event. Runs once on the season-start tick so
             // the registration is stable for the rest of the campaign.
-            Self::enforce_squad_registration(data, self.country_id, current_date);
-        }
-
-        // Phase 2: Process club results (morale, training use post-match state)
-        // Collect academy transfers before consuming club results
-        let mut academy_transfers = Vec::new();
-        for club in &self.clubs {
-            if !club.academy_transfers.is_empty() {
-                academy_transfers.extend(club.academy_transfers.iter().cloned());
+            {
+                let _g = breakdown.scope(ResultProcSubphase::SquadRegistration);
+                Self::enforce_squad_registration(data, self.country_id, current_date);
             }
         }
 
-        for club_result in self.clubs {
-            club_result.process(data, result);
-        }
-
-        // Push academy graduation transfers to country transfer history
-        if !academy_transfers.is_empty() {
-            if let Some(country) = data.country_mut(self.country_id) {
-                for transfer in academy_transfers {
-                    country.transfer_market.transfer_history.push(transfer);
-                }
-            }
-        }
+        // Phase 2: Club result processing was driven from
+        // `Country::simulate` (Phase A) via CountryProcessCtx. Nothing
+        // to do here for the per-club mutations; placeholder shells
+        // sit in self.clubs only to preserve the type signature.
+        let _ = &self.clubs;
 
         // Regular loan return check for non-season-end days
         if !any_new_season {
+            let _g = breakdown.scope(ResultProcSubphase::LoanReturns);
             Self::process_loan_returns(data, country_id, current_date);
         }
 
-        // Phase 3: Pre-season activities (if applicable)
-        if season_dates.is_off_season(current_date) {
-            Self::simulate_preseason_activities(data, country_id, current_date);
+        // Pre-season, international competitions, economic factors all
+        // moved into `Country::simulate` (Phase A) so they parallelize
+        // across countries — kept the local-only ones; transfer market
+        // is the only "country-driven" phase still here because it
+        // mutates `data.free_agents` and routes cross-country
+        // negotiations.
+
+        // Phase 4: Transfer Market — Phase A ran the per-country
+        // pipeline (scouting, negotiations, listings, shadow reports).
+        // Here we just apply the cross-country tail collected into
+        // DeferredTransferOps: sweep shortlists for signed players,
+        // mutate `data.free_agents`, execute deferred transfers,
+        // kickoff foreign negotiations.
+        if let Some(ops) = self.deferred_transfer_ops {
+            let _g = breakdown.scope(ResultProcSubphase::TransferMarket);
+            Self::apply_deferred_transfer_ops(data, ops, current_date);
         }
-
-        // Phase 4: Transfer Market Activities (runs with up-to-date player state,
-        // after match results have been applied)
-        let _transfer_activities = Self::simulate_transfer_market(data, country_id, current_date);
-
-        // Phase 5: International Competitions
-        Self::simulate_international_competitions(data, country_id, current_date);
-
-        // Phase 6: Economic Updates
-        Self::update_economic_factors(data, country_id, current_date);
     }
 
     fn get_country_id(&self, _data: &SimulatorData) -> u32 {

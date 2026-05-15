@@ -21,45 +21,35 @@ struct LoanReturnEvent {
 }
 
 impl CountryResult {
-    pub(super) fn process_end_of_period(
-        data: &mut SimulatorData,
-        country_id: u32,
+    pub(crate) fn process_end_of_period(
+        country: &mut Country,
         date: NaiveDate,
         club_results: &[ClubResult],
     ) {
         // Get season dates from league settings
-        let season = data
-            .country(country_id)
-            .map(|c| c.season_dates())
-            .unwrap_or_default();
+        let season = country.season_dates();
 
         if season.is_season_end(date) {
             debug!("End of season processing");
 
-            if let Some(country) = data.country_mut(country_id) {
-                Self::process_season_awards(country, club_results, date);
-                // NOTE: loan returns are handled in a separate phase (process_loan_returns)
-                // that runs AFTER club results, so ClubResult references remain valid
-                Self::process_player_retirements(country, date);
-            }
+            Self::process_season_awards(country, club_results, date);
+            // NOTE: loan returns are handled in a separate phase (process_loan_returns)
+            // that runs AFTER club results, so ClubResult references remain valid
+            Self::process_player_retirements(country, date);
         }
 
         // Monthly check: retire players who are past max retirement age
         // so they don't linger on teams until season end
         if DateUtils::is_month_beginning(date) && date.month() as u8 != season.end_month {
-            if let Some(country) = data.country_mut(country_id) {
-                Self::process_overdue_retirements(country, date);
-            }
+            Self::process_overdue_retirements(country, date);
         }
 
         // Monthly reputation decay — teams that aren't achieving anything
         // drift back toward the mean. Runs on the 1st regardless of season.
         if DateUtils::is_month_beginning(date) {
-            if let Some(country) = data.country_mut(country_id) {
-                for club in &mut country.clubs {
-                    for team in club.teams.iter_mut() {
-                        team.on_month_tick();
-                    }
+            for club in &mut country.clubs {
+                for team in club.teams.iter_mut() {
+                    team.on_month_tick();
                 }
             }
         }
@@ -70,26 +60,20 @@ impl CountryResult {
         // out — those are invisible to the per-club loop because they
         // physically live at the borrower.
         if DateUtils::is_month_beginning(date) {
-            if let Some(country) = data.country_mut(country_id) {
-                Self::process_parent_loan_renewals(country, date);
-            }
+            Self::process_parent_loan_renewals(country, date);
         }
 
         // Promotion/relegation: runs on the 1st of the month AFTER the latest
         // non-friendly league in the country has finished its season. Using
         // the tier-1 end date alone can fire before lower tiers are done,
         // leaving their final_table empty and silently skipping the swap.
-        let latest_end_month = data
-            .country(country_id)
-            .map(|c| {
-                c.leagues
-                    .leagues
-                    .iter()
-                    .filter(|l| !l.friendly)
-                    .map(|l| l.settings.season_ending_half.to_month)
-                    .max()
-                    .unwrap_or(season.end_month)
-            })
+        let latest_end_month = country
+            .leagues
+            .leagues
+            .iter()
+            .filter(|l| !l.friendly)
+            .map(|l| l.settings.season_ending_half.to_month)
+            .max()
             .unwrap_or(season.end_month);
         let promo_month = if latest_end_month == 12 {
             1u8
@@ -97,24 +81,18 @@ impl CountryResult {
             latest_end_month + 1
         };
         if DateUtils::is_month_beginning(date) && date.month() as u8 == promo_month {
-            if let Some(country) = data.country_mut(country_id) {
-                Self::process_promotion_relegation(country, date);
-            }
+            Self::process_promotion_relegation(country, date);
         }
 
         // Late-season relegation-fear audit — runs once a month, scoped
         // to the second half of the season for tier-1+ leagues. Players
         // in the bottom (relegation_spots + 1) of the live table feel it.
         if DateUtils::is_month_beginning(date) {
-            if let Some(country) = data.country_mut(country_id) {
-                Self::process_relegation_fear_audit(country, date);
-            }
+            Self::process_relegation_fear_audit(country, date);
         }
 
         if date.month() == 12 && date.day() == 31 {
-            if let Some(country) = data.country_mut(country_id) {
-                Self::process_year_end_finances(country);
-            }
+            Self::process_year_end_finances(country);
         }
     }
 

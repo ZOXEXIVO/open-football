@@ -1,6 +1,6 @@
 use crate::club::PlayerCollectionResult;
 use crate::club::team::behaviour::TeamBehaviourResult;
-use crate::simulator::SimulatorData;
+use crate::league::result::LeagueProcessAccess;
 use crate::{StaffCollectionResult, TeamTrainingResult};
 
 pub struct TeamResult {
@@ -28,7 +28,7 @@ impl TeamResult {
         }
     }
 
-    pub fn process(&self, data: &mut SimulatorData) {
+    pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         self.players.process(data);
         self.staffs.process(data);
         self.training.process(data);

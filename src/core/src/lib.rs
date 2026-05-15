@@ -38,7 +38,10 @@ pub use country::{
     PeopleNameGeneratorData, SkinColorDistribution, SquadPick, StoryType,
 };
 pub use nalgebra::*;
-pub use performance::{PerfCounters, PerfPhase, PerfSnapshot, PhaseScope, TickEndContext};
+pub use performance::{
+    PerfCounters, PerfPhase, PerfSnapshot, PhaseScope, ResultProcBreakdown, ResultProcSubphase,
+    SubphaseScope, TickEndContext,
+};
 pub use simulator::*;
 pub use utils::*;
 

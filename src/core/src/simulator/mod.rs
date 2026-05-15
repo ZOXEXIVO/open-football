@@ -18,7 +18,9 @@ use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::ContinentResult;
 use crate::continent::national::world as national_world;
 use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
-use crate::performance::{PerfCounters, PerfPhase, TickEndContext};
+use crate::performance::{
+    PerfCounters, PerfPhase, ResultProcBreakdown, ResultProcSubphase, TickEndContext,
+};
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use awards::{
     MondayAwardCache, MonthlyAwardsTick, SeasonAwardsTick, TeamOfTheWeekTick, TeamOfTheYearTick,
@@ -66,7 +68,14 @@ impl FootballSimulator {
         config: &SimulatorConfig,
     ) -> SimulationResult {
         let perf = PerfCounters::instance();
+        let breakdown = ResultProcBreakdown::instance();
         perf.begin_tick();
+        // Per-tick scratch for the Phase C / Cleanup subphase breakdown.
+        // The aggregate parent counter (`PerfPhase::ResultProcessing`)
+        // already brackets the whole serial loop; this breakdown lets
+        // the dashboard / logs attribute time to specific functions
+        // inside it so we can refactor the hot one with confidence.
+        breakdown.reset();
 
         let mut result = SimulationResult::new();
 
@@ -126,6 +135,36 @@ impl FootballSimulator {
         // is recovered as the delta on the atomic since map closures
         // running in parallel can't share a `&mut u32`.
         let panicks_before = PANICKED_CONTINENTS.load(Ordering::Relaxed);
+        // Build the read-only world snapshot once, before the parallel
+        // pass starts. Each worker thread gets a Copy of the struct
+        // (it's only references inside) so the borrow checker sees
+        // distinct shared borrows of `data.country_info`, `data.indexes`,
+        // and the freshly-built `world_pool` / `global_free_agents`
+        // snapshots, in parallel with the `&mut data.continents` from
+        // `par_iter_mut`. Different fields ⇒ split borrow ⇒ safe.
+        let world_date = data.date;
+        let pool_date = data.date.date();
+        let world_pool: Vec<PlayerSummary> = {
+            let _g = breakdown.scope(ResultProcSubphase::WorldSnapshots);
+            data.continents
+                .iter()
+                .flat_map(|cont| &cont.countries)
+                .flat_map(|c| PipelineProcessor::collect_player_pool(c, pool_date))
+                .collect()
+        };
+        let global_fa_snapshot: Vec<GlobalFreeAgentSummary> = {
+            let _g = breakdown.scope(ResultProcSubphase::WorldSnapshots);
+            snapshot_global_free_agents(data, pool_date)
+        };
+        let world_country_info = &data.country_info;
+        let world_indexes = data.indexes.as_ref();
+        let world = crate::league::result::WorldSnapshot {
+            date: world_date,
+            country_info: world_country_info,
+            indexes: world_indexes,
+            world_pool: &world_pool,
+            global_free_agents: &global_fa_snapshot,
+        };
         let mut results: Vec<ContinentResult> = {
             let _g = perf.scope(PerfPhase::ParallelContinents);
             data
@@ -136,7 +175,7 @@ impl FootballSimulator {
                     let name = continent.name.clone();
                     let ctx_ref = &ctx;
                     panic::catch_unwind(AssertUnwindSafe(|| {
-                        continent.simulate(ctx_ref.with_continent(cid))
+                        continent.simulate(ctx_ref.with_continent(cid), world)
                     }))
                     .unwrap_or_else(|payload| {
                         PANICKED_CONTINENTS.fetch_add(1, Ordering::Relaxed);
@@ -170,46 +209,23 @@ impl FootballSimulator {
             apply_ai_responses(completed, data);
         }
 
-        // Phase C: process the collected results against post-AI data
+        // Phase C: drain Phase-A's deferred ops against post-AI data.
+        // World snapshots were built before Phase A so the parallel pass
+        // could read them; we expose the same view here via the
+        // `daily_*` caches so any legacy callers (test harnesses,
+        // continental-cup paths) still find them. Cleared at the end of
+        // the phase so the next tick rebuilds.
+        data.daily_world_player_pool = Some(world_pool);
+        data.daily_global_free_agents = Some(global_fa_snapshot);
         {
             let _g = perf.scope(PerfPhase::ResultProcessing);
-
-            // Build the world-wide foreign-player pool ONCE for this tick.
-            // `simulate_transfer_market` runs per country and previously
-            // rebuilt this pool on every call by walking every other
-            // country's players (O(N²) in countries × O(P) per country).
-            // The seller context is per-source-country, so a global
-            // snapshot is correct as long as we filter by buyer country
-            // at the read site. Cache lives on `data` so deep callers
-            // pick it up without a signature change.
-            let pool_date = data.date.date();
-            let world_pool: Vec<PlayerSummary> = data
-                .continents
-                .iter()
-                .flat_map(|cont| &cont.countries)
-                .flat_map(|c| PipelineProcessor::collect_player_pool(c, pool_date))
-                .collect();
-            data.daily_world_player_pool = Some(world_pool);
-
-            // Same trick for the global free-agent snapshot. The
-            // function mutates `data.free_agents` (idempotent on
-            // repeat with the same date) and previously fired once
-            // per country. Building once here drops it from N calls
-            // to 1.
-            let global_fa_snapshot: Vec<GlobalFreeAgentSummary> =
-                snapshot_global_free_agents(data, pool_date);
-            data.daily_global_free_agents = Some(global_fa_snapshot);
 
             for continent_result in results {
                 continent_result.process(data, &mut result);
             }
-
-            // Drop the caches so the next tick rebuilds — players move
-            // between clubs/countries and free-agent state evolves; the
-            // per-tick snapshot would otherwise grow stale.
-            data.daily_world_player_pool = None;
-            data.daily_global_free_agents = None;
         }
+        data.daily_world_player_pool = None;
+        data.daily_global_free_agents = None;
 
         // Phase D: world-level manager market. Order is load-bearing —
         // see `ManagerMarketTick::run` for the dependency rationale.
@@ -328,6 +344,29 @@ impl FootballSimulator {
             panicked_continents: result.panicked_continents,
             recording_mode: crate::is_match_recordings_mode(),
         });
+
+        // Log the per-subphase breakdown of Phase C work. One line per
+        // tick at info!, sorted by elapsed time descending so the hot
+        // function shows first. Diagnostic only — drop or gate behind a
+        // setting once the refactor is done.
+        let mut rows = breakdown.snapshot();
+        let total_ns: u64 = rows.iter().map(|(_, ns)| *ns).sum();
+        if total_ns > 0 {
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            let parts: Vec<String> = rows
+                .iter()
+                .filter(|(_, ns)| *ns > 0)
+                .map(|(name, ns)| {
+                    let pct = (*ns as f64) * 100.0 / (total_ns as f64);
+                    format!("{}={:.1}ms({:.1}%)", name, (*ns as f64) / 1.0e6, pct)
+                })
+                .collect();
+            log::info!(
+                "phase_c_breakdown total={:.1}ms {}",
+                (total_ns as f64) / 1.0e6,
+                parts.join(" ")
+            );
+        }
 
         result
     }

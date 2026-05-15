@@ -1,9 +1,9 @@
 use super::LeagueResult;
+use super::data_access::LeagueProcessAccess;
 use crate::club::player::events::match_exertion::MatchExertionInputs;
 use crate::r#match::FieldSquad;
 use crate::r#match::MatchResultRaw;
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
-use crate::simulator::SimulatorData;
 use std::collections::HashMap;
 
 /// Regulation match duration in minutes. Used as the upper bound for
@@ -21,12 +21,12 @@ const EXTRA_TIME_MATCH_MINUTES: f32 = 120.0;
 const EXTRA_TIME_DETECTION_MS: u64 = 100 * 60_000;
 
 impl LeagueResult {
-    pub(super) fn apply_post_match_physical_effects(
+    pub(super) fn apply_post_match_physical_effects<D: LeagueProcessAccess>(
         details: &MatchResultRaw,
-        data: &mut SimulatorData,
+        data: &mut D,
         is_friendly: bool,
     ) {
-        let now = data.date.date();
+        let now = data.date().date();
         // Engine match-time → actual match duration in minutes. A
         // regulation match reports ~90 (plus stoppage); extra-time
         // matches sail well past 100. Snapshots already encode minutes
@@ -71,12 +71,12 @@ fn derive_actual_minutes(match_time_ms: u64) -> f32 {
     }
 }
 
-fn apply_side(
+fn apply_side<D: LeagueProcessAccess>(
     team: &FieldSquad,
     subbed_out_at: &HashMap<u32, u64>,
     subbed_in_at: &HashMap<u32, u64>,
     physical_snapshots: &HashMap<u32, PlayerMatchPhysicalSnapshot>,
-    data: &mut SimulatorData,
+    data: &mut D,
     now: chrono::NaiveDate,
     is_friendly: bool,
     actual_match_minutes: f32,
@@ -119,8 +119,8 @@ fn apply_side(
     }
 }
 
-fn apply_to_player(
-    data: &mut SimulatorData,
+fn apply_to_player<D: LeagueProcessAccess>(
+    data: &mut D,
     player_id: u32,
     snapshot: Option<PlayerMatchPhysicalSnapshot>,
     fallback_minutes: f32,

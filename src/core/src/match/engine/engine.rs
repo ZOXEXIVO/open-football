@@ -262,6 +262,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         FootballEngine {}
     }
 
+    #[allow(unreachable_code)]
     pub fn play(
         left_squad: MatchSquad,
         right_squad: MatchSquad,
@@ -269,6 +270,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         is_friendly: bool,
         is_knockout: bool,
     ) -> MatchResultRaw {
+        // Profiling shortcut — see the `match-stub` feature in
+        // `core/Cargo.toml`. Skips the simulation entirely and returns
+        // a 0-0 result with just enough metadata (team IDs, player
+        // IDs) for the surrounding pipeline to run.
+        #[cfg(feature = "match-stub")]
+        {
+            let _ = (match_recordings, is_friendly, is_knockout);
+            return Self::play_stub(left_squad, right_squad);
+        }
+
         let perf = PerfCounters::instance();
         let match_start = Instant::now();
         let score = Score::new(left_squad.team_id, right_squad.team_id);
@@ -328,6 +339,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let result = Self::build_result(field, context, match_position_data);
         perf.record_match_result_processing(result_start.elapsed());
         perf.record_match_total(match_start.elapsed());
+        result
+    }
+
+    /// Stub match: skips the whole simulation and returns a 0-0
+    /// scoreline with the minimum data downstream consumers expect
+    /// (team IDs in `Score`, player IDs in the field squads). Gated
+    /// on the `match-stub` Cargo feature; intended for profiling the
+    /// pipeline around the engine.
+    #[cfg(feature = "match-stub")]
+    fn play_stub(left_squad: MatchSquad, right_squad: MatchSquad) -> MatchResultRaw {
+        use crate::r#match::engine::result::FieldSquad;
+
+        let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        result.score = Some(Score::new(left_squad.team_id, right_squad.team_id));
+        result.left_team_players = FieldSquad::from_team(&left_squad);
+        result.right_team_players = FieldSquad::from_team(&right_squad);
         result
     }
 

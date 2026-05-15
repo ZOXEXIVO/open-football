@@ -1,86 +1,63 @@
 use super::CountryResult;
-use crate::league::{League, LeagueResult};
-use crate::simulator::SimulatorData;
+use crate::league::League;
 use crate::utils::DateUtils;
-use crate::{ClubResult, Country};
+use crate::Country;
 use chrono::NaiveDate;
 use log::debug;
 
 impl CountryResult {
-    pub(super) fn simulate_international_competitions(
-        data: &mut SimulatorData,
-        country_id: u32,
-        date: NaiveDate,
-    ) {
-        if let Some(country) = data.country_mut(country_id) {
-            for competition in &mut country.international_competitions {
-                competition.simulate_round(date);
-            }
+    pub(crate) fn simulate_international_competitions(country: &mut Country, date: NaiveDate) {
+        for competition in &mut country.international_competitions {
+            competition.simulate_round(date);
         }
     }
 
-    pub(super) fn update_economic_factors(
-        data: &mut SimulatorData,
-        country_id: u32,
-        date: NaiveDate,
-    ) {
+    pub(crate) fn update_economic_factors(country: &mut Country, date: NaiveDate) {
         if DateUtils::is_month_beginning(date) {
-            if let Some(country) = data.country_mut(country_id) {
-                country.economic_factors.monthly_update();
-            }
+            country.economic_factors.monthly_update();
         }
     }
 
-    pub(super) fn simulate_media_coverage(
-        data: &mut SimulatorData,
-        country_id: u32,
-        league_results: &[LeagueResult],
+    pub(crate) fn simulate_media_coverage(
+        country: &mut Country,
+        league_results: &[crate::league::LeagueResult],
     ) {
-        if let Some(country) = data.country_mut(country_id) {
-            country.media_coverage.update_from_results(league_results);
-            country
-                .media_coverage
-                .generate_weekly_stories(&country.clubs);
-        }
+        country.media_coverage.update_from_results(league_results);
+        country
+            .media_coverage
+            .generate_weekly_stories(&country.clubs);
     }
 
-    pub(super) fn update_country_reputation(
-        data: &mut SimulatorData,
-        country_id: u32,
-        _league_results: &[LeagueResult],
-        _club_results: &[ClubResult],
-    ) {
-        if let Some(country) = data.country_mut(country_id) {
-            let mut reputation_change: i16 = 0;
+    pub(crate) fn update_country_reputation(country: &mut Country) {
+        let mut reputation_change: i16 = 0;
 
-            for league in &country.leagues.leagues {
-                let competitiveness = Self::calculate_league_competitiveness(league);
-                reputation_change += (competitiveness * 5.0) as i16;
-            }
+        for league in &country.leagues.leagues {
+            let competitiveness = Self::calculate_league_competitiveness(league);
+            reputation_change += (competitiveness * 5.0) as i16;
+        }
 
-            let international_success = Self::calculate_international_success(country);
-            reputation_change += international_success as i16;
+        let international_success = Self::calculate_international_success(country);
+        reputation_change += international_success as i16;
 
-            let transfer_reputation = Self::calculate_transfer_market_reputation(country);
-            reputation_change += transfer_reputation as i16;
+        let transfer_reputation = Self::calculate_transfer_market_reputation(country);
+        reputation_change += transfer_reputation as i16;
 
-            let new_reputation =
-                (country.reputation as i32 + reputation_change as i32).clamp(0, 10000) as u16;
+        let new_reputation =
+            (country.reputation as i32 + reputation_change as i32).clamp(0, 10000) as u16;
 
-            if new_reputation != country.reputation {
-                debug!(
-                    "Country {} reputation changed: {} -> {} ({})",
-                    country.name,
-                    country.reputation,
-                    new_reputation,
-                    if reputation_change > 0 {
-                        format!("+{}", reputation_change)
-                    } else {
-                        reputation_change.to_string()
-                    }
-                );
-                country.reputation = new_reputation;
-            }
+        if new_reputation != country.reputation {
+            debug!(
+                "Country {} reputation changed: {} -> {} ({})",
+                country.name,
+                country.reputation,
+                new_reputation,
+                if reputation_change > 0 {
+                    format!("+{}", reputation_change)
+                } else {
+                    reputation_change.to_string()
+                }
+            );
+            country.reputation = new_reputation;
         }
     }
 

@@ -1,5 +1,5 @@
 use crate::club::player::behaviour_config::HappinessConfig;
-use crate::simulator::SimulatorData;
+use crate::league::result::LeagueProcessAccess;
 use crate::{
     ChangeType, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
     HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
@@ -18,7 +18,7 @@ impl StaffCollectionResult {
         StaffCollectionResult { staff }
     }
 
-    pub fn process(&self, data: &mut SimulatorData) {
+    pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         for staff_result in &self.staff {
             staff_result.process(data);
         }
@@ -96,14 +96,14 @@ impl StaffResult {
         self.events.push(event);
     }
 
-    pub fn process(&self, data: &mut SimulatorData) {
-        let sim_date = data.date.date();
+    pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
+        let sim_date = data.date().date();
 
         // Process relationship events with random players
         if let Some(ref event) = self.relationship_event {
             match event {
                 RelationshipEvent::PositiveInteraction => {
-                    if let Some(player) = Self::random_player(data) {
+                    if let Some(player) = data.random_player_mut() {
                         let change = RelationshipChange::positive(ChangeType::CoachingSuccess, 0.5);
                         player
                             .relations
@@ -124,7 +124,7 @@ impl StaffResult {
                     }
                 }
                 RelationshipEvent::Conflict => {
-                    if let Some(player) = Self::random_player(data) {
+                    if let Some(player) = data.random_player_mut() {
                         let change =
                             RelationshipChange::negative(ChangeType::TacticalDisagreement, 0.3);
                         player
@@ -153,7 +153,7 @@ impl StaffResult {
                     }
                 }
                 RelationshipEvent::MentorshipStarted => {
-                    if let Some(player) = Self::random_player(data) {
+                    if let Some(player) = data.random_player_mut() {
                         let change = RelationshipChange::positive(ChangeType::PersonalSupport, 0.8);
                         player
                             .relations
@@ -174,7 +174,7 @@ impl StaffResult {
                     }
                 }
                 RelationshipEvent::TrustBuilt => {
-                    if let Some(player) = Self::random_player(data) {
+                    if let Some(player) = data.random_player_mut() {
                         let change = RelationshipChange::positive(ChangeType::CoachingSuccess, 0.6);
                         player
                             .relations
@@ -217,41 +217,6 @@ impl StaffResult {
         }
     }
 
-    fn random_player(data: &mut SimulatorData) -> Option<&mut Player> {
-        // Pick a random player from the simulation data
-        let player_count: usize = data
-            .continents
-            .iter()
-            .flat_map(|c| &c.countries)
-            .flat_map(|c| &c.clubs)
-            .flat_map(|c| &c.teams.teams)
-            .map(|t| t.players.players.len())
-            .sum();
-
-        if player_count == 0 {
-            return None;
-        }
-
-        let target = (rand::random::<f32>() * player_count as f32) as usize;
-        let mut current = 0;
-
-        for continent in &mut data.continents {
-            for country in &mut continent.countries {
-                for club in &mut country.clubs {
-                    for team in &mut club.teams.teams {
-                        for player in &mut team.players.players {
-                            if current == target {
-                                return Some(player);
-                            }
-                            current += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        None
-    }
 }
 
 /// Builder for the structured `HappinessEventContext` payloads attached

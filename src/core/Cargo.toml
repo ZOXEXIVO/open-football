@@ -6,13 +6,28 @@ edition.workspace = true
 
 [features]
 default = []
-# Enables diagnostic logs from the match engine (shot reasons, blowout
-# profile, per-tick ball decisions). Off by default so the production
-# simulator (`simulator.rs`, web runs) stays silent; dev_match enables
-# it for the analytic harness. All match-log sites go through the
-# `match_log_*!` macros in `src/core/src/match_logs.rs` which compile
-# to no-ops when this feature is off.
+
+# ── Match engine features ──────────────────────────────────────────────
+# Off-by-default toggles that change what `FootballEngine::play` does or
+# emits. Production runs (web simulator, league batch simulation) leave
+# all of these off; dev/profiling harnesses opt in.
+#
+# `match` is an aggregate: `--features match` turns on every match-*
+# toggle at once. Sub-features stay individually selectable.
+#
+# match-logs : diagnostic logs from the match engine (shot reasons,
+#              blowout profile, per-tick ball decisions). Sites go
+#              through the `match_log_*!` macros in `match_logs.rs`
+#              which compile to no-ops when off.
+# match-stub : replaces the real simulation with a 0-0 result that
+#              returns immediately — for profiling the surrounding
+#              pipeline (squad selection, league progression,
+#              post-match processing) without paying the engine's CPU
+#              cost. NEVER enable for production runs: every match
+#              ends 0-0 with empty player stats.
+match = ["match-logs", "match-stub"]
 match-logs = []
+match-stub = []
 
 [dependencies]
 chrono = "0.4.44"

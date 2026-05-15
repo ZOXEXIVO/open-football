@@ -14,6 +14,14 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 
+[features]
+# Pass-throughs for the match engine features defined in `core` and
+# forwarded by `web`. Run the app with e.g. `cargo run --features
+# match-stub` to enable the 0-0 stub for profiling.
+match = ["match-logs", "match-stub"]
+match-logs = ["simulator_core/match-logs", "web/match-logs"]
+match-stub = ["simulator_core/match-stub", "web/match-stub"]
+
 [dependencies]
 simulator_core = { path = "src/core", package = "core" }
 web = { path = "src/web" }
