@@ -282,6 +282,23 @@ impl PlayerTraining {
             }
         }
 
+        // ===== DURATION SCALING =====
+        // A 90-minute pressing drill costs nearly twice what a 45-minute
+        // pressing drill costs. The previous model ignored
+        // `duration_minutes` entirely, which made "intensity" the only
+        // load knob and meant a 30-minute light recovery session and a
+        // 90-minute light recovery session cost the same condition.
+        // Reference point: 60 minutes = neutral (mult 1.0). Readiness
+        // scales sub-linearly (sqrt) — a half-length session still gets
+        // most of the sharpness benefit. Injury risk scales linearly
+        // because the chance of pulling something climbs with exposure
+        // time, not effort.
+        let duration_mult = (session.duration_minutes as f32 / 60.0).clamp(0.35, 1.50);
+        effects.fatigue_change *= duration_mult;
+        effects.physical_load_units *= duration_mult;
+        effects.readiness_change *= duration_mult.sqrt();
+        effects.injury_risk *= duration_mult;
+
         // ===== FACILITY QUALITY EFFECTS =====
         // Training facilities directly multiply all skill gains.
         // Poor (0.05) → 0.55x gains, Average (0.35) → 0.85x, Good (0.55) → 1.0x,

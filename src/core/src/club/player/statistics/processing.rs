@@ -60,6 +60,51 @@ impl Player {
         self.cup_statistics = Default::default();
     }
 
+    /// Season-end snapshot for a player sitting on a non-senior squad
+    /// (Reserve, U18..U23). Non-owning teams never appear under their
+    /// own slug — instead the player gets a row under the parent club's
+    /// main team.
+    ///
+    /// `player.statistics` accumulates ONLY senior-league appearances
+    /// because youth leagues are created with `friendly: true` (see
+    /// `database/src/generators/generator/leagues.rs`) — that routes
+    /// U21/Reserve/U18 league matches to `player.friendly_statistics`
+    /// instead. So whatever sits in `player.statistics` at this point
+    /// is exclusively Main-team callup games the youth player earned
+    /// during the season, and those MUST flow into the Main-team row.
+    ///
+    /// Friendly (youth-league) and cup buckets are reset because they
+    /// don't roll into career history — only `player.statistics` does.
+    pub fn on_non_senior_season_end(
+        &mut self,
+        season: Season,
+        main_team_info: &TeamInfo,
+        _date: NaiveDate,
+    ) {
+        let is_loan = self.is_on_loan();
+
+        // Senior callup games — preserve and feed into the Main row.
+        let stats = std::mem::take(&mut self.statistics);
+        // Youth-league + cup buckets get cleared like the senior path.
+        self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
+
+        // Drain through the regular season-end path. Any callup games
+        // land on the seeded Main entry; the merge step collapses any
+        // duplicates and keeps the row even when callup count is zero.
+        self.statistics_history.record_season_end(
+            season,
+            stats,
+            main_team_info,
+            is_loan,
+            self.last_transfer_date,
+        );
+
+        // Buy-back protection only needs to last one season — same
+        // contract as `on_season_end`.
+        self.sold_from = None;
+    }
+
     /// Record a loan move (called by loan execution).
     /// Resets stats, saves history for parent + loan club, sets transfer date.
     pub fn on_loan(&mut self, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {

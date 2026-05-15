@@ -32,59 +32,68 @@ impl CountryResult {
             .collect();
 
         country.clubs.par_iter_mut().for_each(|club| {
-            // Get main team info — used as fallback for sub-teams that
-            // share the parent's brand (Reserve, U18..U23).
-            let main_team_info: Option<(String, String, u16)> = club
-                .teams
-                .main()
-                .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
-
-            let main_team_league = club
-                .teams
-                .main()
-                .and_then(|t| t.league_id)
-                .and_then(|lid| league_lookup.get(&lid))
-                .cloned()
-                .unwrap_or_default();
+            // Resolve the main-team identity once per club so non-senior
+            // squads (Reserve, U18..U23) can alias under it. The player
+            // always carries a Main-team row even when they only ever
+            // played for a youth squad — the user's rule is that
+            // non-owning teams never appear under their own slug, but
+            // the player still belongs to the parent club's main team.
+            let main_team_info: Option<TeamInfo> = club.teams.main().map(|t| {
+                let (league_name, league_slug) = t
+                    .league_id
+                    .and_then(|lid| league_lookup.get(&lid))
+                    .cloned()
+                    .unwrap_or_default();
+                TeamInfo {
+                    name: t.name.clone(),
+                    slug: t.slug.clone(),
+                    reputation: t.reputation.world,
+                    league_name,
+                    league_slug,
+                }
+            });
 
             for team in &mut club.teams.teams {
-                // Senior squads (Main, B, Second) keep their own identity
-                // because they each compete in a real league; the player's
-                // history must show the actual team and league played for.
-                // Youth/Reserve sub-teams collapse into the main brand so
-                // synthetic-sub-league stats still aggregate under the club.
                 let keeps_own_identity = team.team_type.is_own_team();
 
-                let (team_name, team_slug, team_reputation) =
-                    if keeps_own_identity || main_team_info.is_none() {
-                        (team.name.clone(), team.slug.clone(), team.reputation.world)
-                    } else {
-                        let (name, slug, rep) = main_team_info.as_ref().unwrap();
-                        (name.clone(), slug.clone(), *rep)
+                if !keeps_own_identity {
+                    // Non-senior squad: alias to the parent club's main
+                    // team and call the youth-specific season-end path.
+                    // It discards the accumulated youth-team match stats
+                    // (U21 games don't count toward career statistics)
+                    // but still drains any departed senior spells from
+                    // `current` and ensures a Main-team row exists for
+                    // the season.
+                    let alias = match main_team_info.as_ref() {
+                        Some(info) => info.clone(),
+                        None => continue,
                     };
+                    for player in &mut team.players.players {
+                        player.on_non_senior_season_end(
+                            ended_season.clone(),
+                            &alias,
+                            date,
+                        );
+                        player.evaluate_favorite_club(club.id, &alias.slug, date);
+                    }
+                    continue;
+                }
 
-                let (league_name, league_slug) = if keeps_own_identity {
-                    team.league_id
-                        .and_then(|lid| league_lookup.get(&lid))
-                        .cloned()
-                        .unwrap_or_else(|| main_team_league.clone())
-                } else {
-                    main_team_league.clone()
-                };
+                let (league_name, league_slug) = team
+                    .league_id
+                    .and_then(|lid| league_lookup.get(&lid))
+                    .cloned()
+                    .unwrap_or_default();
 
                 let team_info = TeamInfo {
-                    name: team_name,
-                    slug: team_slug,
-                    reputation: team_reputation,
+                    name: team.name.clone(),
+                    slug: team.slug.clone(),
+                    reputation: team.reputation.world,
                     league_name,
                     league_slug,
                 };
 
                 for player in &mut team.players.players {
-                    // Every squad snapshots — `team_info` already aliases
-                    // Reserve / U18..U23 to the main-team brand, so youth
-                    // seasons land in career history under the parent club
-                    // and the player page always shows a row per season.
                     player.on_season_end(ended_season.clone(), &team_info, date);
                     player.evaluate_favorite_club(club.id, &team_info.slug, date);
                 }
@@ -257,10 +266,16 @@ mod tests {
 
     #[test]
     fn reserve_players_snapshot_under_main_team_alias() {
-        // Reserve / U18..U23 stats roll up under the main-team brand so a
-        // player who spends the season on the reserve squad still gets a
-        // career-history row pointing at the parent club's main team.
-        let player = make_player(1, 10, 2);
+        // Reserve / U18..U23 players never appear under their own slug
+        // in career history — the user's rule is that non-owning teams
+        // are not tracked. Instead the snapshot writes a row under the
+        // parent club's main team so the player always has a "career
+        // home" entry for the season. Reserve-league appearances live
+        // in `friendly_statistics` (youth/reserve leagues are friendly)
+        // and are discarded — the Main row shows 0 senior games.
+        let mut player = make_player(1, 0, 0);
+        player.friendly_statistics.played = 10;
+        player.friendly_statistics.goals = 2;
         let main_team = make_team(
             10,
             100,
@@ -295,9 +310,10 @@ mod tests {
             .items
             .iter()
             .find(|i| i.season.start_year == 2031)
-            .expect("Frozen 2031 row missing for reserve player");
+            .expect("reserve player should have a Main alias row");
         assert_eq!(entry.team_slug, "juventus");
-        assert_eq!(entry.statistics.played, 10);
+        // Reserve games are discarded — Main row carries 0 senior apps.
+        assert_eq!(entry.statistics.played, 0);
     }
 
     #[test]
@@ -356,8 +372,11 @@ mod tests {
 
         let reserve_player = &country.clubs[0].teams.teams[1].players.players[0];
         assert_eq!(reserve_player.statistics.played, 0);
-        // Reserve squads now roll up under the main team — the player
-        // gets a "Roma" row even though they played for Roma B.
+        // Reserve squads alias to Main: the player gets a Roma row
+        // under the parent club's main slug. The 5 games on
+        // `player.statistics` represent senior callup appearances
+        // (reserve-league games would land in friendly_statistics) so
+        // they survive into the Main row.
         let reserve_entry = &reserve_player.statistics_history.items[0];
         assert_eq!(reserve_entry.team_slug, "roma");
         assert_eq!(reserve_entry.statistics.played, 5);
@@ -460,10 +479,17 @@ mod tests {
 
     #[test]
     fn youth_squad_player_snapshots_under_main_team_alias() {
-        // U21 stats roll up under the parent club's main-team identity
-        // so every season the player is on the books produces a row in
-        // career history — even seasons played entirely at U21.
-        let player = make_player(1, 12, 3);
+        // U21 (and other youth squads) never appear under their own
+        // slug. A player who spent the season entirely at U21 still
+        // gets a Main-team row in career history (the parent club's
+        // main team) — the user's rule is that non-owning team players
+        // always show a Main row each season, even with 0 games.
+        // U21 league games go to `friendly_statistics` (youth leagues
+        // are friendly leagues) so we set them there to model the U21
+        // appearances that must be discarded.
+        let mut player = make_player(1, 0, 0);
+        player.friendly_statistics.played = 12;
+        player.friendly_statistics.goals = 3;
         let main_team = make_team(10, 100, "Napoli", "napoli", TeamType::Main, Some(1), vec![]);
         let u21 = make_team(
             11,
@@ -484,13 +510,140 @@ mod tests {
         let country = data.country_mut(1).unwrap();
         let u21_player = &country.clubs[0].teams.teams[1].players.players[0];
         assert_eq!(u21_player.statistics.played, 0);
+        // Friendly bucket reset too so U21 games don't bleed forward.
+        assert_eq!(u21_player.friendly_statistics.played, 0);
         let entry = u21_player
             .statistics_history
             .items
             .iter()
             .find(|i| i.season.start_year == 2031)
-            .expect("Frozen 2031 row missing for U21 player");
+            .expect("U21-only player must still have a Main alias row");
+        assert_eq!(entry.team_slug, "napoli");
+        // U21 (friendly-bucket) games are discarded — Main row 0 apps.
+        assert_eq!(entry.statistics.played, 0);
+    }
+
+    #[test]
+    fn youth_squad_player_main_team_callups_count_toward_main_row() {
+        // Bug repro: a player rostered on U21 who got called up to
+        // Main for some matches saw their senior-callup games erased
+        // at season end. Match stats from senior matches land in
+        // `player.statistics` (not `friendly_statistics`), so the
+        // non-senior season-end path must preserve them and feed them
+        // into the Main-team row.
+        let mut player = make_player(1, 0, 0);
+        // Senior callups: 5 apps for the Main team during the season.
+        player.statistics.played = 5;
+        player.statistics.goals = 1;
+        // Plus the regular U21 league output, which must be discarded.
+        player.friendly_statistics.played = 18;
+        player.friendly_statistics.goals = 4;
+
+        let main_team = make_team(10, 100, "Napoli", "napoli", TeamType::Main, Some(1), vec![]);
+        let u21 = make_team(
+            11,
+            100,
+            "Napoli U21",
+            "napoli-u21",
+            TeamType::U21,
+            None,
+            vec![player],
+        );
+        let club = make_club(100, "Napoli", vec![main_team, u21]);
+        let league = make_league(1, "Serie A", "serie-a", false);
+        let country = make_country(vec![club], vec![league]);
+
+        let mut data = make_simulator_data(make_date(2032, 8, 15), country);
+        CountryResult::snapshot_player_season_statistics(&mut data, 1);
+
+        let country = data.country_mut(1).unwrap();
+        let u21_player = &country.clubs[0].teams.teams[1].players.players[0];
+        assert_eq!(u21_player.statistics.played, 0, "stats reset for new season");
+        let entry = u21_player
+            .statistics_history
+            .items
+            .iter()
+            .find(|i| i.season.start_year == 2031)
+            .expect("U21 player with senior callups must have a Main row");
+        assert_eq!(entry.team_slug, "napoli");
+        assert_eq!(
+            entry.statistics.played, 5,
+            "senior callup apps must survive the youth-squad season-end"
+        );
+        assert_eq!(entry.statistics.goals, 1, "callup goals must survive too");
+    }
+
+    #[test]
+    fn youth_player_promoted_mid_season_keeps_main_row_only() {
+        // The bug the user reported: a player who started the season at
+        // Main, was demoted to U21 mid-season, and ended the season on
+        // U21 should NOT see a duplicate or aliased Main row written by
+        // the snapshot. Their pre-demotion Main spell is already frozen
+        // into history by the intra-club move; the snapshot must not
+        // double-write under the U21 → Main alias.
+        use crate::club::player::statistics::CurrentSeasonEntry;
+        use crate::PlayerStatistics;
+
+        let mut player = make_player(1, 0, 0);
+        // Simulate the state after a mid-season Main → U21 demotion: a
+        // departed Main entry sits in `current` carrying the player's
+        // pre-demotion stats.
+        let mut main_stats = PlayerStatistics::default();
+        main_stats.played = 12;
+        main_stats.goals = 3;
+        player
+            .statistics_history
+            .current
+            .push(CurrentSeasonEntry {
+                team_name: "Napoli".to_string(),
+                team_slug: "napoli".to_string(),
+                team_reputation: 100,
+                league_name: "Serie A".to_string(),
+                league_slug: "serie-a".to_string(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: main_stats,
+                joined_date: make_date(2031, 8, 1),
+                departed_date: Some(make_date(2032, 1, 15)),
+                seq_id: 0,
+            });
+        // Player is now on U21 and accumulated 5 youth-team apps that
+        // must NOT bleed into history. Youth-league apps live in
+        // `friendly_statistics`, not `statistics`.
+        player.friendly_statistics.played = 5;
+        player.friendly_statistics.goals = 1;
+
+        let main_team = make_team(10, 100, "Napoli", "napoli", TeamType::Main, Some(1), vec![]);
+        let u21 = make_team(
+            11,
+            100,
+            "Napoli U21",
+            "napoli-u21",
+            TeamType::U21,
+            None,
+            vec![player],
+        );
+        let club = make_club(100, "Napoli", vec![main_team, u21]);
+        let league = make_league(1, "Serie A", "serie-a", false);
+        let country = make_country(vec![club], vec![league]);
+
+        let mut data = make_simulator_data(make_date(2032, 8, 15), country);
+        CountryResult::snapshot_player_season_statistics(&mut data, 1);
+
+        let country = data.country_mut(1).unwrap();
+        let player = &country.clubs[0].teams.teams[1].players.players[0];
+        assert_eq!(player.statistics.played, 0, "match stats must be reset");
+
+        // Exactly one career row: the Main spell with 12 apps. No U21
+        // alias, no phantom row from the youth-team snapshot.
+        assert_eq!(
+            player.statistics_history.items.len(),
+            1,
+            "expected exactly one career row from the Main spell"
+        );
+        let entry = &player.statistics_history.items[0];
         assert_eq!(entry.team_slug, "napoli");
         assert_eq!(entry.statistics.played, 12);
+        assert_eq!(entry.statistics.goals, 3);
     }
 }

@@ -679,6 +679,7 @@ impl LeagueResult {
     ) {
         use crate::ConflictLocation;
         use crate::club::ChangeType;
+        use crate::club::HappinessEventCause;
         use crate::club::HappinessEventChangeKind;
         use crate::club::HappinessEventContext;
         use crate::club::HappinessEventEvidence;
@@ -788,6 +789,9 @@ impl LeagueResult {
                 kind: HappinessEventType,
                 magnitude: f32,
                 evidence: Vec<HappinessEventEvidence>,
+                cause: HappinessEventCause,
+                reason: TeammateConflictReason,
+                location: ConflictLocation,
             }
             let mut updates: Vec<Update> = Vec::new();
 
@@ -882,13 +886,32 @@ impl LeagueResult {
             }
 
             // ── Red card: friction within the same unit ─────────────
+            //
+            // Simulation truth: every same-unit teammate accumulates a
+            // small `PersonalConflict` update against the offender — the
+            // back-four had to play with ten, the midfield got
+            // overloaded, etc. Visible player-history rows are scarcer:
+            // we pick the 1-2 teammates whose personality / standing
+            // would realistically make them speak up, and classify the
+            // event so each reactor's row reads as a specific football
+            // moment (captain's leadership challenge vs. a pro's
+            // standards reaction vs. plain tactical blame) rather than
+            // a copy-paste "argued with teammate" line.
             for &offender in &red_carded {
                 let group = match players.iter().find(|p| p.id == offender) {
                     Some(p) => p.group,
                     None => continue,
                 };
 
-                let mut visible_reactors: Vec<(u32, f32, Vec<HappinessEventEvidence>)> = players
+                #[derive(Clone)]
+                struct ReactorProfile {
+                    score: f32,
+                    evidence: Vec<HappinessEventEvidence>,
+                    cause: HappinessEventCause,
+                    reason: TeammateConflictReason,
+                }
+
+                let mut visible_reactors: Vec<(u32, ReactorProfile)> = players
                     .iter()
                     .filter(|p| p.id != offender && p.group == group)
                     .map(|p| {
@@ -900,42 +923,94 @@ impl LeagueResult {
                         let mut score = 0.0;
                         let mut evidence = vec![HappinessEventEvidence::DressingRoomRow];
 
-                        if relation_level <= -25.0 {
+                        let is_strained = relation_level <= -25.0;
+                        let is_leader = p.is_captain || p.leadership >= 15.0;
+                        let is_high_pro = p.professionalism >= 14.0;
+                        let is_high_sport = p.sportsmanship >= 14.0;
+                        let is_high_contro = p.controversy >= 14.0;
+                        let is_low_temper = p.temperament <= 8.0;
+
+                        if is_strained {
                             score += 2.0;
                             evidence.push(HappinessEventEvidence::AlreadyStrainedRelationship);
                         }
-                        if p.is_captain || p.leadership >= 15.0 {
+                        if is_leader {
                             score += 1.8;
                             evidence.push(HappinessEventEvidence::CaptainOrLeaderInfluence);
                         }
-                        if p.professionalism >= 14.0 {
+                        if is_high_pro {
                             score += 1.1;
                             evidence.push(HappinessEventEvidence::HighProfessionalism);
                         }
-                        if p.sportsmanship >= 14.0 {
+                        if is_high_sport {
                             score += 0.8;
                         }
-                        if p.controversy >= 14.0 {
+                        if is_high_contro {
                             score += (p.controversy - 13.0) * 0.25;
                             evidence.push(HappinessEventEvidence::HighControversy);
                         }
-                        if p.temperament <= 8.0 {
+                        if is_low_temper {
                             score += (9.0 - p.temperament) * 0.25;
                             evidence.push(HappinessEventEvidence::LowTemperament);
                         }
 
-                        (p.id, score, evidence)
+                        // Pick the football-realistic frame for this
+                        // reactor's row. Order matters: a captain's
+                        // public callout outranks a pro's standards
+                        // reaction, which outranks pre-existing friction,
+                        // which outranks the generic "we played with
+                        // ten" tactical complaint. Each variant maps a
+                        // closed (cause, reason) pair so renderers pick
+                        // distinct copy.
+                        let (cause, reason) = if is_leader {
+                            (
+                                HappinessEventCause::LeadershipDispute,
+                                TeammateConflictReason::LeadershipChallenge,
+                            )
+                        } else if is_high_pro || is_high_sport {
+                            (
+                                HappinessEventCause::TrainingFriction,
+                                TeammateConflictReason::TrainingStandards,
+                            )
+                        } else if is_strained {
+                            (
+                                HappinessEventCause::PersonalityClash,
+                                TeammateConflictReason::PersonalityClash,
+                            )
+                        } else {
+                            (
+                                HappinessEventCause::TacticalDisagreement,
+                                TeammateConflictReason::TacticalBlame,
+                            )
+                        };
+
+                        (
+                            p.id,
+                            ReactorProfile {
+                                score,
+                                evidence,
+                                cause,
+                                reason,
+                            },
+                        )
                     })
                     .collect();
 
-                visible_reactors
-                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                let visible_reactors: std::collections::HashMap<u32, Vec<HappinessEventEvidence>> =
+                // Rank by score desc, threshold by 1.5, cap at 2. A
+                // vanilla red card with vanilla teammates produces zero
+                // visible rows — the offender takes the (separate) card
+                // event, the dressing room simmers in the simulation
+                // layer, and the feed stays quiet.
+                visible_reactors.sort_by(|a, b| {
+                    b.1.score
+                        .partial_cmp(&a.1.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let visible_reactors: std::collections::HashMap<u32, ReactorProfile> =
                     visible_reactors
                         .into_iter()
-                        .filter(|(_, score, _)| *score >= 1.5)
+                        .filter(|(_, prof)| prof.score >= 1.5)
                         .take(2)
-                        .map(|(id, _, evidence)| (id, evidence))
                         .collect();
 
                 for p in players
@@ -947,13 +1022,14 @@ impl LeagueResult {
                         to: offender,
                         change_type: ChangeType::PersonalConflict,
                         magnitude: 0.20,
-                        event: visible_reactors
-                            .get(&p.id)
-                            .map(|evidence| VisiblePairEvent {
-                                kind: HappinessEventType::ConflictWithTeammate,
-                                magnitude: -1.5,
-                                evidence: evidence.clone(),
-                            }),
+                        event: visible_reactors.get(&p.id).map(|prof| VisiblePairEvent {
+                            kind: HappinessEventType::ConflictWithTeammate,
+                            magnitude: -1.5,
+                            evidence: prof.evidence.clone(),
+                            cause: prof.cause,
+                            reason: prof.reason,
+                            location: ConflictLocation::DressingRoom,
+                        }),
                     });
                 }
             }
@@ -1110,7 +1186,7 @@ impl LeagueResult {
                                     HappinessEventFollowUp::LikelyToSettle
                                 };
                                 let context = HappinessEventContext::new(
-                                    crate::club::HappinessEventCause::PersonalityClash,
+                                    event.cause,
                                     HappinessEventSeverity::from_magnitude(event.magnitude),
                                     HappinessEventScope::DressingRoom,
                                 )
@@ -1122,8 +1198,8 @@ impl LeagueResult {
                                 .with_evidence_iter(evidence)
                                 .with_follow_up(follow_up)
                                 .with_teammate_conflict_context(TeammateConflictContext::new(
-                                    TeammateConflictReason::PersonalityClash,
-                                    ConflictLocation::DressingRoom,
+                                    event.reason,
+                                    event.location,
                                 ));
 
                                 if player

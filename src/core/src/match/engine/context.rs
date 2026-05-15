@@ -3,7 +3,9 @@ use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
 use crate::r#match::engine::environment::MatchEnvironment;
 use crate::r#match::engine::psychology::PsychologyState;
 use crate::r#match::engine::referee::RefereeProfile;
-use crate::r#match::engine::result::{PenaltyShootoutKick, PlayerMatchEndStats};
+use crate::r#match::engine::result::{
+    PenaltyShootoutKick, PlayerMatchEndStats, PlayerMatchPhysicalSnapshot,
+};
 use crate::r#match::engine::set_pieces::SetPieceHistory;
 use crate::r#match::rules::MatchRules;
 use crate::r#match::{
@@ -60,6 +62,15 @@ pub struct MatchContext {
 
     // Stats for players who were substituted out (preserved before replacement)
     pub substituted_out_stats: Vec<(u32, PlayerMatchEndStats)>,
+
+    /// Physical snapshots for players who were substituted off, captured
+    /// at the moment of the swap. `build_result` folds these into the
+    /// per-match `MatchResultRaw.physical_snapshots` map alongside the
+    /// snapshots for players who finished the match on the pitch. Lets
+    /// the post-match condition-drop formula read the actual energy
+    /// state at the player's exit minute instead of an artificial
+    /// full-time value.
+    pub substituted_out_physical_snapshots: Vec<PlayerMatchPhysicalSnapshot>,
 
     /// Coach state for each team (home = left initially, away = right initially)
     pub coach_home: MatchCoach,
@@ -174,6 +185,7 @@ impl MatchContext {
             penalty_shootout_kicks: Vec::new(),
             last_goal_tick: 0,
             substituted_out_stats: Vec::new(),
+            substituted_out_physical_snapshots: Vec::new(),
             coach_home: MatchCoach::new(),
             coach_away: MatchCoach::new(),
             tactical_home: TeamTacticalState::initial(),

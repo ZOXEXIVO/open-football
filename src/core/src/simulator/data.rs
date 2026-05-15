@@ -307,6 +307,10 @@ impl SimulatorData {
 
     /// Seed statistics history for every player. Called once at
     /// construction time — touches every player unconditionally.
+    /// Non-senior squads (Reserve, U18..U23) seed under the main-team
+    /// alias from `team_info_for` so a player who never leaves the
+    /// youth setup still has a "career home" row pointing at the
+    /// parent club's main team.
     fn seed_player_histories(&mut self) {
         let date = self.date.date();
         self.continents

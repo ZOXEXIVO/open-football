@@ -37,8 +37,8 @@ pub(super) fn team_has_players_needing_seed(team: &Team) -> bool {
 }
 
 /// Snapshot of the club's main-team identity for stats-seeding purposes.
-/// Resolved once per club so youth teams (U18-U23) and Reserve inherit the
-/// main brand consistently across all their players. Senior reserves
+/// Resolved once per club so youth teams (U18-U23) and Reserve inherit
+/// the main brand consistently across all their players. Senior reserves
 /// (B, Second) keep their own identity because they compete in real
 /// lower divisions and players' histories should show that.
 pub(super) struct ClubSeedingContext {
@@ -74,7 +74,9 @@ impl ClubSeedingContext {
     /// Build the `TeamInfo` that the seeder writes onto the player's
     /// history. Main, B and Second teams keep their own identity (each
     /// competes in a real league); youth and Reserve squads inherit the
-    /// main brand so synthetic sub-league stats aggregate under the club.
+    /// main brand so the player always has a "career home" row pointing
+    /// at the parent club's main team — even if they only ever play for
+    /// a non-owning squad.
     pub(super) fn team_info_for(&self, team: &Team) -> TeamInfo {
         let keeps_own_identity = team.team_type.is_own_team();
         if keeps_own_identity {

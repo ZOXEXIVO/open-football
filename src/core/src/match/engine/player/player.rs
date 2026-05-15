@@ -1,5 +1,7 @@
+use crate::club::player::events::PositionLoad;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PlayerMatchEndStats;
+use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::tactics::TacticalPositions;
 use crate::r#match::events::EventCollection;
@@ -97,6 +99,14 @@ pub struct MatchPlayer {
     /// the carrier across many ticks racks up one pressure per "press
     /// burst" rather than one per tick.
     pub last_pressure_tick: u64,
+
+    /// Condition the player carried onto the pitch — kickoff for
+    /// starters, swap-time for substitutes. Stamped once at
+    /// construction (or at the substitution swap) and never mutated
+    /// after that. Read by the engine end-of-match path to build the
+    /// `PlayerMatchPhysicalSnapshot` that drives the post-match
+    /// condition-drop formula on the persisted `Player`.
+    pub starting_condition: i16,
 }
 
 impl MatchPlayer {
@@ -215,6 +225,7 @@ impl MatchPlayer {
             birth_date: player.birth_date,
             entry_match_time_ms: 0,
             last_pressure_tick: 0,
+            starting_condition: player.player_attributes.condition,
         }
     }
 
@@ -274,6 +285,31 @@ impl MatchPlayer {
     pub fn minutes_played_at(&self, now_match_time_ms: u64) -> u16 {
         let elapsed = now_match_time_ms.saturating_sub(self.entry_match_time_ms);
         ((elapsed / 60_000) as u16).min(120)
+    }
+
+    /// Build the post-match physical snapshot for this player at the
+    /// given absolute match time (substitution-off or full-time).
+    /// Captures the starting tank, the current (drained) condition,
+    /// and the position-group default high-intensity share so the
+    /// persisted `Player::on_match_exertion` can size the post-match
+    /// condition drop from real depletion instead of minute count
+    /// alone.
+    pub fn to_physical_snapshot(&self, now_match_time_ms: u64) -> PlayerMatchPhysicalSnapshot {
+        let elapsed_ms = now_match_time_ms.saturating_sub(self.entry_match_time_ms);
+        // Fractional minutes — `minutes_played_at` rounds down to a
+        // u16 which loses information for cameo subs. The post-match
+        // formula reads `duration = minutes / 90` so the fractional
+        // resolution actually matters here.
+        let minutes_played = (elapsed_ms as f32 / 60_000.0).min(120.0);
+        let group = self.tactical_position.current_position.position_group();
+        let hi_share = PositionLoad::high_intensity_share(group);
+        PlayerMatchPhysicalSnapshot {
+            player_id: self.id,
+            minutes_played,
+            starting_condition: self.starting_condition,
+            final_match_energy: self.player_attributes.condition,
+            high_intensity_load_hint: hi_share,
+        }
     }
 
     /// Consumes the tackle cooldown (ticks it down by 1). Called once per

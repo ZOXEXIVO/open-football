@@ -942,7 +942,7 @@ fn simulate_weekly(
             p.load.daily_decay(day);
         }
         if minutes_per_week > 0.0 {
-            p.on_match_exertion(minutes_per_week, match_day, false);
+            p.on_match_exertion_minutes_only(minutes_per_week, match_day, false);
         }
         p.process_development_with(match_day, league_rep, coach, club_rep, &mut FixedRolls(1.0));
     }
@@ -1043,9 +1043,9 @@ fn managed_cameo_pipeline_outgrows_overloaded_full_start_pipeline() {
             overloaded.load.daily_decay(day);
         }
         if w % 2 == 0 {
-            managed.on_match_exertion(30.0, match_day, false);
+            managed.on_match_exertion_minutes_only(30.0, match_day, false);
         }
-        overloaded.on_match_exertion(90.0, match_day, false);
+        overloaded.on_match_exertion_minutes_only(90.0, match_day, false);
         managed.process_development_with(match_day, 9000, &coach, 0.95, &mut FixedRolls(1.0));
         overloaded.process_development_with(match_day, 9000, &coach, 0.95, &mut FixedRolls(1.0));
     }

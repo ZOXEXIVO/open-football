@@ -3,7 +3,8 @@ members = ["src/core", "src/database", "src/web"]
 exclude = [".dev/match"]
 
 [workspace.package]
-version = "1.0.550"
+version = "1.0.590"
+
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"
 

@@ -15,6 +15,34 @@ pub struct SubstitutionInfo {
     pub match_time_ms: u64,
 }
 
+/// Final physical state of a player at the moment they left the pitch
+/// (substitution time or full time). The match engine drains the
+/// `MatchPlayer` copy's condition tick-by-tick during the sim; without
+/// this snapshot the persisted `Player` only sees minute counts and
+/// load — never the actual end-of-match energy. Post-match exertion
+/// feeds `final_match_energy` into a duration-scaled depletion model
+/// so the persisted condition reflects how empty the tank really got.
+#[derive(Debug, Clone, Copy)]
+pub struct PlayerMatchPhysicalSnapshot {
+    pub player_id: u32,
+    /// Minutes spent on the pitch. Computed from `entry_match_time_ms`
+    /// to the exit time (substitution) or current time (full time).
+    pub minutes_played: f32,
+    /// Condition (0..10000) at kickoff or at the moment this player
+    /// entered the pitch as a substitute.
+    pub starting_condition: i16,
+    /// Condition (0..10000) at the moment this player left the pitch
+    /// or at full time. Engine floor is 1500 (15%) — values this low
+    /// indicate the player was running on fumes, which the post-match
+    /// formula uses to amplify the persisted condition drop.
+    pub final_match_energy: i16,
+    /// Engine-side hint for high-intensity work done by this player —
+    /// sprint distance, pressure bursts, etc. Currently seeded from
+    /// the position-group default share (0.05..0.32) so the model has
+    /// a starting value before the engine grows per-player tracking.
+    pub high_intensity_load_hint: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct PlayerMatchEndStats {
     pub shots_on_target: u16,
@@ -119,6 +147,16 @@ pub struct MatchResultRaw {
 
     pub substitutions: Vec<SubstitutionInfo>,
 
+    /// Final physical snapshot per player who appeared in this match.
+    /// Populated for every player on the pitch at full time AND every
+    /// player who was substituted off (snapshot taken at the swap).
+    /// Consumed by `LeagueResult::apply_post_match_physical_effects`
+    /// to feed `final_match_energy` into the new condition-drop
+    /// formula. Missing entries fall back to the legacy minutes-only
+    /// path so callers that don't construct `MatchResultRaw` via the
+    /// engine continue to work.
+    pub physical_snapshots: HashMap<u32, PlayerMatchPhysicalSnapshot>,
+
     pub penalty_shootout: Vec<PenaltyShootoutKick>,
 
     pub player_of_the_match_id: Option<u32>,
@@ -157,6 +195,7 @@ impl Clone for MatchResultRaw {
             additional_time_ms: self.additional_time_ms,
             player_stats: self.player_stats.clone(),
             substitutions: self.substitutions.clone(),
+            physical_snapshots: self.physical_snapshots.clone(),
             penalty_shootout: self.penalty_shootout.clone(),
             player_of_the_match_id: self.player_of_the_match_id,
             starting_home_tactic: self.starting_home_tactic,
@@ -179,6 +218,7 @@ impl MatchResultRaw {
             additional_time_ms: 0,
             player_stats: HashMap::new(),
             substitutions: Vec::new(),
+            physical_snapshots: HashMap::new(),
             penalty_shootout: Vec::new(),
             player_of_the_match_id: None,
             starting_home_tactic: None,
@@ -199,6 +239,7 @@ impl MatchResultRaw {
             additional_time_ms: self.additional_time_ms,
             player_stats: self.player_stats.clone(),
             substitutions: self.substitutions.clone(),
+            physical_snapshots: self.physical_snapshots.clone(),
             penalty_shootout: self.penalty_shootout.clone(),
             player_of_the_match_id: self.player_of_the_match_id,
             starting_home_tactic: self.starting_home_tactic,

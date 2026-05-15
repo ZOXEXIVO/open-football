@@ -564,6 +564,17 @@ impl Substitutions {
             context
                 .substituted_out_stats
                 .push((player_out_id, snapshot));
+            // Capture the physical snapshot BEFORE the swap so the
+            // post-match exertion path can size the persisted condition
+            // drop from the actual in-match drain, not the minute count
+            // alone. Stamped at the moment the player leaves the pitch;
+            // a 60th-minute sub at 5500 condition imprints "you were
+            // 5500 at the 60th minute" forever, even though the same
+            // shirt belongs to a fresh sub for the rest of the match.
+            let phys_snapshot = player_out.to_physical_snapshot(context.total_match_time);
+            context
+                .substituted_out_physical_snapshots
+                .push(phys_snapshot);
         }
 
         if !field.substitute_player(player_out_id, player_in_id) {
@@ -572,9 +583,15 @@ impl Substitutions {
 
         // Stamp the incoming player's entry tick so their end-of-match
         // minute count reflects only the time they were actually on the
-        // pitch.
+        // pitch. Also re-stamp `starting_condition` to the value the
+        // sub is bringing onto the pitch — without this, the engine
+        // would compare their final energy against a kickoff-time
+        // starting_condition that was never relevant for this player
+        // (a sub coming on at 80 min started AT 80 min, not at
+        // kickoff).
         if let Some(player_in) = field.get_player_mut(player_in_id) {
             player_in.entry_match_time_ms = context.total_match_time;
+            player_in.starting_condition = player_in.player_attributes.condition;
         }
 
         context.record_substitution(

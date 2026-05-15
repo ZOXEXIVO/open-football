@@ -412,6 +412,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             stats.match_rating = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
 
             result.player_stats.insert(player.id, stats);
+
+            // Final-whistle physical snapshot — every player still on the
+            // pitch at full time. Captured here because `field.players`
+            // is the canonical "who was on the pitch when the whistle
+            // blew" view, and the engine's in-match condition drain
+            // has been applied to each `MatchPlayer` by now. Players
+            // who were substituted off are handled below from
+            // `context.substituted_out_physical_snapshots` so the same
+            // player never gets two snapshots.
+            let phys_snapshot = player.to_physical_snapshot(context.total_match_time);
+            result
+                .physical_snapshots
+                .insert(player.id, phys_snapshot);
         }
 
         // Include stats from substituted-out players
@@ -431,6 +444,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             stats.match_rating = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
 
             result.player_stats.insert(player_id, stats);
+        }
+
+        // Fold every "subbed-off" physical snapshot into the result. The
+        // snapshot was taken at the swap minute, so the persisted
+        // condition drop will use the right exit-time energy. A
+        // substitute coming on later replaces the same shirt but has
+        // their own snapshot logged at full time above — these two
+        // snapshots are keyed by `player_id`, so they cannot collide.
+        for snapshot in context.substituted_out_physical_snapshots.drain(..) {
+            result
+                .physical_snapshots
+                .insert(snapshot.player_id, snapshot);
         }
 
         // Blowout diagnostic — off by default (see `match-logs` feature).

@@ -1781,8 +1781,8 @@ fn full_match_keeper_has_lower_load_than_full_match_fullback() {
     let mut gk = fresh_player(PlayerPositionType::Goalkeeper);
     let mut fb = fresh_player(PlayerPositionType::WingbackLeft);
     let date = d(2025, 9, 14);
-    gk.on_match_exertion(90.0, date, false);
-    fb.on_match_exertion(90.0, date, false);
+    gk.on_match_exertion_minutes_only(90.0, date, false);
+    fb.on_match_exertion_minutes_only(90.0, date, false);
     // Wingback's load should be at least 2× the keeper's.
     assert!(
         fb.load.physical_load_7 > gk.load.physical_load_7 * 2.0,
@@ -1804,8 +1804,8 @@ fn keeper_full_match_jadedness_lower_than_fullback_full_match() {
     let mut gk = fresh_player(PlayerPositionType::Goalkeeper);
     let mut fb = fresh_player(PlayerPositionType::WingbackLeft);
     let date = d(2025, 9, 14);
-    gk.on_match_exertion(90.0, date, false);
-    fb.on_match_exertion(90.0, date, false);
+    gk.on_match_exertion_minutes_only(90.0, date, false);
+    fb.on_match_exertion_minutes_only(90.0, date, false);
     assert!(
         (fb.player_attributes.jadedness as i32) > (gk.player_attributes.jadedness as i32) + 100,
         "fb jad={} gk jad={}",
@@ -1819,8 +1819,8 @@ fn friendly_cameo_adds_less_load_than_competitive_full_match() {
     let mut friendly = fresh_player(PlayerPositionType::MidfielderCenter);
     let mut competitive = fresh_player(PlayerPositionType::MidfielderCenter);
     let date = d(2025, 9, 14);
-    friendly.on_match_exertion(90.0, date, true);
-    competitive.on_match_exertion(90.0, date, false);
+    friendly.on_match_exertion_minutes_only(90.0, date, true);
+    competitive.on_match_exertion_minutes_only(90.0, date, false);
     assert!(
         friendly.load.physical_load_7 < competitive.load.physical_load_7,
         "friendly load {} should be less than competitive load {}",
@@ -1841,14 +1841,14 @@ fn three_matches_in_seven_days_accrue_higher_debt_than_one_match() {
     once.load.daily_decay(d(2025, 9, 1));
     thrice.load.daily_decay(d(2025, 9, 1));
 
-    once.on_match_exertion(90.0, d(2025, 9, 7), false);
+    once.on_match_exertion_minutes_only(90.0, d(2025, 9, 7), false);
 
     thrice.load.daily_decay(d(2025, 9, 1));
-    thrice.on_match_exertion(90.0, d(2025, 9, 1), false);
+    thrice.on_match_exertion_minutes_only(90.0, d(2025, 9, 1), false);
     thrice.load.daily_decay(d(2025, 9, 4));
-    thrice.on_match_exertion(90.0, d(2025, 9, 4), false);
+    thrice.on_match_exertion_minutes_only(90.0, d(2025, 9, 4), false);
     thrice.load.daily_decay(d(2025, 9, 7));
-    thrice.on_match_exertion(90.0, d(2025, 9, 7), false);
+    thrice.on_match_exertion_minutes_only(90.0, d(2025, 9, 7), false);
 
     // 3-day recency-decay between matches eats some of the cumulative
     // load, but the three-game week still ends materially heavier than
@@ -1881,8 +1881,8 @@ fn under_15_competitive_match_carries_far_more_load_than_adult_peer() {
     let mut youth = fresh_player(PlayerPositionType::MidfielderCenter);
     youth.birth_date = d(2011, 1, 1); // 14
 
-    adult.on_match_exertion(90.0, date, false);
-    youth.on_match_exertion(90.0, date, false);
+    adult.on_match_exertion_minutes_only(90.0, date, false);
+    youth.on_match_exertion_minutes_only(90.0, date, false);
 
     // Load: at least 1.5× the adult's (1.8× nominal, allowing for the
     // depletion-factor and friendly-factor folds in the formula).
@@ -2111,8 +2111,8 @@ fn under_15_friendly_match_does_not_get_maturity_amplification() {
     let mut adult_friendly = fresh_player(PlayerPositionType::MidfielderCenter);
     adult_friendly.birth_date = d(1998, 1, 1); // 27
 
-    youth_friendly.on_match_exertion(90.0, date, true);
-    adult_friendly.on_match_exertion(90.0, date, true);
+    youth_friendly.on_match_exertion_minutes_only(90.0, date, true);
+    adult_friendly.on_match_exertion_minutes_only(90.0, date, true);
 
     // Within ~5% of each other — friendlies don't amplify by age.
     let diff = (youth_friendly.load.physical_load_7 - adult_friendly.load.physical_load_7).abs();
@@ -2128,7 +2128,7 @@ fn under_15_friendly_match_does_not_get_maturity_amplification() {
 fn condition_floor_is_enforced_post_match() {
     let mut p = fresh_player(PlayerPositionType::Striker);
     p.player_attributes.condition = 1_500; // engine-floor low
-    p.on_match_exertion(90.0, d(2025, 9, 14), false);
+    p.on_match_exertion_minutes_only(90.0, d(2025, 9, 14), false);
     assert!(p.player_attributes.condition >= 3_000);
 }
 
@@ -2137,7 +2137,7 @@ fn long_idle_player_match_rebuilds_readiness() {
     let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
     p.skills.physical.match_readiness = 8.0;
     let before = p.skills.physical.match_readiness;
-    p.on_match_exertion(90.0, d(2025, 9, 14), false);
+    p.on_match_exertion_minutes_only(90.0, d(2025, 9, 14), false);
     assert!(p.skills.physical.match_readiness > before + 2.0);
 }
 
@@ -2192,8 +2192,8 @@ fn friendly_competitive_load_ratio_is_single_discount() {
     let mut friendly = fresh_player(PlayerPositionType::MidfielderCenter);
     let mut competitive = fresh_player(PlayerPositionType::MidfielderCenter);
 
-    friendly.on_match_exertion(90.0, date, true);
-    competitive.on_match_exertion(90.0, date, false);
+    friendly.on_match_exertion_minutes_only(90.0, date, true);
+    competitive.on_match_exertion_minutes_only(90.0, date, false);
 
     // Friendly load should be ~0.45× competitive — one discount, not
     // 0.45 × 0.45 = 0.2025× as the previous double-application produced.
@@ -2219,8 +2219,8 @@ fn youth_friendly_cameo_does_not_apply_youth_senior_overload_multipliers() {
     let mut adult = fresh_player(PlayerPositionType::MidfielderCenter);
     adult.birth_date = d(1998, 1, 1); // 27
 
-    youth.on_match_exertion(90.0, date, true);
-    adult.on_match_exertion(90.0, date, true);
+    youth.on_match_exertion_minutes_only(90.0, date, true);
+    adult.on_match_exertion_minutes_only(90.0, date, true);
 
     let diff = (youth.load.physical_load_7 - adult.load.physical_load_7).abs();
     assert!(
@@ -2249,8 +2249,8 @@ fn youth_competitive_full_match_higher_load_and_debt_than_adult() {
     let mut adult = fresh_player(PlayerPositionType::MidfielderCenter);
     adult.birth_date = d(1998, 1, 1); // 27
 
-    youth.on_match_exertion(90.0, date, false);
-    adult.on_match_exertion(90.0, date, false);
+    youth.on_match_exertion_minutes_only(90.0, date, false);
+    adult.on_match_exertion_minutes_only(90.0, date, false);
 
     assert!(
         youth.load.physical_load_7 > adult.load.physical_load_7 * 1.5,
