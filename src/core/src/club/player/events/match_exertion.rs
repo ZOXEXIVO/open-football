@@ -50,6 +50,11 @@ impl MatchExertionInputs {
     /// player's *current* persisted condition. The post-match formula
     /// still scales by duration/position/age, so the result remains
     /// in the right ballpark — just less responsive to outliers.
+    ///
+    /// `high_intensity_load_hint` is seeded from the player's position
+    /// group default (GK ~0.05, defender ~0.20, midfielder ~0.30,
+    /// forward ~0.32) so the synthesis preserves the engine path's
+    /// position-aware HI-share spread when no snapshot is available.
     pub fn from_minutes(player: &Player, minutes: f32) -> Self {
         let starting_condition = player.player_attributes.condition;
         // Estimate end-of-match condition from duration only: a 90-min
@@ -60,11 +65,12 @@ impl MatchExertionInputs {
         let energy_loss_ratio = (0.45 * duration).min(0.85);
         let final_match_energy =
             ((starting_condition as f32) * (1.0 - energy_loss_ratio)).max(1500.0) as i16;
+        let group = player.position().position_group();
         MatchExertionInputs {
             minutes,
             starting_condition,
             final_match_energy,
-            high_intensity_load_hint: 0.20,
+            high_intensity_load_hint: PositionLoad::high_intensity_share(group),
         }
     }
 }
@@ -204,10 +210,14 @@ impl Player {
 
         // Floor: competitive 25%, friendly 35%, post-injury recovery
         // 40% (unless an injury actually fires later in this pass —
-        // injuries get their own state machine). Without the recovery
-        // floor a player coming back from injury could be played 90
-        // and end the day at 25%, defeating the purpose of the
-        // in-recovery gate.
+        // injuries get their own state machine). The floor is a worst-
+        // case stabilization: the player did not collapse below this
+        // even though the engine drained them to 15% mid-match. The
+        // floor only LIFTS a player who started the match above the
+        // floor and burned through it — a player who entered the match
+        // already below the floor stays at their starting condition.
+        // Match exertion never heals; recovery is owned by the daily
+        // rest / training pathways.
         let post_match_floor = if is_friendly {
             3500
         } else if self.player_attributes.is_in_recovery() {
@@ -216,14 +226,16 @@ impl Player {
             2500
         };
         let starting = inputs.starting_condition.max(0);
-        let new_condition = ((starting as f32 - condition_drop).round() as i32)
-            .clamp(post_match_floor as i32, 10_000) as i16;
-        // Never *raise* condition via match — if the engine left the
-        // player above the formula prediction (rare; only happens if
-        // starting_condition was already low), keep the engine value.
-        if new_condition < self.player_attributes.condition {
-            self.player_attributes.condition = new_condition;
-        }
+        // Persisted condition = max(starting − drop, floor), then
+        // never raised above starting_condition. The min(starting)
+        // clamp is the "never heal" guarantee: a player who walked
+        // onto the pitch already at 20% leaves it at 20% even if the
+        // 25% competitive floor would otherwise lift them. Overnight
+        // recovery belongs to `process_condition_recovery`, not here.
+        let computed_after_match = (starting as f32 - condition_drop).round() as i32;
+        let floored = computed_after_match.max(post_match_floor as i32);
+        let new_condition = floored.min(starting as i32).clamp(0, 10_000) as i16;
+        self.player_attributes.condition = new_condition;
 
         // ── LOAD BOOKKEEPING ──────────────────────────────────────
         // Position-weighted minutes (legacy compat for the rolling

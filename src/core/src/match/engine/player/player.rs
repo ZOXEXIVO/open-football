@@ -290,10 +290,13 @@ impl MatchPlayer {
     /// Build the post-match physical snapshot for this player at the
     /// given absolute match time (substitution-off or full-time).
     /// Captures the starting tank, the current (drained) condition,
-    /// and the position-group default high-intensity share so the
-    /// persisted `Player::on_match_exertion` can size the post-match
-    /// condition drop from real depletion instead of minute count
-    /// alone.
+    /// and a high-intensity share that blends the position-group
+    /// default with the player's actual high-intensity involvement
+    /// (pressures, tackles, dribbles, crosses) so the persisted
+    /// `Player::on_match_exertion` reflects how the player actually
+    /// played, not just the position they nominally occupied. A
+    /// fullback who pressed all match should bill more than one who
+    /// sat in a low block.
     pub fn to_physical_snapshot(&self, now_match_time_ms: u64) -> PlayerMatchPhysicalSnapshot {
         let elapsed_ms = now_match_time_ms.saturating_sub(self.entry_match_time_ms);
         // Fractional minutes — `minutes_played_at` rounds down to a
@@ -302,14 +305,55 @@ impl MatchPlayer {
         // resolution actually matters here.
         let minutes_played = (elapsed_ms as f32 / 60_000.0).min(120.0);
         let group = self.tactical_position.current_position.position_group();
-        let hi_share = PositionLoad::high_intensity_share(group);
+        let position_default = PositionLoad::high_intensity_share(group);
         PlayerMatchPhysicalSnapshot {
             player_id: self.id,
             minutes_played,
             starting_condition: self.starting_condition,
             final_match_energy: self.player_attributes.condition,
-            high_intensity_load_hint: hi_share,
+            high_intensity_load_hint: Self::derive_high_intensity_hint(
+                position_default,
+                &self.statistics,
+                minutes_played,
+            ),
         }
+    }
+
+    /// Blend the position-group default high-intensity share with the
+    /// observed action density (pressures, tackles, successful
+    /// dribbles, crosses) so the post-match condition drop reflects
+    /// how the player actually played. Keepers and defenders sitting
+    /// deep stay near their position default; an attacking fullback
+    /// who pressed every action will read materially higher.
+    ///
+    /// A "calibration baseline" of 0.50 actions/min maps to the
+    /// position default; anything above lifts the hint linearly, up
+    /// to a cap of 1.0 (the engine's mathematical ceiling). This is
+    /// deliberately conservative — the position default is right for
+    /// average involvement; behaviour-driven correction is a tilt,
+    /// not a rewrite.
+    pub(crate) fn derive_high_intensity_hint(
+        position_default: f32,
+        stats: &crate::r#match::engine::player::statistics::MatchPlayerStatistics,
+        minutes_played: f32,
+    ) -> f32 {
+        if minutes_played < 1.0 {
+            return position_default;
+        }
+        let hi_actions = stats.pressures as f32
+            + stats.tackles as f32
+            + stats.successful_dribbles as f32
+            + stats.crosses_attempted as f32
+            + stats.progressive_carries as f32;
+        let per_min = hi_actions / minutes_played.max(1.0);
+        // 0.50 actions/min ≈ the position default; deviation tilts the
+        // hint by ±0.4 absolute at the extremes (per-min ≈ 0 → -0.4×,
+        // per-min ≈ 1.5 → +0.4×). Clamped tightly so a stat-stuffer
+        // can't pin the hint to 1.0 and a quiet game can't pin it to 0.
+        const CAL_BASELINE: f32 = 0.50;
+        const PER_MIN_GAIN: f32 = 0.40;
+        let tilt = ((per_min - CAL_BASELINE) * PER_MIN_GAIN).clamp(-0.15, 0.20);
+        (position_default + tilt).clamp(0.02, 1.0)
     }
 
     /// Consumes the tackle cooldown (ticks it down by 1). Called once per

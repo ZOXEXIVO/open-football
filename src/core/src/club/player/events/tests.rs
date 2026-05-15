@@ -2126,10 +2126,19 @@ fn under_15_friendly_match_does_not_get_maturity_amplification() {
 
 #[test]
 fn condition_floor_is_enforced_post_match() {
+    // Competitive floor (2500) applies only to players who STARTED
+    // above it and ran themselves through it — a stabilization, not
+    // an overnight refill. A player who walked onto the pitch at
+    // 9500 and was drained to ~3000 lands at the floor (or just
+    // above, depending on drop magnitude), never below.
     let mut p = fresh_player(PlayerPositionType::Striker);
-    p.player_attributes.condition = 1_500; // engine-floor low
+    p.player_attributes.condition = 9_500;
     p.on_match_exertion_minutes_only(90.0, d(2025, 9, 14), false);
-    assert!(p.player_attributes.condition >= 3_000);
+    assert!(
+        p.player_attributes.condition >= 2_500,
+        "above-floor starter must stabilize at or above 2500: got {}",
+        p.player_attributes.condition
+    );
 }
 
 #[test]
@@ -3679,4 +3688,866 @@ fn on_recognition_award_records_young_team_of_the_month_event() {
         count_events(&p, &HappinessEventType::YoungTeamOfTheMonthSelection),
         1
     );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Snapshot-driven condition drop — exercises the new
+// `MatchExertionInputs` pipeline. The match engine drains the
+// `MatchPlayer` copy tick by tick; without the snapshot the
+// persisted `Player.condition` could read 90% after a full 90-minute
+// slog. These tests pin the end-to-end behaviour: a competitive 90
+// must drop persisted condition by the calibrated band; a friendly
+// must drop materially less; a cameo barely dents the tank; congestion
+// stacks; injury risk responds to depletion + spike + congestion.
+// ════════════════════════════════════════════════════════════════════
+
+use crate::club::player::events::match_exertion::MatchExertionInputs;
+
+/// Helper: build a snapshot for a player who starts at `start_cond`
+/// and finishes the shift at `final_energy` after `minutes`. Uses
+/// the position-group default HI share — matches the engine path.
+fn make_snapshot(
+    player: &Player,
+    minutes: f32,
+    start_cond: i16,
+    final_energy: i16,
+) -> MatchExertionInputs {
+    use crate::club::player::events::PositionLoad;
+    let group = player.position().position_group();
+    MatchExertionInputs {
+        minutes,
+        starting_condition: start_cond,
+        final_match_energy: final_energy,
+        high_intensity_load_hint: PositionLoad::high_intensity_share(group),
+    }
+}
+
+#[test]
+fn full_90_competitive_drops_persisted_condition_into_expected_band() {
+    // 90-min outfield midfielder, average stamina/NF/age — should
+    // drop ~22-32 percentage points of persisted condition. This is
+    // the canonical "condition visibly drops in the UI" case from
+    // the acceptance criteria. The old behaviour kept the persisted
+    // condition near 90% because only minute-count was wired.
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    // Average stamina (10) / NF (10) — fresh_player has NF 14, override.
+    p.skills.physical.stamina = 10.0;
+    p.skills.physical.natural_fitness = 10.0;
+    let pre = p.player_attributes.condition;
+    // Player ran themselves into the engine floor: started 9500 →
+    // ended 3000. That's a fully-drained outfielder.
+    let inputs = make_snapshot(&p, 90.0, 9500, 3000);
+    p.on_match_exertion(inputs, d(2025, 9, 14), false);
+    let drop = pre - p.player_attributes.condition;
+    assert!(
+        (1800..=4000).contains(&(drop as i32)),
+        "competitive 90' drop = {} raw points; expected 1800-4000",
+        drop
+    );
+    // Sanity: the persisted condition didn't bottom out at the floor.
+    assert!(
+        p.player_attributes.condition >= 2500,
+        "competitive floor must be 2500 raw"
+    );
+}
+
+#[test]
+fn final_match_energy_snapshot_survives_substitutions_via_engine_path() {
+    // The substitution path captures the snapshot AT the swap minute
+    // before the outgoing player is replaced. A 60th-minute sub-off
+    // at 5500 must read "60 minutes, end at 5500" into
+    // on_match_exertion, NOT "60 minutes, end at fresh_player default".
+    let mut p = fresh_player(PlayerPositionType::ForwardLeft);
+    p.skills.physical.stamina = 10.0;
+    p.skills.physical.natural_fitness = 10.0;
+    let pre = p.player_attributes.condition;
+    // Started at 9500, was subbed off at 60' with 5500 in the tank.
+    let inputs = MatchExertionInputs {
+        minutes: 60.0,
+        starting_condition: 9500,
+        final_match_energy: 5500,
+        high_intensity_load_hint: 0.32,
+    };
+    p.on_match_exertion(inputs, d(2025, 9, 14), false);
+    let drop = pre - p.player_attributes.condition;
+    // 60 min + moderate energy span = visible drop but not the full
+    // 90' bill. Should be materially less than a 90' drained drop.
+    assert!(drop > 500, "60' drop too small: {}", drop);
+    assert!(drop < 2800, "60' drop too large: {}", drop);
+}
+
+#[test]
+fn keeper_90_drops_less_condition_than_wingback_90() {
+    // Position factor table: GK 0.45 vs WingbackLeft 1.18. Same
+    // depletion, same age, same stamina/NF — a keeper finishes a
+    // 90-min shift fresher.
+    let mut gk = fresh_player(PlayerPositionType::Goalkeeper);
+    let mut wb = fresh_player(PlayerPositionType::WingbackLeft);
+    gk.skills.physical.stamina = 10.0;
+    gk.skills.physical.natural_fitness = 10.0;
+    wb.skills.physical.stamina = 10.0;
+    wb.skills.physical.natural_fitness = 10.0;
+    let gk_pre = gk.player_attributes.condition;
+    let wb_pre = wb.player_attributes.condition;
+    let gk_inputs = make_snapshot(&gk, 90.0, 9500, 4000);
+    let wb_inputs = make_snapshot(&wb, 90.0, 9500, 4000);
+    gk.on_match_exertion(gk_inputs, d(2025, 9, 14), false);
+    wb.on_match_exertion(wb_inputs, d(2025, 9, 14), false);
+    let gk_drop = gk_pre - gk.player_attributes.condition;
+    let wb_drop = wb_pre - wb.player_attributes.condition;
+    assert!(
+        wb_drop > gk_drop + 300,
+        "wingback drop {} must be materially greater than keeper drop {}",
+        wb_drop,
+        gk_drop
+    );
+}
+
+#[test]
+fn friendly_90_drops_materially_less_than_competitive_90() {
+    // Spec: friendly drop ≈ 55% of competitive drop. Same player,
+    // same shift, same depletion — different friendly_mult.
+    let mut comp = fresh_player(PlayerPositionType::MidfielderCenter);
+    let mut frnd = fresh_player(PlayerPositionType::MidfielderCenter);
+    comp.skills.physical.stamina = 10.0;
+    comp.skills.physical.natural_fitness = 10.0;
+    frnd.skills.physical.stamina = 10.0;
+    frnd.skills.physical.natural_fitness = 10.0;
+    let comp_pre = comp.player_attributes.condition;
+    let frnd_pre = frnd.player_attributes.condition;
+    let inputs_c = make_snapshot(&comp, 90.0, 9500, 4000);
+    let inputs_f = make_snapshot(&frnd, 90.0, 9500, 4000);
+    comp.on_match_exertion(inputs_c, d(2025, 9, 14), false);
+    frnd.on_match_exertion(inputs_f, d(2025, 9, 14), true);
+    let comp_drop = comp_pre - comp.player_attributes.condition;
+    let frnd_drop = frnd_pre - frnd.player_attributes.condition;
+    // Friendly drop should be roughly 0.55× competitive (allow band
+    // 0.40..0.70 — depletion stays the same, only friendly_mult
+    // moves so the ratio is fairly tight).
+    let ratio = frnd_drop as f32 / comp_drop.max(1) as f32;
+    assert!(
+        (0.40..=0.70).contains(&ratio),
+        "friendly/competitive ratio {} outside expected 0.40..0.70 (drops f={} c={})",
+        ratio,
+        frnd_drop,
+        comp_drop
+    );
+}
+
+#[test]
+fn twenty_minute_substitute_has_small_condition_drop_and_readiness_gain() {
+    // Cameo subs barely dent the tank but DO rebuild match sharpness.
+    let mut p = fresh_player(PlayerPositionType::ForwardCenter);
+    p.skills.physical.stamina = 10.0;
+    p.skills.physical.natural_fitness = 10.0;
+    p.skills.physical.match_readiness = 10.0;
+    let pre_cond = p.player_attributes.condition;
+    let pre_sharp = p.skills.physical.match_readiness;
+    // Cameo: came on fresh, lost a little energy in 20 min.
+    let inputs = MatchExertionInputs {
+        minutes: 20.0,
+        starting_condition: 9500,
+        final_match_energy: 8000,
+        high_intensity_load_hint: 0.32,
+    };
+    p.on_match_exertion(inputs, d(2025, 9, 14), false);
+    let drop = pre_cond - p.player_attributes.condition;
+    assert!(
+        drop < 1100,
+        "20-min cameo drop too large: {} raw points",
+        drop
+    );
+    assert!(
+        p.skills.physical.match_readiness > pre_sharp,
+        "20-min cameo must build readiness: pre {} post {}",
+        pre_sharp,
+        p.skills.physical.match_readiness
+    );
+}
+
+#[test]
+fn ninety_minute_competitive_match_lifts_load_debt_jadedness_readiness() {
+    // After a real 90, every PlayerLoad signal moves: physical_load_7
+    // increases, recovery_debt is non-zero, jadedness rises,
+    // match_readiness moves upward.
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.skills.physical.stamina = 10.0;
+    p.skills.physical.natural_fitness = 10.0;
+    let pre_jad = p.player_attributes.jadedness;
+    let pre_sharp = p.skills.physical.match_readiness;
+    let inputs = make_snapshot(&p, 90.0, 9500, 3500);
+    p.on_match_exertion(inputs, d(2025, 9, 14), false);
+    assert!(p.load.physical_load_7 > 60.0, "physical_load_7 must climb");
+    assert!(
+        p.load.recovery_debt > 0.0,
+        "recovery_debt must accumulate"
+    );
+    assert!(
+        p.player_attributes.jadedness as i32 > pre_jad as i32 + 200,
+        "jadedness must climb meaningfully: pre={} post={}",
+        pre_jad,
+        p.player_attributes.jadedness
+    );
+    assert!(
+        p.skills.physical.match_readiness > pre_sharp,
+        "match_readiness must climb: pre={} post={}",
+        pre_sharp,
+        p.skills.physical.match_readiness
+    );
+    assert_eq!(p.player_attributes.days_since_last_match, 0);
+}
+
+#[test]
+fn three_matches_in_fourteen_days_increases_congestion_cost() {
+    // Congestion_mult kicks in after the third match in 14 days.
+    // Apples-to-apples: drive the pure `compute_condition_drop`
+    // helper with identical starting/final/age/stamina, varying only
+    // `matches_last_14`. The third match must drop materially more.
+    let drop_with = |matches_last_14: u8| -> f32 {
+        Player::compute_condition_drop(
+            &MatchExertionInputs {
+                minutes: 90.0,
+                starting_condition: 9500,
+                final_match_energy: 4000,
+                high_intensity_load_hint: 0.30,
+            },
+            1.05,
+            0.30,
+            10.0,
+            10.0,
+            25,
+            matches_last_14,
+            false,
+        )
+    };
+    let once_drop = drop_with(1);
+    let thrice_drop = drop_with(3);
+    assert!(
+        thrice_drop > once_drop * 1.05,
+        "congested 3rd-match drop {} should exceed once-only drop {} by 5%+",
+        thrice_drop,
+        once_drop
+    );
+}
+
+#[test]
+fn match_readiness_stays_in_zero_to_twenty_band_and_never_overshoots() {
+    // Defensive: match_readiness is on a 0..20 sharpness scale; the
+    // exertion path must clamp.
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.skills.physical.match_readiness = 19.5; // near the ceiling
+    let inputs = make_snapshot(&p, 90.0, 9500, 3500);
+    p.on_match_exertion(inputs, d(2025, 9, 14), false);
+    assert!(
+        p.skills.physical.match_readiness <= 20.0,
+        "match_readiness overshoot: {}",
+        p.skills.physical.match_readiness
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Training duration & condition-aware effects — exercises the new
+// `duration_mult` scaling, the jadedness-from-load formula, and the
+// recovery-debt model that now responds to player condition.
+// ════════════════════════════════════════════════════════════════════
+
+use crate::club::StaffStub;
+use crate::club::player::training::training::PlayerTraining;
+use crate::club::staff::staff::Staff;
+use crate::{TrainingIntensity, TrainingSession, TrainingType};
+use chrono::NaiveDateTime;
+
+fn make_test_coach() -> Staff {
+    let mut staff = StaffStub::default();
+    staff.id = 900;
+    staff.birth_date = d(1970, 1, 1);
+    staff
+}
+
+fn make_session(ty: TrainingType, duration: u16) -> TrainingSession {
+    TrainingSession {
+        session_type: ty,
+        intensity: TrainingIntensity::High,
+        duration_minutes: duration,
+        focus_positions: vec![],
+        participants: vec![],
+    }
+}
+
+#[test]
+fn ninety_minute_pressing_costs_more_than_forty_five_minute_pressing() {
+    // Duration scaling is the whole point of the new training model.
+    // A 90-min pressing drill must cost ~2× a 45-min one in
+    // fatigue and load.
+    let p = fresh_player(PlayerPositionType::MidfielderCenter);
+    let coach = make_test_coach();
+    let date = NaiveDateTime::new(d(2025, 9, 14), chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap());
+    let short = make_session(TrainingType::PressingDrills, 45);
+    let long = make_session(TrainingType::PressingDrills, 90);
+    let r_short = PlayerTraining::train(&p, &coach, &short, date, 0.5);
+    let r_long = PlayerTraining::train(&p, &coach, &long, date, 0.5);
+    assert!(
+        r_long.effects.fatigue_change > r_short.effects.fatigue_change * 1.5,
+        "90-min pressing fatigue {} must exceed 45-min pressing {} by 1.5+×",
+        r_long.effects.fatigue_change,
+        r_short.effects.fatigue_change
+    );
+    assert!(
+        r_long.effects.physical_load_units > r_short.effects.physical_load_units * 1.5,
+        "90-min pressing load {} must exceed 45-min load {} by 1.5+×",
+        r_long.effects.physical_load_units,
+        r_short.effects.physical_load_units
+    );
+}
+
+#[test]
+fn heavy_training_on_tired_player_accrues_more_debt_and_jadedness() {
+    // Same drill, two players: one fresh (condition 95%, debt 0),
+    // one tired (condition 50%, debt 0). The tired one must end
+    // the session with more recovery_debt AND more jadedness.
+    let mut fresh = fresh_player(PlayerPositionType::ForwardLeft);
+    let mut tired = fresh_player(PlayerPositionType::ForwardLeft);
+    tired.player_attributes.condition = 5000; // 50%
+    let coach = make_test_coach();
+    let date_t = NaiveDateTime::new(
+        d(2025, 9, 14),
+        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+    );
+    let session = make_session(TrainingType::PressingDrills, 60);
+    let r_fresh = PlayerTraining::train(&fresh, &coach, &session, date_t, 0.5);
+    let r_tired = PlayerTraining::train(&tired, &coach, &session, date_t, 0.5);
+    r_fresh.apply_to_player(&mut fresh, date_t.date());
+    r_tired.apply_to_player(&mut tired, date_t.date());
+    assert!(
+        tired.load.recovery_debt > fresh.load.recovery_debt,
+        "tired debt {} should exceed fresh debt {}",
+        tired.load.recovery_debt,
+        fresh.load.recovery_debt
+    );
+    // Jadedness gain is condition-aware too.
+    assert!(
+        tired.player_attributes.jadedness > fresh.player_attributes.jadedness,
+        "tired jadedness {} should exceed fresh jadedness {}",
+        tired.player_attributes.jadedness,
+        fresh.player_attributes.jadedness
+    );
+}
+
+#[test]
+fn recovery_session_restores_condition_but_caps_at_dynamic_normal() {
+    // A Recovery session run on a low-condition player must not be
+    // able to push them past the dynamic cap (88..95% based on NF).
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.player_attributes.condition = 5000; // 50%
+    p.skills.physical.natural_fitness = 20.0; // elite — cap at 9500.
+    let coach = make_test_coach();
+    let date_t = NaiveDateTime::new(
+        d(2025, 9, 14),
+        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+    );
+    // Run three recovery sessions back-to-back — even with massive
+    // negative fatigue_change, the cap must hold.
+    for _ in 0..3 {
+        let session = make_session(TrainingType::Recovery, 60);
+        let r = PlayerTraining::train(&p, &coach, &session, date_t, 1.0);
+        r.apply_to_player(&mut p, date_t.date());
+    }
+    assert!(
+        p.player_attributes.condition <= 9500,
+        "elite NF recovery cap blown: condition={}",
+        p.player_attributes.condition
+    );
+    assert!(
+        p.player_attributes.condition > 5000,
+        "recovery did not restore condition at all: {}",
+        p.player_attributes.condition
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Daily recovery + dynamic cap — checks the
+// `ConditionRecoveryModel` integrates into `process_condition_recovery`.
+// ════════════════════════════════════════════════════════════════════
+
+#[test]
+fn daily_recovery_caps_at_dynamic_normal_for_elite_natural_fitness() {
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.player_attributes.condition = 8800;
+    p.skills.physical.natural_fitness = 20.0;
+    p.player_attributes.days_since_last_match = 10;
+    // Recovery over 30 days — condition should sit at the dynamic
+    // cap (9500), never overshooting.
+    for i in 0..30 {
+        p.process_condition_recovery(d(2025, 11, 1) + chrono::Duration::days(i));
+    }
+    assert!(p.player_attributes.condition <= 9500);
+    assert!(p.player_attributes.condition >= 9000);
+}
+
+#[test]
+fn high_recovery_debt_throttles_daily_recovery() {
+    // Two identical players; only difference is recovery_debt. The
+    // one with heavy debt should recover slower per day.
+    let mut healthy = fresh_player(PlayerPositionType::MidfielderCenter);
+    let mut debted = fresh_player(PlayerPositionType::MidfielderCenter);
+    healthy.player_attributes.condition = 6000;
+    debted.player_attributes.condition = 6000;
+    healthy.load.recovery_debt = 0.0;
+    debted.load.recovery_debt = 1200.0;
+    healthy.player_attributes.days_since_last_match = 5;
+    debted.player_attributes.days_since_last_match = 5;
+    for _ in 0..3 {
+        healthy.process_condition_recovery(d(2025, 11, 14));
+        debted.process_condition_recovery(d(2025, 11, 14));
+    }
+    assert!(
+        healthy.player_attributes.condition > debted.player_attributes.condition,
+        "healthy {} should outpace debted {}",
+        healthy.player_attributes.condition,
+        debted.player_attributes.condition
+    );
+}
+
+#[test]
+fn natural_recovery_drains_some_debt_each_day() {
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.load.recovery_debt = 800.0;
+    p.player_attributes.days_since_last_match = 5;
+    let pre = p.load.recovery_debt;
+    p.process_condition_recovery(d(2025, 11, 14));
+    assert!(
+        p.load.recovery_debt < pre,
+        "natural debt drain didn't fire: pre={} post={}",
+        pre,
+        p.load.recovery_debt
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// `compute_condition_drop` pure unit — pins the formula curve
+// independently of the surrounding mutation pipeline.
+// ════════════════════════════════════════════════════════════════════
+
+#[test]
+fn compute_condition_drop_keeper_90_smaller_than_wingback_90() {
+    let kpr_drop = Player::compute_condition_drop(
+        &MatchExertionInputs {
+            minutes: 90.0,
+            starting_condition: 9500,
+            final_match_energy: 4000,
+            high_intensity_load_hint: 0.05,
+        },
+        0.45, // GK position factor
+        0.05, // GK HI share
+        10.0,
+        10.0,
+        25,
+        1,
+        false,
+    );
+    let wb_drop = Player::compute_condition_drop(
+        &MatchExertionInputs {
+            minutes: 90.0,
+            starting_condition: 9500,
+            final_match_energy: 4000,
+            high_intensity_load_hint: 0.20,
+        },
+        1.18, // wingback position factor
+        0.20, // defender group HI share
+        10.0,
+        10.0,
+        25,
+        1,
+        false,
+    );
+    assert!(
+        wb_drop > kpr_drop * 1.5,
+        "wb drop {} should be much greater than gk drop {}",
+        wb_drop,
+        kpr_drop
+    );
+}
+
+#[test]
+fn compute_condition_drop_friendly_is_about_55pct_of_competitive() {
+    let comp = Player::compute_condition_drop(
+        &MatchExertionInputs {
+            minutes: 90.0,
+            starting_condition: 9500,
+            final_match_energy: 4000,
+            high_intensity_load_hint: 0.30,
+        },
+        1.05,
+        0.30,
+        10.0,
+        10.0,
+        25,
+        1,
+        false,
+    );
+    let frnd = Player::compute_condition_drop(
+        &MatchExertionInputs {
+            minutes: 90.0,
+            starting_condition: 9500,
+            final_match_energy: 4000,
+            high_intensity_load_hint: 0.30,
+        },
+        1.05,
+        0.30,
+        10.0,
+        10.0,
+        25,
+        1,
+        true,
+    );
+    let ratio = frnd / comp;
+    // Allow a fairly tight band around the friendly_mult=0.55 spec.
+    assert!(
+        (0.50..=0.60).contains(&ratio),
+        "friendly/competitive ratio {} outside expected 0.50..0.60",
+        ratio
+    );
+}
+
+#[test]
+fn compute_condition_drop_short_cameo_is_small_share_of_ninety() {
+    let cameo = Player::compute_condition_drop(
+        &MatchExertionInputs {
+            minutes: 20.0,
+            starting_condition: 9500,
+            final_match_energy: 8000,
+            high_intensity_load_hint: 0.30,
+        },
+        1.05,
+        0.30,
+        10.0,
+        10.0,
+        25,
+        1,
+        false,
+    );
+    let full = Player::compute_condition_drop(
+        &MatchExertionInputs {
+            minutes: 90.0,
+            starting_condition: 9500,
+            final_match_energy: 4000,
+            high_intensity_load_hint: 0.30,
+        },
+        1.05,
+        0.30,
+        10.0,
+        10.0,
+        25,
+        1,
+        false,
+    );
+    // Cameo drop should be a small fraction (sub-linear in duration).
+    assert!(
+        cameo < full * 0.4,
+        "cameo {} should be much less than full {}",
+        cameo,
+        full
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Match exertion never heals — pins the "no immediate recovery from
+// the post-match floor" semantics. A player who walked onto the pitch
+// already below the competitive floor leaves it at, at most, the
+// condition they brought in. Overnight recovery belongs to the daily
+// rest path, not the exertion pass.
+// ════════════════════════════════════════════════════════════════════
+
+#[test]
+fn low_starting_condition_is_not_lifted_by_match_exertion() {
+    // Player walked on at 1500 (15%), well below the 2500 competitive
+    // floor. They will burn another small amount of energy in the
+    // match. The post-match persisted condition must NOT lift them
+    // back up to 2500 — the floor is a worst-case stabilization for
+    // players who STARTED above it, not a free overnight refill.
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.skills.physical.stamina = 10.0;
+    p.skills.physical.natural_fitness = 10.0;
+    p.player_attributes.condition = 1_500;
+    let inputs = MatchExertionInputs {
+        minutes: 20.0,
+        starting_condition: 1_500,
+        final_match_energy: 1_500,
+        high_intensity_load_hint: 0.30,
+    };
+    p.on_match_exertion(inputs, d(2025, 9, 14), false);
+    assert!(
+        p.player_attributes.condition <= 1_500,
+        "exertion must never heal: pre=1500 post={}",
+        p.player_attributes.condition
+    );
+}
+
+#[test]
+fn starting_above_floor_clamps_to_floor_not_below() {
+    // Sanity check: a player who DID start above the floor but ran
+    // themselves into the ground still floors at 2500, exactly as
+    // before the no-heal change.
+    let mut p = fresh_player(PlayerPositionType::ForwardLeft);
+    p.skills.physical.stamina = 5.0;
+    p.skills.physical.natural_fitness = 5.0;
+    p.player_attributes.condition = 9_500;
+    let inputs = MatchExertionInputs {
+        minutes: 120.0,
+        starting_condition: 9_500,
+        final_match_energy: 1_500,
+        high_intensity_load_hint: 0.40,
+    };
+    p.on_match_exertion(inputs, d(2025, 9, 14), false);
+    assert!(
+        p.player_attributes.condition >= 2_500,
+        "competitive floor must hold for above-floor starters: post={}",
+        p.player_attributes.condition
+    );
+}
+
+#[test]
+fn no_drop_when_zero_minutes_played() {
+    // Edge case: a cameo of < 1 min produces zero drop. The persisted
+    // condition must match the starting condition exactly (no clamp
+    // up to floor, no clamp down — exertion did nothing).
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.player_attributes.condition = 4_000;
+    let inputs = MatchExertionInputs {
+        minutes: 0.0,
+        starting_condition: 4_000,
+        final_match_energy: 4_000,
+        high_intensity_load_hint: 0.30,
+    };
+    p.on_match_exertion(inputs, d(2025, 9, 14), false);
+    assert_eq!(p.player_attributes.condition, 4_000);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Fitness adaptation — the smooth absorption replaces the old hard
+// cliffs. Strength sessions at HI = 0.15 must still build chronic
+// fitness; a heavy session must not block ITS OWN fitness gain by
+// booking debt before the absorption multiplier reads it.
+// ════════════════════════════════════════════════════════════════════
+
+#[test]
+fn current_session_debt_does_not_block_its_own_fitness_gain() {
+    // Pre-session debt is what gates fitness adaptation. A player
+    // who walked into the session just under the old 500-debt cliff
+    // and whose session ADDS enough to cross it must still bank the
+    // chronic-fitness gain — the body absorbed the stimulus based
+    // on the state it brought to the drill, not the bill it leaves
+    // with. Under the previous hard cliff, this exact case would
+    // post-read recovery_debt at >500 and drop the fitness gain to
+    // zero.
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.player_attributes.fitness = 7_000;
+    p.player_attributes.condition = 9_500;
+    // Walk in JUST under the legacy 500 cliff; the session itself
+    // will push debt past it.
+    p.load.recovery_debt = 490.0;
+    let pre_fitness = p.player_attributes.fitness;
+    let coach = make_test_coach();
+    let date_t = NaiveDateTime::new(
+        d(2025, 9, 14),
+        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+    );
+    let session = make_session(TrainingType::PressingDrills, 90);
+    let r = PlayerTraining::train(&p, &coach, &session, date_t, 0.5);
+    r.apply_to_player(&mut p, date_t.date());
+    assert!(
+        p.player_attributes.fitness > pre_fitness,
+        "current-session debt must not block its own fitness gain: pre={} post={} debt-after={}",
+        pre_fitness,
+        p.player_attributes.fitness,
+        p.load.recovery_debt
+    );
+    // And the debt did cross the legacy 500 cliff, demonstrating the
+    // exact case the old gate would have failed on.
+    assert!(
+        p.load.recovery_debt > 500.0,
+        "session should have pushed debt past 500 (legacy cliff): {}",
+        p.load.recovery_debt
+    );
+}
+
+#[test]
+fn strength_session_at_intensity_share_boundary_still_builds_fitness() {
+    // Spec: a strength session at exactly high_intensity_share 0.15
+    // used to fall on the wrong side of the old `> 0.15` cliff and
+    // bank zero chronic fitness. With the smooth absorption it must
+    // still bank something — strength training IS adaptive load.
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.player_attributes.fitness = 7_000;
+    let pre_fitness = p.player_attributes.fitness;
+    let coach = make_test_coach();
+    let date_t = NaiveDateTime::new(
+        d(2025, 9, 14),
+        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+    );
+    let session = make_session(TrainingType::Strength, 90);
+    let r = PlayerTraining::train(&p, &coach, &session, date_t, 0.5);
+    // Verify the boundary value the test relies on hasn't drifted.
+    assert!(
+        (r.effects.high_intensity_share - 0.15).abs() < 1e-4,
+        "test depends on strength share being exactly 0.15, got {}",
+        r.effects.high_intensity_share
+    );
+    r.apply_to_player(&mut p, date_t.date());
+    assert!(
+        p.player_attributes.fitness > pre_fitness,
+        "strength session at HI share 0.15 must still build fitness: pre={} post={}",
+        pre_fitness,
+        p.player_attributes.fitness
+    );
+}
+
+#[test]
+fn elevated_debt_attenuates_fitness_gain_but_does_not_zero_it() {
+    // Spec: smooth absorption — pre-session debt smoothly reduces the
+    // fitness gain, never cliff-drops it to zero. A player carrying
+    // 800 units of debt should still bank SOME chronic gain, just
+    // smaller than a fresh player would.
+    let mut fresh = fresh_player(PlayerPositionType::MidfielderCenter);
+    let mut tired = fresh_player(PlayerPositionType::MidfielderCenter);
+    fresh.player_attributes.fitness = 7_000;
+    tired.player_attributes.fitness = 7_000;
+    tired.load.recovery_debt = 800.0;
+    let coach = make_test_coach();
+    let date_t = NaiveDateTime::new(
+        d(2025, 9, 14),
+        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+    );
+    let session = make_session(TrainingType::PressingDrills, 60);
+    let r_fresh = PlayerTraining::train(&fresh, &coach, &session, date_t, 0.5);
+    let r_tired = PlayerTraining::train(&tired, &coach, &session, date_t, 0.5);
+    let fresh_pre_fitness = fresh.player_attributes.fitness;
+    let tired_pre_fitness = tired.player_attributes.fitness;
+    r_fresh.apply_to_player(&mut fresh, date_t.date());
+    r_tired.apply_to_player(&mut tired, date_t.date());
+    let fresh_gain = fresh.player_attributes.fitness - fresh_pre_fitness;
+    let tired_gain = tired.player_attributes.fitness - tired_pre_fitness;
+    assert!(fresh_gain > 0, "fresh fitness must grow: {}", fresh_gain);
+    assert!(
+        tired_gain > 0,
+        "tired-but-non-floor must still grow: {}",
+        tired_gain
+    );
+    assert!(
+        tired_gain < fresh_gain,
+        "tired gain {} must be smaller than fresh gain {}",
+        tired_gain,
+        fresh_gain
+    );
+}
+
+#[test]
+fn very_low_condition_blocks_fitness_gain_entirely() {
+    // The hard floor still exists at pre_condition_pct < 45 — training
+    // on fumes does not certify as adaptive load. The session still
+    // books debt + jadedness; only the chronic gain is denied.
+    let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+    p.player_attributes.fitness = 7_000;
+    p.player_attributes.condition = 4_000; // 40% — below the 45 floor.
+    let pre_fitness = p.player_attributes.fitness;
+    let coach = make_test_coach();
+    let date_t = NaiveDateTime::new(
+        d(2025, 9, 14),
+        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+    );
+    let session = make_session(TrainingType::PressingDrills, 60);
+    let r = PlayerTraining::train(&p, &coach, &session, date_t, 0.5);
+    r.apply_to_player(&mut p, date_t.date());
+    assert_eq!(
+        p.player_attributes.fitness, pre_fitness,
+        "training on fumes must not bank a chronic fitness gain"
+    );
+    // And the session DID still book debt (the cost lands).
+    assert!(p.load.recovery_debt > 0.0);
+}
+
+#[test]
+fn smooth_absorption_responds_to_pre_session_condition_continuously() {
+    // The condition absorption multiplier is smooth: a player at 60%
+    // gains less than one at 90% but more than one at 50%. Pin the
+    // ordering — there must be no plateau in the middle.
+    let coach = make_test_coach();
+    let date_t = NaiveDateTime::new(
+        d(2025, 9, 14),
+        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+    );
+    let session = make_session(TrainingType::PressingDrills, 60);
+
+    let gain_at = |start_cond: i16| -> i16 {
+        let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+        p.player_attributes.fitness = 7_000;
+        p.player_attributes.condition = start_cond;
+        let pre = p.player_attributes.fitness;
+        let r = PlayerTraining::train(&p, &coach, &session, date_t, 0.5);
+        r.apply_to_player(&mut p, date_t.date());
+        p.player_attributes.fitness - pre
+    };
+    let high = gain_at(9_000);
+    let mid = gain_at(7_000);
+    let low = gain_at(5_000);
+    assert!(high > mid, "9000 gain {} should beat 7000 gain {}", high, mid);
+    assert!(mid > low, "7000 gain {} should beat 5000 gain {}", mid, low);
+    assert!(low > 0, "5000 should still bank some gain: {}", low);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Snapshot-derived high-intensity hint — exercises the new
+// behaviour-aware blend in `MatchPlayer::to_physical_snapshot`.
+// ════════════════════════════════════════════════════════════════════
+
+#[test]
+fn snapshot_hint_rises_with_observed_pressure_volume() {
+    use crate::r#match::engine::player::statistics::MatchPlayerStatistics;
+    use crate::r#match::engine::player::player::MatchPlayer;
+    // Two fictitious midfielders: same position default (0.30), but
+    // one logged a busy match (pressures + tackles + dribbles), the
+    // other sat in. The derived hint for the active one must be
+    // higher than the position default; the passive one must stay
+    // at or below the default.
+    let mut quiet = MatchPlayerStatistics::new();
+    let mut busy = MatchPlayerStatistics::new();
+    busy.pressures = 40;
+    busy.tackles = 8;
+    busy.successful_dribbles = 6;
+    busy.crosses_attempted = 4;
+    busy.progressive_carries = 10;
+
+    let position_default = 0.30;
+    let minutes_played = 90.0;
+    let quiet_hint =
+        MatchPlayer::derive_high_intensity_hint(position_default, &quiet, minutes_played);
+    let busy_hint =
+        MatchPlayer::derive_high_intensity_hint(position_default, &busy, minutes_played);
+    assert!(
+        busy_hint > position_default,
+        "busy player hint {} should exceed position default {}",
+        busy_hint,
+        position_default
+    );
+    assert!(
+        quiet_hint <= position_default,
+        "quiet player hint {} should not exceed default {}",
+        quiet_hint,
+        position_default
+    );
+    // Hint must stay in [0.02, 1.0] no matter how extreme the inputs.
+    assert!(busy_hint <= 1.0);
+    assert!(quiet_hint >= 0.02);
+}
+
+#[test]
+fn snapshot_hint_zero_minutes_returns_position_default() {
+    use crate::r#match::engine::player::statistics::MatchPlayerStatistics;
+    use crate::r#match::engine::player::player::MatchPlayer;
+    // A player with 0 minutes (subbed off at kickoff for an injury,
+    // say) returns the position default exactly — no per-minute
+    // division by something near zero.
+    let stats = MatchPlayerStatistics::new();
+    let hint = MatchPlayer::derive_high_intensity_hint(0.30, &stats, 0.0);
+    assert_eq!(hint, 0.30);
 }
