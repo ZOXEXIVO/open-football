@@ -326,7 +326,7 @@ pub async fn player_history_action(
                     &neighbor_refs,
                     &team.slug,
                     &league_refs,
-                    team.team_type == core::TeamType::Main,
+                    false,
                 )
             },
             i18n,

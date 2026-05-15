@@ -254,7 +254,7 @@ pub async fn staff_get_action(
                 &neighbor_refs,
                 &team.slug,
                 &league_refs,
-                team.team_type == core::TeamType::Main,
+                true,
             )
         },
         i18n,

@@ -270,7 +270,7 @@ pub fn team_menu(
     neighbor_teams: &[(&str, &str)],
     team_slug: &str,
     leagues: &[(&str, &str)],
-    is_main_team: bool,
+    show_staff_link: bool,
 ) -> Vec<MenuSection> {
     let mut sections = p.home_and_country_sections();
 
@@ -310,64 +310,16 @@ pub fn team_menu(
         ));
     }
 
-    let staff_url = format!("/{}/teams/{}/staff", p.lang, team_slug);
+    if show_staff_link {
+        let staff_url = format!("/{}/teams/{}/staff", p.lang, team_slug);
 
-    sections.push(MenuSection::plain(vec![MenuItem {
-        active: p.current_path == staff_url,
-        title: p.i18n.t("staff").to_string(),
-        url: staff_url,
-        icon: "fa-id-badge".to_string(),
-    }]));
-
-    let tactics_url = format!("/{}/teams/{}/tactics", p.lang, team_slug);
-    let schedule_url = format!("/{}/teams/{}/schedule", p.lang, team_slug);
-    let transfers_url = format!("/{}/teams/{}/transfers", p.lang, team_slug);
-
-    let mut items = vec![MenuItem {
-        active: p.current_path == tactics_url,
-        title: p.i18n.t("tactics").to_string(),
-        url: tactics_url,
-        icon: "fa-chess".to_string(),
-    }];
-
-    if is_main_team {
-        let finances_url = format!("/{}/teams/{}/finances", p.lang, team_slug);
-        let scouting_url = format!("/{}/teams/{}/scouting", p.lang, team_slug);
-        let academy_url = format!("/{}/teams/{}/academy", p.lang, team_slug);
-        items.push(MenuItem {
-            active: p.current_path == finances_url,
-            title: p.i18n.t("finances").to_string(),
-            url: finances_url,
-            icon: "fa-coins".to_string(),
-        });
-        items.push(MenuItem {
-            active: p.current_path == scouting_url,
-            title: p.i18n.t("scouting").to_string(),
-            url: scouting_url,
-            icon: "fa-binoculars".to_string(),
-        });
-        items.push(MenuItem {
-            active: p.current_path == academy_url,
-            title: p.i18n.t("academy").to_string(),
-            url: academy_url,
-            icon: "fa-graduation-cap".to_string(),
-        });
+        sections.push(MenuSection::plain(vec![MenuItem {
+            active: p.current_path == staff_url,
+            title: p.i18n.t("staff").to_string(),
+            url: staff_url,
+            icon: "fa-id-badge".to_string(),
+        }]));
     }
-
-    items.push(MenuItem {
-        active: p.current_path == schedule_url,
-        title: p.i18n.t("schedule").to_string(),
-        url: schedule_url,
-        icon: "fa-calendar".to_string(),
-    });
-    items.push(MenuItem {
-        active: p.current_path == transfers_url,
-        title: p.i18n.t("transfers").to_string(),
-        url: transfers_url,
-        icon: "fa-exchange".to_string(),
-    });
-
-    sections.push(MenuSection::plain(items));
 
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
     sections.push(source_code_section());

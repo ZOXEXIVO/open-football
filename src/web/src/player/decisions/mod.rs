@@ -183,7 +183,7 @@ pub async fn player_decisions_action(
                 &neighbor_refs,
                 &team.slug,
                 &league_refs,
-                team.team_type == core::TeamType::Main,
+                false,
             )
         } else {
             Vec::new()

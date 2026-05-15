@@ -231,7 +231,7 @@ pub async fn team_staff_action(
         &neighbor_refs,
         &team.slug,
         &league_refs,
-        team.team_type == core::TeamType::Main,
+        true,
     );
 
     let title = team.name.clone();

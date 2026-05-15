@@ -295,7 +295,7 @@ pub async fn team_get_action(
         &neighbor_refs,
         &team.slug,
         &league_refs,
-        team.team_type == core::TeamType::Main,
+        true,
     );
     let title = team.name.clone();
 
