@@ -9,7 +9,6 @@ use crate::ai::PendingAiRequest;
 use crate::country::result::transfers::DeferredTransferOps;
 use crate::league::LeagueResult;
 use crate::league::result::DeferredGlobalOps;
-use crate::performance::{ResultProcBreakdown, ResultProcSubphase};
 use crate::r#match::MatchResult;
 use crate::simulator::SimulatorData;
 use crate::{ClubResult, SimulationResult};
@@ -61,7 +60,6 @@ impl CountryResult {
     pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
         let current_date = data.date.date();
         let country_id = self.get_country_id(data);
-        let breakdown = ResultProcBreakdown::instance();
 
         // Country-local subphases (media coverage, country reputation,
         // end-of-period, international competitions, economic factors,
@@ -77,34 +75,31 @@ impl CountryResult {
         // (UI, match storage) see them.
         let any_new_season = self.leagues.iter().any(|l| l.new_season_started);
 
-        {
-            let _g = breakdown.scope(ResultProcSubphase::LeagueProcess);
-            for (_lid, match_results) in self.processed_match_results {
-                for mr in match_results {
-                    result.match_results.push(mr);
-                }
+        for (_lid, match_results) in self.processed_match_results {
+            for mr in match_results {
+                result.match_results.push(mr);
             }
-            // Apply deferred global ops emitted by Phase A. Currently
-            // these are sacked staff awaiting admittance to the global
-            // free-agent pool and pending manager appointments —
-            // populated by ClubResult's board path. Until that path is
-            // also routed through CountryProcessCtx, this drain is a
-            // no-op; left in place so the Phase-A ↔ Phase-C handshake
-            // is wired end-to-end.
-            for staff in self.deferred_global_ops.free_agent_staff {
-                crate::club::staff::free_pool::admit_to_pool(
-                    &mut data.free_agent_staff,
-                    staff,
-                    current_date,
-                );
-            }
-            for club_id in self.deferred_global_ops.pending_appointments {
-                crate::club::board::manager_market::ManagerMarketTick::execute_appointment(
-                    data,
-                    club_id,
-                    current_date,
-                );
-            }
+        }
+        // Apply deferred global ops emitted by Phase A. Currently
+        // these are sacked staff awaiting admittance to the global
+        // free-agent pool and pending manager appointments —
+        // populated by ClubResult's board path. Until that path is
+        // also routed through CountryProcessCtx, this drain is a
+        // no-op; left in place so the Phase-A ↔ Phase-C handshake
+        // is wired end-to-end.
+        for staff in self.deferred_global_ops.free_agent_staff {
+            crate::club::staff::free_pool::admit_to_pool(
+                &mut data.free_agent_staff,
+                staff,
+                current_date,
+            );
+        }
+        for club_id in self.deferred_global_ops.pending_appointments {
+            crate::club::board::manager_market::ManagerMarketTick::execute_appointment(
+                data,
+                club_id,
+                current_date,
+            );
         }
 
         // Snapshot BEFORE loan returns: this ensures cross-country loan players
@@ -113,14 +108,8 @@ impl CountryResult {
         // Loan returns then move the player back — if both clubs are in the same
         // country, the snapshot already captured the loan entry correctly.
         if any_new_season {
-            {
-                let _g = breakdown.scope(ResultProcSubphase::SnapshotSeasonStats);
-                Self::snapshot_player_season_statistics(data, self.country_id);
-            }
-            {
-                let _g = breakdown.scope(ResultProcSubphase::LoanReturns);
-                Self::process_loan_returns(data, country_id, current_date);
-            }
+            Self::snapshot_player_season_statistics(data, self.country_id);
+            Self::process_loan_returns(data, country_id, current_date);
             // Retirement already runs inside process_end_of_period above,
             // via Self::process_player_retirements when the season ends.
 
@@ -129,10 +118,7 @@ impl CountryResult {
             // omitted players receive the SquadRegistrationOmitted
             // happiness event. Runs once on the season-start tick so
             // the registration is stable for the rest of the campaign.
-            {
-                let _g = breakdown.scope(ResultProcSubphase::SquadRegistration);
-                Self::enforce_squad_registration(data, self.country_id, current_date);
-            }
+            Self::enforce_squad_registration(data, self.country_id, current_date);
         }
 
         // Phase 2: Club result processing was driven from
@@ -143,7 +129,6 @@ impl CountryResult {
 
         // Regular loan return check for non-season-end days
         if !any_new_season {
-            let _g = breakdown.scope(ResultProcSubphase::LoanReturns);
             Self::process_loan_returns(data, country_id, current_date);
         }
 
@@ -161,7 +146,6 @@ impl CountryResult {
         // mutate `data.free_agents`, execute deferred transfers,
         // kickoff foreign negotiations.
         if let Some(ops) = self.deferred_transfer_ops {
-            let _g = breakdown.scope(ResultProcSubphase::TransferMarket);
             Self::apply_deferred_transfer_ops(data, ops, current_date);
         }
     }

@@ -18,9 +18,7 @@ use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::ContinentResult;
 use crate::continent::national::world as national_world;
 use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
-use crate::performance::{
-    PerfCounters, PerfPhase, ResultProcBreakdown, ResultProcSubphase, TickEndContext,
-};
+use crate::performance::{PerfCounters, PerfPhase, TickEndContext};
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use awards::{
     MondayAwardCache, MonthlyAwardsTick, SeasonAwardsTick, TeamOfTheWeekTick, TeamOfTheYearTick,
@@ -68,14 +66,7 @@ impl FootballSimulator {
         config: &SimulatorConfig,
     ) -> SimulationResult {
         let perf = PerfCounters::instance();
-        let breakdown = ResultProcBreakdown::instance();
         perf.begin_tick();
-        // Per-tick scratch for the Phase C / Cleanup subphase breakdown.
-        // The aggregate parent counter (`PerfPhase::ResultProcessing`)
-        // already brackets the whole serial loop; this breakdown lets
-        // the dashboard / logs attribute time to specific functions
-        // inside it so we can refactor the hot one with confidence.
-        breakdown.reset();
 
         let mut result = SimulationResult::new();
 
@@ -144,18 +135,14 @@ impl FootballSimulator {
         // `par_iter_mut`. Different fields ⇒ split borrow ⇒ safe.
         let world_date = data.date;
         let pool_date = data.date.date();
-        let world_pool: Vec<PlayerSummary> = {
-            let _g = breakdown.scope(ResultProcSubphase::WorldSnapshots);
-            data.continents
-                .iter()
-                .flat_map(|cont| &cont.countries)
-                .flat_map(|c| PipelineProcessor::collect_player_pool(c, pool_date))
-                .collect()
-        };
-        let global_fa_snapshot: Vec<GlobalFreeAgentSummary> = {
-            let _g = breakdown.scope(ResultProcSubphase::WorldSnapshots);
-            snapshot_global_free_agents(data, pool_date)
-        };
+        let world_pool: Vec<PlayerSummary> = data
+            .continents
+            .iter()
+            .flat_map(|cont| &cont.countries)
+            .flat_map(|c| PipelineProcessor::collect_player_pool(c, pool_date))
+            .collect();
+        let global_fa_snapshot: Vec<GlobalFreeAgentSummary> =
+            snapshot_global_free_agents(data, pool_date);
         let world_country_info = &data.country_info;
         let world_indexes = data.indexes.as_ref();
         let world = crate::league::result::WorldSnapshot {
@@ -344,29 +331,6 @@ impl FootballSimulator {
             panicked_continents: result.panicked_continents,
             recording_mode: crate::is_match_recordings_mode(),
         });
-
-        // Log the per-subphase breakdown of Phase C work. One line per
-        // tick at info!, sorted by elapsed time descending so the hot
-        // function shows first. Diagnostic only — drop or gate behind a
-        // setting once the refactor is done.
-        let mut rows = breakdown.snapshot();
-        let total_ns: u64 = rows.iter().map(|(_, ns)| *ns).sum();
-        if total_ns > 0 {
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
-            let parts: Vec<String> = rows
-                .iter()
-                .filter(|(_, ns)| *ns > 0)
-                .map(|(name, ns)| {
-                    let pct = (*ns as f64) * 100.0 / (total_ns as f64);
-                    format!("{}={:.1}ms({:.1}%)", name, (*ns as f64) / 1.0e6, pct)
-                })
-                .collect();
-            log::info!(
-                "phase_c_breakdown total={:.1}ms {}",
-                (total_ns as f64) / 1.0e6,
-                parts.join(" ")
-            );
-        }
 
         result
     }
