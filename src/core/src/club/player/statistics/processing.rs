@@ -39,7 +39,28 @@ impl Player {
         to_senior: bool,
         date: NaiveDate,
     ) {
-        let stats = std::mem::take(&mut self.statistics);
+        // Only drain `player.statistics` when leaving a SENIOR team
+        // (Main / B / Second) — those games belong to the FROM spell
+        // and `record_intra_club_move`'s `from_senior` branch needs
+        // them to close the row.
+        //
+        // For non-senior moves (any move out of Reserve / U18..U23),
+        // `player.statistics` holds *senior callup* games the youth
+        // player earned while rostered on the non-senior squad. The
+        // history layer aliases those rows to Main, but
+        // `record_intra_club_move` would discard them today because
+        // its `from_senior=false` branch is a no-op. Leave them in
+        // place so the next season-end drain (`on_season_end` after
+        // a promotion, `on_non_senior_season_end` for lateral youth
+        // moves) routes them into the player's Main alias row
+        // correctly. Without this guard, a U21 player called up to
+        // play five Main games and then promoted mid-season loses
+        // all five from career history.
+        let stats = if from_senior {
+            std::mem::take(&mut self.statistics)
+        } else {
+            crate::PlayerStatistics::default()
+        };
         self.statistics_history.record_intra_club_move(
             stats,
             from,
@@ -2236,6 +2257,106 @@ mod tests {
         assert!(
             napoli_entry.is_some(),
             "Napoli entry with 12M fee must survive the duplicate season guard.\n{desc}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // U21 → Main promotion preserves senior-callup stats end-to-end
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn u21_promoted_midseason_keeps_callup_games_in_career_history() {
+        // Real-game scenario: a U21 player gets called up for five
+        // Main-team matches early in the season (those games land in
+        // `player.statistics` because the Main league is non-friendly).
+        // Squad rebalance later promotes them to Main. Before the
+        // `on_intra_club_move` fix, the mid-season promotion drained
+        // `player.statistics` and discarded the games entirely — at
+        // season end the Main row showed 0 apps even though the player
+        // really did play five times.
+        let mut player = make_player();
+
+        let main = make_team("Spartak Moscow", "spartak");
+        let u21 = make_team("Spartak U21", "spartak-u21");
+
+        // Player seeded under the Main alias because they started on U21.
+        player
+            .statistics_history
+            .seed_initial_team(&main, make_date(2025, 8, 1), false);
+
+        // Five senior callup games while rostered on U21.
+        player.statistics = make_stats(5, 2);
+
+        // Mid-season promotion U21 → Main.
+        player.on_intra_club_move(&u21, &main, false, true, make_date(2025, 11, 15));
+
+        // The callup games must NOT have been wiped from
+        // player.statistics — the next senior season-end is what
+        // turns them into a frozen Main row.
+        assert_eq!(
+            player.statistics.played, 5,
+            "U21 → Main promotion must not drain senior callup stats"
+        );
+        assert_eq!(player.statistics.goals, 2);
+
+        // Player plays another 12 Main-team games before season ends.
+        player.statistics.played += 12;
+        player.statistics.goals += 4;
+
+        player.on_season_end(Season::new(2025), &main, make_date(2026, 8, 1));
+
+        let main_row = player
+            .statistics_history
+            .items
+            .iter()
+            .find(|i| i.season.start_year == 2025 && i.team_slug == "spartak")
+            .expect("Main row must exist after season end");
+        assert_eq!(
+            main_row.statistics.played, 17,
+            "Main row must carry both pre-promotion callups and post-promotion games"
+        );
+        assert_eq!(main_row.statistics.goals, 6);
+    }
+
+    #[test]
+    fn lateral_youth_move_keeps_callup_games_for_next_snapshot() {
+        // U18 → U19 lateral move shouldn't touch career history
+        // (both teams alias to Main), AND shouldn't drain the
+        // player's accumulated senior callup stats. The next
+        // non-senior season-end is responsible for routing them to
+        // the Main alias row.
+        let mut player = make_player();
+        let main = make_team("Spartak Moscow", "spartak");
+        let u18 = make_team("Spartak U18", "spartak-u18");
+        let u19 = make_team("Spartak U19", "spartak-u19");
+
+        player
+            .statistics_history
+            .seed_initial_team(&main, make_date(2025, 8, 1), false);
+
+        // 3 senior callup games accrued while on U18.
+        player.statistics = make_stats(3, 1);
+
+        // Mid-season birthday → squad rebalance moves player U18 → U19.
+        player.on_intra_club_move(&u18, &u19, false, false, make_date(2026, 1, 10));
+
+        // Stats stay on player.statistics — neither side of the
+        // intra-club move wrote anything to history, and we did not
+        // discard the games.
+        assert_eq!(player.statistics.played, 3, "lateral youth move must not drain stats");
+
+        // No youth slugs in current — only the Main alias.
+        let non_main: Vec<&str> = player
+            .statistics_history
+            .current
+            .iter()
+            .map(|e| e.team_slug.as_str())
+            .filter(|s| *s != "spartak")
+            .collect();
+        assert!(
+            non_main.is_empty(),
+            "no youth slug must leak into current history (got: {:?})",
+            non_main
         );
     }
 }

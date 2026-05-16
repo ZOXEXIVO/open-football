@@ -447,6 +447,185 @@ impl PlayerStatisticsHistory {
         self.push_new_entry(to, PlayerStatistics::default(), true, Some(0.0), date);
     }
 
+    /// Drain any `current` entry whose `joined_date` season is earlier
+    /// than the season we're about to close, pushing each under its
+    /// OWN season label rather than letting it leak into the current
+    /// season's drain. This recovers from missed snapshots — without
+    /// it, a re-seed left over from a year whose snapshot never fired
+    /// would silently collapse into the next season-end row.
+    ///
+    /// After flushing the entries, fill any gap years between the most
+    /// recently flushed season and `target_season_start - 1` with an
+    /// empty placeholder row for `fallback_team`. Aliased youth squads
+    /// (U18..U23, Reserve) always carry the parent-club Main identity,
+    /// so the gap-fill correctly continues the "career home" thread
+    /// for a player who quietly spent multiple missed seasons in a
+    /// non-owning team.
+    fn flush_prior_season_seeds(
+        &mut self,
+        target_season_start: u16,
+        fallback_team: &TeamInfo,
+        fallback_is_loan: bool,
+    ) {
+        // Only consider entries that are *empty* re-seed leftovers — no
+        // games, no fee, not yet departed. Mid-season actions
+        // (`record_loan_return`, `record_intra_club_move`, etc.) can
+        // legitimately create entries whose `joined_date` falls in an
+        // earlier *calendar* season window (e.g. a loan return in June
+        // sits in the season-ending-May window per `Season::from_date`)
+        // even though their stats belong to the season we're now
+        // closing. Flushing those would lose data — exactly the
+        // regression the `lifecycle_two_consecutive_loans_no_phantom`
+        // test guards against.
+        let mut stale: Vec<CurrentSeasonEntry> = Vec::new();
+        self.current.retain(|e| {
+            let entry_year = Season::from_date(e.joined_date).start_year;
+            let is_empty_seed = e.statistics.total_games() == 0
+                && e.transfer_fee.is_none()
+                && e.departed_date.is_none();
+            if entry_year < target_season_start && is_empty_seed {
+                stale.push(e.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if stale.is_empty() {
+            return;
+        }
+
+        let is_first_season = self.items.is_empty();
+        let first_seq = stale.iter().map(|e| e.seq_id).min();
+
+        // Track the latest season the player demonstrably stayed at a
+        // non-loan club; used to fill gap years for an unbroken career
+        // thread (U18/U21 alias case). Initialised from frozen items
+        // so a missed-snapshot recovery picks up where the last
+        // recorded season left off.
+        let mut last_thread_year: Option<u16> = self
+            .items
+            .iter()
+            .filter(|i| !i.is_loan && i.team_slug == fallback_team.slug)
+            .map(|i| i.season.start_year)
+            .max();
+
+        for entry in stale {
+            let entry_season = Season::from_date(entry.joined_date);
+            let entry_year = entry_season.start_year;
+
+            // Already-frozen for this season? Merge stats/fee instead
+            // of re-pushing — same-season duplicates are collapsed by
+            // merge_same_season_team_items downstream, but we'd rather
+            // not create the duplicate at all when avoidable.
+            let already_frozen = self.items.iter().any(|i| {
+                i.season.start_year == entry_year
+                    && i.team_slug == entry.team_slug
+                    && i.is_loan == entry.is_loan
+            });
+
+            let games = entry.statistics.total_games();
+            let has_fee = entry.transfer_fee.is_some();
+            let is_initial_record = is_first_season && first_seq == Some(entry.seq_id);
+            let stale_loan_seed = entry.is_loan && games == 0 && !has_fee;
+
+            let season_end = entry_season.end_date();
+            let end_date = entry.departed_date.unwrap_or(season_end);
+            let days_at_club = (end_date - entry.joined_date).num_days().max(0);
+            let season_days = (season_end - entry_season.start_date()).num_days().max(1);
+            let time_pct = (days_at_club as f64 / season_days as f64) * 100.0;
+            let trivial_stint = games == 0 && !has_fee && time_pct < 45.0;
+
+            let keep = is_initial_record || (!stale_loan_seed && !trivial_stint);
+            if !keep {
+                continue;
+            }
+
+            if already_frozen {
+                if games > 0 {
+                    if let Some(existing) = self.items.iter_mut().rev().find(|i| {
+                        i.season.start_year == entry_year
+                            && i.team_slug == entry.team_slug
+                            && i.is_loan == entry.is_loan
+                    }) {
+                        let mut remaining = entry.statistics.clone();
+                        remaining.played += remaining.played_subs;
+                        remaining.played_subs = 0;
+                        existing.statistics.merge_from(&remaining);
+                    }
+                }
+                if entry.transfer_fee.is_some() {
+                    if let Some(existing) = self.items.iter_mut().rev().find(|i| {
+                        i.season.start_year == entry_year
+                            && i.team_slug == entry.team_slug
+                            && i.is_loan == entry.is_loan
+                            && i.transfer_fee.is_none()
+                    }) {
+                        existing.transfer_fee = entry.transfer_fee;
+                    }
+                }
+            } else {
+                let mut stats = entry.statistics.clone();
+                stats.played += stats.played_subs;
+                stats.played_subs = 0;
+                self.items.push(PlayerStatisticsHistoryItem {
+                    season: entry_season,
+                    team_name: entry.team_name.clone(),
+                    team_slug: entry.team_slug.clone(),
+                    team_reputation: entry.team_reputation,
+                    league_name: entry.league_name.clone(),
+                    league_slug: entry.league_slug.clone(),
+                    is_loan: entry.is_loan,
+                    transfer_fee: entry.transfer_fee,
+                    statistics: stats,
+                    seq_id: entry.seq_id,
+                });
+            }
+
+            // Only non-loan rows continue the "career home" thread. A
+            // loan spell sits alongside the parent-club row; it
+            // doesn't replace the parent club for gap-fill purposes.
+            if !entry.is_loan {
+                last_thread_year = Some(
+                    last_thread_year
+                        .map(|y| y.max(entry_year))
+                        .unwrap_or(entry_year),
+                );
+            }
+        }
+
+        // Gap-fill: insert an empty placeholder row for every year
+        // between (last_thread_year + 1) and (target_season_start - 1)
+        // that has no non-loan row yet. Uses `fallback_team` so the
+        // U18/U21 alias's parent-club Main identity continues
+        // uninterrupted. Skip the fill entirely when there's no prior
+        // thread year (first-time seed; the regular drain handles it).
+        if let Some(start) = last_thread_year {
+            let fill_from = start.saturating_add(1);
+            for year in fill_from..target_season_start {
+                let already_present = self
+                    .items
+                    .iter()
+                    .any(|i| i.season.start_year == year && !i.is_loan);
+                if already_present {
+                    continue;
+                }
+                let seq = self.next_seq();
+                self.items.push(PlayerStatisticsHistoryItem {
+                    season: Season::new(year),
+                    team_name: fallback_team.name.clone(),
+                    team_slug: fallback_team.slug.clone(),
+                    team_reputation: fallback_team.reputation,
+                    league_name: fallback_team.league_name.clone(),
+                    league_slug: fallback_team.league_slug.clone(),
+                    is_loan: fallback_is_loan,
+                    transfer_fee: None,
+                    statistics: PlayerStatistics::default(),
+                    seq_id: seq,
+                });
+            }
+        }
+    }
+
     // ── Season end: drain current → frozen items, then seed new season ──
 
     pub fn record_season_end(
@@ -457,6 +636,22 @@ impl PlayerStatisticsHistory {
         is_loan: bool,
         last_transfer_date: Option<NaiveDate>,
     ) {
+        // Robustness: drain any *stale* seed entries — entries whose
+        // `joined_date` falls in a season earlier than the one we're
+        // closing now. They appear when a previous season-end snapshot
+        // was skipped (e.g. a multi-league country where every league
+        // briefly fails the `new_season_started` gate, a regen failure,
+        // or simply a date computation that resolves the wrong
+        // `ended_season`). Without this flush, the next-year drain
+        // re-stamps the leftover seed under the current season label
+        // and the missed year vanishes — exactly the user-reported
+        // "missing 2026/27" pattern. For a U18/U21 player aliased to
+        // their parent club's Main team, the gap-fill below also
+        // inserts an empty Main row for each year that was skipped, so
+        // the career table always has one row per season the player
+        // existed at the club.
+        self.flush_prior_season_seeds(season.start_year, team, is_loan);
+
         // Guard: if this season was already frozen (multi-league country where
         // different leagues start new seasons on different dates, or cross-country
         // loan where both countries snapshot the same player), avoid duplicates.
@@ -1515,6 +1710,209 @@ mod club_career_apps_tests {
             .find(|i| i.season.start_year == 2026 && i.team_slug == "spartak")
             .expect("2026/27 Main row must survive");
         assert_eq!(row_2026.statistics.played, 0);
+    }
+
+    #[test]
+    fn skipped_season_snapshot_does_not_collapse_rows() {
+        // Repro hypothesis for the user's "missing 2026/27" report:
+        // the regular season-end snapshot for 2026/27 doesn't fire
+        // (e.g. because the country's leagues happened to have no rows
+        // with played > 0 on the schedule-regen day, or some other gate
+        // dropped `new_season_started` for the year). The next year's
+        // snapshot then drains the seed entry that was meant for
+        // 2026/27 and stamps it under 2027/28's label, leaving the
+        // career table missing the middle season entirely.
+        let mut hist = PlayerStatisticsHistory::new();
+        let main = season_team("spartak");
+        hist.seed_initial_team(&main, d(2025, 8, 1), false);
+
+        // 2025/26 ended normally.
+        hist.record_season_end(
+            Season::new(2025),
+            PlayerStatistics::default(),
+            &main,
+            false,
+            None,
+        );
+        // 2026/27: NO snapshot fires (skipped year).
+        // 2027/28 ends — snapshot finally fires for that year.
+        hist.record_season_end(
+            Season::new(2027),
+            PlayerStatistics::default(),
+            &main,
+            false,
+            None,
+        );
+
+        let years: Vec<u16> = hist
+            .items
+            .iter()
+            .filter(|i| i.team_slug == "spartak")
+            .map(|i| i.season.start_year)
+            .collect();
+        assert!(
+            years.contains(&2025) && years.contains(&2026) && years.contains(&2027),
+            "skipping a snapshot must not collapse the missed season; got: {:?}",
+            years
+        );
+    }
+
+    #[test]
+    fn youth_to_main_promotion_via_history_layer_does_not_lose_stats() {
+        // History-layer guard: `record_intra_club_move` with
+        // `from_senior=false` historically passed `old_stats` to the
+        // function and then ignored them — neither the from nor the
+        // to branch wrote them anywhere. Callers must therefore avoid
+        // handing over stats they care about preserving. This test
+        // pins down that contract: passing default() into a
+        // non-senior-to-senior move is harmless, and the existing
+        // Main-aliased seed is reactivated for the player to
+        // continue accumulating into.
+        let mut hist = PlayerStatisticsHistory::new();
+        let main = season_team("spartak");
+        let u21 = season_team("spartak-u21");
+        hist.seed_initial_team(&main, d(2025, 8, 1), false);
+
+        // No stats handed over (the Player-layer fix in
+        // `on_intra_club_move` skips the mem::take when the from
+        // side is non-senior; player.statistics keeps the callup
+        // games for the next season-end drain).
+        hist.record_intra_club_move(
+            PlayerStatistics::default(),
+            &u21,
+            &main,
+            false,
+            true,
+            d(2025, 11, 15),
+        );
+
+        let main_entries: Vec<&CurrentSeasonEntry> = hist
+            .current
+            .iter()
+            .filter(|e| e.team_slug == "spartak" && !e.is_loan)
+            .collect();
+        assert_eq!(
+            main_entries.len(),
+            1,
+            "exactly one Main entry must be active after promotion, got {:?}",
+            main_entries
+                .iter()
+                .map(|e| (e.team_slug.clone(), e.departed_date))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            main_entries[0].departed_date.is_none(),
+            "the Main entry must be active so subsequent senior games \
+             accumulate against it"
+        );
+    }
+
+    #[test]
+    fn multi_year_skipped_snapshot_fills_every_gap_year() {
+        // Defensive case: if MORE than one snapshot is skipped in a
+        // row, the flush still recovers one row per missed year via
+        // the gap-fill so the career table stays unbroken even after
+        // multiple successive failures of the season-end trigger.
+        let mut hist = PlayerStatisticsHistory::new();
+        let main = season_team("spartak");
+        hist.seed_initial_team(&main, d(2025, 8, 1), false);
+
+        hist.record_season_end(
+            Season::new(2025),
+            PlayerStatistics::default(),
+            &main,
+            false,
+            None,
+        );
+
+        // 2026/27, 2027/28 BOTH skipped — snapshot finally fires for
+        // 2028/29.
+        hist.record_season_end(
+            Season::new(2028),
+            PlayerStatistics::default(),
+            &main,
+            false,
+            None,
+        );
+
+        let years: Vec<u16> = {
+            let mut v: Vec<u16> = hist
+                .items
+                .iter()
+                .filter(|i| i.team_slug == "spartak" && !i.is_loan)
+                .map(|i| i.season.start_year)
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        assert_eq!(
+            years,
+            vec![2025, 2026, 2027, 2028],
+            "every season between the last recorded year and the snapshot \
+             must have a Main row, got: {:?}",
+            years
+        );
+    }
+
+    #[test]
+    fn multi_league_country_repeated_snapshots_keep_every_season_row() {
+        // Real-game repro: a country with several leagues whose seasons
+        // start on staggered days (e.g. Premier League Aug 1, second
+        // division Aug 5, youth league Aug 10) triggers
+        // `snapshot_player_season_statistics` THREE times across that
+        // window — every league that flips into a new season fires the
+        // country-wide snapshot. For a U21 player, each fire calls
+        // `record_season_end` for the same `ended_season`. The first
+        // call drains via the regular path; the next two hit the
+        // duplicate-season guard branch.
+        //
+        // The user reports a 2026/27 row going missing after running the
+        // sim through ~1.2 seasons. This test models the full sequence
+        // for three consecutive seasons including the staggered re-fires
+        // so any drop in the duplicate guard branch surfaces here.
+        let mut hist = PlayerStatisticsHistory::new();
+        let main = season_team("spartak");
+        hist.seed_initial_team(&main, d(2025, 8, 1), false);
+
+        let snapshot = |hist: &mut PlayerStatisticsHistory, ended_year: u16| {
+            hist.record_season_end(
+                Season::new(ended_year),
+                PlayerStatistics::default(),
+                &main,
+                false,
+                None,
+            );
+        };
+
+        // End of 2025/26 — three staggered league snapshots.
+        snapshot(&mut hist, 2025); // Premier League ticks first
+        snapshot(&mut hist, 2025); // 2nd division
+        snapshot(&mut hist, 2025); // youth premier league
+
+        // End of 2026/27 — same staggered pattern.
+        snapshot(&mut hist, 2026);
+        snapshot(&mut hist, 2026);
+        snapshot(&mut hist, 2026);
+
+        // End of 2027/28 — same again.
+        snapshot(&mut hist, 2027);
+        snapshot(&mut hist, 2027);
+        snapshot(&mut hist, 2027);
+
+        let main_rows: Vec<&PlayerStatisticsHistoryItem> = hist
+            .items
+            .iter()
+            .filter(|i| i.team_slug == "spartak")
+            .collect();
+        let years: Vec<u16> = main_rows.iter().map(|i| i.season.start_year).collect();
+        assert!(
+            years.contains(&2025) && years.contains(&2026) && years.contains(&2027),
+            "every consecutive non-senior season must keep its Main row \
+             across the multi-league snapshot pattern, got: {:?}",
+            years
+        );
+        assert_eq!(main_rows.len(), 3, "expected exactly 3 Main rows, got {}", main_rows.len());
     }
 
     #[test]
