@@ -589,6 +589,21 @@ impl Substitutions {
         // starting_condition that was never relevant for this player
         // (a sub coming on at 80 min started AT 80 min, not at
         // kickoff).
+        //
+        // Note: `starting_recovery_debt` is intentionally NOT re-stamped
+        // here. The field is copied once from `Player::load::recovery_debt`
+        // when the `MatchPlayer` is built (see
+        // `MatchPlayer::from_player`), and nothing during the match
+        // mutates `MatchPlayer::starting_recovery_debt` between
+        // construction and the substitution swap. The bench-warming
+        // sub's `starting_recovery_debt` therefore already holds the
+        // pre-match persisted value — re-stamping from
+        // `player_in.player_attributes.condition` would not make sense
+        // (those are different scales), and reaching back through
+        // `PlayerLoad` would duplicate the work already done at squad
+        // build time. If a future change ever lets bench-debt drift
+        // during a match, this is the place that needs to learn how to
+        // pull the authoritative value.
         if let Some(player_in) = field.get_player_mut(player_in_id) {
             player_in.entry_match_time_ms = context.total_match_time;
             player_in.starting_condition = player_in.player_attributes.condition;
@@ -799,5 +814,84 @@ mod tests {
         p.player_attributes.condition = 4000;
         p.is_force_match_selection = true;
         assert!(YouthProtection::is_candidate(&p, today()));
+    }
+
+    /// Sub-test for the comment in [`super`] explaining that
+    /// `starting_recovery_debt` is NOT re-stamped at substitution
+    /// time — the bench-warm value the `MatchPlayer` was built with
+    /// IS the value the engine should read for the sub's in-match
+    /// drain. This test pins that contract: two identical incoming
+    /// subs with the only difference being `starting_recovery_debt`
+    /// must drain condition at materially different rates once on
+    /// the pitch. If a future change ever zeroed out the field at
+    /// swap time (or accidentally re-stamped it to 0.0), this test
+    /// would catch it.
+    #[test]
+    fn higher_starting_recovery_debt_drains_condition_faster_in_match() {
+        use crate::r#match::ConditionContext;
+        use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+        use nalgebra::Vector3;
+
+        let mut fresh =
+            build_match_player(d(1998, 1, 1), PlayerPositionType::MidfielderCenter);
+        let mut heavy_legs =
+            build_match_player(d(1998, 1, 1), PlayerPositionType::MidfielderCenter);
+
+        // Identical condition / stamina / NF / jadedness on both —
+        // only `starting_recovery_debt` differs. Sub coming on with
+        // fresh legs vs sub coming on with chronic accumulated debt.
+        fresh.player_attributes.condition = 9_000;
+        heavy_legs.player_attributes.condition = 9_000;
+        fresh.starting_recovery_debt = 50.0;
+        heavy_legs.starting_recovery_debt = 1_400.0;
+
+        // Set both moving at a clearly-running pace so the
+        // ConditionProcessor's positive-fatigue branch (where the
+        // debt multiplier actually applies) fires. The exact speed
+        // isn't load-bearing, just has to land above the running
+        // threshold for the `low_fatigue / moderate / high` curve.
+        let running_speed = 6.0;
+        fresh.velocity = Vector3::new(running_speed, 0.0, 0.0);
+        heavy_legs.velocity = Vector3::new(running_speed, 0.0, 0.0);
+
+        // Run a comparable number of ticks through the condition
+        // processor — enough that the per-tick deltas accumulate
+        // into a measurable difference. The processor reads
+        // `starting_recovery_debt` every tick, so the
+        // heavy-legs sub should accumulate a larger fatigue
+        // total.
+        for tick in 0..400 {
+            let fresh_ctx = ConditionContext {
+                in_state_time: tick,
+                player: &mut fresh,
+                match_progress: 0.5,
+            };
+            DefenderCondition::new(ActivityIntensity::High).process(fresh_ctx);
+
+            let heavy_ctx = ConditionContext {
+                in_state_time: tick,
+                player: &mut heavy_legs,
+                match_progress: 0.5,
+            };
+            DefenderCondition::new(ActivityIntensity::High).process(heavy_ctx);
+        }
+
+        assert!(
+            heavy_legs.player_attributes.condition < fresh.player_attributes.condition,
+            "heavy-legs sub ({}) must drain faster than fresh sub ({})",
+            heavy_legs.player_attributes.condition,
+            fresh.player_attributes.condition
+        );
+        // And the gap must be meaningful — a 1-point drift would
+        // technically pass `<` but wouldn't reflect the design
+        // intent. The debt_mult curve produces a 1.0..1.35 range,
+        // so a few hundred ticks at full running should leave a
+        // visible gap.
+        let gap = fresh.player_attributes.condition - heavy_legs.player_attributes.condition;
+        assert!(
+            gap >= 30,
+            "fresh-vs-heavy gap {} too small — starting_recovery_debt isn't moving the needle",
+            gap
+        );
     }
 }

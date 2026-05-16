@@ -32,6 +32,9 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
     pub fn process(self, ctx: ConditionContext) {
         let stamina_skill = ctx.player.skills.physical.stamina;
         let natural_fitness = ctx.player.skills.physical.natural_fitness;
+        let chronic_fitness = ctx.player.player_attributes.fitness;
+        let jadedness = ctx.player.player_attributes.jadedness;
+        let recovery_debt = ctx.player.starting_recovery_debt;
 
         // Stamina affects how tired the player gets (better stamina = less fatigue)
         // Range: 0.5x to 1.5x (high stamina players tire 50% slower)
@@ -39,6 +42,22 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
 
         // Natural fitness affects recovery and fatigue resistance
         let fitness_factor = 1.3 - (natural_fitness / 20.0) * 0.6;
+
+        // Chronic fitness (training base) further tilts tick fatigue:
+        // a player in deep season-long form tires slower than a
+        // recently-returned-from-injury one with the same NF/stamina.
+        // 0.90..1.15× band: peak fitness ≈ 0.90, baseline ≈ 1.15.
+        let chronic_fitness01 = (chronic_fitness as f32 / 10_000.0).clamp(0.0, 1.0);
+        let chronic_mult = 1.15 - chronic_fitness01 * 0.25;
+
+        // Recovery-debt and jadedness pile-on. A player walking into a
+        // match with deep debt or chronic tiredness drains faster on
+        // top of everything else — back-to-back fixtures finally cost
+        // the legs the engine knew about, not just the post-match
+        // bookkeeping.
+        let debt01 = (recovery_debt / 1_500.0).clamp(0.0, 1.0);
+        let debt_mult = 1.0 + debt01 * 0.35;
+        let jaded_mult = 1.0 + (jadedness as f32 / 10_000.0).clamp(0.0, 1.0) * 0.20;
 
         // Calculate velocity-based fatigue (75% of total effect)
         // Use squared values to avoid sqrt — compare ratio² against threshold²
@@ -106,8 +125,19 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             FATIGUE_RATE_MULTIPLIER * late_match_fatigue_mult
         };
 
+        // Chronic / debt / jadedness multipliers only inflate FATIGUE,
+        // not recovery — a player with heavy legs still recovers at a
+        // normal rate when standing still (the body just doesn't get
+        // any extra credit). Applying them to negative changes would
+        // also cancel each other out in odd ways.
+        let load_mult = if combined_fatigue > 0.0 {
+            chronic_mult * debt_mult * jaded_mult
+        } else {
+            1.0
+        };
+
         let condition_change_f =
-            combined_fatigue * stamina_factor * fitness_factor * rate_multiplier;
+            combined_fatigue * stamina_factor * fitness_factor * rate_multiplier * load_mult;
 
         // Accumulate fractional fatigue to avoid float-to-int truncation losing small per-tick values
         ctx.player.fatigue_accumulator += condition_change_f;

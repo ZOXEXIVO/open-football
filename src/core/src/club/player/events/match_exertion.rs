@@ -6,11 +6,11 @@
 //! roll). Engine-side condition drain already happened tick by tick;
 //! everything here is *post-match* only.
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
 use crate::PlayerStatusType;
 use crate::club::PlayerFieldPositionGroup;
-use crate::club::player::condition::InjuryRiskInputs;
+use crate::club::player::condition::{ConditionRecoveryModel, InjuryRiskInputs};
 use crate::club::player::injury::InjuryType;
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
@@ -197,7 +197,7 @@ impl Player {
         // which is never as bad as the worst tick during the match.
         // A player who finished on fumes still recovers overnight,
         // just from a deeper hole.
-        let condition_drop = Self::compute_condition_drop(
+        let base_condition_drop = Self::compute_condition_drop(
             &inputs,
             position_factor,
             hi_share,
@@ -207,6 +207,34 @@ impl Player {
             self.load.matches_last_14(),
             is_friendly,
         );
+        // Action-style multiplier: a high-work-rate pressing winger
+        // with pace and acceleration to burn pays more for 90 minutes
+        // than a low-block CB who covered the same minutes. Applied to
+        // the persisted condition drop and to the post-match recovery
+        // debt below — *not* to minutes (which feed selection rotation
+        // and shouldn't be inflated for the wide players who can
+        // genuinely repeat the workload).
+        let action_style_mult = Self::action_style_mult(
+            hi_share,
+            self.skills.mental.work_rate,
+            self.skills.physical.pace,
+            self.skills.physical.acceleration,
+        );
+        // ±4% deterministic noise so two identical profiles in the
+        // same match don't end up at byte-for-byte identical condition
+        // — stable for the `(player, date, salt)` triple. The match-
+        // exertion salt keeps this stream independent from the rest /
+        // training paths so a "matchday + recovery + overnight rest"
+        // sequence can't have all three noise factors line up the same
+        // sign for one unlucky player.
+        let date_ordinal = now.num_days_from_ce();
+        let exertion_noise = ConditionRecoveryModel::deterministic_noise(
+            self.id,
+            date_ordinal,
+            ConditionRecoveryModel::NOISE_MATCH_EXERTION,
+            0.04,
+        );
+        let condition_drop = base_condition_drop * action_style_mult * exertion_noise;
 
         // Floor: competitive 25%, friendly 35%, post-injury recovery
         // 40% (unless an injury actually fires later in this pass —
@@ -258,9 +286,15 @@ impl Player {
         // amplified by the per-shift depletion. A 90-min midfielder
         // at 60% finish adds ~45 units; a 90-min forward at 30%
         // finish adds ~80. Maturity multiplier hits debt harder
-        // (2.0× for under-15s) than load (1.8×).
+        // (2.0× for under-15s) than load (1.8×). The same
+        // action-style multiplier that inflated the condition drop
+        // also lifts debt — a wide presser carries deeper tiredness
+        // overnight than a low-block CB for the same minutes.
         let depletion_tax = match_load * (50.0 - condition_pct_after).max(0.0) / 100.0;
-        let debt_add = (match_load * 0.5 + depletion_tax) * friendly_intensity * maturity_debt
+        let debt_add = (match_load * 0.5 + depletion_tax)
+            * friendly_intensity
+            * maturity_debt
+            * action_style_mult
             / maturity_load.max(0.001);
         self.load.add_recovery_debt(debt_add);
 
@@ -313,11 +347,40 @@ impl Player {
         self.on_match_exertion(inputs, now, is_friendly);
     }
 
+    /// Tactical / role / style multiplier applied on top of the
+    /// position-and-physiology drop. A high-work-rate pressing winger
+    /// with pace and acceleration bills more per minute than the same
+    /// minutes from a low-block CB; that's what makes "a 90 from a
+    /// wide presser" feel different from "a 90 from a back-three CB"
+    /// in the daily standings.
+    ///
+    /// Sits in the 0.90..1.32 band for typical players (HI share
+    /// 0..0.4, all three traits 0..20):
+    ///   neutral CB (HI 0.2, traits 10): ~1.05
+    ///   pressing winger (HI 0.35, WR 17, pace 16, acc 16): ~1.23
+    pub fn action_style_mult(
+        high_intensity_share: f32,
+        work_rate: f32,
+        pace: f32,
+        acceleration: f32,
+    ) -> f32 {
+        let hi = high_intensity_share.clamp(0.0, 1.0);
+        let wr01 = (work_rate / 20.0).clamp(0.0, 1.0);
+        let pace01 = (pace / 20.0).clamp(0.0, 1.0);
+        let acc01 = (acceleration / 20.0).clamp(0.0, 1.0);
+        0.90 + hi * 0.20 + wr01 * 0.10 + pace01 * 0.06 + acc01 * 0.06
+    }
+
     /// Pure helper for the persisted condition-drop formula. Lives
     /// outside `on_match_exertion` so tests can pin the curve without
     /// constructing a full `Player`. All inputs are physical /
     /// situational; no `&self` so the post-match path can also reach
     /// in for diagnostics without re-running the whole exertion pass.
+    ///
+    /// Note: this returns the *base* drop. The tactical/style
+    /// multiplier and exertion noise are applied in
+    /// `on_match_exertion`, not here, so this remains a stable
+    /// reference curve for unit tests.
     pub fn compute_condition_drop(
         inputs: &MatchExertionInputs,
         position_factor: f32,

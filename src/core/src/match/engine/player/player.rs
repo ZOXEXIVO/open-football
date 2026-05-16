@@ -107,6 +107,17 @@ pub struct MatchPlayer {
     /// `PlayerMatchPhysicalSnapshot` that drives the post-match
     /// condition-drop formula on the persisted `Player`.
     pub starting_condition: i16,
+
+    /// Recovery debt the player walked onto the pitch with — copied
+    /// from `Player::load::recovery_debt` at construction (or at the
+    /// substitution swap) and never mutated during the match. Read by
+    /// the in-match condition processor so a player with heavy legs
+    /// tires faster than a fresh player with the same NF/stamina, and
+    /// so a back-to-back schedule shows up in the tick-by-tick drain
+    /// not just the post-match summary. Lives on MatchPlayer (rather
+    /// than reaching back through `PlayerLoad`) so the hot per-tick
+    /// path doesn't touch the persisted simulator data.
+    pub starting_recovery_debt: f32,
 }
 
 impl MatchPlayer {
@@ -226,6 +237,7 @@ impl MatchPlayer {
             entry_match_time_ms: 0,
             last_pressure_tick: 0,
             starting_condition: player.player_attributes.condition,
+            starting_recovery_debt: player.load.recovery_debt,
         }
     }
 

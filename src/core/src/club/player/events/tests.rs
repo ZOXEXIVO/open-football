@@ -4034,12 +4034,75 @@ fn heavy_training_on_tired_player_accrues_more_debt_and_jadedness() {
 }
 
 #[test]
-fn recovery_session_restores_condition_but_caps_at_dynamic_normal() {
+fn recovery_session_does_not_push_every_profile_to_same_post_session_condition() {
+    // Three players all starting on identical low condition;
+    // identical Recovery session. They MUST end up in visibly
+    // different post-session condition — the deficit + efficiency
+    // model is the whole point. An elite recovery profile (high NF,
+    // high chronic fitness, high professionalism) closes more of the
+    // deficit than an average one, who closes more than an old
+    // overloaded body. None of them snaps to "fully fresh".
+    let mut elite = fresh_player(PlayerPositionType::MidfielderCenter);
+    let mut average = fresh_player(PlayerPositionType::MidfielderCenter);
+    let mut tired_vet = fresh_player(PlayerPositionType::MidfielderCenter);
+    for (i, p) in [&mut elite, &mut average, &mut tired_vet].iter_mut().enumerate() {
+        p.id = 700 + i as u32;
+        p.player_attributes.condition = 5_500;
+    }
+    elite.skills.physical.natural_fitness = 19.0;
+    elite.player_attributes.fitness = 9_200;
+    elite.attributes.professionalism = 19.0;
+    average.skills.physical.natural_fitness = 12.0;
+    average.player_attributes.fitness = 7_000;
+    average.attributes.professionalism = 11.0;
+    tired_vet.skills.physical.natural_fitness = 9.0;
+    tired_vet.player_attributes.fitness = 6_200;
+    tired_vet.attributes.professionalism = 11.0;
+    tired_vet.load.recovery_debt = 1_400.0;
+    tired_vet.birth_date = d(1990, 1, 1); // ~35
+
+    let coach = make_test_coach();
+    let date_t = NaiveDateTime::new(
+        d(2025, 9, 14),
+        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+    );
+    for p in [&mut elite, &mut average, &mut tired_vet] {
+        let session = make_session(TrainingType::Recovery, 60);
+        let r = PlayerTraining::train(p, &coach, &session, date_t, 1.0);
+        r.apply_to_player(p, date_t.date());
+    }
+    let elite_c = elite.player_attributes.condition;
+    let avg_c = average.player_attributes.condition;
+    let vet_c = tired_vet.player_attributes.condition;
+    assert!(
+        elite_c > avg_c && avg_c > vet_c,
+        "elite ({}) > average ({}) > tired vet ({}) ordering must hold",
+        elite_c,
+        avg_c,
+        vet_c
+    );
+    // None should be capped at the same value — that would mean the
+    // session just refilled everyone to the cap, which is the
+    // anti-pattern we're fixing.
+    assert!(
+        (elite_c - vet_c) > 100,
+        "spread {} too small — recovery is washing the squad flat",
+        elite_c - vet_c
+    );
+}
+
+#[test]
+fn recovery_session_restores_condition_but_caps_at_individualized_target() {
     // A Recovery session run on a low-condition player must not be
-    // able to push them past the dynamic cap (88..95% based on NF).
+    // able to push them past the per-player target produced by
+    // `ConditionRecoveryModel::individualized_target` — the deficit
+    // ceiling for the recovery formula. The old "dynamic normal cap"
+    // (88..95% based on NF alone) was replaced by the individualised
+    // target, but the contract is the same: even an elite NF player
+    // can't keep refilling beyond their per-day ceiling.
     let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
     p.player_attributes.condition = 5000; // 50%
-    p.skills.physical.natural_fitness = 20.0; // elite — cap at 9500.
+    p.skills.physical.natural_fitness = 20.0; // elite — high target.
     let coach = make_test_coach();
     let date_t = NaiveDateTime::new(
         d(2025, 9, 14),
@@ -4053,8 +4116,8 @@ fn recovery_session_restores_condition_but_caps_at_dynamic_normal() {
         r.apply_to_player(&mut p, date_t.date());
     }
     assert!(
-        p.player_attributes.condition <= 9500,
-        "elite NF recovery cap blown: condition={}",
+        p.player_attributes.condition <= 9700,
+        "elite NF recovery breached the individualised target ceiling: condition={}",
         p.player_attributes.condition
     );
     assert!(
@@ -4509,7 +4572,7 @@ fn snapshot_hint_rises_with_observed_pressure_volume() {
     // other sat in. The derived hint for the active one must be
     // higher than the position default; the passive one must stay
     // at or below the default.
-    let mut quiet = MatchPlayerStatistics::new();
+    let quiet = MatchPlayerStatistics::new();
     let mut busy = MatchPlayerStatistics::new();
     busy.pressures = 40;
     busy.tackles = 8;
@@ -4550,4 +4613,412 @@ fn snapshot_hint_zero_minutes_returns_position_default() {
     let stats = MatchPlayerStatistics::new();
     let hint = MatchPlayer::derive_high_intensity_hint(0.30, &stats, 0.0);
     assert_eq!(hint, 0.30);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Individualized match exertion — proves the redesigned condition
+// model leaves different players in visibly different physical states
+// after the same match, instead of converging on a flat post-match
+// distribution.
+// ════════════════════════════════════════════════════════════════════
+
+#[test]
+fn ninety_minute_wingback_loses_more_condition_than_keeper() {
+    // Position factor + HI-share + the new action_style_mult
+    // (work_rate / pace / acceleration) all add up to a clearly
+    // higher post-match condition drop for a wingback than a
+    // keeper, even with identical fitness profiles.
+    let mut gk = fresh_player(PlayerPositionType::Goalkeeper);
+    let mut wb = fresh_player(PlayerPositionType::WingbackLeft);
+    // Same baseline physical / mental profile so the only material
+    // differences are position factor + HI share + action style.
+    gk.skills.mental.work_rate = 12.0;
+    wb.skills.mental.work_rate = 12.0;
+    gk.skills.physical.pace = 12.0;
+    wb.skills.physical.pace = 12.0;
+    gk.skills.physical.acceleration = 12.0;
+    wb.skills.physical.acceleration = 12.0;
+    let date = d(2025, 9, 14);
+    let gk_pre = gk.player_attributes.condition;
+    let wb_pre = wb.player_attributes.condition;
+    gk.on_match_exertion_minutes_only(90.0, date, false);
+    wb.on_match_exertion_minutes_only(90.0, date, false);
+    let gk_drop = gk_pre - gk.player_attributes.condition;
+    let wb_drop = wb_pre - wb.player_attributes.condition;
+    assert!(
+        wb_drop >= gk_drop + 300,
+        "wb drop {} should be ≥ gk drop {} + 300",
+        wb_drop,
+        gk_drop
+    );
+}
+
+#[test]
+fn ninety_minute_high_stamina_nf_loses_less_condition_than_low_stamina_nf() {
+    // Same position, same minutes, same age — only the physical
+    // profile differs. The high-stamina/high-NF player must finish
+    // with materially more condition left in the tank.
+    let mut elite = fresh_player(PlayerPositionType::MidfielderCenter);
+    let mut weak = fresh_player(PlayerPositionType::MidfielderCenter);
+    elite.skills.physical.stamina = 18.0;
+    elite.skills.physical.natural_fitness = 18.0;
+    weak.skills.physical.stamina = 8.0;
+    weak.skills.physical.natural_fitness = 8.0;
+    let date = d(2025, 9, 14);
+    let elite_pre = elite.player_attributes.condition;
+    let weak_pre = weak.player_attributes.condition;
+    elite.on_match_exertion_minutes_only(90.0, date, false);
+    weak.on_match_exertion_minutes_only(90.0, date, false);
+    let elite_drop = elite_pre - elite.player_attributes.condition;
+    let weak_drop = weak_pre - weak.player_attributes.condition;
+    assert!(
+        weak_drop > elite_drop + 200,
+        "weak drop {} should clearly exceed elite drop {}",
+        weak_drop,
+        elite_drop
+    );
+}
+
+#[test]
+fn pressing_winger_finishes_more_tired_than_low_block_centerback() {
+    // Both play 90 — but the high-WR pressing wide player should
+    // visibly differ from the low-block CB. Drives the
+    // action_style_mult; the wide player carries more debt and a
+    // larger persisted condition drop.
+    let mut presser = fresh_player(PlayerPositionType::MidfielderLeft);
+    let mut cb = fresh_player(PlayerPositionType::DefenderCenter);
+    presser.skills.mental.work_rate = 18.0;
+    presser.skills.physical.pace = 17.0;
+    presser.skills.physical.acceleration = 17.0;
+    cb.skills.mental.work_rate = 10.0;
+    cb.skills.physical.pace = 10.0;
+    cb.skills.physical.acceleration = 10.0;
+    let date = d(2025, 9, 14);
+    let presser_pre = presser.player_attributes.condition;
+    let cb_pre = cb.player_attributes.condition;
+    presser.on_match_exertion_minutes_only(90.0, date, false);
+    cb.on_match_exertion_minutes_only(90.0, date, false);
+    let presser_drop = presser_pre - presser.player_attributes.condition;
+    let cb_drop = cb_pre - cb.player_attributes.condition;
+    assert!(
+        presser_drop > cb_drop,
+        "pressing winger drop {} should exceed low-block CB drop {}",
+        presser_drop,
+        cb_drop
+    );
+    assert!(
+        presser.load.recovery_debt > cb.load.recovery_debt,
+        "presser debt {} should exceed CB debt {}",
+        presser.load.recovery_debt,
+        cb.load.recovery_debt
+    );
+}
+
+#[test]
+fn weekly_matches_for_four_weeks_preserve_condition_spread_across_squad() {
+    // Heuristic acceptance: differentiated XI playing the same
+    // weekly matches over a month should NOT converge to a flat
+    // condition distribution. The combination of individualized
+    // recovery targets, position-based drains, and per-style
+    // multipliers should keep the squad meaningfully spread.
+    use chrono::Duration;
+    use crate::PlayerPositionType::*;
+    let positions = [
+        Goalkeeper,
+        DefenderCenter,
+        WingbackLeft,
+        DefenderRight,
+        DefensiveMidfielder,
+        MidfielderCenter,
+        MidfielderLeft,
+        AttackingMidfielderRight,
+        Striker,
+        ForwardLeft,
+        ForwardCenter,
+    ];
+    let mut squad: Vec<Player> = positions
+        .iter()
+        .enumerate()
+        .map(|(i, pos)| {
+            let mut p = fresh_player(*pos);
+            p.id = 500 + i as u32;
+            // Spread the squad — wide range of NF/stamina/work_rate
+            // so individualized recovery has variance to express.
+            p.skills.physical.natural_fitness = 8.0 + (i as f32 * 1.0);
+            p.skills.physical.stamina = 8.0 + (i as f32 * 0.9);
+            p.skills.mental.work_rate = 9.0 + ((i as f32 * 0.7) % 9.0);
+            p.skills.physical.pace = 9.0 + ((i as f32 * 1.1) % 9.0);
+            p.skills.physical.acceleration = 9.0 + ((i as f32 * 0.6) % 9.0);
+            p.player_attributes.fitness = 6_500 + (i as i16 * 250);
+            p
+        })
+        .collect();
+    let start = d(2025, 9, 1);
+    // Four weeks: a Saturday match every 7 days, daily rest in
+    // between (the recovery model lives at the daily granularity).
+    for week in 0..4 {
+        for day_offset in 0..7 {
+            let date = start + Duration::days((week * 7 + day_offset) as i64);
+            if day_offset == 6 {
+                for p in &mut squad {
+                    p.load.daily_decay(date);
+                    p.on_match_exertion_minutes_only(90.0, date, false);
+                }
+            } else {
+                for p in &mut squad {
+                    p.load.daily_decay(date);
+                    p.process_condition_recovery(date);
+                }
+            }
+        }
+    }
+    let conditions: Vec<i16> =
+        squad.iter().map(|p| p.player_attributes.condition).collect();
+    let min = *conditions.iter().min().unwrap();
+    let max = *conditions.iter().max().unwrap();
+    let spread = max - min;
+    assert!(
+        spread >= 500,
+        "squad condition spread {} too tight after 4 weeks: {:?}",
+        spread,
+        conditions
+    );
+}
+
+#[test]
+fn four_week_calibration_spread_across_positions_and_profiles() {
+    // End-to-end calibration test: six distinctly-profiled players
+    // run through four weeks of weekly competitive matches, mixed
+    // training drills, and daily rest. The individualised condition
+    // model is supposed to keep them visibly differentiated — under
+    // the old "one dynamic cap, flat recovery" path they all
+    // collapsed toward the same band by week 2. We assert both a
+    // numerical spread AND a small set of qualitative orderings so
+    // that brittle coefficient tuning can't silently flip the
+    // story (an elite midfielder ending tireder than an overloaded
+    // forward would be a regression, not a coefficient shift).
+    use crate::PlayerPositionType::*;
+    use chrono::Duration;
+
+    fn build(
+        id: u32,
+        pos: PlayerPositionType,
+        birth: NaiveDate,
+        stamina: f32,
+        natural_fitness: f32,
+        work_rate: f32,
+        pace: f32,
+        acceleration: f32,
+        fitness: i16,
+        debt: f32,
+        condition: i16,
+    ) -> Player {
+        let mut p = fresh_player(pos);
+        p.id = id;
+        p.birth_date = birth;
+        p.skills.physical.stamina = stamina;
+        p.skills.physical.natural_fitness = natural_fitness;
+        p.skills.physical.pace = pace;
+        p.skills.physical.acceleration = acceleration;
+        p.skills.mental.work_rate = work_rate;
+        p.player_attributes.fitness = fitness;
+        p.player_attributes.condition = condition;
+        p.load.recovery_debt = debt;
+        p
+    }
+
+    let mut gk = build(
+        601, Goalkeeper,
+        d(1995, 1, 1),        // 30y — typical keeper age
+        14.0, 14.0,           // average stamina / NF
+        10.0, 8.0, 8.0,       // low action profile
+        7_500, 50.0, 9_400,
+    );
+    let mut wingback = build(
+        602, WingbackLeft,
+        d(1999, 1, 1),        // 26y
+        15.0, 14.0,           // good stamina / NF
+        17.0, 16.0, 16.0,     // high WR + pace + acceleration
+        8_000, 100.0, 9_300,
+    );
+    let mut center_back = build(
+        603, DefenderCenter,
+        d(1996, 1, 1),        // 29y — experienced CB
+        13.0, 13.0,
+        10.0, 10.0, 10.0,     // low action profile
+        7_800, 80.0, 9_300,
+    );
+    // Veteran midfielder (~35) — recovery age penalty should bite.
+    let mut vet_mid = build(
+        604, MidfielderCenter,
+        d(1990, 6, 1),        // ~35y
+        13.0, 13.0,
+        14.0, 12.0, 11.0,
+        7_300, 120.0, 9_200,
+    );
+    // Elite stamina/NF midfielder — should age well and outpace
+    // overloaded peers over the 4-week window.
+    let mut elite_mid = build(
+        605, MidfielderCenter,
+        d(2001, 1, 1),        // 24y, prime
+        19.0, 19.0,
+        14.0, 14.0, 14.0,
+        9_000, 50.0, 9_400,
+    );
+    // Overloaded forward — starts with heavy debt + jadedness
+    // baked in. The recovery throttle and target's load_drag
+    // should keep them below the elite midfielder by the end of
+    // the 4 weeks regardless of what training they got.
+    let mut overload_fwd = build(
+        606, ForwardCenter,
+        d(1998, 1, 1),        // 27y
+        14.0, 13.0,
+        13.0, 14.0, 14.0,
+        7_500, 1_300.0, 8_600,
+    );
+    overload_fwd.player_attributes.jadedness = 6_000;
+
+    let start = d(2025, 9, 1);
+    let coach = make_test_coach();
+
+    // Sequence per week:
+    //   Mon: light pressing drill (heavy training)
+    //   Tue: recovery session
+    //   Wed: light pressing drill
+    //   Thu: rest (daily recovery only)
+    //   Fri: recovery session
+    //   Sat: 90-min competitive match for everyone
+    //   Sun: rest (daily recovery only)
+    // `process_condition_recovery` is called on every day; training
+    // and matches add load on top of that.
+    for week in 0..4 {
+        for day_offset in 0..7 {
+            let date = start + Duration::days((week * 7 + day_offset) as i64);
+            let date_t = NaiveDateTime::new(
+                date,
+                chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+            );
+            let mut players: [&mut Player; 6] = [
+                &mut gk,
+                &mut wingback,
+                &mut center_back,
+                &mut vet_mid,
+                &mut elite_mid,
+                &mut overload_fwd,
+            ];
+
+            match day_offset {
+                0 | 2 => {
+                    // Heavy training day — same drill for everyone so
+                    // the individualised cost multiplier is what
+                    // separates them.
+                    let session = make_session(TrainingType::PressingDrills, 60);
+                    for p in players.iter_mut() {
+                        p.load.daily_decay(date);
+                        let r = PlayerTraining::train(p, &coach, &session, date_t, 0.5);
+                        r.apply_to_player(p, date);
+                    }
+                }
+                1 | 4 => {
+                    // Recovery session — drains debt + jadedness in a
+                    // blended way (actual gain + small potential).
+                    let session = make_session(TrainingType::Recovery, 60);
+                    for p in players.iter_mut() {
+                        p.load.daily_decay(date);
+                        let r = PlayerTraining::train(p, &coach, &session, date_t, 1.0);
+                        r.apply_to_player(p, date);
+                    }
+                }
+                3 | 6 => {
+                    // Rest day — daily recovery model only.
+                    for p in players.iter_mut() {
+                        p.load.daily_decay(date);
+                        p.process_condition_recovery(date);
+                    }
+                }
+                5 => {
+                    // Matchday — 90 competitive minutes for every
+                    // player. The position factor + action style
+                    // multiplier produce the spread within the same
+                    // 90-minute slot.
+                    for p in players.iter_mut() {
+                        p.load.daily_decay(date);
+                        p.on_match_exertion_minutes_only(90.0, date, false);
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    let gk_c = gk.player_attributes.condition;
+    let wb_c = wingback.player_attributes.condition;
+    let cb_c = center_back.player_attributes.condition;
+    let vet_c = vet_mid.player_attributes.condition;
+    let elite_c = elite_mid.player_attributes.condition;
+    let overload_c = overload_fwd.player_attributes.condition;
+
+    let conditions = [gk_c, wb_c, cb_c, vet_c, elite_c, overload_c];
+    let min = *conditions.iter().min().unwrap();
+    let max = *conditions.iter().max().unwrap();
+    let spread = max - min;
+    assert!(
+        spread >= 700,
+        "calibration spread {} too tight: gk={} wb={} cb={} vet={} elite={} overload={}",
+        spread,
+        gk_c,
+        wb_c,
+        cb_c,
+        vet_c,
+        elite_c,
+        overload_c
+    );
+
+    // Ordering: the overloaded forward must end below the elite
+    // midfielder. If those two flip, the load_drag / debt throttle
+    // / blended-drain story isn't holding.
+    assert!(
+        overload_c < elite_c,
+        "overloaded forward ({}) should finish below elite mid ({})",
+        overload_c,
+        elite_c
+    );
+
+    // Wingback either ends below CB on condition, OR carries higher
+    // accumulated recovery debt — both are valid "wingback paid
+    // more per match" signals. Asserting one OR the other keeps
+    // the test from being brittle to whichever signal happens to
+    // dominate on a given coefficient set.
+    let wb_below_cb_in_condition = wb_c < cb_c;
+    let wb_above_cb_in_debt = wingback.load.recovery_debt > center_back.load.recovery_debt;
+    assert!(
+        wb_below_cb_in_condition || wb_above_cb_in_debt,
+        "wingback should pay more than CB: wb_cond={} cb_cond={} wb_debt={:.1} cb_debt={:.1}",
+        wb_c,
+        cb_c,
+        wingback.load.recovery_debt,
+        center_back.load.recovery_debt
+    );
+
+    // Goalkeeper has by far the lowest position factor / HI share /
+    // action style, so they should finish among the highest-
+    // condition outfielders. Asserting "top 2 of 6" instead of
+    // "strict #1" stops the elite midfielder's recovery profile
+    // from accidentally flipping the rank.
+    let mut ranked: Vec<(u32, i16)> = vec![
+        (gk.id, gk_c),
+        (wingback.id, wb_c),
+        (center_back.id, cb_c),
+        (vet_mid.id, vet_c),
+        (elite_mid.id, elite_c),
+        (overload_fwd.id, overload_c),
+    ];
+    ranked.sort_by(|a, b| b.1.cmp(&a.1));
+    let top_two_ids: Vec<u32> = ranked.iter().take(2).map(|(id, _)| *id).collect();
+    assert!(
+        top_two_ids.contains(&gk.id),
+        "goalkeeper ({}) should rank among the two highest-condition players, ranked={:?}",
+        gk_c,
+        ranked
+    );
 }

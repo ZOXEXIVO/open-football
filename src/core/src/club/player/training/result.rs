@@ -1,7 +1,10 @@
-use crate::club::player::condition::{ConditionRecoveryModel, InjuryRiskInputs};
+use crate::club::player::condition::{
+    ConditionRecoveryModel, ConditionTargetInputs, InjuryRiskInputs,
+};
 use crate::club::player::injury::InjuryType;
 use crate::league::result::LeagueProcessAccess;
 use crate::utils::DateUtils;
+use chrono::Datelike;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, MentalGains, PhysicalGains, PlayerStatusType, TechnicalGains,
@@ -208,23 +211,97 @@ impl PlayerTrainingResult {
             let pre_condition_pct = player.player_attributes.condition_percentage();
             let pre_recovery_debt = player.load.recovery_debt;
 
-            // Apply fatigue changes
-            // Negative fatigue_change = recovery (condition increases)
-            // Positive fatigue_change = fatigue (condition decreases)
-            // Cap recovery at the dynamic ceiling (88..95% based on
-            //   natural_fitness) — training restores toward normal,
-            //   not to 100%, and elite endurance horses recover toward
-            //   a higher floor than average pros.
+            // Apply fatigue changes.
+            //
+            // POSITIVE fatigue_change (heavy drill): subtracts from
+            // condition straight — no individualisation, intensity
+            // hurts everyone roughly the same.
+            //
+            // NEGATIVE fatigue_change (recovery session): the magnitude
+            // becomes a *potential* gain, not a guaranteed one. A
+            // genuinely depleted player banks most of it; a player
+            // already near their target gains barely anything. Elite
+            // recovery profiles (high NF / chronic fitness /
+            // professionalism, low recovery debt) absorb more of the
+            // potential than average bodies. An overloaded player can't
+            // reset on a single ice bath.
+            //
+            // The target is computed via the same `individualized_target`
+            // the daily-rest path uses so the training day and the
+            // rest day agree on what "fully recovered" means for this
+            // player today.
             // Floor at 30% — condition never drops below this in training.
-            let new_condition = pre_condition as f32 - self.effects.fatigue_change;
-            let dynamic_cap =
-                ConditionRecoveryModel::dynamic_cap(player.skills.physical.natural_fitness) as f32;
-            let condition_cap = if self.effects.fatigue_change < 0.0 {
-                dynamic_cap
+            let new_condition = if self.effects.fatigue_change >= 0.0 {
+                // Individualise the acute cost: elite stamina / NF /
+                // chronic fitness pay less for the same heavy drill;
+                // overloaded / jaded / very young / veteran bodies pay
+                // more. Reads PRE-session debt / jadedness / condition
+                // so the same drill on a fresh squad and a battered
+                // squad doesn't cost the same. The recovery branch is
+                // already individualised via `individualized_target`,
+                // so the multiplier intentionally lives only here.
+                let age = DateUtils::age(player.birth_date, current_date);
+                let cost_mult = ConditionRecoveryModel::training_fatigue_cost_mult(
+                    player.skills.physical.stamina,
+                    player.skills.physical.natural_fitness,
+                    player.player_attributes.fitness,
+                    pre_recovery_debt,
+                    player.player_attributes.jadedness,
+                    age,
+                );
+                (pre_condition as f32 - self.effects.fatigue_change * cost_mult)
+                    .clamp(3_000.0, 10_000.0)
             } else {
-                10_000.0
+                let recovery_potential = -self.effects.fatigue_change;
+                let age = DateUtils::age(player.birth_date, current_date);
+                let target = ConditionRecoveryModel::individualized_target(ConditionTargetInputs {
+                    natural_fitness: player.skills.physical.natural_fitness,
+                    stamina: player.skills.physical.stamina,
+                    chronic_fitness: player.player_attributes.fitness,
+                    match_readiness: player.skills.physical.match_readiness,
+                    physical_load_7: player.load.physical_load_7,
+                    recovery_debt: pre_recovery_debt,
+                    jadedness: player.player_attributes.jadedness,
+                    age,
+                });
+                let deficit = (target - pre_condition as f32).max(0.0);
+                let nf01 = (player.skills.physical.natural_fitness / 20.0).clamp(0.0, 1.0);
+                let chronic_fitness01 =
+                    (player.player_attributes.fitness as f32 / 10_000.0).clamp(0.0, 1.0);
+                let professionalism01 =
+                    (player.attributes.professionalism / 20.0).clamp(0.0, 1.0);
+                // The club's recovery-facility / sports-science quality
+                // is already folded into `recovery_potential` upstream
+                // (PlayerTraining::train scales recovery sessions by
+                // `TrainingFacilities::get_recovery_modifier`). To avoid
+                // double-counting, use a neutral 0.5 here — the design
+                // term lives in the formula so future per-player staff
+                // modelling can drop in without touching call sites.
+                let staff_fitness01 = 0.5_f32;
+                let efficiency = (0.45
+                    + nf01 * 0.18
+                    + chronic_fitness01 * 0.12
+                    + professionalism01 * 0.08
+                    + staff_fitness01 * 0.10
+                    - (pre_recovery_debt / 2_000.0).clamp(0.0, 1.0) * 0.15)
+                    .clamp(0.35, 1.15);
+                // ±5% deterministic noise — same per-(player, date)
+                // stability guarantee as the rest path. The training-
+                // recovery salt keeps this stream independent from the
+                // daily-rest stream so the same player isn't pushed in
+                // the same noise direction on a day that has both a
+                // recovery session and a rest pass.
+                let date_ordinal = current_date.num_days_from_ce();
+                let noise = ConditionRecoveryModel::deterministic_noise(
+                    player.id,
+                    date_ordinal,
+                    ConditionRecoveryModel::NOISE_TRAINING_RECOVERY,
+                    0.05,
+                );
+                let condition_gain = recovery_potential.min(deficit * 0.75) * efficiency * noise;
+                (pre_condition as f32 + condition_gain).clamp(3_000.0, 10_000.0)
             };
-            player.player_attributes.condition = new_condition.clamp(3_000.0, condition_cap) as i16;
+            player.player_attributes.condition = new_condition as i16;
 
             // Workload bookkeeping into PlayerLoad. Heavy sessions add to
             // physical_load_7/30 + recovery_debt; recovery sessions burn
@@ -282,21 +359,37 @@ impl PlayerTrainingResult {
                 player.player_attributes.jadedness = new_jad as i16;
             }
             if self.effects.fatigue_change < 0.0 {
-                // Recovery sessions drain debt at ~30% of the magnitude
-                // of the condition gain (so a Recovery session worth
-                // -800 burns ~240 debt — a real bounce-back). The
-                // facility recovery modifier has already been folded
-                // into `fatigue_change` upstream in
-                // `PlayerTraining::train`, so we don't double-apply
-                // it here.
-                let recovery_strength = -self.effects.fatigue_change;
-                player.load.consume_recovery_debt(recovery_strength * 0.30);
-                // Recovery sessions also drain jadedness — sat in an
-                // ice bath / on a yoga mat the body un-knots itself.
-                // 0.08 of the condition gain lands as jadedness
-                // reduction (a Recovery worth -800 burns ~64
-                // jadedness points, gradual but real).
-                let jad_reduction = (recovery_strength * 0.08).round() as i32;
+                // Blended drain: most of the debt / jadedness clearance
+                // is driven by the ACTUAL condition gain banked above,
+                // with a small floor of "raw potential". The two terms
+                // capture two different bits of real physiology:
+                //
+                //  * actual_condition_gain → the body did refill, so
+                //    soft-tissue and CNS bookkeeping wind down. Sized
+                //    so a Recovery worth -800 that lands as a +600 gain
+                //    burns ~132 debt and ~30 jadedness points — a real
+                //    bounce-back, but never a structural reset.
+                //  * recovery_potential → the session itself (ice bath,
+                //    massage, mobility) still touches the body even
+                //    when the player walked in near their daily target
+                //    and gained almost no condition. A small floor so
+                //    one Recovery on a near-fresh squad reads as
+                //    "tiny but non-zero", not "completely wasted".
+                //
+                // Net effect: a player at 93% with 900 debt drains far
+                // less debt from a Recovery than a player at 55% with
+                // the same session. Recovery sessions can no longer
+                // erase major overload on their own — the deep tank
+                // requires actual condition recovery to clear.
+                let recovery_potential = -self.effects.fatigue_change;
+                let actual_condition_gain =
+                    (new_condition - pre_condition as f32).max(0.0);
+                let debt_drain =
+                    actual_condition_gain * 0.22 + recovery_potential * 0.08;
+                player.load.consume_recovery_debt(debt_drain);
+                let jadedness_drain =
+                    actual_condition_gain * 0.05 + recovery_potential * 0.025;
+                let jad_reduction = jadedness_drain.round() as i32;
                 let new_jad =
                     (player.player_attributes.jadedness as i32 - jad_reduction).max(0);
                 player.player_attributes.jadedness = new_jad as i16;
