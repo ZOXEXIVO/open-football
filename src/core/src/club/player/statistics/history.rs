@@ -840,19 +840,16 @@ impl PlayerStatisticsHistory {
 ///
 /// Stats are summed (`merge_from`), the first non-`None` `transfer_fee`
 /// is preserved, the highest `seq_id` wins for ordering. Drop rules
-/// (applied after the merge) honour the user's "collapse 0 games
-/// records at end of season" rule while still preserving the player's
-/// first career record:
+/// (applied after the merge):
 ///
 /// - Rows with games or a transfer fee always survive.
-/// - A 0-game-no-fee row is dropped if another team in the same season
-///   has games or a fee — this is the phantom-spell case (e.g. a
-///   seeded Main entry alongside a B spell where the player actually
-///   played).
-/// - The very first career record (lowest `seq_id`) is preserved when
-///   it's the only row in the season OR when a loan row exists in the
-///   season (the seed represents the player's home club alongside
-///   loan spells).
+/// - A 0-game-no-fee row is dropped if another non-loan team in the
+///   same season has games or a fee — this is the intra-club move
+///   phantom case (e.g. a seeded Main entry alongside a B spell where
+///   the player actually played).
+/// - Otherwise a 0-game-no-fee row is kept: U18/U21 players who never
+///   get a senior callup still need a Main row for the season, and a
+///   parent-club row must coexist with a loan-out spell.
 fn merge_same_season_team_items(items: &mut Vec<PlayerStatisticsHistoryItem>, season_year: u16) {
     let (in_season, mut other): (Vec<_>, Vec<_>) = items
         .drain(..)
@@ -881,30 +878,22 @@ fn merge_same_season_team_items(items: &mut Vec<PlayerStatisticsHistoryItem>, se
         }
     }
 
-    let career_first_seq = other
-        .iter()
-        .chain(merged.iter())
-        .map(|i| i.seq_id)
-        .min();
-    let any_loan_with_content = merged.iter().any(|i| {
-        i.is_loan && (i.statistics.total_games() > 0 || i.transfer_fee.is_some())
-    });
-
     let merged_snapshot = merged.clone();
     merged.retain(|i| {
         let has_content = i.statistics.total_games() > 0 || i.transfer_fee.is_some();
         if has_content {
             return true;
         }
-        let is_career_first = Some(i.seq_id) == career_first_seq;
-        if !is_career_first {
-            return false;
-        }
-        let any_other_team_with_content = merged_snapshot.iter().any(|other| {
-            other.team_slug != i.team_slug
+        // Drop only when a sibling NON-LOAN team in this season has
+        // real content — that's the intra-club bounce that left this
+        // row as a phantom seed. Loan siblings don't trigger the drop:
+        // the parent-club row must survive alongside the loan spell.
+        let phantom_alongside_other_senior_spell = merged_snapshot.iter().any(|other| {
+            !other.is_loan
+                && other.team_slug != i.team_slug
                 && (other.statistics.total_games() > 0 || other.transfer_fee.is_some())
         });
-        !any_other_team_with_content || any_loan_with_content
+        !phantom_alongside_other_senior_spell
     });
 
     other.extend(merged);
@@ -941,7 +930,6 @@ fn merge_same_season_team_view(items: &mut Vec<PlayerStatisticsHistoryItem>) {
         }
     }
 
-    let career_first_seq = merged.iter().map(|i| i.seq_id).min();
     let merged_snapshot = merged.clone();
 
     merged.retain(|i| {
@@ -949,24 +937,19 @@ fn merge_same_season_team_view(items: &mut Vec<PlayerStatisticsHistoryItem>) {
         if has_content {
             return true;
         }
-        let is_career_first = Some(i.seq_id) == career_first_seq;
-        if !is_career_first {
-            return false;
-        }
-        // Per-season check: keep the career-first row when no other team
-        // in the same season has content, OR when a loan row exists in
-        // the same season.
-        let any_other_team_with_content_same_season = merged_snapshot.iter().any(|other| {
+        // Mirrors the season-end merge: drop a 0-game-no-fee row only
+        // when a sibling NON-LOAN team in the same season actually
+        // played — that's the intra-club phantom seed pattern. A loan
+        // sibling doesn't trigger the drop (parent-club row must
+        // coexist with the loan row), and a quiet season with just the
+        // Main row is the U18/U21 "career home" record.
+        let phantom_alongside_other_senior_spell = merged_snapshot.iter().any(|other| {
             other.season.start_year == i.season.start_year
+                && !other.is_loan
                 && other.team_slug != i.team_slug
                 && (other.statistics.total_games() > 0 || other.transfer_fee.is_some())
         });
-        let any_loan_same_season = merged_snapshot.iter().any(|other| {
-            other.season.start_year == i.season.start_year
-                && other.is_loan
-                && (other.statistics.total_games() > 0 || other.transfer_fee.is_some())
-        });
-        !any_other_team_with_content_same_season || any_loan_same_season
+        !phantom_alongside_other_senior_spell
     });
 
     *items = merged;
@@ -1473,6 +1456,125 @@ mod club_career_apps_tests {
         assert_eq!(zenit_rows.len(), 1);
         assert_eq!(zenit_rows[0].statistics.played, 14);
         assert_eq!(zenit_rows[0].statistics.goals, 4);
+    }
+
+    #[test]
+    fn consecutive_non_senior_seasons_preserve_main_row_each_year() {
+        // User-reported bug: a U18 player with no senior callups loses
+        // his Main row for every season after the first. The very first
+        // season-end keeps the seed entry under the `is_initial_record`
+        // gate, but every subsequent zero-game season-end row is wiped
+        // out by the merge step because it isn't the career-first row.
+        //
+        // Expected behaviour: every season the player exists at the club
+        // produces a Main row, even when they never break into the senior
+        // squad. The third season here has a single senior callup to
+        // confirm the path that actually records games still works.
+        let mut hist = PlayerStatisticsHistory::new();
+        let main = season_team("spartak");
+
+        hist.seed_initial_team(&main, d(2025, 8, 1), false);
+
+        // 2025/26 — U18 only, no senior callups.
+        hist.record_season_end(
+            Season::new(2025),
+            PlayerStatistics::default(),
+            &main,
+            false,
+            None,
+        );
+
+        // 2026/27 — U18 only again, no senior callups.
+        hist.record_season_end(
+            Season::new(2026),
+            PlayerStatistics::default(),
+            &main,
+            false,
+            None,
+        );
+
+        // 2027/28 — one senior callup (6 apps).
+        let mut callups = PlayerStatistics::default();
+        callups.played = 6;
+        hist.record_season_end(Season::new(2027), callups, &main, false, None);
+
+        let main_rows: Vec<&PlayerStatisticsHistoryItem> = hist
+            .items
+            .iter()
+            .filter(|i| i.team_slug == "spartak")
+            .collect();
+        assert_eq!(
+            main_rows.len(),
+            3,
+            "every consecutive non-senior season must keep its Main row, got seasons: {:?}",
+            main_rows.iter().map(|i| i.season.start_year).collect::<Vec<_>>()
+        );
+        let row_2026 = hist
+            .items
+            .iter()
+            .find(|i| i.season.start_year == 2026 && i.team_slug == "spartak")
+            .expect("2026/27 Main row must survive");
+        assert_eq!(row_2026.statistics.played, 0);
+    }
+
+    #[test]
+    fn view_items_keeps_zero_game_row_for_middle_non_senior_season() {
+        // View-time variant of the bug: a saved player history with three
+        // Main rows (one with games, two with zero games) must keep all
+        // three at render time. The legacy view merge dropped any 0-game
+        // row that wasn't the career-first one.
+        let mut games_only = PlayerStatistics::default();
+        games_only.played = 6;
+        let hist = PlayerStatisticsHistory::from_items(vec![
+            PlayerStatisticsHistoryItem {
+                season: Season::new(2025),
+                team_name: "Spartak Moscow".to_string(),
+                team_slug: "spartak".to_string(),
+                team_reputation: 5_000,
+                league_name: "Russian Premier League".to_string(),
+                league_slug: "rpl".to_string(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: PlayerStatistics::default(),
+                seq_id: 0,
+            },
+            PlayerStatisticsHistoryItem {
+                season: Season::new(2026),
+                team_name: "Spartak Moscow".to_string(),
+                team_slug: "spartak".to_string(),
+                team_reputation: 5_000,
+                league_name: "Russian Premier League".to_string(),
+                league_slug: "rpl".to_string(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: PlayerStatistics::default(),
+                seq_id: 1,
+            },
+            PlayerStatisticsHistoryItem {
+                season: Season::new(2027),
+                team_name: "Spartak Moscow".to_string(),
+                team_slug: "spartak".to_string(),
+                team_reputation: 5_000,
+                league_name: "Russian Premier League".to_string(),
+                league_slug: "rpl".to_string(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: games_only,
+                seq_id: 2,
+            },
+        ]);
+
+        let view = hist.view_items(None, d(2028, 1, 15));
+        let seasons: Vec<u16> = view
+            .iter()
+            .filter(|i| i.team_slug == "spartak")
+            .map(|i| i.season.start_year)
+            .collect();
+        assert!(
+            seasons.contains(&2025) && seasons.contains(&2026) && seasons.contains(&2027),
+            "view must keep every Main row across consecutive seasons, got: {:?}",
+            seasons
+        );
     }
 
     #[test]
