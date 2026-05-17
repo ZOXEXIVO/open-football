@@ -109,34 +109,45 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         // 3 forwards ran toward the same spot synchronously, visibly
         // bunched and making the whole "creating space" movement
         // useless.
-        let mut opp_ys: Vec<f32> = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| {
-                let opp_x_ok = if attacking_direction > 0.0 {
-                    opp.position.x > ball_pos.x - 20.0
-                } else {
-                    opp.position.x < ball_pos.x + 20.0
-                };
-                opp_x_ok
-            })
-            .map(|opp| opp.position.y)
-            .collect();
-
-        // Virtual defenders at the touchlines so gaps near the wings exist.
-        opp_ys.push(0.0);
-        opp_ys.push(field_height);
-        opp_ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-        // Build (gap_width, gap_center_y) list and sort widest-first.
-        let mut gaps: Vec<(f32, f32)> = Vec::new();
-        for i in 0..opp_ys.len() - 1 {
-            let width = opp_ys[i + 1] - opp_ys[i];
-            let center = (opp_ys[i] + opp_ys[i + 1]) / 2.0;
-            gaps.push((width, center));
+        // Inline buffer: at most 11 opponents + 2 virtual touchline
+        // defenders = 13 ys. Cap at 16 with a generous margin.
+        const MAX_DEFENDER_YS: usize = 16;
+        let mut opp_ys: [f32; MAX_DEFENDER_YS] = [0.0; MAX_DEFENDER_YS];
+        let mut opp_ys_len: usize = 0;
+        for opp in ctx.players().opponents().all() {
+            let opp_x_ok = if attacking_direction > 0.0 {
+                opp.position.x > ball_pos.x - 20.0
+            } else {
+                opp.position.x < ball_pos.x + 20.0
+            };
+            if !opp_x_ok {
+                continue;
+            }
+            if opp_ys_len >= MAX_DEFENDER_YS - 2 {
+                break;
+            }
+            opp_ys[opp_ys_len] = opp.position.y;
+            opp_ys_len += 1;
         }
-        gaps.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        // Virtual defenders at the touchlines so gaps near the wings exist.
+        opp_ys[opp_ys_len] = 0.0;
+        opp_ys_len += 1;
+        opp_ys[opp_ys_len] = field_height;
+        opp_ys_len += 1;
+        opp_ys[..opp_ys_len].sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Build (gap_width, gap_center_y) list in a fixed-size array
+        // and track the widest gap inline so we don't have to sort.
+        const MAX_GAPS: usize = MAX_DEFENDER_YS;
+        let mut gaps: [(f32, f32); MAX_GAPS] = [(0.0, 0.0); MAX_GAPS];
+        let mut gaps_len: usize = 0;
+        for i in 0..opp_ys_len.saturating_sub(1) {
+            let width = opp_ys[i + 1] - opp_ys[i];
+            let center = (opp_ys[i] + opp_ys[i + 1]) * 0.5;
+            gaps[gaps_len] = (width, center);
+            gaps_len += 1;
+        }
+        gaps[..gaps_len].sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
         // Rank THIS forward among our forwards by id so each one picks
         // a distinct gap (id-based so the assignment is stable tick
@@ -153,8 +164,8 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         // there are fewer gaps than forwards. Also skew slightly
         // toward a different gap than the nearest teammate would have
         // picked (nearest forward might still be in my slot range).
-        let gap_idx = slot_index.min(gaps.len().saturating_sub(1));
-        let target_y = if gaps.is_empty() {
+        let gap_idx = slot_index.min(gaps_len.saturating_sub(1));
+        let target_y = if gaps_len == 0 {
             field_height / 2.0
         } else {
             gaps[gap_idx].1

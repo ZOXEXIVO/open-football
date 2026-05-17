@@ -436,7 +436,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             let minutes = player.minutes_played_at(context.total_match_time);
             let mut stats = player.to_match_end_stats(minutes);
-            stats.match_rating = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
+            stats.match_rating =
+                RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
 
             result.player_stats.insert(player.id, stats);
 
@@ -449,9 +450,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // `context.substituted_out_physical_snapshots` so the same
             // player never gets two snapshots.
             let phys_snapshot = player.to_physical_snapshot(context.total_match_time);
-            result
-                .physical_snapshots
-                .insert(player.id, phys_snapshot);
+            result.physical_snapshots.insert(player.id, phys_snapshot);
         }
 
         // Include stats from substituted-out players
@@ -468,7 +467,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 (away_goals, home_goals)
             };
 
-            stats.match_rating = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
+            stats.match_rating =
+                RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
 
             result.player_stats.insert(player_id, stats);
         }
@@ -823,13 +823,46 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut tick_parity: u32 = 0;
         let mut coach_eval_counter: u32 = 0;
         let mut tactical_eval_counter: u32 = 0;
-        const TACTICAL_INTERVAL_TICKS: u32 = 10;
+        // Tactical refresh uses an adaptive cadence: BASE during stable
+        // play, TRANSITION right after possession swings / set-piece
+        // restarts / goals / coach-instruction changes / ball entering
+        // or leaving the attacking third. Each "transition trigger"
+        // opens a TRANSITION_WINDOW_TICKS window during which the
+        // cheaper TRANSITION interval is used.
+        const BASE_TACTICAL_INTERVAL_TICKS: u32 = 25;
+        const TRANSITION_TACTICAL_INTERVAL_TICKS: u32 = 10;
+        const TRANSITION_WINDOW_TICKS: u32 = 40;
+        let mut transition_window_remaining: u32 = TRANSITION_WINDOW_TICKS;
+        // Snapshots used to detect transition triggers between refresh
+        // points without a per-tick walk over players.
+        let mut last_owner_id: Option<u32> = field.ball.current_owner;
+        let mut last_possession_team: Option<u32> = last_owner_id
+            .and_then(|id| field.players.iter().find(|p| p.id == id).map(|p| p.team_id));
+        let mut last_home_score: u8 = context.score.home_team.get();
+        let mut last_away_score: u8 = context.score.away_team.get();
+        let mut last_home_instruction = context.coach_home.instruction;
+        let mut last_away_instruction = context.coach_away.instruction;
+        let mut last_home_zone = context.tactical_home.ball_zone;
+        let mut last_away_zone = context.tactical_away.ball_zone;
+        // Position recording cursor — replaces the per-tick
+        // `timestamp % POSITION_RECORD_INTERVAL_MS == 0` check. Round
+        // the starting timestamp UP to the next multiple of the
+        // recording interval so a half restart preserves the original
+        // 30 ms cadence (the loop increments time *before* the body,
+        // so we never see `t == 0`).
+        let initial_t = context.total_match_time;
+        let mut next_position_record_ms: u64 =
+            (initial_t / Self::POSITION_RECORD_INTERVAL_MS + 1) * Self::POSITION_RECORD_INTERVAL_MS;
+        let track_positions = match_data.is_tracking_positions();
 
         while context.increment_time() {
             tick_count += 1;
             tick_parity += 1;
             coach_eval_counter += 1;
             tactical_eval_counter += 1;
+            if transition_window_remaining > 0 {
+                transition_window_remaining -= 1;
+            }
 
             // Coach evaluates every 500 ticks (~5 seconds of match time)
             if coach_eval_counter >= 500 {
@@ -844,21 +877,103 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
 
             // Team-level tactical state (phase, possession timers, line
-            // height) refreshes every 10 ticks — too fast and we chase
-            // flicker in the ball-owner signal; too slow and transition
-            // windows (≤50 ticks) lose resolution.
-            if tactical_eval_counter >= TACTICAL_INTERVAL_TICKS {
+            // height) used a fixed 10-tick cadence. Adaptive cadence:
+            // stable possession uses BASE (25 ticks), while a 40-tick
+            // window after any transition trigger drops to TRANSITION
+            // (10 ticks) so phase/line-height/transition windows still
+            // resolve crisply when the game state actually shifts.
+            //
+            // Triggers (each cheap, no per-tick player walks):
+            //   • possession owner team changed
+            //   • score changed (goal scored — handled via reset path)
+            //   • coach instruction changed for either side
+            //   • ball zone moved into / out of attacking third for
+            //     either side
+            //
+            // Set-piece restarts are covered indirectly: kickoff /
+            // corner / goal kick all reassign the ball owner, which
+            // flips `last_possession_team` and re-opens the window.
+            //
+            // Cheap fast path: most ticks have the same `current_owner`
+            // as the previous tick (passes/dribbles span many ticks).
+            // Only re-resolve `team_id` via a 22-element scan when the
+            // raw id actually changed since the last evaluation.
+            let raw_owner = field.ball.current_owner;
+            let current_owner_team = if raw_owner == last_owner_id {
+                last_possession_team
+            } else {
+                last_owner_id = raw_owner;
+                raw_owner
+                    .and_then(|id| field.players.iter().find(|p| p.id == id).map(|p| p.team_id))
+            };
+            let possession_changed =
+                current_owner_team != last_possession_team && current_owner_team.is_some();
+            let home_score_now = context.score.home_team.get();
+            let away_score_now = context.score.away_team.get();
+            let score_changed =
+                home_score_now != last_home_score || away_score_now != last_away_score;
+            let home_instr_now = context.coach_home.instruction;
+            let away_instr_now = context.coach_away.instruction;
+            let instr_changed =
+                home_instr_now != last_home_instruction || away_instr_now != last_away_instruction;
+            let home_zone_now = context.tactical_home.ball_zone;
+            let away_zone_now = context.tactical_away.ball_zone;
+            // Attacking-third entry/exit on either side.
+            use crate::r#match::BallZone;
+            let zone_changed = matches!(home_zone_now, BallZone::AttackingThird)
+                != matches!(last_home_zone, BallZone::AttackingThird)
+                || matches!(away_zone_now, BallZone::AttackingThird)
+                    != matches!(last_away_zone, BallZone::AttackingThird);
+            if possession_changed || score_changed || instr_changed || zone_changed {
+                transition_window_remaining = TRANSITION_WINDOW_TICKS;
+                if possession_changed {
+                    last_possession_team = current_owner_team;
+                }
+                if score_changed {
+                    last_home_score = home_score_now;
+                    last_away_score = away_score_now;
+                }
+                if instr_changed {
+                    last_home_instruction = home_instr_now;
+                    last_away_instruction = away_instr_now;
+                }
+                if zone_changed {
+                    last_home_zone = home_zone_now;
+                    last_away_zone = away_zone_now;
+                }
+            }
+
+            let tactical_interval = if transition_window_remaining > 0 {
+                TRANSITION_TACTICAL_INTERVAL_TICKS
+            } else {
+                BASE_TACTICAL_INTERVAL_TICKS
+            };
+            if tactical_eval_counter >= tactical_interval {
                 let interval = tactical_eval_counter;
                 tactical_eval_counter = 0;
                 Self::refresh_tactical_states(field, context, interval);
+                // refresh_tactical_states may have repointed
+                // ball_zone — re-snapshot to avoid spuriously
+                // re-triggering the window on the next tick.
+                last_home_zone = context.tactical_home.ball_zone;
+                last_away_zone = context.tactical_away.ball_zone;
             }
 
             // Full tick: ball + player AI + events
             // Light tick: ball + player movement only (no AI re-evaluation)
             if tick_parity & 1 == 0 {
-                Self::game_tick_light(field, context, match_data, &mut events);
+                Self::game_tick_light(field, context, match_data, &mut tick_ctx, &mut events);
             } else {
                 Self::game_tick_inner(field, context, match_data, &mut tick_ctx, &mut events);
+            }
+
+            // Replay-position recording, gated by a cursor instead of
+            // a per-tick modulo. Same 30 ms cadence as before; just one
+            // u64 comparison + add per tick when nothing is being
+            // tracked (the dominant production case).
+            if track_positions && context.total_match_time >= next_position_record_ms {
+                Self::write_match_positions(field, context.total_match_time, match_data);
+                next_position_record_ms += Self::POSITION_RECORD_INTERVAL_MS;
             }
 
             // Substitutions allowed from the second half onwards, plus
@@ -1265,24 +1380,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             0.5
         };
 
-        // Per-team skill composite aggregates. Computed here so the
-        // tactical refresh can size line height, press sustainability,
-        // and build-up patience by the team's actual collective skill —
-        // not just the raw `current_ability` average. Uses the engine's
-        // own composite helpers so attribute reads pass through fatigue.
-        let minute_now = sc::minute_from_ms(context.total_match_time);
-        let mut home_skills = SkillAccumulator::new();
-        let mut away_skills = SkillAccumulator::new();
-        for p in field.players.iter().filter(|p| !p.is_sent_off) {
-            let bucket = if p.team_id == context.field_home_team_id {
-                &mut home_skills
-            } else {
-                &mut away_skills
-            };
-            bucket.add(p, minute_now);
+        // Per-team skill composite aggregates. Recomputed only every
+        // SKILL_AGGREGATE_INTERVAL_TICKS (or on roster invalidation) —
+        // each pass walks 22 players and calls 6-8 fatigue-aware
+        // composite helpers per player, so dropping the cadence from
+        // every-tactical-refresh to ~once per second cuts a sizable
+        // chunk of refresh CPU. The previous fixed-cadence value
+        // could be tens of thousands of times per match; the cache
+        // brings it down to ~5_400.
+        const SKILL_AGGREGATE_INTERVAL_TICKS: u64 = 100;
+        let current_tick = context.current_tick();
+        let needs_recompute = context.skill_aggregates_dirty
+            || current_tick.saturating_sub(context.last_skill_aggregate_tick)
+                >= SKILL_AGGREGATE_INTERVAL_TICKS;
+        if needs_recompute {
+            let minute_now = sc::minute_from_ms(context.total_match_time);
+            let mut home_skills = SkillAccumulator::new();
+            let mut away_skills = SkillAccumulator::new();
+            for p in field.players.iter().filter(|p| !p.is_sent_off) {
+                let bucket = if p.team_id == context.field_home_team_id {
+                    &mut home_skills
+                } else {
+                    &mut away_skills
+                };
+                bucket.add(p, minute_now);
+            }
+            context.home_skill_aggregates = home_skills.finalize();
+            context.away_skill_aggregates = away_skills.finalize();
+            context.last_skill_aggregate_tick = current_tick;
+            context.skill_aggregates_dirty = false;
         }
-        let home_skill_aggregates = home_skills.finalize();
-        let away_skill_aggregates = away_skills.finalize();
+        let home_skill_aggregates = context.home_skill_aggregates;
+        let away_skill_aggregates = context.away_skill_aggregates;
 
         let home_goals = context.score.home_team.get() as i16;
         let away_goals = context.score.away_team.get() as i16;
@@ -1369,6 +1498,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     ) {
         let mut events = EventCollection::with_capacity(10);
         Self::game_tick_inner(field, context, match_data, tick_ctx, &mut events);
+        // Keep this public single-tick wrapper self-contained — the
+        // play_inner loop now gates position recording with a cursor
+        // (`next_position_record_ms`) for efficiency, but external
+        // callers of `game_tick` still expect each call to emit a
+        // position sample when the timestamp is on the 30 ms cadence.
+        Self::write_match_positions(field, context.total_match_time, match_data);
     }
 
     /// Light tick: full ball logic (physics, ownership, goals) but players only move.
@@ -1376,6 +1511,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field: &mut MatchField,
         context: &mut MatchContext,
         match_data: &mut ResultMatchPositionData,
+        tick_ctx: &mut GameTickContext,
         events: &mut EventCollection,
     ) {
         events.clear();
@@ -1387,11 +1523,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Shot-flight GK reactivity: normally light ticks skip player
         // AI to save CPU, but during a shot the keeper needs continuous
         // decisions to close on the intercept line. Run just the two
-        // goalkeepers (cheap, ~2 of 22 players) when a shot is in flight.
+        // goalkeepers (cheap, ~2 of 22 players) when a shot is in
+        // flight. Refresh the *existing* tick_ctx in place instead of
+        // allocating a fresh GameTickContext (grid+space buffers) every
+        // light tick during the shot window.
         if field.ball.cached_shot_target.is_some() {
-            let mut tick_ctx = GameTickContext::new(field);
-            tick_ctx.update(field);
-            Self::play_goalkeepers(field, context, &tick_ctx, events);
+            tick_ctx.update_for_goalkeeper_shot(field);
+            Self::play_goalkeepers(field, context, tick_ctx, events);
         }
 
         // Skip sent-off players: they've been stashed at (-500, -500). A
@@ -1407,8 +1545,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             EventDispatcher::dispatch(events, field, context, match_data, true);
             handle_goal_reset(field, context);
         }
-
-        Self::write_match_positions(field, context.total_match_time, match_data);
     }
 
     fn game_tick_inner(
@@ -1436,8 +1572,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         EventDispatcher::dispatch(events, field, context, match_data, true);
 
         handle_goal_reset(field, context);
-
-        Self::write_match_positions(field, context.total_match_time, match_data);
     }
 
     /// Corner kicks and goal kicks rewrite ball ownership inside `ball.update`,
@@ -1449,7 +1583,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// nulls ownership on the very next tick — ball stalls for seconds.
     fn apply_pending_set_piece_teleport(field: &mut MatchField) {
         if let Some((player_id, ball_pos)) = field.ball.pending_set_piece_teleport.take() {
-            if let Some(p) = field.players.iter_mut().find(|p| p.id == player_id) {
+            if let Some(idx) = field.player_index(player_id) {
+                let p = &mut field.players[idx];
                 p.position = ball_pos;
                 p.velocity = nalgebra::Vector3::zeros();
                 p.in_state_time = 0;
@@ -1467,24 +1602,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let Some((keeper_id, shooter_id)) = field.ball.pending_save_credit.take() else {
             return;
         };
-        // Validate teams differ — defence in depth against any
-        // accidental same-team shooter (deflections that route through
-        // the save handler should already be filtered upstream).
-        let keeper_team = field
-            .players
-            .iter()
-            .find(|p| p.id == keeper_id)
-            .map(|p| p.team_id);
-        let shooter_team = field
-            .players
-            .iter()
-            .find(|p| p.id == shooter_id)
-            .map(|p| p.team_id);
-        if keeper_team.is_none() || shooter_team.is_none() || keeper_team == shooter_team {
+        // One pass over the 22-player list resolves both ids. The team-
+        // mismatch guard is defence in depth against any accidental
+        // same-team shooter — deflections through the save handler
+        // should already have been filtered upstream.
+        let Some((keeper_idx, shooter_idx)) = field.two_player_indices(keeper_id, shooter_id)
+        else {
+            return;
+        };
+        let keeper_team = field.players[keeper_idx].team_id;
+        let shooter_team = field.players[shooter_idx].team_id;
+        if keeper_team == shooter_team {
             return;
         }
         let shot_xg = field.ball.last_shot_xg;
-        if let Some(gk) = field.players.iter_mut().find(|p| p.id == keeper_id) {
+        {
+            let gk = &mut field.players[keeper_idx];
             gk.statistics.saves += 1;
             gk.statistics.shots_faced += 1;
             // The GK denied a shot worth `shot_xg` xG — full credit goes
@@ -1494,9 +1627,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 gk.statistics.record_xg_prevented(shot_xg);
             }
         }
-        if let Some(shooter) = field.players.iter_mut().find(|p| p.id == shooter_id) {
-            shooter.memory.credit_shot_on_target();
-        }
+        field.players[shooter_idx].memory.credit_shot_on_target();
         // Shot has resolved (saved). Drop the metadata so any
         // subsequent goal / save event can't double-credit.
         field.ball.clear_shot_metadata();

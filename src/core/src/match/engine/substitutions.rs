@@ -617,6 +617,10 @@ impl Substitutions {
         );
         context.record_stoppage_time(30_000);
         context.players.remove_player(player_out_id);
+        // Active XI changed — invalidate cached per-team skill
+        // composites so the next tactical refresh re-walks the
+        // roster.
+        context.invalidate_skill_aggregates();
 
         if let Some(field_player) = field.get_player(player_in_id) {
             context
@@ -832,8 +836,7 @@ mod tests {
         use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
         use nalgebra::Vector3;
 
-        let mut fresh =
-            build_match_player(d(1998, 1, 1), PlayerPositionType::MidfielderCenter);
+        let mut fresh = build_match_player(d(1998, 1, 1), PlayerPositionType::MidfielderCenter);
         let mut heavy_legs =
             build_match_player(d(1998, 1, 1), PlayerPositionType::MidfielderCenter);
 

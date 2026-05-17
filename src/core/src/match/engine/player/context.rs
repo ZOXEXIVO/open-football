@@ -27,6 +27,19 @@ impl GameTickContext {
         self.space.update(field);
     }
 
+    /// Cheaper refresh used during shot-flight light ticks where only
+    /// the two goalkeepers run AI. Skips `Space` (raycast / pass-line
+    /// scratchpad) because GK strategies don't read it — they react off
+    /// `BallMetadata::cached_shot_target` and live positions. Keeps
+    /// ball + player positions + spatial grid in sync so the keeper's
+    /// distance-to-ball and chase decisions stay correct.
+    #[inline]
+    pub fn update_for_goalkeeper_shot(&mut self, field: &MatchField) {
+        self.ball.update(field);
+        self.positions.update(field);
+        self.grid.update(field);
+    }
+
     /// Refresh just the ball view. Used between `play_ball` and
     /// `play_players` so the dispatcher's TakeBall assignment sees the
     /// latest ownership — otherwise a player who just claimed mid-tick

@@ -74,6 +74,10 @@ impl StateManager {
         if context.state.match_state.need_swap_squads() {
             field.swap_squads();
             context.tactics = TeamsTactics::from_field(field);
+            // Side swap rebinds positional roles per side, so the
+            // cached per-team composites must be recomputed before
+            // the next tactical refresh.
+            context.invalidate_skill_aggregates();
         }
 
         if play_result.additional_time > 0 {

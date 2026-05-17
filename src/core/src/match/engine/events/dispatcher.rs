@@ -7,68 +7,170 @@ pub enum Event {
     PlayerEvent(PlayerEvent),
 }
 
+/// Inline capacity for the per-state EventCollection. Sized to cover
+/// the 0-1 event case (the dominant path) plus small bursts (tackle +
+/// foul, claim + clear) without spilling to the heap.
+pub const INLINE_EVENT_CAP: usize = 4;
+/// Inline capacity for the dispatcher's `remaining_events` collection
+/// — slightly larger since downstream handlers can fan out before any
+/// spill occurs.
+pub const DISPATCH_REMAINING_INLINE_CAP: usize = 8;
+
 pub struct EventCollection {
-    events: Vec<Event>,
+    inline: [Option<Event>; INLINE_EVENT_CAP],
+    inline_len: u8,
+    overflow: Vec<Event>,
+}
+
+impl Default for EventCollection {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EventCollection {
-    /// Create empty collection without heap allocation.
-    /// Use `with_capacity` only for the reusable per-tick collection.
+    /// Allocation-free constructor: the inline buffer covers 0..=4
+    /// events, the overflow Vec stays empty until it's actually needed.
+    #[inline]
     pub fn new() -> Self {
-        EventCollection { events: Vec::new() }
+        EventCollection {
+            inline: std::array::from_fn(|_| None),
+            inline_len: 0,
+            overflow: Vec::new(),
+        }
     }
 
+    /// Pre-size the overflow Vec for callers that know they'll spill
+    /// past INLINE_EVENT_CAP. Smaller capacities stay allocation-free.
+    #[inline]
     pub fn with_capacity(cap: usize) -> Self {
+        let extra = cap.saturating_sub(INLINE_EVENT_CAP);
         EventCollection {
-            events: Vec::with_capacity(cap),
+            inline: std::array::from_fn(|_| None),
+            inline_len: 0,
+            overflow: if extra > 0 {
+                Vec::with_capacity(extra)
+            } else {
+                Vec::new()
+            },
         }
     }
 
+    /// Single-event constructor — allocation-free.
+    #[inline]
     pub fn with_event(event: Event) -> Self {
-        EventCollection {
-            events: vec![event],
-        }
+        let mut c = Self::new();
+        c.add(event);
+        c
     }
 
+    #[inline]
     pub fn add(&mut self, event: Event) {
-        self.events.push(event)
-    }
-
-    pub fn add_ball_event(&mut self, event: BallEvent) {
-        self.events.push(Event::BallEvent(event))
-    }
-
-    pub fn add_player_event(&mut self, event: PlayerEvent) {
-        self.events.push(Event::PlayerEvent(event))
-    }
-
-    pub fn add_range(&mut self, events: Vec<Event>) {
-        for event in events {
-            self.events.push(event);
+        let n = self.inline_len as usize;
+        if n < INLINE_EVENT_CAP {
+            self.inline[n] = Some(event);
+            self.inline_len = (n + 1) as u8;
+        } else {
+            self.overflow.push(event);
         }
     }
 
-    pub fn add_from_collection(&mut self, events: EventCollection) {
-        for event in events.events {
-            self.events.push(event);
+    #[inline]
+    pub fn add_ball_event(&mut self, event: BallEvent) {
+        self.add(Event::BallEvent(event))
+    }
+
+    #[inline]
+    pub fn add_player_event(&mut self, event: PlayerEvent) {
+        self.add(Event::PlayerEvent(event))
+    }
+
+    /// Generic over any iterator of `Event` — accepts `Vec<Event>`,
+    /// `vec::Drain`, or any other producer without forcing the caller
+    /// to materialise a Vec first.
+    pub fn add_range<I: IntoIterator<Item = Event>>(&mut self, events: I) {
+        for e in events {
+            self.add(e);
+        }
+    }
+
+    pub fn add_from_collection(&mut self, mut events: EventCollection) {
+        let total = events.inline_len as usize;
+        for slot in events.inline.iter_mut().take(total) {
+            if let Some(ev) = slot.take() {
+                self.add(ev);
+            }
+        }
+        events.inline_len = 0;
+        if !events.overflow.is_empty() {
+            for e in events.overflow.drain(..) {
+                self.add(e);
+            }
         }
     }
 
     #[inline]
     pub fn has_events(&self) -> bool {
-        !self.events.is_empty()
+        self.inline_len > 0 || !self.overflow.is_empty()
     }
 
+    #[inline]
     pub fn clear(&mut self) {
-        self.events.clear();
+        let n = self.inline_len as usize;
+        for slot in self.inline.iter_mut().take(n) {
+            *slot = None;
+        }
+        self.inline_len = 0;
+        self.overflow.clear();
     }
 
-    pub fn drain(&mut self) -> std::vec::Drain<'_, Event> {
-        self.events.drain(..)
+    /// Move every event out of the collection, leaving it empty once
+    /// the returned iterator is fully consumed (or dropped).
+    pub fn drain(&mut self) -> EventDrain<'_> {
+        let inline_total = self.inline_len as usize;
+        // Reset length up front: drain semantically empties the
+        // collection, and the iterator's own Drop guarantees any
+        // un-consumed inline slots get cleared.
+        self.inline_len = 0;
+        let overflow = std::mem::take(&mut self.overflow);
+        EventDrain {
+            coll: self,
+            inline_idx: 0,
+            inline_total,
+            overflow_iter: overflow.into_iter(),
+        }
     }
+}
 
-    pub fn to_vec(self) -> Vec<Event> {
-        self.events
+pub struct EventDrain<'a> {
+    coll: &'a mut EventCollection,
+    inline_idx: usize,
+    inline_total: usize,
+    overflow_iter: std::vec::IntoIter<Event>,
+}
+
+impl<'a> Iterator for EventDrain<'a> {
+    type Item = Event;
+
+    fn next(&mut self) -> Option<Event> {
+        while self.inline_idx < self.inline_total {
+            let i = self.inline_idx;
+            self.inline_idx += 1;
+            if let Some(e) = self.coll.inline[i].take() {
+                return Some(e);
+            }
+        }
+        self.overflow_iter.next()
+    }
+}
+
+impl<'a> Drop for EventDrain<'a> {
+    fn drop(&mut self) {
+        while self.inline_idx < self.inline_total {
+            let i = self.inline_idx;
+            self.inline_idx += 1;
+            self.coll.inline[i] = None;
+        }
     }
 }
 
@@ -98,7 +200,11 @@ impl EventDispatcher {
         match_data: &mut ResultMatchPositionData,
         process_remaining_events: bool,
     ) {
-        let mut remaining_events: Vec<Event> = Vec::new();
+        // Inline storage for the recursion buffer — most chained
+        // events fan out to 0-2 follow-ups; only a goal-reset cascade
+        // ever fills more than the inline cap.
+        let mut remaining_events: EventCollection =
+            EventCollection::with_capacity(DISPATCH_REMAINING_INLINE_CAP);
 
         for event in events {
             match event {
@@ -114,11 +220,11 @@ impl EventDispatcher {
                         }
                     }
 
-                    let mut ball_remaining_events =
+                    let ball_remaining_events =
                         BallEventDispatcher::dispatch(ball_event, field, context);
 
                     if process_remaining_events && !ball_remaining_events.is_empty() {
-                        remaining_events.append(&mut ball_remaining_events);
+                        remaining_events.add_range(ball_remaining_events);
                     }
                 }
                 Event::PlayerEvent(player_event) => {
@@ -133,24 +239,18 @@ impl EventDispatcher {
                         }
                     }
 
-                    let mut player_remaining_events =
+                    let player_remaining_events =
                         PlayerEventDispatcher::dispatch(player_event, field, context, match_data);
 
                     if process_remaining_events && !player_remaining_events.is_empty() {
-                        remaining_events.append(&mut player_remaining_events);
+                        remaining_events.add_range(player_remaining_events);
                     }
                 }
             }
         }
 
-        if process_remaining_events && !remaining_events.is_empty() {
-            Self::dispatch_iter(
-                remaining_events.into_iter(),
-                field,
-                context,
-                match_data,
-                false,
-            )
+        if process_remaining_events && remaining_events.has_events() {
+            Self::dispatch_iter(remaining_events.drain(), field, context, match_data, false)
         }
     }
 }

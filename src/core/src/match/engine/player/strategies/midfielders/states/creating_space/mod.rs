@@ -182,20 +182,42 @@ impl MidfielderCreatingSpaceState {
         let scan_center = Vector3::new(ball_pos.x, opposite_y, 0.0);
         let scan_radius = 150.0; // Covers the scan area
 
-        let nearby_opponents: Vec<_> = ctx
+        // Inline fixed-size buffers — at most 11 opponents and 10
+        // teammates (minus self) ever fit in either array. Avoids the
+        // two per-call Vec allocations inside this hot scan helper.
+        const MAX_NEARBY_PLAYERS: usize = 22;
+        let mut nearby_opponents: [(Vector3<f32>, Vector3<f32>); MAX_NEARBY_PLAYERS] =
+            [(Vector3::zeros(), Vector3::zeros()); MAX_NEARBY_PLAYERS];
+        let mut nearby_opponents_len: usize = 0;
+        for o in ctx
             .players()
             .opponents()
             .nearby_at(scan_center, scan_radius)
-            .map(|o| (o.position, o.velocity(ctx)))
-            .collect();
+        {
+            if nearby_opponents_len >= MAX_NEARBY_PLAYERS {
+                break;
+            }
+            nearby_opponents[nearby_opponents_len] = (o.position, o.velocity(ctx));
+            nearby_opponents_len += 1;
+        }
+        let nearby_opponents = &nearby_opponents[..nearby_opponents_len];
 
-        let nearby_teammates: Vec<_> = ctx
+        let mut nearby_teammates: [Vector3<f32>; MAX_NEARBY_PLAYERS] =
+            [Vector3::zeros(); MAX_NEARBY_PLAYERS];
+        let mut nearby_teammates_len: usize = 0;
+        for t in ctx
             .players()
             .teammates()
             .nearby_at(scan_center, scan_radius)
             .filter(|t| t.id != ctx.player.id)
-            .map(|t| t.position)
-            .collect();
+        {
+            if nearby_teammates_len >= MAX_NEARBY_PLAYERS {
+                break;
+            }
+            nearby_teammates[nearby_teammates_len] = t.position;
+            nearby_teammates_len += 1;
+        }
+        let nearby_teammates = &nearby_teammates[..nearby_teammates_len];
 
         // Find the freest zone on that side
         let mut best_position = Vector3::new(ball_pos.x, opposite_y, 0.0);
@@ -220,7 +242,7 @@ impl MidfielderCreatingSpaceState {
 
                 // Calculate congestion using pre-collected players
                 let mut congestion = 0.0f32;
-                for &(opp_pos, opp_vel) in &nearby_opponents {
+                for &(opp_pos, opp_vel) in nearby_opponents {
                     let distance = (opp_pos - test_pos).magnitude();
                     let future_pos = opp_pos + opp_vel * 0.5;
                     let future_distance = (future_pos - test_pos).magnitude();
@@ -232,7 +254,7 @@ impl MidfielderCreatingSpaceState {
                         congestion += 20.0 / (future_distance + 1.0);
                     }
                 }
-                for &tm_pos in &nearby_teammates {
+                for &tm_pos in nearby_teammates {
                     let distance = (tm_pos - test_pos).magnitude();
                     if distance < 25.0 {
                         congestion += 10.0 / (distance + 1.0);

@@ -1539,19 +1539,34 @@ impl ForwardRunningState {
         let player_pos = ctx.player.position;
         let goal_pos = ctx.player().opponent_goal_position();
 
-        let opponents: Vec<MatchPlayerLite> = ctx
-            .players()
-            .opponents()
-            .nearby(100.0)
-            .filter(|opp| {
-                // Only consider opponents between player and goal
-                let to_goal = goal_pos - player_pos;
-                let to_opp = opp.position - player_pos;
-                to_goal.normalize().dot(&to_opp.normalize()) > 0.5
-            })
-            .collect();
+        // Inline fixed-size buffer: at most 11 opponents can pass
+        // the dot-product filter (one team), and we only need their
+        // positions for the O(n²) gap scan.
+        const MAX_OPPONENTS: usize = 11;
+        let mut positions: [Vector3<f32>; MAX_OPPONENTS] = [Vector3::zeros(); MAX_OPPONENTS];
+        let mut n: usize = 0;
+        let to_goal = goal_pos - player_pos;
+        // Skip the filter entirely when the goal direction is
+        // degenerate to avoid a NaN normalize.
+        if to_goal.norm_squared() < 1e-6 {
+            return None;
+        }
+        let goal_dir = to_goal.normalize();
+        for opp in ctx.players().opponents().nearby(100.0) {
+            let to_opp = opp.position - player_pos;
+            if to_opp.norm_squared() < 1e-6 {
+                continue;
+            }
+            if goal_dir.dot(&to_opp.normalize()) > 0.5 {
+                if n >= MAX_OPPONENTS {
+                    break;
+                }
+                positions[n] = opp.position;
+                n += 1;
+            }
+        }
 
-        if opponents.len() < 2 {
+        if n < 2 {
             return None;
         }
 
@@ -1559,10 +1574,10 @@ impl ForwardRunningState {
         let mut best_gap = None;
         let mut best_gap_size = 0.0;
 
-        for i in 0..opponents.len() {
-            for j in i + 1..opponents.len() {
-                let gap_center = (opponents[i].position + opponents[j].position) * 0.5;
-                let gap_size = (opponents[i].position - opponents[j].position).magnitude();
+        for i in 0..n {
+            for j in i + 1..n {
+                let gap_center = (positions[i] + positions[j]) * 0.5;
+                let gap_size = (positions[i] - positions[j]).magnitude();
 
                 if gap_size > best_gap_size && gap_size > 20.0 {
                     best_gap_size = gap_size;

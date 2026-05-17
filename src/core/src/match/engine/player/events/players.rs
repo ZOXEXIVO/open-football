@@ -2663,6 +2663,9 @@ impl PlayerEventDispatcher {
             if let Some(tid) = team_id {
                 field.compact_after_dismissal(tid);
             }
+            // Roster effectively changed (one fewer active player) —
+            // invalidate the cached team skill composites.
+            context.invalidate_skill_aggregates();
 
             if second_yellow {
                 debug!(

@@ -11,7 +11,7 @@ use crate::r#match::rules::MatchRules;
 use crate::r#match::{
     GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach,
     MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score,
-    TeamTacticalState, TeamsTactics,
+    TeamSkillAggregates, TeamTacticalState, TeamsTactics,
 };
 use nalgebra::Vector3;
 
@@ -132,6 +132,20 @@ pub struct MatchContext {
     /// transition.
     pub starting_home_tactic: Option<MatchTacticType>,
     pub starting_away_tactic: Option<MatchTacticType>,
+
+    /// Per-team skill composite aggregates, cached between refresh
+    /// passes. The raw recompute walks every active player and
+    /// queries 6-8 fatigue-aware skill composites, so we recompute
+    /// only every ~100 ticks (~1 sim-second) instead of on every
+    /// tactical refresh. Invalidated immediately by substitutions,
+    /// red cards, or halftime side swaps via
+    /// `invalidate_skill_aggregates`.
+    pub home_skill_aggregates: TeamSkillAggregates,
+    pub away_skill_aggregates: TeamSkillAggregates,
+    pub last_skill_aggregate_tick: u64,
+    /// True until the first compute. Marked true again whenever the
+    /// active roster changes (sub / red card / formation swap).
+    pub skill_aggregates_dirty: bool,
 }
 
 impl MatchContext {
@@ -202,7 +216,20 @@ impl MatchContext {
             first_shape_change_minute: None,
             starting_home_tactic: None,
             starting_away_tactic: None,
+            home_skill_aggregates: TeamSkillAggregates::neutral(),
+            away_skill_aggregates: TeamSkillAggregates::neutral(),
+            last_skill_aggregate_tick: 0,
+            skill_aggregates_dirty: true,
         }
+    }
+
+    /// Mark the per-team skill composite cache as stale so the next
+    /// tactical refresh recomputes it. Call this whenever the active
+    /// XI changes — substitution, red card, halftime side swap (the
+    /// per-side fatigue lookups are positionally bound).
+    #[inline]
+    pub fn invalidate_skill_aggregates(&mut self) {
+        self.skill_aggregates_dirty = true;
     }
 
     pub fn tactical_for_team(&self, team_id: u32) -> &TeamTacticalState {

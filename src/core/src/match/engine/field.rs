@@ -139,6 +139,66 @@ impl MatchField {
         self.players.iter_mut().find(|p| p.id == id)
     }
 
+    /// Single-pass linear lookup for a player's index in
+    /// `self.players`. Cheaper than two `iter().find()` calls when the
+    /// caller wants both keeper+shooter (or any pair) — see
+    /// `two_player_indices`.
+    #[inline]
+    pub fn player_index(&self, id: u32) -> Option<usize> {
+        self.players.iter().position(|p| p.id == id)
+    }
+
+    /// One pass over the player list to resolve two ids to indices.
+    /// Returns `Some((idx_a, idx_b))` only when both are present.
+    /// Order in the returned tuple matches the order of the arguments,
+    /// independent of pitch ordering.
+    #[inline]
+    pub fn two_player_indices(&self, a: u32, b: u32) -> Option<(usize, usize)> {
+        let mut idx_a: Option<usize> = None;
+        let mut idx_b: Option<usize> = None;
+        for (i, p) in self.players.iter().enumerate() {
+            if idx_a.is_none() && p.id == a {
+                idx_a = Some(i);
+                if idx_b.is_some() {
+                    break;
+                }
+            } else if idx_b.is_none() && p.id == b {
+                idx_b = Some(i);
+                if idx_a.is_some() {
+                    break;
+                }
+            }
+        }
+        match (idx_a, idx_b) {
+            (Some(ia), Some(ib)) => Some((ia, ib)),
+            _ => None,
+        }
+    }
+
+    /// Two-player mutable borrow via `split_at_mut`, safe when the
+    /// indices differ. Returns `None` if the ids resolve to the same
+    /// player or either is missing. Order of the returned references
+    /// matches the order of `a, b`.
+    pub fn two_players_mut(
+        &mut self,
+        a: u32,
+        b: u32,
+    ) -> Option<(&mut MatchPlayer, &mut MatchPlayer)> {
+        let (ia, ib) = self.two_player_indices(a, b)?;
+        if ia == ib {
+            return None;
+        }
+        let (lo, hi) = if ia < ib { (ia, ib) } else { (ib, ia) };
+        let (left, right) = self.players.split_at_mut(hi);
+        let lo_ref = &mut left[lo];
+        let hi_ref = &mut right[0];
+        if ia < ib {
+            Some((lo_ref, hi_ref))
+        } else {
+            Some((hi_ref, lo_ref))
+        }
+    }
+
     pub fn substitute_player(&mut self, player_out_id: u32, player_in_id: u32) -> bool {
         // Find the outgoing player's position info
         let out_info = match self.players.iter().find(|p| p.id == player_out_id) {
@@ -187,8 +247,8 @@ fn setup_player_on_field(
     right_team_squad: MatchSquad,
 ) -> (Vec<MatchPlayer>, Vec<MatchPlayer>) {
     let setup_squad = |squad: MatchSquad, side: PlayerSide| {
-        let mut players = Vec::new();
-        let mut subs = Vec::new();
+        let mut players = Vec::with_capacity(squad.main_squad.len());
+        let mut subs = Vec::with_capacity(squad.substitutes.len());
 
         for mut player in squad.main_squad {
             player.side = Some(side);
@@ -212,13 +272,26 @@ fn setup_player_on_field(
         (players, subs)
     };
 
-    let (left_players, left_subs) = setup_squad(left_team_squad, PlayerSide::Left);
+    let left_main_len = left_team_squad.main_squad.len();
+    let right_main_len = right_team_squad.main_squad.len();
+    let left_sub_len = left_team_squad.substitutes.len();
+    let right_sub_len = right_team_squad.substitutes.len();
+
+    let (mut left_players, mut left_subs) = setup_squad(left_team_squad, PlayerSide::Left);
     let (right_players, right_subs) = setup_squad(right_team_squad, PlayerSide::Right);
 
-    (
-        [left_players, right_players].concat(),
-        [left_subs, right_subs].concat(),
-    )
+    // Preallocate combined buffers and extend in place — the previous
+    // `[a, b].concat()` round-tripped through a temporary array AND
+    // allocated a fresh Vec for each output.
+    let mut players = Vec::with_capacity(left_main_len + right_main_len);
+    players.append(&mut left_players);
+    players.extend(right_players);
+
+    let mut substitutes = Vec::with_capacity(left_sub_len + right_sub_len);
+    substitutes.append(&mut left_subs);
+    substitutes.extend(right_subs);
+
+    (players, substitutes)
 }
 
 fn get_player_position(player: &MatchPlayer, side: PlayerSide) -> Option<Vector3<f32>> {

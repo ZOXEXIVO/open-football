@@ -616,22 +616,26 @@ impl ForwardPassingState {
         // Collect opponent POSITIONS only (24 bytes each), not full player
         // refs — we only need positions for the O(n²) gap scan.
         let goal_distance = (goal_pos - player_pos).magnitude();
-        let opponent_positions: Vec<Vector3<f32>> = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter_map(|opp| {
-                let to_opp = opp.position - player_pos;
-                let projection = to_opp.dot(&to_goal_direction);
-                if projection > 0.0 && projection < goal_distance {
-                    Some(opp.position)
-                } else {
-                    None
+        // Inline storage: at most 11 opponents pass the projection
+        // filter (one team), and we only need positions for the gap
+        // scan. Skips the per-call Vec allocation.
+        const MAX_OPPONENT_POSITIONS: usize = 11;
+        let mut opponent_positions: [Vector3<f32>; MAX_OPPONENT_POSITIONS] =
+            [Vector3::zeros(); MAX_OPPONENT_POSITIONS];
+        let mut opponent_positions_len: usize = 0;
+        for opp in ctx.players().opponents().all() {
+            let to_opp = opp.position - player_pos;
+            let projection = to_opp.dot(&to_goal_direction);
+            if projection > 0.0 && projection < goal_distance {
+                if opponent_positions_len >= MAX_OPPONENT_POSITIONS {
+                    break;
                 }
-            })
-            .collect();
+                opponent_positions[opponent_positions_len] = opp.position;
+                opponent_positions_len += 1;
+            }
+        }
 
-        if opponent_positions.len() < 2 {
+        if opponent_positions_len < 2 {
             return None;
         }
 
@@ -639,8 +643,8 @@ impl ForwardPassingState {
         let mut best_gap = None;
         let mut max_gap_width = 0.0;
 
-        for i in 0..opponent_positions.len() {
-            for j in i + 1..opponent_positions.len() {
+        for i in 0..opponent_positions_len {
+            for j in i + 1..opponent_positions_len {
                 let pos_i = opponent_positions[i];
                 let pos_j = opponent_positions[j];
 
