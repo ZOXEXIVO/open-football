@@ -512,30 +512,33 @@ impl SimulatorData {
     pub fn process_free_agent_retirements(&mut self, date: NaiveDate) {
         use crate::PlayerStatusType;
 
-        let mut to_retire: Vec<usize> = Vec::new();
-        for (idx, player) in self.free_agents.iter().enumerate() {
-            let Some(state) = player.free_agent_state() else {
-                continue;
-            };
-            let days_free = (date - state.free_since).num_days();
-            if days_free < 365 {
-                continue;
-            }
-            let months_after_12 = ((days_free - 365) / 30).max(0) as u32;
-            let prob = FreeAgentMarketCalculator::retirement_probability_per_month(
-                months_after_12,
-                player.age(date),
-                player.player_attributes.current_ability,
-                player.player_attributes.world_reputation,
-            );
-            if prob <= 0.0 {
-                continue;
-            }
-            let roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
-            if roll < prob {
-                to_retire.push(idx);
-            }
-        }
+        // Decision phase is per-player independent — run the prob roll
+        // in parallel. Mutation (swap_remove + push into retired_players)
+        // stays serial below because it requires `&mut self`.
+        let mut to_retire: Vec<usize> = self
+            .free_agents
+            .par_iter()
+            .enumerate()
+            .filter_map(|(idx, player)| {
+                let state = player.free_agent_state()?;
+                let days_free = (date - state.free_since).num_days();
+                if days_free < 365 {
+                    return None;
+                }
+                let months_after_12 = ((days_free - 365) / 30).max(0) as u32;
+                let prob = FreeAgentMarketCalculator::retirement_probability_per_month(
+                    months_after_12,
+                    player.age(date),
+                    player.player_attributes.current_ability,
+                    player.player_attributes.world_reputation,
+                );
+                if prob <= 0.0 {
+                    return None;
+                }
+                let roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
+                if roll < prob { Some(idx) } else { None }
+            })
+            .collect();
 
         // Reverse order so swap_remove against earlier indexes doesn't
         // disturb later ones.

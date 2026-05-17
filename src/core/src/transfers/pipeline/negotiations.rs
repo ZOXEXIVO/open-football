@@ -848,15 +848,62 @@ impl PipelineProcessor {
     /// helper closes that gap by sweeping the whole world after the move
     /// actually completes.
     pub fn cleanup_player_transfer_interest(data: &mut SimulatorData, player_id: u32) {
+        Self::cleanup_player_transfer_interest_batch(data, std::slice::from_ref(&player_id));
+    }
+
+    /// Batched version of [`cleanup_player_transfer_interest`]: walks
+    /// every country once and strips interest for every id in
+    /// `player_ids` in a single pass, in parallel across countries.
+    ///
+    /// Phase C used to call the per-player variant inside a tight
+    /// `for signed_id in &ops.domestic_signed_ids` loop for every
+    /// country result — which meant every country's shortlists got
+    /// re-walked once per signed id per country. The orchestrator now
+    /// aggregates all signed ids across the world and calls this once
+    /// per tick, collapsing O(countries × signings × countries) into
+    /// O(countries) work.
+    pub fn cleanup_player_transfer_interest_batch(
+        data: &mut SimulatorData,
+        player_ids: &[u32],
+    ) {
         use crate::transfers::market::TransferListingStatus;
         use crate::transfers::negotiation::NegotiationStatus;
+        use rayon::prelude::*;
+        use std::collections::HashSet;
 
-        for continent in data.continents.iter_mut() {
-            for country in continent.countries.iter_mut() {
-                Self::clear_player_interest(country, player_id);
+        if player_ids.is_empty() {
+            return;
+        }
+        let signed: HashSet<u32> = player_ids.iter().copied().collect();
+
+        data.continents
+            .par_iter_mut()
+            .flat_map(|c| c.countries.par_iter_mut())
+            .for_each(|country| {
+                for club in &mut country.clubs {
+                    let plan = &mut club.transfer_plan;
+                    for assignment in &mut plan.scouting_assignments {
+                        assignment
+                            .observations
+                            .retain(|o| !signed.contains(&o.player_id));
+                    }
+                    plan.scouting_reports
+                        .retain(|r| !signed.contains(&r.player_id));
+                    for shortlist in &mut plan.shortlists {
+                        shortlist
+                            .candidates
+                            .retain(|c| !signed.contains(&c.player_id));
+                    }
+                    plan.staff_recommendations
+                        .retain(|r| !signed.contains(&r.player_id));
+                    plan.loan_out_candidates
+                        .retain(|c| !signed.contains(&c.player_id));
+                    plan.scout_monitoring
+                        .retain(|m| !signed.contains(&m.player_id));
+                }
 
                 for listing in country.transfer_market.listings.iter_mut() {
-                    if listing.player_id == player_id
+                    if signed.contains(&listing.player_id)
                         && listing.status != TransferListingStatus::Completed
                         && listing.status != TransferListingStatus::Cancelled
                     {
@@ -865,7 +912,7 @@ impl PipelineProcessor {
                 }
 
                 for negotiation in country.transfer_market.negotiations.values_mut() {
-                    if negotiation.player_id == player_id
+                    if signed.contains(&negotiation.player_id)
                         && (negotiation.status == NegotiationStatus::Pending
                             || negotiation.status == NegotiationStatus::Countered)
                     {
@@ -874,8 +921,7 @@ impl PipelineProcessor {
                 }
 
                 Self::sync_wanted_status(country);
-            }
-        }
+            });
     }
 
     /// Reconcile `Wnt` statuses with actual interest. `Wnt` is added during

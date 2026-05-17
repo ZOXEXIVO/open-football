@@ -17,9 +17,11 @@ use crate::config::SimulatorConfig;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::ContinentResult;
 use crate::continent::national::world as national_world;
+use crate::continent::ContinentAwardOutcome;
 use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use crate::performance::{PerfCounters, PerfPhase, TickEndContext};
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
+use crate::utils::DateUtils;
 use awards::{
     MondayAwardCache, MonthlyAwardsTick, SeasonAwardsTick, TeamOfTheWeekTick, TeamOfTheYearTick,
     WeeklyAwardsTick, WorldPlayerOfYearTick, YoungTeamOfTheWeekTick, YoungWeeklyAwardsTick,
@@ -137,9 +139,9 @@ impl FootballSimulator {
         let pool_date = data.date.date();
         let world_pool: Vec<PlayerSummary> = data
             .continents
-            .iter()
-            .flat_map(|cont| &cont.countries)
-            .flat_map(|c| PipelineProcessor::collect_player_pool(c, pool_date))
+            .par_iter()
+            .flat_map(|cont| cont.countries.par_iter())
+            .flat_map_iter(|c| PipelineProcessor::collect_player_pool(c, pool_date))
             .collect();
         let global_fa_snapshot: Vec<GlobalFreeAgentSummary> =
             snapshot_global_free_agents(data, pool_date);
@@ -206,6 +208,62 @@ impl FootballSimulator {
         data.daily_global_free_agents = Some(global_fa_snapshot);
         {
             let _g = perf.scope(PerfPhase::ResultProcessing);
+
+            // Continent-local periodic sub-passes — monthly rankings,
+            // quarterly economic zone, yearly regulations, year-end
+            // awards rank + cup-finals. Each closure mutates only its
+            // own continent, so they run in parallel across continents.
+            // Pulled out of the serial drain below because they're the
+            // four heaviest periodic walks (rankings/economics aggregate
+            // every club; the awards walk every player in every team in
+            // every league).
+            let phase_date = current_date.date();
+            let award_outcomes: Vec<ContinentAwardOutcome> = data
+                .continents
+                .par_iter_mut()
+                .filter_map(|continent| {
+                    if DateUtils::is_month_beginning(phase_date) {
+                        ContinentResult::update_continental_rankings(continent);
+                    }
+                    if DateUtils::is_quarter_start(phase_date) {
+                        ContinentResult::update_economic_zone(continent);
+                    }
+                    if DateUtils::is_year_start(phase_date) {
+                        ContinentResult::update_continental_regulations(continent, phase_date);
+                    }
+                    if DateUtils::is_year_end(phase_date) {
+                        Some(ContinentResult::build_continental_award_outcome(
+                            continent, phase_date,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Apply cross-continent player events for the year-end
+            // awards. `data.player_mut` resolves against every
+            // continent, so this stays serial. Small N (3 nominees +
+            // 1 winner per continent per year).
+            for outcome in award_outcomes {
+                ContinentResult::apply_continental_award_outcome(data, outcome, phase_date);
+            }
+
+            // Cross-country interest sweep — batched. Each country's
+            // Phase-A free-agent matching stages domestic signings on
+            // its `DeferredTransferOps.domestic_signed_ids`; the
+            // per-country drain used to fire `cleanup_player_transfer_interest`
+            // for each id, re-walking every other country's shortlists
+            // once per signing. We aggregate every signed id first,
+            // then walk the world once in parallel via
+            // `cleanup_player_transfer_interest_batch`.
+            let all_signed_ids: Vec<u32> = results
+                .iter()
+                .flat_map(|cr| cr.countries.iter())
+                .filter_map(|country_r| country_r.deferred_transfer_ops.as_ref())
+                .flat_map(|ops| ops.domestic_signed_ids.iter().copied())
+                .collect();
+            PipelineProcessor::cleanup_player_transfer_interest_batch(data, &all_signed_ids);
 
             for continent_result in results {
                 continent_result.process(data, &mut result);

@@ -16,6 +16,7 @@ use crate::utils::IntegerUtils;
 use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType, TeamInfo};
 use chrono::NaiveDate;
 use log::debug;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 /// Lightweight snapshot of a player in the global `sim.free_agents` pool.
@@ -703,79 +704,88 @@ pub(crate) fn snapshot_global_free_agents(
     data: &mut SimulatorData,
     date: NaiveDate,
 ) -> Vec<GlobalFreeAgentSummary> {
-    // Pass 1 (immutable): resolve nationality info per unique country.
-    // Two-stage resolve mirrors the rest of the transfer pipeline: an
-    // active country (full `Country`) first, then the lighter
-    // `country_info` map. Without the second stage, the gates fall
-    // back to permissive defaults and an Argentinian free agent slips
-    // through to a Mali buyer. Build a cache keyed by country_id so
-    // the mutable pass below doesn't need a SimulatorData borrow.
-    let mut nationality_cache: HashMap<u32, (u16, u32, String)> = HashMap::new();
-    for player in &data.free_agents {
-        if nationality_cache.contains_key(&player.country_id) {
-            continue;
-        }
-        let resolved = data
-            .country(player.country_id)
-            .map(|c| (c.reputation, c.continent_id, c.code.clone()))
-            .or_else(|| {
-                data.country_info
-                    .get(&player.country_id)
+    // Pass 1 (immutable): resolve nationality info per unique country
+    // in parallel. Two-stage resolve mirrors the rest of the transfer
+    // pipeline: an active country (full `Country`) first, then the
+    // lighter `country_info` map. Without the second stage, the gates
+    // fall back to permissive defaults and an Argentinian free agent
+    // slips through to a Mali buyer. Build a cache keyed by country_id
+    // so the mutable pass below doesn't need a SimulatorData borrow.
+    let unique_country_ids: std::collections::HashSet<u32> =
+        data.free_agents.iter().map(|p| p.country_id).collect();
+    let nationality_cache: HashMap<u32, (u16, u32, String)> = {
+        let data_ref: &SimulatorData = data;
+        unique_country_ids
+            .into_par_iter()
+            .map(|cid| {
+                let resolved = data_ref
+                    .country(cid)
                     .map(|c| (c.reputation, c.continent_id, c.code.clone()))
+                    .or_else(|| {
+                        data_ref
+                            .country_info
+                            .get(&cid)
+                            .map(|c| (c.reputation, c.continent_id, c.code.clone()))
+                    })
+                    // Truly unknown nationality: fail-closed on the rep
+                    // gate (`u16::MAX` blocks every buyer) and pin the
+                    // region to the most prestigious one so the
+                    // prestige gate also rejects, instead of opening
+                    // every door.
+                    .unwrap_or_else(|| (u16::MAX, 1, "gb".to_string()));
+                (cid, resolved)
             })
-            // Truly unknown nationality: fail-closed on the rep gate
-            // (`u16::MAX` blocks every buyer) and pin the region to
-            // the most prestigious one so the prestige gate also
-            // rejects, instead of opening every door.
-            .unwrap_or_else(|| (u16::MAX, 1, "gb".to_string()));
-        nationality_cache.insert(player.country_id, resolved);
-    }
+            .collect()
+    };
 
     // Pass 2 (mutable on the pool only): seed market state for any
     // free agent who arrived without it (database-only entries that
     // never came through `on_release`), then build the snapshot row.
-    let mut summaries: Vec<GlobalFreeAgentSummary> = Vec::with_capacity(data.free_agents.len());
-    for player in data.free_agents.iter_mut() {
-        let (nationality_rep, nationality_continent_id, nationality_country_code) =
-            nationality_cache
-                .get(&player.country_id)
-                .cloned()
-                .unwrap_or_else(|| (u16::MAX, 1, "gb".to_string()));
-        player.ensure_free_agent_state(date, nationality_rep);
+    // Each iteration mutates only its own `Player`, so this runs in
+    // parallel safely.
+    data.free_agents
+        .par_iter_mut()
+        .map(|player| {
+            let (nationality_rep, nationality_continent_id, nationality_country_code) =
+                nationality_cache
+                    .get(&player.country_id)
+                    .cloned()
+                    .unwrap_or_else(|| (u16::MAX, 1, "gb".to_string()));
+            player.ensure_free_agent_state(date, nationality_rep);
 
-        let career_pressure = player.career_pressure(date);
-        let reference_reputation = player.reference_reputation(nationality_rep);
-        let (last_salary, last_country_reputation, last_league_reputation) = player
-            .free_agent_state()
-            .map(|s| {
-                (
-                    s.last_salary,
-                    s.last_country_reputation,
-                    s.last_league_reputation,
-                )
-            })
-            .unwrap_or((0, nationality_rep, ((nationality_rep as f32) * 0.75) as u16));
+            let career_pressure = player.career_pressure(date);
+            let reference_reputation = player.reference_reputation(nationality_rep);
+            let (last_salary, last_country_reputation, last_league_reputation) = player
+                .free_agent_state()
+                .map(|s| {
+                    (
+                        s.last_salary,
+                        s.last_country_reputation,
+                        s.last_league_reputation,
+                    )
+                })
+                .unwrap_or((0, nationality_rep, ((nationality_rep as f32) * 0.75) as u16));
 
-        summaries.push(GlobalFreeAgentSummary {
-            player_id: player.id,
-            player_name: player.full_name.to_string(),
-            ability: player.player_attributes.current_ability,
-            potential: player.player_attributes.potential_ability,
-            age: player.age(date),
-            position_group: player.position().position_group(),
-            nationality_country_reputation: nationality_rep,
-            nationality_continent_id,
-            nationality_country_code,
-            career_pressure,
-            reference_reputation,
-            last_salary,
-            last_country_reputation,
-            last_league_reputation,
-            world_reputation: player.player_attributes.world_reputation,
-            current_reputation: player.player_attributes.current_reputation,
-        });
-    }
-    summaries
+            GlobalFreeAgentSummary {
+                player_id: player.id,
+                player_name: player.full_name.to_string(),
+                ability: player.player_attributes.current_ability,
+                potential: player.player_attributes.potential_ability,
+                age: player.age(date),
+                position_group: player.position().position_group(),
+                nationality_country_reputation: nationality_rep,
+                nationality_continent_id,
+                nationality_country_code,
+                career_pressure,
+                reference_reputation,
+                last_salary,
+                last_country_reputation,
+                last_league_reputation,
+                world_reputation: player.player_attributes.world_reputation,
+                current_reputation: player.player_attributes.current_reputation,
+            }
+        })
+        .collect()
 }
 
 /// Snapshot of the buying side captured *before* we take a mutable borrow

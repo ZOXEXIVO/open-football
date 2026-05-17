@@ -5,31 +5,55 @@ use crate::simulator::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind, HappinessEventType};
 use log::debug;
 
+/// Year-end award outcome staged by the parallel continent pass so the
+/// orchestrator can apply the cross-continent player events serially.
+/// `top_three` and `winner` are filled from the season ranking; cup
+/// finalists are applied inside the parallel pass because they only
+/// touch the continent's own countries.
+pub(crate) struct ContinentAwardOutcome {
+    pub top_three: Vec<u32>,
+    pub winner: Option<u32>,
+}
+
 impl ContinentResult {
-    pub(crate) fn process_continental_awards(
-        &self,
-        data: &mut SimulatorData,
-        _country_results: &[CountryResult],
-    ) {
+    /// Parallel-pass slice of continental awards: rank players inside
+    /// this continent and emit the trophy / final-defeat events to the
+    /// finalists' squads. Returns the top-3 / winner ids so the
+    /// orchestrator can apply the cross-continent player events
+    /// serially (`data.player_mut` walks every continent).
+    pub(crate) fn build_continental_award_outcome(
+        continent: &mut Continent,
+        date: chrono::NaiveDate,
+    ) -> ContinentAwardOutcome {
         debug!("Processing continental awards");
 
-        let continent_id = self.get_continent_id();
-        let date = data.date.date();
-
-        // Build a season-score ranking that drives both shortlist and
-        // winner. Reputation is a tiebreak, never a dominant axis.
-        let ranking: Vec<(u32, f32)> = if let Some(continent) = data.continent(continent_id) {
-            Self::rank_continent(continent, date)
-        } else {
-            return;
-        };
-
+        let ranking = Self::rank_continent(continent, date);
         let top_three: Vec<u32> = ranking.iter().take(3).map(|(id, _)| *id).collect();
         let winner = ranking.first().map(|(id, _)| *id);
 
+        // Continental cup trophies / final defeats. Each tier emits to
+        // both finalists when the engine resolves a `Final` knockout tie.
+        // Today the engine doesn't schedule continental finals, so the
+        // accessors return None and this is a no-op — the wiring is here
+        // so adding final-stage scheduling later auto-fires the events.
+        // Continent-local: only writes to the finalists' own-continent
+        // countries, so it stays in the parallel pass.
+        Self::apply_continental_cup_finals_local(continent, date);
+
+        ContinentAwardOutcome { top_three, winner }
+    }
+
+    /// Apply the cross-continent player events for a year-end award
+    /// outcome. Runs serially after the parallel pass because
+    /// `data.player_mut` resolves against every continent.
+    pub(crate) fn apply_continental_award_outcome(
+        data: &mut SimulatorData,
+        outcome: ContinentAwardOutcome,
+        date: chrono::NaiveDate,
+    ) {
         // Nomination events for the top 3 — guard with cooldowns so a
         // back-to-back year-end recompute doesn't double-emit.
-        for pid in &top_three {
+        for pid in &outcome.top_three {
             if let Some(player) = data.player_mut(*pid) {
                 player.happiness.add_event_default_with_cooldown(
                     HappinessEventType::ContinentalPlayerOfYearNomination,
@@ -38,7 +62,7 @@ impl ContinentResult {
             }
         }
 
-        if let Some(id) = winner {
+        if let Some(id) = outcome.winner {
             if let Some(player) = data.player_mut(id) {
                 player.happiness.add_event_default_with_cooldown(
                     HappinessEventType::ContinentalPlayerOfYear,
@@ -51,13 +75,6 @@ impl ContinentResult {
                 );
             }
         }
-
-        // Continental cup trophies / final defeats. Each tier emits to
-        // both finalists when the engine resolves a `Final` knockout tie.
-        // Today the engine doesn't schedule continental finals, so the
-        // accessors return None and this is a no-op — the wiring is here
-        // so adding final-stage scheduling later auto-fires the events.
-        Self::process_continental_cup_finals(data, continent_id, date);
     }
 
     /// Per-player season-aware ranking across every league of the
@@ -122,54 +139,44 @@ impl ContinentResult {
     /// losing finalist of each continental competition. Prestige factors
     /// follow the canonical band (CL > EL > Conference). Cooldown is
     /// 365 days so back-to-back end-of-period ticks don't double-fire.
-    fn process_continental_cup_finals(
-        data: &mut SimulatorData,
-        continent_id: u32,
-        date: chrono::NaiveDate,
-    ) {
+    /// Continent-local — only touches the continent's own countries, so
+    /// it's safe to run inside the parallel pass.
+    fn apply_continental_cup_finals_local(continent: &mut Continent, date: chrono::NaiveDate) {
         // Snapshot finals up front so we don't keep an immutable borrow
         // while emitting. (CL 1.5 / EL 1.3 / Conference 1.2 reflect the
         // real-world prestige gap.)
-        let finals: Vec<(u32, u32, f32, f32)> =
-            if let Some(continent) = data.continent(continent_id) {
-                let comps = &continent.continental_competitions;
-                let mut v = Vec::new();
-                if let Some((w, l)) = comps.champions_league.final_result() {
-                    v.push((w, l, 1.5, 1.4));
-                }
-                if let Some((w, l)) = comps.europa_league.final_result() {
-                    v.push((w, l, 1.3, 1.2));
-                }
-                if let Some((w, l)) = comps.conference_league.final_result() {
-                    v.push((w, l, 1.2, 1.0));
-                }
-                v
-            } else {
-                return;
-            };
+        let comps = &continent.continental_competitions;
+        let mut finals: Vec<(u32, u32, f32, f32)> = Vec::new();
+        if let Some((w, l)) = comps.champions_league.final_result() {
+            finals.push((w, l, 1.5, 1.4));
+        }
+        if let Some((w, l)) = comps.europa_league.final_result() {
+            finals.push((w, l, 1.3, 1.2));
+        }
+        if let Some((w, l)) = comps.conference_league.final_result() {
+            finals.push((w, l, 1.2, 1.0));
+        }
 
         for (winner_team, loser_team, win_prestige, lose_prestige) in finals {
-            // Locate which country owns each team. Continental cups can
-            // span the whole continent, so we walk the country list.
-            if let Some(continent) = data.continent_mut(continent_id) {
-                for country in continent.countries.iter_mut() {
-                    CountryResult::apply_team_squad_event(
-                        country,
-                        winner_team,
-                        HappinessEventType::TrophyWon,
-                        365,
-                        win_prestige,
-                        date,
-                    );
-                    CountryResult::apply_team_squad_event(
-                        country,
-                        loser_team,
-                        HappinessEventType::CupFinalDefeat,
-                        365,
-                        lose_prestige,
-                        date,
-                    );
-                }
+            // Continental cups can span the whole continent, so we walk
+            // the country list.
+            for country in continent.countries.iter_mut() {
+                CountryResult::apply_team_squad_event(
+                    country,
+                    winner_team,
+                    HappinessEventType::TrophyWon,
+                    365,
+                    win_prestige,
+                    date,
+                );
+                CountryResult::apply_team_squad_event(
+                    country,
+                    loser_team,
+                    HappinessEventType::CupFinalDefeat,
+                    365,
+                    lose_prestige,
+                    date,
+                );
             }
         }
     }

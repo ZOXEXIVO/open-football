@@ -1,52 +1,46 @@
 use super::ContinentResult;
-use crate::continent::{ContinentalCompetitions, ContinentalRankings};
-use crate::simulator::SimulatorData;
-use crate::{Club, Country, SimulationResult};
+use crate::continent::{Continent, ContinentalCompetitions, ContinentalRankings};
+use crate::{Club, Country};
 use log::debug;
 
 impl ContinentResult {
-    pub(crate) fn update_continental_rankings(
-        &self,
-        data: &mut SimulatorData,
-        _result: &mut SimulationResult,
-    ) {
+    /// Continent-local: update country coefficients, club rankings and
+    /// qualification spots from continental competition history. Takes
+    /// `&mut Continent` so the orchestrator can run this in parallel
+    /// across continents (each worker mutates only its own continent).
+    pub(crate) fn update_continental_rankings(continent: &mut Continent) {
         debug!("📊 Updating continental rankings");
 
-        // Get continent from data
-        let continent_id = self.get_continent_id();
-
-        if let Some(continent) = data.continent_mut(continent_id) {
-            // Update country coefficients based on club performances
-            for country in &mut continent.countries {
-                let coefficient = Self::calculate_country_coefficient(
-                    country,
-                    &continent.continental_competitions,
-                );
-                continent
-                    .continental_rankings
-                    .update_country_ranking(country.id, coefficient);
-            }
-
-            // Update club rankings
-            let all_clubs = Self::get_all_clubs(&continent.countries);
-            for club in all_clubs {
-                let club_points = Self::calculate_club_continental_points(
-                    club,
-                    &continent.continental_competitions,
-                );
-                continent
-                    .continental_rankings
-                    .update_club_ranking(club.id, club_points);
-            }
-
-            // Determine continental competition qualifications
-            Self::determine_competition_qualifications(&mut continent.continental_rankings);
-
-            debug!(
-                "Continental rankings updated - Top country: {:?}",
-                continent.continental_rankings.get_top_country()
+        // Update country coefficients based on club performances
+        for country in &mut continent.countries {
+            let coefficient = Self::calculate_country_coefficient(
+                country,
+                &continent.continental_competitions,
             );
+            continent
+                .continental_rankings
+                .update_country_ranking(country.id, coefficient);
         }
+
+        // Update club rankings
+        let all_clubs = Self::get_all_clubs(&continent.countries);
+        for club in all_clubs {
+            let club_points = Self::calculate_club_continental_points(
+                club,
+                &continent.continental_competitions,
+            );
+            continent
+                .continental_rankings
+                .update_club_ranking(club.id, club_points);
+        }
+
+        // Determine continental competition qualifications
+        Self::determine_competition_qualifications(&mut continent.continental_rankings);
+
+        debug!(
+            "Continental rankings updated - Top country: {:?}",
+            continent.continental_rankings.get_top_country()
+        );
     }
 
     fn calculate_country_coefficient(

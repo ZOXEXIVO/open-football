@@ -188,11 +188,12 @@ impl CountryResult {
     ) {
         let config = TransferConfig::default();
 
-        // Cross-country interest sweep for the in-country free-agent
-        // signings that just executed.
-        for signed_id in &ops.domestic_signed_ids {
-            PipelineProcessor::cleanup_player_transfer_interest(data, *signed_id);
-        }
+        // Cross-country interest sweep used to fire per signed id here.
+        // Hoisted into the simulator orchestrator: it now aggregates
+        // every country's `domestic_signed_ids` and calls
+        // `cleanup_player_transfer_interest_batch` once per tick,
+        // collapsing O(countries × signings × countries) into a single
+        // parallel pass over the world.
 
         // Apply free-agent market state — bump 30-day window / rejected
         // counters on each global-pool player that fielded an offer.

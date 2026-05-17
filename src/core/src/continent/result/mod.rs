@@ -5,6 +5,7 @@ mod rankings;
 mod regulations;
 mod types;
 
+pub(crate) use awards::ContinentAwardOutcome;
 pub use types::*;
 
 use crate::SimulationResult;
@@ -12,7 +13,6 @@ use crate::ai::PendingAiRequest;
 use crate::country::CountryResult;
 use crate::r#match::MatchResult;
 use crate::simulator::SimulatorData;
-use crate::utils::DateUtils;
 
 pub struct ContinentResult {
     pub continent_id: u32,
@@ -64,11 +64,6 @@ impl ContinentResult {
             data.match_store.push(match_result.clone(), current_date);
         }
 
-        // Phase 2: Update Continental Rankings (monthly)
-        if DateUtils::is_month_beginning(current_date) {
-            self.update_continental_rankings(data, result);
-        }
-
         // Phase 3: Continental Competition Processing
         if self.is_competition_draw_period(current_date) {
             self.conduct_competition_draws(data, current_date);
@@ -79,20 +74,16 @@ impl ContinentResult {
             self.process_competition_results(comp_results, data, result);
         }
 
-        // Phase 4: Continental Economic Updates (quarterly)
-        if DateUtils::is_quarter_start(current_date) {
-            self.update_economic_zone(data, &self.countries);
-        }
-
-        // Phase 5: Continental Regulatory Updates (yearly)
-        if DateUtils::is_year_start(current_date) {
-            self.update_continental_regulations(data, current_date);
-        }
-
-        // Phase 6: Continental Awards & Recognition (yearly)
-        if DateUtils::is_year_end(current_date) {
-            self.process_continental_awards(data, &self.countries);
-        }
+        // Phases 2/4/5/6 — continental rankings (monthly), economic zone
+        // (quarterly), regulations (yearly), and the player-of-year /
+        // cup-finals rank step (yearly) — were hoisted into the
+        // simulator's parallel continent pre-pass
+        // (`run_continent_periodic_subphases`). Each is disjoint across
+        // continents and used to serialise the four heaviest periodic
+        // walks behind this `for continent_result in results { … }`
+        // drain. The cross-continent player-event slice of awards is
+        // applied immediately after that parallel pass, before this
+        // method runs.
 
         for country_result in self.countries {
             country_result.process(data, result);
