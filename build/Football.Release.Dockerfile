@@ -3,11 +3,16 @@ ARG RUST_VERSION=1.95
 
 # ── Windows x86_64 ────────────────────────────────────────────────────
 
-FROM rust:${RUST_VERSION}-bookworm AS build-windows
+FROM rust:${RUST_VERSION} AS build-windows
 WORKDIR /src
 COPY ./ ./
 
-RUN apt-get update && apt-get install -y gcc-mingw-w64-x86-64 zip
+RUN for i in 1 2 3 4 5; do \
+      apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+      && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 zip \
+      && rm -rf /var/lib/apt/lists/* \
+      && break || { echo "apt failed (attempt \$i), retrying in 15s..."; sleep 15; }; \
+    done
 RUN rustup target add x86_64-pc-windows-gnu
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target/x86_64-pc-windows-gnu \
@@ -18,7 +23,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # ── Linux x86_64 ──────────────────────────────────────────────────────
 
-FROM rust:${RUST_VERSION}-bookworm AS build-linux
+FROM rust:${RUST_VERSION} AS build-linux
 WORKDIR /src
 COPY ./ ./
 
@@ -36,7 +41,10 @@ FROM alpine:latest AS publish
 ARG DRONE_TAG
 ARG DRONE_REPO
 
-RUN apk add --no-cache curl jq
+RUN for i in 1 2 3 4 5; do \
+      apk add --no-cache curl jq && break \
+      || { echo "apk failed (attempt \$i), retrying in 15s..."; sleep 15; }; \
+    done
 
 WORKDIR /release
 COPY --from=build-windows /dist/open-football-windows-x86_64.zip .
