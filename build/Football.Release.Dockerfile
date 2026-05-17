@@ -3,7 +3,7 @@ ARG RUST_VERSION=1.95
 
 # ── Windows x86_64 ────────────────────────────────────────────────────
 
-FROM rust:${RUST_VERSION} AS build-windows
+FROM rust:${RUST_VERSION}-bookworm AS build-windows
 WORKDIR /src
 COPY ./ ./
 
@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # ── Linux x86_64 ──────────────────────────────────────────────────────
 
-FROM rust:${RUST_VERSION} AS build-linux
+FROM rust:${RUST_VERSION}-bookworm AS build-linux
 WORKDIR /src
 COPY ./ ./
 
