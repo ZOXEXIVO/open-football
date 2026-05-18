@@ -107,6 +107,12 @@ impl CountryResult {
         // The snapshot correctly handles is_loan flag from the player's contract.
         // Loan returns then move the player back — if both clubs are in the same
         // country, the snapshot already captured the loan entry correctly.
+        //
+        // The snapshot itself catches up on any seasons whose gate was
+        // missed previously (per-country watermark
+        // `Country::last_snapshotted_season_year`), so a year that
+        // failed the `new_season_started` check is recovered the next
+        // time any league does flip the gate.
         if any_new_season {
             Self::snapshot_player_season_statistics(data, self.country_id);
             Self::process_loan_returns(data, country_id, current_date);

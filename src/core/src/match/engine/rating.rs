@@ -107,12 +107,14 @@ impl<'a> RatingContext<'a> {
         r += self.gk_command();
         r += self.discipline();
         r += self.goalkeeper_xg_prevented();
+        r += self.goalkeeper_dominant_defense();
 
         // ── Position- and minute-aware soft caps (mutate the running total) ─
         r = self.apply_cameo_bound(r);
         r = self.apply_outfielder_low_involvement_caps(r);
         r = self.apply_defender_section(r);
         r = self.apply_midfielder_section(r);
+        r = self.apply_forward_section(r);
 
         Self::compress_top_end(r).clamp(RATING_MIN, RATING_MAX)
     }
@@ -747,6 +749,22 @@ impl<'a> RatingContext<'a> {
         (xg_p * 0.45).min(1.4)
     }
 
+    /// Dominant-defense credit: a GK who kept a clean sheet behind a
+    /// back-line that fielded fewer than 3 shots all match still
+    /// organised the line, claimed set pieces, and held position. The
+    /// save/save%/surplus stack only fires with shot volume, and the
+    /// flat +0.20 clean-sheet bonus alone leaves a quiet shutout at
+    /// 6.2-6.4 — below where real-football match reads put a keeper
+    /// behind a dominant defence. Gated to `shots_faced < 3` so it
+    /// never composes on top of a busy shutout (which the save stack
+    /// already rewards).
+    fn goalkeeper_dominant_defense(&self) -> f32 {
+        if !self.is_goalkeeper() || self.opponent_goals != 0 {
+            return 0.0;
+        }
+        if self.shots_faced() < 3 { 0.15 } else { 0.0 }
+    }
+
     // ───────────────────────────────────────────────────────────────────
     // Soft caps (mutate the running rating)
     // ───────────────────────────────────────────────────────────────────
@@ -906,6 +924,57 @@ impl<'a> RatingContext<'a> {
             && (s.tackles + s.interceptions + s.successful_pressures) < 5
         {
             rating = rating.min(6.7);
+        }
+
+        // Low-attacking-output ceiling cap — parallel to the defender
+        // 7.1 cap. A box-to-box midfielder can stack pass volume,
+        // pressures, tackles/interceptions, zone bonuses and the
+        // pressing bump into 7.5+ territory with zero direct attacking
+        // contribution. Without a goal, assist, multiple key passes,
+        // sustained box-entry volume, a shot on target, or a clutch
+        // block, the rating shouldn't climb past Rodri/Kanté tier on
+        // involvement alone. 7.2 matches real-football reads for a
+        // tidy involved-but-no-end-product shift.
+        let major_intervention = s.blocks >= 2;
+        let attacking = s.goals > 0
+            || s.assists > 0
+            || s.key_passes >= 2
+            || s.passes_into_box >= 3
+            || s.shots_on_target > 0;
+        if s.minutes_played >= 60
+            && !attacking
+            && !major_intervention
+            && s.errors_leading_to_goal == 0
+        {
+            rating = rating.min(7.2);
+        }
+        rating
+    }
+
+    /// Forward attacking-output ceiling cap. Parallel to the defender
+    /// 7.1 and midfielder 7.2 caps, but tighter (7.0) because a
+    /// forward's job is end-product — a striker without a goal, an
+    /// assist, real shooting threat, or genuine chance creation
+    /// should not climb past 7.0 on dribble/cross/carry volume alone.
+    /// Without this cap, a wide forward racking up crosses, carries
+    /// and passes-into-box could pre-compression hit ~7.9 and post-
+    /// compression ~7.5+ across 24/26 no-goal games, dragging a
+    /// season average into Salah territory on 2 goals.
+    fn apply_forward_section(&self, mut rating: f32) -> f32 {
+        if self.pos != PlayerFieldPositionGroup::Forward {
+            return rating;
+        }
+        let s = self.stats;
+        let real_attacking = s.goals > 0
+            || s.assists > 0
+            || s.key_passes >= 2
+            || s.shots_on_target >= 2
+            || s.xg >= 0.5;
+        if s.minutes_played >= 60
+            && !real_attacking
+            && s.errors_leading_to_goal == 0
+        {
+            rating = rating.min(7.0);
         }
         rating
     }
@@ -1505,6 +1574,63 @@ mod tests {
     }
 
     #[test]
+    fn quiet_clean_sheet_keeper_gets_dominant_defense_credit() {
+        // Real symptom: young GKs behind a dominant defence (few shots
+        // faced, mostly clean sheets) posted 6.2-6.4 season averages
+        // because the save/save%/surplus stack only fires with shot
+        // volume and the flat +0.20 CS bonus alone leaves a quiet
+        // shutout at base+CS = 6.20. A GK who finished 90 minutes,
+        // organised the line and let nothing through should read
+        // visibly above that — landing in the 6.4-6.6 band per
+        // WhoScored references for low-workload keepers.
+        let gk = make_gk(0, 0); // 0 saves, 0 shots faced — fully shielded
+        let rating = RatingContext::new(&gk, 1, 0).calculate(); // 1-0 win
+        assert!(
+            rating >= 6.45,
+            "Quiet CS GK (0 saves, 1-0 win) rated {} — dominant-defence credit should lift to 6.45+",
+            rating
+        );
+    }
+
+    #[test]
+    fn busy_clean_sheet_keeper_does_not_double_up_dominant_credit() {
+        // The dominant-defence credit must NOT compose on a busy
+        // shutout — that's what the save / save% / surplus stack
+        // rewards. Gated to shots_faced < 3 so a 5-save CS still
+        // grades exactly where the existing well-rewarded test
+        // expects, with no inflation creep.
+        let busy = make_gk(5, 5); // well-tested CS
+        let busy_rating = RatingContext::new(&busy, 1, 0).calculate();
+        let quiet = make_gk(0, 0);
+        let quiet_rating = RatingContext::new(&quiet, 1, 0).calculate();
+        // Busy must still clearly outrate quiet — save volume is the
+        // dominant signal.
+        assert!(
+            busy_rating > quiet_rating + 0.5,
+            "Busy CS ({}) should clearly outrate quiet CS ({}) — quiet credit must not close the gap",
+            busy_rating,
+            quiet_rating
+        );
+    }
+
+    #[test]
+    fn dominant_defense_credit_only_fires_on_clean_sheet() {
+        // Conceding any goal removes the credit — this is a CS-only
+        // signal, not a "low-shot-volume" signal. A 1-0 loss with 0
+        // saves on 1 shot (one tap-in past a barely-tested keeper)
+        // must not pick up the credit.
+        let gk = make_gk(0, 1); // 0 saves, 1 shot faced, 1 conceded
+        let rating = RatingContext::new(&gk, 0, 1).calculate();
+        // Without the credit: 6.0 - 0.20 (conceded) - 0.15 (loss) +
+        // passing(~0.20) = ~5.85. Credit would push it back to 6.0.
+        assert!(
+            rating < 6.0,
+            "1-conceded loss rated {} — dominant-defence credit must not fire without a clean sheet",
+            rating
+        );
+    }
+
+    #[test]
     fn clean_sheet_keeper_with_distribution_giveaways_holds_above_55() {
         // Real symptom: a keeper in a 0-0 with several long balls that
         // were intercepted and led to opponent shots within the
@@ -1768,6 +1894,104 @@ mod tests {
             "creative MID ({}) should clearly outrate safe-passer MID ({})",
             creative_rating,
             safe_rating
+        );
+    }
+
+    #[test]
+    fn box_to_box_midfielder_without_attacking_output_capped_at_7_2() {
+        // Real symptom: midfielders posting 7.2+ season averages with
+        // 0 goals and 1-2 assists across the season. Per-match, a
+        // box-to-box shift stacking pass volume + pressures + tackles
+        // + interceptions + zone bonuses + the pressing bump could
+        // pre-compression hit ~8.5 and post-compression ~7.9 with
+        // zero direct attacking contribution. Cap that shift at 7.2
+        // — the real-football read for an involved-but-no-end-product
+        // game.
+        let mut mid = make_stats(
+            0,
+            0,
+            50,
+            44,
+            0,
+            0,
+            4,
+            5,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        mid.successful_pressures = 4;
+        mid.pressures = 10;
+        mid.progressive_passes = 4;
+        mid.progressive_carries = 3;
+        mid.xg_buildup = 0.4;
+        mid.carry_distance = 1200;
+        let rating = RatingContext::new(&mid, 1, 0).calculate();
+        assert!(
+            rating <= 7.2,
+            "Box-to-box MID without attacking output rated {} — should cap at 7.2",
+            rating
+        );
+    }
+
+    #[test]
+    fn creative_midfielder_escapes_low_attacking_output_cap() {
+        // A creator with 2+ key passes (or 3+ passes into box) is
+        // genuinely producing chances and must be allowed to climb
+        // past 7.2. Otherwise the cap punishes the wrong archetype.
+        let mut creator = make_stats(
+            0,
+            0,
+            50,
+            44,
+            0,
+            0,
+            2,
+            3,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        creator.key_passes = 3;
+        creator.passes_into_box = 4;
+        creator.progressive_passes = 5;
+        creator.xg_buildup = 0.8;
+        let rating = RatingContext::new(&creator, 1, 0).calculate();
+        assert!(
+            rating > 7.2,
+            "Creative MID (3 key passes, 4 box entries) rated {} — should escape low-output cap",
+            rating
+        );
+    }
+
+    #[test]
+    fn destroyer_midfielder_with_multiple_blocks_escapes_cap() {
+        // A ball-winner who blocked 2+ shots produced a clutch
+        // intervention — same gate as the defender section. They
+        // should be allowed past 7.2 even without goals/assists/key
+        // passes.
+        let mut destroyer = make_stats(
+            0,
+            0,
+            40,
+            34,
+            0,
+            0,
+            6,
+            5,
+            0,
+            0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        destroyer.blocks = 3;
+        destroyer.successful_pressures = 5;
+        destroyer.pressures = 12;
+        destroyer.progressive_passes = 3;
+        let rating = RatingContext::new(&destroyer, 1, 0).calculate();
+        assert!(
+            rating > 7.2,
+            "Destroyer MID (3 blocks, 6 tackles, 5 interceptions) rated {} — clutch intervention should escape low-output cap",
+            rating
         );
     }
 
@@ -2197,6 +2421,135 @@ mod tests {
             "high-volume fouler ({}) should rate visibly below clean ({})",
             niggly_rating,
             clean_rating
+        );
+    }
+
+    #[test]
+    fn wide_forward_without_attacking_output_capped_at_7_0() {
+        // Real symptom: a forward with 2 goals in 26 matches posting a
+        // 7.5 season average and 14 POTM. Per-match, a wide forward
+        // stacking 30 passes / completed crosses / dribbles / carries
+        // / passes-into-box could pre-compression hit ~7.9 and post-
+        // compression ~7.5 with zero direct end-product. Cap at 7.0
+        // — a forward without a goal, an assist, real shooting
+        // threat, or chance creation shouldn't reach Salah territory.
+        let mut fwd = make_stats(
+            0,
+            0,
+            30,
+            25,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.2,
+            PlayerFieldPositionGroup::Forward,
+        );
+        fwd.successful_dribbles = 4;
+        fwd.attempted_dribbles = 4;
+        fwd.progressive_carries = 5;
+        fwd.passes_into_box = 2;
+        fwd.crosses_attempted = 6;
+        fwd.crosses_completed = 4;
+        fwd.carry_distance = 2000;
+        fwd.key_passes = 1;
+        let rating = RatingContext::new(&fwd, 1, 0).calculate();
+        assert!(
+            rating <= 7.0,
+            "Wide FW without goal/assist/shots-on-target rated {} — should cap at 7.0",
+            rating
+        );
+    }
+
+    #[test]
+    fn goalscoring_forward_escapes_low_output_cap() {
+        // A forward who scored is exempt regardless of other volume.
+        let mut fwd = make_stats(
+            1,
+            0,
+            20,
+            16,
+            1,
+            2,
+            0,
+            0,
+            0,
+            0.8,
+            PlayerFieldPositionGroup::Forward,
+        );
+        fwd.shots_on_target = 1;
+        let rating = RatingContext::new(&fwd, 1, 0).calculate();
+        assert!(
+            rating > 7.0,
+            "Goalscoring FW (1 goal, 0.8 xG) rated {} — should escape 7.0 cap",
+            rating
+        );
+    }
+
+    #[test]
+    fn shooting_threat_forward_escapes_low_output_cap() {
+        // A forward with 2+ shots on target showed real attacking
+        // threat — even without a goal they shouldn't be hard-capped
+        // by the 7.0 forward cap. (Strikers having bad finishing days
+        // but generating shots is a different problem than strikers
+        // who don't shoot at all.) Single key pass also included so
+        // the existing 6.4 outfielder floor (which requires
+        // creative == 0) doesn't fire first and mask the 7.0 escape.
+        let mut fwd = make_stats(
+            0,
+            0,
+            40,
+            34,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.6,
+            PlayerFieldPositionGroup::Forward,
+        );
+        fwd.key_passes = 1;
+        fwd.shots_on_target = 3;
+        fwd.shots_total = 4;
+        fwd.successful_dribbles = 3;
+        fwd.attempted_dribbles = 3;
+        fwd.progressive_carries = 4;
+        let rating = RatingContext::new(&fwd, 1, 0).calculate();
+        assert!(
+            rating > 7.0,
+            "Forward with 3 shots-on-target rated {} — real shooting threat should escape 7.0 cap",
+            rating
+        );
+    }
+
+    #[test]
+    fn creator_forward_escapes_low_output_cap() {
+        // A forward who created multiple chances (2+ key passes) had
+        // real end-product even without scoring/assisting — must not
+        // be capped at 7.0.
+        let mut fwd = make_stats(
+            0,
+            0,
+            25,
+            21,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.3,
+            PlayerFieldPositionGroup::Forward,
+        );
+        fwd.key_passes = 3;
+        fwd.passes_into_box = 3;
+        fwd.successful_dribbles = 2;
+        fwd.attempted_dribbles = 3;
+        let rating = RatingContext::new(&fwd, 1, 0).calculate();
+        assert!(
+            rating > 7.0,
+            "Creator FW (3 key passes, 3 box entries) rated {} — chance creation should escape cap",
+            rating
         );
     }
 

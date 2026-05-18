@@ -45,6 +45,16 @@ pub struct Country {
     pub regulations: CountryRegulations,
 
     pub retired_players: Vec<Player>,
+
+    /// `start_year` of the most recent season for which the per-player
+    /// statistics snapshot has fired. `None` before the first
+    /// snapshot runs. Used as a watermark so the snapshot can catch
+    /// up on missed seasons (any league failing the
+    /// `new_season_started` gate would otherwise leave a gap in
+    /// every player's career history table). Updated by
+    /// `snapshot_player_season_statistics` once for each season it
+    /// processes.
+    pub last_snapshotted_season_year: Option<u16>,
 }
 
 /// Season boundary dates derived from a country's primary league settings.

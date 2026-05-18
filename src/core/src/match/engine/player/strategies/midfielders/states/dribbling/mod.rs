@@ -1,5 +1,8 @@
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
@@ -22,6 +25,21 @@ impl StateProcessingHandler for MidfielderDribblingState {
         let shot_profile = ctx.player().shooting().shot_profile();
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
         let has_clear_shot = ctx.player().has_clear_shot();
+
+        // AM carve-out: forward helper picks the trigger so a low-skill
+        // #10 can still finish their own dribble. The standard gate
+        // below requires mid_shot_selection >= 0.42 which a 10-skill
+        // AM never reaches.
+        if ctx.player.tactical_position.current_position.is_attacking_midfielder() {
+            if let ShotDecision::Shoot { reason } =
+                evaluate_forward_shot_decision(ctx, "AM_DRIB_FWD")
+            {
+                return Some(
+                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                        .with_shot_reason(reason),
+                );
+            }
+        }
 
         // Shooting from dribble — gated on midfielder shot selection
         // and the unified shot profile, not raw distance bands. A 5/20

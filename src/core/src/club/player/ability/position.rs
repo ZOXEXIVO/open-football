@@ -109,6 +109,21 @@ impl PlayerPositionType {
         self.position_group() == PlayerFieldPositionGroup::Forward
     }
 
+    /// True for AML / AMC / AMR. These positions group under
+    /// `Midfielder` for shape and selection, but their shooting /
+    /// chance-creation expectations are forward-like — the engine's
+    /// strict midfielder shot gates suppress them to near-zero G/A
+    /// without this carve-out.
+    #[inline]
+    pub fn is_attacking_midfielder(&self) -> bool {
+        matches!(
+            self,
+            PlayerPositionType::AttackingMidfielderLeft
+                | PlayerPositionType::AttackingMidfielderCenter
+                | PlayerPositionType::AttackingMidfielderRight
+        )
+    }
+
     #[inline]
     pub fn position_group(&self) -> PlayerFieldPositionGroup {
         match *self {

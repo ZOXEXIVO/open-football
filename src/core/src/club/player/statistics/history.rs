@@ -183,8 +183,19 @@ impl PlayerStatisticsHistory {
         let is_first_season = self.items.is_empty();
         let first_seq = stale.iter().map(|e| e.seq_id).min();
 
+        // Years where another stale entry has real content (loan or
+        // otherwise). Used for the sole-record carve-out so a U18..U23
+        // player's only 0-game alias row for a season isn't dropped as
+        // a trivial stint.
+        let years_with_any_content: std::collections::HashSet<u16> = stale
+            .iter()
+            .filter(|e| e.statistics.total_games() > 0 || e.transfer_fee.is_some())
+            .map(|e| Season::from_date(e.joined_date).start_year)
+            .collect();
+
         for entry in stale {
             let entry_season = Season::from_date(entry.joined_date);
+            let entry_year = entry_season.start_year;
             let season_end = entry_season.end_date();
 
             let games = entry.statistics.total_games();
@@ -198,7 +209,19 @@ impl PlayerStatisticsHistory {
             let time_pct = (days_at_club as f64 / season_days as f64) * 100.0;
             let trivial_stint = games == 0 && !has_fee && time_pct < 45.0;
 
-            if is_initial_record || (!stale_loan_seed && !trivial_stint) {
+            let has_any_content_for_season = years_with_any_content
+                .contains(&entry_year)
+                || self.items.iter().any(|i| {
+                    i.season.start_year == entry_year
+                        && (i.statistics.total_games() > 0 || i.transfer_fee.is_some())
+                });
+            let sole_season_record =
+                !entry.is_loan && games == 0 && !has_fee && !has_any_content_for_season;
+
+            if is_initial_record
+                || sole_season_record
+                || (!stale_loan_seed && !trivial_stint)
+            {
                 let mut stats = entry.statistics;
                 stats.played += stats.played_subs;
                 stats.played_subs = 0;
@@ -497,6 +520,18 @@ impl PlayerStatisticsHistory {
         let is_first_season = self.items.is_empty();
         let first_seq = stale.iter().map(|e| e.seq_id).min();
 
+        // Precompute the set of season-years that have at least one
+        // stale entry with real content (games or a transfer fee, loan
+        // or otherwise). Combined with `self.items` checks below, this
+        // drives the "sole season record" carve-out so a quiet U18..U23
+        // season's single 0-game alias row isn't lost to the trivial-
+        // stint filter when its seed date sits late in the season.
+        let years_with_any_content: std::collections::HashSet<u16> = stale
+            .iter()
+            .filter(|e| e.statistics.total_games() > 0 || e.transfer_fee.is_some())
+            .map(|e| Season::from_date(e.joined_date).start_year)
+            .collect();
+
         // Track the latest season the player demonstrably stayed at a
         // non-loan club; used to fill gap years for an unbroken career
         // thread (U18/U21 alias case). Initialised from frozen items
@@ -535,7 +570,24 @@ impl PlayerStatisticsHistory {
             let time_pct = (days_at_club as f64 / season_days as f64) * 100.0;
             let trivial_stint = games == 0 && !has_fee && time_pct < 45.0;
 
-            let keep = is_initial_record || (!stale_loan_seed && !trivial_stint);
+            // Sole-record exception (see `record_season_end` drain for
+            // rationale): if no other entry for this season — stale OR
+            // already-frozen — has real content, this 0-game-no-fee row
+            // is the player's only record of that season and must
+            // survive even when the seed date pushes time_pct below the
+            // trivial-stint threshold.
+            let has_any_content_for_season = years_with_any_content
+                .contains(&entry_year)
+                || self.items.iter().any(|i| {
+                    i.season.start_year == entry_year
+                        && (i.statistics.total_games() > 0 || i.transfer_fee.is_some())
+                });
+            let sole_season_record =
+                !entry.is_loan && games == 0 && !has_fee && !has_any_content_for_season;
+
+            let keep = is_initial_record
+                || sole_season_record
+                || (!stale_loan_seed && !trivial_stint);
             if !keep {
                 continue;
             }
@@ -771,6 +823,25 @@ impl PlayerStatisticsHistory {
         let is_first_season = self.items.is_empty();
         let first_seq = entries.iter().map(|e| e.seq_id).min();
 
+        // Whether ANY entry in this drain has real content (games or a
+        // transfer fee), loan or otherwise. Used to decide whether a
+        // 0-game-no-fee row is the player's *only* record of the season.
+        //
+        // Per spec: every season the player existed at the club must
+        // surface at least one row. A U18..U23 player who never gets a
+        // senior callup has exactly one Main-alias row with no fee and
+        // no games — that row must survive even when joined_date pushes
+        // time_pct under the trivial-stint threshold (typical for a
+        // late-in-season seed when the simulator starts mid-real-time).
+        //
+        // A loan row already represents the season, so the
+        // post-loan-return parent-club row with 0 apps is still allowed
+        // to fall through the trivial-stint filter — matching
+        // `loan_return_no_phantom_parent_entry`'s expectation.
+        let has_any_content = entries.iter().any(|e| {
+            e.statistics.total_games() > 0 || e.transfer_fee.is_some()
+        });
+
         for entry in entries {
             let games = entry.statistics.total_games();
             let end_date = entry.departed_date.unwrap_or(season_end);
@@ -786,12 +857,28 @@ impl PlayerStatisticsHistory {
             // entries where the player was at the club for a meaningful portion of the season,
             // or the player's first-ever career record (initial club).
             //
+            // Sole-record exception: when the drain has no other entry
+            // with real content (games or fee, loan or otherwise), this
+            // 0-game-no-fee row is the player's only record of the
+            // season — typical for a U18..U23 player who never gets a
+            // senior callup. The seed's joined_date often sits well
+            // after the season start (game-start mid-real-time, youth
+            // intake), which would otherwise trip the trivial-stint
+            // filter and lose the entire season from career history.
+            //
+            // When a loan or transfer row already represents the season,
+            // a 0-app parent-club row falls through to the trivial-stint
+            // filter as before.
             let has_fee = entry.transfer_fee.is_some();
             let is_initial_record = is_first_season && first_seq == Some(entry.seq_id);
             let trivial_stint = games == 0 && !has_fee && time_pct < 45.0;
             let stale_loan_seed = entry.is_loan && games == 0 && !has_fee;
+            let sole_season_record =
+                !entry.is_loan && games == 0 && !has_fee && !has_any_content;
 
-            let keep = is_initial_record || (!stale_loan_seed && !trivial_stint);
+            let keep = is_initial_record
+                || sole_season_record
+                || (!stale_loan_seed && !trivial_stint);
 
             if keep {
                 let mut stats = entry.statistics;

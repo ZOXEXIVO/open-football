@@ -6,15 +6,62 @@ use log::info;
 use rayon::prelude::*;
 
 impl CountryResult {
-    /// Snapshot all player statistics into history when a new season starts.
+    /// Snapshot every player's statistics into career history for one or
+    /// more just-ended seasons.
+    ///
+    /// Catches up from the per-country watermark
+    /// (`Country::last_snapshotted_season_year`): if today's
+    /// `ended_season` is N years past the watermark, the snapshot fires
+    /// N times, oldest first, so a year that slipped through the
+    /// `new_season_started` league gate (regen failure, all leagues
+    /// briefly inactive, fixture-skip year, etc.) still yields a row
+    /// per season the player existed at the club. After each season is
+    /// processed the watermark advances so future ticks don't redo
+    /// already-frozen years.
     pub(super) fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
         let date = data.date.date();
-
         let current_season = Season::from_date(date);
-        let ended_season = Season::new(current_season.start_year.saturating_sub(1));
+        let target_ended_year = current_season.start_year.saturating_sub(1);
 
+        // Decide the inclusive range of season-years to catch up on.
+        // The very first call (no watermark) snapshots only
+        // `target_ended_year`, matching the long-standing behavior the
+        // existing tests rely on. Subsequent calls advance from
+        // `watermark + 1` so any year whose `new_season_started` gate
+        // dropped is recovered in chronological order when the next
+        // gate event eventually fires.
+        let watermark = data
+            .country(country_id)
+            .and_then(|c| c.last_snapshotted_season_year);
+        let first_year = match watermark {
+            Some(w) => w.saturating_add(1),
+            None => target_ended_year,
+        };
+
+        if first_year > target_ended_year {
+            return;
+        }
+
+        for year in first_year..=target_ended_year {
+            Self::snapshot_one_season(data, country_id, Season::new(year), date);
+            if let Some(country) = data.country_mut(country_id) {
+                country.last_snapshotted_season_year = Some(year);
+            }
+        }
+    }
+
+    /// Process every team in the country for a single ended season.
+    /// Used by the catch-up loop above so one tick can advance the
+    /// watermark across multiple years when the league gate failed for
+    /// a previous year.
+    fn snapshot_one_season(
+        data: &mut SimulatorData,
+        country_id: u32,
+        ended_season: Season,
+        date: chrono::NaiveDate,
+    ) {
         info!(
-            "📋 New season snapshot: saving player statistics for season {} (country {})",
+            "📋 Season snapshot: saving player statistics for season {} (country {})",
             ended_season.start_year, country_id
         );
 
@@ -645,5 +692,76 @@ mod tests {
         assert_eq!(entry.team_slug, "napoli");
         assert_eq!(entry.statistics.played, 12);
         assert_eq!(entry.statistics.goals, 3);
+    }
+
+    // Snapshot watermark catches up missed seasons. Simulates the
+    // user-reported "missing 2026/27" pattern: the first snapshot
+    // fires for 2031/32 (date Aug 15, 2032), then the next snapshot
+    // call happens after a one-year gap (date Aug 15, 2034 — the
+    // 2032/33 snapshot was dropped because the league gate failed for
+    // that year). The catch-up loop must process both 2032/33 and
+    // 2033/34 in order so the player has one row per season.
+    #[test]
+    fn snapshot_catches_up_missed_year_via_watermark() {
+        let player = make_player(1, 5, 1);
+        let main_team = make_team(
+            10,
+            100,
+            "Milan",
+            "milan",
+            TeamType::Main,
+            Some(1),
+            vec![player],
+        );
+        let club = make_club(100, "Milan", vec![main_team]);
+        let league = make_league(1, "Serie A", "serie-a", false);
+        let country = make_country(vec![club], vec![league]);
+
+        let mut data = make_simulator_data(make_date(2032, 8, 15), country);
+        CountryResult::snapshot_player_season_statistics(&mut data, 1);
+
+        // After the first call: watermark is 2031, one frozen row exists.
+        let country = data.country(1).unwrap();
+        assert_eq!(country.last_snapshotted_season_year, Some(2031));
+        let items_after_first = country.clubs[0].teams.teams[0].players.players[0]
+            .statistics_history
+            .items
+            .len();
+        assert_eq!(items_after_first, 1);
+
+        // Advance the date by two years and play another partial season.
+        // The 2032/33 snapshot was never fired (gate dropped). The next
+        // call's catch-up loop should produce TWO rows: 2032 and 2033.
+        let player = &mut data.continents[0].countries[0].clubs[0].teams.teams[0].players.players[0];
+        player.statistics.played = 8;
+        player.statistics.goals = 2;
+        data.date = make_date(2034, 8, 15).and_hms_opt(12, 0, 0).unwrap();
+
+        CountryResult::snapshot_player_season_statistics(&mut data, 1);
+
+        let country = data.country(1).unwrap();
+        assert_eq!(country.last_snapshotted_season_year, Some(2033));
+
+        let years: Vec<u16> = country.clubs[0].teams.teams[0].players.players[0]
+            .statistics_history
+            .items
+            .iter()
+            .map(|i| i.season.start_year)
+            .collect();
+        assert!(
+            years.contains(&2031),
+            "first snapshot row missing: {:?}",
+            years
+        );
+        assert!(
+            years.contains(&2032),
+            "missed-year catch-up row missing: {:?}",
+            years
+        );
+        assert!(
+            years.contains(&2033),
+            "current ended-season row missing: {:?}",
+            years
+        );
     }
 }

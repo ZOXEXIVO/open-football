@@ -161,6 +161,7 @@ impl CountryBuilder {
             media_coverage: self.media_coverage.unwrap_or_else(MediaCoverage::new),
             regulations: self.regulations.unwrap_or_else(CountryRegulations::new),
             retired_players: Vec::new(),
+            last_snapshotted_season_year: None,
         })
     }
 }

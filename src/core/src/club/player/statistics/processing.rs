@@ -2359,4 +2359,102 @@ mod tests {
             non_main
         );
     }
+
+    // ---------------------------------------------------------------
+    // U21 player with DB-loaded prior history, seeded mid-season,
+    // plays 0 senior callups all season — the season row must survive
+    // the trivial-stint filter so the player's history always shows
+    // at least one row per season they existed at the club.
+    // (Bug repro: a U21 player loaded with prior items, seeded on a
+    // late-season date, was losing the row for the just-ended season
+    // because joined_date pushed time_pct under the 45% threshold.)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn u21_player_with_db_history_and_late_seed_keeps_season_row() {
+        use crate::club::player::statistics::history::PlayerStatisticsHistoryItem;
+        use crate::club::player::statistics::PlayerStatistics;
+
+        let mut player = make_player();
+
+        // Simulate DB-loaded prior history: 2 senior seasons at "spartak"
+        // before the simulator started.
+        let prior_2023 = PlayerStatisticsHistoryItem {
+            season: Season::new(2023),
+            team_name: "Spartak".to_string(),
+            team_slug: "spartak".to_string(),
+            team_reputation: 5_000,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: make_stats(18, 2),
+            seq_id: 0,
+        };
+        let prior_2024 = PlayerStatisticsHistoryItem {
+            season: Season::new(2024),
+            team_name: "Spartak".to_string(),
+            team_slug: "spartak".to_string(),
+            team_reputation: 5_000,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: make_stats(22, 3),
+            seq_id: 1,
+        };
+        player.statistics_history =
+            crate::PlayerStatisticsHistory::from_items(vec![prior_2023, prior_2024]);
+
+        let main = make_team("Spartak", "spartak");
+
+        // Simulator starts in the middle of the 2025/26 season — seed runs
+        // with the live game date, NOT the season start.
+        player.statistics_history.seed_initial_team(&main, make_date(2026, 4, 1), false);
+
+        // Player spends the remainder of 2025/26 rostered on U21 with no
+        // senior callups. `record_season_end` is invoked from the youth
+        // alias path so `team` is the Main team and stats are zero.
+        player.statistics = PlayerStatistics::default();
+        player.on_season_end(Season::new(2025), &main, make_date(2026, 8, 1));
+
+        // The 2025/26 row must exist even though the player played 0
+        // senior games and was seeded only ~60 days before season end.
+        let row_2025 = player
+            .statistics_history
+            .items
+            .iter()
+            .find(|i| i.season.start_year == 2025 && i.team_slug == "spartak");
+        assert!(
+            row_2025.is_some(),
+            "2025/26 Main alias row missing — every season the player \
+             existed at the club must show at least one row, even with \
+             0 senior callups and a mid-season seed date. Items: {:?}",
+            player
+                .statistics_history
+                .items
+                .iter()
+                .map(|i| format!("{}:{}", i.season.start_year, i.team_slug))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(row_2025.unwrap().statistics.played, 0);
+
+        // Next season also runs with 0 senior callups — still must keep
+        // a row, since the seeded entry now has a season-start joined
+        // date and the merge function design preserves the lone Main
+        // row in a quiet season.
+        player.statistics = PlayerStatistics::default();
+        player.on_season_end(Season::new(2026), &main, make_date(2027, 8, 1));
+
+        let row_2026 = player
+            .statistics_history
+            .items
+            .iter()
+            .find(|i| i.season.start_year == 2026 && i.team_slug == "spartak");
+        assert!(
+            row_2026.is_some(),
+            "2026/27 row missing after a second quiet season."
+        );
+    }
+
 }

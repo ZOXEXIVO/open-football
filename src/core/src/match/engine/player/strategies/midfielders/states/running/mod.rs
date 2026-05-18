@@ -4,6 +4,9 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
@@ -135,6 +138,44 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
                 // No safe outlet yet — keep the ball, re-evaluate next tick
                 return None;
+            }
+
+            // ── ATTACKING MIDFIELDER carve-out ──────────────────────────
+            // AML / AMC / AMR are grouped under `Midfielder` for shape
+            // and selection, but their shot expectations are forward-
+            // like — the strict `mid_shot_selection >= 0.40 / 0.58`
+            // gates below suppress non-elite #10s to near-zero goals
+            // (a Spartak AM posting 2G/3A in 93 apps is the symptom).
+            // Route them through the forward helper so a skill-graded
+            // willingness roll decides, matching the forwards' path.
+            // Non-AM midfielders keep the conservative gates.
+            if ctx.player.tactical_position.current_position.is_attacking_midfielder()
+                && can_shoot
+                && distance_to_goal <= MAX_SHOOTING_DISTANCE
+            {
+                match evaluate_forward_shot_decision(ctx, "AM_RUN_FWD") {
+                    ShotDecision::Shoot { reason } => {
+                        return Some(
+                            StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                                .with_shot_reason(reason),
+                        );
+                    }
+                    ShotDecision::Pass => {
+                        if let Some((target, _)) = self.find_best_pass_option(ctx) {
+                            return Some(StateChangeResult::with_midfielder_state_and_event(
+                                MidfielderState::Standing,
+                                Event::PlayerEvent(PlayerEvent::PassTo(
+                                    PassingEventContext::new()
+                                        .with_from_player_id(ctx.player.id)
+                                        .with_to_player_id(target.id)
+                                        .with_reason("AM_RUN_FWD_PASS")
+                                        .build(ctx),
+                                )),
+                            ));
+                        }
+                    }
+                    ShotDecision::Hold => {}
+                }
             }
 
             // Priority 0: Point-blank range — skill-graded willingness
@@ -608,6 +649,19 @@ impl StateProcessingHandler for MidfielderRunningState {
                             .build(ctx),
                     )),
                 ));
+            }
+            // AM carve-out: forward helper picks the anti-oscillation
+            // trigger so a low-skill #10 still has a path to a shot
+            // when they've been carrying too long without acting.
+            if ctx.player.tactical_position.current_position.is_attacking_midfielder() {
+                if let ShotDecision::Shoot { reason } =
+                    evaluate_forward_shot_decision(ctx, "AM_RUN_ANTI_OSC_FWD")
+                {
+                    return Some(
+                        StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                            .with_shot_reason(reason),
+                    );
+                }
             }
             // Only shoot as fallback at point-blank range with clear shot
             // AND a midfielder with adequate shot selection.

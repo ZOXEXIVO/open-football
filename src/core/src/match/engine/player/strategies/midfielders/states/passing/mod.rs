@@ -2,6 +2,9 @@ use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
@@ -22,8 +25,21 @@ impl StateProcessingHandler for MidfielderPassingState {
             ));
         }
 
-        // Check if should shoot instead
-        if self.should_shoot_instead_of_pass(ctx) {
+        // AM carve-out: route the "shoot instead of pass" pivot through
+        // the forward helper. The default `should_shoot_instead_of_pass`
+        // scales max_range with `mid_shot_selection`, which collapses
+        // to 20u for a 10-skill #10 — they never pivot to a shot from
+        // the passing state, no matter how clear the lane.
+        if ctx.player.tactical_position.current_position.is_attacking_midfielder() {
+            if let ShotDecision::Shoot { reason } =
+                evaluate_forward_shot_decision(ctx, "AM_PASS_FWD")
+            {
+                return Some(
+                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                        .with_shot_reason(reason),
+                );
+            }
+        } else if self.should_shoot_instead_of_pass(ctx) {
             return Some(
                 StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                     .with_shot_reason("MID_PASS_SHOOT_INSTEAD"),
@@ -98,6 +114,19 @@ impl StateProcessingHandler for MidfielderPassingState {
         };
         if ctx.in_state_time > bail_time {
             let goal_dist = ctx.ball().distance_to_opponent_goal();
+            // AM carve-out for the bailout shot: forward helper picks
+            // the trigger so a low-skill #10 still attempts shots when
+            // the pass options have dried up.
+            if ctx.player.tactical_position.current_position.is_attacking_midfielder() {
+                if let ShotDecision::Shoot { reason } =
+                    evaluate_forward_shot_decision(ctx, "AM_PASS_BAILOUT_FWD")
+                {
+                    return Some(
+                        StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                            .with_shot_reason(reason),
+                    );
+                }
+            }
             // Shoot bailout ONLY when we're in a real shooting spot
             // with a clear lane AND good angle. Tightened further: the
             // "can't find a pass, so shoot" pivot at medium range was
