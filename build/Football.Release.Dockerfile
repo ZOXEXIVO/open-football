@@ -40,7 +40,9 @@ FROM alpine:latest AS publish
 ARG DRONE_TAG
 ARG DRONE_REPO
 
-RUN apk add --no-cache curl jq
+RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirror.yandex.ru/mirrors/alpine|g' \
+        /etc/apk/repositories \
+ && apk add --no-cache curl jq
 
 WORKDIR /release
 COPY --from=build-windows /dist/open-football-windows-x86_64.zip .
