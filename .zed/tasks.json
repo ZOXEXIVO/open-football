@@ -1,0 +1,20 @@
+[
+  {
+    "label": "Run Project (Release)",
+    "command": "cargo",
+    "args": ["run", "--release"],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+  {
+    "label": "Build Project (Release)",
+    "command": "cargo",
+    "args": ["build", "--release"],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+]
