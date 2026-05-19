@@ -926,33 +926,36 @@ impl<'a> RatingContext<'a> {
             rating = rating.min(6.7);
         }
 
-        // Low-attacking-output ceiling cap — parallel to the defender
-        // 7.1 cap. A box-to-box midfielder can stack pass volume,
-        // pressures, tackles/interceptions, zone bonuses and the
-        // pressing bump into 7.5+ territory with zero direct attacking
-        // contribution. Without a goal, assist, multiple key passes,
-        // sustained box-entry volume, a shot on target, or a clutch
-        // block, the rating shouldn't climb past Rodri/Kanté tier on
-        // involvement alone. 7.2 matches real-football reads for a
-        // tidy involved-but-no-end-product shift.
+        // Low-attacking-output ceiling cap. A box-to-box midfielder
+        // can stack pass volume, pressures, tackles/interceptions,
+        // zone bonuses and the pressing bump into 7.5+ territory with
+        // zero direct attacking contribution. Without a goal, assist,
+        // multiple key passes, sustained box-entry volume, multiple
+        // shots on target, or a clutch block, the rating shouldn't
+        // climb past involvement-only tier. Cap is 7.0 (not 7.2) —
+        // effective_rating bonuses (chemistry, big-match, consistency
+        // swing) systematically push a 7.2-capped match above 7.2 as
+        // a season average. The shots_on_target gate is tightened to
+        // ≥ 2 to mirror the forward section: a single random shot on
+        // target shouldn't be enough to escape the cap.
         let major_intervention = s.blocks >= 2;
         let attacking = s.goals > 0
             || s.assists > 0
             || s.key_passes >= 2
             || s.passes_into_box >= 3
-            || s.shots_on_target > 0;
+            || s.shots_on_target >= 2;
         if s.minutes_played >= 60
             && !attacking
             && !major_intervention
             && s.errors_leading_to_goal == 0
         {
-            rating = rating.min(7.2);
+            rating = rating.min(7.0);
         }
         rating
     }
 
     /// Forward attacking-output ceiling cap. Parallel to the defender
-    /// 7.1 and midfielder 7.2 caps, but tighter (7.0) because a
+    /// 7.1 and midfielder 7.0 caps — same 7.0 threshold here because a
     /// forward's job is end-product — a striker without a goal, an
     /// assist, real shooting threat, or genuine chance creation
     /// should not climb past 7.0 on dribble/cross/carry volume alone.
@@ -1898,15 +1901,17 @@ mod tests {
     }
 
     #[test]
-    fn box_to_box_midfielder_without_attacking_output_capped_at_7_2() {
+    fn box_to_box_midfielder_without_attacking_output_capped_at_7_0() {
         // Real symptom: midfielders posting 7.2+ season averages with
-        // 0 goals and 1-2 assists across the season. Per-match, a
+        // 0 goals and 0 assists across many matches (e.g. an AM who
+        // racks up involvement but never produces end-product). A
         // box-to-box shift stacking pass volume + pressures + tackles
         // + interceptions + zone bonuses + the pressing bump could
         // pre-compression hit ~8.5 and post-compression ~7.9 with
-        // zero direct attacking contribution. Cap that shift at 7.2
-        // — the real-football read for an involved-but-no-end-product
-        // game.
+        // zero direct attacking contribution. Cap that shift at 7.0
+        // — tighter than the old 7.2 because the effective_rating
+        // bonuses (chemistry, big-match, swing) systematically push
+        // a capped match above 7.2 across a season.
         let mut mid = make_stats(
             0,
             0,
@@ -1928,8 +1933,8 @@ mod tests {
         mid.carry_distance = 1200;
         let rating = RatingContext::new(&mid, 1, 0).calculate();
         assert!(
-            rating <= 7.2,
-            "Box-to-box MID without attacking output rated {} — should cap at 7.2",
+            rating <= 7.0,
+            "Box-to-box MID without attacking output rated {} — should cap at 7.0",
             rating
         );
     }

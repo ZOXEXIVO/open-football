@@ -389,28 +389,6 @@ mod tests {
         }
     }
 
-    fn make_history_item(
-        start_year: u16,
-        slug: &str,
-        is_loan: bool,
-        played: u16,
-    ) -> PlayerStatisticsHistoryItem {
-        let mut stats = PlayerStatistics::default();
-        stats.played = played;
-        PlayerStatisticsHistoryItem {
-            season: Season::new(start_year),
-            team_name: slug.to_string(),
-            team_slug: slug.to_string(),
-            team_reputation: 100,
-            league_name: "League".to_string(),
-            league_slug: "league".to_string(),
-            is_loan,
-            transfer_fee: None,
-            statistics: stats,
-            seq_id: 0,
-        }
-    }
-
     // ---------------------------------------------------------------
     // on_transfer: resets stats and creates history
     // ---------------------------------------------------------------
@@ -1282,7 +1260,6 @@ mod tests {
 
         let napoli = make_team("Napoli", "napoli");
         let juve = make_team("Juventus", "juventus");
-        let torino = make_team("Torino", "torino");
 
         player
             .statistics_history
@@ -2343,7 +2320,10 @@ mod tests {
         // Stats stay on player.statistics — neither side of the
         // intra-club move wrote anything to history, and we did not
         // discard the games.
-        assert_eq!(player.statistics.played, 3, "lateral youth move must not drain stats");
+        assert_eq!(
+            player.statistics.played, 3,
+            "lateral youth move must not drain stats"
+        );
 
         // No youth slugs in current — only the Main alias.
         let non_main: Vec<&str> = player
@@ -2372,8 +2352,8 @@ mod tests {
 
     #[test]
     fn u21_player_with_db_history_and_late_seed_keeps_season_row() {
-        use crate::club::player::statistics::history::PlayerStatisticsHistoryItem;
         use crate::club::player::statistics::PlayerStatistics;
+        use crate::club::player::statistics::history::PlayerStatisticsHistoryItem;
 
         let mut player = make_player();
 
@@ -2410,7 +2390,9 @@ mod tests {
 
         // Simulator starts in the middle of the 2025/26 season — seed runs
         // with the live game date, NOT the season start.
-        player.statistics_history.seed_initial_team(&main, make_date(2026, 4, 1), false);
+        player
+            .statistics_history
+            .seed_initial_team(&main, make_date(2026, 4, 1), false);
 
         // Player spends the remainder of 2025/26 rostered on U21 with no
         // senior callups. `record_season_end` is invoked from the youth
@@ -2456,5 +2438,4 @@ mod tests {
             "2026/27 row missing after a second quiet season."
         );
     }
-
 }

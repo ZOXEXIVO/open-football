@@ -1219,7 +1219,7 @@ mod style_fit_tests {
     fn split_vote_dossier_with_risk_flags_vetoes() {
         // Two scouts watching, split decision, multiple risk flags →
         // board sends it back to recruitment instead of approving.
-        let mut board = ClubBoard::new();
+        let board = ClubBoard::new();
         let mut proposal = transfer_proposal(
             900_000.0,
             1_000_000.0,

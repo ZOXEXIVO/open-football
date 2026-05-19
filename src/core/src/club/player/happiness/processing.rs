@@ -129,6 +129,7 @@ impl Player {
             .filter(|e| e.event_type == HappinessEventType::ManagerDiscipline)
             .map(|e| e.magnitude * (1.0 - e.days_ago as f32 / 60.0).max(0.0))
             .sum();
+
         self.happiness.factors.recent_discipline = discipline.clamp(-10.0, 0.0);
 
         // Loan-specific weekly modulation — extends the loan audit with
