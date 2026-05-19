@@ -17,3 +17,33 @@ pub fn avx2_available() -> bool {
 pub fn avx2_available() -> bool {
     false
 }
+
+/// `true` when the running CPU advertises ARM NEON. On AArch64 (Apple
+/// Silicon, modern ARM servers) NEON is part of the mandatory ARMv8-A
+/// baseline, so this is a compile-time constant. Always `false` on
+/// non-AArch64 targets.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+pub fn neon_available() -> bool {
+    true
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline]
+pub fn neon_available() -> bool {
+    false
+}
+
+/// Human-readable name of the SIMD path the distance-matrix kernel will
+/// take on this host: `"AVX2"` on x86_64 with AVX2, `"NEON"` on AArch64,
+/// `"scalar"` otherwise. Match-engine dispatch uses the same ordering.
+#[inline]
+pub fn simd_kernel_name() -> &'static str {
+    if avx2_available() {
+        "AVX2"
+    } else if neon_available() {
+        "NEON"
+    } else {
+        "scalar"
+    }
+}

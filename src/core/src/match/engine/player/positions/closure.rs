@@ -1,5 +1,5 @@
 use crate::r#match::{MatchField, MatchPlayer};
-use crate::utils::cpu::avx2_available;
+use crate::utils::cpu::{avx2_available, neon_available};
 use std::cmp::Ordering;
 
 const MAX_DISTANCE: f32 = 999.0;
@@ -105,10 +105,10 @@ impl PlayerDistanceClosure {
         }
 
         // Distances — upper triangle then mirror. Runtime-dispatched:
-        // AVX2 when the host CPU advertises it (cached by std::detect),
-        // scalar otherwise. The two paths produce bit-identical results
-        // — both use `(dx*dx + dy*dy).sqrt()` lane-wise; no FMA so the
-        // rounding sequence matches the scalar loop.
+        // AVX2 on x86_64 hosts that advertise it, NEON on AArch64
+        // (Apple Silicon), scalar otherwise. All paths produce
+        // bit-identical results — `(dx*dx + dy*dy).sqrt()` lane-wise,
+        // no FMA, so the rounding sequence matches the scalar loop.
         if avx2_available() {
             // Safety: `avx2_available` confirms AVX2 is supported on this
             // host. `xs`/`ys` are [f32; MAX_PLAYERS] so 8-wide loads up
@@ -116,6 +116,12 @@ impl PlayerDistanceClosure {
             // past index MAX_PLAYERS-1.
             unsafe {
                 compute_dist_matrix_avx2(&xs, &ys, n, &mut self.dist_matrix);
+            }
+        } else if neon_available() {
+            // Safety: NEON is mandatory on AArch64. 4-wide loads stay
+            // within MAX_PLAYERS for the same reason as the AVX2 path.
+            unsafe {
+                compute_dist_matrix_neon(&xs, &ys, n, &mut self.dist_matrix);
             }
         } else {
             compute_dist_matrix_scalar(&xs, &ys, n, &mut self.dist_matrix);
@@ -240,8 +246,9 @@ impl Ord for PlayerDistanceItem {
 //
 // Hot path: rebuilt every tick (~5400 ticks/match), N² over up to
 // `MAX_PLAYERS` (typically 22). The AVX2 kernel processes 8 j-lanes per
-// iteration; the scalar fallback runs on hosts without AVX2 and on
-// non-x86 targets.
+// iteration on x86_64; the NEON kernel processes 4 j-lanes per
+// iteration on AArch64 (Apple Silicon); the scalar fallback runs on
+// everything else.
 //
 // Both kernels write to the same dist_matrix layout and produce
 // bit-identical values lane-by-lane (`(dx*dx + dy*dy).sqrt()` — no
@@ -338,6 +345,71 @@ unsafe fn compute_dist_matrix_avx2(
     unreachable!("compute_dist_matrix_avx2 called on non-x86_64 target");
 }
 
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn compute_dist_matrix_neon(
+    xs: &[f32; MAX_PLAYERS],
+    ys: &[f32; MAX_PLAYERS],
+    n: usize,
+    matrix: &mut [f32; MAX_PLAYERS * MAX_PLAYERS],
+) {
+    use std::arch::aarch64::*;
+    unsafe {
+        for i in 0..n {
+            let xi = vdupq_n_f32(xs[i]);
+            let yi = vdupq_n_f32(ys[i]);
+            let row_base = i * MAX_PLAYERS;
+
+            let mut j = i + 1;
+            // 4-wide chunks (NEON is 128-bit). Bound on n so we don't
+            // waste lanes computing distances we'll never use.
+            while j + 4 <= n {
+                let xj = vld1q_f32(xs.as_ptr().add(j));
+                let yj = vld1q_f32(ys.as_ptr().add(j));
+                let dx = vsubq_f32(xi, xj);
+                let dy = vsubq_f32(yi, yj);
+                let dx2 = vmulq_f32(dx, dx);
+                let dy2 = vmulq_f32(dy, dy);
+                let d2 = vaddq_f32(dx2, dy2);
+                let d = vsqrtq_f32(d2);
+
+                // Row store: contiguous.
+                vst1q_f32(matrix.as_mut_ptr().add(row_base + j), d);
+
+                // Column mirror: scalar scatter to column i.
+                let mut tmp = [0.0f32; 4];
+                vst1q_f32(tmp.as_mut_ptr(), d);
+                for k in 0..4 {
+                    *matrix.get_unchecked_mut((j + k) * MAX_PLAYERS + i) = tmp[k];
+                }
+
+                j += 4;
+            }
+
+            // Scalar tail (<4 elements).
+            while j < n {
+                let dx = xs[i] - xs[j];
+                let dy = ys[i] - ys[j];
+                let distance = (dx * dx + dy * dy).sqrt();
+                *matrix.get_unchecked_mut(row_base + j) = distance;
+                *matrix.get_unchecked_mut(j * MAX_PLAYERS + i) = distance;
+                j += 1;
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline]
+unsafe fn compute_dist_matrix_neon(
+    _xs: &[f32; MAX_PLAYERS],
+    _ys: &[f32; MAX_PLAYERS],
+    _n: usize,
+    _matrix: &mut [f32; MAX_PLAYERS * MAX_PLAYERS],
+) {
+    unreachable!("compute_dist_matrix_neon called on non-aarch64 target");
+}
+
 #[cfg(test)]
 mod avx_tests {
     use super::*;
@@ -379,6 +451,39 @@ mod avx_tests {
                     assert_eq!(
                         a, b,
                         "n={} i={} j={} scalar={} avx={}",
+                        n,
+                        i,
+                        j,
+                        f32::from_bits(a),
+                        f32::from_bits(b)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn neon_matches_scalar_bitwise() {
+        if !neon_available() {
+            return;
+        }
+        for &n in &[0usize, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 22, 23, MAX_PLAYERS] {
+            let (xs, ys) = fill_positions(n, n as u32 + 1);
+            let mut m_scalar = [0.0f32; MAX_PLAYERS * MAX_PLAYERS];
+            let mut m_neon = [0.0f32; MAX_PLAYERS * MAX_PLAYERS];
+            compute_dist_matrix_scalar(&xs, &ys, n, &mut m_scalar);
+            unsafe { compute_dist_matrix_neon(&xs, &ys, n, &mut m_neon) };
+
+            for i in 0..n {
+                for j in 0..n {
+                    if i == j {
+                        continue;
+                    }
+                    let a = m_scalar[i * MAX_PLAYERS + j].to_bits();
+                    let b = m_neon[i * MAX_PLAYERS + j].to_bits();
+                    assert_eq!(
+                        a, b,
+                        "n={} i={} j={} scalar={} neon={}",
                         n,
                         i,
                         j,

@@ -18,12 +18,8 @@ async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
 
     info!(
-        "AVX2 {}",
-        if simulator_core::utils::cpu::avx2_available() {
-            "available"
-        } else {
-            "not available"
-        }
+        "SIMD: {}",
+        simulator_core::utils::cpu::simd_kernel_name()
     );
 
     let settings = Settings::from_env();
