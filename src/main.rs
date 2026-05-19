@@ -17,6 +17,15 @@ async fn main() {
 
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
 
+    info!(
+        "AVX2 {}",
+        if simulator_core::utils::cpu::avx2_available() {
+            "available"
+        } else {
+            "not available"
+        }
+    );
+
     let settings = Settings::from_env();
 
     settings.apply();
@@ -36,11 +45,9 @@ async fn main() {
 
     let (database, estimated) = TimeEstimation::estimate(DatabaseLoader::load);
 
-    info!("database loaded: {} ms", estimated);
-
     let (game_data, gen_ms) = TimeEstimation::estimate(|| DatabaseGenerator::generate(&database));
 
-    info!("database generated: {} ms", gen_ms);
+    info!("database loaded: {} ms, generated: {} ms", estimated, gen_ms);
 
     let i18n = Arc::new(I18nManager::new());
     i18n.set_date(game_data.date);

@@ -14,7 +14,6 @@ use core::continent::Continent;
 use core::{
     CompetitionScope, NationalCompetitionConfig, SimulatorData, seed_core_player_id_sequence,
 };
-use log::info;
 use rayon::prelude::*;
 
 pub struct DatabaseGenerator;
@@ -123,9 +122,7 @@ impl DatabaseGenerator {
                         PlayerGenerator::generate_from_odb(r, continent_id, &country_code, data)
                     })
                     .collect();
-                let count = hydrated.len();
                 simulator_data.free_agents.extend(hydrated);
-                info!("free agents hydrated from compiled DB: {count}");
             }
         }
 

@@ -439,6 +439,11 @@ pub struct DeferredGlobalOps {
     /// finalise a permanent hire from the global free-agent staff
     /// pool. Produced when the board's search window has elapsed.
     pub pending_appointments: Vec<u32>,
+    /// Academy prospects who aged out at the U18 graduation tick.
+    /// `contract = None`, `Frt` status already stamped — Phase C
+    /// extends them onto `data.free_agents` so they remain
+    /// discoverable through the senior market.
+    pub free_agent_players: Vec<crate::Player>,
 }
 
 impl DeferredGlobalOps {
@@ -446,6 +451,8 @@ impl DeferredGlobalOps {
         Self::default()
     }
     pub fn is_empty(&self) -> bool {
-        self.free_agent_staff.is_empty() && self.pending_appointments.is_empty()
+        self.free_agent_staff.is_empty()
+            && self.pending_appointments.is_empty()
+            && self.free_agent_players.is_empty()
     }
 }

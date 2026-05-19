@@ -16,13 +16,34 @@ impl PlayerCollection {
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> PlayerCollectionResult {
+        self.simulate_inner(ctx, false)
+    }
+
+    /// Identical to [`simulate`] but skips the weekly natural skill
+    /// development tick. Owned by `ClubAcademy` — academy players have a
+    /// separate per-week training driver (`ClubAcademy::train_academy_players`),
+    /// and running both in the same week double-develops every prospect.
+    pub fn simulate_skip_development(&mut self, ctx: GlobalContext<'_>) -> PlayerCollectionResult {
+        self.simulate_inner(ctx, true)
+    }
+
+    fn simulate_inner(
+        &mut self,
+        ctx: GlobalContext<'_>,
+        skip_natural_development: bool,
+    ) -> PlayerCollectionResult {
         let player_results: Vec<PlayerResult> = self
             .players
             .iter_mut()
             .map(|player| {
                 let message = &format!("simulate player: id: {}", player.id);
                 Logging::estimate_result(
-                    || player.simulate(ctx.with_player(Some(player.id))),
+                    || {
+                        player.simulate_with_options(
+                            ctx.with_player(Some(player.id)),
+                            skip_natural_development,
+                        )
+                    },
                     message,
                 )
             })

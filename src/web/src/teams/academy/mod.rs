@@ -7,6 +7,9 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::club::academy::{
+    AcademyDevelopmentIdentity, AcademyPlayerPhase, AcademyReadinessScorer, AcademyTier,
+};
 use core::PlayerPositionType;
 use core::SimulatorData;
 use core::utils::DateUtils;
@@ -41,7 +44,23 @@ pub struct TeamAcademyTemplate {
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
+    pub academy_level: u8,
+    pub academy_tier: u8,
+    pub pathway_reputation: u8,
+    /// i18n key for the academy identity label — translated by the template.
+    pub identity_key: &'static str,
+    /// i18n keys for the recruitment-priority position groups —
+    /// translated by the template.
+    pub recruitment_priority_keys: Vec<&'static str>,
     pub players: Vec<AcademyPlayer>,
+    /// Headline pipeline counts for the academy header.
+    pub foundation_count: usize,
+    pub development_count: usize,
+    pub professional_count: usize,
+    pub ready_for_youth_count: usize,
+    pub at_risk_count: usize,
+    /// 0..100 readiness threshold used to colour-band the per-player bar.
+    pub readiness_threshold: i16,
 }
 
 pub struct AcademyPlayer {
@@ -49,6 +68,7 @@ pub struct AcademyPlayer {
     pub first_name: String,
     pub last_name: String,
     pub position: String,
+    #[allow(dead_code)]
     pub position_sort: PlayerPositionType,
     pub country_slug: String,
     pub country_code: String,
@@ -56,7 +76,15 @@ pub struct AcademyPlayer {
     pub age: u8,
     pub current_ability: u8,
     pub potential_ability: u8,
+    pub potential_ability_raw: u8,
     pub conditions: u8,
+    /// i18n key for the phase — translated by the template.
+    pub phase_key: &'static str,
+    pub phase_sort: u8,
+    pub readiness: i16,
+    pub risk_low_condition: bool,
+    pub risk_jaded: bool,
+    pub risk_injury_prone: bool,
 }
 
 pub async fn team_academy_action(
@@ -101,6 +129,11 @@ pub async fn team_academy_action(
 
     let head_coach = team.staffs.head_coach();
 
+    let scorer = AcademyReadinessScorer::new(
+        club.academy.pathway_reputation,
+        &club.academy.pathway_policy,
+    );
+
     // Get academy players directly from club academy
     let mut players: Vec<AcademyPlayer> = club
         .academy
@@ -110,6 +143,9 @@ pub async fn team_academy_action(
         .filter_map(|p| {
             let country = simulator_data.country(p.country_id)?;
             let position = p.positions.display_positions_compact();
+            let age = DateUtils::age(p.birth_date, now);
+            let phase = AcademyPlayerPhase::from_age(age);
+            let readiness = scorer.score(p, now);
 
             Some(AcademyPlayer {
                 _id: p.id,
@@ -120,19 +156,48 @@ pub async fn team_academy_action(
                 country_slug: country.slug.clone(),
                 country_code: country.code.clone(),
                 country_name: country.name.clone(),
-                age: DateUtils::age(p.birth_date, now),
+                age,
                 current_ability: PotentialStarsView::current(p),
                 potential_ability: PotentialStarsView::potential_by_staff(p, head_coach),
+                potential_ability_raw: p.player_attributes.potential_ability,
                 conditions: (100f32 * (p.player_attributes.condition as f32 / 10000.0)) as u8,
+                phase_key: phase_i18n_key(phase),
+                phase_sort: phase.index(),
+                readiness,
+                risk_low_condition: p.player_attributes.condition < 5500,
+                risk_jaded: p.player_attributes.jadedness > 5500,
+                risk_injury_prone: p.player_attributes.injury_proneness >= 17,
             })
         })
         .collect();
 
+    // Default sort: phase ASC, readiness DESC, raw PA DESC.
     players.sort_by(|a, b| {
-        a.position_sort
-            .partial_cmp(&b.position_sort)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        a.phase_sort
+            .cmp(&b.phase_sort)
+            .then_with(|| b.readiness.cmp(&a.readiness))
+            .then_with(|| b.potential_ability_raw.cmp(&a.potential_ability_raw))
     });
+
+    let readiness_threshold = club.academy.pathway_policy.readiness_threshold;
+    let mut foundation_count = 0usize;
+    let mut development_count = 0usize;
+    let mut professional_count = 0usize;
+    let mut ready_for_youth_count = 0usize;
+    let mut at_risk_count = 0usize;
+    for p in &players {
+        match p.phase_sort {
+            0 => foundation_count += 1,
+            1 => development_count += 1,
+            _ => professional_count += 1,
+        }
+        if p.readiness >= readiness_threshold {
+            ready_for_youth_count += 1;
+        }
+        if p.risk_low_condition || p.risk_jaded || p.risk_injury_prone {
+            at_risk_count += 1;
+        }
+    }
 
     let (neighbor_teams, country_leagues) =
         get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
@@ -167,6 +232,14 @@ pub async fn team_academy_action(
         .map(|l| views::league_display_name(l, &i18n, simulator_data))
         .unwrap_or_default();
 
+    let identity_key = identity_i18n_key(club.academy.development_identity);
+    let recruitment_priority_keys = club
+        .academy
+        .recruitment_priorities
+        .iter()
+        .map(|g| position_group_i18n_key(*g))
+        .collect();
+
     Ok(TeamAcademyTemplate {
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
@@ -189,8 +262,46 @@ pub async fn team_academy_action(
         active_tab: "academy",
         show_finances_tab: team.team_type.is_own_team(),
         show_academy_tab: true,
+        academy_level: club.academy.level(),
+        academy_tier: AcademyTier::from_level(club.academy.level()).value(),
+        pathway_reputation: club.academy.pathway_reputation,
+        identity_key,
+        recruitment_priority_keys,
         players,
+        foundation_count,
+        development_count,
+        professional_count,
+        ready_for_youth_count,
+        at_risk_count,
+        readiness_threshold,
     })
+}
+
+fn identity_i18n_key(identity: AcademyDevelopmentIdentity) -> &'static str {
+    match identity {
+        AcademyDevelopmentIdentity::Balanced => "academy_identity_balanced",
+        AcademyDevelopmentIdentity::TechnicalSchool => "academy_identity_technical",
+        AcademyDevelopmentIdentity::TacticalSchool => "academy_identity_tactical",
+        AcademyDevelopmentIdentity::AthleticDevelopment => "academy_identity_athletic",
+        AcademyDevelopmentIdentity::PlayerTrading => "academy_identity_player_trading",
+    }
+}
+
+fn position_group_i18n_key(group: core::PlayerFieldPositionGroup) -> &'static str {
+    match group {
+        core::PlayerFieldPositionGroup::Goalkeeper => "position_group_gk",
+        core::PlayerFieldPositionGroup::Defender => "position_group_df",
+        core::PlayerFieldPositionGroup::Midfielder => "position_group_mf",
+        core::PlayerFieldPositionGroup::Forward => "position_group_fw",
+    }
+}
+
+fn phase_i18n_key(phase: AcademyPlayerPhase) -> &'static str {
+    match phase {
+        AcademyPlayerPhase::Foundation => "academy_phase_foundation",
+        AcademyPlayerPhase::Development => "academy_phase_development",
+        AcademyPlayerPhase::Professional => "academy_phase_professional",
+    }
 }
 
 fn get_neighbor_teams(

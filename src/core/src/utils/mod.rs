@@ -1,3 +1,4 @@
+pub mod cpu;
 mod date;
 mod estimation;
 pub mod formatting;
@@ -5,6 +6,7 @@ mod logging;
 pub mod random;
 mod strings;
 
+pub use cpu::*;
 pub use date::*;
 pub use estimation::*;
 pub use formatting::*;

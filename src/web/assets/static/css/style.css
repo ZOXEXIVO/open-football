@@ -3970,6 +3970,43 @@ a:link, a:visited, a:hover, a:active {
     gap: 8px;
 }
 
+/* Even 3-column grid for the academy header. The default
+   .fm-info-grid leans on a "machine" tile in the first column;
+   the academy page has no such tile, so we override to three
+   equal columns. The nested override stops the responsive
+   media query from collapsing each "machine" tile to its own
+   row (the academy reuses the machine icon styling for every
+   card, so the row-span behavior is wrong here). */
+.fm-info-grid-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.fm-info-grid-3 .fm-info-tile-machine {
+    grid-column: auto;
+}
+
+/* Inline chip row used between two card groups (e.g. academy
+   recruitment priorities). Sits flush with the cards visually. */
+.fm-info-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 4px;
+}
+
+.fm-info-chips-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #8a9ba8;
+    margin-right: 4px;
+}
+
+.fm-info-chips-label .fa {
+    margin-right: 4px;
+}
+
 .fm-info-tile {
     display: flex;
     align-items: center;

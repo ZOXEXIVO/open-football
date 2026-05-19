@@ -4,6 +4,66 @@
 
 {% block content %}
 <div class="fm-page">
+    <section class="fm-panel fm-info-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("academy") }}</h3>
+        </div>
+        <div class="fm-info-body">
+            <div class="fm-info-grid fm-info-grid-3">
+                <div class="fm-info-tile fm-info-tile-machine">
+                    <div class="fm-info-tile-icon"><i class="fa fa-graduation-cap"></i></div>
+                    <div class="fm-info-tile-body">
+                        <div class="fm-info-tile-value">{{ academy_level }}/20</div>
+                        <div class="fm-info-tile-label">{{ i18n.t("academy_level") }} &middot; {{ i18n.t("academy_tier") }} {{ academy_tier }}/10</div>
+                    </div>
+                </div>
+                <div class="fm-info-tile fm-info-tile-machine">
+                    <div class="fm-info-tile-icon"><i class="fa fa-star"></i></div>
+                    <div class="fm-info-tile-body">
+                        <div class="fm-info-tile-value">{{ pathway_reputation }}/100</div>
+                        <div class="fm-info-tile-label">{{ i18n.t("academy_pathway_reputation") }}</div>
+                    </div>
+                </div>
+                <div class="fm-info-tile fm-info-tile-machine">
+                    <div class="fm-info-tile-icon"><i class="fa fa-compass"></i></div>
+                    <div class="fm-info-tile-body">
+                        <div class="fm-info-machine-value">{{ i18n.t(identity_key) }}</div>
+                        <div class="fm-info-tile-label">{{ i18n.t("academy_identity") }}</div>
+                    </div>
+                </div>
+            </div>
+            {% if !recruitment_priority_keys.is_empty() %}
+            <div class="fm-info-chips">
+                <span class="fm-info-chips-label"><i class="fa fa-bullseye"></i> {{ i18n.t("academy_recruitment_priorities") }}</span>
+                {% for k in recruitment_priority_keys %}<span class="fm-tag">{{ i18n.t(k) }}</span>{% endfor %}
+            </div>
+            {% endif %}
+            <div class="fm-info-grid fm-info-grid-3">
+                <div class="fm-info-tile fm-info-tile-machine">
+                    <div class="fm-info-tile-icon"><i class="fa fa-layer-group"></i></div>
+                    <div class="fm-info-tile-body">
+                        <div class="fm-info-machine-value">{{ foundation_count }} / {{ development_count }} / {{ professional_count }}</div>
+                        <div class="fm-info-tile-label">{{ i18n.t("academy_phase_foundation") }} / {{ i18n.t("academy_phase_development") }} / {{ i18n.t("academy_phase_professional") }}</div>
+                    </div>
+                </div>
+                <div class="fm-info-tile fm-info-tile-machine">
+                    <div class="fm-info-tile-icon"><i class="fa fa-arrow-up"></i></div>
+                    <div class="fm-info-tile-body">
+                        <div class="fm-info-tile-value">{{ ready_for_youth_count }}</div>
+                        <div class="fm-info-tile-label">{{ i18n.t("academy_ready_for_youth") }}</div>
+                    </div>
+                </div>
+                <div class="fm-info-tile fm-info-tile-machine">
+                    <div class="fm-info-tile-icon"><i class="fa fa-triangle-exclamation"></i></div>
+                    <div class="fm-info-tile-body">
+                        <div class="fm-info-tile-value">{{ at_risk_count }}</div>
+                        <div class="fm-info-tile-label">{{ i18n.t("academy_at_risk") }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <section class="fm-panel">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("academy_players") }}</h3>
@@ -17,11 +77,14 @@
                 <tr>
                     <th class="aq-name">{{ i18n.t("name") }}</th>
                     <th class="aq-pos">{{ i18n.t("position") }}</th>
+                    <th class="aq-phase">{{ i18n.t("academy_phase") }}</th>
                     <th class="aq-nat">{{ i18n.t("nat") }}</th>
                     <th class="aq-age">{{ i18n.t("age") }}</th>
                     <th class="aq-ca">{{ i18n.t("ability") }}</th>
                     <th class="aq-pa">{{ i18n.t("potential") }}</th>
+                    <th class="aq-readiness">{{ i18n.t("academy_readiness") }}</th>
                     <th class="aq-cond">{{ i18n.t("condition") }}</th>
+                    <th class="aq-risk">{{ i18n.t("academy_risk") }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -31,6 +94,7 @@
                         {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
                     </td>
                     <td class="aq-pos">{{ player.position }}</td>
+                    <td class="aq-phase">{{ i18n.t(player.phase_key) }}</td>
                     <td class="aq-nat">
                         <a href="/{{ lang }}/countries/{{ player.country_slug }}">
                             <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
@@ -47,11 +111,25 @@
                             {% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}
                         </div>
                     </td>
+                    <td class="aq-readiness">
+                        <div class="fm-cond" title="{{ i18n.t("academy_readiness") }}: {{ player.readiness }} / {{ i18n.t("academy_readiness_threshold") }}: {{ readiness_threshold }}">
+                            <div class="fm-cond-bar">
+                                <div class="fm-cond-fill{% if player.readiness >= readiness_threshold %} fm-cond-fill-ok{% endif %}" style="width:{{ player.readiness }}%"></div>
+                                <div class="fm-cond-marker" style="left:{{ readiness_threshold }}%"></div>
+                            </div>
+                            <span class="fm-cond-val">{{ player.readiness }}</span>
+                        </div>
+                    </td>
                     <td class="aq-cond">
                         <div class="fm-cond">
                             <div class="fm-cond-bar"><div class="fm-cond-fill" style="width:{{ player.conditions }}%"></div></div>
                             <span class="fm-cond-val">{{ player.conditions }}%</span>
                         </div>
+                    </td>
+                    <td class="aq-risk">
+                        {% if player.risk_low_condition %}<span class="fm-tag fm-tag-risk" title="{{ i18n.t("academy_risk_low_condition") }}"><i class="fa fa-heart-pulse"></i></span>{% endif %}
+                        {% if player.risk_jaded %}<span class="fm-tag fm-tag-risk" title="{{ i18n.t("academy_risk_jaded") }}"><i class="fa fa-bed"></i></span>{% endif %}
+                        {% if player.risk_injury_prone %}<span class="fm-tag fm-tag-risk" title="{{ i18n.t("academy_risk_injury_prone") }}"><i class="fa fa-bandage"></i></span>{% endif %}
                     </td>
                 </tr>
                 {% endfor %}

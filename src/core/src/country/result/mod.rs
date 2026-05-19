@@ -101,6 +101,15 @@ impl CountryResult {
                 current_date,
             );
         }
+        if !self.deferred_global_ops.free_agent_players.is_empty() {
+            // Academy-aged-out releases. The players already have
+            // `contract = None` and `Frt` stamped — extend straight
+            // onto the global pool and mark the player index dirty
+            // so subsequent reads find them.
+            data.free_agents
+                .extend(self.deferred_global_ops.free_agent_players);
+            data.dirty_player_index = true;
+        }
 
         // Snapshot BEFORE loan returns: this ensures cross-country loan players
         // get their season stats recorded while they're still at the borrowing club.

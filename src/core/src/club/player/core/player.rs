@@ -803,6 +803,18 @@ impl Player {
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> PlayerResult {
+        self.simulate_with_options(ctx, false)
+    }
+
+    /// `simulate` variant that conditionally skips the weekly natural
+    /// development tick. Used by `ClubAcademy::simulate` so academy
+    /// players develop only via `train_academy_players`, never through
+    /// both signals in the same week.
+    pub fn simulate_with_options(
+        &mut self,
+        ctx: GlobalContext<'_>,
+        skip_natural_development: bool,
+    ) -> PlayerResult {
         let now = ctx.simulation.date;
 
         let mut result = PlayerResult::new(self.id);
@@ -901,12 +913,14 @@ impl Player {
                     )
                 })
                 .unwrap_or_else(CoachingEffect::neutral);
-            self.process_development(
-                now.date(),
-                league_reputation,
-                &coach_effect,
-                team_reputation,
-            );
+            if !skip_natural_development {
+                self.process_development(
+                    now.date(),
+                    league_reputation,
+                    &coach_effect,
+                    team_reputation,
+                );
+            }
             // Language learning when playing abroad
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             self.process_language_learning(now.date(), country_code);

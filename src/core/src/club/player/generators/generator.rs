@@ -98,6 +98,19 @@ fn random_normal() -> f32 {
     (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos()
 }
 
+/// Pick a birth date that produces *exactly* `age` under
+/// `DateUtils::age` (which uses `num_days / 365`). We jitter the
+/// number of days back from `now` inside the half-open window
+/// `[age * 365, (age + 1) * 365)`, which keeps the resulting birth
+/// month/day plausibly spread across the calendar without ever
+/// crossing the +/- 1 boundary the caller is counting on.
+pub(crate) fn exact_age_birth_date(now: NaiveDate, age: u8) -> NaiveDate {
+    let lo = age as i64 * 365;
+    let hi = (age as i64 + 1) * 365 - 1;
+    let days_back = IntegerUtils::random(lo as i32, hi as i32) as i64;
+    now - chrono::Duration::days(days_back)
+}
+
 #[derive(Copy, Clone)]
 enum PositionType {
     Goalkeeper,
@@ -784,18 +797,47 @@ impl AcademyGenerationContext {
     }
 
     /// Combined-potential score (0..1). Single continuous signal that
-    /// drives PA ceiling and gem rolls. Weights are tuned so:
-    /// - top European club at top-flight, top country: ~0.85
-    /// - mid-table top-flight, top country: ~0.55
-    /// - lower-division, weaker country: ~0.20
-    /// - regional minnow with poor facilities: ~0.05
+    /// drives PA ceiling and gem rolls. Kept for backwards compatibility
+    /// with existing callers; new academy generation uses
+    /// `ecosystem_score`.
     pub fn combined_potential_score(&self) -> f32 {
-        let s = 0.30 * self.club_reputation_score
-            + 0.18 * self.league_reputation_score
-            + 0.10 * self.country_reputation_score
+        self.ecosystem_score()
+    }
+
+    /// Ecosystem score (0..1). The signal that drives the PA ceiling.
+    ///
+    ///   0.18 * club  + 0.12 * league + 0.14 * country
+    /// + 0.22 * academy_quality + 0.14 * recruitment + 0.12 * youth_coaching
+    /// + 0.08 * pathway
+    ///
+    /// vs the older `combined_potential_score` weights, this gives
+    /// country reputation a slightly bigger role (the football-ecosystem
+    /// signal) and folds in recruitment quality so a great scouting
+    /// network can lift the right tail without inflating every player.
+    pub fn ecosystem_score(&self) -> f32 {
+        let s = 0.18 * self.club_reputation_score
+            + 0.12 * self.league_reputation_score
+            + 0.14 * self.country_reputation_score
             + 0.22 * self.academy_quality
-            + 0.10 * self.pathway_reputation_score
-            + 0.10 * self.youth_coaching_quality;
+            + 0.14 * self.recruitment_quality
+            + 0.12 * self.youth_coaching_quality
+            + 0.08 * self.pathway_reputation_score;
+        s.clamp(0.0, 1.0)
+    }
+
+    /// CA floor score (0..1). Drives the *floor* — the realistic CA an
+    /// outfield prospect lands at before talent rolls. Matches the
+    /// `academy_tier`/`academy_tier_norm` helpers in the academy module.
+    pub fn ca_floor_score(&self) -> f32 {
+        let lvl = self.academy_level.clamp(1, 20) as u16;
+        let tier = (((lvl + 1) / 2) as u8).clamp(1, 10) as f32;
+        let tier_norm = tier / 10.0;
+
+        let s = 0.30 * self.youth_facility_quality
+            + 0.25 * self.youth_coaching_quality
+            + 0.20 * self.academy_quality
+            + 0.15 * tier_norm
+            + 0.10 * self.pathway_reputation_score;
         s.clamp(0.0, 1.0)
     }
 }
@@ -865,22 +907,34 @@ impl PlayerGenerator {
         max_age: i32,
         intake_state: Option<&mut AcademyIntakeState>,
     ) -> Player {
-        let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age) as u32;
-        let month = IntegerUtils::random(1, 12) as u32;
-        let day = IntegerUtils::random(1, 28) as u32;
+        // When the caller pins to a single age (e.g. annual academy
+        // intake at age 14), pick a birth date that guaranteed-rounds
+        // to that exact age under `DateUtils::age`'s days-based math.
+        // Otherwise the random month/day can land *after* `now`'s
+        // month/day in the same calendar year and produce an off-by-one
+        // (a "14-year-old" generated in May would actually read 13).
+        let (year, month, day) = if min_age == max_age && min_age >= 0 {
+            let bd = exact_age_birth_date(now, min_age as u8);
+            (bd.year() as u32, bd.month(), bd.day())
+        } else {
+            let y = IntegerUtils::random(now.year() - max_age, now.year() - min_age) as u32;
+            let m = IntegerUtils::random(1, 12) as u32;
+            let d = IntegerUtils::random(1, 28) as u32;
+            (y, m, d)
+        };
         let age = (now.year() as u32).saturating_sub(year);
 
-        let level = gen_ctx.academy_level;
-        let youth_facility_quality = gen_ctx.youth_facility_quality;
+        let _level = gen_ctx.academy_level;
         let academy_quality = gen_ctx.academy_quality;
         let recruitment_quality = gen_ctx.recruitment_quality;
+        let country_rep = gen_ctx.country_reputation_score;
+        let pathway_rep = gen_ctx.pathway_reputation_score;
 
-        // Combined potential score blends club / league / country reputation,
-        // academy programme, pathway prestige, and coaching into a single
-        // 0..1 driver. Same continuous signal whether the club is Real
-        // Madrid (~0.85) or a regional minnow (~0.05) — no special-cased
-        // tier branches.
-        let cps = gen_ctx.combined_potential_score();
+        // Ecosystem score — single continuous 0..1 driver of the PA
+        // ceiling. Replaces the older `combined_potential_score` weights
+        // with a recruitment-aware blend so a great scouting network can
+        // lift the right tail directly.
+        let cps = gen_ctx.ecosystem_score();
 
         // Per-intake elite-cluster damping: each prior elite (PA>=160)
         // hit in the same intake squeezes the next one's gem/talent rolls,
@@ -891,43 +945,47 @@ impl PlayerGenerator {
             .map(|s| s.elite_damping_factor())
             .unwrap_or(1.0);
 
-        // Floor (raw_ca) — physical facilities + youth coaching dominate the
-        // floor; reputation contributes only modestly. Cambodian academy
+        // CA floor — physical facilities + youth coaching + tier
+        // dominate. Reputation contributes only modestly. A small club
         // with great facilities still produces a competent CA player.
-        let norm_level = (level as f32 / 20.0).clamp(0.0, 1.0);
-        let base_rep_factor = (norm_level.powf(1.2) * 0.45).clamp(0.01, 0.45);
-        let youth_boost =
-            0.80 + youth_facility_quality * 0.40 + gen_ctx.youth_coaching_quality * 0.10; // 0.83..1.30
-        let cps_floor_lift = 1.0 + cps * 0.22; // up to +22% from reputation
-        let rep_factor = (base_rep_factor * youth_boost * cps_floor_lift).clamp(0.01, 0.55);
-        let raw_ca = 10.0 + rep_factor * 200.0;
+        let ca_floor = gen_ctx.ca_floor_score();
+        let raw_ca = 18.0 + ca_floor.powf(1.10) * 82.0; // 18..100
+        // Express the floor as a 0..1 reputation factor so the downstream
+        // affinity/skill code that reads `rep_factor` keeps working.
+        let rep_factor = (raw_ca / 200.0).clamp(0.01, 0.55);
 
         // Gem chance: recruitment widens the candidate pool, but elite
-        // candidates only show up where reputation can attract them. Even
-        // CPS=0 still leaves a tiny floor so small clubs can produce a
-        // standout — just very rarely.
-        let gem_chance = (0.0035 + recruitment_quality * 0.012 + cps * 0.022) * elite_damping;
+        // candidates only show up where reputation can attract them.
+        let gem_chance = (0.0015
+            + 0.0100 * recruitment_quality
+            + 0.0080 * academy_quality
+            + 0.0060 * country_rep
+            + 0.0040 * pathway_rep)
+            * elite_damping;
         let is_gem = rand::random::<f32>() < gem_chance;
 
-        // PA ceiling: a single continuous curve of CPS — academies at the
-        // bottom cap around 110, mid clubs at 145, top clubs at 180+ before
-        // any prodigy roll. Note: even at CPS=1 the cap stays under 190;
-        // PA 190+ requires the prodigy path, never the regular one.
-        let mut academy_pa_cap = (110.0 + cps.powf(1.15) * 78.0) as i32; // ~110..188
+        // PA ceiling — single continuous curve of `ecosystem_score`.
+        // Roughly 95..185 before any prodigy roll. Adds normal noise
+        // around the curve so neighbour clubs differentiate.
+        let mut academy_pa_cap = (95.0 + cps.powf(1.18) * 90.0) as i32; // ~95..185
+        let pa_noise = random_normal() * 5.0;
+        academy_pa_cap = (academy_pa_cap as f32 + pa_noise).clamp(90.0, 188.0) as i32;
 
-        // Rare prodigy: gates beyond the standard cap. The high tiers (PA
-        // 175+, 190+) require the prodigy roll AND meaningful CPS, so a
-        // hopeless minnow does not regularly mint world-class kids.
+        // Rare prodigy: gates beyond the standard cap. Bands are tighter
+        // than before so the upper tail is anchored on the ecosystem.
         let prodigy_roll = rand::random::<f32>() / elite_damping.max(1e-3);
-        if prodigy_roll < 0.00005 && cps >= 0.55 {
-            // Generational, only at well-resourced clubs.
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(178, 195));
-        } else if prodigy_roll < 0.00025 && cps >= 0.40 {
+        if prodigy_roll < 0.000015 && cps >= 0.76 {
+            // Generational, only at the most well-resourced clubs.
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(195, 200));
+        } else if prodigy_roll < 0.00008 && cps >= 0.58 {
             // World-class — credible top-flight or strong second-flight.
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(160, 180));
-        } else if prodigy_roll < 0.0010 {
-            // Very high potential — open to any club, including small ones,
-            // because even a Norwich or Brentford can occasionally turn up
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(180, 195));
+        } else if prodigy_roll < 0.00030 && cps >= 0.40 {
+            // Elite — mid-table top-flight or above.
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(165, 180));
+        } else if prodigy_roll < 0.0012 {
+            // Very high potential — open to any club, including small
+            // ones. Even a Norwich or Brentford can occasionally turn up
             // a future star.
             academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(145, 165));
         }
@@ -1661,9 +1719,51 @@ mod academy_realism_tests {
         let small_avg = small_pas.iter().map(|&pa| pa as u32).sum::<u32>() / small_pas.len() as u32;
         let big_avg = big_pas.iter().map(|&pa| pa as u32).sum::<u32>() / big_pas.len() as u32;
 
+        // After the realism overhaul, ecosystem_score weighs club_rep at
+        // 0.18 (down from 0.30 in CPS), so reputation alone moves a
+        // smaller fraction of the PA distribution. The directional
+        // guarantee — bigger reputation produces a better average —
+        // still holds.
         assert!(
-            big_avg >= small_avg + 8,
+            big_avg >= small_avg + 4,
             "reputation should shift PA: small={small_avg}, big={big_avg}"
+        );
+    }
+
+    #[test]
+    fn higher_recruitment_widens_right_tail_without_collapsing_average() {
+        // Recruitment quality widens the candidate pool that the selection
+        // gate then prunes. The candidate-pool damping move means we
+        // should see *more* high-PA hits in the pool when recruitment is
+        // higher, while the *average* PA stays in a sensible band rather
+        // than collapsing.
+        const N: usize = 1500;
+
+        // Same academy level / facilities / coaching — only recruitment
+        // differs. (level, youth_fac, academy_q, recruitment_q,
+        // youth_coach, main_rep, league_rep, country_rep, pathway_rep)
+        let low_recruit = AcademyGenerationContext::from_components(
+            12, 0.60, 0.60, 0.30, 0.60, 5000, 5000, 5000, 60,
+        );
+        let high_recruit = AcademyGenerationContext::from_components(
+            12, 0.60, 0.60, 0.95, 0.60, 5000, 5000, 5000, 60,
+        );
+
+        let lo_pas = generate_batch(&low_recruit, N);
+        let hi_pas = generate_batch(&high_recruit, N);
+        let lo_avg = lo_pas.iter().map(|&pa| pa as u32).sum::<u32>() / lo_pas.len() as u32;
+        let hi_avg = hi_pas.iter().map(|&pa| pa as u32).sum::<u32>() / hi_pas.len() as u32;
+        let lo_elite = lo_pas.iter().filter(|&&pa| pa >= 160).count();
+        let hi_elite = hi_pas.iter().filter(|&&pa| pa >= 160).count();
+
+        assert!(
+            hi_elite >= lo_elite,
+            "higher recruitment should produce >= elites (lo={lo_elite}, hi={hi_elite})"
+        );
+        // Average must not collapse — it should hold or climb.
+        assert!(
+            (hi_avg as i32) >= (lo_avg as i32) - 5,
+            "average PA collapsed: lo={lo_avg}, hi={hi_avg}"
         );
     }
 
@@ -1680,15 +1780,74 @@ mod academy_realism_tests {
     }
 
     #[test]
+    fn exact_age_helper_lands_on_requested_age() {
+        // Annual intake uses min_age == max_age; the helper must
+        // produce a birth date that `DateUtils::age` reads as exactly
+        // the requested age. Cover several "now" dates so neither
+        // leap-day mathematics nor late-in-the-year drift can sneak in.
+        use crate::club::player::generators::generator::exact_age_birth_date;
+        use crate::utils::DateUtils;
+
+        let nows = [
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 19).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 12, 28).unwrap(),
+        ];
+        for &now in &nows {
+            for age in [13u8, 14, 15, 16] {
+                for _ in 0..50 {
+                    let bd = exact_age_birth_date(now, age);
+                    let computed = DateUtils::age(bd, now);
+                    assert_eq!(
+                        computed, age,
+                        "exact_age({age}) on {now} gave {bd} which reads as age {computed}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn annual_intake_age_is_never_below_thirteen() {
+        // Regression: an "age 14" annual intake used to read as 13
+        // when the random month/day landed after `now`'s month/day in
+        // the same calendar year. Sample a batch and verify nobody
+        // appears at age 12 or younger.
+        use crate::utils::DateUtils;
+        let ctx = elite_ctx();
+        let names = empty_names();
+        let today = now();
+        for _ in 0..400 {
+            let p = PlayerGenerator::generate_with_context(
+                1,
+                today,
+                PlayerPositionType::MidfielderCenter,
+                &names,
+                &ctx,
+                14,
+                14,
+                None,
+            );
+            let actual = DateUtils::age(p.birth_date, today);
+            assert!(
+                actual == 14,
+                "annual intake age 14 produced player aged {actual} (birth {})",
+                p.birth_date
+            );
+        }
+    }
+
+    #[test]
     fn academy_level_scale_normalised() {
         // tier collapsing should map facility rating 1..20 to pathway tier 1..10
-        use crate::club::academy::academy::academy_tier;
-        assert_eq!(academy_tier(1), 1);
-        assert_eq!(academy_tier(2), 1);
-        assert_eq!(academy_tier(11), 6);
-        assert_eq!(academy_tier(15), 8);
-        assert_eq!(academy_tier(19), 10);
-        assert_eq!(academy_tier(20), 10);
+        use crate::club::academy::AcademyTier;
+        assert_eq!(AcademyTier::from_level(1).value(), 1);
+        assert_eq!(AcademyTier::from_level(2).value(), 1);
+        assert_eq!(AcademyTier::from_level(11).value(), 6);
+        assert_eq!(AcademyTier::from_level(15).value(), 8);
+        assert_eq!(AcademyTier::from_level(19).value(), 10);
+        assert_eq!(AcademyTier::from_level(20).value(), 10);
     }
 }
 

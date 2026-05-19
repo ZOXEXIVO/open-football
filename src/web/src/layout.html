@@ -63,6 +63,13 @@
                         </div>
                     </li>
                     <li class="fm-nav-divider"></li>
+                    <li>
+                        <a href="/{{ lang }}/performance">
+                            <i class="fa fa-microchip"></i>
+                            <span>Performance</span>
+                        </a>
+                    </li>
+                    <li class="fm-nav-divider"></li>
                     {% for item in last.items %}
                     <li>
                         <a href="{{ item.url }}" {% if item.url.starts_with("http") %} target="_blank" rel="noopener"{%
@@ -103,8 +110,8 @@
                                 </div>
                                 {% block header_center %}{% endblock %}
                                 <div class="fm-header-actions">
-                                    <a class="fm-ai-icon fm-perf-icon" href="/{{ lang }}/performance" title="Performance">
-                                        <i class="fa fa-microchip"></i>
+                                    <a class="fm-ai-icon fm-header-search" href="/{{ lang }}/search" title="Search">
+                                        <i class="fa fa-search"></i>
                                     </a>
                                     <a class="fm-ai-icon fm-ai-icon-robot" href="/{{ lang }}/ai" title="AI">
                                         <i class="fa fa-robot"></i>

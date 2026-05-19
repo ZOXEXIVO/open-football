@@ -358,7 +358,10 @@ impl Club {
 
             self.process_pre_season_reset();
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
-            result.academy_transfers = self.process_academy_graduations(date, country_code);
+            let (academy_transfers, released_players) =
+                self.process_academy_graduations(date, country_code);
+            result.academy_transfers = academy_transfers;
+            result.academy_released_players = released_players;
             self.trim_positional_surplus(date);
         }
 

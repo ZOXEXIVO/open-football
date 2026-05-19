@@ -38,14 +38,16 @@ impl Club {
 
     /// Graduate best academy players to U18 team (8-12 per year).
     /// Move overage youth players to main team.
-    /// Aged-out academy players disappear.
-    /// Returns completed transfer records for graduated players.
+    /// Aged-out academy players are released onto the global free-agent
+    /// pool. Returns completed transfer records and the released
+    /// player roster so the country processing layer can route them.
     pub(super) fn process_academy_graduations(
         &mut self,
         date: NaiveDate,
         country_code: &str,
-    ) -> Vec<CompletedTransfer> {
+    ) -> (Vec<CompletedTransfer>, Vec<crate::Player>) {
         let mut transfers = Vec::new();
+        let mut released_players: Vec<crate::Player> = Vec::new();
 
         // Find the lowest youth team to graduate into (U18 → U19 → U20 → U21 → U23)
         let youth_idx = TeamType::YOUTH_PROGRESSION
@@ -53,12 +55,19 @@ impl Club {
             .find_map(|tt| self.teams.index_of_type(*tt));
 
         // Graduate best academy players BEFORE releasing aged-out ones,
-        // so 16+ year olds get a chance to graduate instead of being deleted
+        // so 16+ year olds get a chance to graduate instead of being deleted.
+        //
+        // Target a 24-player youth squad and never push past the
+        // soft-max of 30. The academy's `recommended_graduates` /
+        // `elite_overshoot_count` helpers decide the actual count so
+        // there's a single place to tune the pathway throughput.
         if let Some(idx) = youth_idx {
             let youth_count = self.teams.teams[idx].players.len();
-            let target = 25usize;
-            let space = target.saturating_sub(youth_count);
-            let to_graduate = space.max(8).min(12);
+            let normal = self.academy.recommended_graduates(youth_count);
+            let elite_overshoot = self.academy.elite_overshoot_count(date);
+            let to_graduate = self
+                .academy
+                .graduation_ceiling(youth_count, normal, elite_overshoot);
 
             // Main team name for contract registration
             let main_team_name = self
@@ -107,19 +116,45 @@ impl Club {
             }
         }
 
-        // Release aged-out academy players (18+) that were NOT graduated
-        let released = self.academy.release_aged_out(date);
-        if released > 0 {
+        // Release aged-out academy players (18+) that were NOT graduated.
+        // Each release records a free transfer event AND stamps the
+        // player as `Frt` with a cleared contract so the global
+        // free-agent pipeline picks them up — previously they exited
+        // the academy but never reached the senior free-agent pool.
+        let released = self.academy.release_aged_out_players(date);
+        if !released.is_empty() {
             debug!(
-                "academy {}: {} aged-out players released",
-                self.name, released
+                "academy {}: {} aged-out players released to free agents",
+                self.name,
+                released.len()
             );
+            for player in released {
+                // `release_aged_out_players` already cleared the
+                // contract and stamped Frt; we only need to record
+                // the transfer history line and surface the player.
+                transfers.push(
+                    CompletedTransfer::new(
+                        player.id,
+                        player.full_name.to_string(),
+                        0,
+                        0,
+                        "Academy".to_string(),
+                        0,
+                        "Free Agents".to_string(),
+                        date,
+                        CurrencyValue::new(0.0, Currency::Usd),
+                        TransferType::Free,
+                    )
+                    .with_reason("Academy aged-out release".to_string()),
+                );
+                released_players.push(player);
+            }
         }
 
         // Rebalance: overage moves, talent promotions, backfill
         self.rebalance_squads(date);
 
-        transfers
+        (transfers, released_players)
     }
 }
 

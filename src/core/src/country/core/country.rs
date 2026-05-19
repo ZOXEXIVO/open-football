@@ -225,7 +225,7 @@ impl Country {
             }
             c
         };
-        let clubs_results = self.simulate_clubs(&ctx);
+        let mut clubs_results = self.simulate_clubs(&ctx);
 
         // Per-country local result processing — used to run serially in
         // Phase C after the parallel continent pass joined. Moved into
@@ -320,6 +320,17 @@ impl Country {
         for cr in &clubs_results {
             if !cr.academy_transfers.is_empty() {
                 academy_transfers.extend(cr.academy_transfers.iter().cloned());
+            }
+        }
+        // Aged-out academy players need to flow into the global free
+        // agent pool. Each club's released cohort is moved (not cloned)
+        // into `deferred.free_agent_players`; Phase C extends them onto
+        // `data.free_agents`.
+        for cr in &mut clubs_results {
+            if !cr.academy_released_players.is_empty() {
+                deferred
+                    .free_agent_players
+                    .extend(std::mem::take(&mut cr.academy_released_players));
             }
         }
         for cr in clubs_results {

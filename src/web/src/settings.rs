@@ -62,7 +62,9 @@ impl Settings {
         if self.match_recordings {
             info!("Match recordings mode enabled");
         }
-        info!("Match engine pool: {} threads", self.match_threads);
-        info!("Match store pool: {} threads", self.match_store_threads);
+        info!(
+            "Match engine: {} threads, store: {} threads",
+            self.match_threads, self.match_store_threads
+        );
     }
 }

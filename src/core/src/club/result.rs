@@ -55,6 +55,12 @@ pub struct ClubResult {
     pub board: BoardResult,
     pub academy: ClubAcademyResult,
     pub academy_transfers: Vec<CompletedTransfer>,
+    /// Academy prospects who aged out (turned 18 without being graduated
+    /// to the U18 pathway). They have their contract cleared and an
+    /// `Frt` status stamped before being surfaced here; the country
+    /// drain routes them into the global `data.free_agents` pool so
+    /// they remain discoverable players instead of vanishing.
+    pub academy_released_players: Vec<Player>,
     /// AI batch requests this club emitted during its tick. Drained by
     /// the simulator after the parallel continent phase joins, so the
     /// club never writes into a shared collector.
@@ -76,6 +82,7 @@ impl ClubResult {
             board,
             academy,
             academy_transfers: Vec::new(),
+            academy_released_players: Vec::new(),
             pending_ai_requests: Vec::new(),
         }
     }

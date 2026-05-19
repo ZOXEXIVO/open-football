@@ -16,6 +16,10 @@ pub mod team;
 pub mod transfers;
 
 // Re-export all simple modules
+pub use academy::{
+    AcademyDevelopmentIdentity, AcademyPathwayPolicy, AcademyPipelineHealth, AcademyPlayerPhase,
+    AcademyReadinessScorer, AcademyTier, AcademyTuning, ClubAcademy,
+};
 pub use board::*;
 pub use club::*;
 pub use context::*;
