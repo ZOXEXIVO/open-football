@@ -17,7 +17,7 @@ use crate::transfers::pipeline::{
 use crate::utils::FormattingUtils;
 use crate::{
     ClubPhilosophy, ClubTransferStrategy, Country, Person, PlayerStatusType, ReputationLevel,
-    StaffPosition, WageCalculator,
+    StaffPosition, TransferStrategyContext, WageCalculator,
 };
 
 /// Continuous buying aggressiveness from reputation ratio.
@@ -239,17 +239,19 @@ impl PipelineProcessor {
                     let buying_aggressiveness =
                         buying_aggressiveness_from_rep(buying_rep_score, selling_rep_score);
 
-                    let strategy = ClubTransferStrategy {
-                        club_id: club.id,
-                        budget: Some(CurrencyValue {
-                            amount: shortlist.allocated_budget.min(budget),
+                    let allocated_for_move = shortlist.allocated_budget.min(budget);
+                    let strategy = ClubTransferStrategy::from_club_context(
+                        club.id,
+                        Some(CurrencyValue {
+                            amount: allocated_for_move,
                             currency: Currency::Usd,
                         }),
-                        selling_willingness: 0.5,
+                        avg_ability as u16,
+                        vec![player.position()],
+                        &club.philosophy,
+                        &club.board.vision,
                         buying_aggressiveness,
-                        target_positions: vec![player.position()],
-                        reputation_level: avg_ability as u16,
-                    };
+                    );
 
                     let asking_price = Self::calculate_asking_price(
                         player,
@@ -276,7 +278,82 @@ impl PipelineProcessor {
                         asking_price.clone()
                     };
 
-                    let mut offer = strategy.calculate_initial_offer(player, &actual_asking, date);
+                    // Pull scout-side context for this candidate so the
+                    // strategy can use assessed potential instead of
+                    // hidden PA, and respect dossier risk flags. Both
+                    // sources are optional — minimal context falls back
+                    // to the previous behaviour.
+                    let monitoring = plan
+                        .scout_monitoring
+                        .iter()
+                        .find(|m| m.player_id == player_id);
+                    let scouting_report = plan
+                        .scouting_reports
+                        .iter()
+                        .find(|r| r.player_id == player_id);
+                    let dossier = if monitoring.is_some() || scouting_report.is_some() {
+                        Some(Self::build_board_dossier(
+                            plan,
+                            player_id,
+                            shortlist.transfer_request_id,
+                        ))
+                    } else {
+                        None
+                    };
+                    // Active rival bidders on this player at the
+                    // moment. Read once so we don't walk the
+                    // negotiation map twice during offer construction.
+                    let competition_count: u32 = country
+                        .transfer_market
+                        .negotiations
+                        .values()
+                        .filter(|n| {
+                            n.player_id == player_id
+                                && n.buying_club_id != club.id
+                                && matches!(
+                                    n.status,
+                                    crate::transfers::negotiation::NegotiationStatus::Pending
+                                        | crate::transfers::negotiation::NegotiationStatus::Countered
+                                )
+                        })
+                        .count() as u32;
+                    let strategy_ctx = TransferStrategyContext {
+                        date,
+                        request,
+                        board_dossier: dossier.as_ref(),
+                        approach: approach.clone(),
+                        buyer_reputation_score: buying_rep_score,
+                        seller_reputation_score: selling_rep_score,
+                        league_reputation: buying_league_reputation,
+                        available_budget: budget,
+                        allocated_budget: allocated_for_move,
+                        wage_budget_headroom: None,
+                        buying_club_balance: club.finance.balance.balance,
+                        is_january: Self::is_january_window(date),
+                        price_level,
+                        shortlist_rank: shortlist
+                            .candidates
+                            .iter()
+                            .position(|c| c.player_id == player_id)
+                            .map(|p| p as u8),
+                        competition_count: Some(competition_count.min(u8::MAX as u32) as u8),
+                        scout_assessed_ability: monitoring
+                            .map(|m| m.current_assessed_ability)
+                            .or_else(|| scouting_report.map(|r| r.assessed_ability)),
+                        scout_assessed_potential: monitoring
+                            .map(|m| m.current_assessed_potential)
+                            .or_else(|| scouting_report.map(|r| r.assessed_potential)),
+                        scout_confidence: monitoring
+                            .map(|m| m.confidence)
+                            .or_else(|| scouting_report.map(|r| r.confidence)),
+                        seller_is_rival: is_rival,
+                    };
+
+                    let mut offer = strategy.calculate_initial_offer_with_context(
+                        player,
+                        &actual_asking,
+                        &strategy_ctx,
+                    );
 
                     // Add appearance fee clause for loans from high-reputation sellers
                     if is_loan {
@@ -1236,19 +1313,71 @@ impl PipelineProcessor {
                 .map(|l| l.reputation)
                 .unwrap_or(0);
 
-            let strategy = ClubTransferStrategy {
-                club_id: cand.buying_club_id,
-                budget: Some(CurrencyValue {
+            let strategy = ClubTransferStrategy::from_club_context(
+                cand.buying_club_id,
+                Some(CurrencyValue {
                     amount: budget,
                     currency: Currency::Usd,
                 }),
-                selling_willingness: 0.5,
-                buying_aggressiveness: buying_aggressiveness_from_rep(buying_rep, selling_rep),
-                target_positions: vec![player.position()],
-                reputation_level: avg_ability as u16,
+                avg_ability as u16,
+                vec![player.position()],
+                &buy_club.philosophy,
+                &buy_club.board.vision,
+                buying_aggressiveness_from_rep(buying_rep, selling_rep),
+            );
+
+            // Pull scout-side context for the foreign target.
+            // Monitoring rows live with the buying club's plan; the
+            // dossier helper resolves the rest from the same plan.
+            let monitoring = buy_club
+                .transfer_plan
+                .scout_monitoring
+                .iter()
+                .find(|m| m.player_id == cand.player_id);
+            let scouting_report = buy_club
+                .transfer_plan
+                .scouting_reports
+                .iter()
+                .find(|r| r.player_id == cand.player_id);
+            let dossier = if monitoring.is_some() || scouting_report.is_some() {
+                Some(Self::build_board_dossier(
+                    &buy_club.transfer_plan,
+                    cand.player_id,
+                    cand.shortlist_request_id,
+                ))
+            } else {
+                None
+            };
+            let strategy_ctx = TransferStrategyContext {
+                date,
+                request,
+                board_dossier: dossier.as_ref(),
+                approach: approach.clone(),
+                buyer_reputation_score: buying_rep,
+                seller_reputation_score: selling_rep,
+                league_reputation: buying_league_reputation,
+                available_budget: budget,
+                allocated_budget: budget,
+                wage_budget_headroom: None,
+                buying_club_balance: buy_club.finance.balance.balance,
+                is_january: Self::is_january_window(date),
+                price_level: sell_price_level,
+                shortlist_rank: None,
+                competition_count: None,
+                scout_assessed_ability: monitoring
+                    .map(|m| m.current_assessed_ability)
+                    .or_else(|| scouting_report.map(|r| r.assessed_ability)),
+                scout_assessed_potential: monitoring
+                    .map(|m| m.current_assessed_potential)
+                    .or_else(|| scouting_report.map(|r| r.assessed_potential)),
+                scout_confidence: monitoring
+                    .map(|m| m.confidence)
+                    .or_else(|| scouting_report.map(|r| r.confidence)),
+                seller_is_rival: false,
             };
 
-            let mut offer = strategy.calculate_initial_offer(player, &actual_asking, date);
+            let mut offer =
+                strategy.calculate_initial_offer_with_context(player, &actual_asking, &strategy_ctx);
 
             if has_option_to_buy {
                 let option_price = FormattingUtils::round_fee(asking_price.amount * 0.7);

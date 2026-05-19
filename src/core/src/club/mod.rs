@@ -43,7 +43,11 @@ pub use relations::{
 };
 
 // Transfers exports
-pub use transfers::ClubTransferStrategy;
+pub use transfers::{
+    AgePreference, ClubTransferStrategy, NegotiationPolicy, RecruitmentPolicy, SellingDecision,
+    SellingPolicy, SquadBuildingPolicy, SquadPhase, TransferInterestDecision,
+    TransferInterestReason, TransferInterestRisk, TransferInterestScore, TransferStrategyContext,
+};
 
 // Player exports (except conflicting modules)
 pub use player::{
