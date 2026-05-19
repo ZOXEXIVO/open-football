@@ -1,0 +1,392 @@
+mod career_desire;
+mod contract;
+mod core;
+mod event_context;
+mod event_type;
+mod injury;
+mod leadership;
+mod life_simulation;
+mod loan;
+mod manager_interaction;
+mod match_performance;
+mod media_fan;
+mod national_team;
+mod personal_adaptation;
+mod recognition;
+mod regulation;
+mod role_status;
+mod season_outcome;
+mod selection;
+mod support;
+mod teammate_conflict;
+mod training;
+mod transfer_interest;
+
+pub use career_desire::*;
+pub use contract::*;
+pub use core::*;
+pub use event_context::*;
+pub use event_type::*;
+pub use injury::*;
+pub use leadership::*;
+pub use life_simulation::*;
+pub use loan::*;
+pub use manager_interaction::*;
+pub use match_performance::*;
+pub use media_fan::*;
+pub use national_team::*;
+pub use personal_adaptation::*;
+pub use recognition::*;
+pub use regulation::*;
+pub use role_status::*;
+pub use season_outcome::*;
+pub use selection::*;
+pub use support::*;
+pub use teammate_conflict::*;
+pub use training::*;
+pub use transfer_interest::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_context_carries_no_specialized_payload() {
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::Personal,
+        );
+        assert_eq!(ctx.specialized_payload_count(), 0);
+    }
+
+    #[test]
+    fn each_with_specialized_context_yields_payload_count_one() {
+        // Spot-check several builders — the renderer dispatch trusts
+        // that exactly one specialized payload is set per event, so a
+        // single with_*_context call must produce count == 1 (and not,
+        // say, count == 2 due to a copy-paste bug in a future builder).
+        let base = || {
+            HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::Minor,
+                HappinessEventScope::Personal,
+            )
+        };
+        let recognition = base().with_recognition_context(RecognitionEventContext::new(
+            RecognitionEventKind::PlayerOfTheWeek,
+        ));
+        assert_eq!(recognition.specialized_payload_count(), 1);
+
+        let season = base()
+            .with_season_outcome_context(SeasonOutcomeContext::new(SeasonOutcomeKind::Relegated));
+        assert_eq!(season.specialized_payload_count(), 1);
+
+        let regulation = base().with_regulation_context(RegulationEventContext::new(
+            RegulationOutcomeKind::Omitted,
+            RegulationSlotKind::NonEuQuota,
+        ));
+        assert_eq!(regulation.specialized_payload_count(), 1);
+    }
+
+    #[test]
+    fn double_attached_specialized_payload_count_exceeds_one() {
+        // If a future emit site (or a careless refactor) attaches two
+        // specialized contexts, `specialized_payload_count` must return
+        // >1 so the debug_assert in `add_event_full` catches it. This
+        // test pins that the counter actually counts each payload, so
+        // the runtime guard remains effective.
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::Personal,
+        )
+        .with_recognition_context(RecognitionEventContext::new(
+            RecognitionEventKind::PlayerOfTheWeek,
+        ))
+        .with_season_outcome_context(SeasonOutcomeContext::new(SeasonOutcomeKind::Relegated));
+        assert_eq!(ctx.specialized_payload_count(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "specialized payloads")]
+    fn add_event_with_double_specialized_payload_panics_in_debug() {
+        // The debug_assert in add_event_full fires when an emit site
+        // attaches two specialized payloads. Tests run with
+        // debug_assertions enabled, so this should panic. In release
+        // builds the event is still recorded (best-effort), but the
+        // mutually-exclusive contract is enforced under tests.
+        let mut h = PlayerHappiness::new();
+        let bad_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::Media,
+        )
+        .with_recognition_context(RecognitionEventContext::new(
+            RecognitionEventKind::PlayerOfTheMonth,
+        ))
+        .with_regulation_context(RegulationEventContext::new(
+            RegulationOutcomeKind::Omitted,
+            RegulationSlotKind::Other,
+        ));
+        h.add_event_with_context(HappinessEventType::PlayerOfTheMonth, 5.0, None, bad_ctx);
+    }
+
+    #[test]
+    fn cooldown_blocks_duplicate_event() {
+        let mut h = PlayerHappiness::new();
+        let added = h.add_event_with_cooldown(HappinessEventType::DerbyHero, 5.0, 14);
+        assert!(added, "first emit should land");
+        let second = h.add_event_with_cooldown(HappinessEventType::DerbyHero, 5.0, 14);
+        assert!(!second, "second emit inside cooldown should be skipped");
+        assert_eq!(
+            h.recent_events
+                .iter()
+                .filter(|e| e.event_type == HappinessEventType::DerbyHero)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn cooldown_lapses_after_age() {
+        let mut h = PlayerHappiness::new();
+        h.add_event_with_cooldown(HappinessEventType::SettledIntoSquad, 2.0, 14);
+        // Simulate time passing — bump days_ago past the cooldown window.
+        h.recent_events[0].days_ago = 21;
+        let added = h.add_event_with_cooldown(HappinessEventType::SettledIntoSquad, 2.0, 14);
+        assert!(added, "emit should resume once cooldown has elapsed");
+    }
+
+    #[test]
+    fn has_recent_event_distinguishes_event_types() {
+        let mut h = PlayerHappiness::new();
+        h.add_event_default(HappinessEventType::DerbyHero);
+        assert!(h.has_recent_event(&HappinessEventType::DerbyHero, 30));
+        assert!(!h.has_recent_event(&HappinessEventType::DerbyDefeat, 30));
+    }
+
+    #[test]
+    fn severity_thresholds_are_stable() {
+        // Boundary checks — keep these in lockstep with renderer copy
+        // and tests that assert the visible label.
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(0.5),
+            HappinessEventSeverity::Minor
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(1.9),
+            HappinessEventSeverity::Minor
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(2.0),
+            HappinessEventSeverity::Moderate
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(-3.5),
+            HappinessEventSeverity::Moderate
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(4.0),
+            HappinessEventSeverity::Serious
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(-5.9),
+            HappinessEventSeverity::Serious
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(6.0),
+            HappinessEventSeverity::Major
+        );
+        assert_eq!(
+            HappinessEventSeverity::from_magnitude(-12.0),
+            HappinessEventSeverity::Major
+        );
+    }
+
+    #[test]
+    fn legacy_emit_paths_carry_no_context() {
+        let mut h = PlayerHappiness::new();
+        h.add_event(HappinessEventType::PoorTraining, -1.0);
+        let event = h.recent_events.last().unwrap();
+        assert!(
+            event.context.is_none(),
+            "legacy emit must not synthesise a context — None means 'unknown', \
+             which the renderer falls back from cleanly"
+        );
+    }
+
+    #[test]
+    fn add_event_with_context_round_trips() {
+        let mut h = PlayerHappiness::new();
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::PositionalRivalry,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::DressingRoom,
+        )
+        .with_relationship_level(-30.0)
+        .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk);
+        h.add_event_with_context(
+            HappinessEventType::ConflictWithTeammate,
+            -2.0,
+            Some(99),
+            ctx,
+        );
+        let event = h.recent_events.last().unwrap();
+        let stored = event.context.as_ref().expect("context must round-trip");
+        assert_eq!(stored.cause, HappinessEventCause::PositionalRivalry);
+        assert_eq!(stored.severity, HappinessEventSeverity::Moderate);
+        assert_eq!(stored.scope, HappinessEventScope::DressingRoom);
+        assert_eq!(stored.relationship_level_before, Some(-30.0));
+        assert_eq!(
+            stored.follow_up,
+            Some(HappinessEventFollowUp::DressingRoomDamageRisk)
+        );
+        assert_eq!(event.partner_player_id, Some(99));
+    }
+
+    #[test]
+    fn partner_required_event_without_partner_is_dropped() {
+        let mut h = PlayerHappiness::new();
+        // debug_assertions panic in test builds — wrap in catch_unwind so
+        // we can assert that the event is not silently committed.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let ctx = HappinessEventContext::new(
+                HappinessEventCause::PersonalityClash,
+                HappinessEventSeverity::Minor,
+                HappinessEventScope::DressingRoom,
+            );
+            h.add_event_with_context(HappinessEventType::ConflictWithTeammate, -1.0, None, ctx);
+        }));
+        assert!(
+            result.is_err() || h.recent_events.is_empty(),
+            "partner-required event without partner_id must not land in recent_events"
+        );
+    }
+
+    #[test]
+    fn match_selection_context_round_trips_through_event_context() {
+        let mut h = PlayerHappiness::new();
+        let sel = MatchSelectionContext {
+            scope: SelectionDecisionScope::DroppedToBench,
+            reason: SelectionOmissionReason::TeammatePreferredOnFitness,
+            comparison: Some(SelectionComparison {
+                selected_player_id: 42,
+                selected_was_starter: true,
+                slot: Some(SelectionRole::Winger),
+                selected_score: 14.5,
+                omitted_score: 12.0,
+                top_factors: vec![SelectionScoreFactor::MatchReadiness],
+            }),
+            role: SelectionRole::Winger,
+            match_importance: 0.8,
+            repeated: false,
+            is_friendly: false,
+        };
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::PositionalRivalry,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::MatchDay,
+        )
+        .with_selection_context(sel);
+        h.add_event_with_context(HappinessEventType::MatchDropped, -2.0, None, ctx);
+
+        let event = h.recent_events.last().expect("event must land");
+        let stored = event
+            .context
+            .as_ref()
+            .and_then(|c| c.selection_context.as_ref())
+            .expect("selection context round-trips");
+        assert_eq!(stored.scope, SelectionDecisionScope::DroppedToBench);
+        assert_eq!(
+            stored.reason,
+            SelectionOmissionReason::TeammatePreferredOnFitness
+        );
+        let comp = stored.comparison.as_ref().expect("comparison present");
+        assert_eq!(comp.selected_player_id, 42);
+        assert!(comp.selected_was_starter);
+        assert_eq!(comp.slot, Some(SelectionRole::Winger));
+    }
+
+    #[test]
+    fn selection_omission_reason_keys_are_unique_and_non_empty() {
+        let reasons = [
+            SelectionOmissionReason::LowerMatchReadiness,
+            SelectionOmissionReason::FitnessProtection,
+            SelectionOmissionReason::FatigueManagement,
+            SelectionOmissionReason::PoorRecentForm,
+            SelectionOmissionReason::TacticalMismatch,
+            SelectionOmissionReason::PositionFitIssue,
+            SelectionOmissionReason::TeammatePreferredOnAbility,
+            SelectionOmissionReason::TeammatePreferredOnForm,
+            SelectionOmissionReason::TeammatePreferredOnFitness,
+            SelectionOmissionReason::TeammatePreferredOnTrust,
+            SelectionOmissionReason::TeammatePreferredForTacticalBalance,
+            SelectionOmissionReason::YouthDevelopmentRotation,
+            SelectionOmissionReason::CupRotation,
+            SelectionOmissionReason::LowMatchImportanceRotation,
+            SelectionOmissionReason::SquadStatusMismatch,
+            SelectionOmissionReason::ManagerDoesNotTrustPlayer,
+            SelectionOmissionReason::NewcomerStillIntegrating,
+            SelectionOmissionReason::ReturningFromInjury,
+            SelectionOmissionReason::DisciplinarySelection,
+            SelectionOmissionReason::BenchBalance,
+            SelectionOmissionReason::NoNaturalRoleInFormation,
+        ];
+        let mut keys: Vec<&'static str> = reasons.iter().map(|r| r.as_i18n_key()).collect();
+        keys.sort();
+        let unique = {
+            let mut k = keys.clone();
+            k.dedup();
+            k.len()
+        };
+        assert_eq!(keys.len(), unique, "reason keys must be unique");
+        for k in &keys {
+            assert!(!k.is_empty(), "reason i18n key must be non-empty");
+            assert!(
+                k.starts_with("selection_reason_"),
+                "reason key {} must follow the naming convention",
+                k
+            );
+        }
+    }
+
+    #[test]
+    fn partner_aware_cooldown_is_per_partner() {
+        let mut h = PlayerHappiness::new();
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::TrainingFriction,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::TrainingGround,
+        );
+        let added_first = h.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::ConflictWithTeammate,
+            -1.0,
+            7,
+            ctx.clone(),
+            45,
+        );
+        assert!(added_first);
+        // Same partner inside cooldown — blocked.
+        let added_again = h.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::ConflictWithTeammate,
+            -1.0,
+            7,
+            ctx.clone(),
+            45,
+        );
+        assert!(!added_again, "same partner inside cooldown must be blocked");
+        // Different partner — should land.
+        let added_other = h.add_event_with_partner_context_and_cooldown(
+            HappinessEventType::ConflictWithTeammate,
+            -1.0,
+            42,
+            ctx,
+            45,
+        );
+        assert!(
+            added_other,
+            "cooldown must be keyed per-partner so a new teammate's first incident is recorded"
+        );
+    }
+}
