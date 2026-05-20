@@ -11,17 +11,142 @@
 //! the stronger the case for the swap. The substitution loop combines
 //! a `sub_off_score` and a `sub_in_score` to choose pairs.
 
+use crate::r#match::engine::rating::RatingContext;
 use crate::r#match::{MatchPlayer, engine::coach::TacticalNeed};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
+/// Lightweight live-performance snapshot for a single on-field player.
+///
+/// Built from the same `PlayerMatchEndStats` shape that the post-match
+/// rating helper consumes, but evaluated against the *current* scoreline
+/// so the substitution loop can talk about "what has this player done
+/// in this match so far". The substitution scorer reads this to protect
+/// goal scorers and high-rated starters from routine removal — without
+/// reaching into hidden ability or any pre-computed reputation flag.
+///
+/// The live rating is an approximation of the eventual post-match
+/// rating: the same `RatingContext` is fed the same stats, with the
+/// scoreline at the moment of decision. Cameos saturate naturally via
+/// the existing minute-confidence damp.
+#[derive(Debug, Clone)]
+pub struct LiveSubstitutionStats {
+    pub minutes_played: u16,
+    pub goals: u16,
+    pub assists: u16,
+    pub key_passes: u16,
+    pub shots_on_target: u16,
+    pub xg: f32,
+    pub errors_leading_to_goal: u16,
+    pub yellow_cards: u16,
+    pub red_cards: u16,
+    /// Estimated current rating computed from the snapshot stats and
+    /// current scoreline. Used to gate star protection.
+    pub live_rating: f32,
+    pub condition: i16,
+    /// `team_goals - opponent_goals` from this player's perspective.
+    pub goal_diff: i32,
+    /// Whole-minute view of `context.total_match_time` at snapshot time.
+    pub match_minute: u32,
+}
+
+impl LiveSubstitutionStats {
+    /// Snapshot the player's contribution at the current match time.
+    /// `own_goals` / `opp_goals` are the team-perspective scoreline so
+    /// `goal_diff` reads positive for a team that is winning.
+    pub fn from_player(
+        player: &MatchPlayer,
+        total_match_time_ms: u64,
+        own_goals: u8,
+        opp_goals: u8,
+    ) -> Self {
+        let minutes_played = player.minutes_played_at(total_match_time_ms);
+        let stats = player.to_match_end_stats(minutes_played);
+        let live_rating = RatingContext::new(&stats, own_goals, opp_goals).calculate();
+        Self {
+            minutes_played,
+            goals: stats.goals,
+            assists: stats.assists,
+            key_passes: stats.key_passes,
+            shots_on_target: stats.shots_on_target,
+            xg: stats.xg,
+            errors_leading_to_goal: stats.errors_leading_to_goal,
+            yellow_cards: stats.yellow_cards,
+            red_cards: stats.red_cards,
+            live_rating,
+            condition: player.player_attributes.condition,
+            goal_diff: own_goals as i32 - opp_goals as i32,
+            match_minute: (total_match_time_ms / 60_000) as u32,
+        }
+    }
+
+    #[inline]
+    pub fn yellow_carded(&self) -> bool {
+        self.yellow_cards >= 1
+    }
+
+    #[inline]
+    pub fn is_scorer(&self) -> bool {
+        self.goals >= 1
+    }
+
+    /// Goals + assists. The "decisive contributions" footprint that
+    /// star protection reads.
+    #[inline]
+    pub fn major_contributions(&self) -> u16 {
+        self.goals + self.assists
+    }
+}
+
+/// Star-protection bonus (always ≥ 0) — subtracted from `sub_off_score`
+/// so the manager doesn't pull the player who is carrying the match.
+///
+/// Thresholds match the engineering brief:
+/// * Goal scorer: 0.20 (replaced by 0.35 once they have 2+ G/A)
+/// * 2+ G/A: 0.35 (covers two-goal scorers and goal+assist creators)
+/// * Live rating ≥ 7.3: +0.18
+/// * Live rating ≥ 8.0: +0.35 (replaces the 7.3 tier)
+/// * Decisive scorer when leading by exactly one: +0.15 stacked on top
+///
+/// Critical injury / red-card aftermath / extreme exhaustion are NOT
+/// gated by this function — callers handle those branches before
+/// reaching the scoring pass.
+pub fn star_protection(live: &LiveSubstitutionStats) -> f32 {
+    let major = live.major_contributions();
+    let contrib_protection = if major >= 2 {
+        0.35
+    } else if live.goals >= 1 {
+        0.20
+    } else {
+        0.0
+    };
+
+    let rating_protection = if live.live_rating >= 8.0 {
+        0.35
+    } else if live.live_rating >= 7.3 {
+        0.18
+    } else {
+        0.0
+    };
+
+    // Decisive scorer in a narrow lead: pulling the only goal scorer
+    // off the pitch when 1-0 up is the canonical "don't do that" move.
+    let decisive_protection = if live.goals >= 1 && live.goal_diff == 1 {
+        0.15
+    } else {
+        0.0
+    };
+
+    contrib_protection + rating_protection + decisive_protection
+}
+
 /// Score a player as a sub-off candidate. Higher = more urgent to
 /// remove. Force-selected players are still respected by the loop;
-/// this score is purely about tactical / fatigue / risk fit.
+/// this score is purely about tactical / fatigue / risk fit. Star
+/// protection is layered on by [`sub_off_score_protected`].
 pub fn sub_off_score(
     player: &MatchPlayer,
-    rating: f32,
+    live: &LiveSubstitutionStats,
     need: TacticalNeed,
-    yellow_carded: bool,
 ) -> f32 {
     let cond_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
     let jaded = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
@@ -33,7 +158,7 @@ pub fn sub_off_score(
 
     // Performance dimension — clamp so we can't punish a 6.0 player
     // who simply hasn't done anything.
-    let perf = ((6.2 - rating) / 2.0).clamp(0.0, 1.0);
+    let perf = ((6.2 - live.live_rating) / 2.0).clamp(0.0, 1.0);
     s += perf * 0.16;
 
     // Role exhaustion: high-press wingers / fullbacks / CMs at < 60%
@@ -53,7 +178,7 @@ pub fn sub_off_score(
 
     // Yellow-card risk: a yellow + high aggression in a defensive role
     // is a clear "get him off before he sees red" trigger.
-    if yellow_carded
+    if live.yellow_carded()
         && player.skills.mental.aggression >= 14.0
         && matches!(
             pos_group,
@@ -61,6 +186,13 @@ pub fn sub_off_score(
         )
     {
         s += 0.12;
+    }
+
+    // Errors leading to goal: the player has already cost the team
+    // once — the manager has good reason to hook them. Smaller bite
+    // than a red card but still a clear signal.
+    if live.errors_leading_to_goal >= 1 {
+        s += 0.15;
     }
 
     // Tactical mismatch: chasing → defenders / DMs less needed; defending
@@ -72,6 +204,24 @@ pub fn sub_off_score(
     };
 
     s
+}
+
+/// Sub-off urgency net of star protection. Callers pass a
+/// `protection_dampening` in [0.0, 1.0]: 1.0 keeps full protection
+/// (default), <1.0 weakens it (e.g. in a comfortable late lead where
+/// resting a star is acceptable).
+///
+/// Result can go negative, signalling "this player is a net asset on
+/// the pitch right now" — discretionary subs should pass them over.
+pub fn sub_off_score_protected(
+    player: &MatchPlayer,
+    live: &LiveSubstitutionStats,
+    need: TacticalNeed,
+    protection_dampening: f32,
+) -> f32 {
+    let raw = sub_off_score(player, live, need);
+    let protection = star_protection(live) * protection_dampening.clamp(0.0, 1.0);
+    raw - protection
 }
 
 /// Score a substitute as a sub-in candidate for the given tactical need.
@@ -236,5 +386,84 @@ pub fn allowed_in_window(sub_index: u8, match_minute: u32, force_critical: bool)
         1 => match_minute >= 65 && match_minute <= 88,
         2 => match_minute >= 75 && match_minute <= 92,
         _ => match_minute >= 85,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn live(
+        goals: u16,
+        assists: u16,
+        rating: f32,
+        goal_diff: i32,
+        condition: i16,
+        minute: u32,
+    ) -> LiveSubstitutionStats {
+        LiveSubstitutionStats {
+            minutes_played: minute.min(120) as u16,
+            goals,
+            assists,
+            key_passes: 0,
+            shots_on_target: 0,
+            xg: 0.0,
+            errors_leading_to_goal: 0,
+            yellow_cards: 0,
+            red_cards: 0,
+            live_rating: rating,
+            condition,
+            goal_diff,
+            match_minute: minute,
+        }
+    }
+
+    #[test]
+    fn star_protection_zero_for_anonymous_player() {
+        let s = live(0, 0, 6.4, 0, 8000, 60);
+        assert_eq!(star_protection(&s), 0.0);
+    }
+
+    #[test]
+    fn star_protection_lifts_for_single_goal() {
+        let s = live(1, 0, 7.0, 0, 8000, 60);
+        // single goal → 0.20, rating < 7.3 → 0, goal_diff != 1 → 0
+        assert!((star_protection(&s) - 0.20).abs() < 1e-4);
+    }
+
+    #[test]
+    fn star_protection_two_g_a_replaces_single_goal_tier() {
+        let s_two_g = live(2, 0, 7.0, 0, 8000, 70);
+        let s_g_and_a = live(1, 1, 7.0, 0, 8000, 70);
+        // both should land at the 0.35 tier — confirms 2+ G/A replaces
+        // (not stacks with) the single-goal tier.
+        assert!((star_protection(&s_two_g) - 0.35).abs() < 1e-4);
+        assert!((star_protection(&s_g_and_a) - 0.35).abs() < 1e-4);
+    }
+
+    #[test]
+    fn star_protection_rating_tier_replaces_lower_band() {
+        let s_high = live(0, 0, 8.1, 0, 8000, 70);
+        let s_mid = live(0, 0, 7.4, 0, 8000, 70);
+        assert!((star_protection(&s_high) - 0.35).abs() < 1e-4);
+        assert!((star_protection(&s_mid) - 0.18).abs() < 1e-4);
+    }
+
+    #[test]
+    fn star_protection_decisive_lead_scorer_gets_extra() {
+        let s_one_up = live(1, 0, 7.0, 1, 8000, 70);
+        let s_two_up = live(1, 0, 7.0, 2, 8000, 70);
+        // leading by exactly one → +0.15 stacked on top of the goal tier
+        assert!((star_protection(&s_one_up) - 0.35).abs() < 1e-4);
+        // leading by two → no decisive bonus
+        assert!((star_protection(&s_two_up) - 0.20).abs() < 1e-4);
+    }
+
+    #[test]
+    fn star_protection_caps_at_stacked_top_tier() {
+        // 2 goals + rating 8.2 + leading by one
+        let s = live(2, 1, 8.2, 1, 8000, 80);
+        // 0.35 (G/A) + 0.35 (rating 8.0+) + 0.15 (decisive) = 0.85
+        assert!((star_protection(&s) - 0.85).abs() < 1e-4);
     }
 }

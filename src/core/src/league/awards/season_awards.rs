@@ -305,6 +305,35 @@ impl CandidateAggregate {
             0.0
         }
     }
+
+    /// Reliability-adjusted average for season / monthly award
+    /// scoring. The aggregate doesn't track minutes-per-match, so we
+    /// treat each appearance as one effective game and regress toward
+    /// the positional neutral with the same RELIABILITY_GAMES constant
+    /// used by [`crate::PlayerStatistics::realistic_average_rating`].
+    ///
+    /// Team-of-the-Week scoring should keep using the raw
+    /// [`Self::average_rating`] — weekly awards are intentionally
+    /// short-window and the matches_played gates already protect them.
+    pub fn realistic_average_rating(&self) -> f32 {
+        let raw = self.average_rating();
+        if raw <= 0.0 {
+            return 0.0;
+        }
+        const RELIABILITY_GAMES: f32 = 12.0;
+        let neutral = match self
+            .primary_position
+            .unwrap_or(PlayerFieldPositionGroup::Midfielder)
+        {
+            PlayerFieldPositionGroup::Goalkeeper => 6.65,
+            PlayerFieldPositionGroup::Defender => 6.55,
+            PlayerFieldPositionGroup::Midfielder => 6.60,
+            PlayerFieldPositionGroup::Forward => 6.55,
+        };
+        let effective = self.matches_played as f32;
+        let reliability = effective / (effective + RELIABILITY_GAMES);
+        neutral + (raw - neutral) * reliability
+    }
 }
 
 /// Stateless aggregation of per-player stats across a set of matches.
@@ -415,11 +444,25 @@ pub struct TeamOfTheWeekSelector;
 
 impl TeamOfTheWeekSelector {
     /// Compute one player's contribution score from their aggregate.
+    /// Uses the raw average — for weekly Team of the Week only.
+    /// Season-long Team-of-the-Season / Team-of-the-Year selection
+    /// goes through [`Self::candidate_score_regressed`].
     pub fn candidate_score(agg: &CandidateAggregate) -> f32 {
+        Self::candidate_score_with_avg(agg, agg.average_rating())
+    }
+
+    /// Same scoring formula but feeds the sample-size-regressed
+    /// average into the rating term. Use for any selector whose
+    /// window is large enough that a regressed average is meaningful
+    /// (>= 10 appearances).
+    pub fn candidate_score_regressed(agg: &CandidateAggregate) -> f32 {
+        Self::candidate_score_with_avg(agg, agg.realistic_average_rating())
+    }
+
+    fn candidate_score_with_avg(agg: &CandidateAggregate, avg: f32) -> f32 {
         let pos = agg
             .primary_position
             .unwrap_or(PlayerFieldPositionGroup::Midfielder);
-        let avg = agg.average_rating();
         let rating_term = (avg - 6.0).max(0.0).min(4.0) * 2.0;
 
         let (goal_w, assist_w) = match pos {
@@ -478,8 +521,14 @@ impl TeamOfTheWeekSelector {
 
     /// Same as [`pick`] but each candidate must have at least `min_apps`
     /// matches played in the window. Used by the season Team of the
-    /// Season so a player with one elite shift can't outrank a regular
-    /// starter.
+    /// Season and the Team of the Year so a player with one elite shift
+    /// can't outrank a regular starter.
+    ///
+    /// Long-window selection uses the *sample-size-regressed* rating
+    /// term: at min_apps=10 the regression still pulls a raw 7.5 down
+    /// by ~0.5, but a one-match 9.5 would have been filtered out by
+    /// the appearance gate anyway. Weekly TOTW continues to use
+    /// [`Self::candidate_score`] directly.
     pub fn pick_with_min_apps(
         scores: &HashMap<u32, CandidateAggregate>,
         min_apps: u8,
@@ -493,7 +542,7 @@ impl TeamOfTheWeekSelector {
             let pos = agg
                 .primary_position
                 .unwrap_or(PlayerFieldPositionGroup::Midfielder);
-            let s = Self::candidate_score(agg);
+            let s = Self::candidate_score_regressed(agg);
             if s <= 0.0 {
                 continue;
             }
@@ -561,7 +610,11 @@ impl MonthlyAwardSelector {
         let pos = agg
             .primary_position
             .unwrap_or(PlayerFieldPositionGroup::Midfielder);
-        let avg = agg.average_rating();
+        // Sample-size-regressed: monthly awards must not crown a player
+        // whose 3-match raw 8.5 came from one explosive week. The
+        // matches_played gate filters the entry pool; the regression
+        // gates the actual score so a thin sample can't dominate.
+        let avg = agg.realistic_average_rating();
         let avg_rating_score = (avg - 6.0).max(0.0) * 8.0;
 
         let (goal_w, assist_w) = match pos {
@@ -635,7 +688,11 @@ impl SeasonAwardSelector {
         let pos = agg
             .primary_position
             .unwrap_or(PlayerFieldPositionGroup::Midfielder);
-        let avg = agg.average_rating();
+        // Season Player of the Year is the heaviest abuse vector for a
+        // small-sample 8.2 (the `(avg - 6.0) * 18.0` term is the biggest
+        // single contributor). The regression is mandatory here; goals
+        // and assist counters already protect against pure-rating ties.
+        let avg = agg.realistic_average_rating();
         let avg_rating_score = (avg - 6.0).max(0.0) * 18.0;
 
         let (goal_w, assist_w) = match pos {
@@ -753,6 +810,39 @@ mod tests {
         assert_eq!(mid_count, 4);
         assert_eq!(fwd_count, 2);
         assert_eq!(team.len(), 11);
+    }
+
+    #[test]
+    fn realistic_aggregate_regresses_small_sample() {
+        // 9 apps at raw 8.2 → regressed should sit near 7.25, not 8.20.
+        let mut agg = CandidateAggregate::default();
+        agg.matches_played = 9;
+        agg.rating_sum = 8.2 * 9.0;
+        agg.primary_position = Some(PlayerFieldPositionGroup::Forward);
+        let regressed = agg.realistic_average_rating();
+        assert!(
+            regressed > 7.0 && regressed < 7.6,
+            "9-app 8.2 forward should regress to ~7.25, got {}",
+            regressed
+        );
+    }
+
+    #[test]
+    fn season_score_regresses_small_sample_below_proven_starter() {
+        // The decision-system version of the reported bug. Both players
+        // have raw 8.2-ish averages, but only one has the sample to
+        // back it up. The season-of-the-year scorer should rank the
+        // proven starter ahead.
+        let young = make_agg(PlayerFieldPositionGroup::Forward, 9, 2, 0, 8.2, 5);
+        let starter = make_agg(PlayerFieldPositionGroup::Forward, 30, 14, 8, 7.2, 16);
+        let young_score = SeasonAwardSelector::score(&young, 8000, 1.0, 0);
+        let starter_score = SeasonAwardSelector::score(&starter, 8000, 1.0, 0);
+        assert!(
+            starter_score > young_score,
+            "regression should keep small-sample 8.2 ({}) below proven 7.2 ({})",
+            young_score,
+            starter_score
+        );
     }
 
     #[test]

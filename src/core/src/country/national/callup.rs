@@ -13,8 +13,8 @@ use super::types::{
     BREAK_WINDOWS, CallUpCandidate, CallUpReason, MIN_REAL_PLAYERS, NationalSquadPlayer, SQUAD_SIZE,
 };
 use crate::{
-    Country, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType, Tactics,
-    TeamType,
+    Country, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatistics,
+    PlayerStatusType, Tactics, TeamType,
 };
 use chrono::{Datelike, NaiveDate};
 use log::debug;
@@ -158,7 +158,10 @@ impl NationalTeam {
             age,
             condition_pct,
             match_readiness: player.skills.physical.match_readiness,
-            average_rating: player.statistics.average_rating,
+            // National-team callup ranking uses the regressed season
+            // average so a one-cap U21 prospect's 8.2 doesn't outrank a
+            // 25-app senior's 7.4 in the candidate sorter.
+            average_rating: player.statistics.average_rating_realistic(position_group),
             played: total_games,
             international_apps: international_caps,
             international_goals: player.player_attributes.international_goals,
@@ -186,7 +189,8 @@ impl NationalTeam {
 
     /// Summarise a player's most recent prior season into (apps, rating, goals).
     /// Several frozen items can share a season (mid-season transfer/loan) so
-    /// games are summed and rating is weighted by minutes-played.
+    /// games are summed and the per-item ledgers are merged via the same
+    /// fallback used by `PlayerStatistics::merge_from` before regression.
     pub(super) fn summarise_last_season(player: &Player) -> (u16, f32, u16) {
         let last_year = match player
             .statistics_history
@@ -201,8 +205,7 @@ impl NationalTeam {
 
         let mut apps: u16 = 0;
         let mut goals: u16 = 0;
-        let mut weighted_rating: f32 = 0.0;
-        let mut rating_weight: u16 = 0;
+        let mut combined = PlayerStatistics::default();
         for item in &player.statistics_history.items {
             if item.season.start_year != last_year {
                 continue;
@@ -213,16 +216,12 @@ impl NationalTeam {
                 .saturating_add(item.statistics.played_subs);
             apps = apps.saturating_add(games);
             goals = goals.saturating_add(item.statistics.goals);
-            if item.statistics.average_rating > 0.0 && games > 0 {
-                weighted_rating += item.statistics.average_rating * games as f32;
-                rating_weight = rating_weight.saturating_add(games);
-            }
+            combined.merge_from(&item.statistics);
         }
-        let rating = if rating_weight > 0 {
-            weighted_rating / rating_weight as f32
-        } else {
-            0.0
-        };
+        // National callup ranks last-season form, so apply the same
+        // sample-size regression as the live-season rating field.
+        let pos = player.position().position_group();
+        let rating = combined.average_rating_realistic(pos);
         (apps, rating, goals)
     }
 

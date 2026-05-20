@@ -236,6 +236,12 @@ impl BallEventDispatcher {
 
     /// Classify a concluded carry and credit progressive_carries /
     /// carries-into-box / carry_distance on the carrier's stats.
+    /// Also credits `successful_dribbles` for opponents the carrier
+    /// physically ran past during the carry (within the lateral
+    /// pressure cone, between start and end), provided possession
+    /// stayed with the carrier's team — a carry ending in a tackle
+    /// is classified upstream as a failed dribble and must not also
+    /// fire a successful one here.
     fn credit_carry(
         carrier_id: u32,
         start: Vector3<f32>,
@@ -243,8 +249,11 @@ impl BallEventDispatcher {
         field: &mut MatchField,
         context: &MatchContext,
     ) {
-        let side = match field.get_player(carrier_id).and_then(|p| p.side) {
-            Some(s) => s,
+        let (side, carrier_team_id) = match field.get_player(carrier_id) {
+            Some(p) => match p.side {
+                Some(s) => (s, p.team_id),
+                None => return,
+            },
             None => return,
         };
         let field_w = context.field_size.width as f32;
@@ -263,6 +272,36 @@ impl BallEventDispatcher {
         let started_outside_box = !opp_box.contains(&start);
         let ended_in_box = opp_box.contains(&end);
 
+        // Carry ended via opponent dispossession? If the new ball owner
+        // is on the opposing team, the tackle handler already credited
+        // a failed dribble — don't double-count it as a beat here.
+        let new_owner_team = field
+            .ball
+            .current_owner
+            .and_then(|id| field.get_player(id))
+            .map(|p| p.team_id);
+        let dispossessed_by_opponent = new_owner_team
+            .map(|nt| nt != carrier_team_id)
+            .unwrap_or(false);
+
+        // Successful-dribble producer: count opponents who were on the
+        // carry line between start and end (carrier physically ran past
+        // their pressure cone). Defenders sitting right at the start or
+        // right at the end are excluded — neither was "beaten".
+        let beaten_count = if !dispossessed_by_opponent && forward_progress >= 12.0 {
+            Self::count_beaten_on_carry_path(
+                start,
+                end,
+                field
+                    .players
+                    .iter()
+                    .filter(|p| p.team_id != carrier_team_id)
+                    .map(|p| p.position),
+            )
+        } else {
+            0
+        };
+
         if let Some(carrier) = field.get_player_mut(carrier_id) {
             carrier.statistics.carry_distance = carrier
                 .statistics
@@ -278,6 +317,146 @@ impl BallEventDispatcher {
             if started_outside_box && ended_in_box {
                 carrier.statistics.note_carry_into_box();
             }
+            for _ in 0..beaten_count {
+                carrier.statistics.add_successful_dribble();
+            }
         }
+    }
+
+    /// Count opponents the carrier physically ran past on this carry.
+    /// Geometry-only: an opponent is "beaten" if their CURRENT position
+    /// projects onto the carry line between start and end (window
+    /// `[3u .. carry_len - 4u]`) and is within a 5u lateral pressure
+    /// cone of that line. Approximate — opponents move during the carry
+    /// too — but a deterministic stat-line signal that low-HQ ball
+    /// carriers who can't beat anyone will lack and elite ball-carriers
+    /// will accumulate. Capped at 3 per single carry: nobody beats 4+
+    /// defenders in one run.
+    fn count_beaten_on_carry_path(
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        opponent_positions: impl Iterator<Item = Vector3<f32>>,
+    ) -> u16 {
+        let carry_vec = end - start;
+        let carry_len = carry_vec.magnitude();
+        if carry_len < 10.0 {
+            return 0;
+        }
+        let carry_dir = carry_vec / carry_len;
+        let mut beaten: u16 = 0;
+        for opp_pos in opponent_positions {
+            let to_opp = opp_pos - start;
+            let along = to_opp.dot(&carry_dir);
+            if along < 3.0 || along > carry_len - 4.0 {
+                continue;
+            }
+            let proj = start + carry_dir * along;
+            let perpendicular = (opp_pos - proj).magnitude();
+            if perpendicular < 5.0 {
+                beaten = beaten.saturating_add(1);
+            }
+        }
+        beaten.min(3)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(x: f32, y: f32) -> Vector3<f32> {
+        Vector3::new(x, y, 0.0)
+    }
+
+    #[test]
+    fn beaten_returns_zero_for_short_carry() {
+        // Less than 10u carry → no successful-dribble credit, even if
+        // opponents litter the path. Short carries aren't dribbles.
+        let opps = [v(50.0, 100.0), v(55.0, 100.0)];
+        let r = BallEventDispatcher::count_beaten_on_carry_path(
+            v(48.0, 100.0),
+            v(54.0, 100.0),
+            opps.iter().copied(),
+        );
+        assert_eq!(r, 0);
+    }
+
+    #[test]
+    fn beaten_counts_opponent_on_carry_line() {
+        // 30u carry from (10,100) to (40,100). An opponent at (25,102)
+        // is on the line, between the cutoffs, within 5u lateral → one
+        // beaten defender.
+        let opps = [v(25.0, 102.0)];
+        let r = BallEventDispatcher::count_beaten_on_carry_path(
+            v(10.0, 100.0),
+            v(40.0, 100.0),
+            opps.iter().copied(),
+        );
+        assert_eq!(r, 1);
+    }
+
+    #[test]
+    fn beaten_excludes_opponent_outside_carry_window() {
+        // Opponent right at the start (along < 3) — not beaten.
+        let opps = [v(11.0, 100.0)];
+        let r = BallEventDispatcher::count_beaten_on_carry_path(
+            v(10.0, 100.0),
+            v(40.0, 100.0),
+            opps.iter().copied(),
+        );
+        assert_eq!(r, 0);
+        // Opponent right at the end (along > carry_len - 4) — also
+        // not beaten (they arrived, didn't get past).
+        let opps = [v(38.0, 100.0)];
+        let r = BallEventDispatcher::count_beaten_on_carry_path(
+            v(10.0, 100.0),
+            v(40.0, 100.0),
+            opps.iter().copied(),
+        );
+        assert_eq!(r, 0);
+    }
+
+    #[test]
+    fn beaten_excludes_opponent_outside_lateral_cone() {
+        // Opponent on the line direction but 8u to the side — not on
+        // the pressure cone, didn't have to be beaten.
+        let opps = [v(25.0, 110.0)];
+        let r = BallEventDispatcher::count_beaten_on_carry_path(
+            v(10.0, 100.0),
+            v(40.0, 100.0),
+            opps.iter().copied(),
+        );
+        assert_eq!(r, 0);
+    }
+
+    #[test]
+    fn beaten_caps_at_three() {
+        // Five opponents on the carry line — cap at 3.
+        let opps = [
+            v(15.0, 100.0),
+            v(20.0, 101.0),
+            v(25.0, 99.0),
+            v(30.0, 100.0),
+            v(33.0, 102.0),
+        ];
+        let r = BallEventDispatcher::count_beaten_on_carry_path(
+            v(10.0, 100.0),
+            v(40.0, 100.0),
+            opps.iter().copied(),
+        );
+        assert_eq!(r, 3);
+    }
+
+    #[test]
+    fn beaten_handles_diagonal_carry() {
+        // 30u diagonal carry from (10,100) to (40,130). An opponent at
+        // (25,115) lies on the diagonal (midpoint) and counts.
+        let opps = [v(25.0, 115.0)];
+        let r = BallEventDispatcher::count_beaten_on_carry_path(
+            v(10.0, 100.0),
+            v(40.0, 130.0),
+            opps.iter().copied(),
+        );
+        assert_eq!(r, 1);
     }
 }

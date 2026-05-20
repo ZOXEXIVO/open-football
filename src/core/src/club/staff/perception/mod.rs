@@ -69,12 +69,18 @@ impl CoachDecisionState {
         let coach_seed = self.profile.coach_seed;
         let stubbornness = self.profile.stubbornness;
 
+        // Track perception against the regressed average so coach
+        // overreaction (delta vs prev_avg_rating) and quality bumps
+        // aren't driven by small-sample raw noise.
+        let pos_group = player.position().position_group();
+        let regressed_avg = player.statistics.average_rating_realistic(pos_group);
+
         let impression = self.impressions.entry(player.id).or_insert_with(|| {
             let mut imp = PlayerImpression::new(player.id, date);
             imp.bias = initial_bias;
             imp.prev_red_cards = player.statistics.red_cards;
             imp.prev_goals = player.statistics.goals;
-            imp.prev_avg_rating = player.statistics.average_rating;
+            imp.prev_avg_rating = regressed_avg;
             imp
         });
 
@@ -124,8 +130,7 @@ impl CoachDecisionState {
             heat_delta += 0.15 * volatility;
         }
 
-        if impression.prev_avg_rating > 0.0
-            && player.statistics.average_rating < impression.prev_avg_rating - 0.5
+        if impression.prev_avg_rating > 0.0 && regressed_avg < impression.prev_avg_rating - 0.5
         {
             impression.bias.quality_offset =
                 (impression.bias.quality_offset - 0.3 * negativity_bias).clamp(-3.0, 3.0);
@@ -160,16 +165,19 @@ impl CoachDecisionState {
             heat_delta += 0.10 * volatility;
         }
 
-        if player.statistics.average_rating > 7.5
-            && player.statistics.played + player.statistics.played_subs > 3
-        {
+        // "Clearly performing well" bump: regressed > 7.5 means the
+        // player is genuinely outperforming the league-neutral baseline
+        // by enough margin to register with the coach even after the
+        // sample-size discount. The 4-app floor remains as a basic
+        // observability gate.
+        if regressed_avg > 7.5 && player.statistics.played + player.statistics.played_subs > 3 {
             impression.bias.quality_offset =
                 (impression.bias.quality_offset + 0.3).clamp(-3.0, 3.0);
         }
 
         impression.prev_red_cards = player.statistics.red_cards;
         impression.prev_goals = player.statistics.goals;
-        impression.prev_avg_rating = player.statistics.average_rating;
+        impression.prev_avg_rating = regressed_avg;
 
         // Overreaction timer countdown
         if impression.bias.overreaction_timer > 0 {

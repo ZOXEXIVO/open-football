@@ -274,7 +274,10 @@ impl TeamBehaviour {
         let assists_factor =
             (player.statistics.assists as f32 / (player.statistics.played.max(1) as f32)) * 5.0;
         let appearance_factor = (player.statistics.played as f32 / 30.0).min(1.0) * 5.0;
-        let rating_factor = player.statistics.average_rating;
+        // Coach behaviour perception is a long-form judgement, so feed
+        // the regressed value instead of the raw small-sample reading.
+        let pos = player.position().position_group();
+        let rating_factor = player.statistics.average_rating_realistic(pos);
 
         // Factor in reputation: a high-reputation player who performs poorly stands out
         let rep_factor =

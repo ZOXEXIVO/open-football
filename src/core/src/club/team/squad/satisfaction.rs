@@ -28,11 +28,17 @@ fn size_satisfaction(squad_size: usize) -> f32 {
 }
 
 /// Based on average match rating of players with 4+ appearances.
+/// Uses the sample-size-regressed value so a squad with two breakout
+/// young players doesn't show artificial 7.5 average performance from
+/// what is actually a thin sample.
 fn performance_satisfaction(players: &[Player]) -> f32 {
     let (sum, count) = players
         .iter()
         .filter(|p| p.statistics.played + p.statistics.played_subs > 3)
-        .map(|p| p.statistics.average_rating)
+        .map(|p| {
+            let pos = p.position().position_group();
+            p.statistics.average_rating_realistic(pos)
+        })
         .fold((0.0_f32, 0u32), |(s, c), r| (s + r, c + 1));
 
     if count == 0 {

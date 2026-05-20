@@ -588,7 +588,11 @@ fn build_debug_dto(player: &Player) -> PlayerDebugDto {
     let form_bonus = if load.form_rating > 0.0 {
         (load.form_rating - 6.5).clamp(-1.5, 1.5)
     } else if apps > 3 {
-        (player.statistics.average_rating - 6.5).clamp(-1.5, 1.5)
+        // Pre-form-EMA fallback: use the sample-size-regressed season
+        // average so a 9-app 8.2 prospect doesn't show a +1.5 form
+        // bonus when the engine has no rolling form reading yet.
+        let pos = player.position().position_group();
+        (player.statistics.average_rating_realistic(pos) - 6.5).clamp(-1.5, 1.5)
     } else {
         0.0
     };
@@ -772,6 +776,13 @@ fn get_statistics(player: &Player) -> PlayerStatistics {
     // a per-spell live counter that gets drained on each Main ↔ B ↔ Second
     // move; the drained spells survive in `statistics_history.current`.
     // Reading the live field alone shows zero apps right after a move.
+    //
+    // The per-player Overview shows the *raw* minutes-weighted average:
+    // we're looking at one specific player so the displayed number
+    // should track what they actually did match-by-match. Sample-size
+    // regression is applied on aggregate ranking surfaces (squad list,
+    // league top-rated, scouting, awards) where small-sample inflation
+    // skews comparisons — not here.
     let s = player
         .statistics_history
         .current_season_stats(&player.statistics);

@@ -95,9 +95,12 @@ impl TeamBehaviour {
             // Form-driven automatic talks — gate on the manager's personality.
             // A strong motivator spots hot streaks; a strong disciplinarian
             // spots slumps. Managers weak in both skip form-based talks.
+            // Read the regressed form so a single barnstormer or stinker
+            // doesn't summon a praise/discipline meeting after three games.
             let mgr_motivating = manager.staff_attributes.mental.motivating;
             let mgr_discipline = manager.staff_attributes.mental.discipline;
-            let form = player.statistics.average_rating;
+            let pos = player.position().position_group();
+            let form = player.statistics.average_rating_realistic(pos);
             let apps = player.statistics.played + player.statistics.played_subs;
             if apps >= 3 {
                 if mgr_motivating >= 14 && form >= 7.5 && player.happiness.morale < 85.0 {

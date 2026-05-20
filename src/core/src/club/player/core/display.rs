@@ -435,6 +435,11 @@ impl Player {
     }
 
     fn club_history_vec(&self) -> Vec<PlayerHistoryLlm> {
+        // LLM context: feed the sample-size-regressed value so prompts
+        // about a young player aren't anchored on a small-sample raw
+        // average. Position-aware regression uses the player's current
+        // position — historical entries don't track per-season role.
+        let pos = self.position().position_group();
         self.statistics_history
             .items
             .iter()
@@ -446,7 +451,7 @@ impl Player {
                 apps: h.statistics.played + h.statistics.played_subs,
                 goals: h.statistics.goals,
                 assists: h.statistics.assists,
-                average_rating: h.statistics.average_rating,
+                average_rating: h.statistics.average_rating_realistic(pos),
             })
             .collect()
     }

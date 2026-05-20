@@ -372,13 +372,20 @@ fn determine_career_consistency_factor(player: &Player) -> f64 {
         return 1.0; // Not enough data
     }
 
+    // Career rating is a transfer-valuation input, so anchor each
+    // season on the regressed value before averaging — even a 10-app
+    // season with raw 7.6 leaves a few tenths of regression on the
+    // table, and short loan stints regress further toward the neutral.
+    let pos = player.position().position_group();
     let total_games: u32 = rated_seasons
         .iter()
         .map(|h| h.statistics.played as u32)
         .sum();
     let weighted_rating: f64 = rated_seasons
         .iter()
-        .map(|h| h.statistics.average_rating as f64 * h.statistics.played as f64)
+        .map(|h| {
+            h.statistics.average_rating_realistic(pos) as f64 * h.statistics.played as f64
+        })
         .sum::<f64>()
         / total_games as f64;
 

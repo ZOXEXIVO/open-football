@@ -216,8 +216,18 @@ fn summarise_last_season_aggregates_multiple_items() {
     let (apps, rating, goals) = NationalTeam::summarise_last_season(&player);
     assert_eq!(apps, 30);
     assert_eq!(goals, 12);
-    // weighted: (10 * 7.0 + 20 * 8.0) / 30 = 7.6666…
-    assert!((rating - 7.6667).abs() < 0.01, "got rating {}", rating);
+    // After the rating-realism polish, `summarise_last_season` returns
+    // the sample-size-regressed value, not the raw weighted blend.
+    // For a midfielder (neutral 6.60) with 30 ledger-weighted games:
+    //   raw weighted = (10 * 7.0 + 20 * 8.0) / 30 ≈ 7.667
+    //   reliability  = 30 / (30 + 12) ≈ 0.714
+    //   regressed    ≈ 6.60 + (7.667 - 6.60) * 0.714 ≈ 7.36
+    // Apps and goals still sum across both spells unchanged.
+    assert!(
+        (rating - 7.36).abs() < 0.05,
+        "expected regressed rating ~7.36, got {}",
+        rating
+    );
 }
 
 #[test]

@@ -762,11 +762,15 @@ impl CountryResult {
             .map(|start| (date - start).num_days() / 365)
             .unwrap_or(0);
 
+        // Sample-size-regressed: "still delivering" is a season-long
+        // judgement; a 5-app farewell season at raw 7.0 shouldn't earn
+        // long-tenure protection that a regressed 6.7 wouldn't.
+        let pos = player.position().position_group();
         let last_rating = player
             .statistics_history
             .items
             .last()
-            .map(|h| h.statistics.average_rating)
+            .map(|h| h.statistics.average_rating_realistic(pos))
             .unwrap_or(0.0);
 
         if tenure_years >= 4 && last_rating >= 6.9 {

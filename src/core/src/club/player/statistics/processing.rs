@@ -187,12 +187,16 @@ impl Player {
             return;
         }
 
-        // Aggregate stats across all history items for this club
+        // Aggregate stats across all history items for this club via
+        // the ledger-aware merge so cameo-heavy spells weight less than
+        // full-starter ones. Loyalty calc is then anchored on the
+        // sample-size-regressed value (a 4-game farewell season at
+        // raw 7.5 shouldn't carry the same weight as a proven 30-game
+        // year).
         let mut total_apps: u16 = 0;
         let mut total_goals: u16 = 0;
         let mut total_pom: u16 = 0;
-        let mut total_rating_sum: f32 = 0.0;
-        let mut total_rated_games: u16 = 0;
+        let mut combined_stats = crate::PlayerStatistics::default();
         let mut seasons_at_club: u16 = 0;
         let mut first_season_year: Option<u16> = None;
 
@@ -204,10 +208,7 @@ impl Player {
             total_apps += games;
             total_goals += item.statistics.goals;
             total_pom += item.statistics.player_of_the_match as u16;
-            if games > 0 && item.statistics.average_rating > 0.0 {
-                total_rating_sum += item.statistics.average_rating * games as f32;
-                total_rated_games += games;
-            }
+            combined_stats.merge_from(&item.statistics);
             seasons_at_club += 1;
             if first_season_year.is_none() || item.season.start_year < first_season_year.unwrap() {
                 first_season_year = Some(item.season.start_year);
@@ -223,17 +224,11 @@ impl Player {
             total_apps += games;
             total_goals += entry.statistics.goals;
             total_pom += entry.statistics.player_of_the_match as u16;
-            if games > 0 && entry.statistics.average_rating > 0.0 {
-                total_rating_sum += entry.statistics.average_rating * games as f32;
-                total_rated_games += games;
-            }
+            combined_stats.merge_from(&entry.statistics);
         }
 
-        let avg_rating = if total_rated_games > 0 {
-            total_rating_sum / total_rated_games as f32
-        } else {
-            0.0
-        };
+        let pos = self.position().position_group();
+        let avg_rating = combined_stats.average_rating_realistic(pos);
 
         // Youth club: first club where player was aged 16-21, after 2+ seasons
         if let Some(first_year) = first_season_year {
@@ -256,8 +251,11 @@ impl Player {
             return;
         }
 
-        // Strong impact: consistently high performer over a meaningful sample
-        if total_rated_games >= 30 && avg_rating >= 7.3 {
+        // Strong impact: consistently high performer over a meaningful
+        // sample. Threshold is on total apps now (was rated_games before
+        // the ledger merge); the regression already protects against
+        // small-sample inflated averages.
+        if total_apps >= 30 && avg_rating >= 7.3 {
             self.favorite_clubs.push(club_id);
         }
     }

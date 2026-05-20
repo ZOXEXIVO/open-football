@@ -397,11 +397,14 @@ pub async fn league_get_action(
         ));
     }
 
-    // Average rating still flows from `player.statistics.average_rating`
-    // — per-league rating tracking would need new storage on the
-    // player. Iterate over the same effective rosters we use for
-    // matchday selection so force-pinned youth players surface here
-    // too.
+    // Average rating still flows from the global league bucket — per-league
+    // rating tracking would need new storage on the player. Iterate over
+    // the same effective rosters we use for matchday selection so force-
+    // pinned youth players surface here too. The value we feed into the
+    // ranking is the sample-size-regressed one so the league's top-rated
+    // table is gated by both the minimum-apps filter below *and* the
+    // positional reliability regression — a debut-month 8.2 shouldn't
+    // outrank a 30-app 7.4 starter.
     let mut seen_in_table: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for table_row in league_table {
         if let Some(team) = simulator_data.team(table_row.team_id) {
@@ -435,13 +438,14 @@ pub async fn league_get_action(
                 // are excluded by the `played > 0` filter below.
                 let played = apps_per_player.get(&player.id).copied().unwrap_or(0);
                 if played > 0 && player.statistics.average_rating > 0.0 {
+                    let pos = player.position().position_group();
                     rating_data.push((
                         player.id,
                         player.full_name.to_string(),
                         team_name.clone(),
                         team_slug.clone(),
                         played,
-                        player.statistics.average_rating,
+                        player.statistics.average_rating_realistic(pos),
                     ));
                 }
             }

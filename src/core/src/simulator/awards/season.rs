@@ -125,7 +125,11 @@ impl SeasonAwardsTick {
         let Some(player) = data.player_mut(player_id) else {
             return;
         };
-        let avg_rating = player.statistics.average_rating;
+        // Season recognition: regressed value so the recognition event
+        // context isn't anchored on a small-sample raw average for a
+        // late-season-burst winner.
+        let pos = player.position().position_group();
+        let avg_rating = player.statistics.average_rating_realistic(pos);
         let matches_played = player.statistics.played + player.statistics.played_subs;
         let goals = player.statistics.goals;
         let assists = player.statistics.assists;

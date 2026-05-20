@@ -135,7 +135,12 @@ impl<'a> OmissionBuilder<'a> {
                     return true;
                 }
                 let games = player.statistics.played + player.cup_statistics.played;
-                games >= 5 && player.statistics.average_rating >= 7.0
+                // Sample-size-regressed: a 5-app 7.0+ raw is often
+                // 6.7 once regression is applied — protects against a
+                // tiny-sample squad-rotation player being treated as a
+                // disgruntled regular over a single hot week.
+                let pos = player.position().position_group();
+                games >= 5 && player.statistics.average_rating_realistic(pos) >= 7.0
             }
         }
     }
@@ -320,7 +325,11 @@ impl<'a> OmissionBuilder<'a> {
         if load >= 360.0 {
             return SelectionOmissionReason::FatigueManagement;
         }
-        if omitted.statistics.average_rating > 0.0 && omitted.statistics.average_rating < 6.3 {
+        // Diagnose "poor form" against the regressed season average so
+        // a single-match dip doesn't trigger the wrong omission reason.
+        let pos = omitted.position().position_group();
+        let regressed = omitted.statistics.average_rating_realistic(pos);
+        if regressed > 0.0 && regressed < 6.3 {
             return SelectionOmissionReason::PoorRecentForm;
         }
         SelectionOmissionReason::TacticalMismatch
