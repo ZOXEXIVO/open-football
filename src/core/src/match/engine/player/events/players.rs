@@ -863,6 +863,14 @@ impl PlayerEventDispatcher {
             passer.statistics.passes_completed =
                 passer.statistics.passes_completed.saturating_add(1);
         }
+        // First-touch quality producer: a receiver with weak technique
+        // / first_touch can fluff the reception (miscontrol) or kill
+        // it with a heavy touch — particularly when defenders are
+        // close. The carrier keeps the ball here, so this records a
+        // stat-only signal; the rating helper drags accordingly via
+        // `touch_quality`. High-skill receivers under no pressure
+        // virtually never trip this.
+        Self::maybe_record_first_touch_loss(receiver_id, field, context);
         if let (Some(origin), Some(target)) = (origin, target) {
             Self::classify_completed_pass(
                 passer_id,
@@ -887,6 +895,94 @@ impl PlayerEventDispatcher {
         // turnover, so don't credit a successful pressure. Clear the
         // snapshot so it can't be reused by an unrelated future event.
         field.ball.pressers_at_pass_count = 0;
+    }
+
+    /// Deterministic first-touch quality roll. When a pass is claimed,
+    /// the receiver's `first_touch / technique / composure` composite
+    /// gates whether the touch was clean, a heavy touch (kept the ball
+    /// but lost tempo), or — rarely, for very weak receivers under
+    /// heavy pressure — a miscontrol. The carrier always keeps the ball
+    /// here; the engine's physics handle the kept-but-loose case
+    /// implicitly through follow-on positions, while this records the
+    /// stat-line evidence the rating helper consumes via
+    /// `touch_quality`. Pure deterministic seeding (receiver id × tick)
+    /// keeps replays reproducible.
+    pub(crate) fn maybe_record_first_touch_loss(
+        receiver_id: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        let (composite01, pressure_count, _) = match field.get_player(receiver_id) {
+            Some(p) => {
+                let s = &p.skills;
+                let composite = s.technical.first_touch * 0.40
+                    + s.technical.technique * 0.20
+                    + s.mental.composure * 0.20
+                    + s.mental.anticipation * 0.20;
+                let comp01 = (composite / 20.0).clamp(0.0, 1.0);
+                let pos = p.position;
+                let team = p.team_id;
+                let opp_close = field
+                    .players
+                    .iter()
+                    .filter(|q| q.team_id != team)
+                    .filter(|q| (q.position - pos).magnitude() < 6.0)
+                    .count();
+                (comp01, opp_close, ())
+            }
+            None => return,
+        };
+
+        let bad_touch_prob = Self::first_touch_loss_probability(composite01, pressure_count);
+        if bad_touch_prob < 0.02 {
+            return;
+        }
+
+        // Deterministic per-event roll. Mixing tick × receiver_id × a
+        // wide odd multiplier scatters consecutive ticks evenly across
+        // the [0,1) interval — match-engine call sites can repeat the
+        // same receive across re-simulation and get identical stats.
+        let tick = context.current_tick();
+        let seed = (receiver_id as u64).wrapping_mul(0x9E3779B97F4A7C15)
+            ^ tick.wrapping_mul(0xBF58476D1CE4E5B9);
+        let roll = ((seed >> 11) & 0xFFFFFF) as f32 / 16_777_215.0;
+        if roll >= bad_touch_prob {
+            return;
+        }
+
+        // Severity split — the worst ~25% of bad-touch rolls AND a
+        // genuinely weak composite (≤ 0.45) get registered as a
+        // miscontrol; the remainder is a heavy touch. The rating's
+        // touch_quality drag treats miscontrols as roughly 2× the
+        // weight of heavy touches, so the split shapes how visible
+        // the failure is in the post-match line.
+        let severe_threshold = bad_touch_prob * 0.25;
+        if let Some(p) = field.get_player_mut(receiver_id) {
+            if roll < severe_threshold && composite01 < 0.45 {
+                p.statistics.add_miscontrol();
+            } else {
+                p.statistics.add_heavy_touch();
+            }
+        }
+    }
+
+    /// Pure first-touch-loss probability formula. Returns a value in
+    /// `[0.0, 0.30]`. Tuned so:
+    ///   * `first_touch ≈ 5` + 2 close opponents → ~11%
+    ///   * `first_touch ≈ 10` + 2 close opponents → ~4%
+    ///   * `first_touch ≈ 15` + 2 close opponents → ~0.7%
+    /// The `^2.5` skill curve makes elite reception virtually immune
+    /// while weak receivers under pressure visibly leak control.
+    /// Extracted as a pure function so the gradient is unit-testable
+    /// without standing up a `MatchField`.
+    #[inline]
+    pub(crate) fn first_touch_loss_probability(
+        composite01: f32,
+        pressure_count: usize,
+    ) -> f32 {
+        let pressure_mult = 1.0 + (pressure_count.min(4) as f32) * 0.6;
+        ((1.0 - composite01.clamp(0.0, 1.0)).powf(2.5) * 0.10 * pressure_mult)
+            .clamp(0.0, 0.30)
     }
 
     /// Classify a completed pass and bump the passer's per-zone /
@@ -3396,6 +3492,83 @@ mod xg_distribution_tests {
             (total_chain - 0.12).abs() < 1e-4,
             "total chain pool should be 0.12, got {}",
             total_chain
+        );
+    }
+}
+
+#[cfg(test)]
+mod first_touch_loss_tests {
+    use super::PlayerEventDispatcher;
+
+    /// Skill-loss curve must be strictly decreasing in composite skill.
+    /// A 5/20 receiver must register a clearly higher loss probability
+    /// than a 15/20 receiver, holding pressure constant.
+    #[test]
+    fn weak_receiver_has_higher_loss_probability_than_strong() {
+        for opp in 0..=3 {
+            let weak = PlayerEventDispatcher::first_touch_loss_probability(0.25, opp);
+            let avg = PlayerEventDispatcher::first_touch_loss_probability(0.50, opp);
+            let elite = PlayerEventDispatcher::first_touch_loss_probability(0.85, opp);
+            assert!(
+                weak > avg && avg > elite,
+                "monotonic in skill (opp={}): weak={} avg={} elite={}",
+                opp, weak, avg, elite
+            );
+        }
+    }
+
+    /// Pressure must amplify the probability — same receiver under
+    /// two close opponents should fluff more than the same receiver
+    /// unmarked.
+    #[test]
+    fn pressure_amplifies_loss_probability() {
+        let no_pressure = PlayerEventDispatcher::first_touch_loss_probability(0.40, 0);
+        let two_close = PlayerEventDispatcher::first_touch_loss_probability(0.40, 2);
+        assert!(
+            two_close > no_pressure * 1.5,
+            "pressure must amplify: 0 opp = {} vs 2 opp = {}",
+            no_pressure, two_close
+        );
+    }
+
+    /// Elite receivers (≥ 0.85 composite) should land near-immune to
+    /// pressure-induced fluffs — well under 2% even under heavy press.
+    #[test]
+    fn elite_receiver_virtually_immune_to_pressure() {
+        let elite_heavy_press =
+            PlayerEventDispatcher::first_touch_loss_probability(0.90, 4);
+        assert!(
+            elite_heavy_press < 0.02,
+            "elite receiver under heavy press shouldn't trip the producer: got {}",
+            elite_heavy_press
+        );
+    }
+
+    /// Cap holds — even 0-skill under maximum pressure can't exceed
+    /// the 0.30 ceiling.
+    #[test]
+    fn loss_probability_capped_at_thirty_percent() {
+        let worst = PlayerEventDispatcher::first_touch_loss_probability(0.0, 10);
+        assert!(worst <= 0.30 + 1e-6, "cap violated: got {}", worst);
+    }
+
+    /// Clamping protects against out-of-range composite inputs.
+    #[test]
+    fn out_of_range_composite_clamped() {
+        let neg = PlayerEventDispatcher::first_touch_loss_probability(-1.0, 2);
+        let over = PlayerEventDispatcher::first_touch_loss_probability(2.0, 2);
+        // negative skill clamps to 0 → max probability under that pressure
+        let zero = PlayerEventDispatcher::first_touch_loss_probability(0.0, 2);
+        // skill > 1 clamps to 1.0 → zero probability
+        assert!(
+            (neg - zero).abs() < 1e-6,
+            "negative composite must clamp to 0: got {}",
+            neg
+        );
+        assert!(
+            over < 1e-6,
+            "composite > 1 must clamp to 1 (zero prob): got {}",
+            over
         );
     }
 }

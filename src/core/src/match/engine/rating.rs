@@ -430,21 +430,50 @@ impl<'a> RatingContext<'a> {
     /// in midfield is rewarded; a low-completion volume passer is
     /// dragged. Volume gates the magnitude (a 10-pass shift moves the
     /// retention component very little).
+    ///
+    /// First-touch quality enters here as a small drag from
+    /// `miscontrols` and `heavy_touches`. The drag is conservative
+    /// because the engine producers for those counters are still being
+    /// wired up — once they fire reliably, every event registers as a
+    /// visible loss of control without needing a coefficient bump.
     fn retention(&self) -> f32 {
         let s = self.stats;
+        let touch_drag = self.touch_quality();
         if s.passes_attempted < 10 {
-            return 0.0;
+            return touch_drag;
         }
         let pct = s.passes_completed as f32 / s.passes_attempted as f32;
         let volume = sat(s.passes_attempted as f32, 45.0); // saturates by ~90 attempts
         // 0.74 is the league-average baseline. Above 0.92 saturates near +0.46,
         // below 0.56 saturates near -0.46.
-        signed_sat(pct - 0.74, 0.18) * volume * 0.46
+        let pass_signal = signed_sat(pct - 0.74, 0.18) * volume * 0.46;
+        pass_signal + touch_drag
+    }
+
+    /// Touch-quality drag from miscontrols and heavy touches. Returns
+    /// a non-positive value (0 if no events recorded). Saturating so
+    /// a single bad touch isn't catastrophic but accumulating losses
+    /// of control visibly drag the rating.
+    fn touch_quality(&self) -> f32 {
+        let s = self.stats;
+        let m = s.miscontrols as f32;
+        let h = s.heavy_touches as f32 * 0.5;
+        if m + h <= 0.0 {
+            return 0.0;
+        }
+        // sat(3, 5) ≈ 0.45 → ~ -0.25 rating units at three miscontrols.
+        -sat(m + h, 5.0) * 0.55
     }
 
     /// Defensive work: tackles, interceptions, blocks, clearances,
     /// pressures. Includes a zone-aware premium for actions inside
     /// the own box / six-yard area and pressing high up the pitch.
+    ///
+    /// Saturation denominators are deliberately set so that real-football
+    /// "average per-90" volumes (a CB with 2-3 tackles + 1-2 ints + 3-4
+    /// clearances) earn moderate credit, not elite saturation. A defender
+    /// who genuinely dominates (5+ tackles, 5+ ints, 6+ clearances) still
+    /// pushes the band; their fingerprints just have to look it.
     fn defensive(&self) -> f32 {
         let s = self.stats;
         let z = s.zone_stats;
@@ -452,16 +481,16 @@ impl<'a> RatingContext<'a> {
         // Effective tackles = tackles minus a share of fouls (so the
         // player didn't "earn" a tackle by hacking the runner down).
         let effective_tackles = (s.tackles as f32 - s.fouls as f32 * 0.5).max(0.0);
-        let tackles = sat(effective_tackles, 4.5) * 0.48;
-        let interceptions = sat(s.interceptions as f32, 4.5) * 0.48;
-        let blocks = sat(s.blocks as f32, 2.8) * 0.38;
-        let clearances = sat(s.clearances as f32, 5.5) * 0.28;
+        let tackles = sat(effective_tackles, 6.0) * 0.48;
+        let interceptions = sat(s.interceptions as f32, 6.0) * 0.48;
+        let blocks = sat(s.blocks as f32, 3.5) * 0.38;
+        let clearances = sat(s.clearances as f32, 7.5) * 0.28;
 
-        let succ_pressure = sat(s.successful_pressures as f32, 4.5) * 0.24;
+        let succ_pressure = sat(s.successful_pressures as f32, 5.5) * 0.24;
         let raw_pressure = s
             .pressures
             .saturating_sub(s.successful_pressures);
-        let press_volume = sat(raw_pressure as f32, 10.0) * 0.08;
+        let press_volume = sat(raw_pressure as f32, 12.0) * 0.08;
 
         // Zone-aware premium on top of the flat work — actions in
         // high-danger zones deserve more credit.
@@ -625,6 +654,55 @@ impl<'a> RatingContext<'a> {
             return soft_cap(positive_delta, 1.1, 0.25);
         }
 
+        // Routine-only passenger (defenders / midfielders): full match,
+        // no G/A, no decisive output and no high-value zone work to
+        // explain why they're trending up. Catches the "low-quality
+        // back-line player who accumulated 3 tackles + 2 ints + 4
+        // clearances and is riding the team's clean sheet to a 7.0"
+        // shape that the per-component soft caps miss because their
+        // routine line individually is modest but stacks into the band.
+        //
+        // Evidence-only: a midfielder with even one progressive pass /
+        // key pass / cross / box entry / dribble, or a defender who
+        // intervened inside the own box / six-yard area, never trips
+        // this guard. Pure stats; never reads ability.
+        //
+        // The reduction is *graded* by routine defensive volume — a
+        // genuinely busy worker bee (15+ routine actions) keeps ~85%
+        // of their routine credit and can still rate 7.0+ on the
+        // strength of clean-sheet / win bonuses, while a quiet
+        // passenger (0-4 actions) keeps only ~60%.
+        let creative_volume = (s.key_passes
+            + s.passes_into_box
+            + s.successful_dribbles
+            + s.progressive_passes
+            + s.progressive_carries
+            + s.crosses_completed
+            + s.shots_on_target) as u32;
+        let zone_impact = (z.tackles_own_box
+            + z.tackles_own_six_yard
+            + z.interceptions_own_box
+            + z.interceptions_own_six_yard
+            + z.blocks_own_box
+            + z.blocks_own_six_yard
+            + z.clearances_own_box
+            + z.clearances_own_six_yard
+            + z.pressures_won_final_third) as u32;
+        let is_back_or_middle = matches!(
+            self.pos,
+            PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Midfielder
+        );
+        if is_back_or_middle
+            && minutes >= 60
+            && major_contrib == 0
+            && creative_volume == 0
+            && zone_impact == 0
+        {
+            let busy = (defensive_volume as f32 / 14.0).clamp(0.0, 1.0);
+            let mult = 0.60 + busy * 0.25; // 0.60 .. 0.85
+            return positive_delta * mult;
+        }
+
         positive_delta
     }
 
@@ -649,13 +727,46 @@ impl<'a> RatingContext<'a> {
     }
 
     /// Position-aware clean-sheet bonus.
+    ///
+    /// Defenders get a tiered credit based on stat-line evidence of
+    /// actual back-line involvement: a CB who made high-danger zone
+    /// interventions or posted ≥6 routine defensive actions gets full
+    /// credit; a CB with only modest activity gets a reduced bonus;
+    /// a truly absent passenger gets the smallest bookkeeping bonus.
+    /// This is evidence-based — the gating uses observed stats, not
+    /// hidden ability — and stops a back-line passenger from riding
+    /// the team's clean sheet into the elite band.
     fn clean_sheet_context(&self) -> f32 {
         if self.opponent_goals != 0 {
             return 0.0;
         }
         match self.pos {
             PlayerFieldPositionGroup::Goalkeeper => 0.30,
-            PlayerFieldPositionGroup::Defender => 0.25,
+            PlayerFieldPositionGroup::Defender => {
+                let z = self.stats.zone_stats;
+                let high_value = (z.tackles_own_box
+                    + z.tackles_own_six_yard
+                    + z.interceptions_own_box
+                    + z.interceptions_own_six_yard
+                    + z.blocks_own_box
+                    + z.blocks_own_six_yard
+                    + z.clearances_own_box
+                    + z.clearances_own_six_yard) as u16;
+                let routine = self
+                    .stats
+                    .tackles
+                    .saturating_add(self.stats.interceptions)
+                    .saturating_add(self.stats.blocks)
+                    .saturating_add(self.stats.clearances)
+                    .saturating_add(self.stats.successful_pressures);
+                if high_value >= 1 || routine >= 6 {
+                    0.25
+                } else if routine >= 3 {
+                    0.15
+                } else {
+                    0.08
+                }
+            }
             PlayerFieldPositionGroup::Midfielder => 0.05,
             _ => 0.0,
         }
@@ -1262,6 +1373,202 @@ mod tests {
         let p_r = RatingContext::new(&plain, 1, 1).calculate();
         let c_r = RatingContext::new(&chained, 1, 1).calculate();
         assert!(c_r > p_r, "buildup chained {} > plain {}", c_r, p_r);
+    }
+
+    // ===========================================================
+    // Low-HQ passenger / routine-volume guards
+    //
+    // These pin the headline bug: a back-line / midfield player
+    // racking up routine defensive volume (no own-box impact, no
+    // progressive output, no key passes / crosses / dribbles, no
+    // G/A) should not drift into the elite band on the back of a
+    // clean-sheet win. Stat-line evidence only — never reads
+    // current_ability or any hidden flag.
+    // ===========================================================
+
+    #[test]
+    fn low_impact_routine_cb_with_clean_sheet_stays_below_seven() {
+        // 12 routine defensive actions, 80% completion on 30 safe
+        // passes, no own-box / six-yard interventions, no progressive
+        // passes / carries / dribbles, no key passes. Clean-sheet win.
+        // This is the engine's typical low-HQ CB output shape — the
+        // rating must NOT report this as a 7.0+ shift.
+        let mut s = make_stats(
+            0, 0, 30, 24, 0, 0, 3, 2, 0, 0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        s.clearances = 4;
+        s.blocks = 1;
+        s.successful_pressures = 2;
+        s.pressures = 8;
+        s.minutes_played = 90;
+        let r = RatingContext::new(&s, 1, 0).calculate();
+        assert!(
+            r < 7.0,
+            "low-impact routine CB with clean sheet rated {} — must stay < 7.0",
+            r
+        );
+        assert!(
+            r > 6.0,
+            "low-impact routine CB rated {} — should still benefit from showing up",
+            r
+        );
+    }
+
+    #[test]
+    fn low_impact_routine_mid_with_routine_passing_stays_below_seven() {
+        // 30/26 passes (87%), 1 tackle, 1 interception, 1 successful
+        // pressure, 5 pressures. No key pass / progressive pass / cross.
+        // Win 1-0 (clean sheet doesn't help midfielders much). The
+        // engine's typical low-HQ shuttler shape — must stay sub-7.0.
+        let mut s = make_stats(
+            0, 0, 30, 26, 0, 0, 1, 1, 0, 0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        s.successful_pressures = 1;
+        s.pressures = 5;
+        s.minutes_played = 90;
+        let r = RatingContext::new(&s, 1, 0).calculate();
+        assert!(
+            r < 7.0,
+            "low-impact routine MID rated {} — must stay < 7.0",
+            r
+        );
+    }
+
+    #[test]
+    fn cb_with_own_box_intervention_clears_passenger_guard() {
+        // Same routine volume as the bug case above, but with a single
+        // own-box clearance. That's stat-line evidence of a decisive
+        // moment — the passenger reduction must not fire.
+        let mut s = make_stats(
+            0, 0, 30, 24, 0, 0, 3, 2, 0, 0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        s.clearances = 4;
+        s.blocks = 1;
+        s.successful_pressures = 2;
+        s.pressures = 8;
+        s.minutes_played = 90;
+        s.zone_stats.clearances_own_box = 1;
+        let r = RatingContext::new(&s, 1, 0).calculate();
+        // Same player, plus the zone-impact event, must rate higher
+        // than the equivalent without it — the guard never triggers.
+        assert!(
+            r > 7.0,
+            "CB with own-box intervention rated {} — should clear 7.0 on evidence",
+            r
+        );
+    }
+
+    #[test]
+    fn low_hq_player_with_decisive_goal_still_rates_above_seven() {
+        // The fix should reduce *fake* competence from routine volume,
+        // never block a real decisive moment. A "low-HQ" forward whose
+        // single match yielded a goal must still be allowed past 7.0.
+        let mut s = make_stats(
+            1, 0, 12, 8, 1, 2, 0, 0, 0, 0.4,
+            PlayerFieldPositionGroup::Forward,
+        );
+        s.minutes_played = 80;
+        let r = RatingContext::new(&s, 1, 0).calculate();
+        assert!(
+            r > 7.0,
+            "low-volume forward with a goal rated {} — must reach 7.0+",
+            r
+        );
+    }
+
+    #[test]
+    fn miscontrols_drag_rating_when_recorded() {
+        // Once the engine producers fire, miscontrols / heavy touches
+        // must visibly drag the rating — the helper's coefficient is
+        // calibrated to land but not dominate.
+        let mut clean = make_stats(
+            0, 0, 30, 26, 0, 0, 2, 1, 0, 0.0,
+            PlayerFieldPositionGroup::Midfielder,
+        );
+        clean.minutes_played = 90;
+        let mut sloppy = clean.clone();
+        sloppy.miscontrols = 3;
+        sloppy.heavy_touches = 2;
+        let clean_r = RatingContext::new(&clean, 1, 1).calculate();
+        let sloppy_r = RatingContext::new(&sloppy, 1, 1).calculate();
+        assert!(
+            clean_r > sloppy_r + 0.15,
+            "miscontrols/heavy-touches should drag: clean {} vs sloppy {}",
+            clean_r,
+            sloppy_r
+        );
+    }
+
+    #[test]
+    fn quiet_passenger_below_busy_passenger() {
+        // Both pass the passenger guard, but the busy worker bee should
+        // outrate the truly quiet one — the graded `busy` multiplier
+        // preserves ordering within the passenger band.
+        let mut quiet = make_stats(
+            0, 0, 18, 15, 0, 0, 1, 1, 0, 0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        quiet.minutes_played = 90;
+        let mut busy = quiet.clone();
+        busy.tackles = 4;
+        busy.interceptions = 3;
+        busy.clearances = 5;
+        busy.blocks = 1;
+        busy.successful_pressures = 2;
+        busy.pressures = 6;
+        let quiet_r = RatingContext::new(&quiet, 1, 0).calculate();
+        let busy_r = RatingContext::new(&busy, 1, 0).calculate();
+        assert!(
+            busy_r > quiet_r + 0.3,
+            "busy CB {} should outrate quiet passenger CB {}",
+            busy_r,
+            quiet_r
+        );
+        // Quiet passenger never clears 7.0; the busy 15-action worker
+        // bee is allowed to drift just past it on clean-sheet credit,
+        // but well below the elite band that real decisive output
+        // would unlock.
+        assert!(
+            quiet_r < 7.0,
+            "quiet passenger CB rated {} — must stay < 7.0",
+            quiet_r
+        );
+        assert!(
+            busy_r < 7.3,
+            "busy passenger CB rated {} — should not breach 7.3 without decisive output",
+            busy_r
+        );
+    }
+
+    #[test]
+    fn clean_sheet_credit_tiered_by_defensive_evidence() {
+        // CB with zero defensive activity (and no own-box presence)
+        // gets a minimal clean-sheet bonus; a busy back-line workhorse
+        // gets the full +0.25. Evidence-based — no ability read.
+        let mut quiet = make_stats(
+            0, 0, 18, 15, 0, 0, 0, 0, 0, 0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        quiet.minutes_played = 90;
+        let mut busy = quiet.clone();
+        busy.tackles = 3;
+        busy.interceptions = 2;
+        busy.clearances = 3;
+        busy.blocks = 1;
+        let mut zone_busy = quiet.clone();
+        zone_busy.zone_stats.tackles_own_box = 1;
+        let qctx = RatingContext::new(&quiet, 1, 0);
+        let bctx = RatingContext::new(&busy, 1, 0);
+        let zctx = RatingContext::new(&zone_busy, 1, 0);
+        assert!(qctx.clean_sheet_context() < bctx.clean_sheet_context());
+        assert!(qctx.clean_sheet_context() < zctx.clean_sheet_context());
+        assert!(
+            (zctx.clean_sheet_context() - 0.25).abs() < 0.001,
+            "own-box intervention earns full clean-sheet bonus"
+        );
     }
 
     #[test]
