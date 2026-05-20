@@ -455,7 +455,13 @@ impl PipelineProcessor {
                 for player in &target_team.players.players {
                     let player_pos_group = player.position().position_group();
                     let player_age = player.age(current_date);
-                    let match_rating = player.statistics.average_rating;
+                    // Scout uses the regressed season average to assess
+                    // the player. The raw value would let a one-cap teen
+                    // with an 8.2 trigger a StrongBuy recommendation;
+                    // the regression keeps recommendation tiers anchored
+                    // to a meaningful sample.
+                    let match_rating =
+                        player.statistics.average_rating_realistic(player_pos_group);
 
                     // Check if this player matches any linked scouting assignment
                     let matching_assignment = plan.scouting_assignments.iter().find(|a| {
@@ -787,7 +793,12 @@ impl PipelineProcessor {
                         skill_ability: player
                             .skills
                             .calculate_ability_for_position(player.position()),
-                        average_rating: player.statistics.average_rating,
+                        // Transfer-market candidate listing: regressed
+                        // value so the candidate sorter / recommendation
+                        // engine isn't fooled by a small-sample season.
+                        average_rating: player
+                            .statistics
+                            .average_rating_realistic(player.position().position_group()),
                         goals: player.statistics.goals,
                         assists: player.statistics.assists,
                         appearances: player.statistics.total_games(),

@@ -159,8 +159,8 @@ mod tests {
     use crate::shared::Location;
     use crate::{
         Club, ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
-        PlayerCollection, PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder,
-        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+        StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::NaiveDate;
 
@@ -179,7 +179,16 @@ mod tests {
             .country_id(1)
             .attributes(PersonAttributes::default())
             .skills(PlayerSkills::default())
-            .positions(PlayerPositions { positions: vec![] })
+            // The post-snapshot processing now reads `position()`, so
+            // the test fixture must declare at least one role. A
+            // central midfielder is the most neutral choice for the
+            // squad-aggregation tests in this module.
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 18,
+                }],
+            })
             .player_attributes(PlayerAttributes::default())
             .build()
             .unwrap();

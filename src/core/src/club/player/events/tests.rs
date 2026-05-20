@@ -5022,3 +5022,92 @@ fn four_week_calibration_spread_across_positions_and_profiles() {
         ranked
     );
 }
+
+// ── End-to-end: reported 9-app 8.2-prospect bug ───────────────
+//
+// Drives the same `on_match_played` pipeline a real simulator turn
+// uses, then asserts that the display surface and decision surfaces
+// both render the realistic value. Catches regressions where a future
+// edit re-introduces a raw `average_rating_str()` consumer.
+
+#[test]
+fn nine_starts_at_eight_two_display_below_seven_six() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(8.2, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        8.2,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    for _ in 0..9 {
+        p.on_match_played(&o);
+    }
+
+    // Raw weighted ledger should expose the original 8.2 for any
+    // single-match / debug surface that explicitly asks for it.
+    let raw = p.statistics.average_rating_raw();
+    assert!(
+        (raw - 8.2).abs() < 0.02,
+        "raw accessor should still report ~8.20, got {}",
+        raw
+    );
+
+    // The public *display* helper — the one the web layer uses —
+    // must report the regressed value, NOT the raw 8.20.
+    let displayed = p
+        .statistics
+        .display_average_rating(PlayerFieldPositionGroup::Forward);
+    let parsed: f32 = displayed.parse().unwrap();
+    assert!(
+        parsed < 7.6,
+        "9-app 8.2 forward must display under 7.60 (regressed). got {}",
+        displayed
+    );
+    assert!(
+        parsed > 7.0,
+        "regressed value should still be clearly above neutral. got {}",
+        displayed
+    );
+}
+
+#[test]
+fn unused_substitute_does_not_contaminate_average() {
+    // Unused-substitute path: an unused sub is booked in `played_subs`
+    // (via `on_match_dropped` in real flow) but NEVER calls
+    // `on_match_played`, so the rating ledger stays untouched. We
+    // additionally guard against accidental direct calls to
+    // `record_match_rating` with zero minutes by asserting the guard
+    // holds at the player-stats level.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    // Three legitimate 7.0 starts establish a baseline.
+    let baseline = stats(7.0, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let baseline_outcome = outcome(
+        &baseline,
+        7.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    for _ in 0..3 {
+        p.on_match_played(&baseline_outcome);
+    }
+    let baseline_weight = p.statistics.rating_weight;
+
+    // Directly attempt to insert a zero-minute "appearance" — the
+    // guard must reject it.
+    p.statistics.record_match_rating(0.0, 0, false);
+    assert_eq!(
+        p.statistics.rating_weight, baseline_weight,
+        "zero-minute / zero-rating record must be rejected"
+    );
+}

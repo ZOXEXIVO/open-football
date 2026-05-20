@@ -771,8 +771,11 @@ impl Player {
         let index_gap = pressure_index - tolerance;
 
         // High rep player having a poor recent stretch under spotlight
-        // (low form rating) — extra hit. Form ≥ 0 means we have data.
-        let form = self.statistics.average_rating;
+        // (low form rating) — extra hit. Regressed value so a one-bad-
+        // match dip doesn't trigger morale fallout for a player with
+        // a long body of solid form.
+        let pos = self.position().position_group();
+        let form = self.statistics.average_rating_realistic(pos);
         let form_penalty = if form > 0.0 && form < 6.0 && pressure_index > 50.0 {
             -1.5
         } else {
@@ -882,14 +885,19 @@ impl Player {
                 .add_event_with_cooldown(HappinessEventType::LackOfPlayingTime, -2.0, 21);
         }
 
-        // Loan underperformance — apps but rating < 6.0 means the loan
-        // isn't yielding the kind of minutes the parent club hoped for.
-        // Surface this as a *loan* event (parent club concerned) rather
-        // than a fake training report — it's about competitive form, not
-        // attitude on the training ground.
+        // Loan underperformance — apps but rating sits clearly below the
+        // positional neutral means the loan isn't yielding the kind of
+        // minutes the parent club hoped for. Surface this as a *loan*
+        // event (parent club concerned) rather than a fake training
+        // report — it's about competitive form, not attitude on the
+        // training ground. Using the regressed value, the trigger
+        // threshold rises to 6.2 (matches the neutral-minus-0.4 band)
+        // so a small-sample bad spell still triggers but a single
+        // off-week doesn't fake a loan crisis.
         let apps = self.statistics.played + self.statistics.played_subs;
-        let form = self.statistics.average_rating;
-        if apps >= 6 && form > 0.0 && form < 6.0 {
+        let loan_pos = self.position().position_group();
+        let form = self.statistics.average_rating_realistic(loan_pos);
+        if apps >= 6 && form > 0.0 && form < 6.2 {
             use crate::{
                 HappinessEventCause, HappinessEventContext, HappinessEventScope,
                 HappinessEventSeverity, LoanEventContext, LoanEventKind,

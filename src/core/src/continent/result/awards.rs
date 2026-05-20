@@ -105,7 +105,13 @@ impl ContinentResult {
                             }
                             let goals = player.statistics.goals as f32;
                             let assists = player.statistics.assists as f32;
-                            let avg = player.statistics.average_rating;
+                            // Continental award scoring leans heavily on
+                            // `(avg - 6.0) * 18.0`, so an 8.2 raw becomes
+                            // +39.6 against a regressed 7.25's +22.5. Use
+                            // the regressed value so a 9-app phenom can't
+                            // outscore a 30-app proven season.
+                            let pos = player.position().position_group();
+                            let avg = player.statistics.average_rating_realistic(pos);
                             let motm = player.statistics.player_of_the_match as f32;
                             let raw = (avg - 6.0).max(0.0) * 18.0
                                 + goals * 1.6

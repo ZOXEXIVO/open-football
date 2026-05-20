@@ -98,31 +98,39 @@ pub async fn team_stats_action(
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
 
+    // Sort by the sample-size regressed value so a one-cap teen with
+    // 8.2 raw doesn't push proven starters down the squad-stats table.
     let mut raw_players: Vec<(&core::Player, f32)> = team
         .players()
         .iter()
-        .map(|p| (*p, p.statistics.average_rating))
+        .map(|p| {
+            let pos = p.position().position_group();
+            (*p, p.statistics.average_rating_realistic(pos))
+        })
         .collect();
 
     raw_players.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let players: Vec<TeamPlayerStats> = raw_players
         .iter()
-        .map(|(p, _)| TeamPlayerStats {
-            slug: p.slug(),
-            last_name: p.full_name.display_last_name().to_string(),
-            first_name: p.full_name.display_first_name().to_string(),
-            position: p.position().get_short_name().to_string(),
-            played: p.statistics.played,
-            played_subs: p.statistics.played_subs,
-            goals: p.statistics.goals,
-            assists: p.statistics.assists,
-            yellow_cards: p.statistics.yellow_cards,
-            red_cards: p.statistics.red_cards,
-            shots_on_target: p.statistics.shots_on_target,
-            passes: p.statistics.passes,
-            tackling: p.statistics.tackling,
-            average_rating: p.statistics.average_rating_str(),
+        .map(|(p, _)| {
+            let pos = p.position().position_group();
+            TeamPlayerStats {
+                slug: p.slug(),
+                last_name: p.full_name.display_last_name().to_string(),
+                first_name: p.full_name.display_first_name().to_string(),
+                position: p.position().get_short_name().to_string(),
+                played: p.statistics.played,
+                played_subs: p.statistics.played_subs,
+                goals: p.statistics.goals,
+                assists: p.statistics.assists,
+                yellow_cards: p.statistics.yellow_cards,
+                red_cards: p.statistics.red_cards,
+                shots_on_target: p.statistics.shots_on_target,
+                passes: p.statistics.passes,
+                tackling: p.statistics.tackling,
+                average_rating: p.statistics.display_average_rating(pos),
+            }
         })
         .collect();
 

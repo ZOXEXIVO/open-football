@@ -99,8 +99,13 @@ impl CoachDecisionState {
 
         let appearances = player.statistics.played + player.statistics.played_subs;
         let performance_bonus = if appearances >= 3 {
-            let rating_visibility =
-                ((player.statistics.average_rating - 6.5) * 0.06).clamp(0.0, 0.12);
+            // Visibility multiplier is small (≤ 0.12) and feeds the
+            // coach's perception of how easily a player can be judged.
+            // Regressed reading keeps a three-cap hot streak from
+            // jumping a player into the "easy to read" bucket.
+            let pos = player.position().position_group();
+            let regressed = player.statistics.average_rating_realistic(pos);
+            let rating_visibility = ((regressed - 6.5) * 0.06).clamp(0.0, 0.12);
             let motm_visibility = (player.statistics.player_of_the_match as f32 * 0.04).min(0.08);
             rating_visibility + motm_visibility
         } else {
@@ -158,7 +163,12 @@ impl CoachDecisionState {
         let biased_base = base + quality_offset;
 
         let raw_form_bonus = if player.statistics.played + player.statistics.played_subs > 3 {
-            (player.statistics.average_rating - 6.5).clamp(-1.5, 1.5)
+            // Coach perception form-bonus reads the regressed season
+            // average — the recency_bias amplifier below already
+            // rewards fast-moving signals, so the underlying base
+            // should be the steadier value.
+            let pos = player.position().position_group();
+            (player.statistics.average_rating_realistic(pos) - 6.5).clamp(-1.5, 1.5)
         } else {
             0.0
         };

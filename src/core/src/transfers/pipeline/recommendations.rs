@@ -353,7 +353,10 @@ impl PipelineProcessor {
                         ambition: player.attributes.ambition,
                         world_reputation: player.player_attributes.world_reputation,
                         current_reputation: player.player_attributes.current_reputation,
-                        average_rating: player.statistics.average_rating,
+                        // Recommendation feature row: regressed value.
+                        average_rating: player
+                            .statistics
+                            .average_rating_realistic(player.position().position_group()),
                         appearances: player.statistics.total_games(),
                         is_transfer_protected: player.is_transfer_protected(date, current_window),
                     });

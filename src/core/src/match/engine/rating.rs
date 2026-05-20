@@ -12,18 +12,23 @@ use crate::r#match::engine::zones::ZoneStats;
 // from a [`PlayerMatchEndStats`] snapshot. The model is component-based:
 //
 //   rating = BASE
-//          + Σ profile_weight[c] · component[c]
+//          + compress(positive routine + scoring event) [soft-cap by profile]
+//          + negative routine deltas
 //          + always-on contextual deltas (result, clean sheet, conceded,
-//            errors, cards, discipline)
+//            errors, cards, discipline, GK exceptional negatives)
 //          + final clamp [1, 10]
 //
 // Each component evaluates to a small signed "impact" value driven by
-// smooth saturation curves (`sat`, `signed_sat`) rather than by stacks
-// of fixed `.min()` caps. Saturation lets exceptional performances
-// register without runaway stacking. There are no per-position hard
-// ceilings (e.g. "forward without a goal cannot exceed 7.0"). Low
-// involvement naturally stays near 6.0 because the components produce
-// small numbers, not because they are clamped.
+// smooth saturation curves (`sat`, `signed_sat`). Routine on-the-ball
+// signal is always confidence-damped by minutes. Direct event deltas
+// (goals, errors-to-goal, red cards, own goals, failed claims) keep
+// most of their bite even from a cameo via `event_minutes_factor`.
+//
+// A cross-component compression and contribution-aware soft caps keep
+// the rating distribution realistic: an anonymous starter stays under
+// ~7.1, a one-goal-only finisher under ~7.6, and a hat-trick scorer
+// is uncapped. Distinct ratings still register because positive
+// components stack inside the cap rather than hard-clamping.
 //
 // Build a context with [`RatingContext::new`] and call
 // [`RatingContext::calculate`].
@@ -38,8 +43,7 @@ const RATING_MAX: f32 = 10.0;
 
 /// Smooth positive saturation: `1 - exp(-x/scale)`. Returns 0 for
 /// non-positive `x`. At `x = scale` ≈ 0.63, at `x = 2·scale` ≈ 0.86,
-/// at `x = 3·scale` ≈ 0.95. Used everywhere a counter should grow
-/// quickly at first and then diminish.
+/// at `x = 3·scale` ≈ 0.95.
 #[inline]
 fn sat(x: f32, scale: f32) -> f32 {
     if x <= 0.0 || scale <= 0.0 {
@@ -57,6 +61,57 @@ fn signed_sat(x: f32, scale: f32) -> f32 {
         0.0
     } else {
         (x / scale).tanh()
+    }
+}
+
+// =====================================================================
+// Confidence + event-minute policy
+// =====================================================================
+
+/// Smooth minute-confidence curve. Reaches ~0.40 by 15 minutes, ~0.70
+/// by 35, ~0.93 by 70, ~1.0 by 90+. Players that didn't play (0
+/// minutes) get 0.0 so their event totals contribute nothing.
+fn minute_confidence(minutes: u16) -> f32 {
+    if minutes == 0 {
+        return 0.0;
+    }
+    let m = minutes as f32 / 35.0;
+    m.tanh()
+}
+
+/// Damp factor for direct event deltas (goals, errors-to-goal, reds,
+/// own goals). Always ≥ 0.70 so a 5-minute winner keeps the bulk of
+/// the goal credit, but a cameo doesn't get the full routine credit
+/// either — that part still goes through `minute_confidence`.
+#[inline]
+fn event_minutes_factor(conf: f32) -> f32 {
+    0.70 + 0.30 * conf
+}
+
+/// Compress excessive cumulative positive upside. Below 1.6 rating
+/// units passes through unchanged; above that, each extra unit is
+/// damped to 0.55× contribution. Keeps a stat-spammer from stacking
+/// six small bonuses into elite territory without a decisive moment.
+#[inline]
+fn compress_positive_delta(delta: f32) -> f32 {
+    const KNEE: f32 = 1.6;
+    const SLOPE: f32 = 0.55;
+    if delta <= KNEE {
+        delta
+    } else {
+        KNEE + (delta - KNEE) * SLOPE
+    }
+}
+
+/// Soft cap: below `cap`, passes through; above, the excess is
+/// compressed by `slope_after`. Cheaper than a hard clamp because
+/// the relative ordering of "great vs very great" survives.
+#[inline]
+fn soft_cap(value: f32, cap: f32, slope_after: f32) -> f32 {
+    if value <= cap {
+        value
+    } else {
+        cap + (value - cap) * slope_after
     }
 }
 
@@ -131,12 +186,9 @@ pub struct RatingContext<'a> {
     opponent_goals: u8,
     pos: PlayerFieldPositionGroup,
     profile: Profile,
-    /// Smooth confidence factor for time on the pitch — full at ~70+
-    /// minutes, ramps from ~0.25 for short cameos. Exceptional events
-    /// (goals, red cards, errors-to-goal, own goals) bypass the damp
-    /// since a 5-minute winner should still rate high.
+    /// Smooth confidence factor for time on the pitch. Applied to all
+    /// routine (on-the-ball) components.
     confidence: f32,
-    exceptional: bool,
 }
 
 impl<'a> RatingContext<'a> {
@@ -145,10 +197,6 @@ impl<'a> RatingContext<'a> {
     pub fn new(stats: &'a PlayerMatchEndStats, team_goals: u8, opponent_goals: u8) -> Self {
         let pos = stats.position_group;
         let profile = Profile::for_position(pos);
-        let exceptional = stats.goals > 0
-            || stats.red_cards > 0
-            || stats.errors_leading_to_goal > 0
-            || stats.own_goals > 0;
         let confidence = minute_confidence(stats.minutes_played);
         Self {
             stats,
@@ -157,51 +205,61 @@ impl<'a> RatingContext<'a> {
             pos,
             profile,
             confidence,
-            exceptional,
         }
     }
 
     /// Calculate the match rating (1.0 - 10.0, base 6.0).
     ///
-    /// Components evaluate to signed "impact" values. Each is multiplied
-    /// by its position weight from [`Profile`] before summing. The
-    /// per-component impact is then scaled by minute confidence (so
-    /// short cameos move less for non-exceptional play) and added to
-    /// the always-on contextual deltas (team result, clean sheet,
-    /// conceded penalty, discipline). The final value is clamped to
-    /// `[1.0, 10.0]`.
+    /// Routine components are always damped by minute confidence so a
+    /// short cameo of small touches doesn't farm a high rating. Direct
+    /// event deltas (goals + clinical/decisive bonuses) keep most of
+    /// their bite even from a cameo via `event_minutes_factor`.
+    ///
+    /// The positive sum is then compressed (a single decisive moment
+    /// shouldn't combine with five tiny bonuses to reach elite band)
+    /// and gated by contribution-aware soft caps: anonymous starters
+    /// stay around 7.1, one-goal-only finishers around 7.6, multi-goal
+    /// scorers are uncapped. Negative events (errors-to-goal, reds,
+    /// own goals, conceded penalty, GK failed claims) stay at full
+    /// strength so a defining moment of failure always lands.
     pub fn calculate(&self) -> f32 {
         let p = self.profile;
+        let conf = self.confidence;
+        let ev_factor = event_minutes_factor(conf);
 
-        // Position-weighted components. These are all "rating units"
-        // (signed deltas applied directly to base 6.0).
-        let mut weighted_impact = 0.0_f32;
-        weighted_impact += p.scoring * self.scoring();
-        weighted_impact += p.shooting * self.shooting();
-        weighted_impact += p.creation * self.creation();
-        weighted_impact += p.progression * self.progression();
-        weighted_impact += p.retention * self.retention();
-        weighted_impact += p.defensive * self.defensive();
-        weighted_impact += p.goalkeeping * self.goalkeeping();
+        // Routine on-the-ball signal — minute-confidence damped.
+        let routine = p.shooting * self.shooting()
+            + p.creation * self.creation()
+            + p.progression * self.progression()
+            + p.retention * self.retention()
+            + p.defensive * self.defensive()
+            + p.goalkeeping * self.goalkeeping();
+        let routine_damped = routine * conf;
 
-        // Exceptional events ignore the confidence damp; routine event
-        // volume from a short cameo is otherwise diluted so a 10-minute
-        // sub stacking small contributions can't post 7.5+ off them.
-        let confidence_applied = if self.exceptional {
-            weighted_impact
-        } else {
-            weighted_impact * self.confidence
-        };
+        // Direct event delta — goals, decisive/clinical bonus. Softer
+        // minute policy so a 5-minute winner keeps most of its credit.
+        let event_pos = p.scoring * self.scoring_event();
+        let event_damped = event_pos * ev_factor;
 
-        // Always-on contextual deltas — applied at full strength so a
-        // cameo error-to-goal or a clean sheet for a back-line player
-        // still registers properly.
-        let mut rating = BASE_RATING + confidence_applied;
+        // Split positive/negative pieces so compression only fires on
+        // the upside. Routine positives get cross-component compression;
+        // event positives are kept intact (one decisive moment should
+        // not be sanded down by the same curve that bounds spam).
+        let positive_routine = compress_positive_delta(routine_damped.max(0.0));
+        let negative_routine = routine_damped.min(0.0);
+        let positive_event = event_damped.max(0.0);
+        let negative_event = event_damped.min(0.0);
+
+        // Contribution-aware soft caps on the combined positive total.
+        let positive_total = self.apply_soft_caps(positive_routine + positive_event);
+
+        let mut rating = BASE_RATING + positive_total + negative_routine + negative_event;
         rating += self.result_context();
         rating += self.clean_sheet_context();
         rating += self.conceded_context();
         rating += self.discipline();
         rating += self.errors_and_cards();
+        rating += self.gk_exceptional_negatives();
 
         rating.clamp(RATING_MIN, RATING_MAX)
     }
@@ -228,27 +286,26 @@ impl<'a> RatingContext<'a> {
     // weight (≤ ~1.1) before contributing to the rating.
     // ===================================================================
 
-    /// Goals scored. Saturates so a hat-trick is rewarded but not 3×
-    /// a single goal. A small over-conversion bonus rewards clinical
-    /// finishing (more goals than xG suggested); under-conversion
-    /// shows up via the shooting component's wasted-xG penalty.
-    fn scoring(&self) -> f32 {
+    /// Direct goal-event impact: goals scored + clinical (over-xG) +
+    /// decisive (the goal won the match). Saturates so a hat-trick is
+    /// rewarded but not 3× a single goal.
+    fn scoring_event(&self) -> f32 {
         let s = self.stats;
         if s.goals == 0 {
             return 0.0;
         }
         let g = s.goals as f32;
-        // sat(1, 1.6) ≈ 0.46; sat(2) ≈ 0.71; sat(3) ≈ 0.85; sat(5) ≈ 0.96
-        let raw = sat(g, 1.6) * 2.6;
+        // sat(1, 1.6) ≈ 0.46; sat(2) ≈ 0.71; sat(3) ≈ 0.85.
+        let raw = sat(g, 1.6) * 2.55;
 
         // Clinical-finisher bonus: goals beyond xG → premium for
         // converting tougher chances or being lethal in front of goal.
         let over = (g - s.xg).max(0.0);
-        let clinical = sat(over, 1.0) * 0.25;
+        let clinical = sat(over, 1.0) * 0.15;
 
         // Decisive-goal nudge — the goal mattered to the scoreline.
         let decisive = if self.team_goals > self.opponent_goals {
-            0.12
+            0.08
         } else {
             0.0
         };
@@ -265,24 +322,19 @@ impl<'a> RatingContext<'a> {
             return 0.0;
         }
 
-        // xG and shots on target both signal "you got into shooting
-        // positions". Saturating both prevents a spam-shooter from
-        // farming this component.
-        let xg_value = sat(s.xg, 1.8) * 0.40;
-        let sot_value = sat(s.shots_on_target as f32, 2.5) * 0.30;
+        let xg_value = sat(s.xg, 1.8) * 0.30;
+        let sot_value = sat(s.shots_on_target as f32, 2.5) * 0.22;
         let mut shooting = xg_value + sot_value;
 
         // Wasted high xG: created premium chances, scored nothing.
-        // Smooth penalty rather than a hard floor.
-        if s.goals == 0 && s.xg > 0.7 {
-            shooting -= sat(s.xg - 0.7, 1.2) * 0.50;
+        if s.goals == 0 && s.xg > 0.6 {
+            shooting -= sat(s.xg - 0.6, 1.2) * 0.55;
         }
 
-        // Shot accuracy band — small lift for hitting the target,
-        // small drag for spraying it wide.
+        // Shot accuracy band — small lift for hitting the target.
         if s.shots_total > 0 {
             let accuracy = s.shots_on_target as f32 / s.shots_total as f32;
-            shooting += signed_sat(accuracy - 0.40, 0.30) * 0.12;
+            shooting += signed_sat(accuracy - 0.40, 0.30) * 0.08;
         }
 
         // Shot spam: ≥ 5 shots with very low xG/shot means chasing
@@ -299,36 +351,31 @@ impl<'a> RatingContext<'a> {
 
     /// Chance creation: assists, key passes, passes/carries into the
     /// box, completed crosses, xG buildup, zone-aware lane bonuses.
-    /// All inputs feed through `sat`, so a key-pass-and-box-entry-and-
-    /// progressive-pass on the same play doesn't pay four independent
-    /// bonuses — diminishing returns keep them honest.
     fn creation(&self) -> f32 {
         let s = self.stats;
         let z = s.zone_stats;
 
-        let assists = sat(s.assists as f32, 1.6) * 1.50;
+        let assists = sat(s.assists as f32, 1.6) * 1.10;
 
-        let key = sat(s.key_passes as f32, 3.0) * 0.55;
+        let key = sat(s.key_passes as f32, 3.5) * 0.50;
 
         // Box entries — combine passes-into-box and carries-into-box so
         // the same delivery doesn't pay double if both fired.
         let box_entries = sat(
             s.passes_into_box as f32 + z.carries_into_box as f32,
-            4.0,
-        ) * 0.40;
+            5.0,
+        ) * 0.38;
 
-        // Cross output: completed crosses help, failed crosses drag but
-        // smoothly (winger spam is taxed without floors).
-        let cross_credit = sat(s.crosses_completed as f32, 3.0) * 0.22;
+        // Cross output: completed crosses help, failed crosses drag.
+        let cross_credit = sat(s.crosses_completed as f32, 3.5) * 0.16;
         let cross_failed = s
             .crosses_attempted
             .saturating_sub(s.crosses_completed) as f32;
         let cross_penalty = sat(cross_failed, 5.0) * 0.18;
 
         // xG buildup — chains the player participated in that ended
-        // in a shot. Excludes own shots/assists, so it's a clean
-        // "made the chance happen" signal.
-        let xg_chain = sat(s.xg_buildup.max(0.0), 1.0) * 0.40;
+        // in a shot. Clean "made the chance happen" signal.
+        let xg_chain = sat(s.xg_buildup.max(0.0), 1.2) * 0.36;
 
         // Zone-aware lane creation — smaller weights because the same
         // events typically tick `passes_into_box` / `key_passes` too.
@@ -336,16 +383,16 @@ impl<'a> RatingContext<'a> {
             z.half_space_passes_into_box as f32
                 + z.central_passes_into_box as f32
                 + z.switches_of_play as f32,
-            6.0,
-        ) * 0.25;
+            7.0,
+        ) * 0.18;
 
         // Progressive into final third — chance build-up that didn't
         // reach the box.
         let into_final_third = sat(
             z.progressive_passes_into_final_third as f32
                 + z.progressive_carries_into_final_third as f32,
-            6.0,
-        ) * 0.18;
+            7.0,
+        ) * 0.12;
 
         assists + key + box_entries + cross_credit - cross_penalty + xg_chain + lanes
             + into_final_third
@@ -356,15 +403,15 @@ impl<'a> RatingContext<'a> {
     fn progression(&self) -> f32 {
         let s = self.stats;
 
-        let pp = sat(s.progressive_passes as f32, 5.0) * 0.45;
-        let pc = sat(s.progressive_carries as f32, 4.0) * 0.40;
-        let cd = sat(s.carry_distance as f32 / 1000.0, 1.5) * 0.20;
+        let pp = sat(s.progressive_passes as f32, 6.0) * 0.32;
+        let pc = sat(s.progressive_carries as f32, 5.0) * 0.30;
+        let cd = sat(s.carry_distance as f32 / 1000.0, 1.8) * 0.14;
 
         let drib_w = match self.pos {
-            PlayerFieldPositionGroup::Forward | PlayerFieldPositionGroup::Midfielder => 0.40,
-            _ => 0.25,
+            PlayerFieldPositionGroup::Forward | PlayerFieldPositionGroup::Midfielder => 0.32,
+            _ => 0.18,
         };
-        let dribbles = sat(s.successful_dribbles as f32, 3.0) * drib_w;
+        let dribbles = sat(s.successful_dribbles as f32, 3.5) * drib_w;
 
         let failed = s
             .attempted_dribbles
@@ -372,7 +419,7 @@ impl<'a> RatingContext<'a> {
         let failed_w = if self.pos == PlayerFieldPositionGroup::Forward {
             0.18
         } else {
-            0.25
+            0.24
         };
         let failed_drib = sat(failed, 4.0) * failed_w;
 
@@ -389,10 +436,10 @@ impl<'a> RatingContext<'a> {
             return 0.0;
         }
         let pct = s.passes_completed as f32 / s.passes_attempted as f32;
-        let volume = sat(s.passes_attempted as f32, 40.0); // saturates by ~80 attempts
-        // 0.70 is the league-average baseline. Above 0.90 saturates to ~+0.55,
-        // below 0.50 saturates to ~-0.55.
-        signed_sat(pct - 0.70, 0.18) * volume * 0.65
+        let volume = sat(s.passes_attempted as f32, 45.0); // saturates by ~90 attempts
+        // 0.74 is the league-average baseline. Above 0.92 saturates near +0.46,
+        // below 0.56 saturates near -0.46.
+        signed_sat(pct - 0.74, 0.18) * volume * 0.46
     }
 
     /// Defensive work: tackles, interceptions, blocks, clearances,
@@ -405,21 +452,19 @@ impl<'a> RatingContext<'a> {
         // Effective tackles = tackles minus a share of fouls (so the
         // player didn't "earn" a tackle by hacking the runner down).
         let effective_tackles = (s.tackles as f32 - s.fouls as f32 * 0.5).max(0.0);
-        let tackles = sat(effective_tackles, 4.0) * 0.55;
-        let interceptions = sat(s.interceptions as f32, 4.0) * 0.55;
-        let blocks = sat(s.blocks as f32, 2.5) * 0.45;
-        let clearances = sat(s.clearances as f32, 5.0) * 0.35;
+        let tackles = sat(effective_tackles, 4.5) * 0.48;
+        let interceptions = sat(s.interceptions as f32, 4.5) * 0.48;
+        let blocks = sat(s.blocks as f32, 2.8) * 0.38;
+        let clearances = sat(s.clearances as f32, 5.5) * 0.28;
 
-        let succ_pressure = sat(s.successful_pressures as f32, 4.0) * 0.30;
+        let succ_pressure = sat(s.successful_pressures as f32, 4.5) * 0.24;
         let raw_pressure = s
             .pressures
             .saturating_sub(s.successful_pressures);
-        let press_volume = sat(raw_pressure as f32, 10.0) * 0.12;
+        let press_volume = sat(raw_pressure as f32, 10.0) * 0.08;
 
         // Zone-aware premium on top of the flat work — actions in
-        // high-danger zones deserve more credit. Smooth saturation
-        // keeps the bonus from runaway-stacking when several events
-        // happen to share a zone.
+        // high-danger zones deserve more credit.
         let danger_actions = (z.tackles_own_box + z.interceptions_own_box + z.blocks_own_box
             + z.clearances_own_box) as f32
             * 0.5
@@ -427,11 +472,11 @@ impl<'a> RatingContext<'a> {
                 + z.interceptions_own_six_yard
                 + z.blocks_own_six_yard
                 + z.clearances_own_six_yard) as f32;
-        let danger_zone = sat(danger_actions, 5.0) * 0.45;
+        let danger_zone = sat(danger_actions, 5.5) * 0.38;
 
-        let final_third_pressure = sat(z.pressures_won_final_third as f32, 3.0) * 0.20;
+        let final_third_pressure = sat(z.pressures_won_final_third as f32, 3.0) * 0.18;
         let middle_third_int = sat(z.interceptions_middle_third as f32, 4.0) * 0.10;
-        let final_third_tackle = sat(z.tackles_final_third as f32, 3.0) * 0.15;
+        let final_third_tackle = sat(z.tackles_final_third as f32, 3.0) * 0.14;
 
         tackles + interceptions + blocks + clearances + succ_pressure + press_volume
             + danger_zone
@@ -440,11 +485,12 @@ impl<'a> RatingContext<'a> {
             + final_third_tackle
     }
 
-    /// Goalkeeping: saves volume, save percentage, xG prevented,
-    /// command-box actions, workload absorbed, and the conceded curve
-    /// (which lives here so it composes with the rest of the keeper
-    /// signal under the position weight). Failed-claim coefficients
-    /// stay at full strength regardless of the rest of the match.
+    /// Goalkeeping routine signal: saves volume, save percentage, xG
+    /// prevented, command-box actions, workload absorbed, and the
+    /// quiet-shutout credit. Exceptional negatives (failed claims,
+    /// dangerous turnovers, errors-to-goal extras) live in
+    /// [`Self::gk_exceptional_negatives`] so they stay at full bite
+    /// regardless of minutes played.
     fn goalkeeping(&self) -> f32 {
         if !self.is_goalkeeper() {
             return 0.0;
@@ -454,17 +500,16 @@ impl<'a> RatingContext<'a> {
 
         // Per-save credit — saturates so a 10-save shift isn't 10× a
         // single save.
-        let saves_v = sat(s.saves as f32, 2.6) * 1.6;
+        let saves_v = sat(s.saves as f32, 2.8) * 1.35;
 
         // Save percentage band — relative to a 70% baseline. We use a
         // hard zero in the 50%-70% dead-zone to keep a "made the saves
-        // they were supposed to" keeper at baseline (matches WhoScored
-        // references for league-average GK shifts).
+        // they were supposed to" keeper at baseline.
         let shots_faced = self.shots_faced();
         let save_pct_v = if shots_faced >= 3 {
             let pct = s.saves as f32 / shots_faced as f32;
             if pct > 0.70 {
-                ((pct - 0.70) * 3.0).min(0.95)
+                ((pct - 0.70) * 2.7).min(0.80)
             } else if pct < 0.50 {
                 ((pct - 0.50) * 2.0).max(-0.80)
             } else {
@@ -474,10 +519,7 @@ impl<'a> RatingContext<'a> {
             0.0
         };
 
-        // xG-prevented: positive-only (upside-only by design). Engine
-        // negative ledger from concessions is already taxed by the
-        // conceded curve. If the live producer hasn't populated this,
-        // synthesise from save volume vs. a 70% baseline.
+        // xG-prevented: positive-only (upside-only by design).
         let direct = s.xg_prevented.max(0.0);
         let xg_prev = if direct > 0.0 {
             direct
@@ -487,25 +529,37 @@ impl<'a> RatingContext<'a> {
         } else {
             0.0
         };
-        let xg_prev_v = sat(xg_prev, 1.5) * 1.05;
+        let xg_prev_v = sat(xg_prev, 1.5) * 0.90;
 
-        // Workload absorbed: showing up under a barrage. Capped via sat
-        // so 25 shots faced doesn't lift the rating to absurd values.
+        // Workload absorbed: showing up under a barrage. Capped via sat.
         let workload =
-            sat((shots_faced as f32 - 2.0).max(0.0), 6.0) * 0.45;
+            sat((shots_faced as f32 - 2.0).max(0.0), 6.0) * 0.35;
 
         // Command-zone actions (cross claims, sweeper interventions).
         let command = sat(z.gk_command_actions as f32, 4.0) * 0.30;
 
-        // Failed-claim penalties stay un-saturated and at full bite —
-        // a botched cross that became a goal is a defining moment.
-        let failed_shot =
-            z.gk_failed_claims_to_shot as f32 * ZoneCoeffs::GK_FAILED_CLAIM_TO_SHOT;
-        let failed_goal =
-            z.gk_failed_claims_to_goal as f32 * ZoneCoeffs::GK_FAILED_CLAIM_TO_GOAL;
+        // Quiet-shutout credit — keeper who organised the line and
+        // never had to make a save still earned the clean sheet.
+        let dominant_defense = if self.opponent_goals == 0 && shots_faced < 3 {
+            0.12
+        } else {
+            0.0
+        };
 
-        // Dangerous-turnover hit for keepers distributing under pressure.
-        // Saturates so 8 turnovers ≠ 8× one turnover.
+        saves_v + save_pct_v + xg_prev_v + workload + command + dominant_defense
+    }
+
+    /// GK-specific exceptional negatives kept at full strength: failed
+    /// claims-to-shot / -goal, dangerous turnovers, errors-to-goal in
+    /// the own box. These are "defining moments of failure" and should
+    /// always land, regardless of minutes played.
+    fn gk_exceptional_negatives(&self) -> f32 {
+        if !self.is_goalkeeper() {
+            return 0.0;
+        }
+        let z = self.stats.zone_stats;
+        let failed_shot = z.gk_failed_claims_to_shot as f32 * ZoneCoeffs::GK_FAILED_CLAIM_TO_SHOT;
+        let failed_goal = z.gk_failed_claims_to_goal as f32 * ZoneCoeffs::GK_FAILED_CLAIM_TO_GOAL;
         let turnovers = sat(
             z.dangerous_turnovers_own_third as f32 * 0.5
                 + z.dangerous_turnovers_own_box as f32,
@@ -513,28 +567,74 @@ impl<'a> RatingContext<'a> {
         ) * 0.55;
         let error_extra =
             z.errors_to_goal_own_box as f32 * ZoneCoeffs::ERROR_TO_GOAL_OWN_BOX_EXTRA;
+        // Apply GK profile weight (1.0) implicitly — these are GK-only.
+        failed_shot + failed_goal - turnovers + error_extra
+    }
 
-        // Quiet-shutout credit — a keeper who organised the line and
-        // never had to make a save still earned the clean sheet behind
-        // them. Only fires on a clean sheet with < 3 shots faced so it
-        // never doubles with the save stack.
-        let dominant_defense = if self.opponent_goals == 0 && shots_faced < 3 {
-            0.15
-        } else {
-            0.0
-        };
+    /// Contribution-aware soft caps on the cumulative positive delta.
+    /// Prevents an anonymous starter from drifting into elite ratings,
+    /// while leaving multi-goal scorers uncapped.
+    fn apply_soft_caps(&self, positive_delta: f32) -> f32 {
+        let s = self.stats;
+        let z = s.zone_stats;
 
-        saves_v + save_pct_v + xg_prev_v + workload + command + failed_shot + failed_goal
-            - turnovers + error_extra + dominant_defense
+        let goals = s.goals as u32;
+        let assists = s.assists as u32;
+        let major_contrib = goals + assists;
+        let shot_or_chance = (s.shots_total
+            + s.key_passes
+            + s.passes_into_box
+            + s.successful_dribbles) as u32;
+        let defensive_volume = (s.tackles
+            + s.interceptions
+            + s.blocks
+            + s.clearances
+            + s.successful_pressures) as u32;
+        let gk_volume = s.saves as u32 + z.gk_command_actions as u32;
+        let total_volume = shot_or_chance + defensive_volume + gk_volume + (assists * 2);
+
+        let minutes = s.minutes_played;
+        let any_event = goals > 0
+            || s.errors_leading_to_goal > 0
+            || s.red_cards > 0
+            || s.own_goals > 0;
+
+        // Hat trick or 3+ G/A: no cap.
+        if goals >= 3 || major_contrib >= 3 {
+            return positive_delta;
+        }
+
+        // Two goals or goal + assist: cap at +2.3 (= 8.3) with slope
+        // 0.45 — a clear elite shift but not pinned to 10.
+        if goals >= 2 || major_contrib >= 2 {
+            return soft_cap(positive_delta, 2.3, 0.45);
+        }
+
+        // One goal only with low all-around volume: cap at +1.6 (= 7.6).
+        if goals == 1 && total_volume < 6 {
+            return soft_cap(positive_delta, 1.6, 0.45);
+        }
+
+        // Cameo with no event of any kind: cap at +0.7 (= 6.7).
+        if minutes < 30 && !any_event {
+            return soft_cap(positive_delta, 0.7, 0.25);
+        }
+
+        // Anonymous starter: 60+ minutes, no G/A, low meaningful volume.
+        if minutes >= 60 && major_contrib == 0 && total_volume < 5 {
+            return soft_cap(positive_delta, 1.1, 0.25);
+        }
+
+        positive_delta
     }
 
     // ===================================================================
     // Always-on contextual deltas
     //
-    // These are applied AFTER the confidence damp so they hit at full
-    // strength even for cameos. They're scoreline / clean-sheet /
-    // conceded / discipline signals — not "things this player did on
-    // the ball", so confidence shouldn't gate them.
+    // These are applied AFTER the routine damp / event factor so they
+    // hit at full strength even for cameos. They're scoreline /
+    // clean-sheet / conceded / discipline signals — not "things this
+    // player did on the ball", so confidence shouldn't gate them.
     // ===================================================================
 
     /// Win / loss nudge.
@@ -617,38 +717,17 @@ impl<'a> RatingContext<'a> {
         fouls + own_third_extra + penalty_foul + offsides + own_goals
     }
 
-    /// Errors that led to a shot or goal + yellow/red cards.
-    /// Saturating so a torrent of small giveaways can't push a clean-
-    /// sheet keeper below a sensible floor; the worst events (errors-
-    /// to-goal, reds) keep their full bite.
+    /// Errors that led to a shot or goal + yellow/red cards. Errors-
+    /// to-goal hit hard per event — a single mistake is a defining
+    /// moment. Always at full strength so a cameo error still lands.
     fn errors_and_cards(&self) -> f32 {
         let s = self.stats;
-        // Errors-to-shot saturates quickly: 1-2 cost meaningfully, 5-8
-        // doesn't keep compounding. A keeper distributing under
-        // pressure shouldn't be floored by repeated long-ball
-        // interceptions when none turned into a goal.
         let err_shot = sat(s.errors_leading_to_shot as f32, 1.0) * -0.55;
-        // Errors-to-goal hit hard per event — a single mistake is a
-        // defining moment. Saturation is gentle so the second/third
-        // still cost, but the first one already lands the heaviest
-        // blow.
         let err_goal = sat(s.errors_leading_to_goal as f32, 1.2) * -2.40;
         let yellow = s.yellow_cards as f32 * -0.15;
         let red = s.red_cards as f32 * -1.50;
         err_shot + err_goal + yellow + red
     }
-}
-
-/// Smooth minute-confidence curve. Reaches ~0.40 by 15 minutes, ~0.70
-/// by 35, ~0.93 by 70, ~1.0 by 90+. Players that didn't play (0
-/// minutes) get 0.0 so their event totals contribute nothing.
-fn minute_confidence(minutes: u16) -> f32 {
-    if minutes == 0 {
-        return 0.0;
-    }
-    // tanh hits ~0.99 at x≈2.65. Tuning: 70 minutes → tanh(2) ≈ 0.96.
-    let m = minutes as f32 / 35.0;
-    m.tanh()
 }
 
 #[cfg(test)]
@@ -726,7 +805,7 @@ mod tests {
     }
 
     // ===========================================================
-    // Behavioral invariants (the 12 spec tests)
+    // Behavioral invariants
     // ===========================================================
 
     #[test]
@@ -738,7 +817,6 @@ mod tests {
 
     #[test]
     fn short_cameo_has_damped_non_exceptional_rating_movement() {
-        // Same modern stats, one starter, one cameo.
         let mut starter = make_stats(
             0, 0, 30, 26, 0, 0, 0, 0, 0, 0.0,
             PlayerFieldPositionGroup::Midfielder,
@@ -753,12 +831,11 @@ mod tests {
         let starter_r = RatingContext::new(&starter, 1, 1).calculate();
         let cameo_r = RatingContext::new(&cameo, 1, 1).calculate();
         assert!(
-            starter_r > cameo_r + 0.5,
+            starter_r > cameo_r + 0.3,
             "starter {} should clearly outrate damped cameo {}",
             starter_r,
             cameo_r
         );
-        // Cameo without exceptional events should be near 6.0.
         assert!(
             cameo_r < 6.6,
             "cameo with no exceptional events rated {} — should stay damped near 6",
@@ -768,8 +845,8 @@ mod tests {
 
     #[test]
     fn late_goal_cameo_can_rate_high() {
-        // 5-minute cameo, scored the winner. The exception bypass
-        // means this player keeps the full goal credit.
+        // 5-minute cameo, scored the winner. event_minutes_factor keeps
+        // most of the goal credit.
         let mut s = make_stats(
             1, 0, 4, 3, 1, 1, 0, 0, 0, 0.5,
             PlayerFieldPositionGroup::Forward,
@@ -777,7 +854,44 @@ mod tests {
         s.minutes_played = 5;
         s.shots_on_target = 1;
         let r = RatingContext::new(&s, 2, 1).calculate();
-        assert!(r >= 7.5, "late-goal cameo rated {} — should reach 7.5+", r);
+        assert!(
+            r >= 7.1 && r <= 7.8,
+            "late-goal cameo rated {} — should be in 7.1..=7.8",
+            r
+        );
+    }
+
+    #[test]
+    fn one_goal_low_volume_forward_does_not_exceed_7_7() {
+        // 90 minutes, 1 goal, 1 SOT, low creation/passing.
+        let mut s = make_stats(
+            1, 0, 12, 9, 1, 1, 0, 0, 0, 0.5,
+            PlayerFieldPositionGroup::Forward,
+        );
+        s.minutes_played = 90;
+        let r = RatingContext::new(&s, 2, 1).calculate();
+        assert!(
+            r >= 7.0 && r <= 7.7,
+            "single-goal low-volume FWD rated {} — should be 7.0..=7.7",
+            r
+        );
+    }
+
+    #[test]
+    fn two_goals_can_reach_eight_but_not_nine_without_all_round_volume() {
+        // 90 minutes, 2 goals, 2 SOT, low creation. Should reach 8.0
+        // but not 9.0 without supporting volume.
+        let mut s = make_stats(
+            2, 0, 18, 14, 2, 2, 0, 0, 0, 0.9,
+            PlayerFieldPositionGroup::Forward,
+        );
+        s.minutes_played = 90;
+        let r = RatingContext::new(&s, 2, 0).calculate();
+        assert!(
+            r >= 8.0 && r <= 8.7,
+            "two-goal low-volume FWD rated {} — should be 8.0..=8.7",
+            r
+        );
     }
 
     #[test]
@@ -794,15 +908,25 @@ mod tests {
         fwd.xg_buildup = 0.4;
         let r = RatingContext::new(&fwd, 1, 0).calculate();
         assert!(
-            r > 7.0,
-            "creative no-goal forward rated {} — should exceed 7.0",
+            r > 7.0 && r < 7.8,
+            "creative no-goal forward rated {} — should be 7.0..7.8",
             r
         );
     }
 
     #[test]
+    fn anonymous_clean_sheet_defender_stays_below_7() {
+        let mut s = make_stats(
+            0, 0, 18, 15, 0, 0, 0, 0, 0, 0.0,
+            PlayerFieldPositionGroup::Defender,
+        );
+        s.minutes_played = 90;
+        let r = RatingContext::new(&s, 1, 0).calculate();
+        assert!(r < 7.0, "anonymous clean-sheet DEF rated {} — must be < 7.0", r);
+    }
+
+    #[test]
     fn safe_recycler_does_not_get_elite_rating() {
-        // 60-pass shift, sideways only, no creation/defending/shooting.
         let mut s = make_stats(
             0, 0, 60, 55, 0, 0, 0, 0, 0, 0.0,
             PlayerFieldPositionGroup::Midfielder,
@@ -855,7 +979,7 @@ mod tests {
         let mid_r = RatingContext::new(&middle, 1, 0).calculate();
         let box_r = RatingContext::new(&box_cb, 1, 0).calculate();
         assert!(
-            box_r > mid_r + 0.25,
+            box_r > mid_r + 0.20,
             "box CB ({}) should outrate middle-zone CB ({})",
             box_r,
             mid_r
@@ -864,10 +988,9 @@ mod tests {
 
     #[test]
     fn goalkeeper_busy_clean_sheet_rates_well() {
-        // Busy CS keeper sits in the strong-performance band.
         let busy = make_gk(6, 6);
         let r = RatingContext::new(&busy, 1, 0).calculate();
-        assert!(r >= 7.5, "busy CS GK rated {} — should reach 7.5+", r);
+        assert!(r >= 7.3, "busy CS GK rated {} — should reach 7.3+", r);
     }
 
     #[test]
@@ -877,7 +1000,7 @@ mod tests {
         let busy_r = RatingContext::new(&busy_three, 0, 3).calculate();
         let bad_r = RatingContext::new(&bad_three, 0, 3).calculate();
         assert!(
-            busy_r > bad_r + 0.7,
+            busy_r > bad_r + 0.5,
             "busy 3-shipping GK ({}) must outrate inactive 3-shipping GK ({})",
             busy_r,
             bad_r
@@ -914,7 +1037,6 @@ mod tests {
 
     #[test]
     fn rating_stays_in_one_to_ten_range() {
-        // Best case + worst case both produce in-range values.
         let mut great = make_stats(
             5, 3, 60, 57, 5, 5, 5, 5, 10, 4.0,
             PlayerFieldPositionGroup::Forward,
@@ -948,8 +1070,6 @@ mod tests {
 
     #[test]
     fn extreme_stat_spam_saturates_without_hard_ceiling_artifacts() {
-        // Comparing 50× volume vs 10× volume — saturation means the
-        // 50× shift isn't 5× the rating delta.
         let mut moderate = make_stats(
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0,
             PlayerFieldPositionGroup::Midfielder,
@@ -984,9 +1104,7 @@ mod tests {
     }
 
     // ===========================================================
-    // Sanity / regression checks carried over (in spirit, not in
-    // hardcoded thresholds). All assert behavioral relationships,
-    // not exact numeric outputs.
+    // Sanity / regression checks
     // ===========================================================
 
     #[test]
@@ -1003,8 +1121,6 @@ mod tests {
         let gk = make_gk(3, 10);
         let r = RatingContext::new(&gk, 0, 7).calculate();
         assert!(r < 4.5, "7-shipping GK rated {} — should be a disaster", r);
-        // But not pinned to the floor: another keeper with no saves at
-        // all should rate lower.
         let none = make_gk(0, 7);
         let none_r = RatingContext::new(&none, 0, 7).calculate();
         assert!(r > none_r, "any-effort {} must outrate no-effort {}", r, none_r);
@@ -1023,7 +1139,7 @@ mod tests {
         active.blocks = 2;
         let p_r = RatingContext::new(&passive, 1, 0).calculate();
         let a_r = RatingContext::new(&active, 1, 0).calculate();
-        assert!(a_r > p_r + 0.6, "active CB {} vs passive {}", a_r, p_r);
+        assert!(a_r > p_r + 0.4, "active CB {} vs passive {}", a_r, p_r);
     }
 
     #[test]
@@ -1103,7 +1219,6 @@ mod tests {
 
     #[test]
     fn errors_to_shot_saturate() {
-        // Two events ≈ 8 events delta should be small (saturating cap).
         let mut few = make_stats(
             0, 0, 30, 24, 0, 0, 0, 0, 0, 0.0,
             PlayerFieldPositionGroup::Midfielder,
@@ -1129,8 +1244,6 @@ mod tests {
         gk.zone_stats.gk_failed_claims_to_goal = 1;
         let with_fail = RatingContext::new(&gk, 1, 1).calculate();
         let drop = baseline - with_fail;
-        // The full coefficient applies (full strength under the GK
-        // position weight 1.0).
         assert!(
             drop > 0.6,
             "failed-claim-to-goal must hit hard — got drop {}",
@@ -1162,6 +1275,6 @@ mod tests {
         destroyer.pressures = 12;
         destroyer.progressive_passes = 3;
         let r = RatingContext::new(&destroyer, 1, 0).calculate();
-        assert!(r > 7.2, "destroyer MID rated {} — clutch D should lift", r);
+        assert!(r > 7.0, "destroyer MID rated {} — clutch D should lift", r);
     }
 }

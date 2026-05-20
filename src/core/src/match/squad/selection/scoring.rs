@@ -265,12 +265,15 @@ impl ScoringEngine {
 
         // Form bonus amplified by recency_bias. Prefer the fast-moving EMA
         // (`load.form_rating`) when the player has accumulated form data;
-        // fall back to the season-average only for players without a
-        // recent match rating (e.g. just arrived from another club).
+        // fall back to the *regressed* season-average only for players
+        // without a recent match rating (e.g. just arrived from another
+        // club). Regression keeps a 9-app 8.2 prospect from being
+        // selected ahead of a 30-app 7.4 starter.
         let raw_form_bonus = if player.load.form_rating > 0.0 {
             (player.load.form_rating - 6.5).clamp(-1.5, 1.5)
         } else if player.statistics.played + player.statistics.played_subs > 3 {
-            (player.statistics.average_rating - 6.5).clamp(-1.5, 1.5)
+            let pos = player.position().position_group();
+            (player.statistics.average_rating_realistic(pos) - 6.5).clamp(-1.5, 1.5)
         } else {
             0.0
         };

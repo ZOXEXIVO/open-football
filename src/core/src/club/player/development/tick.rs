@@ -127,7 +127,15 @@ impl Player {
         let friendly_games = self.friendly_statistics.total_games();
         let official_bonus = official_match_bonus(official_games, friendly_games);
 
-        let rating_mult = rating_multiplier(self.statistics.average_rating, official_games);
+        // Rating multiplier feeds long-form development scaling, so use
+        // the regressed season average rather than the raw weighted form.
+        // A youngster with three 8.5s shouldn't have his attributes growing
+        // at top-talent speed just because the sample is tiny.
+        let pos = self.position().position_group();
+        let rating_mult = rating_multiplier(
+            self.statistics.average_rating_realistic(pos),
+            official_games,
+        );
 
         let decline_prot = decline_protection(
             self.skills.physical.natural_fitness,

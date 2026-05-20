@@ -212,7 +212,12 @@ impl PipelineProcessor {
                         is_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
                         is_loan_listed: player.statuses.get().contains(&PlayerStatusType::Loa),
                         skill_ability,
-                        average_rating: player.statistics.average_rating,
+                        // Sample-size-regressed: this candidate row
+                        // feeds the same scouting recommendation tier
+                        // logic as the scouting pipeline above.
+                        average_rating: player
+                            .statistics
+                            .average_rating_realistic(player.position().position_group()),
                         goals: player.statistics.goals,
                         assists: player.statistics.assists,
                         appearances: player.statistics.total_games(),

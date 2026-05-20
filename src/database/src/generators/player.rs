@@ -1649,6 +1649,8 @@ fn build_statistics_history(
                 tackling: 0.0,
                 passes: 0,
                 average_rating: h.rating,
+                rating_points: 0.0,
+                rating_weight: 0.0,
                 conceded: 0,
                 clean_sheets: 0,
             };

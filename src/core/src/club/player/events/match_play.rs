@@ -129,13 +129,23 @@ impl Player {
             };
         }
 
-        let games = s.played + s.played_subs;
-        s.average_rating = if games <= 1 {
-            o.effective_rating
-        } else {
-            let prev = s.average_rating;
-            (prev * (games - 1) as f32 + o.effective_rating) / games as f32
-        };
+        // Minutes-weighted rolling average — a 10-minute cameo no
+        // longer counts the same as a 90-minute start. We record the
+        // *raw* `stats.match_rating` (the engine's on-pitch verdict)
+        // rather than `effective_rating` (the settlement / chemistry /
+        // consistency / big-match adjusted value) so the season
+        // average a user sees on the player overview agrees with
+        // every per-match rating shown in the match panels. The
+        // effective_rating still drives the contextual events
+        // downstream (POM selection, manager talks, fan reactions,
+        // reputation deltas) — that's where the adjusted value
+        // belongs.
+        let is_starter = matches!(o.participation, MatchParticipation::Starter);
+        s.record_match_rating(
+            o.stats.match_rating,
+            o.stats.minutes_played as u16,
+            is_starter,
+        );
 
         if o.is_motm {
             s.player_of_the_match = s.player_of_the_match.saturating_add(1);
