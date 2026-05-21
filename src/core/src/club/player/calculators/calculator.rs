@@ -11,18 +11,19 @@ impl PlayerValueCalculator {
         league_reputation: u16,
         club_reputation: u16,
     ) -> f64 {
-        let base_value = determine_base_value(player);
-        let age_factor = determine_age_factor(player, now);
-        let potential_factor = determine_potential_factor(player, now);
-        let status_factor = determine_status_factor(player);
-        let squad_role_factor = determine_squad_role_factor(player);
-        let contract_factor = determine_contract_factor(player, now);
-        let performance_factor = determine_performance_factor(player, league_reputation);
-        let recent_form_factor = determine_recent_form_factor(player);
-        let career_factor = determine_career_consistency_factor(player);
-        let reputation_factor = determine_reputation_factor(player);
-        let position_factor = determine_position_factor(player);
-        let league_club_factor = determine_league_club_factor(league_reputation, club_reputation);
+        let base_value = Self::determine_base_value(player);
+        let age_factor = Self::determine_age_factor(player, now);
+        let potential_factor = Self::determine_potential_factor(player, now);
+        let status_factor = Self::determine_status_factor(player);
+        let squad_role_factor = Self::determine_squad_role_factor(player);
+        let contract_factor = Self::determine_contract_factor(player, now);
+        let performance_factor = Self::determine_performance_factor(player, league_reputation);
+        let recent_form_factor = Self::determine_recent_form_factor(player);
+        let career_factor = Self::determine_career_consistency_factor(player);
+        let reputation_factor = Self::determine_reputation_factor(player);
+        let position_factor = Self::determine_position_factor(player);
+        let league_club_factor =
+            Self::determine_league_club_factor(league_reputation, club_reputation);
 
         let value = base_value
             * age_factor
@@ -38,12 +39,11 @@ impl PlayerValueCalculator {
             * league_club_factor
             * price_level as f64;
 
-        round_market_value(value.max(500.0))
+        Self::round_market_value(value.max(500.0))
     }
-}
 
-/// Round to a "clean" market value (like real transfer fees)
-fn round_market_value(value: f64) -> f64 {
+    /// Round to a "clean" market value (like real transfer fees)
+    fn round_market_value(value: f64) -> f64 {
     if value >= 10_000_000.0 {
         (value / 1_000_000.0).round() * 1_000_000.0
     } else if value >= 1_000_000.0 {
@@ -520,6 +520,7 @@ fn determine_position_factor(player: &Player) -> f64 {
 
     base * versatility_bonus
 }
+}
 
 #[cfg(test)]
 mod tests {
@@ -552,11 +553,11 @@ mod tests {
 
     #[test]
     fn round_market_value_rounds_correctly() {
-        assert_eq!(round_market_value(15_432_100.0), 15_000_000.0);
-        assert_eq!(round_market_value(1_567_000.0), 1_600_000.0);
-        assert_eq!(round_market_value(237_000.0), 250_000.0);
-        assert_eq!(round_market_value(43_000.0), 40_000.0);
-        assert_eq!(round_market_value(7_500.0), 8_000.0);
+        assert_eq!(PlayerValueCalculator::round_market_value(15_432_100.0), 15_000_000.0);
+        assert_eq!(PlayerValueCalculator::round_market_value(1_567_000.0), 1_600_000.0);
+        assert_eq!(PlayerValueCalculator::round_market_value(237_000.0), 250_000.0);
+        assert_eq!(PlayerValueCalculator::round_market_value(43_000.0), 40_000.0);
+        assert_eq!(PlayerValueCalculator::round_market_value(7_500.0), 8_000.0);
     }
 
     /// Build a fully-formed test player from `PlayerGenerator`, then
@@ -808,7 +809,7 @@ mod tests {
             if let Some(c) = p.contract.as_mut() {
                 c.squad_status = status;
             }
-            determine_squad_role_factor(p)
+            PlayerValueCalculator::determine_squad_role_factor(p)
         };
 
         assert!(with_status(KeyPlayer, &mut p) > with_status(FirstTeamRegular, &mut p));

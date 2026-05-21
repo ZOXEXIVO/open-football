@@ -97,7 +97,7 @@ impl Player {
 
         // ── Compute shared multipliers ────────────────────────────────
 
-        let personality = personality_multiplier(
+        let personality = DevelopmentModifiers::personality_multiplier(
             self.attributes.professionalism,
             self.attributes.ambition,
             self.skills.mental.determination,
@@ -125,24 +125,24 @@ impl Player {
         // youngsters now.
         let official_games = self.statistics.total_games() + self.cup_statistics.total_games();
         let friendly_games = self.friendly_statistics.total_games();
-        let official_bonus = official_match_bonus(official_games, friendly_games);
+        let official_bonus = DevelopmentModifiers::official_match_bonus(official_games, friendly_games);
 
         // Rating multiplier feeds long-form development scaling, so use
         // the regressed season average rather than the raw weighted form.
         // A youngster with three 8.5s shouldn't have his attributes growing
         // at top-talent speed just because the sample is tiny.
         let pos = self.position().position_group();
-        let rating_mult = rating_multiplier(
+        let rating_mult = DevelopmentModifiers::rating_multiplier(
             self.statistics.average_rating_realistic(pos),
             official_games,
         );
 
-        let decline_prot = decline_protection(
+        let decline_prot = DevelopmentModifiers::decline_protection(
             self.skills.physical.natural_fitness,
             self.attributes.professionalism,
         );
 
-        let comp_quality = competition_quality_multiplier(league_reputation);
+        let comp_quality = DevelopmentModifiers::competition_quality_multiplier(league_reputation);
 
         // Raw step-up bonus from the adaptation system, dampened by an
         // age factor: under-15s get nothing (they train with the academy
@@ -155,9 +155,10 @@ impl Player {
         // Workload / fitness / readiness modifiers.
         let condition_pct = self.player_attributes.condition_percentage();
         let jadedness = self.player_attributes.jadedness;
-        let workload_growth = workload_growth_modifier(condition_pct, jadedness);
-        let workload_decline = workload_decline_amplifier(condition_pct, jadedness);
-        let readiness_mult = match_readiness_multiplier(self.skills.physical.match_readiness);
+        let workload_growth = DevelopmentModifiers::workload_growth_modifier(condition_pct, jadedness);
+        let workload_decline = DevelopmentModifiers::workload_decline_amplifier(condition_pct, jadedness);
+        let readiness_mult =
+            DevelopmentModifiers::match_readiness_multiplier(self.skills.physical.match_readiness);
 
         // Acute overload: 7-day load + condition + jadedness + recovery
         // debt. Independent of the rolling-minutes signal so a player
@@ -198,7 +199,7 @@ impl Player {
             let skill_ceiling = (base_ceiling * dev_weights[i]).clamp(1.0, 20.0);
 
             // Per-skill gap factor (replaces global PA-CA gap).
-            let gap = skill_gap_factor(skills[i], skill_ceiling);
+            let gap = DevelopmentModifiers::skill_gap_factor(skills[i], skill_ceiling);
 
             // Base rate from age curve.
             let (min_rate, max_rate) = base_weekly_rate(effective_age, cat);

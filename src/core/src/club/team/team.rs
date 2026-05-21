@@ -3,7 +3,7 @@ use crate::club::player::language::Language;
 use crate::club::relations::ChemistryContext;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::builder::TeamBuilder;
-use crate::club::team::mentorship::process_mentorship;
+use crate::club::team::mentorship::MentorshipProcessor;
 use crate::club::team::reputation::{Achievement, CompetitionType, MatchOutcome, MatchResultInfo};
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
@@ -96,7 +96,8 @@ impl Team {
         if ctx.simulation.is_week_beginning() {
             let week_date = ctx.simulation.date.date();
             let hoy_wwy = self.staffs.best_youth_development_wwy(10);
-            let _pairings = process_mentorship(&mut self.players.players, week_date, hoy_wwy);
+            let _pairings =
+                MentorshipProcessor::process(&mut self.players.players, week_date, hoy_wwy);
 
             // Weekly social decay. Without this, every relationship and
             // rapport entry that ever fired stays at its peak forever —

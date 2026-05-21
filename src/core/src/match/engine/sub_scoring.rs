@@ -97,6 +97,12 @@ impl LiveSubstitutionStats {
     }
 }
 
+/// Stateless namespace for substitution-decision scoring. Bundles
+/// star-protection, sub-off / sub-in fits, and the per-slot timing window
+/// used by the substitution loop.
+pub struct SubScoring;
+
+impl SubScoring {
 /// Star-protection bonus (always ≥ 0) — subtracted from `sub_off_score`
 /// so the manager doesn't pull the player who is carrying the match.
 ///
@@ -219,8 +225,8 @@ pub fn sub_off_score_protected(
     need: TacticalNeed,
     protection_dampening: f32,
 ) -> f32 {
-    let raw = sub_off_score(player, live, need);
-    let protection = star_protection(live) * protection_dampening.clamp(0.0, 1.0);
+    let raw = Self::sub_off_score(player, live, need);
+    let protection = Self::star_protection(live) * protection_dampening.clamp(0.0, 1.0);
     raw - protection
 }
 
@@ -236,8 +242,8 @@ pub fn sub_in_score(
     let cond = (sub.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
     let mut s = 0.30 * position_fit + 0.20 * ca + 0.14 * cond;
 
-    let trait_fit = trait_fit_score(sub, need);
-    let need_fit = need_fit_score(sub, need);
+    let trait_fit = Self::trait_fit_score(sub, need);
+    let need_fit = Self::need_fit_score(sub, need);
 
     s += 0.20 * need_fit;
     s += 0.10 * trait_fit;
@@ -388,6 +394,7 @@ pub fn allowed_in_window(sub_index: u8, match_minute: u32, force_critical: bool)
         _ => match_minute >= 85,
     }
 }
+}
 
 #[cfg(test)]
 mod tests {
@@ -421,14 +428,14 @@ mod tests {
     #[test]
     fn star_protection_zero_for_anonymous_player() {
         let s = live(0, 0, 6.4, 0, 8000, 60);
-        assert_eq!(star_protection(&s), 0.0);
+        assert_eq!(SubScoring::star_protection(&s), 0.0);
     }
 
     #[test]
     fn star_protection_lifts_for_single_goal() {
         let s = live(1, 0, 7.0, 0, 8000, 60);
         // single goal → 0.20, rating < 7.3 → 0, goal_diff != 1 → 0
-        assert!((star_protection(&s) - 0.20).abs() < 1e-4);
+        assert!((SubScoring::star_protection(&s) - 0.20).abs() < 1e-4);
     }
 
     #[test]
@@ -437,16 +444,16 @@ mod tests {
         let s_g_and_a = live(1, 1, 7.0, 0, 8000, 70);
         // both should land at the 0.35 tier — confirms 2+ G/A replaces
         // (not stacks with) the single-goal tier.
-        assert!((star_protection(&s_two_g) - 0.35).abs() < 1e-4);
-        assert!((star_protection(&s_g_and_a) - 0.35).abs() < 1e-4);
+        assert!((SubScoring::star_protection(&s_two_g) - 0.35).abs() < 1e-4);
+        assert!((SubScoring::star_protection(&s_g_and_a) - 0.35).abs() < 1e-4);
     }
 
     #[test]
     fn star_protection_rating_tier_replaces_lower_band() {
         let s_high = live(0, 0, 8.1, 0, 8000, 70);
         let s_mid = live(0, 0, 7.4, 0, 8000, 70);
-        assert!((star_protection(&s_high) - 0.35).abs() < 1e-4);
-        assert!((star_protection(&s_mid) - 0.18).abs() < 1e-4);
+        assert!((SubScoring::star_protection(&s_high) - 0.35).abs() < 1e-4);
+        assert!((SubScoring::star_protection(&s_mid) - 0.18).abs() < 1e-4);
     }
 
     #[test]
@@ -454,9 +461,9 @@ mod tests {
         let s_one_up = live(1, 0, 7.0, 1, 8000, 70);
         let s_two_up = live(1, 0, 7.0, 2, 8000, 70);
         // leading by exactly one → +0.15 stacked on top of the goal tier
-        assert!((star_protection(&s_one_up) - 0.35).abs() < 1e-4);
+        assert!((SubScoring::star_protection(&s_one_up) - 0.35).abs() < 1e-4);
         // leading by two → no decisive bonus
-        assert!((star_protection(&s_two_up) - 0.20).abs() < 1e-4);
+        assert!((SubScoring::star_protection(&s_two_up) - 0.20).abs() < 1e-4);
     }
 
     #[test]
@@ -464,6 +471,6 @@ mod tests {
         // 2 goals + rating 8.2 + leading by one
         let s = live(2, 1, 8.2, 1, 8000, 80);
         // 0.35 (G/A) + 0.35 (rating 8.0+) + 0.15 (decisive) = 0.85
-        assert!((star_protection(&s) - 0.85).abs() < 1e-4);
+        assert!((SubScoring::star_protection(&s) - 0.85).abs() < 1e-4);
     }
 }

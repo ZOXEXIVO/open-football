@@ -14,8 +14,7 @@ use crate::r#match::engine::game_management::{
     TimeWastingRestart, home_advantage_deltas, time_wasting_delay_ms, time_wasting_yellow_prob,
 };
 use crate::r#match::engine::psychology::{
-    NegativeEvent, PositiveEvent, PsychState, PsychologyState, leadership_damped_momentum,
-    pressure_load, skill_modifiers, team_leadership_score,
+    NegativeEvent, PositiveEvent, PsychState, Psychology, PsychologyState,
 };
 use crate::r#match::engine::referee::{ContactLocation, FoulCallContext, RefereeProfile};
 use crate::r#match::engine::set_pieces::{
@@ -155,8 +154,8 @@ fn corner_winner_blocked_after_consecutive_failures() {
 #[test]
 fn leadership_dampens_negative_momentum() {
     let raw = -0.5;
-    let captain_leadership = team_leadership_score(18.0, 16.0, 17.0, 17.0, 14.0, 14.0);
-    let damped = leadership_damped_momentum(raw, captain_leadership);
+    let captain_leadership = Psychology::team_leadership_score(18.0, 16.0, 17.0, 17.0, 14.0, 14.0);
+    let damped = Psychology::leadership_damped_momentum(raw, captain_leadership);
     assert!(damped > raw);
     assert!(damped < 0.0);
 }
@@ -169,8 +168,8 @@ fn captain_leadership_dampens_pressure_load() {
         crowd_intensity: 0.85,
         ..Default::default()
     };
-    let no_leader = pressure_load(&env, 0.7, 0.4, 0.0);
-    let strong_leader = pressure_load(&env, 0.7, 0.4, 1.0);
+    let no_leader = Psychology::pressure_load(&env, 0.7, 0.4, 0.0);
+    let strong_leader = Psychology::pressure_load(&env, 0.7, 0.4, 1.0);
     assert!(strong_leader < no_leader);
 }
 
@@ -201,7 +200,7 @@ fn very_high_nervousness_state_lifts_foul_risk_modifier() {
         nervousness: 0.7,
         ..Default::default()
     };
-    let m = skill_modifiers(&s);
+    let m = Psychology::skill_modifiers(&s);
     assert!(m.foul_risk_add > 0.0);
     assert!(m.miscontrol_add > 0.0);
 }
@@ -280,7 +279,7 @@ fn muddy_pitch_plus_heavy_rain_compounds_first_touch_loss() {
 #[test]
 fn psych_neutral_state_is_neutral_modifiers() {
     let s = PsychState::default();
-    let m = skill_modifiers(&s);
+    let m = Psychology::skill_modifiers(&s);
     assert_eq!(m.composure_mul, 1.0);
     assert_eq!(m.first_touch_mul, 1.0);
     assert_eq!(m.foul_risk_add, 0.0);

@@ -14,7 +14,7 @@ use crate::club::player::traits::PlayerTrait;
 use crate::r#match::engine::coach::{
     CoachInstruction, MatchCoach, RollingTeamMetrics, TacticalNeed,
 };
-use crate::r#match::engine::sub_scoring::sub_in_score;
+use crate::r#match::engine::sub_scoring::SubScoring;
 use crate::r#match::player::strategies::players::ops::dribble_duel::{
     DuelContext, resolve_dribble_duel,
 };
@@ -317,8 +317,8 @@ fn chasing_substitution_prefers_attacker() {
         9000,
         vec![PlayerTrait::StaysBack],
     );
-    let attacker_score = sub_in_score(&attacker, TacticalNeed::Chasing, 1.0, 0.0);
-    let defender_score = sub_in_score(&defender, TacticalNeed::Chasing, 1.0, 0.0);
+    let attacker_score = SubScoring::sub_in_score(&attacker, TacticalNeed::Chasing, 1.0, 0.0);
+    let defender_score = SubScoring::sub_in_score(&defender, TacticalNeed::Chasing, 1.0, 0.0);
     assert!(
         attacker_score > defender_score,
         "attacker={:.3}, defender={:.3}",
@@ -344,8 +344,8 @@ fn protecting_lead_substitution_prefers_defender() {
         9000,
         vec![PlayerTrait::StaysBack, PlayerTrait::MarkTightly],
     );
-    let attacker_score = sub_in_score(&attacker, TacticalNeed::ProtectingLead, 1.0, 0.0);
-    let defender_score = sub_in_score(&defender, TacticalNeed::ProtectingLead, 1.0, 0.0);
+    let attacker_score = SubScoring::sub_in_score(&attacker, TacticalNeed::ProtectingLead, 1.0, 0.0);
+    let defender_score = SubScoring::sub_in_score(&defender, TacticalNeed::ProtectingLead, 1.0, 0.0);
     assert!(defender_score > attacker_score);
 }
 

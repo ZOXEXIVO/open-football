@@ -302,6 +302,53 @@ impl BallEventDispatcher {
             0
         };
 
+        // Skill-gate the dribble credit. Geometry alone — "carrier ran
+        // past opponent in their pressure cone" — overstated the take-on
+        // contribution for low-skill carriers, who in real football
+        // lose control of the ball at the pressure point. The rating's
+        // tier classifier uses `successful_dribbles` to lift a player
+        // out of the Passenger tier, so a fake credit here had a
+        // compounding effect: low-skill players escaped the engagement
+        // penalty and clean-context damping on the back of geometric
+        // beats they wouldn't have completed in reality.
+        //
+        // Per-beat success rate: dribbling × technique × agility blend
+        // raised to a squaring curve. Skill=1 retains ~6% of beats,
+        // skill=10 retains ~26%, skill=20 retains ~90%.
+        let (carrier_skill_factor, carry_seed) = if let Some(carrier) = field.get_player(carrier_id)
+        {
+            let dribbling = (carrier.skills.technical.dribbling / 20.0).clamp(0.05, 1.0);
+            let technique = (carrier.skills.technical.technique / 20.0).clamp(0.05, 1.0);
+            let agility = (carrier.skills.physical.agility / 20.0).clamp(0.05, 1.0);
+            let composite = dribbling * 0.5 + technique * 0.3 + agility * 0.2;
+            // Squaring curve so skill 0.05 → ~0.06 success, skill 0.5 →
+            // ~0.28, skill 0.95 → ~0.90. Floor at 0.05 to keep the
+            // worst dribblers from getting zero credit when they
+            // genuinely break the line on a counter; cap at 0.95 so
+            // even an elite can't run through everyone without some
+            // chance of a slip.
+            let p = composite.powi(2).clamp(0.05, 0.95);
+            (p, context.current_tick())
+        } else {
+            (0.5, 0)
+        };
+
+        let mut credited_beats: u16 = 0;
+        // Deterministic per-beat roll: same carry should produce the
+        // same dribble credit on re-simulation. Each beat gets its own
+        // sub-seed mixed from (tick × carrier × beat-index) so the
+        // outcomes of consecutive beats are independent.
+        for beat_idx in 0..beaten_count {
+            let seed = (carry_seed as u64)
+                .wrapping_mul(0x9E3779B97F4A7C15)
+                ^ (carrier_id as u64).wrapping_mul(0xBF58476D1CE4E5B9)
+                ^ (beat_idx as u64).wrapping_mul(0x94D049BB133111EB);
+            let roll = ((seed >> 11) & 0xFFFFFF) as f32 / 16_777_215.0;
+            if roll < carrier_skill_factor {
+                credited_beats = credited_beats.saturating_add(1);
+            }
+        }
+
         if let Some(carrier) = field.get_player_mut(carrier_id) {
             carrier.statistics.carry_distance = carrier
                 .statistics
@@ -317,8 +364,18 @@ impl BallEventDispatcher {
             if started_outside_box && ended_in_box {
                 carrier.statistics.note_carry_into_box();
             }
-            for _ in 0..beaten_count {
+            for _ in 0..credited_beats {
                 carrier.statistics.add_successful_dribble();
+            }
+            // Beats geometrically "passed" but not credited as successful
+            // dribbles are credited as ATTEMPTED dribbles — the carrier
+            // tried to beat a defender and didn't actually maintain
+            // control. This gives the rating's `failed_drib` drag a
+            // signal for low-skill carriers who keep getting close to
+            // opponents on the run but never come out clean.
+            let failed_beats = beaten_count.saturating_sub(credited_beats);
+            for _ in 0..failed_beats {
+                carrier.statistics.add_failed_dribble();
             }
         }
     }

@@ -177,12 +177,10 @@ pub async fn team_get_action(
                     + p.friendly_statistics.played_subs
                     + p.cup_statistics.played_subs,
                 goals: p.statistics.goals + p.friendly_statistics.goals + p.cup_statistics.goals,
-                // Sample-size-regressed across official + friendly so a
-                // pre-season cameo run can't push a yet-to-debut squad
-                // member up the squad list with a fake 8.2.
                 average_rating: p
-                    .statistics
-                    .combined_display_rating(&p.friendly_statistics, p.position().position_group()),
+                    .statistics_history
+                    .current_season_stats(&p.statistics)
+                    .average_rating_str(),
                 has_recent_decision,
                 status: PlayerStatusDto::new(p.statuses.get()),
             }
@@ -257,10 +255,10 @@ pub async fn team_get_action(
                             goals: player.statistics.goals
                                 + player.friendly_statistics.goals
                                 + player.cup_statistics.goals,
-                            average_rating: player.statistics.combined_display_rating(
-                                &player.friendly_statistics,
-                                player.position().position_group(),
-                            ),
+                            average_rating: player
+                                .statistics_history
+                                .current_season_stats(&player.statistics)
+                                .average_rating_str(),
                             has_recent_decision: has_decision_within_days(player, now, 7),
                             status: PlayerStatusDto::new(player.statuses.get()),
                         });

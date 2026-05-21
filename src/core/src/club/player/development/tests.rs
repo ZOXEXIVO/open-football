@@ -168,8 +168,8 @@ fn skill_count_matches_enum() {
 
 #[test]
 fn workload_growth_modifier_drops_with_fatigue() {
-    let fresh = workload_growth_modifier(100, 0);
-    let drained = workload_growth_modifier(35, 8000);
+    let fresh = DevelopmentModifiers::workload_growth_modifier(100, 0);
+    let drained = DevelopmentModifiers::workload_growth_modifier(35, 8000);
     assert!(
         fresh > drained,
         "fresh {} should exceed drained {}",
@@ -182,16 +182,19 @@ fn workload_growth_modifier_drops_with_fatigue() {
 
 #[test]
 fn match_readiness_multiplier_scales_inside_band() {
-    assert!(match_readiness_multiplier(0.0) < match_readiness_multiplier(20.0));
-    assert!((match_readiness_multiplier(20.0) - 1.10).abs() < 1e-4);
-    assert!((match_readiness_multiplier(0.0) - 0.90).abs() < 1e-4);
+    assert!(
+        DevelopmentModifiers::match_readiness_multiplier(0.0)
+            < DevelopmentModifiers::match_readiness_multiplier(20.0)
+    );
+    assert!((DevelopmentModifiers::match_readiness_multiplier(20.0) - 1.10).abs() < 1e-4);
+    assert!((DevelopmentModifiers::match_readiness_multiplier(0.0) - 0.90).abs() < 1e-4);
 }
 
 #[test]
 fn skill_gap_factor_is_zero_at_or_above_ceiling() {
-    assert_eq!(skill_gap_factor(20.0, 15.0), 0.05);
-    assert_eq!(skill_gap_factor(15.0, 15.0), 0.05);
-    assert!(skill_gap_factor(5.0, 15.0) > 0.5);
+    assert_eq!(DevelopmentModifiers::skill_gap_factor(20.0, 15.0), 0.05);
+    assert_eq!(DevelopmentModifiers::skill_gap_factor(15.0, 15.0), 0.05);
+    assert!(DevelopmentModifiers::skill_gap_factor(5.0, 15.0) > 0.5);
 }
 
 #[test]

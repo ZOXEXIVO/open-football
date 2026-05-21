@@ -357,7 +357,23 @@ impl PlayerEventDispatcher {
                     field,
                     context,
                 );
-                Self::handle_pass_to_event(pass_event_model, field, context.total_match_time);
+                // Cross detection at emit-time: passer in a wide channel
+                // delivering toward the opposition box. Computed BEFORE
+                // the pass handler runs so crosses can use the dedicated
+                // crossing-skill error term (a low-crossing player's
+                // cross sails harder off-target than their open-play
+                // pass would).
+                let was_cross = if let Some(side) = passer_side {
+                    Self::is_cross_attempt(passer_position, pass_target, side, context)
+                } else {
+                    false
+                };
+                Self::handle_pass_to_event(
+                    pass_event_model,
+                    field,
+                    context.total_match_time,
+                    was_cross,
+                );
                 // Tag the ball with the passer for pass-accuracy
                 // accounting. Lives for a short window (150 ticks)
                 // and is cleared on opponent touch — see ball.rs
@@ -366,15 +382,6 @@ impl PlayerEventDispatcher {
                 field.ball.pending_pass_set_tick = context.current_tick();
                 field.ball.pending_pass_origin = Some(passer_position);
                 field.ball.pending_pass_target = Some(pass_target);
-                // Cross detection at emit-time: passer in a wide channel
-                // delivering toward the opposition box. The completion
-                // path credits the cross-completed counterpart when the
-                // intended receiver actually claims it.
-                let was_cross = if let Some(side) = passer_side {
-                    Self::is_cross_attempt(passer_position, pass_target, side, context)
-                } else {
-                    false
-                };
                 field.ball.pending_pass_was_cross = was_cross;
                 if was_cross {
                     if let Some(passer) = field.get_player_mut(passer_id) {
@@ -1139,6 +1146,7 @@ impl PlayerEventDispatcher {
         event_model: PassingEventContext,
         field: &mut MatchField,
         total_match_time_ms: u64,
+        was_cross: bool,
     ) {
         let mut rng = rand::rng();
         let minute = sc::minute_from_ms(total_match_time_ms);
@@ -1200,28 +1208,63 @@ impl PlayerEventDispatcher {
         let ideal_pass_vector = ideal_target - pass_origin;
         let horizontal_distance = Self::calculate_horizontal_distance(&ideal_pass_vector);
 
-        // Skill-based targeting error. Steeper skill spread than the
-        // previous linear formula — an elite passer (passing 18,
-        // technique 18, concentration 18) hits within ~0.4u; an average
-        // passer ~2.5u; a poor passer (all 6) ~7u.
-        // Squared accuracy_factor sharpens the drop-off: the gap
-        // between "world class" and "pro-level" accuracy is larger
-        // than the gap between "pro-level" and "average".
+        // Skill-based targeting error. The accuracy_factor is the
+        // overall passing × concentration product; everything below
+        // shapes how much positional error gets applied to the actual
+        // pass target.
         let accuracy_factor = (overall_quality * skills.concentration).clamp(0.0, 1.0);
-        let precision = accuracy_factor * accuracy_factor;
 
         // Distance-based error: longer passes have more positional error.
-        // Curve also steepened so 20u passes are near-perfect for
-        // skilled players, while 200u passes lose significant accuracy.
+        // Curve steepened so 20u passes are near-perfect for skilled
+        // players, while 200u passes lose significant accuracy.
         let distance_error_factor = (horizontal_distance / 250.0).clamp(0.1, 1.8);
 
-        // Max error scales from 0.3u (elite) to 5.5u (poor), modulated
-        // by distance. Narrowed from 9.0 → 5.5 — the old ceiling was
-        // large enough that an average passer's random 6-8u error
-        // combined with a 3-5u lead underestimation pushed the ball
-        // consistently just outside the receiver claim radius. Real
-        // football average passers deliver within ~1.5m, not ~4m.
-        let max_position_error = (0.3 + (1.0 - precision) * 5.5) * distance_error_factor;
+        // Max error: shaped on `(1 - accuracy_factor)^1.5` rather than
+        // on `(1 - precision)` linearly. The previous linear-in-precision
+        // formula collapsed the spread between *average* and *poor*
+        // passers (both landing ~5.5u) — a poor passer was no worse
+        // than an average one, which let low-skill players hide inside
+        // possession-dominant teams. The exponent restores skill spread:
+        //
+        //   accuracy_factor 0.81 (elite):    max_err ≈ 1.0u
+        //   accuracy_factor 0.50 (good):     max_err ≈ 3.5u
+        //   accuracy_factor 0.30 (average):  max_err ≈ 5.5u
+        //   accuracy_factor 0.10 (poor):     max_err ≈ 8.0u
+        //
+        // Distance scaling still applies on top, so long passes by
+        // poor passers stretch toward ~14u of error — close to but
+        // still inside the 40u receiver claim radius, so completion
+        // rates don't collapse, but the offset is large enough that
+        // first-touch rolls trigger more often on receive (poor pass
+        // arrival → harder control → more miscontrols → lower rating).
+        let shortfall = (1.0 - accuracy_factor).clamp(0.0, 1.0);
+        let base_max_position_error = (0.3 + shortfall.powf(1.5) * 9.0) * distance_error_factor;
+
+        // Crossing-specific error multiplier. Crosses are a distinct
+        // skill from open-play passing — a low-crossing winger sails
+        // the ball over the target far more than their open-play passes
+        // suggest. The PassEvaluator's `crossing > 0.4` gate decides
+        // whether the player ENTERS the crossing state, but until now
+        // execution used the same passing/technique/vision error
+        // budget as any other pass. Result: a skill=1 winger somehow
+        // hit crosses as accurately as their flat passes — unrealistic.
+        //
+        // The multiplier scales with `1 - crossing_skill`, so:
+        //   crossing 0.95 (elite): ×1.0  (no extra error)
+        //   crossing 0.50 (good):  ×1.25
+        //   crossing 0.20 (poor):  ×1.80
+        //   crossing 0.05 (lowest): ×2.10
+        // Applied multiplicatively on top of the base error, so even
+        // an elite passer's cross is somewhat looser than their
+        // open-play pass at the same distance, which matches real
+        // football where crosses are a notoriously low-percentage skill.
+        let max_position_error = if was_cross {
+            let crossing_shortfall = (1.0 - skills.crossing).clamp(0.0, 1.0);
+            let cross_multiplier = 1.0 + crossing_shortfall.powf(1.2) * 1.2;
+            base_max_position_error * cross_multiplier
+        } else {
+            base_max_position_error
+        };
 
         // Add random targeting error
         let mut target_error_x = if max_position_error > f32::EPSILON {

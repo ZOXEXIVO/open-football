@@ -1,9 +1,7 @@
 use chrono::NaiveDate;
 
 use crate::r#match::engine::coach::TacticalNeed;
-use crate::r#match::engine::sub_scoring::{
-    LiveSubstitutionStats, allowed_in_window, sub_in_score, sub_off_score_protected,
-};
+use crate::r#match::engine::sub_scoring::{LiveSubstitutionStats, SubScoring};
 use crate::r#match::field::MatchField;
 use crate::r#match::{MatchContext, MatchPlayer};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
@@ -266,7 +264,7 @@ pub fn process_substitutions(
                 break;
             }
             let used = context.subs_used_by_team(team_id) as u8;
-            if !allowed_in_window(used, match_minute_u32, false) {
+            if !SubScoring::allowed_in_window(used, match_minute_u32, false) {
                 break;
             }
 
@@ -691,7 +689,7 @@ impl Substitutions {
             } else {
                 protection_dampening
             };
-            let out_score = sub_off_score_protected(out, live, need, local_dampening);
+            let out_score = SubScoring::sub_off_score_protected(out, live, need, local_dampening);
 
             for sub in &bench {
                 let fit = Self::position_fit(out, sub);
@@ -715,7 +713,7 @@ impl Substitutions {
                 // sub_in_score; let `tactical_fit_bonus` express the
                 // "this is the kind of player we need right now"
                 // preference on top.
-                let in_score = sub_in_score(sub, need, fit, dev);
+                let in_score = SubScoring::sub_in_score(sub, need, fit, dev);
                 let tactical_bonus = Self::tactical_fit_bonus(out, sub, need);
 
                 let pair_score = out_score + in_score + tactical_bonus - disruption;
@@ -957,7 +955,7 @@ mod tests {
     use crate::Tactics;
     use crate::club::team::tactics::MatchTacticType;
     use crate::r#match::ball::Ball;
-    use crate::r#match::engine::sub_scoring::allowed_in_window;
+    use crate::r#match::engine::sub_scoring::SubScoring;
     use crate::r#match::squad::squad::MatchSquad;
     use crate::r#match::{MatchContext, MatchField, MatchFieldSize, MatchPlayerCollection};
     use crate::r#match::engine::result::{Score, TeamScore};
@@ -1405,16 +1403,16 @@ mod tests {
         // The discretionary loop calls `allowed_in_window` with
         // force_critical=false. The window function is what enforces
         // the 55+/65+/75+/85+ slot calendar.
-        assert!(!allowed_in_window(0, 40, false));
-        assert!(!allowed_in_window(0, 54, false));
-        assert!(allowed_in_window(0, 55, false));
-        assert!(allowed_in_window(0, 88, false));
-        assert!(!allowed_in_window(0, 89, false));
+        assert!(!SubScoring::allowed_in_window(0, 40, false));
+        assert!(!SubScoring::allowed_in_window(0, 54, false));
+        assert!(SubScoring::allowed_in_window(0, 55, false));
+        assert!(SubScoring::allowed_in_window(0, 88, false));
+        assert!(!SubScoring::allowed_in_window(0, 89, false));
 
         // force_critical bypasses the window (post-5'). Critical-injury
         // and youth-protection passes use this carve-out.
-        assert!(allowed_in_window(0, 10, true));
-        assert!(allowed_in_window(2, 6, true));
+        assert!(SubScoring::allowed_in_window(0, 10, true));
+        assert!(SubScoring::allowed_in_window(2, 6, true));
     }
 
     // ─────────────────────────────────────────────────────────────────
