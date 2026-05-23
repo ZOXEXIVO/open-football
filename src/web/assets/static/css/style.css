@@ -8976,6 +8976,55 @@ a:link, a:visited, a:hover, a:active {
     margin-top: 10px;
 }
 
+/* League-grouped section header. The first block on the page is the
+   player's current (most recent) league — this strip is the visual
+   anchor that introduces a new league's cards + chart group. */
+.fm-awards-league {
+    display: block;
+}
+
+.fm-awards-league + .fm-awards-league {
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid #1f2a36;
+}
+
+.fm-awards-league-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 4px 0 10px;
+    padding: 0 2px;
+}
+
+.fm-awards-league-name {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+    color: #d8dde2;
+    letter-spacing: 0.3px;
+}
+
+.fm-awards-league-name a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(216, 221, 226, 0.25);
+}
+
+.fm-awards-league-name a:hover {
+    color: #ffffff;
+    border-bottom-color: rgba(216, 221, 226, 0.5);
+}
+
+.fm-awards-league-total {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: #51626d;
+}
+
 .fm-awards-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -9133,7 +9182,7 @@ a:link, a:visited, a:hover, a:active {
     display: flex;
     align-items: flex-end;
     gap: 6px;
-    padding: 20px 16px 14px;
+    padding: 24px 16px 14px;
     min-height: 200px;
     width: 100%;
 }
@@ -9148,13 +9197,17 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-awards-bar-track {
+    position: relative;
     width: 100%;
     height: 150px;
     display: flex;
     align-items: flex-end;
     background: linear-gradient(180deg, transparent 0%, rgba(36, 49, 64, 0.4) 100%);
     border-radius: 3px 3px 0 0;
-    overflow: hidden;
+    /* `overflow: visible` so the count label above each bar isn't
+       clipped horizontally on narrow bars or vertically on peak bars
+       that fill the entire track height. */
+    overflow: visible;
 }
 
 .fm-awards-bar-fill {
@@ -9173,13 +9226,17 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-awards-bar-value {
     position: absolute;
-    top: -18px;
+    top: -16px;
     left: 50%;
     transform: translateX(-50%);
     font-size: 11px;
     font-weight: 700;
     color: #e6ecf2;
     white-space: nowrap;
+    pointer-events: none;
+    /* A subtle shadow so the value reads against any header colour
+       behind it (bar fills are coloured by the club). */
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
 .fm-awards-bar-label {

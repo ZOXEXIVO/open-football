@@ -367,7 +367,8 @@ impl MonthlyAwardsTick {
                     player.on_recognition_award(HappinessEventType::YoungPlayerOfTheMonth, ctx, 28);
                     let mut input = AwardReputationInput::new()
                         .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16);
+                        .with_matches_played(matches_played as u16)
+                        .with_league_id(entry.league_id);
                     if let Some(rep) = league_rep {
                         input = input.with_league_reputation(rep);
                     }
@@ -390,7 +391,8 @@ impl MonthlyAwardsTick {
                     player.on_recognition_award(HappinessEventType::PlayerOfTheMonth, ctx, 28);
                     let mut input = AwardReputationInput::new()
                         .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16);
+                        .with_matches_played(matches_played as u16)
+                        .with_league_id(entry.league_id);
                     if let Some(rep) = league_rep {
                         input = input.with_league_reputation(rep);
                     }
@@ -425,7 +427,8 @@ impl MonthlyAwardsTick {
                     );
                     let mut input = AwardReputationInput::new()
                         .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16);
+                        .with_matches_played(matches_played as u16)
+                        .with_league_id(entry.league_id);
                     if let Some(rep) = league_rep {
                         input = input.with_league_reputation(rep);
                     }
@@ -454,7 +457,8 @@ impl MonthlyAwardsTick {
                     );
                     let mut input = AwardReputationInput::new()
                         .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16);
+                        .with_matches_played(matches_played as u16)
+                        .with_league_id(entry.league_id);
                     if let Some(rep) = league_rep {
                         input = input.with_league_reputation(rep);
                     }

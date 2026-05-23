@@ -98,7 +98,8 @@ impl TeamOfTheWeekTick {
                     );
                     let mut input = AwardReputationInput::new()
                         .with_avg_rating(avg_rating)
-                        .with_matches_played(matches_played as u16);
+                        .with_matches_played(matches_played as u16)
+                        .with_league_id(entry.league_id);
                     if let Some(rep) = league_rep {
                         input = input.with_league_reputation(rep);
                     }

@@ -39,6 +39,32 @@ pub struct MonthBar {
     pub height_pct: u32,
 }
 
+/// One league section on the Awards tab. The first block in the list
+/// (sorted most-recent-first) is the player's "current league" and
+/// renders both the cards and the 12-month chart; the rest show only
+/// the lifetime counts won at that league. `league_id == None` is the
+/// global bucket (Continental / World POY) — only rendered when the
+/// player has actually won one of those.
+pub struct LeagueBlock {
+    pub league_name: String,
+    pub league_slug: String,
+    pub league_id: Option<u32>,
+    pub weekly_cards: Vec<AwardCard>,
+    pub monthly_cards: Vec<AwardCard>,
+    pub season_cards: Vec<AwardCard>,
+    pub global_cards: Vec<AwardCard>,
+    pub has_weekly: bool,
+    pub has_monthly: bool,
+    pub has_season: bool,
+    pub has_global: bool,
+    pub total: u32,
+    /// Populated only on the leading block (most recent league). Other
+    /// blocks render their counts but skip the chart panel.
+    pub month_bars: Vec<MonthBar>,
+    pub month_max: u16,
+    pub has_chart: bool,
+}
+
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "player/awards/index.html")]
 pub struct PlayerAwardsTemplate {
@@ -70,17 +96,7 @@ pub struct PlayerAwardsTemplate {
     pub decisions_count: usize,
     pub interested_clubs_count: usize,
     pub awards_count: u32,
-    pub weekly_cards: Vec<AwardCard>,
-    pub monthly_cards: Vec<AwardCard>,
-    pub season_cards: Vec<AwardCard>,
-    pub global_cards: Vec<AwardCard>,
-    pub has_weekly: bool,
-    pub has_monthly: bool,
-    pub has_season: bool,
-    pub has_global: bool,
-    pub month_bars: Vec<MonthBar>,
-    pub month_max: u16,
-    pub has_chart: bool,
+    pub league_blocks: Vec<LeagueBlock>,
 }
 
 pub async fn player_awards_action(
@@ -129,12 +145,7 @@ pub async fn player_awards_action(
     );
 
     let counts = &player.awards_count;
-    let (weekly_cards, monthly_cards, season_cards, global_cards) = build_cards(counts, &i18n);
-    let has_weekly = weekly_cards.iter().any(|c| c.count > 0);
-    let has_monthly = monthly_cards.iter().any(|c| c.count > 0);
-    let has_season = season_cards.iter().any(|c| c.count > 0);
-    let has_global = global_cards.iter().any(|c| c.count > 0);
-    let (month_bars, month_max) = build_month_bars(counts, simulator_data.date.date());
+    let league_blocks = build_league_blocks(counts, simulator_data, &i18n);
 
     Ok(PlayerAwardsTemplate {
         css_version: CSS_VERSION,
@@ -198,23 +209,83 @@ pub async fn player_awards_action(
         decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: counts.total(),
-        weekly_cards,
-        monthly_cards,
-        season_cards,
-        global_cards,
-        has_weekly,
-        has_monthly,
-        has_season,
-        has_global,
-        has_chart: !month_bars.is_empty(),
-        month_bars,
-        month_max,
+        league_blocks,
     }
     .into_response())
 }
 
+/// Per-league derived totals, computed by counting the timeline.
+/// Mirrors the lifetime [`PlayerAwardsCount`] field layout but only
+/// over awards won at a specific league_id.
+#[derive(Default)]
+struct LeagueAwardTotals {
+    player_of_the_week: u16,
+    young_player_of_the_week: u16,
+    team_of_the_week: u16,
+    young_team_of_the_week: u16,
+    player_of_the_month: u16,
+    young_player_of_the_month: u16,
+    team_of_the_month: u16,
+    young_team_of_the_month: u16,
+    team_of_the_season: u16,
+    team_of_the_year: u16,
+    player_of_the_season: u16,
+    young_player_of_the_season: u16,
+    league_top_scorer: u16,
+    league_top_assists: u16,
+    league_golden_glove: u16,
+    continental_player_of_year: u16,
+    world_player_of_year: u16,
+}
+
+impl LeagueAwardTotals {
+    fn add(&mut self, kind: core::AwardReputationKind) {
+        use core::AwardReputationKind as K;
+        let slot = match kind {
+            K::PlayerOfTheWeek => &mut self.player_of_the_week,
+            K::YoungPlayerOfTheWeek => &mut self.young_player_of_the_week,
+            K::TeamOfTheWeekSelection => &mut self.team_of_the_week,
+            K::YoungTeamOfTheWeekSelection => &mut self.young_team_of_the_week,
+            K::PlayerOfTheMonth => &mut self.player_of_the_month,
+            K::YoungPlayerOfTheMonth => &mut self.young_player_of_the_month,
+            K::TeamOfTheMonthSelection => &mut self.team_of_the_month,
+            K::YoungTeamOfTheMonthSelection => &mut self.young_team_of_the_month,
+            K::TeamOfTheSeasonSelection => &mut self.team_of_the_season,
+            K::TeamOfTheYearSelection => &mut self.team_of_the_year,
+            K::PlayerOfTheSeason => &mut self.player_of_the_season,
+            K::YoungPlayerOfTheSeason => &mut self.young_player_of_the_season,
+            K::LeagueTopScorer => &mut self.league_top_scorer,
+            K::LeagueTopAssists => &mut self.league_top_assists,
+            K::LeagueGoldenGlove => &mut self.league_golden_glove,
+            K::ContinentalPlayerOfYear => &mut self.continental_player_of_year,
+            K::WorldPlayerOfYear => &mut self.world_player_of_year,
+        };
+        *slot = slot.saturating_add(1);
+    }
+
+    fn total(&self) -> u32 {
+        self.player_of_the_week as u32
+            + self.young_player_of_the_week as u32
+            + self.team_of_the_week as u32
+            + self.young_team_of_the_week as u32
+            + self.player_of_the_month as u32
+            + self.young_player_of_the_month as u32
+            + self.team_of_the_month as u32
+            + self.young_team_of_the_month as u32
+            + self.team_of_the_season as u32
+            + self.team_of_the_year as u32
+            + self.player_of_the_season as u32
+            + self.young_player_of_the_season as u32
+            + self.league_top_scorer as u32
+            + self.league_top_assists as u32
+            + self.league_golden_glove as u32
+            + self.continental_player_of_year as u32
+            + self.world_player_of_year as u32
+    }
+}
+
 fn build_cards(
-    counts: &PlayerAwardsCount,
+    totals: &LeagueAwardTotals,
     i18n: &I18n,
 ) -> (
     Vec<AwardCard>,
@@ -236,25 +307,25 @@ fn build_cards(
     let weekly = vec![
         card(
             "team_of_the_week",
-            counts.team_of_the_week,
+            totals.team_of_the_week,
             "weekly",
             "fa-people-group",
         ),
         card(
             "young_team_of_the_week",
-            counts.young_team_of_the_week,
+            totals.young_team_of_the_week,
             "weekly young",
             "fa-user-graduate",
         ),
         card(
             "player_of_the_week",
-            counts.player_of_the_week,
+            totals.player_of_the_week,
             "weekly",
             "fa-star",
         ),
         card(
             "young_player_of_the_week",
-            counts.young_player_of_the_week,
+            totals.young_player_of_the_week,
             "weekly young",
             "fa-seedling",
         ),
@@ -263,25 +334,25 @@ fn build_cards(
     let monthly = vec![
         card(
             "team_of_the_month",
-            counts.team_of_the_month,
+            totals.team_of_the_month,
             "monthly",
             "fa-people-group",
         ),
         card(
             "young_team_of_the_month",
-            counts.young_team_of_the_month,
+            totals.young_team_of_the_month,
             "monthly young",
             "fa-user-graduate",
         ),
         card(
             "player_of_the_month",
-            counts.player_of_the_month,
+            totals.player_of_the_month,
             "monthly",
             "fa-medal",
         ),
         card(
             "young_player_of_the_month",
-            counts.young_player_of_the_month,
+            totals.young_player_of_the_month,
             "monthly young",
             "fa-award",
         ),
@@ -290,43 +361,43 @@ fn build_cards(
     let season = vec![
         card(
             "team_of_the_season",
-            counts.team_of_the_season,
+            totals.team_of_the_season,
             "season",
             "fa-trophy",
         ),
         card(
             "team_of_the_year",
-            counts.team_of_the_year,
+            totals.team_of_the_year,
             "season",
             "fa-trophy",
         ),
         card(
             "player_of_the_season",
-            counts.player_of_the_season,
+            totals.player_of_the_season,
             "season",
             "fa-crown",
         ),
         card(
             "young_player_of_the_season",
-            counts.young_player_of_the_season,
+            totals.young_player_of_the_season,
             "season young",
             "fa-crown",
         ),
         card(
             "top_scorer",
-            counts.league_top_scorer,
+            totals.league_top_scorer,
             "season",
             "fa-futbol",
         ),
         card(
             "top_assists",
-            counts.league_top_assists,
+            totals.league_top_assists,
             "season",
             "fa-handshake",
         ),
         card(
             "golden_glove",
-            counts.league_golden_glove,
+            totals.league_golden_glove,
             "season",
             "fa-hand-back-fist",
         ),
@@ -335,13 +406,13 @@ fn build_cards(
     let global = vec![
         card(
             "continental_player_of_the_year",
-            counts.continental_player_of_year,
+            totals.continental_player_of_year,
             "global",
             "fa-globe-europe",
         ),
         card(
             "world_player_of_the_year",
-            counts.world_player_of_year,
+            totals.world_player_of_year,
             "global",
             "fa-earth-americas",
         ),
@@ -350,17 +421,106 @@ fn build_cards(
     (weekly, monthly, season, global)
 }
 
-/// Bucket the lifetime timeline by calendar month for the past 12
-/// months relative to `now`. Always returns exactly 12 bars (current
-/// month last) so the chart's x-axis is stable even when the player
-/// went quiet — empty months render as a flat track. Returns
-/// `(bars, max_count)`; max may be zero if no awards fell in the
-/// window. The bar list is empty only when the player has no awards
-/// at all (so the chart panel is hidden).
-fn build_month_bars(counts: &PlayerAwardsCount, now: chrono::NaiveDate) -> (Vec<MonthBar>, u16) {
-    if counts.timeline.is_empty() {
-        return (Vec::new(), 0);
+/// Group the lifetime timeline into per-league blocks, sorted by
+/// most-recent-award-date desc. The leading block (current league)
+/// also carries the past-12-months chart; trailing blocks render
+/// counts only. The `None` bucket — Continental / World POY — only
+/// appears when the player has won one of those.
+fn build_league_blocks(
+    counts: &PlayerAwardsCount,
+    data: &SimulatorData,
+    i18n: &I18n,
+) -> Vec<LeagueBlock> {
+    use std::collections::HashMap;
+
+    let mut totals_by_league: HashMap<Option<u32>, LeagueAwardTotals> = HashMap::new();
+    let mut latest_by_league: HashMap<Option<u32>, chrono::NaiveDate> = HashMap::new();
+    for entry in &counts.timeline {
+        let key = entry.league_id;
+        totals_by_league.entry(key).or_default().add(entry.kind);
+        latest_by_league
+            .entry(key)
+            .and_modify(|d| {
+                if entry.date > *d {
+                    *d = entry.date;
+                }
+            })
+            .or_insert(entry.date);
     }
+
+    // Convert into Vec and sort newest-first by latest award date.
+    let mut keys: Vec<Option<u32>> = totals_by_league.keys().copied().collect();
+    keys.sort_by(|a, b| {
+        let da = latest_by_league.get(a).copied();
+        let db = latest_by_league.get(b).copied();
+        db.cmp(&da)
+    });
+
+    let now = data.date.date();
+    let mut blocks: Vec<LeagueBlock> = Vec::with_capacity(keys.len());
+    for (idx, league_id) in keys.iter().enumerate() {
+        let totals = totals_by_league.get(league_id).expect("populated above");
+        let (weekly, monthly, season, global) = build_cards(totals, i18n);
+        let has_weekly = weekly.iter().any(|c| c.count > 0);
+        let has_monthly = monthly.iter().any(|c| c.count > 0);
+        let has_season = season.iter().any(|c| c.count > 0);
+        let has_global = global.iter().any(|c| c.count > 0);
+
+        let (league_name, league_slug) = match league_id {
+            Some(id) => data
+                .league(*id)
+                .map(|l| (l.name.clone(), l.slug.clone()))
+                .unwrap_or_else(|| (i18n.t("awards_unknown_league").to_string(), String::new())),
+            None => (
+                i18n.t("awards_section_global").to_string(),
+                String::new(),
+            ),
+        };
+
+        // Only the leading league (most recent) gets the chart.
+        let (month_bars, month_max) = if idx == 0 {
+            build_month_bars_for_league(&counts.timeline, *league_id, now)
+        } else {
+            (Vec::new(), 0)
+        };
+
+        let has_chart = !month_bars.is_empty();
+
+        blocks.push(LeagueBlock {
+            league_name,
+            league_slug,
+            league_id: *league_id,
+            weekly_cards: weekly,
+            monthly_cards: monthly,
+            season_cards: season,
+            global_cards: global,
+            has_weekly,
+            has_monthly,
+            has_season,
+            has_global,
+            total: totals.total(),
+            month_bars,
+            month_max,
+            has_chart,
+        });
+    }
+
+    blocks
+}
+
+/// Bucket the lifetime timeline by calendar month for the past 12
+/// months relative to `now`, filtered to a specific `league_id`.
+/// Always returns exactly 12 bars (current month last) so the chart's
+/// x-axis is stable even when the player went quiet — empty months
+/// render as a flat track. Returns `(bars, max_count)`; max may be
+/// zero if no awards fell in the window. The bar list is empty only
+/// when the league had zero awards in the period (the chart panel is
+/// then hidden).
+fn build_month_bars_for_league(
+    timeline: &[core::AwardTimelineEntry],
+    league_id: Option<u32>,
+    now: chrono::NaiveDate,
+) -> (Vec<MonthBar>, u16) {
     use chrono::Datelike;
 
     // Build the 12 (year, month) keys ending at `now`'s month. Stored
@@ -378,13 +538,21 @@ fn build_month_bars(counts: &PlayerAwardsCount, now: chrono::NaiveDate) -> (Vec<
     }
     keys.reverse();
 
-    // Index counts per (year, month).
+    // Index counts per (year, month), restricted to this league.
     use std::collections::HashMap;
     let mut counts_by_key: HashMap<(i32, u32), u16> = HashMap::new();
-    for entry in &counts.timeline {
+    let mut any_in_league = false;
+    for entry in timeline {
+        if entry.league_id != league_id {
+            continue;
+        }
+        any_in_league = true;
         let key = (entry.date.year(), entry.date.month());
         let slot = counts_by_key.entry(key).or_insert(0);
         *slot = slot.saturating_add(1);
+    }
+    if !any_in_league {
+        return (Vec::new(), 0);
     }
 
     let month_short = |m: u32| -> &'static str {

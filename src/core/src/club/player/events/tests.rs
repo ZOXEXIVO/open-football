@@ -3238,20 +3238,25 @@ fn awards_count_bumps_on_apply_award_reputation_impact() {
     let mut p = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
     assert_eq!(p.awards_count.total(), 0);
 
-    let input = AwardReputationInput::new().with_league_reputation(5_000);
+    let input_league_a = AwardReputationInput::new()
+        .with_league_reputation(5_000)
+        .with_league_id(42);
+    let input_league_b = AwardReputationInput::new()
+        .with_league_reputation(5_000)
+        .with_league_id(99);
     p.apply_award_reputation_impact(
         AwardReputationKind::TeamOfTheWeekSelection,
-        input,
+        input_league_a,
         d(2026, 5, 7),
     );
     p.apply_award_reputation_impact(
         AwardReputationKind::TeamOfTheWeekSelection,
-        input,
+        input_league_b,
         d(2026, 5, 14),
     );
     p.apply_award_reputation_impact(
         AwardReputationKind::YoungTeamOfTheWeekSelection,
-        input,
+        input_league_a,
         d(2026, 5, 14),
     );
     p.apply_award_reputation_impact(
@@ -3265,14 +3270,22 @@ fn awards_count_bumps_on_apply_award_reputation_impact() {
     assert_eq!(p.awards_count.world_player_of_year, 1);
     assert_eq!(p.awards_count.total(), 4);
 
-    // Timeline log captures the date+kind for every award so the
-    // Awards-tab chart can bucket totals per year.
+    // Timeline log captures the date + kind + league_id for every
+    // award so the Awards-tab can group totals per league and chart
+    // totals per month.
     assert_eq!(p.awards_count.timeline.len(), 4);
     assert_eq!(p.awards_count.timeline[0].date, d(2026, 5, 7));
     assert!(matches!(
         p.awards_count.timeline[0].kind,
         AwardReputationKind::TeamOfTheWeekSelection
     ));
+    assert_eq!(p.awards_count.timeline[0].league_id, Some(42));
+    assert_eq!(p.awards_count.timeline[1].league_id, Some(99));
+    assert_eq!(p.awards_count.timeline[2].league_id, Some(42));
+    assert_eq!(
+        p.awards_count.timeline[3].league_id, None,
+        "global POY award carries no league context"
+    );
     assert!(matches!(
         p.awards_count.timeline[3].kind,
         AwardReputationKind::WorldPlayerOfYear

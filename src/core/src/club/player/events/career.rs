@@ -116,6 +116,10 @@ impl AwardReputationKind {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwardReputationInput {
     pub league_reputation: Option<u16>,
+    /// Awarding league — recorded on the player's timeline so the
+    /// Awards tab can group totals per league. `None` for global
+    /// awards (Continental / World POY).
+    pub league_id: Option<u32>,
     pub avg_rating: Option<f32>,
     pub matches_played: Option<u16>,
 }
@@ -127,6 +131,11 @@ impl AwardReputationInput {
 
     pub fn with_league_reputation(mut self, rep: u16) -> Self {
         self.league_reputation = Some(rep);
+        self
+    }
+
+    pub fn with_league_id(mut self, league_id: u32) -> Self {
+        self.league_id = Some(league_id);
         self
     }
 
@@ -144,10 +153,12 @@ impl AwardReputationInput {
 /// One entry in the lifetime award log. Storing the date alongside the
 /// kind lets the Awards-tab chart bucket totals by year / month, which
 /// the per-league archives can't do once their retention windows expire.
+/// `league_id` is `None` for global awards (Continental / World POY).
 #[derive(Debug, Clone, Copy)]
 pub struct AwardTimelineEntry {
     pub date: NaiveDate,
     pub kind: AwardReputationKind,
+    pub league_id: Option<u32>,
 }
 
 /// Capped log size — comfortably fits an unusually decorated 20-year
@@ -213,7 +224,7 @@ impl PlayerAwardsCount {
             + self.world_player_of_year as u32
     }
 
-    fn bump(&mut self, kind: AwardReputationKind, date: NaiveDate) {
+    fn bump(&mut self, kind: AwardReputationKind, date: NaiveDate, league_id: Option<u32>) {
         let slot = match kind {
             AwardReputationKind::PlayerOfTheWeek => &mut self.player_of_the_week,
             AwardReputationKind::YoungPlayerOfTheWeek => &mut self.young_player_of_the_week,
@@ -235,7 +246,11 @@ impl PlayerAwardsCount {
         };
         *slot = slot.saturating_add(1);
 
-        self.timeline.push(AwardTimelineEntry { date, kind });
+        self.timeline.push(AwardTimelineEntry {
+            date,
+            kind,
+            league_id,
+        });
         if self.timeline.len() > TIMELINE_MAX {
             // Drop oldest to keep memory bounded on freakishly long careers.
             self.timeline.drain(0..self.timeline.len() - TIMELINE_MAX);
@@ -433,7 +448,7 @@ impl Player {
         // Lifetime tally — incremented here (the single funnel every
         // award path goes through) so the Awards tab can show "across
         // all seasons" totals beyond the per-league retention bounds.
-        self.awards_count.bump(kind, now);
+        self.awards_count.bump(kind, now, input.league_id);
 
         let (base_cur, base_home, base_world) = kind.centre_delta();
         let cur_now = self.player_attributes.current_reputation;

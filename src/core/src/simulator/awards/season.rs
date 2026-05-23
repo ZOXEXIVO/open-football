@@ -143,7 +143,7 @@ impl SeasonAwardsTick {
         }
         player.on_recognition_award(happiness_event, ctx, 330);
 
-        let mut input = AwardReputationInput::new();
+        let mut input = AwardReputationInput::new().with_league_id(league_id);
         if let Some(rep) = league_rep {
             input = input.with_league_reputation(rep);
         }
