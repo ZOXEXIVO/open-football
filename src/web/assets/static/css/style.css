@@ -8983,6 +8983,40 @@ a:link, a:visited, a:hover, a:active {
     display: block;
 }
 
+/* The summary row at the top reuses the league-block layout but
+   styles its header strip a touch stronger — accent rail on the
+   left + lifted text colour so the reader can read it as "career
+   totals" before scanning into the per-league sections. */
+.fm-awards-summary {
+    margin-bottom: 6px;
+    padding: 10px 0 14px;
+    border-bottom: 1px solid #1f2a36;
+}
+
+.fm-awards-summary .fm-awards-league-head {
+    position: relative;
+    padding-left: 10px;
+    margin-bottom: 12px;
+}
+
+.fm-awards-summary .fm-awards-league-head::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 2px;
+    bottom: 2px;
+    width: 3px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, #c89a3c 0%, #8a6624 100%);
+}
+
+.fm-awards-summary .fm-awards-league-name {
+    font-size: 15px;
+    color: #e6ecf2;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
 .fm-awards-league + .fm-awards-league {
     margin-top: 22px;
     padding-top: 18px;
@@ -9004,6 +9038,10 @@ a:link, a:visited, a:hover, a:active {
     font-weight: 700;
     color: #d8dde2;
     letter-spacing: 0.3px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .fm-awards-league-name a {
@@ -9015,6 +9053,27 @@ a:link, a:visited, a:hover, a:active {
 .fm-awards-league-name a:hover {
     color: #ffffff;
     border-bottom-color: rgba(216, 221, 226, 0.5);
+}
+
+/* Country prefix: flag + name set in a slightly muted weight so the
+   league name still dominates the header. Border-bottom is removed
+   for the country link to keep the flag-name pair visually compact. */
+.fm-awards-league-country {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    color: #a8b5be;
+    border-bottom: none !important;
+}
+
+.fm-awards-league-country:hover .fm-awards-league-country-name {
+    color: #d8dde2;
+}
+
+.fm-awards-league-sep {
+    color: #3d4f5c;
+    font-weight: 400;
 }
 
 .fm-awards-league-total {

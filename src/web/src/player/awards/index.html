@@ -15,10 +15,100 @@
         </div>
     </section>
     {% else %}
+    <section class="fm-awards-league fm-awards-summary">
+        <header class="fm-awards-league-head">
+            <h2 class="fm-awards-league-name">{{ i18n.t("awards_summary_title") }}</h2>
+            <span class="fm-awards-league-total">{{ summary.total }} {{ i18n.t("awards") }}</span>
+        </header>
+        {% if summary.has_weekly %}
+        <section class="fm-panel fm-awards-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("awards_section_weekly") }}</h3>
+            </div>
+            <div class="fm-awards-grid">
+                {% for card in summary.weekly_cards %}
+                {% if card.count > 0 %}
+                <div class="fm-award-card fm-award-{{ card.tone }}">
+                    <div class="fm-award-icon"><i class="fa {{ card.icon }}"></i></div>
+                    <div class="fm-award-body">
+                        <div class="fm-award-count">{{ card.count }}</div>
+                        <div class="fm-award-title">{{ card.title }}</div>
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+        {% if summary.has_monthly %}
+        <section class="fm-panel fm-awards-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("awards_section_monthly") }}</h3>
+            </div>
+            <div class="fm-awards-grid">
+                {% for card in summary.monthly_cards %}
+                {% if card.count > 0 %}
+                <div class="fm-award-card fm-award-{{ card.tone }}">
+                    <div class="fm-award-icon"><i class="fa {{ card.icon }}"></i></div>
+                    <div class="fm-award-body">
+                        <div class="fm-award-count">{{ card.count }}</div>
+                        <div class="fm-award-title">{{ card.title }}</div>
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+        {% if summary.has_season %}
+        <section class="fm-panel fm-awards-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("awards_section_season") }}</h3>
+            </div>
+            <div class="fm-awards-grid">
+                {% for card in summary.season_cards %}
+                {% if card.count > 0 %}
+                <div class="fm-award-card fm-award-{{ card.tone }}">
+                    <div class="fm-award-icon"><i class="fa {{ card.icon }}"></i></div>
+                    <div class="fm-award-body">
+                        <div class="fm-award-count">{{ card.count }}</div>
+                        <div class="fm-award-title">{{ card.title }}</div>
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+        {% if summary.has_global %}
+        <section class="fm-panel fm-awards-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("awards_section_global") }}</h3>
+            </div>
+            <div class="fm-awards-grid">
+                {% for card in summary.global_cards %}
+                {% if card.count > 0 %}
+                <div class="fm-award-card fm-award-{{ card.tone }}">
+                    <div class="fm-award-icon"><i class="fa {{ card.icon }}"></i></div>
+                    <div class="fm-award-body">
+                        <div class="fm-award-count">{{ card.count }}</div>
+                        <div class="fm-award-title">{{ card.title }}</div>
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+    </section>
     {% for block in league_blocks %}
     <section class="fm-awards-league">
         <header class="fm-awards-league-head">
             <h2 class="fm-awards-league-name">
+                {% if !block.country_code.is_empty() %}
+                {% if !block.country_slug.is_empty() %}<a class="fm-awards-league-country" href="/{{ lang }}/countries/{{ block.country_slug }}"><span class="flag flag-{{ block.country_code }}" title="{{ block.country_name }}"></span> <span class="fm-awards-league-country-name">{{ block.country_name }}</span></a>{% else %}<span class="fm-awards-league-country"><span class="flag flag-{{ block.country_code }}" title="{{ block.country_name }}"></span> <span class="fm-awards-league-country-name">{{ block.country_name }}</span></span>{% endif %}
+                <span class="fm-awards-league-sep">·</span>
+                {% endif %}
                 {% if let Some(_) = block.league_id %}{% if !block.league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ block.league_slug }}">{{ block.league_name }}</a>{% else %}{{ block.league_name }}{% endif %}{% else %}{{ block.league_name }}{% endif %}
             </h2>
             <span class="fm-awards-league-total">{{ block.total }} {{ i18n.t("awards") }}</span>

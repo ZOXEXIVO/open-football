@@ -39,6 +39,22 @@ pub struct MonthBar {
     pub height_pct: u32,
 }
 
+/// Career-wide summary at the top of the page — lifetime counts
+/// across every league the player has ever appeared in. Same card
+/// layout as a [`LeagueBlock`] but with no chart and no league
+/// header link.
+pub struct SummaryBlock {
+    pub weekly_cards: Vec<AwardCard>,
+    pub monthly_cards: Vec<AwardCard>,
+    pub season_cards: Vec<AwardCard>,
+    pub global_cards: Vec<AwardCard>,
+    pub has_weekly: bool,
+    pub has_monthly: bool,
+    pub has_season: bool,
+    pub has_global: bool,
+    pub total: u32,
+}
+
 /// One league section on the Awards tab. The first block in the list
 /// (sorted most-recent-first) is the player's "current league" and
 /// renders both the cards and the 12-month chart; the rest show only
@@ -49,6 +65,12 @@ pub struct LeagueBlock {
     pub league_name: String,
     pub league_slug: String,
     pub league_id: Option<u32>,
+    /// Country card shown to the left of the league name when the
+    /// block is a real league (not the global / Continental bucket).
+    /// `code` is the lowercased ISO code used by the flag sprite.
+    pub country_code: String,
+    pub country_name: String,
+    pub country_slug: String,
     pub weekly_cards: Vec<AwardCard>,
     pub monthly_cards: Vec<AwardCard>,
     pub season_cards: Vec<AwardCard>,
@@ -96,6 +118,7 @@ pub struct PlayerAwardsTemplate {
     pub decisions_count: usize,
     pub interested_clubs_count: usize,
     pub awards_count: u32,
+    pub summary: SummaryBlock,
     pub league_blocks: Vec<LeagueBlock>,
 }
 
@@ -145,6 +168,7 @@ pub async fn player_awards_action(
     );
 
     let counts = &player.awards_count;
+    let summary = build_summary(counts, &i18n);
     let league_blocks = build_league_blocks(counts, simulator_data, &i18n);
 
     Ok(PlayerAwardsTemplate {
@@ -209,9 +233,26 @@ pub async fn player_awards_action(
         decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: counts.total(),
+        summary,
         league_blocks,
     }
     .into_response())
+}
+
+fn build_summary(counts: &PlayerAwardsCount, i18n: &I18n) -> SummaryBlock {
+    let totals = LeagueAwardTotals::from_lifetime(counts);
+    let (weekly, monthly, season, global) = build_cards(&totals, i18n);
+    SummaryBlock {
+        has_weekly: weekly.iter().any(|c| c.count > 0),
+        has_monthly: monthly.iter().any(|c| c.count > 0),
+        has_season: season.iter().any(|c| c.count > 0),
+        has_global: global.iter().any(|c| c.count > 0),
+        weekly_cards: weekly,
+        monthly_cards: monthly,
+        season_cards: season,
+        global_cards: global,
+        total: totals.total(),
+    }
 }
 
 /// Per-league derived totals, computed by counting the timeline.
@@ -239,6 +280,31 @@ struct LeagueAwardTotals {
 }
 
 impl LeagueAwardTotals {
+    /// Lifetime totals (across every league) sourced directly from
+    /// the player's counter struct — used by the career-summary
+    /// header so it doesn't need to re-walk the timeline.
+    fn from_lifetime(counts: &PlayerAwardsCount) -> Self {
+        Self {
+            player_of_the_week: counts.player_of_the_week,
+            young_player_of_the_week: counts.young_player_of_the_week,
+            team_of_the_week: counts.team_of_the_week,
+            young_team_of_the_week: counts.young_team_of_the_week,
+            player_of_the_month: counts.player_of_the_month,
+            young_player_of_the_month: counts.young_player_of_the_month,
+            team_of_the_month: counts.team_of_the_month,
+            young_team_of_the_month: counts.young_team_of_the_month,
+            team_of_the_season: counts.team_of_the_season,
+            team_of_the_year: counts.team_of_the_year,
+            player_of_the_season: counts.player_of_the_season,
+            young_player_of_the_season: counts.young_player_of_the_season,
+            league_top_scorer: counts.league_top_scorer,
+            league_top_assists: counts.league_top_assists,
+            league_golden_glove: counts.league_golden_glove,
+            continental_player_of_year: counts.continental_player_of_year,
+            world_player_of_year: counts.world_player_of_year,
+        }
+    }
+
     fn add(&mut self, kind: core::AwardReputationKind) {
         use core::AwardReputationKind as K;
         let slot = match kind {
@@ -466,13 +532,26 @@ fn build_league_blocks(
         let has_season = season.iter().any(|c| c.count > 0);
         let has_global = global.iter().any(|c| c.count > 0);
 
-        let (league_name, league_slug) = match league_id {
-            Some(id) => data
-                .league(*id)
-                .map(|l| (l.name.clone(), l.slug.clone()))
-                .unwrap_or_else(|| (i18n.t("awards_unknown_league").to_string(), String::new())),
+        let (league_name, league_slug, country_code, country_name, country_slug) = match league_id
+        {
+            Some(id) => {
+                let league = data.league(*id);
+                let (name, slug, country_id) = league
+                    .map(|l| (l.name.clone(), l.slug.clone(), Some(l.country_id)))
+                    .unwrap_or_else(|| {
+                        (i18n.t("awards_unknown_league").to_string(), String::new(), None)
+                    });
+                let country = country_id.and_then(|cid| data.country(cid));
+                let (code, cname, cslug) = country
+                    .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
+                    .unwrap_or_default();
+                (name, slug, code, cname, cslug)
+            }
             None => (
                 i18n.t("awards_section_global").to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
                 String::new(),
             ),
         };
@@ -490,6 +569,9 @@ fn build_league_blocks(
             league_name,
             league_slug,
             league_id: *league_id,
+            country_code,
+            country_name,
+            country_slug,
             weekly_cards: weekly,
             monthly_cards: monthly,
             season_cards: season,
