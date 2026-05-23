@@ -8960,3 +8960,248 @@ a:link, a:visited, a:hover, a:active {
         display: none;
     }
 }
+
+/* ============================================
+   FM PLAYER AWARDS — DASHBOARD
+   ============================================
+   Counter tiles for lifetime award totals, grouped by horizon (weekly /
+   monthly / season / global). Each tile shows the count in oversized
+   numerals so a glance picks up "five Team of the Week selections"
+   without the eye chasing decoration. Tone colours echo the page's
+   accent palette: weekly = neutral steel, monthly = warm gold, season
+   = trophy bronze, global = champion gold-cyan. The `.young` modifier
+   adds a teal underline so senior / young pairs read at a glance. */
+
+.fm-awards-panel + .fm-awards-panel {
+    margin-top: 10px;
+}
+
+.fm-awards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 8px;
+    padding: 12px;
+}
+
+.fm-award-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    min-height: 78px;
+    border: 1px solid #243140;
+    border-left: 3px solid #3d4f5c;
+    border-radius: 4px;
+    background: linear-gradient(180deg, #1b262e 0%, #18222a 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.015);
+    transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.fm-award-card:hover {
+    border-color: #2f3f50;
+    transform: translateY(-1px);
+}
+
+.fm-award-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    font-size: 18px;
+    color: #1b262e;
+    background: #5a6f80;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18),
+        0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.fm-award-body {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+}
+
+.fm-award-count {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1;
+    color: #e6ecf2;
+    letter-spacing: -0.5px;
+}
+
+.fm-award-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    color: #8a99a4;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* Tone modifiers — set the rail colour on the left edge of each card
+   and the icon medallion background. The senior / young split shares a
+   tone family; `.young` overlays a subtle teal accent dot in the
+   upper-right so paired tiles read as a set without doubling the rail
+   palette. */
+.fm-award-card.fm-award-weekly {
+    border-left-color: #5a6f80;
+}
+.fm-award-card.fm-award-weekly .fm-award-icon {
+    background: linear-gradient(180deg, #7d92a3 0%, #5a6f80 100%);
+    color: #14202a;
+}
+.fm-award-card.fm-award-monthly {
+    border-left-color: #b07d3b;
+}
+.fm-award-card.fm-award-monthly .fm-award-icon {
+    background: linear-gradient(180deg, #d49a55 0%, #b07d3b 100%);
+    color: #2a1a08;
+}
+.fm-award-card.fm-award-season {
+    border-left-color: #c89a3c;
+}
+.fm-award-card.fm-award-season .fm-award-icon {
+    background: linear-gradient(180deg, #e6b95a 0%, #c89a3c 100%);
+    color: #2a1f0a;
+}
+.fm-award-card.fm-award-global {
+    border-left-color: #4ec8b8;
+}
+.fm-award-card.fm-award-global .fm-award-icon {
+    background: linear-gradient(180deg, #6fe0d0 0%, #4a9d8a 100%);
+    color: #0a2622;
+}
+
+.fm-award-card.young .fm-award-icon::after {
+    content: "";
+    position: absolute;
+    transform: translate(13px, -13px);
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4ec8b8;
+    box-shadow: 0 0 0 2px #1b262e;
+}
+
+.fm-award-card.young .fm-award-icon {
+    position: relative;
+}
+
+.fm-awards-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: #51626d;
+}
+
+.fm-awards-empty-mark {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #2f3f50;
+    border-radius: 50%;
+    color: #3d4f5c;
+    font-size: 20px;
+}
+
+.fm-awards-empty-text {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+
+/* ── Awards past-12-months chart ────────────────────────────────────
+   CSS-only bar chart: each column is a percentage-height fill inside
+   a fixed-height track. No JS — the server precomputes `height_pct`
+   against the largest month in the window. The chart stretches to
+   fill the panel width; bar fill colour comes from the club's header
+   colour (inline style) so the chart matches the player's club. */
+.fm-awards-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    padding: 20px 16px 14px;
+    min-height: 200px;
+    width: 100%;
+}
+
+.fm-awards-bar-col {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.fm-awards-bar-track {
+    width: 100%;
+    height: 150px;
+    display: flex;
+    align-items: flex-end;
+    background: linear-gradient(180deg, transparent 0%, rgba(36, 49, 64, 0.4) 100%);
+    border-radius: 3px 3px 0 0;
+    overflow: hidden;
+}
+
+.fm-awards-bar-fill {
+    position: relative;
+    width: 100%;
+    min-height: 4px;
+    border-radius: 3px 3px 0 0;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2),
+        0 0 8px rgba(0, 0, 0, 0.25);
+    transition: filter 120ms ease;
+}
+
+.fm-awards-bar-col:hover .fm-awards-bar-fill {
+    filter: brightness(1.15);
+}
+
+.fm-awards-bar-value {
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    font-weight: 700;
+    color: #e6ecf2;
+    white-space: nowrap;
+}
+
+.fm-awards-bar-label {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    line-height: 1.1;
+    text-align: center;
+}
+
+.fm-awards-bar-month {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    color: #c8d6e0;
+    text-transform: uppercase;
+}
+
+.fm-awards-bar-year {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    color: #51626d;
+}

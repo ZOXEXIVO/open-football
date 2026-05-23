@@ -179,7 +179,9 @@ pub use club::{
     // Player exports
     Player,
     PlayerAcceptance,
+    AwardTimelineEntry,
     PlayerAttributes,
+    PlayerAwardsCount,
     PlayerBehaviourResult,
     PlayerBuilder,
     PlayerClubContract,

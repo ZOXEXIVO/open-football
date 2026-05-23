@@ -139,6 +139,7 @@ pub struct PlayerEventsTemplate {
     pub events_count: usize,
     pub decisions_count: usize,
     pub interested_clubs_count: usize,
+    pub awards_count: u32,
     pub events: Vec<PlayerEventDto>,
 }
 
@@ -266,6 +267,7 @@ pub async fn player_events_action(
         events_count: events.len(),
         decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
+        awards_count: player.awards_count.total(),
         events,
     }
     .into_response())

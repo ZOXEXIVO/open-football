@@ -1,0 +1,125 @@
+{% extends "player/player_layout.html" %}
+
+{% block html_title %}{{ title }}{% if !sub_title_link.is_empty() %}, {{ sub_title }}{% endif %} - {{ i18n.t("awards") }} | {{ i18n.t("site_name") }}{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    {% if awards_count == 0 %}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("awards") }}</h3>
+        </div>
+        <div class="fm-awards-empty">
+            <div class="fm-awards-empty-mark"><i class="fa fa-trophy"></i></div>
+            <div class="fm-awards-empty-text">{{ i18n.t("no_awards") }}</div>
+        </div>
+    </section>
+    {% else %}
+    {% if has_weekly %}
+    <section class="fm-panel fm-awards-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("awards_section_weekly") }}</h3>
+        </div>
+        <div class="fm-awards-grid">
+            {% for card in weekly_cards %}
+            {% if card.count > 0 %}
+            <div class="fm-award-card fm-award-{{ card.tone }}">
+                <div class="fm-award-icon"><i class="fa {{ card.icon }}"></i></div>
+                <div class="fm-award-body">
+                    <div class="fm-award-count">{{ card.count }}</div>
+                    <div class="fm-award-title">{{ card.title }}</div>
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+    {% if has_monthly %}
+    <section class="fm-panel fm-awards-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("awards_section_monthly") }}</h3>
+        </div>
+        <div class="fm-awards-grid">
+            {% for card in monthly_cards %}
+            {% if card.count > 0 %}
+            <div class="fm-award-card fm-award-{{ card.tone }}">
+                <div class="fm-award-icon"><i class="fa {{ card.icon }}"></i></div>
+                <div class="fm-award-body">
+                    <div class="fm-award-count">{{ card.count }}</div>
+                    <div class="fm-award-title">{{ card.title }}</div>
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+    {% if has_season %}
+    <section class="fm-panel fm-awards-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("awards_section_season") }}</h3>
+        </div>
+        <div class="fm-awards-grid">
+            {% for card in season_cards %}
+            {% if card.count > 0 %}
+            <div class="fm-award-card fm-award-{{ card.tone }}">
+                <div class="fm-award-icon"><i class="fa {{ card.icon }}"></i></div>
+                <div class="fm-award-body">
+                    <div class="fm-award-count">{{ card.count }}</div>
+                    <div class="fm-award-title">{{ card.title }}</div>
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+    {% if has_global %}
+    <section class="fm-panel fm-awards-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("awards_section_global") }}</h3>
+        </div>
+        <div class="fm-awards-grid">
+            {% for card in global_cards %}
+            {% if card.count > 0 %}
+            <div class="fm-award-card fm-award-{{ card.tone }}">
+                <div class="fm-award-icon"><i class="fa {{ card.icon }}"></i></div>
+                <div class="fm-award-body">
+                    <div class="fm-award-count">{{ card.count }}</div>
+                    <div class="fm-award-title">{{ card.title }}</div>
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+    {% if has_chart %}
+    <section class="fm-panel fm-awards-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("awards_chart_title") }}</h3>
+            <span class="fm-panel-count">{{ i18n.t("awards_chart_peak") }} {{ month_max }}</span>
+        </div>
+        <div class="fm-awards-chart">
+            {% for bar in month_bars %}
+            <div class="fm-awards-bar-col" title="{{ bar.month }} {{ bar.year }}: {{ bar.count }}">
+                <div class="fm-awards-bar-track">
+                    {% if bar.count > 0 %}
+                    <div class="fm-awards-bar-fill" style="height: {{ bar.height_pct }}%; background: {{ header_color }};">
+                        <span class="fm-awards-bar-value">{{ bar.count }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="fm-awards-bar-label">
+                    <span class="fm-awards-bar-month">{{ bar.month }}</span>
+                    <span class="fm-awards-bar-year">{{ bar.year }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

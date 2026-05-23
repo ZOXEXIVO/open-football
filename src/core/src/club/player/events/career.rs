@@ -141,6 +141,108 @@ impl AwardReputationInput {
     }
 }
 
+/// One entry in the lifetime award log. Storing the date alongside the
+/// kind lets the Awards-tab chart bucket totals by year / month, which
+/// the per-league archives can't do once their retention windows expire.
+#[derive(Debug, Clone, Copy)]
+pub struct AwardTimelineEntry {
+    pub date: NaiveDate,
+    pub kind: AwardReputationKind,
+}
+
+/// Capped log size — comfortably fits an unusually decorated 20-year
+/// career (~30 weekly TOTW + a handful of monthlies = ~35-40 awards/yr).
+/// Beyond the cap, the oldest entry is dropped: per-year counters
+/// continue to be correct via the dedicated `u16` fields; only the
+/// chart loses depth on the deep historical tail.
+const TIMELINE_MAX: usize = 1024;
+
+/// Lifetime tally of awards won, one counter per [`AwardReputationKind`].
+/// Incremented inside [`Player::apply_award_reputation_impact`] so every
+/// award path (weekly, monthly, season, year, continental, world) bumps
+/// exactly one counter. Unbounded by design — the per-league archives are
+/// retention-bounded, so they can't be used to render a "across all
+/// seasons" tally on the player page.
+#[derive(Debug, Clone, Default)]
+pub struct PlayerAwardsCount {
+    pub player_of_the_week: u16,
+    pub young_player_of_the_week: u16,
+    pub team_of_the_week: u16,
+    pub young_team_of_the_week: u16,
+    pub player_of_the_month: u16,
+    pub young_player_of_the_month: u16,
+    pub team_of_the_month: u16,
+    pub young_team_of_the_month: u16,
+    pub team_of_the_season: u16,
+    pub team_of_the_year: u16,
+    pub player_of_the_season: u16,
+    pub young_player_of_the_season: u16,
+    pub league_top_scorer: u16,
+    pub league_top_assists: u16,
+    pub league_golden_glove: u16,
+    pub continental_player_of_year: u16,
+    pub world_player_of_year: u16,
+    /// Chronological log of every award, capped at [`TIMELINE_MAX`].
+    /// Read by the web layer to chart awards by year / month.
+    pub timeline: Vec<AwardTimelineEntry>,
+}
+
+impl PlayerAwardsCount {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sum across every award kind — used as the tab badge total.
+    pub fn total(&self) -> u32 {
+        self.player_of_the_week as u32
+            + self.young_player_of_the_week as u32
+            + self.team_of_the_week as u32
+            + self.young_team_of_the_week as u32
+            + self.player_of_the_month as u32
+            + self.young_player_of_the_month as u32
+            + self.team_of_the_month as u32
+            + self.young_team_of_the_month as u32
+            + self.team_of_the_season as u32
+            + self.team_of_the_year as u32
+            + self.player_of_the_season as u32
+            + self.young_player_of_the_season as u32
+            + self.league_top_scorer as u32
+            + self.league_top_assists as u32
+            + self.league_golden_glove as u32
+            + self.continental_player_of_year as u32
+            + self.world_player_of_year as u32
+    }
+
+    fn bump(&mut self, kind: AwardReputationKind, date: NaiveDate) {
+        let slot = match kind {
+            AwardReputationKind::PlayerOfTheWeek => &mut self.player_of_the_week,
+            AwardReputationKind::YoungPlayerOfTheWeek => &mut self.young_player_of_the_week,
+            AwardReputationKind::TeamOfTheWeekSelection => &mut self.team_of_the_week,
+            AwardReputationKind::YoungTeamOfTheWeekSelection => &mut self.young_team_of_the_week,
+            AwardReputationKind::PlayerOfTheMonth => &mut self.player_of_the_month,
+            AwardReputationKind::YoungPlayerOfTheMonth => &mut self.young_player_of_the_month,
+            AwardReputationKind::TeamOfTheMonthSelection => &mut self.team_of_the_month,
+            AwardReputationKind::YoungTeamOfTheMonthSelection => &mut self.young_team_of_the_month,
+            AwardReputationKind::TeamOfTheSeasonSelection => &mut self.team_of_the_season,
+            AwardReputationKind::TeamOfTheYearSelection => &mut self.team_of_the_year,
+            AwardReputationKind::PlayerOfTheSeason => &mut self.player_of_the_season,
+            AwardReputationKind::YoungPlayerOfTheSeason => &mut self.young_player_of_the_season,
+            AwardReputationKind::LeagueTopScorer => &mut self.league_top_scorer,
+            AwardReputationKind::LeagueTopAssists => &mut self.league_top_assists,
+            AwardReputationKind::LeagueGoldenGlove => &mut self.league_golden_glove,
+            AwardReputationKind::ContinentalPlayerOfYear => &mut self.continental_player_of_year,
+            AwardReputationKind::WorldPlayerOfYear => &mut self.world_player_of_year,
+        };
+        *slot = slot.saturating_add(1);
+
+        self.timeline.push(AwardTimelineEntry { date, kind });
+        if self.timeline.len() > TIMELINE_MAX {
+            // Drop oldest to keep memory bounded on freakishly long careers.
+            self.timeline.drain(0..self.timeline.len() - TIMELINE_MAX);
+        }
+    }
+}
+
 impl Player {
     /// React to a promotion from a youth/reserve team to the senior side.
     /// Career milestone — emit once per spell with a long cooldown so a
@@ -328,6 +430,11 @@ impl Player {
         input: AwardReputationInput,
         now: NaiveDate,
     ) {
+        // Lifetime tally — incremented here (the single funnel every
+        // award path goes through) so the Awards tab can show "across
+        // all seasons" totals beyond the per-league retention bounds.
+        self.awards_count.bump(kind, now);
+
         let (base_cur, base_home, base_world) = kind.centre_delta();
         let cur_now = self.player_attributes.current_reputation;
         let home_now = self.player_attributes.home_reputation;

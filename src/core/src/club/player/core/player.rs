@@ -25,7 +25,7 @@ use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, ManagerInteractionEventContext, ManagerInteractionTone,
     ManagerInteractionTopic, PersonalAdaptationEventContext, PersonalAdaptationKind,
-    PlayerAcceptance, PromiseKind,
+    PlayerAcceptance, PlayerAwardsCount, PromiseKind,
 };
 use crate::{
     Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerPositionType,
@@ -183,6 +183,11 @@ pub struct Player {
     /// Visibility narrowed to `pub(crate)` — read it via `Player::is_generated()`.
     /// Mutation is internal (set once by `PlayerBuilder::generated`).
     pub(crate) generated: bool,
+
+    /// Lifetime tally of awards won, across all seasons. Bumped by
+    /// `apply_award_reputation_impact` — the single funnel every award
+    /// path goes through. Drives the Awards tab dashboard.
+    pub awards_count: PlayerAwardsCount,
 
     /// Visibility narrowed to `pub(crate)` — read via `Player::is_retired()`.
     /// Mutation is internal (set by end-of-season retirement processing).

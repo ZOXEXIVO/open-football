@@ -21,7 +21,9 @@ pub use ability::{attributes, position, position_weights, registry, skills, trai
 pub use condition::load;
 pub use contract::agent;
 pub use core::{builder, collection, context, player, result, utils};
-pub use events::{AwardReputationInput, AwardReputationKind};
+pub use events::{
+    AwardReputationInput, AwardReputationKind, AwardTimelineEntry, PlayerAwardsCount,
+};
 pub use personality::{adaptation, behaviour_config, decisions, interaction, language, rapport};
 pub use squad::{plan, status};
 pub use transfer::free_agent_market;

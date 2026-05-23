@@ -1156,6 +1156,7 @@ impl PlayerGenerator {
             free_agent_state: None,
             squad_social_view: None,
             transfer_request_reasons: Vec::new(),
+            awards_count: Default::default(),
         }
     }
 

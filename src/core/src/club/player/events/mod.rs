@@ -32,7 +32,9 @@ pub mod transfer;
 pub mod transfer_social;
 pub mod types;
 
-pub use career::{AwardReputationInput, AwardReputationKind};
+pub use career::{
+    AwardReputationInput, AwardReputationKind, AwardTimelineEntry, PlayerAwardsCount,
+};
 pub use match_exertion::{MatchExertionInputs, PositionLoad};
 pub use types::{LoanCompletion, MatchOutcome, MatchParticipation, TransferCompletion};
 

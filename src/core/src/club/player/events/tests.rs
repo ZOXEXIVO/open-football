@@ -3230,6 +3230,56 @@ fn rep_deltas(p: &Player, before: (i16, i16, i16)) -> (i16, i16, i16) {
 }
 
 #[test]
+fn awards_count_bumps_on_apply_award_reputation_impact() {
+    // The Awards-tab dashboard relies on the lifetime counter being
+    // bumped exactly once per `apply_award_reputation_impact` call. If
+    // an award path is added that skips this funnel, this test must
+    // also fail — keeping every award visible on the player page.
+    let mut p = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
+    assert_eq!(p.awards_count.total(), 0);
+
+    let input = AwardReputationInput::new().with_league_reputation(5_000);
+    p.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheWeekSelection,
+        input,
+        d(2026, 5, 7),
+    );
+    p.apply_award_reputation_impact(
+        AwardReputationKind::TeamOfTheWeekSelection,
+        input,
+        d(2026, 5, 14),
+    );
+    p.apply_award_reputation_impact(
+        AwardReputationKind::YoungTeamOfTheWeekSelection,
+        input,
+        d(2026, 5, 14),
+    );
+    p.apply_award_reputation_impact(
+        AwardReputationKind::WorldPlayerOfYear,
+        AwardReputationInput::new(),
+        d(2026, 12, 31),
+    );
+
+    assert_eq!(p.awards_count.team_of_the_week, 2);
+    assert_eq!(p.awards_count.young_team_of_the_week, 1);
+    assert_eq!(p.awards_count.world_player_of_year, 1);
+    assert_eq!(p.awards_count.total(), 4);
+
+    // Timeline log captures the date+kind for every award so the
+    // Awards-tab chart can bucket totals per year.
+    assert_eq!(p.awards_count.timeline.len(), 4);
+    assert_eq!(p.awards_count.timeline[0].date, d(2026, 5, 7));
+    assert!(matches!(
+        p.awards_count.timeline[0].kind,
+        AwardReputationKind::TeamOfTheWeekSelection
+    ));
+    assert!(matches!(
+        p.awards_count.timeline[3].kind,
+        AwardReputationKind::WorldPlayerOfYear
+    ));
+}
+
+#[test]
 fn award_reputation_team_of_week_small_boost() {
     let mut p = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
     let before = (
