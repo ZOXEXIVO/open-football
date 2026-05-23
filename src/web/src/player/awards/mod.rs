@@ -558,7 +558,7 @@ fn build_league_blocks(
 
         // Only the leading league (most recent) gets the chart.
         let (month_bars, month_max) = if idx == 0 {
-            build_month_bars_for_league(&counts.timeline, *league_id, now)
+            build_month_bars_for_league(&counts.timeline, *league_id, now, i18n)
         } else {
             (Vec::new(), 0)
         };
@@ -602,6 +602,7 @@ fn build_month_bars_for_league(
     timeline: &[core::AwardTimelineEntry],
     league_id: Option<u32>,
     now: chrono::NaiveDate,
+    i18n: &I18n,
 ) -> (Vec<MonthBar>, u16) {
     use chrono::Datelike;
 
@@ -637,25 +638,28 @@ fn build_month_bars_for_league(
         return (Vec::new(), 0);
     }
 
-    let month_short = |m: u32| -> &'static str {
-        match m {
-            1 => "Jan",
-            2 => "Feb",
-            3 => "Mar",
-            4 => "Apr",
-            5 => "May",
-            6 => "Jun",
-            7 => "Jul",
-            8 => "Aug",
-            9 => "Sep",
-            10 => "Oct",
-            11 => "Nov",
-            12 => "Dec",
+    // Localised 3-letter month abbreviations — reuses the existing
+    // `month_<short>` i18n keys (already present for every locale).
+    let month_short = |m: u32| -> String {
+        let key = match m {
+            1 => "month_jan",
+            2 => "month_feb",
+            3 => "month_mar",
+            4 => "month_apr",
+            5 => "month_may",
+            6 => "month_jun",
+            7 => "month_jul",
+            8 => "month_aug",
+            9 => "month_sep",
+            10 => "month_oct",
+            11 => "month_nov",
+            12 => "month_dec",
             _ => "",
-        }
+        };
+        i18n.t(key).to_string()
     };
 
-    let bars_data: Vec<(&'static str, i32, u16)> = keys
+    let bars_data: Vec<(String, i32, u16)> = keys
         .iter()
         .map(|key| {
             let count = counts_by_key.get(key).copied().unwrap_or(0);
@@ -674,7 +678,7 @@ fn build_month_bars_for_league(
                 ((count as u32 * 100) / max_count as u32).min(100)
             };
             MonthBar {
-                month: month.to_string(),
+                month,
                 year: year.to_string(),
                 count,
                 height_pct,
