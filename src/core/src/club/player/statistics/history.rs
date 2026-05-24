@@ -209,8 +209,7 @@ impl PlayerStatisticsHistory {
             let time_pct = (days_at_club as f64 / season_days as f64) * 100.0;
             let trivial_stint = games == 0 && !has_fee && time_pct < 45.0;
 
-            let has_any_content_for_season = years_with_any_content
-                .contains(&entry_year)
+            let has_any_content_for_season = years_with_any_content.contains(&entry_year)
                 || self.items.iter().any(|i| {
                     i.season.start_year == entry_year
                         && (i.statistics.total_games() > 0 || i.transfer_fee.is_some())
@@ -218,10 +217,7 @@ impl PlayerStatisticsHistory {
             let sole_season_record =
                 !entry.is_loan && games == 0 && !has_fee && !has_any_content_for_season;
 
-            if is_initial_record
-                || sole_season_record
-                || (!stale_loan_seed && !trivial_stint)
-            {
+            if is_initial_record || sole_season_record || (!stale_loan_seed && !trivial_stint) {
                 let mut stats = entry.statistics;
                 stats.played += stats.played_subs;
                 stats.played_subs = 0;
@@ -308,7 +304,6 @@ impl PlayerStatisticsHistory {
             }
         }
     }
-
 
     pub fn record_loan(
         &mut self,
@@ -576,8 +571,7 @@ impl PlayerStatisticsHistory {
             // is the player's only record of that season and must
             // survive even when the seed date pushes time_pct below the
             // trivial-stint threshold.
-            let has_any_content_for_season = years_with_any_content
-                .contains(&entry_year)
+            let has_any_content_for_season = years_with_any_content.contains(&entry_year)
                 || self.items.iter().any(|i| {
                     i.season.start_year == entry_year
                         && (i.statistics.total_games() > 0 || i.transfer_fee.is_some())
@@ -585,9 +579,8 @@ impl PlayerStatisticsHistory {
             let sole_season_record =
                 !entry.is_loan && games == 0 && !has_fee && !has_any_content_for_season;
 
-            let keep = is_initial_record
-                || sole_season_record
-                || (!stale_loan_seed && !trivial_stint);
+            let keep =
+                is_initial_record || sole_season_record || (!stale_loan_seed && !trivial_stint);
             if !keep {
                 continue;
             }
@@ -838,9 +831,9 @@ impl PlayerStatisticsHistory {
         // post-loan-return parent-club row with 0 apps is still allowed
         // to fall through the trivial-stint filter — matching
         // `loan_return_no_phantom_parent_entry`'s expectation.
-        let has_any_content = entries.iter().any(|e| {
-            e.statistics.total_games() > 0 || e.transfer_fee.is_some()
-        });
+        let has_any_content = entries
+            .iter()
+            .any(|e| e.statistics.total_games() > 0 || e.transfer_fee.is_some());
 
         for entry in entries {
             let games = entry.statistics.total_games();
@@ -873,12 +866,10 @@ impl PlayerStatisticsHistory {
             let is_initial_record = is_first_season && first_seq == Some(entry.seq_id);
             let trivial_stint = games == 0 && !has_fee && time_pct < 45.0;
             let stale_loan_seed = entry.is_loan && games == 0 && !has_fee;
-            let sole_season_record =
-                !entry.is_loan && games == 0 && !has_fee && !has_any_content;
+            let sole_season_record = !entry.is_loan && games == 0 && !has_fee && !has_any_content;
 
-            let keep = is_initial_record
-                || sole_season_record
-                || (!stale_loan_seed && !trivial_stint);
+            let keep =
+                is_initial_record || sole_season_record || (!stale_loan_seed && !trivial_stint);
 
             if keep {
                 let mut stats = entry.statistics;
@@ -1789,7 +1780,10 @@ mod club_career_apps_tests {
             main_rows.len(),
             3,
             "every consecutive non-senior season must keep its Main row, got seasons: {:?}",
-            main_rows.iter().map(|i| i.season.start_year).collect::<Vec<_>>()
+            main_rows
+                .iter()
+                .map(|i| i.season.start_year)
+                .collect::<Vec<_>>()
         );
         let row_2026 = hist
             .items
@@ -1999,7 +1993,12 @@ mod club_career_apps_tests {
              across the multi-league snapshot pattern, got: {:?}",
             years
         );
-        assert_eq!(main_rows.len(), 3, "expected exactly 3 Main rows, got {}", main_rows.len());
+        assert_eq!(
+            main_rows.len(),
+            3,
+            "expected exactly 3 Main rows, got {}",
+            main_rows.len()
+        );
     }
 
     #[test]

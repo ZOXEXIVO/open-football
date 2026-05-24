@@ -27,9 +27,8 @@ pub static CPU_CORES: LazyLock<usize> = LazyLock::new(|| {
 
 /// CPU brand string (e.g. "AMD Ryzen 9 7950X 16-Core Processor"), resolved once at startup.
 pub static CPU_BRAND: LazyLock<String> = LazyLock::new(|| {
-    let sys = System::new_with_specifics(
-        RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing()),
-    );
+    let sys =
+        System::new_with_specifics(RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing()));
     sys.cpus()
         .first()
         .map(|c| c.brand().trim().to_string())

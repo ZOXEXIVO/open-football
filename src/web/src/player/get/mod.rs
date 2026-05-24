@@ -445,13 +445,7 @@ pub async fn player_get_action(
                     country_name: cn,
                     country_slug: cs,
                 };
-                views::team_menu(
-                    &mp,
-                    &neighbor_refs,
-                    &team.slug,
-                    &league_refs,
-                    false,
-                )
+                views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, false)
             },
             i18n,
             lang: route_params.lang.clone(),
@@ -467,7 +461,10 @@ pub async fn player_get_action(
             is_force_match_selection: player.is_force_match_selection,
             is_on_watchlist,
             events_count: PlayerEventsCounter::count(player),
-            decisions_count: PlayerDecisionsCounter::count_recent(player, simulator_data.date.date()),
+            decisions_count: PlayerDecisionsCounter::count_recent(
+                player,
+                simulator_data.date.date(),
+            ),
             interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
             awards_count: player.awards_count.total(),
             debug,

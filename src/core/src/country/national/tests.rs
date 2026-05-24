@@ -216,8 +216,7 @@ fn incumbent_beats_marginally_better_uncapped_in_competitive_window() {
     let mut incumbents = HashSet::new();
     incumbents.insert(999_u32);
 
-    let s_incumbent =
-        NationalTeam::score_candidate(&incumbent, &tactics, &ctx, &incumbents);
+    let s_incumbent = NationalTeam::score_candidate(&incumbent, &tactics, &ctx, &incumbents);
     let s_newbie = NationalTeam::score_candidate(&newbie, &tactics, &ctx, &incumbents);
 
     assert!(
@@ -248,8 +247,7 @@ fn clearly_superior_uncapped_beats_incumbent() {
     let mut incumbents = HashSet::new();
     incumbents.insert(999_u32);
 
-    let s_weak =
-        NationalTeam::score_candidate(&weak_incumbent, &tactics, &ctx, &incumbents);
+    let s_weak = NationalTeam::score_candidate(&weak_incumbent, &tactics, &ctx, &incumbents);
     let s_elite = NationalTeam::score_candidate(&elite, &tactics, &ctx, &incumbents);
 
     assert!(
@@ -277,10 +275,8 @@ fn friendly_mode_favors_u24_high_potential_uncapped_player() {
     let ctx = friendly_ctx();
     let tactics = Tactics::new(MatchTacticType::T442);
 
-    let s_prospect =
-        NationalTeam::score_candidate(&prospect, &tactics, &ctx, &HashSet::new());
-    let s_veteran =
-        NationalTeam::score_candidate(&veteran, &tactics, &ctx, &HashSet::new());
+    let s_prospect = NationalTeam::score_candidate(&prospect, &tactics, &ctx, &HashSet::new());
+    let s_veteran = NationalTeam::score_candidate(&veteran, &tactics, &ctx, &HashSet::new());
     assert!(
         s_prospect > s_veteran,
         "friendly window should favour the U24 prospect ({:.2}) over the veteran ({:.2})",
@@ -306,10 +302,8 @@ fn tournament_mode_favors_experienced_high_cap_player() {
 
     let ctx = tournament_ctx();
     let tactics = Tactics::new(MatchTacticType::T442);
-    let s_prospect =
-        NationalTeam::score_candidate(&prospect, &tactics, &ctx, &HashSet::new());
-    let s_veteran =
-        NationalTeam::score_candidate(&veteran, &tactics, &ctx, &HashSet::new());
+    let s_prospect = NationalTeam::score_candidate(&prospect, &tactics, &ctx, &HashSet::new());
+    let s_veteran = NationalTeam::score_candidate(&veteran, &tactics, &ctx, &HashSet::new());
     assert!(
         s_veteran > s_prospect,
         "tournament should favour the experienced veteran ({:.2}) over the prospect ({:.2})",
@@ -503,11 +497,7 @@ fn no_pending_friendly_fixtures_are_created_by_call_up_squad() {
     let candidates = realistic_pool();
     nt.call_up_squad(candidates, comp_date(), 1, &[(2, "Other".to_string())]);
 
-    let pending_friendlies = nt
-        .schedule
-        .iter()
-        .filter(|f| f.result.is_none())
-        .count();
+    let pending_friendlies = nt.schedule.iter().filter(|f| f.result.is_none()).count();
     assert_eq!(pending_friendlies, 0);
 }
 
@@ -565,8 +555,7 @@ fn derive_reasons_picks_youth_prospect_for_high_potential_youngsters() {
     c.league_reputation = 400;
     c.position_levels = vec![(PlayerPositionType::Striker, 14)];
     let ctx = comp_ctx();
-    let (primary, _) =
-        NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
+    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
     assert_eq!(primary, CallUpReason::YouthProspect);
 }
 
@@ -586,8 +575,7 @@ fn derive_reasons_picks_friendly_experiment_in_friendly_window() {
     c.position_levels = vec![(PlayerPositionType::MidfielderCenter, 14)];
 
     let ctx = friendly_ctx();
-    let (primary, _) =
-        NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
+    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
     assert_eq!(primary, CallUpReason::FriendlyExperiment);
 }
 
@@ -605,8 +593,7 @@ fn derive_reasons_picks_tournament_experience_for_capped_veteran() {
     c.league_reputation = 400;
 
     let ctx = tournament_ctx();
-    let (primary, _) =
-        NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
+    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
     assert_eq!(primary, CallUpReason::TournamentExperience);
 }
 

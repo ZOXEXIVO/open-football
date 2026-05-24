@@ -26,21 +26,15 @@ impl ClubAcademy {
         let recruitment_quality = ctx.club_recruitment_quality();
         let pathway_score = self.pathway_reputation as f32 / 100.0;
         let club_rep_score = ctx.club_main_reputation() as f32 / 10000.0;
-        let intake_count = self.calculate_annual_intake(
-            recruitment_quality,
-            pathway_score,
-            club_rep_score,
-        );
+        let intake_count =
+            self.calculate_annual_intake(recruitment_quality, pathway_score, club_rep_score);
 
         // Throttle against the academy's hard population cap. The
         // minimum-3 floor only applies when there is at least that much
         // headroom — otherwise we'd push the academy over its cap.
         let current = self.players.players.len();
-        let intake_count = Self::clamp_intake_to_cap(
-            intake_count,
-            current,
-            self.tuning.max_academy_players,
-        );
+        let intake_count =
+            Self::clamp_intake_to_cap(intake_count, current, self.tuning.max_academy_players);
 
         if intake_count == 0 {
             // No headroom — still mark the year as processed so the
@@ -338,10 +332,7 @@ impl<'a> PositionAssigner<'a> {
         }
     }
 
-    fn priority_position_for(
-        group: PlayerFieldPositionGroup,
-        idx: usize,
-    ) -> PlayerPositionType {
+    fn priority_position_for(group: PlayerFieldPositionGroup, idx: usize) -> PlayerPositionType {
         match group {
             PlayerFieldPositionGroup::Goalkeeper => PlayerPositionType::Goalkeeper,
             PlayerFieldPositionGroup::Defender => match idx % 4 {
@@ -659,7 +650,10 @@ mod tests {
     #[test]
     fn elite_gate_lets_first_world_class_through() {
         let mut gate = EliteSelectionGate::new(180, 160);
-        assert!(gate.accept(185), "first world-class must always be accepted");
+        assert!(
+            gate.accept(185),
+            "first world-class must always be accepted"
+        );
     }
 
     #[test]
@@ -676,8 +670,14 @@ mod tests {
             }
         }
         // 0.35 ≈ 35%. Give a little margin for randomness.
-        assert!(second_passes < 450, "second world-class passed {second_passes}/1000 — gate is not dampening");
-        assert!(second_passes > 200, "expected ~35% pass rate, saw {second_passes}/1000");
+        assert!(
+            second_passes < 450,
+            "second world-class passed {second_passes}/1000 — gate is not dampening"
+        );
+        assert!(
+            second_passes > 200,
+            "expected ~35% pass rate, saw {second_passes}/1000"
+        );
     }
 
     #[test]
@@ -691,8 +691,14 @@ mod tests {
             }
         }
         // 0.55 ≈ 55%.
-        assert!(second_passes < 670, "elite gate not dampening: {second_passes}/1000");
-        assert!(second_passes > 400, "elite gate over-dampening: {second_passes}/1000");
+        assert!(
+            second_passes < 670,
+            "elite gate not dampening: {second_passes}/1000"
+        );
+        assert!(
+            second_passes > 400,
+            "elite gate over-dampening: {second_passes}/1000"
+        );
     }
 
     #[test]
@@ -717,8 +723,10 @@ mod tests {
                 foundation_seen += 1;
             }
         }
-        assert!(foundation_seen >= 50,
-                "expected at least ~5% foundation-age backfill, saw {}",
-                foundation_seen);
+        assert!(
+            foundation_seen >= 50,
+            "expected at least ~5% foundation-age backfill, saw {}",
+            foundation_seen
+        );
     }
 }

@@ -286,11 +286,7 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
     fn club(&self, id: u32) -> Option<&Club> {
         if let Some(idx) = self.lookup {
             if let Some(&ci) = idx.clubs.get(&id) {
-                return self
-                    .country
-                    .clubs
-                    .get(ci as usize)
-                    .filter(|c| c.id == id);
+                return self.country.clubs.get(ci as usize).filter(|c| c.id == id);
             }
             return None;
         }

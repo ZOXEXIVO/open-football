@@ -246,11 +246,7 @@ pub async fn league_awards_action(
         .map(|a| build_player_card_from_monthly(simulator_data, a));
 
     let team_of_month = snapshot.and_then(|s| {
-        build_team_view_from_slots(
-            simulator_data,
-            &s.team_of_month,
-            monthly_label.clone(),
-        )
+        build_team_view_from_slots(simulator_data, &s.team_of_month, monthly_label.clone())
     });
 
     let young_team_of_month = snapshot.and_then(|s| {
@@ -339,8 +335,7 @@ pub async fn league_awards_action(
                 .collect();
             cl.sort_by_key(|(id, _, _)| *id);
             let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            let current_path =
-                format!("/{}/leagues/{}/awards", &route_params.lang, &league.slug);
+            let current_path = format!("/{}/leagues/{}/awards", &route_params.lang, &league.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -438,10 +433,7 @@ fn build_recent_week_item(data: &SimulatorData, award: &PlayerOfTheWeekAward) ->
     }
 }
 
-fn build_stat_leader_item(
-    data: &SimulatorData,
-    leader: &MonthlyStatLeader,
-) -> StatLeaderItem {
+fn build_stat_leader_item(data: &SimulatorData, leader: &MonthlyStatLeader) -> StatLeaderItem {
     StatLeaderItem {
         player_id: leader.player_id,
         player_slug: player_history_slug(data, leader.player_id, &leader.player_name),
@@ -513,10 +505,7 @@ const FORMATION_442: &[(PlayerFieldPositionGroup, &[&str])] = &[
     (PlayerFieldPositionGroup::Forward, &["pos-stl", "pos-str"]),
 ];
 
-fn build_team_of_week(
-    data: &SimulatorData,
-    award: &TeamOfTheWeekAward,
-) -> TeamOfWeekView {
+fn build_team_of_week(data: &SimulatorData, award: &TeamOfTheWeekAward) -> TeamOfWeekView {
     let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<&TeamOfTheWeekSlot>> = HashMap::new();
     for s in &award.slots {
         by_group.entry(s.position_group).or_default().push(s);
@@ -526,11 +515,7 @@ fn build_team_of_week(
     for (group, position_classes) in FORMATION_442 {
         if let Some(group_slots) = by_group.get(group) {
             for (idx, slot) in group_slots.iter().enumerate() {
-                let pos_class = position_classes
-                    .get(idx)
-                    .copied()
-                    .unwrap_or("")
-                    .to_string();
+                let pos_class = position_classes.get(idx).copied().unwrap_or("").to_string();
                 all_slots.push(build_totw_slot(data, slot, pos_class));
             }
         }
@@ -542,10 +527,7 @@ fn build_team_of_week(
     }
 }
 
-fn build_team_of_year(
-    data: &SimulatorData,
-    award: &TeamOfTheYearAward,
-) -> Option<TeamOfYearView> {
+fn build_team_of_year(data: &SimulatorData, award: &TeamOfTheYearAward) -> Option<TeamOfYearView> {
     if award.slots.is_empty() {
         return None;
     }
@@ -557,11 +539,7 @@ fn build_team_of_year(
     for (group, position_classes) in FORMATION_442 {
         if let Some(group_slots) = by_group.get(group) {
             for (idx, slot) in group_slots.iter().enumerate() {
-                let pos_class = position_classes
-                    .get(idx)
-                    .copied()
-                    .unwrap_or("")
-                    .to_string();
+                let pos_class = position_classes.get(idx).copied().unwrap_or("").to_string();
                 all_slots.push(build_totw_slot(data, slot, pos_class));
             }
         }
@@ -594,11 +572,7 @@ fn build_team_view_from_slots(
     for (group, position_classes) in FORMATION_442 {
         if let Some(group_slots) = by_group.get(group) {
             for (idx, slot) in group_slots.iter().enumerate() {
-                let pos_class = position_classes
-                    .get(idx)
-                    .copied()
-                    .unwrap_or("")
-                    .to_string();
+                let pos_class = position_classes.get(idx).copied().unwrap_or("").to_string();
                 all_slots.push(build_totw_slot(data, slot, pos_class));
             }
         }

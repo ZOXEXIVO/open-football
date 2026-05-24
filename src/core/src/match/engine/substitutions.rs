@@ -292,9 +292,8 @@ pub fn process_substitutions(
 
             match chosen {
                 Some((out_id, in_id)) => {
-                    if !Substitutions::execute_substitution(
-                        field, context, team_id, out_id, in_id,
-                    ) {
+                    if !Substitutions::execute_substitution(field, context, team_id, out_id, in_id)
+                    {
                         break;
                     }
                     subs_made += 1;
@@ -555,11 +554,7 @@ impl Substitutions {
     /// lead pulls a forward for a defender, etc. The point of this
     /// bonus is to break ties between equally tired pairs in favour
     /// of the one that actually shifts the team toward the need.
-    fn tactical_fit_bonus(
-        out: &MatchPlayer,
-        sub: &MatchPlayer,
-        need: TacticalNeed,
-    ) -> f32 {
+    fn tactical_fit_bonus(out: &MatchPlayer, sub: &MatchPlayer, need: TacticalNeed) -> f32 {
         let out_group = out.tactical_position.current_position.position_group();
         let sub_group = sub.tactical_position.current_position.position_group();
         use PlayerFieldPositionGroup::*;
@@ -955,10 +950,10 @@ mod tests {
     use crate::Tactics;
     use crate::club::team::tactics::MatchTacticType;
     use crate::r#match::ball::Ball;
+    use crate::r#match::engine::result::{Score, TeamScore};
     use crate::r#match::engine::sub_scoring::SubScoring;
     use crate::r#match::squad::squad::MatchSquad;
     use crate::r#match::{MatchContext, MatchField, MatchFieldSize, MatchPlayerCollection};
-    use crate::r#match::engine::result::{Score, TeamScore};
 
     /// Build an outfield `MatchPlayer` with the given id, team, age,
     /// position, and condition. Sensible defaults for everything else
@@ -1079,7 +1074,13 @@ mod tests {
         // One sub per outfield group, plus a backup GK. Conditions
         // start fresh — the "incoming player" picture.
         vec![
-            build_player(base_id, team_id, birth, PlayerPositionType::Goalkeeper, 9500),
+            build_player(
+                base_id,
+                team_id,
+                birth,
+                PlayerPositionType::Goalkeeper,
+                9500,
+            ),
             build_player(
                 base_id + 1,
                 team_id,
@@ -1165,15 +1166,19 @@ mod tests {
         let away = build_roster(2, 300, adult_birth());
 
         // Anonymous tired winger.
-        let winger_idx = home.iter().position(|p| {
-            p.tactical_position.current_position == PlayerPositionType::MidfielderLeft
-        }).unwrap();
+        let winger_idx = home
+            .iter()
+            .position(|p| {
+                p.tactical_position.current_position == PlayerPositionType::MidfielderLeft
+            })
+            .unwrap();
         home[winger_idx].player_attributes.condition = 3500;
 
         // Star scorer — 1 goal, high rating, 60% condition.
-        let scorer_idx = home.iter().position(|p| {
-            p.tactical_position.current_position == PlayerPositionType::ForwardLeft
-        }).unwrap();
+        let scorer_idx = home
+            .iter()
+            .position(|p| p.tactical_position.current_position == PlayerPositionType::ForwardLeft)
+            .unwrap();
         record_goals_and_assists(&mut home[scorer_idx], 1, 1);
         let scorer_id = home[scorer_idx].id;
         home[scorer_idx].player_attributes.condition = 6000;
@@ -1217,9 +1222,10 @@ mod tests {
         let bench = build_bench(1, 200, adult_birth());
         let away = build_roster(2, 300, adult_birth());
 
-        let scorer_idx = home.iter().position(|p| {
-            p.tactical_position.current_position == PlayerPositionType::ForwardLeft
-        }).unwrap();
+        let scorer_idx = home
+            .iter()
+            .position(|p| p.tactical_position.current_position == PlayerPositionType::ForwardLeft)
+            .unwrap();
         record_goals_and_assists(&mut home[scorer_idx], 1, 0);
         home[scorer_idx].player_attributes.condition = 3500;
         home[scorer_idx].entry_match_time_ms = 0;
@@ -1259,21 +1265,23 @@ mod tests {
         let away = build_roster(2, 300, adult_birth());
 
         // Tired defender (DefenderLeft) and a tired midfielder.
-        let def_idx = home.iter().position(|p| {
-            p.tactical_position.current_position == PlayerPositionType::DefenderLeft
-        }).unwrap();
+        let def_idx = home
+            .iter()
+            .position(|p| p.tactical_position.current_position == PlayerPositionType::DefenderLeft)
+            .unwrap();
         home[def_idx].player_attributes.condition = 3500;
 
-        let mid_idx = home.iter().position(|p| {
-            p.tactical_position.current_position == PlayerPositionType::MidfielderCenterLeft
-        }).unwrap();
+        let mid_idx = home
+            .iter()
+            .position(|p| {
+                p.tactical_position.current_position == PlayerPositionType::MidfielderCenterLeft
+            })
+            .unwrap();
         home[mid_idx].player_attributes.condition = 4000;
 
         let bench_fwd_id = bench
             .iter()
-            .find(|p| {
-                p.tactical_position.current_position == PlayerPositionType::ForwardCenter
-            })
+            .find(|p| p.tactical_position.current_position == PlayerPositionType::ForwardCenter)
             .unwrap()
             .id;
 
@@ -1322,14 +1330,16 @@ mod tests {
 
         // ForwardRight is sent off → only ForwardLeft remains in the
         // Forward group on the pitch.
-        let fr_idx = home.iter().position(|p| {
-            p.tactical_position.current_position == PlayerPositionType::ForwardRight
-        }).unwrap();
+        let fr_idx = home
+            .iter()
+            .position(|p| p.tactical_position.current_position == PlayerPositionType::ForwardRight)
+            .unwrap();
         home[fr_idx].is_sent_off = true;
 
-        let fl_idx = home.iter().position(|p| {
-            p.tactical_position.current_position == PlayerPositionType::ForwardLeft
-        }).unwrap();
+        let fl_idx = home
+            .iter()
+            .position(|p| p.tactical_position.current_position == PlayerPositionType::ForwardLeft)
+            .unwrap();
         home[fl_idx].player_attributes.condition = 2500;
         let fl_id = home[fl_idx].id;
 
@@ -1367,9 +1377,10 @@ mod tests {
         let bench = build_bench(1, 200, adult_birth());
         let away = build_roster(2, 300, adult_birth());
 
-        let scorer_idx = home.iter().position(|p| {
-            p.tactical_position.current_position == PlayerPositionType::ForwardLeft
-        }).unwrap();
+        let scorer_idx = home
+            .iter()
+            .position(|p| p.tactical_position.current_position == PlayerPositionType::ForwardLeft)
+            .unwrap();
         record_goals_and_assists(&mut home[scorer_idx], 1, 0);
         let scorer_id = home[scorer_idx].id;
         // Decent condition — no fatigue case to override protection.
@@ -1422,7 +1433,11 @@ mod tests {
     // MatchContext so the rule-set + sub bookkeeping all run.
     // ─────────────────────────────────────────────────────────────────
 
-    fn make_match_context(score_home: u8, score_away: u8, total_match_time: u64) -> (MatchField, MatchContext) {
+    fn make_match_context(
+        score_home: u8,
+        score_away: u8,
+        total_match_time: u64,
+    ) -> (MatchField, MatchContext) {
         let home = build_roster(1, 100, adult_birth());
         let home_subs = build_bench(1, 200, adult_birth());
         let away = build_roster(2, 300, adult_birth());

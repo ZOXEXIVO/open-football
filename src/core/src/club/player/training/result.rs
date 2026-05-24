@@ -4,12 +4,12 @@ use crate::club::player::condition::{
 use crate::club::player::injury::InjuryType;
 use crate::league::result::LeagueProcessAccess;
 use crate::utils::DateUtils;
-use chrono::Datelike;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, MentalGains, PhysicalGains, PlayerStatusType, TechnicalGains,
     TrainingEffects, TrainingEventContext, TrainingEventEvidence, TrainingEventReason,
 };
+use chrono::Datelike;
 
 /// Per-session outcome breakdown built by `PlayerTraining::train`.
 /// Carries the sub-scores (effort / focus / physical / coach / psychological
@@ -268,8 +268,7 @@ impl PlayerTrainingResult {
                 let nf01 = (player.skills.physical.natural_fitness / 20.0).clamp(0.0, 1.0);
                 let chronic_fitness01 =
                     (player.player_attributes.fitness as f32 / 10_000.0).clamp(0.0, 1.0);
-                let professionalism01 =
-                    (player.attributes.professionalism / 20.0).clamp(0.0, 1.0);
+                let professionalism01 = (player.attributes.professionalism / 20.0).clamp(0.0, 1.0);
                 // The club's recovery-facility / sports-science quality
                 // is already folded into `recovery_potential` upstream
                 // (PlayerTraining::train scales recovery sessions by
@@ -382,16 +381,12 @@ impl PlayerTrainingResult {
                 // erase major overload on their own — the deep tank
                 // requires actual condition recovery to clear.
                 let recovery_potential = -self.effects.fatigue_change;
-                let actual_condition_gain =
-                    (new_condition - pre_condition as f32).max(0.0);
-                let debt_drain =
-                    actual_condition_gain * 0.22 + recovery_potential * 0.08;
+                let actual_condition_gain = (new_condition - pre_condition as f32).max(0.0);
+                let debt_drain = actual_condition_gain * 0.22 + recovery_potential * 0.08;
                 player.load.consume_recovery_debt(debt_drain);
-                let jadedness_drain =
-                    actual_condition_gain * 0.05 + recovery_potential * 0.025;
+                let jadedness_drain = actual_condition_gain * 0.05 + recovery_potential * 0.025;
                 let jad_reduction = jadedness_drain.round() as i32;
-                let new_jad =
-                    (player.player_attributes.jadedness as i32 - jad_reduction).max(0);
+                let new_jad = (player.player_attributes.jadedness as i32 - jad_reduction).max(0);
                 player.player_attributes.jadedness = new_jad as i16;
             }
 

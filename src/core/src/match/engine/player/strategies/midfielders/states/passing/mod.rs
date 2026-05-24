@@ -30,7 +30,12 @@ impl StateProcessingHandler for MidfielderPassingState {
         // scales max_range with `mid_shot_selection`, which collapses
         // to 20u for a 10-skill #10 — they never pivot to a shot from
         // the passing state, no matter how clear the lane.
-        if ctx.player.tactical_position.current_position.is_attacking_midfielder() {
+        if ctx
+            .player
+            .tactical_position
+            .current_position
+            .is_attacking_midfielder()
+        {
             if let ShotDecision::Shoot { reason } =
                 evaluate_forward_shot_decision(ctx, "AM_PASS_FWD")
             {
@@ -117,7 +122,12 @@ impl StateProcessingHandler for MidfielderPassingState {
             // AM carve-out for the bailout shot: forward helper picks
             // the trigger so a low-skill #10 still attempts shots when
             // the pass options have dried up.
-            if ctx.player.tactical_position.current_position.is_attacking_midfielder() {
+            if ctx
+                .player
+                .tactical_position
+                .current_position
+                .is_attacking_midfielder()
+            {
                 if let ShotDecision::Shoot { reason } =
                     evaluate_forward_shot_decision(ctx, "AM_PASS_BAILOUT_FWD")
                 {

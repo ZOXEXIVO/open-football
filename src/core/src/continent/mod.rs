@@ -16,6 +16,6 @@ pub use economics::*;
 pub use national::*;
 pub use rankings::*;
 pub use regulations::*;
-pub use result::*;
 pub(crate) use result::ContinentAwardOutcome;
+pub use result::*;
 pub use tournaments::*;

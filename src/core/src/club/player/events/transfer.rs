@@ -29,6 +29,8 @@ impl Player {
     pub fn complete_transfer(&mut self, t: TransferCompletion<'_>) {
         let previous_salary = self.contract.as_ref().map(|c| c.salary);
         let desire_carry = self.snapshot_desire_carry();
+        let source_club_reputation = t.from.reputation;
+        let source_league_reputation = t.selling_league_reputation;
         self.on_transfer(t.from, t.to, t.fee, t.date);
         self.sold_from = Some((t.selling_club_id, t.fee));
         self.reset_on_club_change();
@@ -57,6 +59,9 @@ impl Player {
             had_return_home_desire: desire_carry.return_home,
             had_european_desire: desire_carry.european,
             had_libertadores_desire: desire_carry.libertadores,
+            source_club_reputation,
+            source_league_reputation,
+            dest_position_depth_rank: None,
         });
     }
 
@@ -90,6 +95,10 @@ impl Player {
             had_return_home_desire: desire_carry.return_home,
             had_european_desire: desire_carry.european,
             had_libertadores_desire: desire_carry.libertadores,
+            // Free-agent signing has no source club.
+            source_club_reputation: 0,
+            source_league_reputation: 0,
+            dest_position_depth_rank: None,
         });
     }
 
@@ -109,6 +118,8 @@ impl Player {
     pub fn complete_loan(&mut self, l: LoanCompletion<'_>) {
         let borrowing_id = l.borrowing_club_id;
         let desire_carry = self.snapshot_desire_carry();
+        let source_club_reputation = l.from.reputation;
+        let source_league_reputation = l.parent_league_reputation;
         self.on_loan(l.from, l.to, l.loan_fee, l.date);
         self.reset_on_club_change();
         if let Some(parent) = self.contract.as_mut() {
@@ -123,6 +134,49 @@ impl Player {
             had_return_home_desire: desire_carry.return_home,
             had_european_desire: desire_carry.european,
             had_libertadores_desire: desire_carry.libertadores,
+            source_club_reputation,
+            source_league_reputation,
+            dest_position_depth_rank: None,
+        });
+    }
+
+    /// Stage a `PendingSigning` after a manual web-driven move. Mirrors
+    /// what the AI `complete_transfer` / `complete_loan` / free-signing
+    /// paths do at the end of their flow, so the very next sim tick
+    /// fires the same DreamMove / AmbitionShock / SalaryShock / RoleMismatch
+    /// / FeelingIsolated events for a user-created move. Caller is
+    /// responsible for clearing happiness, installing the new contract,
+    /// and recording career history beforehand — this helper *only*
+    /// captures the transient pending-signing state.
+    ///
+    /// `previous_salary` is read straight from the player's existing
+    /// contract (the source contract, pre-installation of the destination
+    /// contract). The desire-carry snapshot is read from the player's
+    /// happiness — call this BEFORE `player.happiness.clear()`, otherwise
+    /// the carry flags will all be false and the on-completion satisfaction
+    /// events won't fire.
+    pub fn stage_manual_pending_signing(
+        &mut self,
+        destination_club_id: u32,
+        fee: f64,
+        is_loan: bool,
+        source_club_reputation: u16,
+        source_league_reputation: u16,
+        dest_position_depth_rank: Option<u8>,
+    ) {
+        let previous_salary = self.contract.as_ref().map(|c| c.salary);
+        let desire_carry = self.snapshot_desire_carry();
+        self.pending_signing = Some(PendingSigning {
+            previous_salary,
+            fee,
+            is_loan,
+            destination_club_id,
+            had_return_home_desire: desire_carry.return_home,
+            had_european_desire: desire_carry.european,
+            had_libertadores_desire: desire_carry.libertadores,
+            source_club_reputation,
+            source_league_reputation,
+            dest_position_depth_rank,
         });
     }
 

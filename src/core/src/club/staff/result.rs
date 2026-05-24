@@ -216,7 +216,6 @@ impl StaffResult {
             }
         }
     }
-
 }
 
 /// Builder for the structured `HappinessEventContext` payloads attached

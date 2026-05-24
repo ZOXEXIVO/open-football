@@ -344,8 +344,10 @@ fn protecting_lead_substitution_prefers_defender() {
         9000,
         vec![PlayerTrait::StaysBack, PlayerTrait::MarkTightly],
     );
-    let attacker_score = SubScoring::sub_in_score(&attacker, TacticalNeed::ProtectingLead, 1.0, 0.0);
-    let defender_score = SubScoring::sub_in_score(&defender, TacticalNeed::ProtectingLead, 1.0, 0.0);
+    let attacker_score =
+        SubScoring::sub_in_score(&attacker, TacticalNeed::ProtectingLead, 1.0, 0.0);
+    let defender_score =
+        SubScoring::sub_in_score(&defender, TacticalNeed::ProtectingLead, 1.0, 0.0);
     assert!(defender_score > attacker_score);
 }
 

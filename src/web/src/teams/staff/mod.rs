@@ -226,13 +226,8 @@ pub async fn team_staff_action(
         country_name: cn,
         country_slug: cs,
     };
-    let menu_sections = views::team_menu(
-        &menu_params,
-        &neighbor_refs,
-        &team.slug,
-        &league_refs,
-        true,
-    );
+    let menu_sections =
+        views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, true);
 
     let title = team.name.clone();
     let league_title = league

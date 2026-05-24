@@ -130,8 +130,7 @@ impl CoachDecisionState {
             heat_delta += 0.15 * volatility;
         }
 
-        if impression.prev_avg_rating > 0.0 && regressed_avg < impression.prev_avg_rating - 0.5
-        {
+        if impression.prev_avg_rating > 0.0 && regressed_avg < impression.prev_avg_rating - 0.5 {
             impression.bias.quality_offset =
                 (impression.bias.quality_offset - 0.3 * negativity_bias).clamp(-3.0, 3.0);
             if volatility > 0.4 {

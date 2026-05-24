@@ -181,7 +181,11 @@ impl ConditionRecoveryModel {
     /// take their time. The multiplicative modifiers in
     /// `process_condition_recovery` (age, debt throttle, jadedness,
     /// season phase) further scale this.
-    pub fn daily_recovery_rate(natural_fitness: f32, chronic_fitness: i16, professionalism: f32) -> f32 {
+    pub fn daily_recovery_rate(
+        natural_fitness: f32,
+        chronic_fitness: i16,
+        professionalism: f32,
+    ) -> f32 {
         let nf01 = (natural_fitness / 20.0).clamp(0.0, 1.0);
         let chronic_fitness01 = (chronic_fitness as f32 / 10_000.0).clamp(0.0, 1.0);
         let professionalism01 = (professionalism / 20.0).clamp(0.0, 1.0);
@@ -239,8 +243,7 @@ impl ConditionRecoveryModel {
         // it actually changes the avalanche path, not just the final
         // bits of the hash.
         let pid_mixed = (player_id as u64) ^ ((salt as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93));
-        let mut h = pid_mixed
-            ^ ((date_ordinal as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut h = pid_mixed ^ ((date_ordinal as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
         h ^= h >> 30;
         h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
         h ^= h >> 27;
@@ -297,10 +300,7 @@ impl ConditionRecoveryModel {
         // Physical resistance: high stamina / NF / chronic fitness all
         // shave the cost. Capped so an "elite-everything" 26-year-old
         // doesn't make heavy drills free.
-        let resistance = 1.18
-            - stamina01 * 0.14
-            - nf01 * 0.10
-            - chronic01 * 0.08;
+        let resistance = 1.18 - stamina01 * 0.14 - nf01 * 0.10 - chronic01 * 0.08;
 
         // Overload tax: a jaded / debt-laden body burns more condition
         // for the same drill.
@@ -461,7 +461,11 @@ impl Player {
         // on a free transfer or a long-injured pro losing their
         // base fitness reads correctly.
         if self.player_attributes.days_since_last_match > 14 && self.load.physical_load_7 < 15.0 {
-            let age_decay_base = if age >= 30 { 30.0 } else { 10.0 + (age as f32 - 16.0).max(0.0) };
+            let age_decay_base = if age >= 30 {
+                30.0
+            } else {
+                10.0 + (age as f32 - 16.0).max(0.0)
+            };
             let fitness_decay = age_decay_base.clamp(10.0, 30.0) as i16;
             self.player_attributes.fitness =
                 (self.player_attributes.fitness - fitness_decay).max(INJURY_FITNESS_FLOOR);
@@ -583,7 +587,10 @@ mod recovery_tests {
         );
         assert_ne!(rest, training, "rest and training salts collided");
         assert_ne!(rest, exertion, "rest and match-exertion salts collided");
-        assert_ne!(training, exertion, "training and match-exertion salts collided");
+        assert_ne!(
+            training, exertion,
+            "training and match-exertion salts collided"
+        );
     }
 
     #[test]
@@ -601,8 +608,14 @@ mod recovery_tests {
             for date in [1_i32, 100, 740_000, 800_000] {
                 for s in salts {
                     let v = ConditionRecoveryModel::deterministic_noise(pid, date, s, amp);
-                    assert!(v >= 1.0 - amp - 1e-5 && v <= 1.0 + amp + 1e-5,
-                        "noise {} out of band for pid={} date={} salt={:#x}", v, pid, date, s);
+                    assert!(
+                        v >= 1.0 - amp - 1e-5 && v <= 1.0 + amp + 1e-5,
+                        "noise {} out of band for pid={} date={} salt={:#x}",
+                        v,
+                        pid,
+                        date,
+                        s
+                    );
                 }
             }
         }
@@ -689,12 +702,10 @@ mod recovery_tests {
         // chronic fitness must show up as a meaningfully lower acute
         // cost. If this collapses to the same number then the
         // individualisation isn't really happening.
-        let elite = ConditionRecoveryModel::training_fatigue_cost_mult(
-            18.0, 18.0, 9_000, 100.0, 1_500, 26,
-        );
-        let average = ConditionRecoveryModel::training_fatigue_cost_mult(
-            10.0, 10.0, 6_000, 100.0, 1_500, 26,
-        );
+        let elite =
+            ConditionRecoveryModel::training_fatigue_cost_mult(18.0, 18.0, 9_000, 100.0, 1_500, 26);
+        let average =
+            ConditionRecoveryModel::training_fatigue_cost_mult(10.0, 10.0, 6_000, 100.0, 1_500, 26);
         assert!(
             elite < average - 0.05,
             "elite {} must clearly beat average {}",
@@ -706,9 +717,8 @@ mod recovery_tests {
     #[test]
     fn training_fatigue_cost_mult_overloaded_pays_more_than_fresh() {
         // Same body, same drill — only debt / jadedness differ.
-        let fresh = ConditionRecoveryModel::training_fatigue_cost_mult(
-            14.0, 14.0, 7_500, 50.0, 1_500, 26,
-        );
+        let fresh =
+            ConditionRecoveryModel::training_fatigue_cost_mult(14.0, 14.0, 7_500, 50.0, 1_500, 26);
         let overloaded = ConditionRecoveryModel::training_fatigue_cost_mult(
             14.0, 14.0, 7_500, 1_300.0, 7_500, 26,
         );
@@ -725,15 +735,12 @@ mod recovery_tests {
         // Same physical profile, same overload state — only age
         // differs. A 16-year-old and a 36-year-old should both pay
         // more than a 26-year-old for the same drill.
-        let prime = ConditionRecoveryModel::training_fatigue_cost_mult(
-            14.0, 14.0, 7_500, 100.0, 1_500, 26,
-        );
-        let kid = ConditionRecoveryModel::training_fatigue_cost_mult(
-            14.0, 14.0, 7_500, 100.0, 1_500, 16,
-        );
-        let vet = ConditionRecoveryModel::training_fatigue_cost_mult(
-            14.0, 14.0, 7_500, 100.0, 1_500, 36,
-        );
+        let prime =
+            ConditionRecoveryModel::training_fatigue_cost_mult(14.0, 14.0, 7_500, 100.0, 1_500, 26);
+        let kid =
+            ConditionRecoveryModel::training_fatigue_cost_mult(14.0, 14.0, 7_500, 100.0, 1_500, 16);
+        let vet =
+            ConditionRecoveryModel::training_fatigue_cost_mult(14.0, 14.0, 7_500, 100.0, 1_500, 36);
         assert!(kid > prime, "kid {} should exceed prime {}", kid, prime);
         assert!(vet > prime, "vet {} should exceed prime {}", vet, prime);
     }
@@ -744,14 +751,20 @@ mod recovery_tests {
         // veteran) must respect the design 0.82..1.35 band — the
         // multiplier is meant to tilt, not to make heavy drills free
         // or ruinous.
-        let best = ConditionRecoveryModel::training_fatigue_cost_mult(
-            20.0, 20.0, 10_000, 0.0, 0, 26,
+        let best =
+            ConditionRecoveryModel::training_fatigue_cost_mult(20.0, 20.0, 10_000, 0.0, 0, 26);
+        let worst =
+            ConditionRecoveryModel::training_fatigue_cost_mult(0.0, 0.0, 0, 2_000.0, 10_000, 40);
+        assert!(
+            best >= 0.82 - 1e-5 && best <= 1.35 + 1e-5,
+            "best out of band: {}",
+            best
         );
-        let worst = ConditionRecoveryModel::training_fatigue_cost_mult(
-            0.0, 0.0, 0, 2_000.0, 10_000, 40,
+        assert!(
+            worst >= 0.82 - 1e-5 && worst <= 1.35 + 1e-5,
+            "worst out of band: {}",
+            worst
         );
-        assert!(best >= 0.82 - 1e-5 && best <= 1.35 + 1e-5, "best out of band: {}", best);
-        assert!(worst >= 0.82 - 1e-5 && worst <= 1.35 + 1e-5, "worst out of band: {}", worst);
     }
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -970,10 +983,8 @@ mod recovery_tests {
         // After a week of identical rest days they should NOT land at
         // the same condition — the individualized target and the
         // recovery-rate uplift for elite physiology must show up.
-        let mut elite =
-            make_pro_player(201, d(2000, 1, 1), 18.0, 17.0, 8_500);
-        let mut average =
-            make_pro_player(202, d(2000, 1, 1), 10.0, 10.0, 6_500);
+        let mut elite = make_pro_player(201, d(2000, 1, 1), 18.0, 17.0, 8_500);
+        let mut average = make_pro_player(202, d(2000, 1, 1), 10.0, 10.0, 6_500);
         elite.player_attributes.condition = 5_000;
         average.player_attributes.condition = 5_000;
 
@@ -1002,8 +1013,7 @@ mod recovery_tests {
         // target's load_drag pull the heavy-debt player's daily
         // recovery downward.
         let mut fresh = make_pro_player(301, d(2000, 1, 1), 14.0, 14.0, 7_500);
-        let mut burdened =
-            make_pro_player(302, d(2000, 1, 1), 14.0, 14.0, 7_500);
+        let mut burdened = make_pro_player(302, d(2000, 1, 1), 14.0, 14.0, 7_500);
         fresh.player_attributes.condition = 5_000;
         burdened.player_attributes.condition = 5_000;
         // Heavy legs: ~halfway through the throttle band, and enough
@@ -1091,8 +1101,10 @@ mod recovery_tests {
                 p.process_condition_recovery(day);
             }
         }
-        let conditions: Vec<i16> =
-            squad.iter().map(|p| p.player_attributes.condition).collect();
+        let conditions: Vec<i16> = squad
+            .iter()
+            .map(|p| p.player_attributes.condition)
+            .collect();
         let min = *conditions.iter().min().unwrap();
         let max = *conditions.iter().max().unwrap();
         assert!(

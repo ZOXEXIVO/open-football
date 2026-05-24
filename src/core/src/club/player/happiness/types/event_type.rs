@@ -328,4 +328,53 @@ pub enum HappinessEventType {
     /// `LifeSimulationDesireContext` on the event identifies which
     /// flavour was emitted; renderer picks copy off `kind`.
     LifeSimulationDesire,
+
+    // ── Transfer-environment realism (weak↔elite, star↔weak) ────
+    //
+    // Emitted at the first sim tick after a transfer (one-shot via
+    // `pending_signing`) and/or weekly during the integration window
+    // (`process_transfer_environment_story`). Driven by the
+    // `TransferEnvironmentProfile` built from the source/dest club &
+    // league reputation, the player's own world rep / CA, destination
+    // position depth, ambition, and language fit. See
+    // `personality::adaptation` for the gates and `MoraleEventCatalog`
+    // for the base magnitudes.
+    //
+    // Positive / aspirational
+    /// Weak or low-reputation player suddenly thrust onto a top-club
+    /// stage. Pride lift, even when the player isn't expected to start.
+    TopClubOpportunity,
+    /// Player benefits from the higher training standards / coaching
+    /// at the new club. Quiet ongoing boost.
+    EliteTrainingLift,
+    /// Player visibly settles after a rocky start at the new club.
+    AdaptationBreakthrough,
+    /// Manager has started trusting the player after their step-up.
+    TrustedAfterStepUp,
+    /// Player's performances prove he belongs at the bigger stage.
+    ProvedLevelAfterMove,
+    /// An established teammate has taken the new signing under his wing.
+    SeniorMentorSupport,
+    //
+    // Negative / pressure
+    /// Weak player struggles with the standards / pace at a top club.
+    OverawedByEliteClub,
+    /// Destination's depth chart blocks the new arrival's minutes path.
+    RolePathBlockedAtEliteClub,
+    /// Sudden national-media spotlight after a big-club move.
+    MediaSpotlightPressure,
+    /// Player is no longer a dressing-room star at the new club.
+    DressingRoomStatusShock,
+    /// High-reputation player feels he's playing below his level after
+    /// a step-down move.
+    TooGoodForLevel,
+    /// Star frustrated by sub-standard coaching / facilities at the
+    /// new club.
+    TrainingStandardFrustration,
+    /// High fee or high incoming reputation creates fan-pressure burden.
+    FanExpectationBurden,
+    /// Reputational embarrassment after a clear step-down move.
+    StepDownEmbarrassment,
+    /// Loan level is either too easy or too hard for the player's tier.
+    LoanLevelMismatch,
 }

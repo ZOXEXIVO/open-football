@@ -87,11 +87,7 @@ impl ClubResult {
         }
     }
 
-    pub fn process<D: LeagueProcessAccess>(
-        self,
-        data: &mut D,
-        _result: &mut SimulationResult,
-    ) {
+    pub fn process<D: LeagueProcessAccess>(self, data: &mut D, _result: &mut SimulationResult) {
         self.finance.process(data);
         self.process_teams(data);
         self.board.process(data);
@@ -837,7 +833,6 @@ impl ClubResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::simulator::SimulatorData;
     use crate::academy::ClubAcademy;
     use crate::club::board::SeasonTargets;
     use crate::club::player::contract::{RENEWAL_OFFERED_LABEL, RENEWAL_REJECTED_LABEL};
@@ -848,6 +843,7 @@ mod tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
+    use crate::simulator::SimulatorData;
     use crate::{
         Club, ClubColors, ClubFinances, ClubStatus, Country, PersonAttributes, Player,
         PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,

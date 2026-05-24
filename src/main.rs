@@ -17,10 +17,7 @@ async fn main() {
 
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
 
-    info!(
-        "SIMD: {}",
-        simulator_core::utils::cpu::simd_kernel_name()
-    );
+    info!("SIMD: {}", simulator_core::utils::cpu::simd_kernel_name());
 
     let settings = Settings::from_env();
 
@@ -43,7 +40,10 @@ async fn main() {
 
     let (game_data, gen_ms) = TimeEstimation::estimate(|| DatabaseGenerator::generate(&database));
 
-    info!("database loaded: {} ms, generated: {} ms", estimated, gen_ms);
+    info!(
+        "database loaded: {} ms, generated: {} ms",
+        estimated, gen_ms
+    );
 
     let i18n = Arc::new(I18nManager::new());
     i18n.set_date(game_data.date);

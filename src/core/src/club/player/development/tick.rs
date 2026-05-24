@@ -125,7 +125,8 @@ impl Player {
         // youngsters now.
         let official_games = self.statistics.total_games() + self.cup_statistics.total_games();
         let friendly_games = self.friendly_statistics.total_games();
-        let official_bonus = DevelopmentModifiers::official_match_bonus(official_games, friendly_games);
+        let official_bonus =
+            DevelopmentModifiers::official_match_bonus(official_games, friendly_games);
 
         // Rating multiplier feeds long-form development scaling, so use
         // the regressed season average rather than the raw weighted form.
@@ -155,8 +156,10 @@ impl Player {
         // Workload / fitness / readiness modifiers.
         let condition_pct = self.player_attributes.condition_percentage();
         let jadedness = self.player_attributes.jadedness;
-        let workload_growth = DevelopmentModifiers::workload_growth_modifier(condition_pct, jadedness);
-        let workload_decline = DevelopmentModifiers::workload_decline_amplifier(condition_pct, jadedness);
+        let workload_growth =
+            DevelopmentModifiers::workload_growth_modifier(condition_pct, jadedness);
+        let workload_decline =
+            DevelopmentModifiers::workload_decline_amplifier(condition_pct, jadedness);
         let readiness_mult =
             DevelopmentModifiers::match_readiness_multiplier(self.skills.physical.match_readiness);
 

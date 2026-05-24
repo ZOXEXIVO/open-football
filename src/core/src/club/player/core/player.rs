@@ -839,8 +839,15 @@ impl Player {
         if self.pending_signing.is_some() {
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             let club_rep = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
+            let league_rep = ctx.league.as_ref().map(|l| l.reputation).unwrap_or(0);
             let formation = ctx.team.as_ref().and_then(|t| t.formation);
-            self.process_transfer_shock(now.date(), club_rep, country_code, formation.as_ref());
+            self.process_transfer_shock(
+                now.date(),
+                club_rep,
+                league_rep,
+                country_code,
+                formation.as_ref(),
+            );
         }
 
         // Injury recovery (daily) — driven by the parent club's medical
@@ -932,6 +939,19 @@ impl Player {
             // Post-transfer integration: bonding / isolation events for the
             // first ~24 weeks at a new club.
             self.process_integration(now.date(), country_code);
+            // Weekly transfer-environment story tick — ongoing
+            // weak↔elite / star↔weak narratives layered on top of the
+            // first-tick shocks. Active for the first 168 days after a
+            // transfer; no-op otherwise.
+            let team_rep = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
+            let formation_for_story = ctx.team.as_ref().and_then(|t| t.formation);
+            self.process_transfer_environment_story(
+                now.date(),
+                country_code,
+                team_rep,
+                league_reputation,
+                formation_for_story.as_ref(),
+            );
         }
 
         // Contract processing

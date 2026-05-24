@@ -149,7 +149,11 @@ impl StateProcessingHandler for MidfielderRunningState {
             // Route them through the forward helper so a skill-graded
             // willingness roll decides, matching the forwards' path.
             // Non-AM midfielders keep the conservative gates.
-            if ctx.player.tactical_position.current_position.is_attacking_midfielder()
+            if ctx
+                .player
+                .tactical_position
+                .current_position
+                .is_attacking_midfielder()
                 && can_shoot
                 && distance_to_goal <= MAX_SHOOTING_DISTANCE
             {
@@ -653,7 +657,12 @@ impl StateProcessingHandler for MidfielderRunningState {
             // AM carve-out: forward helper picks the anti-oscillation
             // trigger so a low-skill #10 still has a path to a shot
             // when they've been carrying too long without acting.
-            if ctx.player.tactical_position.current_position.is_attacking_midfielder() {
+            if ctx
+                .player
+                .tactical_position
+                .current_position
+                .is_attacking_midfielder()
+            {
                 if let ShotDecision::Shoot { reason } =
                     evaluate_forward_shot_decision(ctx, "AM_RUN_ANTI_OSC_FWD")
                 {

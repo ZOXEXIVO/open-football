@@ -983,13 +983,9 @@ impl PlayerEventDispatcher {
     /// Extracted as a pure function so the gradient is unit-testable
     /// without standing up a `MatchField`.
     #[inline]
-    pub(crate) fn first_touch_loss_probability(
-        composite01: f32,
-        pressure_count: usize,
-    ) -> f32 {
+    pub(crate) fn first_touch_loss_probability(composite01: f32, pressure_count: usize) -> f32 {
         let pressure_mult = 1.0 + (pressure_count.min(4) as f32) * 0.6;
-        ((1.0 - composite01.clamp(0.0, 1.0)).powf(2.5) * 0.10 * pressure_mult)
-            .clamp(0.0, 0.30)
+        ((1.0 - composite01.clamp(0.0, 1.0)).powf(2.5) * 0.10 * pressure_mult).clamp(0.0, 0.30)
     }
 
     /// Classify a completed pass and bump the passer's per-zone /
@@ -3555,7 +3551,10 @@ mod first_touch_loss_tests {
             assert!(
                 weak > avg && avg > elite,
                 "monotonic in skill (opp={}): weak={} avg={} elite={}",
-                opp, weak, avg, elite
+                opp,
+                weak,
+                avg,
+                elite
             );
         }
     }
@@ -3570,7 +3569,8 @@ mod first_touch_loss_tests {
         assert!(
             two_close > no_pressure * 1.5,
             "pressure must amplify: 0 opp = {} vs 2 opp = {}",
-            no_pressure, two_close
+            no_pressure,
+            two_close
         );
     }
 
@@ -3578,8 +3578,7 @@ mod first_touch_loss_tests {
     /// pressure-induced fluffs — well under 2% even under heavy press.
     #[test]
     fn elite_receiver_virtually_immune_to_pressure() {
-        let elite_heavy_press =
-            PlayerEventDispatcher::first_touch_loss_probability(0.90, 4);
+        let elite_heavy_press = PlayerEventDispatcher::first_touch_loss_probability(0.90, 4);
         assert!(
             elite_heavy_press < 0.02,
             "elite receiver under heavy press shouldn't trip the producer: got {}",

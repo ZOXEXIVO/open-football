@@ -367,13 +367,12 @@ fn build_cards(
     Vec<AwardCard>,
     Vec<AwardCard>,
 ) {
-    let card =
-        |title_key: &str, count: u16, tone: &'static str, icon: &'static str| AwardCard {
-            title: i18n.t(title_key).to_string(),
-            count,
-            tone,
-            icon,
-        };
+    let card = |title_key: &str, count: u16, tone: &'static str, icon: &'static str| AwardCard {
+        title: i18n.t(title_key).to_string(),
+        count,
+        tone,
+        icon,
+    };
 
     // Icon mapping uses Font Awesome glyphs already in the page's icon
     // pack. Team awards take group icons; senior individual awards take
@@ -539,14 +538,17 @@ fn build_league_blocks(
         let has_season = season.iter().any(|c| c.count > 0);
         let has_global = global.iter().any(|c| c.count > 0);
 
-        let (league_name, league_slug, country_code, country_name, country_slug) = match league_id
-        {
+        let (league_name, league_slug, country_code, country_name, country_slug) = match league_id {
             Some(id) => {
                 let league = data.league(*id);
                 let (name, slug, country_id) = league
                     .map(|l| (l.name.clone(), l.slug.clone(), Some(l.country_id)))
                     .unwrap_or_else(|| {
-                        (i18n.t("awards_unknown_league").to_string(), String::new(), None)
+                        (
+                            i18n.t("awards_unknown_league").to_string(),
+                            String::new(),
+                            None,
+                        )
                     });
                 let country = country_id.and_then(|cid| data.country(cid));
                 let (code, cname, cslug) = country
@@ -703,4 +705,3 @@ fn get_neighbor_teams(
             .collect(),
     ))
 }
-

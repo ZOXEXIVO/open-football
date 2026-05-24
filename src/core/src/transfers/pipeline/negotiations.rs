@@ -939,10 +939,7 @@ impl PipelineProcessor {
     /// aggregates all signed ids across the world and calls this once
     /// per tick, collapsing O(countries × signings × countries) into
     /// O(countries) work.
-    pub fn cleanup_player_transfer_interest_batch(
-        data: &mut SimulatorData,
-        player_ids: &[u32],
-    ) {
+    pub fn cleanup_player_transfer_interest_batch(data: &mut SimulatorData, player_ids: &[u32]) {
         use crate::transfers::market::TransferListingStatus;
         use crate::transfers::negotiation::NegotiationStatus;
         use rayon::prelude::*;
@@ -1376,8 +1373,11 @@ impl PipelineProcessor {
                 seller_is_rival: false,
             };
 
-            let mut offer =
-                strategy.calculate_initial_offer_with_context(player, &actual_asking, &strategy_ctx);
+            let mut offer = strategy.calculate_initial_offer_with_context(
+                player,
+                &actual_asking,
+                &strategy_ctx,
+            );
 
             if has_option_to_buy {
                 let option_price = FormattingUtils::round_fee(asking_price.amount * 0.7);

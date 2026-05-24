@@ -116,11 +116,7 @@ impl CountryResult {
                         None => continue,
                     };
                     for player in &mut team.players.players {
-                        player.on_non_senior_season_end(
-                            ended_season.clone(),
-                            &alias,
-                            date,
-                        );
+                        player.on_non_senior_season_end(ended_season.clone(), &alias, date);
                         player.evaluate_favorite_club(club.id, &alias.slug, date);
                     }
                     continue;
@@ -614,7 +610,10 @@ mod tests {
 
         let country = data.country_mut(1).unwrap();
         let u21_player = &country.clubs[0].teams.teams[1].players.players[0];
-        assert_eq!(u21_player.statistics.played, 0, "stats reset for new season");
+        assert_eq!(
+            u21_player.statistics.played, 0,
+            "stats reset for new season"
+        );
         let entry = u21_player
             .statistics_history
             .items
@@ -637,8 +636,8 @@ mod tests {
         // the snapshot. Their pre-demotion Main spell is already frozen
         // into history by the intra-club move; the snapshot must not
         // double-write under the U21 → Main alias.
-        use crate::club::player::statistics::CurrentSeasonEntry;
         use crate::PlayerStatistics;
+        use crate::club::player::statistics::CurrentSeasonEntry;
 
         let mut player = make_player(1, 0, 0);
         // Simulate the state after a mid-season Main → U21 demotion: a
@@ -647,22 +646,19 @@ mod tests {
         let mut main_stats = PlayerStatistics::default();
         main_stats.played = 12;
         main_stats.goals = 3;
-        player
-            .statistics_history
-            .current
-            .push(CurrentSeasonEntry {
-                team_name: "Napoli".to_string(),
-                team_slug: "napoli".to_string(),
-                team_reputation: 100,
-                league_name: "Serie A".to_string(),
-                league_slug: "serie-a".to_string(),
-                is_loan: false,
-                transfer_fee: None,
-                statistics: main_stats,
-                joined_date: make_date(2031, 8, 1),
-                departed_date: Some(make_date(2032, 1, 15)),
-                seq_id: 0,
-            });
+        player.statistics_history.current.push(CurrentSeasonEntry {
+            team_name: "Napoli".to_string(),
+            team_slug: "napoli".to_string(),
+            team_reputation: 100,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: main_stats,
+            joined_date: make_date(2031, 8, 1),
+            departed_date: Some(make_date(2032, 1, 15)),
+            seq_id: 0,
+        });
         // Player is now on U21 and accumulated 5 youth-team apps that
         // must NOT bleed into history. Youth-league apps live in
         // `friendly_statistics`, not `statistics`.
@@ -741,7 +737,9 @@ mod tests {
         // Advance the date by two years and play another partial season.
         // The 2032/33 snapshot was never fired (gate dropped). The next
         // call's catch-up loop should produce TWO rows: 2032 and 2033.
-        let player = &mut data.continents[0].countries[0].clubs[0].teams.teams[0].players.players[0];
+        let player = &mut data.continents[0].countries[0].clubs[0].teams.teams[0]
+            .players
+            .players[0];
         player.statistics.played = 8;
         player.statistics.goals = 2;
         data.date = make_date(2034, 8, 15).and_hms_opt(12, 0, 0).unwrap();

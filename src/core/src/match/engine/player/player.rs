@@ -1,8 +1,8 @@
 use crate::club::player::events::PositionLoad;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PlayerMatchEndStats;
-use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::engine::tactics::TacticalPositions;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;

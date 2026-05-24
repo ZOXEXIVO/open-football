@@ -460,8 +460,7 @@ impl PipelineProcessor {
                     // with an 8.2 trigger a StrongBuy recommendation;
                     // the regression keeps recommendation tiers anchored
                     // to a meaningful sample.
-                    let match_rating =
-                        player.statistics.average_rating_realistic(player_pos_group);
+                    let match_rating = player.statistics.average_rating_realistic(player_pos_group);
 
                     // Check if this player matches any linked scouting assignment
                     let matching_assignment = plan.scouting_assignments.iter().find(|a| {

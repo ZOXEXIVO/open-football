@@ -433,7 +433,6 @@ impl WelfareMultiplier {
     }
 }
 
-
 /// Per-phase training routine. The `apply` method dispatches to the
 /// right outfield / GK body based on `phase` and `is_gk`, keeping the
 /// individual `train_*` helpers as private associated functions on the
@@ -816,22 +815,56 @@ impl AcademyCeilingWeights {
     fn for_group(group: PlayerFieldPositionGroup) -> Self {
         // Default = 1.0; will be clamped to 0.65..1.25 on use anyway.
         let mut w = AcademyCeilingWeights {
-            tech_corners: 1.0, tech_crossing: 1.0, tech_dribbling: 1.0, tech_finishing: 1.0,
-            tech_first_touch: 1.0, tech_free_kicks: 1.0, tech_heading: 1.0, tech_long_shots: 1.0,
-            tech_long_throws: 1.0, tech_marking: 1.0, tech_passing: 1.0, tech_penalty: 1.0,
-            tech_tackling: 1.0, tech_technique: 1.0,
-            mental_aggression: 1.0, mental_anticipation: 1.0, mental_bravery: 1.0,
-            mental_composure: 1.0, mental_concentration: 1.0, mental_decisions: 1.0,
-            mental_determination: 1.0, mental_flair: 1.0, mental_leadership: 1.0,
-            mental_off_the_ball: 1.0, mental_positioning: 1.0, mental_teamwork: 1.0,
-            mental_vision: 1.0, mental_work_rate: 1.0,
-            phys_acceleration: 1.0, phys_agility: 1.0, phys_balance: 1.0, phys_jumping: 1.0,
-            phys_fitness: 1.0, phys_pace: 1.0, phys_stamina: 1.0, phys_strength: 1.0,
+            tech_corners: 1.0,
+            tech_crossing: 1.0,
+            tech_dribbling: 1.0,
+            tech_finishing: 1.0,
+            tech_first_touch: 1.0,
+            tech_free_kicks: 1.0,
+            tech_heading: 1.0,
+            tech_long_shots: 1.0,
+            tech_long_throws: 1.0,
+            tech_marking: 1.0,
+            tech_passing: 1.0,
+            tech_penalty: 1.0,
+            tech_tackling: 1.0,
+            tech_technique: 1.0,
+            mental_aggression: 1.0,
+            mental_anticipation: 1.0,
+            mental_bravery: 1.0,
+            mental_composure: 1.0,
+            mental_concentration: 1.0,
+            mental_decisions: 1.0,
+            mental_determination: 1.0,
+            mental_flair: 1.0,
+            mental_leadership: 1.0,
+            mental_off_the_ball: 1.0,
+            mental_positioning: 1.0,
+            mental_teamwork: 1.0,
+            mental_vision: 1.0,
+            mental_work_rate: 1.0,
+            phys_acceleration: 1.0,
+            phys_agility: 1.0,
+            phys_balance: 1.0,
+            phys_jumping: 1.0,
+            phys_fitness: 1.0,
+            phys_pace: 1.0,
+            phys_stamina: 1.0,
+            phys_strength: 1.0,
             // For outfielders we keep GK skills at the floor so they don't
             // collect bonus academy gains there. Clamped to 0.65 on use.
-            gk_aerial: 0.5, gk_command: 0.5, gk_communication: 0.5, gk_eccentricity: 0.5,
-            gk_first_touch: 0.6, gk_handling: 0.5, gk_kicking: 0.5, gk_one_on_ones: 0.5,
-            gk_passing: 0.6, gk_punching: 0.5, gk_reflexes: 0.5, gk_rushing: 0.5,
+            gk_aerial: 0.5,
+            gk_command: 0.5,
+            gk_communication: 0.5,
+            gk_eccentricity: 0.5,
+            gk_first_touch: 0.6,
+            gk_handling: 0.5,
+            gk_kicking: 0.5,
+            gk_one_on_ones: 0.5,
+            gk_passing: 0.6,
+            gk_punching: 0.5,
+            gk_reflexes: 0.5,
+            gk_rushing: 0.5,
             gk_throwing: 0.5,
         };
 
@@ -839,61 +872,106 @@ impl AcademyCeilingWeights {
             PlayerFieldPositionGroup::Goalkeeper => {
                 // GK-specific outfield weights — keep technical/physical
                 // low so a goalkeeper doesn't develop full-scale finishing.
-                w.tech_corners = 0.5; w.tech_crossing = 0.5; w.tech_dribbling = 0.5;
-                w.tech_finishing = 0.5; w.tech_free_kicks = 0.55; w.tech_heading = 0.55;
-                w.tech_long_shots = 0.5; w.tech_long_throws = 0.6; w.tech_marking = 0.55;
-                w.tech_penalty = 0.5; w.tech_tackling = 0.55;
+                w.tech_corners = 0.5;
+                w.tech_crossing = 0.5;
+                w.tech_dribbling = 0.5;
+                w.tech_finishing = 0.5;
+                w.tech_free_kicks = 0.55;
+                w.tech_heading = 0.55;
+                w.tech_long_shots = 0.5;
+                w.tech_long_throws = 0.6;
+                w.tech_marking = 0.55;
+                w.tech_penalty = 0.5;
+                w.tech_tackling = 0.55;
                 // Still useful for sweeper-keepers.
-                w.tech_first_touch = 1.05; w.tech_passing = 1.05; w.tech_technique = 1.0;
+                w.tech_first_touch = 1.05;
+                w.tech_passing = 1.05;
+                w.tech_technique = 1.0;
 
-                w.mental_positioning = 1.20; w.mental_concentration = 1.20;
-                w.mental_composure = 1.15; w.mental_decisions = 1.15;
-                w.mental_anticipation = 1.15; w.mental_bravery = 1.10;
-                w.mental_flair = 0.7; w.mental_off_the_ball = 0.7;
+                w.mental_positioning = 1.20;
+                w.mental_concentration = 1.20;
+                w.mental_composure = 1.15;
+                w.mental_decisions = 1.15;
+                w.mental_anticipation = 1.15;
+                w.mental_bravery = 1.10;
+                w.mental_flair = 0.7;
+                w.mental_off_the_ball = 0.7;
 
-                w.phys_agility = 1.20; w.phys_jumping = 1.20; w.phys_balance = 1.10;
-                w.phys_pace = 0.8; w.phys_stamina = 0.8; w.phys_acceleration = 0.9;
+                w.phys_agility = 1.20;
+                w.phys_jumping = 1.20;
+                w.phys_balance = 1.10;
+                w.phys_pace = 0.8;
+                w.phys_stamina = 0.8;
+                w.phys_acceleration = 0.9;
 
                 // GK-specific are the core for goalkeepers.
-                w.gk_handling = 1.25; w.gk_reflexes = 1.25; w.gk_one_on_ones = 1.20;
-                w.gk_aerial = 1.20; w.gk_command = 1.20; w.gk_communication = 1.15;
-                w.gk_rushing = 1.15; w.gk_punching = 1.10; w.gk_kicking = 1.10;
-                w.gk_throwing = 1.05; w.gk_first_touch = 1.05; w.gk_passing = 1.05;
+                w.gk_handling = 1.25;
+                w.gk_reflexes = 1.25;
+                w.gk_one_on_ones = 1.20;
+                w.gk_aerial = 1.20;
+                w.gk_command = 1.20;
+                w.gk_communication = 1.15;
+                w.gk_rushing = 1.15;
+                w.gk_punching = 1.10;
+                w.gk_kicking = 1.10;
+                w.gk_throwing = 1.05;
+                w.gk_first_touch = 1.05;
+                w.gk_passing = 1.05;
                 w.gk_eccentricity = 0.8;
             }
             PlayerFieldPositionGroup::Defender => {
-                w.tech_tackling = 1.20; w.tech_marking = 1.20; w.tech_heading = 1.15;
+                w.tech_tackling = 1.20;
+                w.tech_marking = 1.20;
+                w.tech_heading = 1.15;
                 w.tech_passing = 1.05;
-                w.tech_finishing = 0.6; w.tech_dribbling = 0.7; w.tech_long_shots = 0.65;
-                w.tech_corners = 0.7; w.tech_free_kicks = 0.7;
+                w.tech_finishing = 0.6;
+                w.tech_dribbling = 0.7;
+                w.tech_long_shots = 0.65;
+                w.tech_corners = 0.7;
+                w.tech_free_kicks = 0.7;
 
-                w.mental_positioning = 1.20; w.mental_concentration = 1.15;
-                w.mental_anticipation = 1.15; w.mental_bravery = 1.15;
+                w.mental_positioning = 1.20;
+                w.mental_concentration = 1.15;
+                w.mental_anticipation = 1.15;
+                w.mental_bravery = 1.15;
                 w.mental_flair = 0.7;
 
-                w.phys_strength = 1.15; w.phys_jumping = 1.15; w.phys_pace = 1.05;
+                w.phys_strength = 1.15;
+                w.phys_jumping = 1.15;
+                w.phys_pace = 1.05;
                 w.phys_stamina = 1.05;
             }
             PlayerFieldPositionGroup::Midfielder => {
-                w.tech_passing = 1.20; w.tech_technique = 1.15;
-                w.tech_first_touch = 1.15; w.tech_dribbling = 1.05;
+                w.tech_passing = 1.20;
+                w.tech_technique = 1.15;
+                w.tech_first_touch = 1.15;
+                w.tech_dribbling = 1.05;
                 w.tech_heading = 0.75;
 
-                w.mental_vision = 1.20; w.mental_decisions = 1.15;
-                w.mental_teamwork = 1.15; w.mental_work_rate = 1.15;
+                w.mental_vision = 1.20;
+                w.mental_decisions = 1.15;
+                w.mental_teamwork = 1.15;
+                w.mental_work_rate = 1.15;
 
-                w.phys_stamina = 1.15; w.phys_pace = 1.05; w.phys_agility = 1.05;
+                w.phys_stamina = 1.15;
+                w.phys_pace = 1.05;
+                w.phys_agility = 1.05;
             }
             PlayerFieldPositionGroup::Forward => {
-                w.tech_finishing = 1.25; w.tech_dribbling = 1.20;
-                w.tech_first_touch = 1.15; w.tech_long_shots = 1.05;
-                w.tech_tackling = 0.6; w.tech_marking = 0.6;
+                w.tech_finishing = 1.25;
+                w.tech_dribbling = 1.20;
+                w.tech_first_touch = 1.15;
+                w.tech_long_shots = 1.05;
+                w.tech_tackling = 0.6;
+                w.tech_marking = 0.6;
 
-                w.mental_off_the_ball = 1.20; w.mental_composure = 1.15;
+                w.mental_off_the_ball = 1.20;
+                w.mental_composure = 1.15;
                 w.mental_anticipation = 1.15;
                 w.mental_positioning = 0.8;
 
-                w.phys_pace = 1.20; w.phys_acceleration = 1.20;
+                w.phys_pace = 1.20;
+                w.phys_acceleration = 1.20;
                 w.phys_strength = 1.05;
             }
         }

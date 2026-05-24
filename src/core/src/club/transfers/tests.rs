@@ -433,9 +433,7 @@ fn expiring_contract_and_listed_status_lower_offer() {
         140,
         Some(d(2026, 12, 1)),
     );
-    distressed_player
-        .statuses
-        .add(date, PlayerStatusType::Lst);
+    distressed_player.statuses.add(date, PlayerStatusType::Lst);
 
     let s = ClubTransferStrategy::from_club_context(
         1,
@@ -451,8 +449,7 @@ fn expiring_contract_and_listed_status_lower_offer() {
     );
 
     let ctx = ctx_for(date, 10_000_000.0);
-    let baseline_offer =
-        s.calculate_initial_offer_with_context(&baseline_player, &asking, &ctx);
+    let baseline_offer = s.calculate_initial_offer_with_context(&baseline_player, &asking, &ctx);
     let distressed_offer =
         s.calculate_initial_offer_with_context(&distressed_player, &asking, &ctx);
 

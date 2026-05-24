@@ -193,13 +193,7 @@ pub async fn staff_personal_action(
                 country_name: cn,
                 country_slug: cs,
             };
-            views::team_menu(
-                &mp,
-                &neighbor_refs,
-                &team.slug,
-                &league_refs,
-                true,
-            )
+            views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, true)
         },
         i18n,
         lang: route_params.lang.clone(),

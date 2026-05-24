@@ -100,7 +100,12 @@ impl ClubAcademy {
     /// Hard ceiling on graduates this round when there are elite
     /// prospects on the books. Caps total team size at the soft max
     /// (30).
-    pub fn graduation_ceiling(&self, youth_count: usize, normal_graduates: usize, elite_overshoot: usize) -> usize {
+    pub fn graduation_ceiling(
+        &self,
+        youth_count: usize,
+        normal_graduates: usize,
+        elite_overshoot: usize,
+    ) -> usize {
         let soft_max = 30usize;
         let proposed = normal_graduates + elite_overshoot;
         let max_room = soft_max.saturating_sub(youth_count);
@@ -144,7 +149,6 @@ impl ClubAcademy {
     pub fn release_aged_out(&mut self, date: NaiveDate) -> usize {
         self.release_aged_out_players(date).len()
     }
-
 }
 
 /// Salary band for a freshly-graduated academy player. The ladder is a
@@ -199,13 +203,8 @@ mod tests {
             nicknames: vec![],
         };
         let date = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
-        let mut player = PlayerGenerator::generate(
-            1,
-            date,
-            PlayerPositionType::MidfielderCenter,
-            10,
-            &names,
-        );
+        let mut player =
+            PlayerGenerator::generate(1, date, PlayerPositionType::MidfielderCenter, 10, &names);
         // Force the player to be 18 today so the age filter fires.
         player.birth_date = NaiveDate::from_ymd_opt(2008, 6, 1).unwrap();
         assert!(player.age(date) >= 18, "test setup: player must be 18+");
@@ -218,7 +217,10 @@ mod tests {
         let released = academy.release_aged_out_players(date);
         assert_eq!(released.len(), 1, "aged-out player must be released");
         let p = &released[0];
-        assert!(p.contract.is_none(), "released player must have no contract");
+        assert!(
+            p.contract.is_none(),
+            "released player must have no contract"
+        );
         assert!(
             p.statuses.get().contains(&PlayerStatusType::Frt),
             "released player must carry Frt status for free-agent discovery"

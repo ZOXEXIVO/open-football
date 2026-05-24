@@ -332,6 +332,25 @@ pub enum HappinessEventEvidence {
     YoungPlayerNeedingConfidence,
     /// Returning from injury — the gesture lands harder.
     ReturnFromInjuryBoost,
+    // ── Transfer-environment evidence (weak↔elite, star↔weak) ───
+    /// Player just joined a top-tier club (dest rep ≥ 7500). Pairs
+    /// with the `TopClubOpportunity` / `OverawedByEliteClub` events.
+    JoinedEliteClub,
+    /// Player's current ability sits visibly below the destination
+    /// squad's expected level. Drives `OverawedByEliteClub` framing.
+    BelowSquadStandard,
+    /// Player's current ability sits visibly above the destination
+    /// squad's expected level. Drives `TooGoodForLevel` framing.
+    AboveSquadStandard,
+    /// Position depth at the destination blocks the new arrival's
+    /// minutes path. Pairs with `RolePathBlockedAtEliteClub`.
+    BlockedByDepth,
+    /// Sub-standard coaching / training facilities at the new club —
+    /// a star arriving from a richer setup notices the gap.
+    TrainingLevelGap,
+    /// Large transfer fee or high reputation creates fan-pressure
+    /// expectations. Pairs with `FanExpectationBurden`.
+    HighFeePressure,
 }
 
 impl HappinessEventEvidence {
@@ -400,6 +419,12 @@ impl HappinessEventEvidence {
                 "evidence_young_player_needing_confidence"
             }
             HappinessEventEvidence::ReturnFromInjuryBoost => "evidence_return_from_injury_boost",
+            HappinessEventEvidence::JoinedEliteClub => "evidence_joined_elite_club",
+            HappinessEventEvidence::BelowSquadStandard => "evidence_below_squad_standard",
+            HappinessEventEvidence::AboveSquadStandard => "evidence_above_squad_standard",
+            HappinessEventEvidence::BlockedByDepth => "evidence_blocked_by_depth",
+            HappinessEventEvidence::TrainingLevelGap => "evidence_training_level_gap",
+            HappinessEventEvidence::HighFeePressure => "evidence_high_fee_pressure",
         }
     }
 }

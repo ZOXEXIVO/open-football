@@ -490,7 +490,10 @@ impl<'a> AcademyReadinessScorer<'a> {
             penalty += 3.0;
         }
 
-        let score = ca_score + potential_score + personality_score + age_score
+        let score = ca_score
+            + potential_score
+            + personality_score
+            + age_score
             + fitness_score
             + pathway_score
             - penalty;
@@ -625,20 +628,15 @@ mod tests {
     /// Build a minimal Player suitable for readiness scoring. Lives in
     /// the test module so we don't expose the constructor anywhere else.
     fn synthetic_academy_player(age: u8, ca: u8, pa: u8, today: NaiveDate) -> Player {
-        use crate::PlayerGenerator;
         use crate::PeopleNameGeneratorData;
+        use crate::PlayerGenerator;
         let names = PeopleNameGeneratorData {
             first_names: vec!["Test".to_string()],
             last_names: vec!["Player".to_string()],
             nicknames: vec![],
         };
-        let mut player = PlayerGenerator::generate(
-            1,
-            today,
-            PlayerPositionType::MidfielderCenter,
-            10,
-            &names,
-        );
+        let mut player =
+            PlayerGenerator::generate(1, today, PlayerPositionType::MidfielderCenter, 10, &names);
         // Override CA/PA and birth_date to match the test fixture
         player.player_attributes.current_ability = ca;
         player.player_attributes.potential_ability = pa;
@@ -677,7 +675,8 @@ mod tests {
             group_counts: [4, 11, 15, 10],
             years_since_last_graduate: 0,
         };
-        academy.apply_pathway_reputation_delta(&health, NaiveDate::from_ymd_opt(2025, 7, 1).unwrap());
+        academy
+            .apply_pathway_reputation_delta(&health, NaiveDate::from_ymd_opt(2025, 7, 1).unwrap());
         let after_good = academy.pathway_reputation_f;
         assert!(after_good - 50.0 <= 2.0001);
         assert!(after_good - 50.0 >= 1.0); // at least *some* lift
@@ -691,8 +690,10 @@ mod tests {
             years_since_last_graduate: 5,
             ..AcademyPipelineHealth::default()
         };
-        academy
-            .apply_pathway_reputation_delta(&bad_health, NaiveDate::from_ymd_opt(2025, 7, 1).unwrap());
+        academy.apply_pathway_reputation_delta(
+            &bad_health,
+            NaiveDate::from_ymd_opt(2025, 7, 1).unwrap(),
+        );
         let after_bad = academy.pathway_reputation_f;
         assert!(50.0 - after_bad <= 2.0001);
         assert!(50.0 - after_bad >= 1.0);

@@ -67,6 +67,11 @@ pub struct TransferCompletion<'a> {
     /// Buying club's league reputation (0–10000), for fallback wage computation
     /// when `agreed_wage` is absent.
     pub buying_league_reputation: u16,
+    /// Selling club's league reputation (0–10000). Captured at this point
+    /// so the transfer-environment profile in `process_transfer_shock`
+    /// can compare league_rep_gap without re-walking the world. 0 when
+    /// unknown.
+    pub selling_league_reputation: u16,
     /// Sell-on percentage pledged by the buyer to the current seller. Added
     /// to `player.sell_on_obligations` so the next sale pays the seller out.
     pub record_sell_on: Option<f32>,
@@ -79,4 +84,8 @@ pub struct LoanCompletion<'a> {
     pub date: NaiveDate,
     pub loan_contract: PlayerClubContract,
     pub borrowing_club_id: u32,
+    /// Parent (selling) club's league reputation (0–10000), captured so
+    /// the transfer-environment profile can compare a loan's source tier.
+    /// 0 when unknown.
+    pub parent_league_reputation: u16,
 }

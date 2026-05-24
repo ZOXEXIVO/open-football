@@ -419,6 +419,27 @@ pub struct MoraleEventCatalog {
     /// event. Severity tier on the context scales this — Mild → 0.5×,
     /// Moderate → 1.0×, Strong → 1.5×, Acute → 2.0×.
     pub life_simulation_desire: f32,
+
+    // ── Transfer-environment realism ────────────────────────────
+    // Emission sites live in `personality::adaptation` (first-tick
+    // `process_transfer_shock` + weekly `process_transfer_environment_story`).
+    // Magnitudes here are *base* values; emit sites scale by age,
+    // ambition, professionalism, pressure, and personality dampeners.
+    pub top_club_opportunity: f32,
+    pub elite_training_lift: f32,
+    pub adaptation_breakthrough: f32,
+    pub trusted_after_step_up: f32,
+    pub proved_level_after_move: f32,
+    pub senior_mentor_support: f32,
+    pub overawed_by_elite_club: f32,
+    pub role_path_blocked_at_elite_club: f32,
+    pub media_spotlight_pressure: f32,
+    pub dressing_room_status_shock: f32,
+    pub too_good_for_level: f32,
+    pub training_standard_frustration: f32,
+    pub fan_expectation_burden: f32,
+    pub step_down_embarrassment: f32,
+    pub loan_level_mismatch: f32,
 }
 
 impl Default for MoraleEventCatalog {
@@ -588,6 +609,27 @@ impl Default for MoraleEventCatalog {
             home_return_opportunity: 4.0,
             continental_ambition_satisfied: 4.0,
             life_simulation_desire: -3.0,
+            // Transfer-environment realism — base magnitudes from the
+            // requirements doc. Aspirational events sit in the +2..+6
+            // band; negative pressure events in the -2.5..-6 band. The
+            // emit sites scale these by age (younger amplifies), ambition
+            // (higher amplifies positives + step-down embarrassment),
+            // and professionalism (high dampens negatives).
+            top_club_opportunity: 6.0,
+            elite_training_lift: 2.0,
+            adaptation_breakthrough: 4.0,
+            trusted_after_step_up: 5.0,
+            proved_level_after_move: 6.0,
+            senior_mentor_support: 2.5,
+            overawed_by_elite_club: -4.0,
+            role_path_blocked_at_elite_club: -5.0,
+            media_spotlight_pressure: -2.5,
+            dressing_room_status_shock: -3.0,
+            too_good_for_level: -6.0,
+            training_standard_frustration: -3.0,
+            fan_expectation_burden: -3.5,
+            step_down_embarrassment: -5.0,
+            loan_level_mismatch: -3.0,
         }
     }
 }
@@ -720,6 +762,21 @@ impl MoraleEventCatalog {
             HomeReturnOpportunity => self.home_return_opportunity,
             ContinentalAmbitionSatisfied => self.continental_ambition_satisfied,
             LifeSimulationDesire => self.life_simulation_desire,
+            TopClubOpportunity => self.top_club_opportunity,
+            EliteTrainingLift => self.elite_training_lift,
+            AdaptationBreakthrough => self.adaptation_breakthrough,
+            TrustedAfterStepUp => self.trusted_after_step_up,
+            ProvedLevelAfterMove => self.proved_level_after_move,
+            SeniorMentorSupport => self.senior_mentor_support,
+            OverawedByEliteClub => self.overawed_by_elite_club,
+            RolePathBlockedAtEliteClub => self.role_path_blocked_at_elite_club,
+            MediaSpotlightPressure => self.media_spotlight_pressure,
+            DressingRoomStatusShock => self.dressing_room_status_shock,
+            TooGoodForLevel => self.too_good_for_level,
+            TrainingStandardFrustration => self.training_standard_frustration,
+            FanExpectationBurden => self.fan_expectation_burden,
+            StepDownEmbarrassment => self.step_down_embarrassment,
+            LoanLevelMismatch => self.loan_level_mismatch,
         }
     }
 }

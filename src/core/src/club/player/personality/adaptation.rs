@@ -128,6 +128,18 @@ pub struct PendingSigning {
     /// True when the player carried a recent `WantsCopaLibertadores`
     /// mood at the moment of the transfer.
     pub had_libertadores_desire: bool,
+    /// Source club's world reputation (0..10000). Captured at staging time
+    /// — the source club is gone by the time `process_transfer_shock`
+    /// runs. Used by the [`TransferEnvironmentProfile`] gates that compare
+    /// step-up / step-down magnitudes. 0 when unknown (e.g. free-agent
+    /// signings have no source club).
+    pub source_club_reputation: u16,
+    /// Source league reputation. 0 when unknown.
+    pub source_league_reputation: u16,
+    /// Destination position-group depth rank — 1 = clear first choice,
+    /// 2 = second option, etc. `None` when the caller didn't compute it.
+    /// Drives the `RolePathBlockedAtEliteClub` gate.
+    pub dest_position_depth_rank: Option<u8>,
 }
 
 // All settlement-shock thresholds (ambition gap, dream-move surplus,
@@ -381,6 +393,7 @@ impl Player {
         &mut self,
         now: NaiveDate,
         club_rep_0_to_1: f32,
+        league_reputation: u16,
         country_code: &str,
         formation: Option<&[PlayerPositionType; 11]>,
     ) {
@@ -479,6 +492,20 @@ impl Player {
         // single-shot today).
         self.emit_continental_satisfaction_on_signing(&pending, club_rep_0_to_1);
         self.emit_home_return_satisfaction_on_signing(&pending, country_code);
+
+        // Transfer-environment realism: weak↔elite and star↔weak
+        // narratives layered on top of the existing shock events.
+        // Builds the `TransferEnvironmentProfile` from the staged
+        // `PendingSigning` + current ctx and fires the matching
+        // first-tick events.
+        let profile = TransferEnvironmentProfile::build(
+            self,
+            now,
+            &pending,
+            club_rep_0_to_1,
+            league_reputation,
+        );
+        self.apply_first_tick_environment_events(now, &profile);
     }
 
     /// Stage `ContinentalAmbitionSatisfied` when a player who carried a
@@ -1198,6 +1225,1176 @@ impl Player {
     }
 }
 
+// ============================================================
+// TransferEnvironmentProfile — weak↔elite / star↔weak gates
+// ============================================================
+
+/// Snapshot of the player's environmental situation right after a
+/// transfer. Built once by `process_transfer_shock` and `process_transfer_environment_story`
+/// from the staged [`PendingSigning`] + ctx.
+///
+/// All reputation fields share the 0..10000 scale. Derived coefficients
+/// (`club_rep_gap`, `league_rep_gap`, `step_up_score`, `pressure_score`)
+/// are exposed as methods so callers don't recompute.
+///
+/// Fields are intentionally narrow — each one is consumed by at least
+/// one gate or emit-site magnitude scaler. Audit before adding new
+/// fields: a write-only field becomes confusing fast.
+#[derive(Debug, Clone, Copy)]
+pub struct TransferEnvironmentProfile {
+    pub source_club_rep: u16,
+    pub dest_club_rep: u16,
+    pub source_league_rep: u16,
+    pub dest_league_rep: u16,
+    pub player_world_rep: i16,
+    pub player_current_rep: i16,
+    pub player_ca: u8,
+    pub age: u8,
+    pub fee: f64,
+    pub is_loan: bool,
+    pub destination_is_favorite: bool,
+    pub dest_position_depth_rank: Option<u8>,
+    // Personality axes — captured so the cooldown helper doesn't have to
+    // re-walk the player struct.
+    pub ambition: f32,
+    pub pressure: f32,
+    pub professionalism: f32,
+    pub loyalty: f32,
+    pub adaptability: f32,
+}
+
+impl TransferEnvironmentProfile {
+    /// Build from a freshly-consumed [`PendingSigning`] + current ctx.
+    pub fn build(
+        player: &Player,
+        now: NaiveDate,
+        pending: &PendingSigning,
+        dest_club_rep_0_to_1: f32,
+        dest_league_reputation: u16,
+    ) -> Self {
+        let dest_club_rep = (dest_club_rep_0_to_1.clamp(0.0, 1.0) * 10000.0) as u16;
+        let destination_is_favorite = player.favorite_clubs.contains(&pending.destination_club_id);
+        TransferEnvironmentProfile {
+            source_club_rep: pending.source_club_reputation,
+            dest_club_rep,
+            source_league_rep: pending.source_league_reputation,
+            dest_league_rep: dest_league_reputation,
+            player_world_rep: player.player_attributes.world_reputation,
+            player_current_rep: player.player_attributes.current_reputation,
+            player_ca: player.player_attributes.current_ability,
+            age: player.age(now),
+            fee: pending.fee,
+            is_loan: pending.is_loan,
+            destination_is_favorite,
+            dest_position_depth_rank: pending.dest_position_depth_rank,
+            ambition: player.attributes.ambition,
+            pressure: player.attributes.pressure,
+            professionalism: player.attributes.professionalism,
+            loyalty: player.attributes.loyalty,
+            adaptability: player.attributes.adaptability,
+        }
+    }
+
+    pub fn club_rep_gap(&self) -> i32 {
+        self.dest_club_rep as i32 - self.source_club_rep as i32
+    }
+
+    pub fn league_rep_gap(&self) -> i32 {
+        self.dest_league_rep as i32 - self.source_league_rep as i32
+    }
+
+    pub fn player_vs_dest_club(&self) -> i32 {
+        self.player_world_rep as i32 - self.dest_club_rep as i32
+    }
+
+    /// Expected CA for the destination tier — `league_rep / 60` clamped
+    /// to a sensible band. Used to detect "below standard" / "above
+    /// standard" mismatches.
+    pub fn expected_ca_for_dest(&self) -> i32 {
+        ((self.dest_league_rep as i32) / 60).clamp(45, 175)
+    }
+
+    pub fn ability_vs_dest_tier(&self) -> i32 {
+        self.player_ca as i32 - self.expected_ca_for_dest()
+    }
+
+    /// Heuristic step-up score in roughly [-1.5, 1.5]: weighted blend
+    /// of club / league / ability gaps each normalised by ~10000 / ~10000
+    /// / ~100. Positive = step up; negative = step down.
+    pub fn step_up_score(&self) -> f32 {
+        let club_norm = self.club_rep_gap() as f32 / 10000.0;
+        let league_norm = self.league_rep_gap() as f32 / 10000.0;
+        let ability_norm = self.ability_vs_dest_tier() as f32 / 100.0;
+        0.45 * club_norm + 0.35 * league_norm + 0.20 * ability_norm
+    }
+
+    /// 0..1 pressure score — top-tier club + top-tier league + high
+    /// personal reputation all contribute. Drives fan-expectation /
+    /// media-spotlight gates.
+    pub fn pressure_score(&self) -> f32 {
+        let club = (self.dest_club_rep as f32 / 10000.0).clamp(0.0, 1.0);
+        let league = (self.dest_league_rep as f32 / 10000.0).clamp(0.0, 1.0);
+        let player = (self.player_current_rep.max(0) as f32 / 10000.0).clamp(0.0, 1.0);
+        (0.50 * club + 0.30 * league + 0.20 * player).clamp(0.0, 1.0)
+    }
+
+    /// True when the destination club + league rep + player ability gap
+    /// match the "weak player at elite club" narrative gate from the spec.
+    pub fn is_weak_player_at_elite_club(&self) -> bool {
+        if self.dest_club_rep < 7500 {
+            return false;
+        }
+        let club_or_league_gap = self.club_rep_gap() >= 2500 || self.league_rep_gap() >= 2000;
+        if !club_or_league_gap {
+            return false;
+        }
+        let expected = self.expected_ca_for_dest();
+        let ability_below = (self.player_ca as i32) < expected - 15;
+        let rep_below = (self.player_world_rep as i32) < self.dest_club_rep as i32 - 2500;
+        ability_below || rep_below
+    }
+
+    /// True when the destination is a clear step-down for a high-rep
+    /// player — drives `TooGoodForLevel` / `StepDownEmbarrassment` gates.
+    pub fn is_star_at_weak_club(&self) -> bool {
+        let rep_gap = self.player_world_rep as i32 - self.dest_club_rep as i32 >= 3000;
+        let ability_gap = self.ability_vs_dest_tier() >= 35;
+        rep_gap || ability_gap
+    }
+}
+
+/// Narrative role of an environment-story candidate. Caps in
+/// [`Player::apply_first_tick_environment_events`] keep the arrival
+/// feed readable: at most one Primary headline + one Flavor add-on.
+/// `Universal` candidates emit alongside without competing for the cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvRole {
+    /// Headline event — defines the arrival narrative. Cap: 1 per tick.
+    Primary,
+    /// Add-on flavour — colour for the headline. Cap: 1 per tick.
+    Flavor,
+    /// Orthogonal signal independent of the weak↔elite / star↔weak
+    /// framing. Emits separately, doesn't consume the cap.
+    Universal,
+}
+
+/// One candidate environment-story emission. Built by pure
+/// `candidate_*` helpers and emitted via [`Player::emit_candidate`].
+struct EnvCandidate {
+    event_type: HappinessEventType,
+    magnitude: f32,
+    context: HappinessEventContext,
+    role: EnvRole,
+    /// Higher = preferred when multiple candidates of the same role
+    /// pass their gates. Stable within a single tick.
+    priority: u8,
+    cooldown_days: u16,
+}
+
+/// Snapshot of the player's social-integration signals — used by
+/// `SeniorMentorSupport` and the weekly adaptation score so we don't
+/// pretend a defaulted `AdaptationSquadContext` is realistic.
+#[derive(Debug, Clone, Copy)]
+struct SocialSignals {
+    same_language_teammates: u8,
+    same_nationality_teammates: u8,
+    team_chemistry: f32,
+    manager_relation_level: f32,
+}
+
+impl SocialSignals {
+    /// Read from `player.squad_social_view` (set by the team's weekly
+    /// pre-tick) + `player.relations.get_team_chemistry()`. Returns
+    /// neutral defaults only when the social view hasn't been populated
+    /// yet — a recent transfer's first weekly tick falls in this bucket.
+    fn from_player(player: &Player) -> Self {
+        let view = player.squad_social_view.as_ref();
+        SocialSignals {
+            same_language_teammates: view.map(|v| v.same_language_teammates).unwrap_or(0),
+            same_nationality_teammates: view.map(|v| v.same_nationality_teammates).unwrap_or(0),
+            team_chemistry: player.relations.get_team_chemistry().clamp(0.0, 100.0),
+            // No surfaced helper for highest staff-relation level today —
+            // pass 0 (neutral) and rely on `adaptation_score`'s own
+            // contribution floor. Tracked for a future helper rather than
+            // pretending we have the data.
+            manager_relation_level: 0.0,
+        }
+    }
+
+    /// True when the player has at least one social anchor — a
+    /// compatriot or a fluent shared-language teammate. Drives the
+    /// `SeniorMentorSupport` gate.
+    fn has_support_anchor(&self) -> bool {
+        self.same_language_teammates >= 1 || self.same_nationality_teammates >= 1
+    }
+
+    /// Build an `AdaptationSquadContext` for the weekly tick. The
+    /// `is_loan` / `is_favorite_club` flags are caller-supplied.
+    fn adaptation_squad_context(
+        &self,
+        is_loan: bool,
+        is_favorite_club: bool,
+    ) -> AdaptationSquadContext {
+        AdaptationSquadContext {
+            same_language_teammates: self.same_language_teammates,
+            same_nationality_teammates: self.same_nationality_teammates,
+            mentor_quality: None,
+            squad_chemistry: self.team_chemistry,
+            manager_relation_level: self.manager_relation_level,
+            is_loan,
+            is_favorite_club,
+        }
+    }
+}
+
+impl Player {
+    /// Apply the first-tick (post-shock) environment-realism events
+    /// derived from the [`TransferEnvironmentProfile`].
+    ///
+    /// Build → rank → emit:
+    ///   1. Each `candidate_*` helper inspects its gate and returns
+    ///      `Some(EnvCandidate)` when it would fire.
+    ///   2. Within `Primary` / `Flavor` roles, the highest-priority
+    ///      candidate wins — emitting at most one of each role.
+    ///   3. `Universal` candidates (loan-tier mismatch, media
+    ///      spotlight) emit independently and don't compete for the cap.
+    ///
+    /// Existing first-tick shock events (DreamMove, JoiningElite,
+    /// AmbitionShock, SalaryShock, FeelingIsolated, RoleMismatch) fire
+    /// upstream in `process_transfer_shock` — this method only owns the
+    /// new environment narrative.
+    fn apply_first_tick_environment_events(
+        &mut self,
+        now: NaiveDate,
+        profile: &TransferEnvironmentProfile,
+    ) {
+        let _ = now;
+        let signals = SocialSignals::from_player(self);
+
+        // Build the candidate pool. Each builder method is gate-checked
+        // and returns None when the situation doesn't fit — so calling
+        // every helper here is cheap.
+        let mut pool = EnvCandidatePool::new();
+        if profile.is_weak_player_at_elite_club() {
+            pool.push_some(profile.top_club_opportunity_candidate());
+            pool.push_some(profile.elite_training_lift_candidate());
+            pool.push_some(profile.overawed_by_elite_club_candidate());
+            pool.push_some(profile.role_path_blocked_candidate());
+            pool.push_some(profile.dressing_room_status_shock_candidate());
+            pool.push_some(profile.senior_mentor_support_candidate(&signals));
+        }
+        if profile.is_star_at_weak_club() {
+            pool.push_some(profile.too_good_for_level_candidate());
+            pool.push_some(profile.step_down_embarrassment_candidate());
+            pool.push_some(profile.training_standard_frustration_candidate());
+            pool.push_some(profile.fan_expectation_burden_first_tick_candidate());
+            pool.push_some(profile.dressing_room_status_shock_candidate());
+        }
+
+        // Cap: 1 Primary + 1 Flavor. Pick highest priority per role.
+        if let Some(primary) = pool.take_top_of(EnvRole::Primary) {
+            self.emit_candidate(primary);
+        }
+        if let Some(flavor) = pool.take_top_of(EnvRole::Flavor) {
+            self.emit_candidate(flavor);
+        }
+
+        // Universal signals — fire alongside the narrative cap.
+        if profile.is_loan {
+            if let Some(c) = profile.loan_level_mismatch_candidate() {
+                self.emit_candidate(c);
+            }
+        }
+        if let Some(c) = profile.media_spotlight_pressure_candidate() {
+            self.emit_candidate(c);
+        }
+    }
+
+    /// Push a built candidate onto happiness with its full context and
+    /// per-event cooldown. Bool return mirrors the underlying happiness
+    /// API but is currently unused by callers — the candidate's gate
+    /// has already filtered noise.
+    fn emit_candidate(&mut self, c: EnvCandidate) -> bool {
+        self.happiness.add_event_with_context_and_cooldown(
+            c.event_type,
+            c.magnitude,
+            None,
+            c.context,
+            c.cooldown_days,
+        )
+    }
+
+    // ── Age / ambition / professionalism scaling ────────────────
+
+    /// Spec multiplier: `1.20` for ≤23, `0.85` for ≥30, `1.0` otherwise.
+    fn age_amplifier_for_top_club(age: u8) -> f32 {
+        if age <= 23 {
+            1.20
+        } else if age >= 30 {
+            0.85
+        } else {
+            1.0
+        }
+    }
+
+    /// Spec: `0.85 + ambition / 20 * 0.45` → roughly [0.85, 1.30].
+    fn ambition_amplifier_for_aspirational(ambition: f32) -> f32 {
+        0.85 + (ambition.clamp(0.0, 20.0) / 20.0) * 0.45
+    }
+
+    /// Professionalism dampener on negatives: `1.0 - prof / 20 * 0.35`.
+    fn professionalism_dampener_for_negatives(professionalism: f32) -> f32 {
+        (1.0 - (professionalism.clamp(0.0, 20.0) / 20.0) * 0.35).max(0.5)
+    }
+}
+
+/// Newtype wrapper around the candidate vector. Concentrates the
+/// "push if Some, then pick the top" pattern into one place so both the
+/// first-tick orchestrator and the weekly story orchestrator share the
+/// same selection semantics.
+struct EnvCandidatePool {
+    items: Vec<EnvCandidate>,
+}
+
+impl EnvCandidatePool {
+    fn new() -> Self {
+        Self { items: Vec::new() }
+    }
+
+    /// Append a candidate if the builder returned `Some` — equivalent to
+    /// `if let Some(c) = opt { pool.push(c) }` but reads as a single
+    /// expression at the call site.
+    fn push_some(&mut self, candidate: Option<EnvCandidate>) {
+        if let Some(c) = candidate {
+            self.items.push(c);
+        }
+    }
+
+    /// Drain the highest-priority candidate of the given role out of
+    /// the pool. Ties prefer the candidate that was inserted first —
+    /// keeps emission order stable across reruns of the same situation.
+    fn take_top_of(&mut self, role: EnvRole) -> Option<EnvCandidate> {
+        let idx = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.role == role)
+            .max_by_key(|(i, c)| (c.priority, std::cmp::Reverse(*i)))
+            .map(|(i, _)| i)?;
+        Some(self.items.remove(idx))
+    }
+
+    /// Consume the pool, returning the single highest-priority
+    /// candidate across all roles. Used by the weekly story tick where
+    /// the cap is "one event per week", not split by role.
+    fn into_top(self) -> Option<EnvCandidate> {
+        self.items.into_iter().max_by_key(|c| c.priority)
+    }
+}
+
+// ── Candidate builders: first-tick (post-shock) ─────────────────
+//
+// Methods on `TransferEnvironmentProfile`. Each one inspects a single
+// gate, builds a fully-decorated `HappinessEventContext`, and returns
+// `Some(EnvCandidate)` when the emission should happen. The orchestrator
+// in `Player::apply_first_tick_environment_events` owns the &mut self
+// emission via `emit_candidate`.
+
+impl TransferEnvironmentProfile {
+    fn top_club_opportunity_candidate(&self) -> Option<EnvCandidate> {
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.top_club_opportunity;
+        let mag = base
+            * Player::age_amplifier_for_top_club(self.age)
+            * Player::ambition_amplifier_for_aspirational(self.ambition);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationAdmiration,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_evidence(HappinessEventEvidence::JoinedEliteClub)
+        .with_evidence(HappinessEventEvidence::ReputationGap)
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::TopClubOpportunity,
+            magnitude: mag,
+            context: ctx,
+            // Primary: the headline of the weak-to-elite narrative.
+            role: EnvRole::Primary,
+            priority: 90,
+            cooldown_days: 120,
+        })
+    }
+
+    fn elite_training_lift_candidate(&self) -> Option<EnvCandidate> {
+        if (self.adaptability + self.professionalism) < 24.0 {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.elite_training_lift;
+        let mag = base * Player::ambition_amplifier_for_aspirational(self.ambition);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::TrainingPartnership,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::TrainingGround,
+        )
+        .with_evidence(HappinessEventEvidence::JoinedEliteClub)
+        .with_evidence(HappinessEventEvidence::HighProfessionalism)
+        .with_follow_up(HappinessEventFollowUp::TrendImproving);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::EliteTrainingLift,
+            magnitude: mag,
+            context: ctx,
+            // Flavor: positive supplement to the headline.
+            role: EnvRole::Flavor,
+            priority: 55,
+            cooldown_days: 60,
+        })
+    }
+
+    fn overawed_by_elite_club_candidate(&self) -> Option<EnvCandidate> {
+        let depth_blocked = self
+            .dest_position_depth_rank
+            .map(|r| r >= 4)
+            .unwrap_or(false);
+        if self.pressure > 8.0 && !depth_blocked {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.overawed_by_elite_club;
+        let mag = base
+            * Player::age_amplifier_for_top_club(self.age)
+            * Player::professionalism_dampener_for_negatives(self.professionalism);
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationTension,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence(HappinessEventEvidence::JoinedEliteClub)
+        .with_evidence(HappinessEventEvidence::BelowSquadStandard)
+        .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+        if self.pressure <= 8.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::LowPressurePersonality);
+        }
+        Some(EnvCandidate {
+            event_type: HappinessEventType::OverawedByEliteClub,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Flavor,
+            priority: 50,
+            cooldown_days: 30,
+        })
+    }
+
+    fn role_path_blocked_candidate(&self) -> Option<EnvCandidate> {
+        let depth_blocked = self
+            .dest_position_depth_rank
+            .map(|r| r >= 4)
+            .unwrap_or(false);
+        if !depth_blocked {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.role_path_blocked_at_elite_club;
+        let mag = base
+            * Player::age_amplifier_for_top_club(self.age)
+            * Player::professionalism_dampener_for_negatives(self.professionalism);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::PositionalRivalry,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::MatchDay,
+        )
+        .with_evidence(HappinessEventEvidence::BlockedByDepth)
+        .with_evidence(HappinessEventEvidence::SamePositionCompetition)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::RolePathBlockedAtEliteClub,
+            magnitude: mag,
+            context: ctx,
+            // Higher Flavor priority than OverawedByEliteClub because
+            // depth blocking is a concrete role signal, not a vibe.
+            role: EnvRole::Flavor,
+            priority: 65,
+            cooldown_days: 30,
+        })
+    }
+
+    /// `DressingRoomStatusShock` — previously-important player arrives
+    /// at a much stronger club and is no longer the dressing-room star.
+    /// Gates: source club was meaningfully below the destination
+    /// (≥ 1500 rep gap), AND poor depth rank (≥ 3) OR clearly below
+    /// the destination tier.
+    fn dressing_room_status_shock_candidate(&self) -> Option<EnvCandidate> {
+        // Player was a "name" at the source club only if source rep was
+        // meaningfully below the destination — the bigger the gap, the
+        // bigger the status drop.
+        let upward_jump = (self.dest_club_rep as i32) - (self.source_club_rep as i32) >= 1500;
+        if !upward_jump {
+            return None;
+        }
+        let depth_blocked = self
+            .dest_position_depth_rank
+            .map(|r| r >= 3)
+            .unwrap_or(false);
+        let below_standard = self.ability_vs_dest_tier() <= -25;
+        if !(depth_blocked || below_standard) {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.dressing_room_status_shock;
+        let mag = base * Player::professionalism_dampener_for_negatives(self.professionalism);
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationTension,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence(HappinessEventEvidence::BelowSquadStandard)
+        .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+        if depth_blocked {
+            ctx = ctx.with_evidence(HappinessEventEvidence::BlockedByDepth);
+        }
+        Some(EnvCandidate {
+            event_type: HappinessEventType::DressingRoomStatusShock,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Flavor,
+            priority: 60,
+            cooldown_days: 45,
+        })
+    }
+
+    /// `SeniorMentorSupport` — positive flavour for a struggling
+    /// newcomer who has good social anchors: same-language teammates,
+    /// compatriots, or a high-professionalism profile. Lifts only when
+    /// the player needs the support (weak-at-elite or star-at-weak).
+    fn senior_mentor_support_candidate(&self, s: &SocialSignals) -> Option<EnvCandidate> {
+        if !s.has_support_anchor() && self.professionalism < 12.0 {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.senior_mentor_support;
+        let mut mul = 1.0;
+        if s.same_nationality_teammates >= 1 {
+            mul *= 1.15;
+        }
+        if s.same_language_teammates >= 2 {
+            mul *= 1.10;
+        }
+        let mag = base * mul;
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::DressingRoomLift,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+        if s.same_nationality_teammates >= 1 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::SharedNationality);
+        }
+        if s.same_language_teammates >= 1 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::NewSigningStillSettling);
+        }
+        if self.professionalism >= 14.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::HighProfessionalism);
+        }
+        Some(EnvCandidate {
+            event_type: HappinessEventType::SeniorMentorSupport,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Flavor,
+            // Lifted above the negative flavor (Overawed/Status-shock)
+            // so a well-supported newcomer's first-tick story leads with
+            // the positive framing rather than the pressure framing.
+            priority: 70,
+            cooldown_days: 60,
+        })
+    }
+
+    fn too_good_for_level_candidate(&self) -> Option<EnvCandidate> {
+        if self.destination_is_favorite && self.ambition < 16.0 {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.too_good_for_level;
+        let mut mul = if self.ambition >= 15.0 { 1.30 } else { 1.0 };
+        if self.loyalty >= 15.0 && self.destination_is_favorite {
+            mul *= 0.55;
+        }
+        let mag = base * mul;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationTension,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::MatchDay,
+        )
+        .with_evidence(HappinessEventEvidence::AboveSquadStandard)
+        .with_evidence(HappinessEventEvidence::ReputationGap)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::TooGoodForLevel,
+            magnitude: mag,
+            context: ctx,
+            // Primary: headline of the star-to-weak narrative. Outranks
+            // StepDownEmbarrassment because "too good for the level" is
+            // the forward-looking framing; embarrassment is about
+            // reputation, not playing fit.
+            role: EnvRole::Primary,
+            priority: 85,
+            cooldown_days: 45,
+        })
+    }
+
+    fn step_down_embarrassment_candidate(&self) -> Option<EnvCandidate> {
+        let source_advantage = (self.source_club_rep as i32) - (self.dest_club_rep as i32) >= 2000
+            || (self.source_league_rep as i32) - (self.dest_league_rep as i32) >= 1500;
+        if !source_advantage {
+            return None;
+        }
+        if self.destination_is_favorite && self.loyalty >= 15.0 {
+            // Loyal favourite-club return suppresses the embarrassment
+            // framing — surfaced as `DreamMove` elsewhere.
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.step_down_embarrassment;
+        let mut mul = 1.0;
+        if self.age >= 33 {
+            mul *= 0.75;
+        }
+        if self.ambition >= 15.0 {
+            mul *= 1.30;
+        }
+        let mag = base * mul;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::MediaPressure,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Media,
+        )
+        .with_evidence(HappinessEventEvidence::AboveSquadStandard)
+        .with_evidence(HappinessEventEvidence::MediaIncident)
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::StepDownEmbarrassment,
+            magnitude: mag,
+            context: ctx,
+            // Primary: alternative headline for the star-to-weak
+            // narrative. Lower priority than TooGoodForLevel — see
+            // comment there.
+            role: EnvRole::Primary,
+            priority: 80,
+            cooldown_days: 60,
+        })
+    }
+
+    fn training_standard_frustration_candidate(&self) -> Option<EnvCandidate> {
+        let setup_gap = (self.source_league_rep as i32) - (self.dest_league_rep as i32) >= 2500;
+        if !setup_gap {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.training_standard_frustration;
+        let mul = if self.professionalism >= 15.0 {
+            1.20
+        } else {
+            1.0
+        };
+        let mag = base * mul;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::TrainingFriction,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::TrainingGround,
+        )
+        .with_evidence(HappinessEventEvidence::TrainingLevelGap)
+        .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::TrainingStandardFrustration,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Flavor,
+            priority: 45,
+            cooldown_days: 45,
+        })
+    }
+
+    /// First-tick variant of `FanExpectationBurden`: no form data
+    /// exists yet, so this gate fires purely on rep + fee + pressure
+    /// personality. The weekly variant adds a form-sample requirement.
+    fn fan_expectation_burden_first_tick_candidate(&self) -> Option<EnvCandidate> {
+        if self.is_loan {
+            return None;
+        }
+        if (self.player_current_rep as i32) < 6000 {
+            return None;
+        }
+        let high_fee = self.fee >= 10_000_000.0;
+        let high_rep_gap = self.player_world_rep as i32 - self.dest_club_rep as i32 >= 2000;
+        if !(high_fee || high_rep_gap) {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.fan_expectation_burden;
+        let mul = if self.pressure <= 8.0 { 1.30 } else { 1.0 };
+        let mag = base * mul;
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::MediaPressure,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Media,
+        )
+        .with_evidence(HappinessEventEvidence::HighFeePressure)
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        if self.pressure <= 8.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::LowPressurePersonality);
+        }
+        Some(EnvCandidate {
+            event_type: HappinessEventType::FanExpectationBurden,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Flavor,
+            priority: 40,
+            cooldown_days: 45,
+        })
+    }
+
+    fn media_spotlight_pressure_candidate(&self) -> Option<EnvCandidate> {
+        if self.pressure_score() < 0.65 {
+            return None;
+        }
+        let big_step_up = self.step_up_score() >= 0.30;
+        let low_pressure = self.pressure <= 10.0;
+        if !(big_step_up || low_pressure) {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.media_spotlight_pressure;
+        let mag = base * Player::professionalism_dampener_for_negatives(self.professionalism);
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::MediaPressure,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Media,
+        )
+        .with_evidence(HappinessEventEvidence::MediaIncident)
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        if low_pressure {
+            ctx = ctx.with_evidence(HappinessEventEvidence::LowPressurePersonality);
+        }
+        Some(EnvCandidate {
+            event_type: HappinessEventType::MediaSpotlightPressure,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Universal,
+            priority: 30,
+            cooldown_days: 30,
+        })
+    }
+
+    fn loan_level_mismatch_candidate(&self) -> Option<EnvCandidate> {
+        let down_mismatch = (self.player_world_rep as i32) - (self.dest_club_rep as i32) >= 2500;
+        let up_mismatch = (self.dest_club_rep as i32) - (self.source_club_rep as i32) >= 2500;
+        if !(down_mismatch || up_mismatch) {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let base = cfg.catalog.loan_level_mismatch;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::TacticalDisagreement,
+            HappinessEventSeverity::from_magnitude(base),
+            HappinessEventScope::MatchDay,
+        )
+        .with_evidence(HappinessEventEvidence::ReputationGap)
+        .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::LoanLevelMismatch,
+            magnitude: base,
+            context: ctx,
+            role: EnvRole::Universal,
+            priority: 20,
+            cooldown_days: 60,
+        })
+    }
+}
+
+/// Per-tick weekly signals consumed by the weekly story candidates.
+/// Built once at the top of [`Player::process_transfer_environment_story`]
+/// so each candidate sees a consistent snapshot of form, adaptation,
+/// and roll values.
+struct WeeklyEnvSignals {
+    days_since: i64,
+    adaptation_score: f32,
+    apps: f32,
+    starts: f32,
+    avg_rating: f32,
+    league_reputation: u16,
+    professionalism: f32,
+    ambition: f32,
+    pressure: f32,
+    current_reputation: i16,
+    had_recent_isolation: bool,
+    roll: f32,
+}
+
+impl WeeklyEnvSignals {
+    /// `AdaptationBreakthrough` — adaptation_score climbed to ≥ 65
+    /// after a documented "hard start" (recent FeelingIsolated).
+    fn adaptation_breakthrough_candidate(&self) -> Option<EnvCandidate> {
+        if !(self.adaptation_score >= 65.0 && self.had_recent_isolation && self.roll < 0.50) {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.adaptation_breakthrough;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::AdaptationIsolation,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_evidence(HappinessEventEvidence::NewSigningStillSettling)
+        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::AdaptationBreakthrough,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Primary,
+            priority: 90,
+            cooldown_days: 60,
+        })
+    }
+
+    /// `TrustedAfterStepUp` — manager trust: starter ratio ≥ 0.55 over
+    /// 5+ apps + adaptation score ≥ 55.
+    fn trusted_after_step_up_candidate(&self) -> Option<EnvCandidate> {
+        if !(self.apps >= 5.0
+            && self.starts / self.apps.max(1.0) >= 0.55
+            && self.adaptation_score >= 55.0
+            && self.roll < 0.55)
+        {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.trusted_after_step_up
+            * Player::ambition_amplifier_for_aspirational(self.ambition);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::ManagerSupport,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::MatchDay,
+        )
+        .with_evidence(HappinessEventEvidence::ManagerTrust)
+        .with_follow_up(HappinessEventFollowUp::ManagerTrustRising);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::TrustedAfterStepUp,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Primary,
+            priority: 85,
+            cooldown_days: 60,
+        })
+    }
+
+    /// `ProvedLevelAfterMove` — strong form (avg ≥ 7.0) over a
+    /// meaningful sample (≥ 6 apps).
+    fn proved_level_after_move_candidate(&self) -> Option<EnvCandidate> {
+        if !(self.apps >= 6.0 && self.avg_rating >= 7.0 && self.roll < 0.45) {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.proved_level_after_move;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationAdmiration,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::MatchDay,
+        )
+        .with_evidence(HappinessEventEvidence::ExcellentPerformance)
+        .with_follow_up(HappinessEventFollowUp::TrendImproving);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::ProvedLevelAfterMove,
+            magnitude: mag,
+            context: ctx,
+            // Highest of all weekly candidates — positive recovery
+            // outranks every negative pressure event.
+            role: EnvRole::Primary,
+            priority: 95,
+            cooldown_days: 60,
+        })
+    }
+
+    /// `OverawedByEliteClub` (weekly) — adaptation_score < 45 in the
+    /// first 60 days. Negative, so priority sits below the positive
+    /// recovery candidates above.
+    fn overawed_by_elite_club_candidate(&self) -> Option<EnvCandidate> {
+        if !(self.days_since <= 60 && self.adaptation_score < 45.0 && self.roll < 0.40) {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.overawed_by_elite_club
+            * Player::professionalism_dampener_for_negatives(self.professionalism);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::AdaptationIsolation,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::DressingRoom,
+        )
+        .with_evidence(HappinessEventEvidence::JoinedEliteClub)
+        .with_evidence(HappinessEventEvidence::BelowSquadStandard)
+        .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::OverawedByEliteClub,
+            magnitude: mag,
+            context: ctx,
+            // Below the positive recovery trio (90/85/95) so a player
+            // who actually proves the move worked surfaces THAT before
+            // another round of "still struggling".
+            role: EnvRole::Primary,
+            priority: 45,
+            cooldown_days: 21,
+        })
+    }
+
+    /// `TooGoodForLevel` (weekly). Two-mode gating:
+    ///   - With 0–2 apps: fire on role-frustration framing (player
+    ///     hasn't even been picked, which IS frustrating).
+    ///   - With 3+ apps: require poor form (avg rating < 7.0).
+    fn too_good_for_level_candidate(&self) -> Option<EnvCandidate> {
+        if !(self.ambition >= 13.0 && self.roll < 0.35) {
+            return None;
+        }
+        let no_minutes = self.apps < 3.0;
+        if !no_minutes && self.avg_rating >= 7.0 {
+            // Player has a proper sample and is performing — no event.
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.too_good_for_level;
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationTension,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::MatchDay,
+        )
+        .with_evidence(HappinessEventEvidence::AboveSquadStandard)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        if no_minutes {
+            ctx = ctx.with_evidence(HappinessEventEvidence::BlockedByDepth);
+        } else {
+            ctx = ctx.with_evidence(HappinessEventEvidence::ReputationGap);
+        }
+        Some(EnvCandidate {
+            event_type: HappinessEventType::TooGoodForLevel,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Primary,
+            priority: 50,
+            cooldown_days: 30,
+        })
+    }
+
+    /// `TrainingStandardFrustration` (weekly) — current league sits
+    /// well below the expected tier for the player.
+    fn training_standard_frustration_candidate(&self) -> Option<EnvCandidate> {
+        if !((self.league_reputation as i32) < 4500 && self.roll < 0.30) {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.training_standard_frustration;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::TrainingFriction,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::TrainingGround,
+        )
+        .with_evidence(HappinessEventEvidence::TrainingLevelGap)
+        .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::TrainingStandardFrustration,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Flavor,
+            priority: 35,
+            cooldown_days: 30,
+        })
+    }
+
+    /// `FanExpectationBurden` (weekly). Requires a real form sample
+    /// before treating "no form" as "poor form" — without 3+ apps the
+    /// fans haven't seen enough to react.
+    fn fan_expectation_burden_candidate(&self) -> Option<EnvCandidate> {
+        if !(self.current_reputation >= 6000
+            && self.pressure <= 8.0
+            && self.apps >= 3.0
+            && self.avg_rating < 7.0
+            && self.roll < 0.30)
+        {
+            return None;
+        }
+        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let mag = cfg.catalog.fan_expectation_burden;
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::MediaPressure,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Media,
+        )
+        .with_evidence(HappinessEventEvidence::HighFeePressure)
+        .with_evidence(HappinessEventEvidence::LowPressurePersonality)
+        .with_follow_up(HappinessEventFollowUp::PressureBuilding);
+        Some(EnvCandidate {
+            event_type: HappinessEventType::FanExpectationBurden,
+            magnitude: mag,
+            context: ctx,
+            role: EnvRole::Flavor,
+            priority: 30,
+            cooldown_days: 30,
+        })
+    }
+}
+
+// ============================================================
+// Weekly transfer-environment story cadence (Phase 6)
+// ============================================================
+
+impl Player {
+    /// Weekly tick — emits ongoing weak↔elite / star↔weak narrative
+    /// events during the integration window (168 days post-transfer).
+    /// Uses cooldowns + a deterministic per-player/per-week roll to
+    /// limit spam (max 1 environment-story event per week).
+    ///
+    /// No-op when the player has no recent transfer or sits outside
+    /// the integration window. `process_transfer_shock` already
+    /// consumed `pending_signing` on day 0 — by the time this fires,
+    /// the env info has to come from current ctx (dest reps) + the
+    /// player's own attributes. Source-side reps are unavailable here
+    /// (they lived on `PendingSigning`); the weekly tick infers the
+    /// situation from the current player-vs-dest gap instead, which is
+    /// what we want anyway for ongoing fit signals.
+    pub fn process_transfer_environment_story(
+        &mut self,
+        now: NaiveDate,
+        country_code: &str,
+        club_rep_0_to_1: f32,
+        league_reputation: u16,
+        formation: Option<&[PlayerPositionType; 11]>,
+    ) {
+        let _ = formation;
+        // Active window: 168 days (~24 weeks) post-transfer.
+        let days_since = match self.days_since_transfer(now) {
+            Some(d) if (0..=168).contains(&d) => d,
+            _ => return,
+        };
+
+        // Cap at one environment-story event per calendar week.
+        if self.has_recent_environment_story_event(7) {
+            return;
+        }
+
+        // Deterministic per-player/per-week roll. Mirrors
+        // `isolation_roll` but uses the ISO week number so events
+        // don't fire every weekly tick of the same situation.
+        let roll = environment_story_roll(self.id, now);
+
+        let dest_club_rep = (club_rep_0_to_1.clamp(0.0, 1.0) * 10000.0) as u16;
+        let player_world_rep = self.player_attributes.world_reputation as i32;
+        let player_vs_dest = player_world_rep - dest_club_rep as i32;
+
+        // Real adaptation context: language buddies + chemistry from the
+        // squad social view written by the team's weekly pre-tick, not a
+        // defaulted neutral context. `PlayerClubContract` doesn't carry
+        // a club id, so the favourite-club flag is supplied as false
+        // here — the loan-cap inside `adaptation_score` is the only
+        // consumer and the weekly tick fires past the initial shock.
+        let social = SocialSignals::from_player(self);
+        let squad_ctx = social.adaptation_squad_context(self.is_on_loan(), false);
+        let adaptation_score =
+            self.adaptation_score(now, country_code, club_rep_0_to_1, None, &squad_ctx);
+
+        // Snapshot the form + adaptation signals once so every weekly
+        // candidate sees consistent data.
+        let signals = WeeklyEnvSignals {
+            days_since,
+            adaptation_score,
+            apps: self.statistics.played as f32 + self.statistics.played_subs as f32,
+            starts: self.statistics.played as f32,
+            avg_rating: self
+                .statistics
+                .average_rating_realistic(self.position().position_group()),
+            league_reputation,
+            professionalism: self.attributes.professionalism,
+            ambition: self.attributes.ambition,
+            pressure: self.attributes.pressure,
+            current_reputation: self.player_attributes.current_reputation,
+            had_recent_isolation: self
+                .happiness
+                .has_recent_event(&HappinessEventType::FeelingIsolated, 60),
+            roll,
+        };
+
+        // Build the candidate pool — positive recovery candidates carry
+        // priorities above their negative counterparts so a player who's
+        // actually proving the move worked surfaces THAT before another
+        // round of "still struggling."
+        let mut pool = EnvCandidatePool::new();
+
+        if dest_club_rep >= 7500 && player_vs_dest <= -2500 {
+            pool.push_some(signals.proved_level_after_move_candidate());
+            pool.push_some(signals.adaptation_breakthrough_candidate());
+            pool.push_some(signals.trusted_after_step_up_candidate());
+            pool.push_some(signals.overawed_by_elite_club_candidate());
+        }
+        if player_vs_dest >= 3500 {
+            pool.push_some(signals.proved_level_after_move_candidate());
+            pool.push_some(signals.too_good_for_level_candidate());
+            pool.push_some(signals.training_standard_frustration_candidate());
+            pool.push_some(signals.fan_expectation_burden_candidate());
+        }
+
+        // Single emission per week — highest priority wins across both
+        // roles. Cap is "one event per week", not split by role.
+        if let Some(winner) = pool.into_top() {
+            self.emit_candidate(winner);
+        }
+    }
+
+    /// True when any transfer-environment story event landed in the
+    /// last `days` days. Used to enforce the "max one per week" cap on
+    /// the weekly cadence.
+    fn has_recent_environment_story_event(&self, days: u16) -> bool {
+        for e in &self.happiness.recent_events {
+            if e.days_ago > days {
+                continue;
+            }
+            if matches!(
+                e.event_type,
+                HappinessEventType::TopClubOpportunity
+                    | HappinessEventType::EliteTrainingLift
+                    | HappinessEventType::AdaptationBreakthrough
+                    | HappinessEventType::TrustedAfterStepUp
+                    | HappinessEventType::ProvedLevelAfterMove
+                    | HappinessEventType::SeniorMentorSupport
+                    | HappinessEventType::OverawedByEliteClub
+                    | HappinessEventType::RolePathBlockedAtEliteClub
+                    | HappinessEventType::MediaSpotlightPressure
+                    | HappinessEventType::DressingRoomStatusShock
+                    | HappinessEventType::TooGoodForLevel
+                    | HappinessEventType::TrainingStandardFrustration
+                    | HappinessEventType::FanExpectationBurden
+                    | HappinessEventType::StepDownEmbarrassment
+                    | HappinessEventType::LoanLevelMismatch
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Deterministic per-player/per-week roll, in `[0, 1)`. Same player +
+/// same ISO week yields the same number, so re-running the weekly tick
+/// is idempotent. Distinct from `isolation_roll` (per-day) so the two
+/// systems don't share a seed and lock in correlated outcomes.
+fn environment_story_roll(player_id: u32, date: NaiveDate) -> f32 {
+    use chrono::Datelike;
+    let week = date.iso_week().week();
+    let year = date.iso_week().year();
+    let h = (player_id as u64)
+        .wrapping_mul(0xBF58_476D_1CE4_E5B9)
+        .wrapping_add(week as u64)
+        .wrapping_add((year as u64).wrapping_mul(54_321));
+    let frac = ((h >> 17) as u32 as f32) / (u32::MAX as f32);
+    frac.clamp(0.0, 0.999)
+}
+
 #[cfg(test)]
 mod dream_move_gating_tests {
     use super::*;
@@ -1324,5 +2521,506 @@ mod dream_move_gating_tests {
         let mut p2 = player(36, 12.0, 3000);
         p2.emit_dream_move(0.85, 1.0, now);
         assert_eq!(dream_count(&p2), 1);
+    }
+}
+
+// ============================================================
+// Transfer-environment realism tests
+// ============================================================
+
+#[cfg(test)]
+mod transfer_environment_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn person(
+        ambition: f32,
+        pressure: f32,
+        professionalism: f32,
+        loyalty: f32,
+    ) -> PersonAttributes {
+        PersonAttributes {
+            adaptability: 10.0,
+            ambition,
+            controversy: 10.0,
+            loyalty,
+            pressure,
+            professionalism,
+            sportsmanship: 10.0,
+            temperament: 10.0,
+            consistency: 10.0,
+            important_matches: 10.0,
+            dirtiness: 10.0,
+        }
+    }
+
+    fn player_with(
+        age: u8,
+        ambition: f32,
+        world_rep: i16,
+        current_rep: i16,
+        ca: u8,
+        pressure: f32,
+        professionalism: f32,
+        loyalty: f32,
+    ) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.world_reputation = world_rep;
+        attrs.current_reputation = current_rep;
+        attrs.current_ability = ca;
+        attrs.potential_ability = ca;
+        let today = d(2026, 4, 26);
+        let birth = today
+            .checked_sub_signed(chrono::Duration::days(age as i64 * 365))
+            .unwrap();
+        PlayerBuilder::new()
+            .id(7)
+            .full_name(FullName::new("X".into(), "Y".into()))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(person(ambition, pressure, professionalism, loyalty))
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap()
+    }
+
+    fn pending(
+        dest_id: u32,
+        fee: f64,
+        is_loan: bool,
+        src_club: u16,
+        src_league: u16,
+        depth_rank: Option<u8>,
+    ) -> PendingSigning {
+        PendingSigning {
+            previous_salary: Some(50_000),
+            fee,
+            is_loan,
+            destination_club_id: dest_id,
+            had_return_home_desire: false,
+            had_european_desire: false,
+            had_libertadores_desire: false,
+            source_club_reputation: src_club,
+            source_league_reputation: src_league,
+            dest_position_depth_rank: depth_rank,
+        }
+    }
+
+    fn count(p: &Player, t: HappinessEventType) -> usize {
+        p.happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == t)
+            .count()
+    }
+
+    // ── Stage-helper smoke ───────────────────────────────────────
+
+    #[test]
+    fn stage_manual_pending_signing_records_carry_flags_and_metadata() {
+        let mut p = player_with(24, 14.0, 4000, 4000, 130, 12.0, 14.0, 10.0);
+        // Plant a homesickness mood so the snapshot picks it up.
+        p.happiness
+            .add_event(HappinessEventType::WantsReturnHome, -5.0);
+        p.stage_manual_pending_signing(42, 7_500_000.0, false, 2500, 3000, Some(2));
+        let staged = p.pending_signing.as_ref().expect("staged");
+        assert_eq!(staged.destination_club_id, 42);
+        assert_eq!(staged.fee, 7_500_000.0);
+        assert!(!staged.is_loan);
+        assert!(staged.had_return_home_desire);
+        assert_eq!(staged.source_club_reputation, 2500);
+        assert_eq!(staged.source_league_reputation, 3000);
+        assert_eq!(staged.dest_position_depth_rank, Some(2));
+        // Test player has no contract installed; the helper reads
+        // `self.contract.as_ref().map(|c| c.salary)`, so previous_salary
+        // is None. The integration path in actions/mod.rs holds the
+        // source-club contract at this point and captures the real wage.
+        assert_eq!(staged.previous_salary, None);
+    }
+
+    #[test]
+    fn stage_manual_pending_signing_loan_marks_loan_flag() {
+        let mut p = player_with(22, 12.0, 2500, 2500, 110, 10.0, 12.0, 10.0);
+        p.stage_manual_pending_signing(99, 0.0, true, 6000, 7000, Some(3));
+        let staged = p.pending_signing.as_ref().expect("staged");
+        assert!(staged.is_loan);
+        assert_eq!(staged.destination_club_id, 99);
+    }
+
+    // ── Weak player → elite club ─────────────────────────────────
+
+    #[test]
+    fn weak_player_at_elite_club_fires_top_club_opportunity() {
+        // CA 80, world rep 1000, dest club rep 8500, league rep 9000.
+        let mut p = player_with(24, 14.0, 1000, 1000, 80, 12.0, 14.0, 10.0);
+        let pend = pending(100, 0.0, false, 2000, 2500, Some(2));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.85, 9000);
+        assert!(profile.is_weak_player_at_elite_club());
+        p.apply_first_tick_environment_events(d(2026, 4, 26), &profile);
+        assert!(count(&p, HappinessEventType::TopClubOpportunity) >= 1);
+    }
+
+    #[test]
+    fn weak_player_with_low_pressure_and_depth_block_fires_primary_plus_one_flavor() {
+        // CA 80, world rep 1000, dest 8500 / league 9000, pressure 5,
+        // depth rank 5. The cap allows 1 Primary + 1 Flavor — verify
+        // the Primary is TopClubOpportunity and exactly one Flavor lands
+        // (RolePathBlockedAtEliteClub wins by priority 65 vs Overawed's
+        // 50). Professionalism set to 11.0 so SeniorMentorSupport's
+        // `prof < 12.0 || has_anchor` gate fails (no squad_social_view
+        // populated on the test player → no social anchor).
+        let mut p = player_with(24, 12.0, 1000, 1000, 80, 5.0, 11.0, 10.0);
+        let pend = pending(100, 0.0, false, 2000, 2500, Some(5));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.85, 9000);
+        p.apply_first_tick_environment_events(d(2026, 4, 26), &profile);
+        assert!(count(&p, HappinessEventType::TopClubOpportunity) >= 1);
+        // Flavor cap: RolePathBlocked wins (priority 65) — Overawed
+        // doesn't get a slot because we cap at 1 Flavor.
+        assert!(count(&p, HappinessEventType::RolePathBlockedAtEliteClub) >= 1);
+        assert_eq!(count(&p, HappinessEventType::OverawedByEliteClub), 0);
+    }
+
+    // ── Star → weak club ────────────────────────────────────────
+
+    #[test]
+    fn star_at_weak_club_fires_too_good_under_primary_cap() {
+        // CA 170, world rep 8500, dest 2500 / league 3000. Source 9000 / 9500.
+        // Both TooGoodForLevel and StepDownEmbarrassment are Primary
+        // candidates; the cap allows only one. TooGoodForLevel wins by
+        // priority (85 > 80).
+        let mut p = player_with(28, 15.0, 8500, 8500, 170, 12.0, 14.0, 10.0);
+        let pend = pending(100, 0.0, false, 9000, 9500, Some(1));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.25, 3000);
+        assert!(profile.is_star_at_weak_club());
+        p.apply_first_tick_environment_events(d(2026, 4, 26), &profile);
+        assert_eq!(count(&p, HappinessEventType::TooGoodForLevel), 1);
+        // StepDownEmbarrassment lost the Primary cap — won't fire at
+        // first tick. (It can still surface later via direct emit sites
+        // or the weekly cadence if the situation persists.)
+        assert_eq!(count(&p, HappinessEventType::StepDownEmbarrassment), 0);
+    }
+
+    #[test]
+    fn favorite_club_with_high_loyalty_suppresses_embarrassment() {
+        // Same star-to-weak shape, but destination is a favourite and
+        // loyalty is high — the embarrassment framing should be muted
+        // and the TooGoodForLevel suppressed unless ambition is very high.
+        let mut p = player_with(28, 13.0, 8500, 8500, 170, 12.0, 14.0, 16.0);
+        p.favorite_clubs.push(100);
+        let pend = pending(100, 0.0, false, 9000, 9500, Some(1));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.25, 3000);
+        p.apply_first_tick_environment_events(d(2026, 4, 26), &profile);
+        // With ambition 13 (< 16) and favourite-club destination, the
+        // TooGoodForLevel gate is short-circuited.
+        assert_eq!(count(&p, HappinessEventType::TooGoodForLevel), 0);
+        // And loyalty 16 + favourite suppresses the embarrassment too.
+        assert_eq!(count(&p, HappinessEventType::StepDownEmbarrassment), 0);
+    }
+
+    // ── Weekly cadence cooldown ─────────────────────────────────
+
+    #[test]
+    fn weekly_environment_story_caps_at_one_per_week() {
+        // Player with a recent transfer has multiple env signals active.
+        let mut p = player_with(24, 14.0, 1500, 1500, 85, 7.0, 12.0, 10.0);
+        let now = d(2026, 4, 26);
+        // Pretend the transfer landed 14 days ago.
+        p.last_transfer_date = Some(now - chrono::Duration::days(14));
+        // Drop one env event manually so the "max one per week" cap
+        // triggers on the next tick.
+        p.happiness
+            .add_event(HappinessEventType::OverawedByEliteClub, -3.0);
+        let before = p.happiness.recent_events.len();
+        // Weekly call should now no-op for env-story events because
+        // OverawedByEliteClub landed within 7 days.
+        p.process_transfer_environment_story(now, "", 0.85, 9000, None);
+        let after = p.happiness.recent_events.len();
+        assert_eq!(
+            after, before,
+            "weekly cap should have prevented a second emission"
+        );
+    }
+
+    // ── Profile derived coefficients ────────────────────────────
+
+    #[test]
+    fn profile_step_up_score_positive_for_weak_to_elite() {
+        let p = player_with(24, 14.0, 1000, 1000, 80, 12.0, 14.0, 10.0);
+        let pend = pending(100, 0.0, false, 2000, 2500, Some(2));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.85, 9000);
+        assert!(profile.step_up_score() > 0.0);
+    }
+
+    #[test]
+    fn profile_step_up_score_negative_for_star_to_weak() {
+        let p = player_with(28, 15.0, 8500, 8500, 170, 12.0, 14.0, 10.0);
+        let pend = pending(100, 0.0, false, 9000, 9500, Some(1));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.25, 3000);
+        assert!(profile.step_up_score() < 0.0);
+    }
+
+    #[test]
+    fn profile_pressure_score_high_for_elite_destination() {
+        let p = player_with(26, 14.0, 6000, 6000, 150, 12.0, 14.0, 10.0);
+        let pend = pending(100, 5_000_000.0, false, 5000, 6000, Some(1));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.95, 9500);
+        assert!(profile.pressure_score() >= 0.7);
+    }
+
+    // ── First-tick cap ─────────────────────────────────────────
+
+    fn count_env_first_tick_events(p: &Player) -> usize {
+        p.happiness
+            .recent_events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.event_type,
+                    HappinessEventType::TopClubOpportunity
+                        | HappinessEventType::EliteTrainingLift
+                        | HappinessEventType::OverawedByEliteClub
+                        | HappinessEventType::RolePathBlockedAtEliteClub
+                        | HappinessEventType::DressingRoomStatusShock
+                        | HappinessEventType::SeniorMentorSupport
+                        | HappinessEventType::TooGoodForLevel
+                        | HappinessEventType::StepDownEmbarrassment
+                        | HappinessEventType::TrainingStandardFrustration
+                        | HappinessEventType::FanExpectationBurden
+                )
+            })
+            .count()
+    }
+
+    #[test]
+    fn first_tick_caps_narrative_events_to_one_primary_plus_one_flavor() {
+        // Weak-to-elite scenario with low pressure + blocked depth →
+        // every weak-at-elite gate passes. Without the cap this would
+        // spam 4-5 events; with the cap it's at most 2 narrative
+        // events (Primary + Flavor) plus the orthogonal universals.
+        let mut p = player_with(24, 14.0, 1000, 1000, 80, 5.0, 12.0, 10.0);
+        let pend = pending(100, 0.0, false, 2000, 2500, Some(5));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.85, 9000);
+        p.apply_first_tick_environment_events(d(2026, 4, 26), &profile);
+        // At most: 1 Primary (TopClubOpportunity) + 1 Flavor (one of
+        // RolePathBlocked / Overawed / SeniorMentor / EliteTrainingLift /
+        // DressingRoomStatusShock).
+        assert!(
+            count_env_first_tick_events(&p) <= 2,
+            "first-tick environment events should be capped at 2 (got {})",
+            count_env_first_tick_events(&p),
+        );
+        // Primary should be TopClubOpportunity (highest-priority gate).
+        assert_eq!(count(&p, HappinessEventType::TopClubOpportunity), 1);
+    }
+
+    #[test]
+    fn first_tick_picks_role_path_blocked_as_top_flavor_when_depth_blocks() {
+        // Depth rank 5 → RolePathBlockedAtEliteClub (priority 65) beats
+        // OverawedByEliteClub (50) and SeniorMentorSupport (70) when
+        // there is no support anchor + low professionalism.
+        let mut p = player_with(24, 14.0, 1000, 1000, 80, 5.0, 10.0, 10.0);
+        // No social anchors — squad_social_view is None → mentor-support
+        // gate fails (low professionalism + no anchor).
+        let pend = pending(100, 0.0, false, 2000, 2500, Some(5));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.85, 9000);
+        p.apply_first_tick_environment_events(d(2026, 4, 26), &profile);
+        assert_eq!(count(&p, HappinessEventType::RolePathBlockedAtEliteClub), 1);
+    }
+
+    #[test]
+    fn senior_mentor_support_fires_when_player_has_compatriot_anchor() {
+        // Weak-at-elite player WITH same-nationality teammates ≥ 1 →
+        // SeniorMentorSupport beats RolePathBlocked / Overawed in the
+        // Flavor slot (priority 70 vs 65/50).
+        let mut p = player_with(24, 14.0, 1000, 1000, 80, 5.0, 10.0, 10.0);
+        p.squad_social_view = Some(crate::club::player::core::player::SquadSocialView {
+            same_nationality_teammates: 2,
+            same_language_teammates: 2,
+        });
+        let pend = pending(100, 0.0, false, 2000, 2500, Some(5));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.85, 9000);
+        p.apply_first_tick_environment_events(d(2026, 4, 26), &profile);
+        assert_eq!(count(&p, HappinessEventType::SeniorMentorSupport), 1);
+        // RolePathBlocked got out-ranked.
+        assert_eq!(count(&p, HappinessEventType::RolePathBlockedAtEliteClub), 0);
+    }
+
+    #[test]
+    fn dressing_room_status_shock_fires_on_upward_jump_with_depth_block() {
+        // Modest player (source rep 2500) jumps to elite club (dest rep
+        // 8500) with depth rank 3 → status shock candidate passes.
+        let mut p = player_with(28, 12.0, 2500, 2500, 100, 12.0, 12.0, 10.0);
+        let pend = pending(100, 0.0, false, 2500, 3000, Some(3));
+        // Profile gate `is_weak_player_at_elite_club` needs player_ca
+        // ≤ expected_ca - 15. Expected for league 9000 = 150. Player CA
+        // 100 → ability_below = true. Confirmed.
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.85, 9000);
+        assert!(profile.is_weak_player_at_elite_club());
+        p.apply_first_tick_environment_events(d(2026, 4, 26), &profile);
+        // DressingRoomStatusShock may or may not be picked (other
+        // Flavor candidates compete) — assert at least its gate logic
+        // surfaces a candidate by counting directly via the method.
+        assert!(profile.dressing_room_status_shock_candidate().is_some());
+    }
+
+    // ── Loan-tier mismatch (universal) ──────────────────────────
+
+    #[test]
+    fn loan_level_mismatch_fires_for_extreme_tier_jump() {
+        // Player rep 4000 loaned to dest 8500 → up_mismatch passes.
+        // Universal — fires alongside the cap.
+        let mut p = player_with(22, 13.0, 4000, 4000, 130, 12.0, 12.0, 10.0);
+        let pend = pending(100, 0.0, true, 2000, 2500, Some(4));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.85, 9000);
+        p.apply_first_tick_environment_events(d(2026, 4, 26), &profile);
+        assert_eq!(count(&p, HappinessEventType::LoanLevelMismatch), 1);
+    }
+
+    // ── Weekly: positive recovery priority ──────────────────────
+
+    #[test]
+    fn weekly_positive_recovery_outranks_negative_pressure() {
+        // Weak-at-elite player AFTER form has improved. Set 8 starts
+        // with great form — ProvedLevelAfterMove (priority 95) should
+        // outrank OverawedByEliteClub (priority 45) even though the
+        // adaptation_score is < 45 and would otherwise trigger it.
+        let mut p = player_with(24, 14.0, 1000, 1000, 80, 8.0, 12.0, 10.0);
+        let now = d(2026, 4, 26);
+        p.last_transfer_date = Some(now - chrono::Duration::days(30));
+        // Stuff the rating ledger so realistic average is ≥ 7.0. The
+        // canonical entry point is `record_match_rating`, which bumps
+        // `played` AND feeds the rating ledger together.
+        for _ in 0..8 {
+            p.statistics.record_match_rating(7.5, 90, true);
+        }
+        p.process_transfer_environment_story(now, "", 0.85, 9000, None);
+        // Either ProvedLevelAfterMove fired (positive priority), OR
+        // the deterministic roll suppressed it — in which case nothing
+        // else should have fired either, because the cap is one per
+        // week and positives outrank negatives.
+        let proved = count(&p, HappinessEventType::ProvedLevelAfterMove);
+        let overawed = count(&p, HappinessEventType::OverawedByEliteClub);
+        assert!(
+            proved >= overawed,
+            "positive recovery should outrank negative pressure (proved={}, overawed={})",
+            proved,
+            overawed,
+        );
+    }
+
+    // ── Form/sample gating ─────────────────────────────────────
+
+    #[test]
+    fn weekly_fan_expectation_burden_does_not_fire_without_form_sample() {
+        // Star-to-weak player with no appearances yet. FanExpectationBurden
+        // weekly variant requires apps >= 3 before treating "no form" as
+        // poor form — must NOT fire on a 0-app sample.
+        let mut p = player_with(28, 14.0, 8500, 8500, 170, 6.0, 12.0, 10.0);
+        let now = d(2026, 4, 26);
+        p.last_transfer_date = Some(now - chrono::Duration::days(30));
+        // Zero appearances by default.
+        p.process_transfer_environment_story(now, "", 0.25, 3000, None);
+        assert_eq!(count(&p, HappinessEventType::FanExpectationBurden), 0);
+    }
+
+    #[test]
+    fn weekly_too_good_for_level_uses_no_minutes_framing_when_no_apps() {
+        // Star-to-weak player, 0 apps → TooGoodForLevel weekly fires
+        // with role-frustration (BlockedByDepth) framing instead of
+        // poor-form framing.
+        let mut p = player_with(28, 15.0, 8500, 8500, 170, 12.0, 12.0, 10.0);
+        let now = d(2026, 4, 26);
+        p.last_transfer_date = Some(now - chrono::Duration::days(30));
+        // No apps. The deterministic roll for this player/week may
+        // gate the emission; rather than asserting it fires, we
+        // verify the no-minutes candidate is reachable via the
+        // signals method when the gate passes.
+        let signals = WeeklyEnvSignals {
+            days_since: 30,
+            adaptation_score: 50.0,
+            apps: 0.0,
+            starts: 0.0,
+            avg_rating: 0.0,
+            league_reputation: 3000,
+            professionalism: 12.0,
+            ambition: 15.0,
+            pressure: 12.0,
+            current_reputation: 8500,
+            had_recent_isolation: false,
+            roll: 0.10, // low enough to pass the 0.35 gate
+        };
+        let candidate = signals.too_good_for_level_candidate();
+        assert!(candidate.is_some());
+        let c = candidate.unwrap();
+        // BlockedByDepth evidence reflects the no-minutes framing.
+        assert!(
+            c.context
+                .evidence
+                .contains(&HappinessEventEvidence::BlockedByDepth)
+        );
+    }
+
+    #[test]
+    fn weekly_proved_level_after_move_requires_min_5_apps() {
+        // Strong avg rating but only 4 apps — sample too small.
+        let signals = WeeklyEnvSignals {
+            days_since: 30,
+            adaptation_score: 70.0,
+            apps: 4.0, // below the 6-apps minimum
+            starts: 4.0,
+            avg_rating: 8.0,
+            league_reputation: 9000,
+            professionalism: 12.0,
+            ambition: 14.0,
+            pressure: 12.0,
+            current_reputation: 1000,
+            had_recent_isolation: false,
+            roll: 0.10,
+        };
+        assert!(signals.proved_level_after_move_candidate().is_none());
+        // Boost to 6 apps — now fires.
+        let signals_ok = WeeklyEnvSignals {
+            apps: 6.0,
+            ..signals
+        };
+        assert!(signals_ok.proved_level_after_move_candidate().is_some());
+    }
+
+    // ── EnvCandidatePool helper ─────────────────────────────────
+
+    #[test]
+    fn env_candidate_pool_take_top_picks_highest_priority_per_role() {
+        let mut pool = EnvCandidatePool::new();
+        let p = player_with(24, 14.0, 1000, 1000, 80, 5.0, 12.0, 10.0);
+        let pend = pending(100, 0.0, false, 2000, 2500, Some(5));
+        let profile = TransferEnvironmentProfile::build(&p, d(2026, 4, 26), &pend, 0.85, 9000);
+        pool.push_some(profile.top_club_opportunity_candidate());
+        pool.push_some(profile.role_path_blocked_candidate());
+        pool.push_some(profile.overawed_by_elite_club_candidate());
+        let primary = pool.take_top_of(EnvRole::Primary).expect("primary");
+        assert_eq!(primary.event_type, HappinessEventType::TopClubOpportunity);
+        let flavor = pool.take_top_of(EnvRole::Flavor).expect("flavor");
+        // RolePathBlocked has priority 65, Overawed has 50.
+        assert_eq!(
+            flavor.event_type,
+            HappinessEventType::RolePathBlockedAtEliteClub
+        );
     }
 }

@@ -246,6 +246,8 @@ pub(crate) fn execute_transfer_within_country(
         // Drain existing sell-on obligations now — they pay previous
         // beneficiaries out of the selling club's proceeds on this sale.
         let obligations = player.drain_sell_on_obligations();
+        let selling_league_reputation =
+            resolve_selling_league_reputation(country, selling_league_id);
         player.complete_transfer(TransferCompletion {
             from: &from,
             to: &to,
@@ -255,6 +257,7 @@ pub(crate) fn execute_transfer_within_country(
             buying_club_id,
             agreed_wage: transfer.agreed_annual_wage,
             buying_league_reputation: transfer.buying_league_reputation,
+            selling_league_reputation,
             record_sell_on: transfer.sell_on_percentage,
         });
 
@@ -500,6 +503,8 @@ fn execute_loan_within_country(
             borrower_score,
             parent_desire,
         );
+        let parent_league_reputation =
+            resolve_selling_league_reputation(country, selling_league_id);
         player.complete_loan(LoanCompletion {
             from: &from,
             to: &to,
@@ -507,6 +512,7 @@ fn execute_loan_within_country(
             date,
             loan_contract,
             borrowing_club_id: buying_club_id,
+            parent_league_reputation,
         });
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
@@ -668,7 +674,7 @@ fn execute_transfer_across_countries(
         false,
     );
 
-    let (mut player, from_info, _, _) = match taken {
+    let (mut player, from_info, selling_league_id, _) = match taken {
         Some(v) => v,
         None => {
             debug!(
@@ -678,6 +684,14 @@ fn execute_transfer_across_countries(
             return false;
         }
     };
+
+    // Resolve the source league rep BEFORE crossing into the buyer's
+    // borrow — needed for the TransferEnvironmentProfile in
+    // `process_transfer_shock`.
+    let selling_league_reputation = data
+        .country(selling_country_id)
+        .map(|c| resolve_selling_league_reputation(c, selling_league_id))
+        .unwrap_or(0);
 
     // Selling-side dressing-room pass: the player has been taken out of
     // the squad, the remaining teammates feel the departure.
@@ -741,6 +755,7 @@ fn execute_transfer_across_countries(
         buying_club_id,
         agreed_wage: transfer.agreed_annual_wage,
         buying_league_reputation: transfer.buying_league_reputation,
+        selling_league_reputation,
         record_sell_on: transfer.sell_on_percentage,
     });
 
@@ -889,6 +904,15 @@ fn execute_loan_across_countries(
             NaiveDate::from_ymd_opt(year, 5, 31).unwrap_or(date)
         });
 
+    // Snapshot the parent's league rep BEFORE `take_player_from_selling_country`
+    // grabs the mut-borrow — the rep feeds `LoanCompletion` so the
+    // transfer-environment profile in `process_transfer_shock` can score
+    // the cross-country move.
+    let parent_league_reputation = data
+        .country(selling_country_id)
+        .map(|c| resolve_selling_league_reputation(c, selling_league_id))
+        .unwrap_or(0);
+
     let taken = take_player_from_selling_country(
         data,
         player_id,
@@ -962,6 +986,7 @@ fn execute_loan_across_countries(
         date,
         loan_contract,
         borrowing_club_id: buying_club_id,
+        parent_league_reputation,
     });
 
     if let Some(buying_club) = buying_country
@@ -997,6 +1022,23 @@ fn empty_team_info() -> TeamInfo {
         league_name: String::new(),
         league_slug: String::new(),
     }
+}
+
+/// Look up the league reputation (0–10000) for the selling side.
+/// Friendly leagues are ignored — the player's competitive league is
+/// the one that defines their tier. Returns 0 when unresolved.
+fn resolve_selling_league_reputation(country: &Country, selling_league_id: Option<u32>) -> u16 {
+    selling_league_id
+        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+        .and_then(|l| {
+            if l.friendly {
+                country.leagues.leagues.iter().find(|ml| !ml.friendly)
+            } else {
+                Some(l)
+            }
+        })
+        .map(|l| l.reputation)
+        .unwrap_or(0)
 }
 
 /// Resolve `(league_name, league_slug)` for the selling side of a transfer.

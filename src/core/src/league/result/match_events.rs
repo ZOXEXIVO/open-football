@@ -433,13 +433,11 @@ impl LeagueResult {
                 // Permanent-deal payer (current club from index). Loaned
                 // players' borrower id is the same lookup result; we
                 // override below for parent-contract bonuses.
-                let borrower_club_id = match data
-                    .indexes()
-                    .and_then(|i| i.get_player_location(*pid))
-                {
-                    Some((_, _, club_id, _)) => club_id,
-                    None => continue,
-                };
+                let borrower_club_id =
+                    match data.indexes().and_then(|i| i.get_player_location(*pid)) {
+                        Some((_, _, club_id, _)) => club_id,
+                        None => continue,
+                    };
 
                 // Determine clean sheet eligibility for a GK
                 let is_gk = player.position().is_goalkeeper();
@@ -510,13 +508,11 @@ impl LeagueResult {
         // parent, loan contract bills the borrower.
         for pid in &unused_sub_ids {
             if let Some(player) = data.player(*pid) {
-                let borrower_club_id = match data
-                    .indexes()
-                    .and_then(|i| i.get_player_location(*pid))
-                {
-                    Some((_, _, club_id, _)) => club_id,
-                    None => continue,
-                };
+                let borrower_club_id =
+                    match data.indexes().and_then(|i| i.get_player_location(*pid)) {
+                        Some((_, _, club_id, _)) => club_id,
+                        None => continue,
+                    };
                 if let Some(parent_contract) = player.contract.as_ref() {
                     let parent_club_id = player
                         .contract_loan

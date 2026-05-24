@@ -8,6 +8,7 @@
 
 use super::types::{MatchOutcome, MatchParticipation};
 use crate::club::player::builder::PlayerBuilder;
+use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::player::Player;
 use crate::r#match::engine::result::PlayerMatchEndStats;
 use crate::shared::fullname::FullName;
@@ -16,7 +17,6 @@ use crate::{
     PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType,
     PlayerPositions, PlayerSkills,
 };
-use crate::club::player::condition::InjuryRiskInputs;
 use chrono::NaiveDate;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -3941,10 +3941,7 @@ fn ninety_minute_competitive_match_lifts_load_debt_jadedness_readiness() {
     let inputs = make_snapshot(&p, 90.0, 9500, 3500);
     p.on_match_exertion(inputs, d(2025, 9, 14), false);
     assert!(p.load.physical_load_7 > 60.0, "physical_load_7 must climb");
-    assert!(
-        p.load.recovery_debt > 0.0,
-        "recovery_debt must accumulate"
-    );
+    assert!(p.load.recovery_debt > 0.0, "recovery_debt must accumulate");
     assert!(
         p.player_attributes.jadedness as i32 > pre_jad as i32 + 200,
         "jadedness must climb meaningfully: pre={} post={}",
@@ -4044,7 +4041,10 @@ fn ninety_minute_pressing_costs_more_than_forty_five_minute_pressing() {
     // fatigue and load.
     let p = fresh_player(PlayerPositionType::MidfielderCenter);
     let coach = make_test_coach();
-    let date = NaiveDateTime::new(d(2025, 9, 14), chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap());
+    let date = NaiveDateTime::new(
+        d(2025, 9, 14),
+        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+    );
     let short = make_session(TrainingType::PressingDrills, 45);
     let long = make_session(TrainingType::PressingDrills, 90);
     let r_short = PlayerTraining::train(&p, &coach, &short, date, 0.5);
@@ -4108,7 +4108,10 @@ fn recovery_session_does_not_push_every_profile_to_same_post_session_condition()
     let mut elite = fresh_player(PlayerPositionType::MidfielderCenter);
     let mut average = fresh_player(PlayerPositionType::MidfielderCenter);
     let mut tired_vet = fresh_player(PlayerPositionType::MidfielderCenter);
-    for (i, p) in [&mut elite, &mut average, &mut tired_vet].iter_mut().enumerate() {
+    for (i, p) in [&mut elite, &mut average, &mut tired_vet]
+        .iter_mut()
+        .enumerate()
+    {
         p.id = 700 + i as u32;
         p.player_attributes.condition = 5_500;
     }
@@ -4616,7 +4619,12 @@ fn smooth_absorption_responds_to_pre_session_condition_continuously() {
     let high = gain_at(9_000);
     let mid = gain_at(7_000);
     let low = gain_at(5_000);
-    assert!(high > mid, "9000 gain {} should beat 7000 gain {}", high, mid);
+    assert!(
+        high > mid,
+        "9000 gain {} should beat 7000 gain {}",
+        high,
+        mid
+    );
     assert!(mid > low, "7000 gain {} should beat 5000 gain {}", mid, low);
     assert!(low > 0, "5000 should still bank some gain: {}", low);
 }
@@ -4628,8 +4636,8 @@ fn smooth_absorption_responds_to_pre_session_condition_continuously() {
 
 #[test]
 fn snapshot_hint_rises_with_observed_pressure_volume() {
-    use crate::r#match::engine::player::statistics::MatchPlayerStatistics;
     use crate::r#match::engine::player::player::MatchPlayer;
+    use crate::r#match::engine::player::statistics::MatchPlayerStatistics;
     // Two fictitious midfielders: same position default (0.30), but
     // one logged a busy match (pressures + tackles + dribbles), the
     // other sat in. The derived hint for the active one must be
@@ -4668,8 +4676,8 @@ fn snapshot_hint_rises_with_observed_pressure_volume() {
 
 #[test]
 fn snapshot_hint_zero_minutes_returns_position_default() {
-    use crate::r#match::engine::player::statistics::MatchPlayerStatistics;
     use crate::r#match::engine::player::player::MatchPlayer;
+    use crate::r#match::engine::player::statistics::MatchPlayerStatistics;
     // A player with 0 minutes (subbed off at kickoff for an injury,
     // say) returns the position default exactly — no per-minute
     // division by something near zero.
@@ -4784,8 +4792,8 @@ fn weekly_matches_for_four_weeks_preserve_condition_spread_across_squad() {
     // condition distribution. The combination of individualized
     // recovery targets, position-based drains, and per-style
     // multipliers should keep the squad meaningfully spread.
-    use chrono::Duration;
     use crate::PlayerPositionType::*;
+    use chrono::Duration;
     let positions = [
         Goalkeeper,
         DefenderCenter,
@@ -4835,8 +4843,10 @@ fn weekly_matches_for_four_weeks_preserve_condition_spread_across_squad() {
             }
         }
     }
-    let conditions: Vec<i16> =
-        squad.iter().map(|p| p.player_attributes.condition).collect();
+    let conditions: Vec<i16> = squad
+        .iter()
+        .map(|p| p.player_attributes.condition)
+        .collect();
     let min = *conditions.iter().min().unwrap();
     let max = *conditions.iter().max().unwrap();
     let spread = max - min;
@@ -4891,53 +4901,89 @@ fn four_week_calibration_spread_across_positions_and_profiles() {
     }
 
     let mut gk = build(
-        601, Goalkeeper,
-        d(1995, 1, 1),        // 30y — typical keeper age
-        14.0, 14.0,           // average stamina / NF
-        10.0, 8.0, 8.0,       // low action profile
-        7_500, 50.0, 9_400,
+        601,
+        Goalkeeper,
+        d(1995, 1, 1), // 30y — typical keeper age
+        14.0,
+        14.0, // average stamina / NF
+        10.0,
+        8.0,
+        8.0, // low action profile
+        7_500,
+        50.0,
+        9_400,
     );
     let mut wingback = build(
-        602, WingbackLeft,
-        d(1999, 1, 1),        // 26y
-        15.0, 14.0,           // good stamina / NF
-        17.0, 16.0, 16.0,     // high WR + pace + acceleration
-        8_000, 100.0, 9_300,
+        602,
+        WingbackLeft,
+        d(1999, 1, 1), // 26y
+        15.0,
+        14.0, // good stamina / NF
+        17.0,
+        16.0,
+        16.0, // high WR + pace + acceleration
+        8_000,
+        100.0,
+        9_300,
     );
     let mut center_back = build(
-        603, DefenderCenter,
-        d(1996, 1, 1),        // 29y — experienced CB
-        13.0, 13.0,
-        10.0, 10.0, 10.0,     // low action profile
-        7_800, 80.0, 9_300,
+        603,
+        DefenderCenter,
+        d(1996, 1, 1), // 29y — experienced CB
+        13.0,
+        13.0,
+        10.0,
+        10.0,
+        10.0, // low action profile
+        7_800,
+        80.0,
+        9_300,
     );
     // Veteran midfielder (~35) — recovery age penalty should bite.
     let mut vet_mid = build(
-        604, MidfielderCenter,
-        d(1990, 6, 1),        // ~35y
-        13.0, 13.0,
-        14.0, 12.0, 11.0,
-        7_300, 120.0, 9_200,
+        604,
+        MidfielderCenter,
+        d(1990, 6, 1), // ~35y
+        13.0,
+        13.0,
+        14.0,
+        12.0,
+        11.0,
+        7_300,
+        120.0,
+        9_200,
     );
     // Elite stamina/NF midfielder — should age well and outpace
     // overloaded peers over the 4-week window.
     let mut elite_mid = build(
-        605, MidfielderCenter,
-        d(2001, 1, 1),        // 24y, prime
-        19.0, 19.0,
-        14.0, 14.0, 14.0,
-        9_000, 50.0, 9_400,
+        605,
+        MidfielderCenter,
+        d(2001, 1, 1), // 24y, prime
+        19.0,
+        19.0,
+        14.0,
+        14.0,
+        14.0,
+        9_000,
+        50.0,
+        9_400,
     );
     // Overloaded forward — starts with heavy debt + jadedness
     // baked in. The recovery throttle and target's load_drag
     // should keep them below the elite midfielder by the end of
     // the 4 weeks regardless of what training they got.
     let mut overload_fwd = build(
-        606, ForwardCenter,
-        d(1998, 1, 1),        // 27y
-        14.0, 13.0,
-        13.0, 14.0, 14.0,
-        7_500, 1_300.0, 8_600,
+        606,
+        ForwardCenter,
+        d(1998, 1, 1), // 27y
+        14.0,
+        13.0,
+        13.0,
+        14.0,
+        14.0,
+        7_500,
+        1_300.0,
+        8_600,
     );
     overload_fwd.player_attributes.jadedness = 6_000;
 
@@ -4957,10 +5003,8 @@ fn four_week_calibration_spread_across_positions_and_profiles() {
     for week in 0..4 {
         for day_offset in 0..7 {
             let date = start + Duration::days((week * 7 + day_offset) as i64);
-            let date_t = NaiveDateTime::new(
-                date,
-                chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-            );
+            let date_t =
+                NaiveDateTime::new(date, chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap());
             let mut players: [&mut Player; 6] = [
                 &mut gk,
                 &mut wingback,

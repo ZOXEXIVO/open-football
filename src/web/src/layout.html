@@ -30,7 +30,7 @@
                         </li>
                         {% if is_collapsible && loop.index0 == 1 %}
                         <li class="fm-nav-toggle">
-                            <button type="button" aria-label="Toggle more leagues"
+                            <button type="button" aria-label="{{ i18n.t("toggle_more_leagues") }}"
                                     aria-expanded="{% if section.expanded %}true{% else %}false{% endif %}"
                                     onclick="(function(b){var ul=b.closest('.fm-nav-collapsible');var open=ul.classList.toggle('fm-nav-expanded');b.setAttribute('aria-expanded',open);})(this)">
                                 <span class="fm-nav-toggle-spacer"></span>
@@ -66,7 +66,7 @@
                     <li>
                         <a href="/{{ lang }}/performance">
                             <i class="fa fa-microchip"></i>
-                            <span>Performance</span>
+                            <span>{{ i18n.t("performance") }}</span>
                         </a>
                     </li>
                     <li class="fm-nav-divider"></li>
@@ -96,7 +96,7 @@
                                 {% if !menu_sections.is_empty() %}
                                 <button class="fm-menu-toggle d-xl-none"
                                         onclick="document.body.classList.toggle('fm-sidebar-open')"
-                                        aria-label="Toggle menu">
+                                        aria-label="{{ i18n.t("toggle_menu") }}">
                                     <span></span>
                                 </button>
                                 {% endif %}
@@ -110,10 +110,10 @@
                                 </div>
                                 {% block header_center %}{% endblock %}
                                 <div class="fm-header-actions">
-                                    <a class="fm-ai-icon fm-header-search" href="/{{ lang }}/search" title="Search">
+                                    <a class="fm-ai-icon fm-header-search" href="/{{ lang }}/search" title="{{ i18n.t("search") }}">
                                         <i class="fa fa-search"></i>
                                     </a>
-                                    <a class="fm-ai-icon fm-ai-icon-robot" href="/{{ lang }}/ai" title="AI">
+                                    <a class="fm-ai-icon fm-ai-icon-robot" href="/{{ lang }}/ai" title="{{ i18n.t("ai") }}">
                                         <i class="fa fa-robot"></i>
                                     </a>
                                     <div class="fm-date">

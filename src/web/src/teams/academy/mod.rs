@@ -7,11 +7,11 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::PlayerPositionType;
+use core::SimulatorData;
 use core::club::academy::{
     AcademyDevelopmentIdentity, AcademyPlayerPhase, AcademyReadinessScorer, AcademyTier,
 };
-use core::PlayerPositionType;
-use core::SimulatorData;
 use core::utils::DateUtils;
 use serde::Deserialize;
 
@@ -219,13 +219,8 @@ pub async fn team_academy_action(
         country_name: cn,
         country_slug: cs,
     };
-    let menu_sections = views::team_menu(
-        &menu_params,
-        &neighbor_refs,
-        &team.slug,
-        &league_refs,
-        true,
-    );
+    let menu_sections =
+        views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, true);
 
     let title = team.name.clone();
     let league_title = league

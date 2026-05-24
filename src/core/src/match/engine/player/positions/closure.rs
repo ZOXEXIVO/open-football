@@ -449,7 +449,8 @@ mod avx_tests {
                     let a = m_scalar[i * MAX_PLAYERS + j].to_bits();
                     let b = m_avx[i * MAX_PLAYERS + j].to_bits();
                     assert_eq!(
-                        a, b,
+                        a,
+                        b,
                         "n={} i={} j={} scalar={} avx={}",
                         n,
                         i,
@@ -467,7 +468,23 @@ mod avx_tests {
         if !neon_available() {
             return;
         }
-        for &n in &[0usize, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 22, 23, MAX_PLAYERS] {
+        for &n in &[
+            0usize,
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            9,
+            15,
+            16,
+            17,
+            22,
+            23,
+            MAX_PLAYERS,
+        ] {
             let (xs, ys) = fill_positions(n, n as u32 + 1);
             let mut m_scalar = [0.0f32; MAX_PLAYERS * MAX_PLAYERS];
             let mut m_neon = [0.0f32; MAX_PLAYERS * MAX_PLAYERS];
@@ -482,7 +499,8 @@ mod avx_tests {
                     let a = m_scalar[i * MAX_PLAYERS + j].to_bits();
                     let b = m_neon[i * MAX_PLAYERS + j].to_bits();
                     assert_eq!(
-                        a, b,
+                        a,
+                        b,
                         "n={} i={} j={} scalar={} neon={}",
                         n,
                         i,

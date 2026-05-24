@@ -64,9 +64,12 @@ impl RoleSlot {
             RoleSlot::Goalkeeper => &[Goalkeeper],
             RoleSlot::LeftDefensiveSide => &[DefenderLeft, WingbackLeft],
             RoleSlot::RightDefensiveSide => &[DefenderRight, WingbackRight],
-            RoleSlot::CentralDefender => {
-                &[DefenderCenter, DefenderCenterLeft, DefenderCenterRight, Sweeper]
-            }
+            RoleSlot::CentralDefender => &[
+                DefenderCenter,
+                DefenderCenterLeft,
+                DefenderCenterRight,
+                Sweeper,
+            ],
             RoleSlot::CentralOrDefensiveMid => &[
                 DefensiveMidfielder,
                 MidfielderCenter,
@@ -81,9 +84,7 @@ impl RoleSlot {
                 ForwardLeft,
                 ForwardRight,
             ],
-            RoleSlot::CentralForward => {
-                &[Striker, ForwardCenter, AttackingMidfielderCenter]
-            }
+            RoleSlot::CentralForward => &[Striker, ForwardCenter, AttackingMidfielderCenter],
         }
     }
 }
@@ -431,8 +432,7 @@ impl NationalTeam {
         let window_type = Self::window_for_date(date);
         let ctx = CallUpContext::new(date, country_id, window_type);
 
-        let selected =
-            Self::select_balanced_squad(&candidates, &self.tactics, &ctx, &incumbents);
+        let selected = Self::select_balanced_squad(&candidates, &self.tactics, &ctx, &incumbents);
 
         for (idx, reason, secondaries) in &selected {
             let c = &candidates[*idx];
@@ -573,10 +573,7 @@ impl NationalTeam {
         let blended_games = c.played as f32 + c.last_season_apps as f32 * 0.35;
         let games_norm = (blended_games.min(22.0) / 22.0) * 100.0;
 
-        condition_norm * 0.20
-            + match_readiness_norm * 0.25
-            + rating_norm * 0.30
-            + games_norm * 0.25
+        condition_norm * 0.20 + match_readiness_norm * 0.25 + rating_norm * 0.30 + games_norm * 0.25
     }
 
     fn experience_score(c: &CallUpCandidate) -> f32 {
@@ -593,8 +590,8 @@ impl NationalTeam {
     }
 
     fn mental_score(c: &CallUpCandidate) -> f32 {
-        let avg = (c.leadership + c.composure + c.teamwork + c.determination + c.pressure_handling)
-            / 5.0;
+        let avg =
+            (c.leadership + c.composure + c.teamwork + c.determination + c.pressure_handling) / 5.0;
         (avg / 20.0 * 100.0).clamp(0.0, 100.0)
     }
 
@@ -904,8 +901,7 @@ impl NationalTeam {
             RoleSlot::CentralForward,
         ];
 
-        let mut counts: HashMap<RoleSlot, usize> =
-            slots.iter().copied().map(|s| (s, 0)).collect();
+        let mut counts: HashMap<RoleSlot, usize> = slots.iter().copied().map(|s| (s, 0)).collect();
 
         for idx in indices {
             let c = &candidates[idx];
@@ -1006,8 +1002,7 @@ impl NationalTeam {
         let fwd = by_group(PlayerFieldPositionGroup::Forward);
 
         // (idx, role-coverage flag, position-need flag, score)
-        let mut selected: Vec<(usize, bool, bool, f32)> =
-            Vec::with_capacity(ctx.target_squad_size);
+        let mut selected: Vec<(usize, bool, bool, f32)> = Vec::with_capacity(ctx.target_squad_size);
         let mut taken: HashSet<usize> = HashSet::new();
 
         let take_group = |group: &[(usize, f32)],
@@ -1096,10 +1091,8 @@ impl NationalTeam {
         for slot in slots {
             let target = *targets.get(&slot).unwrap_or(&0);
             loop {
-                let coverage = Self::role_coverage_counts(
-                    candidates,
-                    selected.iter().map(|(i, _, _, _)| *i),
-                );
+                let coverage =
+                    Self::role_coverage_counts(candidates, selected.iter().map(|(i, _, _, _)| *i));
                 let have = *coverage.get(&slot).unwrap_or(&0);
                 if have >= target {
                     break;
@@ -1117,10 +1110,7 @@ impl NationalTeam {
                             None
                         }
                     })
-                    .max_by(|a, b| {
-                        a.1.partial_cmp(&b.1)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
                 let (in_idx, in_score, _in_lvl) = match incoming {
                     Some(v) => v,
@@ -1156,7 +1146,10 @@ impl NationalTeam {
                         }
                         let other_have = *coverage.get(&other_slot).unwrap_or(&0);
                         let out_covers = other_slot.positions().iter().any(|p| {
-                            out_c.position_levels.iter().any(|(pp, lvl)| pp == p && *lvl >= 12)
+                            out_c
+                                .position_levels
+                                .iter()
+                                .any(|(pp, lvl)| pp == p && *lvl >= 12)
                         });
                         if out_covers && other_have <= other_target {
                             creates_deficit = true;
@@ -1296,9 +1289,15 @@ impl NationalTeam {
 
         // Floors (note: GK floor for tournament is 3; for 23 it's 2 —
         // already met by the quotas above).
-        [gk.max(if target_squad_size >= TOURNAMENT_SQUAD_SIZE { 3 } else { 2 }),
+        [
+            gk.max(if target_squad_size >= TOURNAMENT_SQUAD_SIZE {
+                3
+            } else {
+                2
+            }),
             def.max(5),
             mid.max(5),
-            fwd.max(3)]
+            fwd.max(3),
+        ]
     }
 }

@@ -69,7 +69,7 @@ impl MatchStorage {
         &'a self,
         start: NaiveDate,
         end: NaiveDate,
-    ) -> impl Iterator<Item=&'a MatchResult> + 'a {
+    ) -> impl Iterator<Item = &'a MatchResult> + 'a {
         self.by_date
             .range(start..end)
             .flat_map(|(_, ids)| ids.iter())
@@ -80,7 +80,7 @@ impl MatchStorage {
     /// this when the caller wants the full retained window (per-league
     /// stores are reset on season-start, so "all stored" already means
     /// "this season").
-    pub fn iter(&self) -> impl Iterator<Item=&MatchResult> {
+    pub fn iter(&self) -> impl Iterator<Item = &MatchResult> {
         self.results.values()
     }
 

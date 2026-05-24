@@ -335,10 +335,12 @@ impl MentorshipProcessor {
                     .with_evidence(HappinessEventEvidence::MentorInfluence)
                     .with_evidence(HappinessEventEvidence::RepeatedIncident)
                     .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk)
-                    .with_teammate_conflict_context(TeammateConflictContext::new(
-                        TeammateConflictReason::LeadershipChallenge,
-                        ConflictLocation::TrainingGround,
-                    ));
+                    .with_teammate_conflict_context(
+                        TeammateConflictContext::new(
+                            TeammateConflictReason::LeadershipChallenge,
+                            ConflictLocation::TrainingGround,
+                        ),
+                    );
                     if let Some((level, trust, friendship, prof)) = snapshot {
                         ctx = ctx
                             .with_relationship_levels(level, level)

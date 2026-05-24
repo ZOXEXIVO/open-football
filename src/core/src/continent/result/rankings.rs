@@ -13,10 +13,8 @@ impl ContinentResult {
 
         // Update country coefficients based on club performances
         for country in &mut continent.countries {
-            let coefficient = Self::calculate_country_coefficient(
-                country,
-                &continent.continental_competitions,
-            );
+            let coefficient =
+                Self::calculate_country_coefficient(country, &continent.continental_competitions);
             continent
                 .continental_rankings
                 .update_country_ranking(country.id, coefficient);
@@ -25,10 +23,8 @@ impl ContinentResult {
         // Update club rankings
         let all_clubs = Self::get_all_clubs(&continent.countries);
         for club in all_clubs {
-            let club_points = Self::calculate_club_continental_points(
-                club,
-                &continent.continental_competitions,
-            );
+            let club_points =
+                Self::calculate_club_continental_points(club, &continent.continental_competitions);
             continent
                 .continental_rankings
                 .update_club_ranking(club.id, club_points);

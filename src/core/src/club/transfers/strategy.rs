@@ -414,8 +414,7 @@ impl ClubTransferStrategy {
 
         // Position fit. Empty target list = generic interest.
         let position_open = self.target_positions.is_empty();
-        let position_match =
-            position_open || self.target_positions.contains(&player.position());
+        let position_match = position_open || self.target_positions.contains(&player.position());
         if position_match {
             score += 1.0;
             if !position_open {
@@ -452,28 +451,20 @@ impl ClubTransferStrategy {
             AgePreference::Balanced => {}
             _ => {}
         }
-        if matches!(
-            self.recruitment.youth_focus,
-            VisionYouthFocus::DevelopYouth
-        ) && age <= 23
-        {
+        if matches!(self.recruitment.youth_focus, VisionYouthFocus::DevelopYouth) && age <= 23 {
             score += 0.3;
             reasons.push(TransferInterestReason::AgeFitsPolicy);
         }
-        if matches!(
-            self.recruitment.philosophy,
-            ClubPhilosophy::DevelopAndSell
-        ) && age >= 30
-        {
+        if matches!(self.recruitment.philosophy, ClubPhilosophy::DevelopAndSell) && age >= 30 {
             score -= 0.5;
             risks.push(TransferInterestRisk::AgeRisk);
         }
 
         // Quality bar. Prefer scout-assessed ability over hidden CA
         // when present — keeps AI honest about what it knows.
-        let assessed_ability = ctx
-            .scout_assessed_ability
-            .unwrap_or(player.player_attributes.current_ability) as u16;
+        let assessed_ability =
+            ctx.scout_assessed_ability
+                .unwrap_or(player.player_attributes.current_ability) as u16;
         if assessed_ability < self.reputation_level / 2 {
             score -= 1.0;
             risks.push(TransferInterestRisk::UnderQuality);
@@ -599,11 +590,7 @@ impl ClubTransferStrategy {
         asking_price: &CurrencyValue,
         ctx: &TransferStrategyContext,
     ) -> TransferOffer {
-        let max_budget = self
-            .budget
-            .as_ref()
-            .map(|b| b.amount)
-            .unwrap_or(f64::MAX);
+        let max_budget = self.budget.as_ref().map(|b| b.amount).unwrap_or(f64::MAX);
 
         // Valuation anchored on the buying club's league/club
         // reputation — old call used 0/0 which flattened prices.
@@ -725,9 +712,9 @@ impl ClubTransferStrategy {
 
         // Assessed potential gap — never use hidden PA when
         // scouting context is present.
-        let assessed_ability = ctx
-            .scout_assessed_ability
-            .unwrap_or(player.player_attributes.current_ability) as i16;
+        let assessed_ability =
+            ctx.scout_assessed_ability
+                .unwrap_or(player.player_attributes.current_ability) as i16;
         let assessed_potential = ctx
             .scout_assessed_potential
             .map(|p| p as i16)
@@ -743,8 +730,7 @@ impl ClubTransferStrategy {
         if wants_sell_on {
             let pct_floor = 0.08 + self.negotiation.sell_on_preference * 0.10;
             let pct_from_potential = (potential_gap as f32 / 100.0).clamp(0.0, 0.15);
-            let sell_on_pct =
-                (pct_floor + pct_from_potential).clamp(0.05, 0.25);
+            let sell_on_pct = (pct_floor + pct_from_potential).clamp(0.05, 0.25);
             offer = offer.with_clause(TransferClause::SellOnClause(sell_on_pct));
         }
 
@@ -788,16 +774,15 @@ impl ClubTransferStrategy {
 
         // Installments — preferred by cash-poor / austerity clubs
         // and by clubs whose installment_preference is high.
-        let cash_poor =
-            ctx.buying_club_balance < 0 || self.recruitment.financial_stance == FinancialStance::Austerity;
-        let installment_pull = self.negotiation.installment_preference
-            + if cash_poor { 0.3 } else { 0.0 };
+        let cash_poor = ctx.buying_club_balance < 0
+            || self.recruitment.financial_stance == FinancialStance::Austerity;
+        let installment_pull =
+            self.negotiation.installment_preference + if cash_poor { 0.3 } else { 0.0 };
         // Only attach installments above a base-fee threshold —
         // tiny deals don't need a payment plan.
         if installment_pull > 0.55 && offer_amount >= 1_500_000.0 {
             let years = if cash_poor { 4 } else { 3 };
-            let installment_amount =
-                FormattingUtils::round_fee(offer_amount * 0.55);
+            let installment_amount = FormattingUtils::round_fee(offer_amount * 0.55);
             offer = offer.with_clause(TransferClause::Installments(
                 CurrencyValue {
                     amount: installment_amount,
@@ -1100,4 +1085,3 @@ impl ContractTiming {
         months.max(0)
     }
 }
-

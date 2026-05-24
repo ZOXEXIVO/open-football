@@ -343,6 +343,28 @@ pub async fn transfer_action(
 
         let player_name = player.full_name.to_string();
 
+        // Capture source-club reps BEFORE the player's `on_manual_*`
+        // (which clears `last_transfer_date` & resets) but they live on
+        // the destination context anyway — pull from the source `TeamInfo`.
+        let source_club_reputation = source_info
+            .as_ref()
+            .map(|(_, _, s)| s.info.reputation)
+            .unwrap_or(0);
+        let source_league_reputation = source_info
+            .as_ref()
+            .and_then(|(ci, coi, s)| {
+                let country = &sim.continents[*ci].countries[*coi];
+                country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == s.club_id)
+                    .and_then(|c| c.teams.main())
+                    .and_then(|t| t.league_id)
+                    .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                    .map(|l| l.reputation)
+            })
+            .unwrap_or(0);
+
         if let Some((_, _, ref source)) = source_info {
             player.on_manual_transfer(&source.info, &dest.info, Some(fee), date);
         } else {
@@ -361,8 +383,49 @@ pub async fn transfer_action(
         player.statuses.remove(core::PlayerStatusType::Frt);
         player.statuses.remove(core::PlayerStatusType::Unh);
 
+        // Stage the pending signing BEFORE clearing happiness so the
+        // desire-carry snapshot can read recent `WantsReturnHome` /
+        // `WantsEuropeanCompetition` / `WantsCopaLibertadores` moods and
+        // surface the matching satisfaction events on the next sim tick.
+        // Position depth rank against the pre-add roster matches the
+        // squad-status calculation below: 1 = clear first choice.
+        let player_group = player.position().position_group();
+        let player_ca = player.player_attributes.current_ability;
+        // Existing roster only — don't push the new arrival in until
+        // depth rank has been computed. The existing-CAs vector also
+        // feeds the squad-status calculation below, but THERE the new
+        // arrival is included (squad-status reflects post-signing depth).
+        let existing_group_cas: Vec<u8> =
+            sim.continents[dci].countries[dcoi].clubs[dcli].teams.teams[dti]
+                .players
+                .players
+                .iter()
+                .filter(|p| p.position().position_group() == player_group)
+                .map(|p| p.player_attributes.current_ability)
+                .collect();
+        // Depth rank = 1 + number of strictly-better existing teammates
+        // at the same position group. New arrivals tied on CA with
+        // incumbents land BEHIND them (incumbency tiebreak).
+        let depth_rank = (existing_group_cas
+            .iter()
+            .filter(|ca| **ca > player_ca)
+            .count()
+            + 1)
+        .min(255) as u8;
+        player.stage_manual_pending_signing(
+            dest.club_id,
+            fee,
+            false,
+            source_club_reputation,
+            source_league_reputation,
+            Some(depth_rank),
+        );
+
         // Fresh start at new club: reset happiness so old salary/playing-time
         // frustrations don't carry over from the previous club.
+        // Drop the cumulative buffer but preserve the most recent
+        // `WantsReturnHome` etc. through the staged `desire_carry` we
+        // captured above.
         player.happiness.clear();
 
         // Wage and length come from the canonical contract policy on
@@ -374,26 +437,16 @@ pub async fn transfer_action(
         player.install_permanent_contract(date, club_rep, league_rep, None);
 
         // Squad status is club-roster-aware: it depends on the destination
-        // team's existing position-group depth. Compute against the
-        // pre-add roster (the player isn't in the team yet) and pin it
-        // on the freshly-installed contract so the UI shows a sensible
-        // value immediately rather than waiting for the monthly batch.
-        let player_ca = player.player_attributes.current_ability;
+        // team's full position-group depth (existing teammates + the new
+        // arrival). Compute and pin on the freshly-installed contract so
+        // the UI shows a sensible value immediately.
         let player_age = core::utils::DateUtils::age(player.birth_date, date);
-        let player_group = player.position().position_group();
-        let mut group_cas: Vec<u8> = sim.continents[dci].countries[dcoi].clubs[dcli].teams.teams
-            [dti]
-            .players
-            .players
-            .iter()
-            .filter(|p| p.position().position_group() == player_group)
-            .map(|p| p.player_attributes.current_ability)
-            .collect();
-        group_cas.push(player_ca);
-        group_cas.sort_unstable_by(|a, b| b.cmp(a));
+        let mut full_group_cas = existing_group_cas.clone();
+        full_group_cas.push(player_ca);
+        full_group_cas.sort_unstable_by(|a, b| b.cmp(a));
         if let Some(contract) = player.contract.as_mut() {
             contract.squad_status =
-                core::PlayerSquadStatus::calculate(player_ca, player_age, &group_cas);
+                core::PlayerSquadStatus::calculate(player_ca, player_age, &full_group_cas);
         }
 
         sim.continents[dci].countries[dcoi].clubs[dcli].teams.teams[dti]
@@ -543,6 +596,44 @@ pub async fn loan_action(
             None => return StatusCode::NOT_FOUND,
         };
 
+        // Capture source-side reps + dest position depth BEFORE clearing
+        // happiness / mutating roster — these feed the staged
+        // `pending_signing` so the next sim tick can emit the same
+        // shock / role-fit / promise events the AI loan path emits.
+        let source_club_reputation = source.info.reputation;
+        let source_league_reputation = {
+            let country = &sim.continents[ci].countries[coi];
+            country
+                .clubs
+                .iter()
+                .find(|c| c.id == source.club_id)
+                .and_then(|c| c.teams.main())
+                .and_then(|t| t.league_id)
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| l.reputation)
+                .unwrap_or(0)
+        };
+        let player_group = player.position().position_group();
+        let player_ca = player.player_attributes.current_ability;
+        let existing_group_cas: Vec<u8> = sim.continents[dest_pos.0].countries[dest_pos.1].clubs
+            [dest_pos.2]
+            .teams
+            .teams[dest_pos.3]
+            .players
+            .players
+            .iter()
+            .filter(|p| p.position().position_group() == player_group)
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
+        // Depth rank = 1 + number of strictly-better existing teammates
+        // at the same position group. Equal-CA incumbents win the tie.
+        let depth_rank = (existing_group_cas
+            .iter()
+            .filter(|ca| **ca > player_ca)
+            .count()
+            + 1)
+        .min(255) as u8;
+
         player.on_manual_loan(&source.info, &parent.info, &dest.info, date);
 
         // Clear transfer-related statuses
@@ -554,6 +645,20 @@ pub async fn loan_action(
         player.statuses.remove(core::PlayerStatusType::Req);
         player.statuses.remove(core::PlayerStatusType::Loa);
         player.statuses.remove(core::PlayerStatusType::Unh);
+
+        // Stage the loan pending-signing BEFORE happiness.clear() so the
+        // desire-carry snapshot captures recent home/EU/Libertadores moods.
+        // For a loan the destination is the borrowing club; previous
+        // salary is the parent contract's salary (process_transfer_shock
+        // skips salary shock for loans anyway).
+        player.stage_manual_pending_signing(
+            body.to_club_id,
+            0.0,
+            true,
+            source_club_reputation,
+            source_league_reputation,
+            Some(depth_rank),
+        );
 
         // Fresh start at new club: reset happiness so old frustrations
         // don't carry over from the previous club.

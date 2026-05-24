@@ -1,7 +1,7 @@
 use super::CountryResult;
+use crate::Country;
 use crate::league::League;
 use crate::utils::DateUtils;
-use crate::Country;
 use chrono::NaiveDate;
 use log::debug;
 

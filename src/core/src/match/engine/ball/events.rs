@@ -339,8 +339,7 @@ impl BallEventDispatcher {
         // sub-seed mixed from (tick × carrier × beat-index) so the
         // outcomes of consecutive beats are independent.
         for beat_idx in 0..beaten_count {
-            let seed = (carry_seed as u64)
-                .wrapping_mul(0x9E3779B97F4A7C15)
+            let seed = (carry_seed as u64).wrapping_mul(0x9E3779B97F4A7C15)
                 ^ (carrier_id as u64).wrapping_mul(0xBF58476D1CE4E5B9)
                 ^ (beat_idx as u64).wrapping_mul(0x94D049BB133111EB);
             let roll = ((seed >> 11) & 0xFFFFFF) as f32 / 16_777_215.0;

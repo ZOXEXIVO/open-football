@@ -191,10 +191,8 @@ impl DatabaseGenerator {
                                 // squad-aware scorer breaks that loop and
                                 // makes the tactics screen truthful from
                                 // the first request.
-                                let tactic = TacticsSelector::select(
-                                    &team,
-                                    team.staffs.head_coach(),
-                                );
+                                let tactic =
+                                    TacticsSelector::select(&team, team.staffs.head_coach());
                                 team.tactics = Some(tactic);
                                 team
                             })

@@ -113,19 +113,13 @@ impl CountryResult {
         country.transfer_market.check_transfer_window(window_open);
 
         // Resolve pending negotiations — returns all completed transfers for deferred execution
-        let deferred =
-            Self::resolve_pending_negotiations(country, current_date, &mut summary);
+        let deferred = Self::resolve_pending_negotiations(country, current_date, &mut summary);
         ops.deferred_transfers = deferred;
 
         // Expire stale negotiations
         let expired = country.transfer_market.update(current_date);
         for (buying_club_id, player_id) in expired {
-            PipelineProcessor::on_negotiation_resolved(
-                country,
-                buying_club_id,
-                player_id,
-                false,
-            );
+            PipelineProcessor::on_negotiation_resolved(country, buying_club_id, player_id, false);
         }
 
         // Free agents and contract expirations. Returns deferred
@@ -157,11 +151,7 @@ impl CountryResult {
             PipelineProcessor::evaluate_board_approvals(country, current_date);
             PipelineProcessor::initiate_negotiations(country, current_date);
             PipelineProcessor::scan_loan_market(country, current_date);
-            PipelineProcessor::scan_foreign_loan_market(
-                country,
-                &foreign_players,
-                current_date,
-            );
+            PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);
         }
 
         PipelineProcessor::refresh_shadow_reports(country, current_date);

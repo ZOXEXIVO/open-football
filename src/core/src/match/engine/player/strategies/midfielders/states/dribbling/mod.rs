@@ -30,7 +30,12 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // #10 can still finish their own dribble. The standard gate
         // below requires mid_shot_selection >= 0.42 which a 10-skill
         // AM never reaches.
-        if ctx.player.tactical_position.current_position.is_attacking_midfielder() {
+        if ctx
+            .player
+            .tactical_position
+            .current_position
+            .is_attacking_midfielder()
+        {
             if let ShotDecision::Shoot { reason } =
                 evaluate_forward_shot_decision(ctx, "AM_DRIB_FWD")
             {
