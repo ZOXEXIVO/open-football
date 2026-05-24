@@ -80,6 +80,14 @@ pub enum CallUpReason {
     YouthProspect,
     /// Synthetic player generated to fill a thin pool (weak nation).
     SyntheticDepth,
+    /// Already in the prior squad or has enough caps to keep the spot.
+    Incumbent,
+    /// Selected (or kept) because a specific tactical role was uncovered.
+    RoleCoverage,
+    /// Friendly window: experimental call-up for an uncapped young player.
+    FriendlyExperiment,
+    /// Tournament: brought along primarily for big-stage experience.
+    TournamentExperience,
 }
 
 impl CallUpReason {
@@ -95,6 +103,10 @@ impl CallUpReason {
             CallUpReason::Leadership => "callup_reason_leadership",
             CallUpReason::YouthProspect => "callup_reason_youth_prospect",
             CallUpReason::SyntheticDepth => "callup_reason_synthetic_depth",
+            CallUpReason::Incumbent => "callup_reason_incumbent",
+            CallUpReason::RoleCoverage => "callup_reason_role_coverage",
+            CallUpReason::FriendlyExperiment => "callup_reason_friendly_experiment",
+            CallUpReason::TournamentExperience => "callup_reason_tournament_experience",
         }
     }
 }
@@ -137,8 +149,81 @@ pub(super) const DEFAULT_STAFF_ROLES: [NationalTeamStaffRole; 5] = [
 /// Minimum number of real club players before generating synthetic ones
 pub(super) const MIN_REAL_PLAYERS: usize = 16;
 
-/// Default squad call-up size
+/// Default squad call-up size for competitive/friendly windows
 pub(super) const SQUAD_SIZE: usize = 23;
+
+/// Tournament finals squad size (FIFA/UEFA expanded list)
+pub(super) const TOURNAMENT_SQUAD_SIZE: usize = 26;
+
+/// The kind of international call-up cycle that's about to be selected
+/// for. Drives age curves, continuity weight, squad size, and
+/// experimentation tolerance — managers don't pick the same 23 for a
+/// World Cup as they do for a March friendly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallUpWindowType {
+    /// June/July major-tournament window (World Cup / Euros / Copa).
+    TournamentFinals,
+    /// Regular international break with competitive matches scheduled.
+    CompetitiveWindow,
+    /// Pure friendly window — room to experiment with youth and depth.
+    FriendlyWindow,
+}
+
+/// Inputs gathered once per call-up cycle. Replaces the old
+/// `is_tournament: bool` flag with enough structure to differentiate
+/// "March friendly" from "qualifying double-header" from "World Cup".
+pub struct CallUpContext {
+    pub date: NaiveDate,
+    pub country_id: u32,
+    pub window_type: CallUpWindowType,
+    pub target_squad_size: usize,
+}
+
+impl CallUpContext {
+    pub(crate) fn new(date: NaiveDate, country_id: u32, window_type: CallUpWindowType) -> Self {
+        let target_squad_size = match window_type {
+            CallUpWindowType::TournamentFinals => TOURNAMENT_SQUAD_SIZE,
+            CallUpWindowType::CompetitiveWindow => SQUAD_SIZE,
+            CallUpWindowType::FriendlyWindow => SQUAD_SIZE,
+        };
+        Self {
+            date,
+            country_id,
+            window_type,
+            target_squad_size,
+        }
+    }
+}
+
+/// Stylistic bias attached deterministically to each country. Folds the
+/// old anonymous `country_id % 4` switch into a small enum so that the
+/// scoring code is readable and individual coach traits are testable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NationalCoachProfile {
+    /// Trusts experienced internationals; cautious with uncapped picks.
+    Conservative,
+    /// Pushes high-potential youngsters into the squad early.
+    YouthDeveloper,
+    /// Prizes world reputation — picks famous names first.
+    StarDriven,
+    /// Rewards in-season form heavily.
+    FormDriven,
+    /// Picks for tactical positional fit above raw reputation.
+    TacticalSpecialist,
+}
+
+impl NationalCoachProfile {
+    /// Deterministic mapping from country to coach archetype.
+    pub fn for_country(country_id: u32) -> Self {
+        match country_id % 5 {
+            0 => NationalCoachProfile::Conservative,
+            1 => NationalCoachProfile::YouthDeveloper,
+            2 => NationalCoachProfile::StarDriven,
+            3 => NationalCoachProfile::FormDriven,
+            _ => NationalCoachProfile::TacticalSpecialist,
+        }
+    }
+}
 
 /// Positions template for generating a balanced synthetic squad
 pub(super) const SYNTHETIC_POSITIONS: [PlayerPositionType; 23] = [
@@ -172,6 +257,7 @@ pub(super) const SYNTHETIC_POSITIONS: [PlayerPositionType; 23] = [
 /// — every field here can be cited as a reason ("regular starter",
 /// "strong league", "veteran caps", …) without needing to re-read the
 /// underlying Player struct.
+#[derive(Clone)]
 pub(crate) struct CallUpCandidate {
     pub(super) player_id: u32,
     pub(super) club_id: u32,

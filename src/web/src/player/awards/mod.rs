@@ -53,12 +53,11 @@ pub struct SummaryBlock {
     pub total: u32,
 }
 
-/// One league section on the Awards tab. The first block in the list
-/// (sorted most-recent-first) is the player's "current league" and
-/// renders both the cards and the 12-month chart; the rest show only
-/// the lifetime counts won at that league. `league_id == None` is the
-/// global bucket (Continental / World POY) — only rendered when the
-/// player has actually won one of those.
+/// One league section on the Awards tab. Sorted most-recent-first.
+/// `league_id == None` is the global bucket (Continental / World POY)
+/// — only rendered when the player has actually won one of those.
+/// The past-12-months chart lives at the page level (right under the
+/// Career Summary hero) and is no longer tied to a single league.
 pub struct LeagueBlock {
     pub league_name: String,
     pub league_slug: String,
@@ -78,11 +77,6 @@ pub struct LeagueBlock {
     pub has_season: bool,
     pub has_global: bool,
     pub total: u32,
-    /// Populated only on the leading block (most recent league). Other
-    /// blocks render their counts but skip the chart panel.
-    pub month_bars: Vec<MonthBar>,
-    pub month_max: u16,
-    pub has_chart: bool,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -117,6 +111,11 @@ pub struct PlayerAwardsTemplate {
     pub interested_clubs_count: usize,
     pub awards_count: u32,
     pub summary: SummaryBlock,
+    /// Career-wide past-12-months chart, rendered right under the
+    /// Career Summary hero. Aggregates every league.
+    pub chart_month_bars: Vec<MonthBar>,
+    pub chart_month_max: u16,
+    pub has_chart: bool,
     pub league_blocks: Vec<LeagueBlock>,
 }
 
@@ -167,6 +166,9 @@ pub async fn player_awards_action(
 
     let counts = &player.awards_count;
     let summary = build_summary(counts, &i18n);
+    let now = simulator_data.date.date();
+    let (chart_month_bars, chart_month_max) = build_month_bars_all(&counts.timeline, now, &i18n);
+    let has_chart = !chart_month_bars.is_empty();
     let league_blocks = build_league_blocks(counts, simulator_data, &i18n);
 
     Ok(PlayerAwardsTemplate {
@@ -232,6 +234,9 @@ pub async fn player_awards_action(
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: counts.total(),
         summary,
+        chart_month_bars,
+        chart_month_max,
+        has_chart,
         league_blocks,
     }
     .into_response())
@@ -525,9 +530,8 @@ fn build_league_blocks(
         db.cmp(&da)
     });
 
-    let now = data.date.date();
     let mut blocks: Vec<LeagueBlock> = Vec::with_capacity(keys.len());
-    for (idx, league_id) in keys.iter().enumerate() {
+    for league_id in keys.iter() {
         let totals = totals_by_league.get(league_id).expect("populated above");
         let (weekly, monthly, season, global) = build_cards(totals, i18n);
         let has_weekly = weekly.iter().any(|c| c.count > 0);
@@ -559,15 +563,6 @@ fn build_league_blocks(
             ),
         };
 
-        // Only the leading league (most recent) gets the chart.
-        let (month_bars, month_max) = if idx == 0 {
-            build_month_bars_for_league(&counts.timeline, *league_id, now, i18n)
-        } else {
-            (Vec::new(), 0)
-        };
-
-        let has_chart = !month_bars.is_empty();
-
         blocks.push(LeagueBlock {
             league_name,
             league_slug,
@@ -584,33 +579,25 @@ fn build_league_blocks(
             has_season,
             has_global,
             total: totals.total(),
-            month_bars,
-            month_max,
-            has_chart,
         });
     }
 
     blocks
 }
 
-/// Bucket the lifetime timeline by calendar month for the past 12
-/// months relative to `now`, filtered to a specific `league_id`.
-/// Always returns exactly 12 bars (current month last) so the chart's
-/// x-axis is stable even when the player went quiet — empty months
-/// render as a flat track. Returns `(bars, max_count)`; max may be
-/// zero if no awards fell in the window. The bar list is empty only
-/// when the league had zero awards in the period (the chart panel is
-/// then hidden).
-fn build_month_bars_for_league(
+/// Career-wide chart data — bucket the lifetime timeline by calendar
+/// month for the past 12 months relative to `now`, aggregating every
+/// league. Always returns exactly 12 bars (current month last) so the
+/// chart's x-axis is stable when the player went quiet. Returns an
+/// empty vec only when the player has zero awards total (chart panel
+/// is then hidden).
+fn build_month_bars_all(
     timeline: &[core::AwardTimelineEntry],
-    league_id: Option<u32>,
     now: chrono::NaiveDate,
     i18n: &I18n,
 ) -> (Vec<MonthBar>, u16) {
     use chrono::Datelike;
 
-    // Build the 12 (year, month) keys ending at `now`'s month. Stored
-    // in chronological order so the rightmost bar is "this month".
     let mut keys: Vec<(i32, u32)> = Vec::with_capacity(12);
     let mut year = now.year();
     let mut month = now.month() as i32;
@@ -624,25 +611,19 @@ fn build_month_bars_for_league(
     }
     keys.reverse();
 
-    // Index counts per (year, month), restricted to this league.
     use std::collections::HashMap;
     let mut counts_by_key: HashMap<(i32, u32), u16> = HashMap::new();
-    let mut any_in_league = false;
+    let mut any = false;
     for entry in timeline {
-        if entry.league_id != league_id {
-            continue;
-        }
-        any_in_league = true;
+        any = true;
         let key = (entry.date.year(), entry.date.month());
         let slot = counts_by_key.entry(key).or_insert(0);
         *slot = slot.saturating_add(1);
     }
-    if !any_in_league {
+    if !any {
         return (Vec::new(), 0);
     }
 
-    // Localised 3-letter month abbreviations — reuses the existing
-    // `month_<short>` i18n keys (already present for every locale).
     let month_short = |m: u32| -> String {
         let key = match m {
             1 => "month_jan",

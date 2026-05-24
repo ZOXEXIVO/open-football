@@ -9313,6 +9313,114 @@ a.fm-award-card:hover {
     position: relative;
 }
 
+/* Career-wide past-12-months chart panel — sits right under the
+   Career Summary hero. The 2em bottom margin separates it from the
+   per-league detail panels that follow. */
+.fm-awards-chart-panel {
+    margin-bottom: 1em;
+}
+
+/* Compact merged per-league panel — collapses what used to be four
+   stacked sub-panels (Weekly / Monthly / Season / Global) into a single
+   panel with thin inline group labels. The Career Summary hero at the
+   top of the page is unaffected (different class scope) so the page
+   reads as "big hero up top, dense reference grid below". */
+.fm-awards-detail-panel {
+    padding: 0;
+}
+
+.fm-awards-detail-body {
+    display: flex;
+    flex-direction: column;
+}
+
+.fm-awards-detail-group + .fm-awards-detail-group {
+    border-top: 1px solid #1f2a36;
+}
+
+.fm-awards-detail-group-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.1px;
+    color: #6c7d8a;
+    background: linear-gradient(180deg, rgba(34, 46, 56, 0.55) 0%, rgba(28, 38, 46, 0.25) 100%);
+    border-bottom: 1px solid #1f2a36;
+}
+
+.fm-awards-detail-group-label .fa {
+    font-size: 10px;
+    opacity: 0.7;
+}
+
+.fm-awards-detail-group-weekly  .fm-awards-detail-group-label .fa { color: #7d92a3; }
+.fm-awards-detail-group-monthly .fm-awards-detail-group-label .fa { color: #d49a55; }
+.fm-awards-detail-group-season  .fm-awards-detail-group-label .fa { color: #e6b95a; }
+.fm-awards-detail-group-global  .fm-awards-detail-group-label .fa { color: #6fe0d0; }
+
+/* Compact card variant — roughly 3x smaller footprint than the default
+   .fm-award-card. Used only inside the merged per-league detail panel;
+   the hero-level layout still uses full-size tiles. */
+.fm-awards-grid-compact {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 4px;
+    padding: 6px 8px;
+}
+
+.fm-awards-grid-compact .fm-award-card {
+    min-height: 32px;
+    padding: 5px 9px;
+    gap: 9px;
+    border-left-width: 2px;
+    border-radius: 3px;
+}
+
+.fm-awards-grid-compact .fm-award-icon {
+    width: 24px;
+    height: 24px;
+    font-size: 11px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15),
+        0 1px 1px rgba(0, 0, 0, 0.2);
+}
+
+.fm-awards-grid-compact .fm-award-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+}
+
+.fm-awards-grid-compact .fm-award-count {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.2px;
+    color: #e6ecf2;
+    min-width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.fm-awards-grid-compact .fm-award-title {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    line-height: 1.15;
+    color: #7a8a96;
+    flex: 1;
+    min-width: 0;
+}
+
+.fm-awards-grid-compact .fm-award-card.young .fm-award-icon::after {
+    transform: translate(8px, -8px);
+    width: 5px;
+    height: 5px;
+    box-shadow: 0 0 0 1.5px #1b262e;
+}
+
 .fm-awards-empty {
     padding: 40px 20px;
     text-align: center;
