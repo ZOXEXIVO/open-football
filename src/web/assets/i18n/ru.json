@@ -1871,7 +1871,7 @@
   "tck_w": "ОТБ",
   "team": "Команда",
   "team_of_the_month": "Сборная месяца",
-  "team_of_the_week": "Сборная недели",
+  "team_of_the_week": "Игрок сборной недели",
   "team_of_the_year": "Команда года",
   "teammate_conflict_reason_language_barrier": "Проблемы с пониманием превратили мелкое недоразумение в настоящий спор.",
   "teammate_conflict_reason_leadership_challenge": "Старший игрок поставил под сомнение его стандарты на глазах у группы.",
@@ -2126,6 +2126,6 @@
   "young_player_of_month": "Молодой игрок месяца",
   "young_player_of_the_season": "Молодой игрок сезона",
   "young_player_of_the_week": "Молодой игрок недели",
-  "young_team_of_the_month": "Молодёжная сборная месяца",
+  "young_team_of_the_month": "Игрок молодёжной сборной месяца",
   "young_team_of_the_week": "Молодая команда недели"
 }

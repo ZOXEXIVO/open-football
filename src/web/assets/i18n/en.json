@@ -1883,7 +1883,7 @@
   "team": "Team",
   "team_of_the_month": "Team of the Month",
   "team_of_the_season": "Team of the Season",
-  "team_of_the_week": "Team of the Week",
+  "team_of_the_week": "Team of the Week member",
   "team_of_the_year": "Team of the Year",
   "teammate_conflict_reason_language_barrier": "Communication issues turned a small misunderstanding into a real argument.",
   "teammate_conflict_reason_leadership_challenge": "A senior voice challenged his standards in front of the group.",
@@ -2141,6 +2141,6 @@
   "young_player_of_the_month": "Young Player of the Month",
   "young_player_of_the_season": "Young Player of the Season",
   "young_player_of_the_week": "Young Player of the Week",
-  "young_team_of_the_month": "Young Team of the Month",
+  "young_team_of_the_month": "Young Team of the Month member",
   "young_team_of_the_week": "Young Team of the Week"
 }

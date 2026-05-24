@@ -1871,7 +1871,7 @@
   "tck_w": "TCK G",
   "team": "Équipe",
   "team_of_the_month": "Équipe du Mois",
-  "team_of_the_week": "Équipe de la Semaine",
+  "team_of_the_week": "Membre de l'Équipe de la Semaine",
   "team_of_the_year": "Équipe de l'Année",
   "teammate_conflict_reason_language_barrier": "Des problèmes de communication ont transformé un malentendu en vrai accrochage.",
   "teammate_conflict_reason_leadership_challenge": "Une voix d'expérience a remis ses standards en cause devant le groupe.",
@@ -2126,6 +2126,6 @@
   "young_player_of_month": "Jeune Joueur du Mois",
   "young_player_of_the_season": "Jeune Joueur de la Saison",
   "young_player_of_the_week": "Jeune Joueur de la Semaine",
-  "young_team_of_the_month": "Jeune Équipe du Mois",
+  "young_team_of_the_month": "Membre de la Jeune Équipe du Mois",
   "young_team_of_the_week": "Jeune Équipe de la Semaine"
 }

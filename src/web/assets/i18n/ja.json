@@ -1871,7 +1871,7 @@
   "tck_w": "タックル成功",
   "team": "チーム",
   "team_of_the_month": "月間ベストイレブン",
-  "team_of_the_week": "週間ベストイレブン",
+  "team_of_the_week": "週間ベストイレブン選出",
   "team_of_the_year": "年間ベストイレブン",
   "teammate_conflict_reason_language_barrier": "意思疎通の難しさが小さな誤解を本気の口論に変えた。",
   "teammate_conflict_reason_leadership_challenge": "ベテランがチームの前で彼の基準に異議を唱えた。",
@@ -2126,6 +2126,6 @@
   "young_player_of_month": "月間最優秀若手選手",
   "young_player_of_the_season": "シーズン最優秀若手選手",
   "young_player_of_the_week": "週間最優秀若手選手",
-  "young_team_of_the_month": "月間若手ベストイレブン",
+  "young_team_of_the_month": "月間若手ベストイレブン選出",
   "young_team_of_the_week": "週間ベスト若手イレブン"
 }

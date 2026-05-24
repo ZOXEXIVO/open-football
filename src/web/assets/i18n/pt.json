@@ -1871,7 +1871,7 @@
   "tck_w": "DES G",
   "team": "Time",
   "team_of_the_month": "Seleção do Mês",
-  "team_of_the_week": "Seleção da Semana",
+  "team_of_the_week": "Membro da Seleção da Semana",
   "team_of_the_year": "Equipa do Ano",
   "teammate_conflict_reason_language_barrier": "Problemas de comunicação transformaram um mal-entendido numa discussão real.",
   "teammate_conflict_reason_leadership_challenge": "Uma voz veterana questionou os seus padrões à frente do grupo.",
@@ -2126,6 +2126,6 @@
   "young_player_of_month": "Jovem Jogador do Mês",
   "young_player_of_the_season": "Jovem Jogador da Temporada",
   "young_player_of_the_week": "Jovem Jogador da Semana",
-  "young_team_of_the_month": "Seleção Jovem do Mês",
+  "young_team_of_the_month": "Membro da Seleção Jovem do Mês",
   "young_team_of_the_week": "Equipa Jovem da Semana"
 }

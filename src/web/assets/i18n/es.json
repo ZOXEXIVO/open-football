@@ -1871,7 +1871,7 @@
   "tck_w": "ENT",
   "team": "Equipo",
   "team_of_the_month": "Equipo del Mes",
-  "team_of_the_week": "Equipo de la Semana",
+  "team_of_the_week": "Miembro del Equipo de la Semana",
   "team_of_the_year": "Equipo del Año",
   "teammate_conflict_reason_language_barrier": "Las dificultades de comunicación convirtieron un malentendido en una discusión real.",
   "teammate_conflict_reason_leadership_challenge": "Una voz veterana cuestionó sus estándares delante del grupo.",
@@ -2126,6 +2126,6 @@
   "young_player_of_month": "Joven Jugador del Mes",
   "young_player_of_the_season": "Joven Jugador de la Temporada",
   "young_player_of_the_week": "Jugador Joven de la Semana",
-  "young_team_of_the_month": "Equipo Joven del Mes",
+  "young_team_of_the_month": "Miembro del Equipo Joven del Mes",
   "young_team_of_the_week": "Equipo Joven de la Semana"
 }

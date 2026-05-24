@@ -1871,7 +1871,7 @@
   "tck_w": "TCK G",
   "team": "Mannschaft",
   "team_of_the_month": "Team des Monats",
-  "team_of_the_week": "Team der Woche",
+  "team_of_the_week": "Mitglied des Teams der Woche",
   "team_of_the_year": "Team des Jahres",
   "teammate_conflict_reason_language_barrier": "Verständigungsprobleme machten aus einem kleinen Missverständnis einen echten Streit.",
   "teammate_conflict_reason_leadership_challenge": "Eine wichtige Stimme stellte vor der Mannschaft seine Standards infrage.",
@@ -2126,6 +2126,6 @@
   "young_player_of_month": "Junger Spieler des Monats",
   "young_player_of_the_season": "Junger Spieler der Saison",
   "young_player_of_the_week": "Junger Spieler der Woche",
-  "young_team_of_the_month": "Junges Team des Monats",
+  "young_team_of_the_month": "Mitglied des jungen Teams des Monats",
   "young_team_of_the_week": "Junges Team der Woche"
 }

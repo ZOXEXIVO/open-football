@@ -1871,7 +1871,7 @@
   "tck_w": "搶斷成功",
   "team": "球隊",
   "team_of_the_month": "本月最佳陣容",
-  "team_of_the_week": "本週最佳陣容",
+  "team_of_the_week": "本週最佳陣容成員",
   "team_of_the_year": "年度最佳陣容",
   "teammate_conflict_reason_language_barrier": "沟通障碍把一次小误会变成了真正的争吵。",
   "teammate_conflict_reason_leadership_challenge": "一位资深球员当着全队质疑了他的标准。",
@@ -2126,6 +2126,6 @@
   "young_player_of_month": "月最佳新秀",
   "young_player_of_the_season": "賽季最佳新秀",
   "young_player_of_the_week": "週最佳年輕球員",
-  "young_team_of_the_month": "本月最佳新秀陣容",
+  "young_team_of_the_month": "本月最佳新秀陣容成員",
   "young_team_of_the_week": "週最佳年輕陣容"
 }
