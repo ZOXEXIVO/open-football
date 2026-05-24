@@ -533,6 +533,22 @@ impl TeamOfTheWeekSelector {
         scores: &HashMap<u32, CandidateAggregate>,
         min_apps: u8,
     ) -> Vec<(u32, PlayerFieldPositionGroup, f32, CandidateAggregate)> {
+        Self::pick_with_gates(scores, min_apps, 0.0)
+    }
+
+    /// Same shape as [`pick_with_min_apps`] but adds a minimum
+    /// candidate-score gate. Used by the Young Team of the Week, where
+    /// thin U-20 pools in low-reputation leagues would otherwise fill
+    /// all 11 slots with whoever scored fractionally above zero — a
+    /// 6.5-avg kid in a tier-5 league racking up six "young XI"
+    /// appearances inside a month. The selector skips a slot rather
+    /// than filling it with a sub-floor candidate; if a position has
+    /// no qualifying candidate at all, that slot is simply empty.
+    pub fn pick_with_gates(
+        scores: &HashMap<u32, CandidateAggregate>,
+        min_apps: u8,
+        min_score: f32,
+    ) -> Vec<(u32, PlayerFieldPositionGroup, f32, CandidateAggregate)> {
         let mut by_pos: HashMap<PlayerFieldPositionGroup, Vec<(u32, f32, CandidateAggregate)>> =
             HashMap::new();
         for (id, agg) in scores {
@@ -543,7 +559,7 @@ impl TeamOfTheWeekSelector {
                 .primary_position
                 .unwrap_or(PlayerFieldPositionGroup::Midfielder);
             let s = Self::candidate_score_regressed(agg);
-            if s <= 0.0 {
+            if s <= 0.0 || s < min_score {
                 continue;
             }
             by_pos.entry(pos).or_default().push((*id, s, *agg));
@@ -1147,6 +1163,38 @@ mod tests {
         let ids: Vec<u32> = team.iter().map(|(id, ..)| *id).collect();
         assert!(!ids.contains(&21), "21-year-old must be filtered out");
         assert!(ids.contains(&20), "20-year-old must remain eligible");
+    }
+
+    #[test]
+    fn young_totw_score_floor_filters_thin_pool_padding() {
+        // Reproduces the Young TOTW pathology: a low-rep league with a
+        // tiny U-20 pool where the same routine kids fill every slot
+        // weekly. With min_score = YOUNG_WEEKLY_MIN_SCORE (3.0), a
+        // 6.5-avg one-touch midfielder must be filtered out, but a
+        // forward with 1 goal + a 7.0-avg week must remain eligible.
+        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        // Padder: 6.5 avg, no contributions, regressed score lands
+        // well under the 3.0 floor.
+        scores.insert(
+            1,
+            make_agg(PlayerFieldPositionGroup::Midfielder, 1, 0, 0, 6.5, 0),
+        );
+        // Genuine performance: 7.4 avg + 1 goal, must stay eligible.
+        scores.insert(
+            2,
+            make_agg(PlayerFieldPositionGroup::Forward, 1, 1, 0, 7.4, 1),
+        );
+
+        let team = TeamOfTheWeekSelector::pick_with_gates(&scores, 1, 3.0);
+        let ids: Vec<u32> = team.iter().map(|(id, ..)| *id).collect();
+        assert!(
+            !ids.contains(&1),
+            "thin-pool 6.5-avg padder must be filtered by score floor"
+        );
+        assert!(
+            ids.contains(&2),
+            "real performance must remain eligible above the floor"
+        );
     }
 
     #[test]

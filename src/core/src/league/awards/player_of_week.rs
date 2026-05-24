@@ -234,9 +234,22 @@ impl PlayerOfTheWeekSelector {
     /// Pick the top scorer. Ties broken by best single-match rating, then
     /// lowest player id (deterministic across ticks).
     pub fn pick_winner(scores: &HashMap<u32, WeeklyAggregate>) -> Option<(u32, WeeklyAggregate)> {
+        Self::pick_winner_with_min_score(scores, 0.0)
+    }
+
+    /// Same shape as [`pick_winner`] but adds a minimum score floor.
+    /// Used by the Young Player of the Week, where a thin U-20 pool in
+    /// a low-reputation league would otherwise crown a routine 6.5-avg
+    /// kid as "winner" purely because no one else cleared zero. Returns
+    /// `None` if no candidate clears the floor — the league simply
+    /// doesn't have a Young POW that week.
+    pub fn pick_winner_with_min_score(
+        scores: &HashMap<u32, WeeklyAggregate>,
+        min_score: f32,
+    ) -> Option<(u32, WeeklyAggregate)> {
         scores
             .iter()
-            .filter(|(_, a)| a.matches_played > 0 && a.score > 0.0)
+            .filter(|(_, a)| a.matches_played > 0 && a.score > 0.0 && a.score >= min_score)
             .max_by(|(la, a), (lb, b)| {
                 a.score
                     .partial_cmp(&b.score)
@@ -537,6 +550,45 @@ mod tests {
             .map(|(id, a)| (*id, *a))
             .collect();
         let (winner, _) = PlayerOfTheWeekSelector::pick_winner(&young).expect("a winner");
+        assert_eq!(winner, 1);
+    }
+
+    #[test]
+    fn young_pow_score_floor_filters_thin_pool_padder() {
+        // Thin U-20 pool, low-rep league: a 6.5-avg midfielder with no
+        // goals/assists/MOTM is the only candidate above 0. Without
+        // the floor they'd "win" Young POW every week.
+        let mut padder = empty_stats();
+        padder.match_rating = 6.5;
+        padder.position_group = PlayerFieldPositionGroup::Midfielder;
+        let m = build_match("m", 10, 20, 0, 0, &[1], &[], vec![(1, padder)], None);
+
+        let agg = PlayerOfTheWeekSelector::aggregate([&m]);
+        // Sanity: without the floor, id 1 would be the winner.
+        assert!(PlayerOfTheWeekSelector::pick_winner(&agg).is_some());
+
+        // With the production Young POW floor, the padder is filtered
+        // out and the league has no Young POW that week.
+        assert!(
+            PlayerOfTheWeekSelector::pick_winner_with_min_score(&agg, 2.0).is_none(),
+            "6.5-avg padder must not clear the 2.0 Young POW floor",
+        );
+    }
+
+    #[test]
+    fn young_pow_score_floor_keeps_real_performance() {
+        // Inverse: a 7.5-avg forward who also scored must still win
+        // under the same floor — the gate filters padding, not actual
+        // contribution.
+        let mut real = empty_stats();
+        real.match_rating = 7.5;
+        real.goals = 1;
+        real.position_group = PlayerFieldPositionGroup::Forward;
+        let m = build_match("m", 10, 20, 1, 0, &[1], &[], vec![(1, real)], Some(1));
+
+        let agg = PlayerOfTheWeekSelector::aggregate([&m]);
+        let (winner, _) = PlayerOfTheWeekSelector::pick_winner_with_min_score(&agg, 2.0)
+            .expect("real performance must clear the floor");
         assert_eq!(winner, 1);
     }
 

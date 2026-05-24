@@ -1,6 +1,6 @@
 use super::cache::MondayAwardCache;
 use super::weekly::WeeklyAwardsTick;
-use crate::league::awards::{WeeklyAggregate, YOUNG_WEEKLY_MAX_AGE};
+use crate::league::awards::{WeeklyAggregate, YOUNG_WEEKLY_MAX_AGE, YOUNG_WEEKLY_POW_MIN_SCORE};
 use crate::league::player_of_week::{PlayerOfTheWeekAward, PlayerOfTheWeekSelector};
 use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
@@ -59,7 +59,14 @@ impl YoungWeeklyAwardsTick {
                         young.insert(*id, *agg);
                     }
                 }
-                let (winner_id, agg) = PlayerOfTheWeekSelector::pick_winner(&young)?;
+                // Score floor parallels Young TOTW: a thin U-20 pool
+                // in a low-reputation league must not crown a 6.5-avg
+                // padder. Below the floor, the league simply doesn't
+                // have a Young POW that week.
+                let (winner_id, agg) = PlayerOfTheWeekSelector::pick_winner_with_min_score(
+                    &young,
+                    YOUNG_WEEKLY_POW_MIN_SCORE,
+                )?;
 
                 let player = data.player(winner_id)?;
                 let player_name = format!(

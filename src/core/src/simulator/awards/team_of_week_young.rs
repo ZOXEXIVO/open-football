@@ -3,7 +3,7 @@ use super::weekly::WeeklyAwardsTick;
 use crate::HappinessEventType;
 use crate::league::awards::{
     CandidateAggregate, TeamOfTheWeekAward, TeamOfTheWeekSelector, TeamOfTheWeekSlot,
-    YOUNG_WEEKLY_MAX_AGE,
+    YOUNG_WEEKLY_MAX_AGE, YOUNG_WEEKLY_TOTW_MIN_SCORE,
 };
 use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
@@ -55,7 +55,14 @@ impl YoungTeamOfTheWeekTick {
                     })
                     .map(|(id, agg)| (*id, *agg))
                     .collect();
-                let team = TeamOfTheWeekSelector::pick(&young);
+                // Gate by min candidate score (not min appearances —
+                // most leagues only have one fixture per week, so a
+                // min_apps>=2 gate would silently kill Young TOTW
+                // outside congested rounds). The score floor filters
+                // thin-pool padding without breaking single-fixture
+                // weeks.
+                let team =
+                    TeamOfTheWeekSelector::pick_with_gates(&young, 1, YOUNG_WEEKLY_TOTW_MIN_SCORE);
                 if team.is_empty() {
                     return None;
                 }
