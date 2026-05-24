@@ -8983,38 +8983,140 @@ a:link, a:visited, a:hover, a:active {
     display: block;
 }
 
-/* The summary row at the top reuses the league-block layout but
-   styles its header strip a touch stronger — accent rail on the
-   left + lifted text colour so the reader can read it as "career
-   totals" before scanning into the per-league sections. */
-.fm-awards-summary {
-    margin-bottom: 6px;
-    padding: 10px 0 14px;
-    border-bottom: 1px solid #1f2a36;
+/* Career Summary hero — a single horizontal strip that sits above
+   the per-league blocks and reads as the page-level "career totals"
+   banner. Deliberately a different shape than the league rows below
+   (gold left rail, trophy mark, big total + 4 category stat tiles)
+   so the reader's eye latches on to it before scanning the league
+   breakdown. */
+.fm-awards-hero {
+    display: flex;
+    gap: 18px;
+    padding: 16px 18px;
+    margin-bottom: 18px;
+    background: linear-gradient(135deg, #1e2c38 0%, #16222b 100%);
+    border: 1px solid #2a3a4a;
+    border-left: 3px solid #c89a3c;
+    border-radius: 6px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025),
+        0 1px 2px rgba(0, 0, 0, 0.2);
+    align-items: stretch;
 }
 
-.fm-awards-summary .fm-awards-league-head {
-    position: relative;
-    padding-left: 10px;
-    margin-bottom: 12px;
+.fm-awards-hero-banner {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding-right: 18px;
+    border-right: 1px solid #243140;
+    flex-shrink: 0;
 }
 
-.fm-awards-summary .fm-awards-league-head::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 2px;
-    bottom: 2px;
-    width: 3px;
-    border-radius: 2px;
-    background: linear-gradient(180deg, #c89a3c 0%, #8a6624 100%);
+.fm-awards-hero-mark {
+    width: 54px;
+    height: 54px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: #2a1f0a;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #e6b95a 0%, #c89a3c 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3),
+        0 2px 6px rgba(0, 0, 0, 0.35);
+    flex-shrink: 0;
 }
 
-.fm-awards-summary .fm-awards-league-name {
-    font-size: 15px;
-    color: #e6ecf2;
+.fm-awards-hero-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.fm-awards-hero-total {
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1;
+    color: #f1e4c4;
+    letter-spacing: -1px;
+}
+
+.fm-awards-hero-label {
+    font-size: 11px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 1.2px;
+    color: #8a7a52;
+}
+
+.fm-awards-hero-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.fm-awards-hero-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid #1f2a36;
+    border-radius: 4px;
+    text-align: center;
+}
+
+.fm-awards-hero-stat.is-empty {
+    opacity: 0.4;
+}
+
+.fm-awards-hero-stat-icon {
+    font-size: 13px;
+    color: #5a6f80;
+    line-height: 1;
+}
+
+.fm-awards-hero-stat-val {
+    font-size: 22px;
+    font-weight: 700;
+    color: #e6ecf2;
+    line-height: 1;
+    letter-spacing: -0.5px;
+}
+
+.fm-awards-hero-stat-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: #8a99a4;
+    line-height: 1.2;
+}
+
+.fm-awards-hero-stat-weekly .fm-awards-hero-stat-icon { color: #7d92a3; }
+.fm-awards-hero-stat-monthly .fm-awards-hero-stat-icon { color: #d49a55; }
+.fm-awards-hero-stat-season .fm-awards-hero-stat-icon { color: #e6b95a; }
+.fm-awards-hero-stat-global .fm-awards-hero-stat-icon { color: #6fe0d0; }
+
+@media (max-width: 760px) {
+    .fm-awards-hero {
+        flex-direction: column;
+        gap: 14px;
+    }
+    .fm-awards-hero-banner {
+        border-right: none;
+        border-bottom: 1px solid #243140;
+        padding-right: 0;
+        padding-bottom: 12px;
+    }
+    .fm-awards-hero-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 
 .fm-awards-league + .fm-awards-league {

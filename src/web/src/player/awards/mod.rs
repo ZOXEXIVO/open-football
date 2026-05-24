@@ -39,15 +39,13 @@ pub struct MonthBar {
     pub height_pct: u32,
 }
 
-/// Career-wide summary at the top of the page — lifetime counts
-/// across every league the player has ever appeared in. Same card
-/// layout as a [`LeagueBlock`] but with no chart and no league
-/// header link.
+/// Career-wide hero strip at the top of the page — lifetime totals
+/// rolled up into one row with a banner and four category tiles.
 pub struct SummaryBlock {
-    pub weekly_cards: Vec<AwardCard>,
-    pub monthly_cards: Vec<AwardCard>,
-    pub season_cards: Vec<AwardCard>,
-    pub global_cards: Vec<AwardCard>,
+    pub weekly_total: u32,
+    pub monthly_total: u32,
+    pub season_total: u32,
+    pub global_total: u32,
     pub has_weekly: bool,
     pub has_monthly: bool,
     pub has_season: bool,
@@ -242,15 +240,20 @@ pub async fn player_awards_action(
 fn build_summary(counts: &PlayerAwardsCount, i18n: &I18n) -> SummaryBlock {
     let totals = LeagueAwardTotals::from_lifetime(counts);
     let (weekly, monthly, season, global) = build_cards(&totals, i18n);
+    let sum = |cards: &[AwardCard]| -> u32 { cards.iter().map(|c| c.count as u32).sum() };
+    let weekly_total = sum(&weekly);
+    let monthly_total = sum(&monthly);
+    let season_total = sum(&season);
+    let global_total = sum(&global);
     SummaryBlock {
-        has_weekly: weekly.iter().any(|c| c.count > 0),
-        has_monthly: monthly.iter().any(|c| c.count > 0),
-        has_season: season.iter().any(|c| c.count > 0),
-        has_global: global.iter().any(|c| c.count > 0),
-        weekly_cards: weekly,
-        monthly_cards: monthly,
-        season_cards: season,
-        global_cards: global,
+        has_weekly: weekly_total > 0,
+        has_monthly: monthly_total > 0,
+        has_season: season_total > 0,
+        has_global: global_total > 0,
+        weekly_total,
+        monthly_total,
+        season_total,
+        global_total,
         total: totals.total(),
     }
 }
