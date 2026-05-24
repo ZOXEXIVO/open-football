@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
@@ -185,9 +186,11 @@ impl ForwardStandingState {
             return false;
         }
 
-        // Dribble to beat nearby defenders if skilled enough
-        let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
-        dribbling_skill > 0.5
+        // Dribble willingness scales smoothly with the dribbling skill
+        // (sigmoid pivot 10/20) — sub-5 dribblers very rarely attempt
+        // a take-on; elite 17/20 almost always do.
+        let p = SkillCurve::new(ctx.player.skills.technical.dribbling, 10.0, 0.6).probability();
+        rand::random::<f32>() < p
     }
 
     /// Decides whether the forward should press the opponent.

@@ -13,6 +13,7 @@
 
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::MatchPlayer;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MovementBias {
@@ -97,9 +98,11 @@ pub fn passing_bias(player: &MatchPlayer) -> PassingBias {
     if player.has_trait(PlayerTrait::Playmaker) {
         b.ask_for_ball_bonus += 0.12;
         b.tempo_control_bonus += 0.10;
-        if player.skills.mental.vision >= 13.0 {
-            b.risky_central_pass_bonus += 0.08;
-        }
+        // Risky central pass bonus scales smoothly with vision —
+        // a vision-12 playmaker still attempts these, just less than
+        // a vision-17 one. Sigmoid pivot at 13/20 preserves intent.
+        b.risky_central_pass_bonus +=
+            0.08 * SkillCurve::new(player.skills.mental.vision, 13.0, 0.6).probability();
     }
     if player.has_trait(PlayerTrait::TriesThroughBalls)
         || player.has_trait(PlayerTrait::KillerBallOften)

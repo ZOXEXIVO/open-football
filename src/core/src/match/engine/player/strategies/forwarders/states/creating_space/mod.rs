@@ -1,4 +1,5 @@
 use crate::TacticalStyle;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
@@ -1282,7 +1283,14 @@ impl ForwardCreatingSpaceState {
             return false;
         }
         if blockers == 1 {
-            return ctx.player.skills.physical.pace > 12.0;
+            // Pace decides whether the runner can beat a single blocker.
+            // Smooth sigmoid (pivot 12/20) — a slow striker (pace=6) very
+            // occasionally still tries; a quick one (pace=17) almost
+            // always commits.
+            let p = SkillCurve::new(ctx.player.skills.physical.pace, 12.0, 0.6).probability();
+            if rand::random::<f32>() >= p {
+                return false;
+            }
         }
 
         // Also check passing lane: runner must be ahead of the passer

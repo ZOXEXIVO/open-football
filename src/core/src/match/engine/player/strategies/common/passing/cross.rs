@@ -4,6 +4,7 @@
 //! model is consistent across roles.
 
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, StateProcessingContext};
 use nalgebra::Vector3;
@@ -163,9 +164,19 @@ fn pick_cross_type(
     let near_byline = crosser_dist_to_goal < 70.0;
     let target_inside_box = (target_pos - goal_pos).norm_squared() < 80.0 * 80.0;
 
+    // `target_heading_skill` is already normalised (raw/20). Compute
+    // sigmoid probability of "poor header" so the cutback / driven-low
+    // choices scale smoothly with the target's actual heading, instead
+    // of cliff-gating everyone below 0.55 / 0.50 into the same bucket.
+    let raw_heading = target_heading_skill * 20.0;
+    let p_poor_header_byline = 1.0 - SkillCurve::new(raw_heading, 11.0, 0.6).probability();
+    let p_poor_header_wide = 1.0 - SkillCurve::new(raw_heading, 10.0, 0.6).probability();
+
     if near_byline && target_inside_box {
         // Pulled-back option for a runner trailing the play.
-        if target_pos.x.abs() > crosser_pos.x.abs() && target_heading_skill < 0.55 {
+        if target_pos.x.abs() > crosser_pos.x.abs()
+            && rand::random::<f32>() < p_poor_header_byline
+        {
             return CrossType::Cutback;
         }
         return CrossType::WhippedNearPost;
@@ -177,7 +188,7 @@ fn pick_cross_type(
         return CrossType::FloatedFarPost;
     }
 
-    if target_heading_skill < 0.5 && separation > 25.0 {
+    if separation > 25.0 && rand::random::<f32>() < p_poor_header_wide {
         // Foot-runner profile — a low driven ball is the better choice.
         return CrossType::DrivenLowCross;
     }

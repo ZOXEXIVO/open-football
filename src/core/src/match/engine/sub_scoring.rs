@@ -11,6 +11,7 @@
 //! the stronger the case for the swap. The substitution loop combines
 //! a `sub_off_score` and a `sub_in_score` to choose pairs.
 
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::engine::rating::RatingContext;
 use crate::r#match::{MatchPlayer, engine::coach::TacticalNeed};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
@@ -182,16 +183,17 @@ impl SubScoring {
             s += 0.05;
         }
 
-        // Yellow-card risk: a yellow + high aggression in a defensive role
-        // is a clear "get him off before he sees red" trigger.
+        // Yellow-card risk: a yellow + aggression in a defensive role
+        // is a "get him off before he sees red" signal. Aggression scales
+        // the bite smoothly (sigmoid around 14/20) so a 13/20 player is
+        // still treated as risky, just less than a 17/20 hothead.
         if live.yellow_carded()
-            && player.skills.mental.aggression >= 14.0
             && matches!(
                 pos_group,
                 PlayerFieldPositionGroup::Defender | PlayerFieldPositionGroup::Midfielder
             )
         {
-            s += 0.12;
+            s += 0.12 * SkillCurve::new(player.skills.mental.aggression, 14.0, 0.6).probability();
         }
 
         // Errors leading to goal: the player has already cost the team

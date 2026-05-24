@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
@@ -1440,8 +1441,11 @@ impl MidfielderRunningState {
             return false;
         }
 
-        // Crossing skill must be decent (> 8.0 on 0-20 scale)
-        ctx.player.skills.technical.crossing > 8.0
+        // Crossing skill scales the willingness smoothly (sigmoid pivot
+        // at 8/20). A bad crosser still attempts a deep cross
+        // occasionally; an elite one almost always does.
+        let p = SkillCurve::new(ctx.player.skills.technical.crossing, 8.0, 0.6).probability();
+        rand::random::<f32>() < p
     }
 
     /// Find a safe backward/lateral pass target for tempo control.

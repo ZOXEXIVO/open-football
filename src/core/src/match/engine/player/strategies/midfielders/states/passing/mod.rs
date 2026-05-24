@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
@@ -429,8 +430,15 @@ impl MidfielderPassingState {
         }
 
         if marker_count == 1 {
+            // Effectiveness of a single tight marker scales with their
+            // positioning (sigmoid pivot at 16/20) and proximity.
+            // Treat the combined signal as "heavily marked" when above
+            // 0.5 — replaces the hard `> 16.0 && < 2.5` cliff that
+            // turned every sub-elite marker into a non-factor.
             let marking_skill = ctx.player().skills(single_marker_id).mental.positioning;
-            if marking_skill > 16.0 && single_marker_dist < 2.5 {
+            let skill_p = SkillCurve::new(marking_skill, 16.0, 0.6).probability();
+            let proximity = (1.0 - (single_marker_dist / MARKING_DISTANCE)).clamp(0.0, 1.0);
+            if skill_p * proximity > 0.40 {
                 return true;
             }
         }

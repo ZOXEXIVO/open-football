@@ -1,6 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
@@ -141,27 +142,33 @@ impl PassSkills {
         let mental = EffSkillCtx::mental(minute);
         let expl = EffSkillCtx::explosive(minute);
 
-        let passing =
-            (effective_skill(player, player.skills.technical.passing, tech) / 20.0).clamp(0.1, 1.0);
+        // Floors lowered from 0.10 to 0.02 so the bottom of the 1-20
+        // range visibly separates: a skill-1 player now lands at 0.05
+        // (raw) rather than being lifted to the same 0.10 as a skill-2.
+        // Stamina keeps a slightly higher floor (0.05) so a wrecked
+        // player can still walk through a possession; flair was
+        // already unfloored.
+        let passing = (effective_skill(player, player.skills.technical.passing, tech) / 20.0)
+            .clamp(0.02, 1.0);
         let technique = (effective_skill(player, player.skills.technical.technique, tech) / 20.0)
-            .clamp(0.1, 1.0);
+            .clamp(0.02, 1.0);
         let vision =
-            (effective_skill(player, player.skills.mental.vision, mental) / 20.0).clamp(0.1, 1.0);
+            (effective_skill(player, player.skills.mental.vision, mental) / 20.0).clamp(0.02, 1.0);
         let composure = (effective_skill(player, player.skills.mental.composure, mental) / 20.0)
-            .clamp(0.1, 1.0);
+            .clamp(0.02, 1.0);
         let decisions = (effective_skill(player, player.skills.mental.decisions, mental) / 20.0)
-            .clamp(0.1, 1.0);
+            .clamp(0.02, 1.0);
         let concentration = (effective_skill(player, player.skills.mental.concentration, mental)
             / 20.0)
-            .clamp(0.1, 1.0);
+            .clamp(0.02, 1.0);
         let flair =
             (effective_skill(player, player.skills.mental.flair, mental) / 20.0).clamp(0.0, 1.0);
         let long_shots = (effective_skill(player, player.skills.technical.long_shots, tech) / 20.0)
-            .clamp(0.1, 1.0);
+            .clamp(0.02, 1.0);
         let crossing = (effective_skill(player, player.skills.technical.crossing, tech) / 20.0)
-            .clamp(0.1, 1.0);
+            .clamp(0.02, 1.0);
         let stamina =
-            (effective_skill(player, player.skills.physical.stamina, expl) / 20.0).clamp(0.15, 1.0);
+            (effective_skill(player, player.skills.physical.stamina, expl) / 20.0).clamp(0.05, 1.0);
 
         // Availability factor — independent of `effective_skill`'s
         // condition handling. Captures chronic fitness (long-term shape)
@@ -1559,16 +1566,24 @@ impl PlayerEventDispatcher {
                 }
             }
         } else {
-            // OBSTACLES PRESENT - Use lofted passes (crosses)
+            // OBSTACLES PRESENT - Use lofted passes (crosses).
+            // Smooth crossing / vision gates via sigmoid pivots at the
+            // old `> 0.7` (=14/20) thresholds — `skills.*` are already
+            // normalised 0-1 so we re-scale to raw 1-20 for the curve.
             let many_obstacles = obstacles_in_lane >= 2;
-            let has_good_crossing = skills.crossing > 0.7;
+            let crossing_p =
+                SkillCurve::new(skills.crossing * 20.0, 14.0, 0.6).probability();
+            let vision_p =
+                SkillCurve::new(vision_quality * 20.0, 14.0, 0.6).probability();
+            let has_good_crossing = rng.random_range(0.0..1.0) < crossing_p;
 
             if is_short {
                 // Short pass with obstacles - chip or lift (NEVER low)
-                if vision_quality > 0.7 && skill_influenced_random < 0.65 {
-                    TrajectoryType::Chip // Smart chip over defender (65%)
+                let chip_p = vision_p * 0.65;
+                if skill_influenced_random < chip_p {
+                    TrajectoryType::Chip // Smart chip over defender, scaled by vision
                 } else {
-                    TrajectoryType::MediumArc // Medium loft (35%)
+                    TrajectoryType::MediumArc // Medium loft
                 }
             } else if is_medium {
                 // Medium pass with obstacles - cross with arc (NEVER low)

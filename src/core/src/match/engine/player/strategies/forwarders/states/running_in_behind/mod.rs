@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
@@ -176,8 +177,11 @@ impl ForwardRunningInBehindState {
         }
 
         if blockers == 1 {
-            let pace = ctx.player.skills.physical.pace;
-            return pace > 12.0;
+            // Pace decides the chance of beating a single blocker on
+            // a run-in-behind. Sigmoid pivot at 12/20 so the full
+            // 1-20 range matters instead of a hard cliff.
+            let p = SkillCurve::new(ctx.player.skills.physical.pace, 12.0, 0.6).probability();
+            return rand::random::<f32>() < p;
         }
 
         false

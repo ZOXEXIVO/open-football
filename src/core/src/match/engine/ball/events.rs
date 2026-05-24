@@ -317,17 +317,17 @@ impl BallEventDispatcher {
         // skill=10 retains ~26%, skill=20 retains ~90%.
         let (carrier_skill_factor, carry_seed) = if let Some(carrier) = field.get_player(carrier_id)
         {
-            let dribbling = (carrier.skills.technical.dribbling / 20.0).clamp(0.05, 1.0);
-            let technique = (carrier.skills.technical.technique / 20.0).clamp(0.05, 1.0);
-            let agility = (carrier.skills.physical.agility / 20.0).clamp(0.05, 1.0);
+            let dribbling = (carrier.skills.technical.dribbling / 20.0).clamp(0.0, 1.0);
+            let technique = (carrier.skills.technical.technique / 20.0).clamp(0.0, 1.0);
+            let agility = (carrier.skills.physical.agility / 20.0).clamp(0.0, 1.0);
             let composite = dribbling * 0.5 + technique * 0.3 + agility * 0.2;
-            // Squaring curve so skill 0.05 → ~0.06 success, skill 0.5 →
-            // ~0.28, skill 0.95 → ~0.90. Floor at 0.05 to keep the
-            // worst dribblers from getting zero credit when they
-            // genuinely break the line on a counter; cap at 0.95 so
-            // even an elite can't run through everyone without some
-            // chance of a slip.
-            let p = composite.powi(2).clamp(0.05, 0.95);
+            // Squaring curve so skill ~1 → ~0.0025 success, skill 5 →
+            // ~6%, skill 10 → ~25%, skill 20 → ~90%. Floor at 0.01 (1%)
+            // so a sub-5 dribbler can occasionally beat a man on a
+            // lucky touch without flattening the whole bottom into the
+            // same rate; cap at 0.95 so even an elite has some chance
+            // of a slip.
+            let p = composite.powi(2).clamp(0.01, 0.95);
             (p, context.current_tick())
         } else {
             (0.5, 0)

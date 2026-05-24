@@ -1,6 +1,51 @@
 use crate::r#match::StateProcessingContext;
 use crate::r#match::engine::player::strategies::common::players::ops::skill_composites as sc;
 
+/// Smooth eligibility curve for skill-gated actions. Wraps a logistic
+/// sigmoid centred at `midpoint` (raw 1-20 skill units, NOT normalised).
+///
+/// Replaces hard `if skill >= N` gates that flatten the lower half of
+/// the 1-20 range (every sub-N player behaves identically). With a
+/// curve, a 5/20 player still has *some* chance / *some* contribution,
+/// just much less than an elite 17/20.
+///
+/// Typical uses:
+///   * Probabilistic eligibility: `if roll < SkillCurve::new(s, 12.0, 0.6).probability() { ... }`
+///   * Smooth multiplier: `SkillCurve::new(s, 12.0, 0.6).lerp(low, high)`
+#[derive(Debug, Clone, Copy)]
+pub struct SkillCurve {
+    skill: f32,
+    midpoint: f32,
+    steepness: f32,
+}
+
+impl SkillCurve {
+    /// `midpoint` is the 50%-probability skill value (raw 1-20).
+    /// `steepness` ≈ 0.6 covers the 20%-80% transition in roughly ±3
+    /// skill units; 1.0 is sharper, 0.3 broader.
+    #[inline]
+    pub fn new(skill: f32, midpoint: f32, steepness: f32) -> Self {
+        Self {
+            skill,
+            midpoint,
+            steepness,
+        }
+    }
+
+    /// Probability in (0, 1). At `skill == midpoint` returns 0.5.
+    #[inline]
+    pub fn probability(self) -> f32 {
+        1.0 / (1.0 + (-(self.skill - self.midpoint) * self.steepness).exp())
+    }
+
+    /// Linear interpolation: `low` at low skill, `high` at elite skill,
+    /// with the midpoint at the 50/50 blend.
+    #[inline]
+    pub fn lerp(self, low: f32, high: f32) -> f32 {
+        low + (high - low) * self.probability()
+    }
+}
+
 /// Coarse shooting context — picks the right shooting composite.
 #[derive(Debug, Clone, Copy)]
 pub enum ShotRange {

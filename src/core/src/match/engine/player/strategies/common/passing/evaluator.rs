@@ -2,6 +2,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::club::player::behaviour_config::PassEvaluatorConfig;
 use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     BallSideZone, GamePhase, MatchPlayer, MatchPlayerLite, PlayerSide, StateProcessingContext,
@@ -134,30 +135,18 @@ impl PassEvaluator {
             let base_factor = 0.4 - (excess / range * 0.25);
             (base_factor + skill_factor * 0.2).clamp(0.15, 0.55)
         } else if distance <= extreme_long_threshold {
-            // Ultra-long passes (200-300m) - only elite players can execute
+            // Ultra-long passes (200-300m) — smooth curve across skill_factor
+            // instead of two hard tiers. A 5/20 player no longer gets the
+            // same 0.10 floor as a 9/20 player; success scales continuously.
             let skill_factor = (vision_skill / 20.0 * 0.7) + (technique_skill / 20.0 * 0.3);
-
-            // Require high skills for these passes
-            if skill_factor > 0.7 {
-                (0.3 + skill_factor * 0.15).clamp(0.2, 0.45)
-            } else if skill_factor > 0.5 {
-                (0.2 + skill_factor * 0.1).clamp(0.15, 0.35)
-            } else {
-                0.1
-            }
+            (0.05 + skill_factor * 0.40).clamp(0.02, 0.45)
         } else {
-            // Extreme long passes (300m+) - goalkeeper clearances, desperate plays
+            // Extreme long passes (300m+) — goalkeeper clearances,
+            // desperate plays. Smooth curve replaces 3-tier step.
             let skill_factor = (vision_skill / 20.0 * 0.5)
                 + (technique_skill / 20.0 * 0.35)
                 + (passing_skill / 20.0 * 0.15);
-
-            if skill_factor > 0.8 {
-                0.35
-            } else if skill_factor > 0.6 {
-                0.2
-            } else {
-                0.1
-            }
+            (0.03 + skill_factor * 0.35).clamp(0.02, 0.40)
         }
     }
 
@@ -216,7 +205,9 @@ impl PassEvaluator {
         let pressure_with_mentals =
             base_pressure + (1.0 - base_pressure) * composure_factor * decision_factor;
 
-        pressure_with_mentals.clamp(0.3, 1.0)
+        // Floor lowered 0.30 → 0.10 so sub-5 composure/decisions
+        // visibly fold under pressure compared to a 10/20 player.
+        pressure_with_mentals.clamp(0.10, 1.0)
     }
 
     /// Evaluate receiver's positioning quality
@@ -312,11 +303,10 @@ impl PassEvaluator {
         let short = sc::passing_execution(passer, minute);
         let long = sc::long_passing(passer, minute);
         let composite = short * (1.0 - long_weight) + long * long_weight;
-        // Preserve historical 0.30 floor so utterly tired passers still
-        // produce a non-zero pass ability — the pass evaluator further
-        // downstream multiplies this through the success_probability
-        // formula and clamps the final result.
-        composite.clamp(0.30, 1.0)
+        // Floor lowered 0.30 → 0.05 so a sub-5 passer is meaningfully
+        // worse than a 10/20 passer — the downstream success formula
+        // multiplies this and re-clamps the final probability anyway.
+        composite.clamp(0.05, 1.0)
     }
 
     /// Calculate receiver's ability to control the pass.
@@ -325,10 +315,13 @@ impl PassEvaluator {
     fn calculate_receiver_ability(ctx: &StateProcessingContext, receiver: &MatchPlayerLite) -> f32 {
         let receiver_player = match ctx.context.players.by_id(receiver.id) {
             Some(p) => p,
-            None => return 0.30,
+            None => return 0.05,
         };
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        sc::receiving_first_touch(receiver_player, minute).clamp(0.30, 1.0)
+        // Floor lowered 0.30 → 0.05 so a sub-5 first-touch player is
+        // visibly worse at receiving than an average 10/20 — instead
+        // of cliff-equal to anyone below 6/20.
+        sc::receiving_first_touch(receiver_player, minute).clamp(0.05, 1.0)
     }
 
     /// Calculate tactical value of the pass
@@ -832,21 +825,45 @@ impl PassEvaluator {
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
-        // Determine player's passing personality based on skills
-        let pass_skill = ctx.player.skills.technical.passing / 20.0;
-        let vision_skill = ctx.player.skills.mental.vision / 20.0;
-        let flair_skill = ctx.player.skills.mental.flair / 20.0;
-        let decision_skill = ctx.player.skills.mental.decisions / 20.0;
-        let composure_skill = ctx.player.skills.mental.composure / 20.0;
-        let teamwork_skill = ctx.player.skills.mental.teamwork / 20.0;
+        // Passing personality is now derived directly from raw skills
+        // via `SkillCurve` below — the legacy normalised aliases were
+        // dropped to remove an unused-variable warning. Keep
+        // `_anticipation_skill` documented; it isn't read yet but
+        // earmarked for the through-ball read in a follow-up.
         let _anticipation_skill = ctx.player.skills.mental.anticipation / 20.0;
 
-        // Define passing personalities
-        let is_playmaker = vision_skill > 0.75 && flair_skill > 0.65; // Creative, through balls
-        let is_direct = flair_skill > 0.7 && pass_skill > 0.65; // Risky, aggressive forward passes
-        let is_conservative = decision_skill < 0.5 || composure_skill < 0.5; // Safe, sideways passes
-        let is_team_player = teamwork_skill > 0.75 && pass_skill > 0.65; // Finds best positioned teammates
-        let is_pragmatic = decision_skill > 0.75 && pass_skill > 0.6; // Smart, calculated passes
+        // Passing personalities — sigmoid-rolled per evaluation so the
+        // full 1-20 skill range maps to a smooth probability of acting
+        // like that archetype, instead of hard `> 0.75` cliffs that
+        // flattened mid-skill players into "ordinary" only. Probability
+        // products gate dual-skill archetypes (need BOTH to lean toward
+        // the type); the conservative archetype is the inverse — high
+        // probability when EITHER decisions OR composure are weak.
+        let vision_raw = ctx.player.skills.mental.vision;
+        let flair_raw = ctx.player.skills.mental.flair;
+        let pass_raw = ctx.player.skills.technical.passing;
+        let dec_raw = ctx.player.skills.mental.decisions;
+        let comp_raw = ctx.player.skills.mental.composure;
+        let team_raw = ctx.player.skills.mental.teamwork;
+        let roll = || rand::random::<f32>();
+        let is_playmaker = roll()
+            < SkillCurve::new(vision_raw, 15.0, 0.6).probability()
+                * SkillCurve::new(flair_raw, 13.0, 0.6).probability();
+        let is_direct = roll()
+            < SkillCurve::new(flair_raw, 14.0, 0.6).probability()
+                * SkillCurve::new(pass_raw, 13.0, 0.6).probability();
+        // Conservative = LOW decisions OR LOW composure. Probability of
+        // "low" is 1 - curve(skill, 10, 0.6); take the max so either
+        // weakness pulls toward safe play.
+        let low_dec = 1.0 - SkillCurve::new(dec_raw, 10.0, 0.6).probability();
+        let low_comp = 1.0 - SkillCurve::new(comp_raw, 10.0, 0.6).probability();
+        let is_conservative = roll() < low_dec.max(low_comp);
+        let is_team_player = roll()
+            < SkillCurve::new(team_raw, 15.0, 0.6).probability()
+                * SkillCurve::new(pass_raw, 13.0, 0.6).probability();
+        let is_pragmatic = roll()
+            < SkillCurve::new(dec_raw, 15.0, 0.6).probability()
+                * SkillCurve::new(pass_raw, 12.0, 0.6).probability();
 
         // Calculate minimum pass distance based on pressure
         // NOTE: This filter prevents "too short" passes that don't progress the ball
@@ -984,15 +1001,18 @@ impl PassEvaluator {
                 0.6
             };
 
-            // Distance preference based on personality
+            // Distance preference based on personality. Vision-gated
+            // ultra-long multipliers smoothed via sigmoid blend so a
+            // vision-14 playmaker isn't cliff-equal to a vision-9 on
+            // a 250m switch — interpolates between the two extremes.
             let distance_preference = if is_playmaker {
                 // Playmakers prefer through balls but not unrealistic long passes
                 if pass_distance > 300.0 {
                     // Extreme passes - very risky even for elite
-                    if vision_skill > 0.85 { 1.1 } else { 0.6 }
+                    SkillCurve::new(vision_raw, 17.0, 0.6).lerp(0.6, 1.1)
                 } else if pass_distance > 200.0 {
                     // Ultra-long switches - risky
-                    if vision_skill > 0.75 { 1.15 } else { 0.8 }
+                    SkillCurve::new(vision_raw, 15.0, 0.6).lerp(0.8, 1.15)
                 } else if pass_distance > 100.0 {
                     1.2 // Long passes - moderate bonus
                 } else if pass_distance > 80.0 {
@@ -1177,10 +1197,16 @@ impl PassEvaluator {
                 }
             };
 
-            // Hard reject: never pass through 2+ opponents unless playmaker with high vision
+            // Hard reject: never pass through 2+ opponents unless
+            // a playmaker rolls high vision. Vision gate smoothed
+            // (sigmoid pivot 16/20) so the "elite" tier isn't a sharp
+            // cliff — a vision-14 playmaker still occasionally tries.
             let interception_blocked = if interception_risk >= 0.85 {
                 // 2+ opponents in the lane — almost always reject
-                if is_playmaker && vision_skill > 0.8 {
+                if is_playmaker
+                    && rand::random::<f32>()
+                        < SkillCurve::new(vision_raw, 16.0, 0.6).probability()
+                {
                     false // Elite playmakers can attempt
                 } else {
                     true

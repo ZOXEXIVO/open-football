@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
@@ -56,11 +57,13 @@ impl StateProcessingHandler for ForwardTacklingState {
         }
 
         // Skill gate — most strikers don't drill defensive tackles
-        // (Haaland, Mbappe profile). Threshold 8/20 admits forwards
-        // with at least functional defensive ability while excluding
-        // pure attackers; without this gate forwards engaged in
-        // tackling 14.9 times per team per match (real 1-3).
-        if ctx.player.skills.technical.tackling < 8.0 {
+        // (Haaland, Mbappe profile). Sigmoid pivot at 8/20: a tackling=4
+        // pure attacker very rarely commits to a tackle; a tackling=14
+        // ball-winning forward almost always does. Smooth replacement
+        // for the hard cliff that flattened the 1-8 range.
+        let tackling_p =
+            SkillCurve::new(ctx.player.skills.technical.tackling, 8.0, 0.6).probability();
+        if rand::random::<f32>() >= tackling_p {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Pressing,
             ));

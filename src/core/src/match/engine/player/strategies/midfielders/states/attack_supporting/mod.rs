@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::{
@@ -741,16 +742,21 @@ impl MidfielderAttackSupportingState {
         }
     }
 
-    /// Check if should make a late run into the box
+    /// Check if should make a late run into the box. Off-the-ball
+    /// scales smoothly (sigmoid pivot at 12/20) so the late-run
+    /// frequency tracks the full 1-20 range instead of cliff-gating.
     fn should_make_late_box_run(&self, ctx: &StateProcessingContext) -> bool {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
         let field_width = ctx.context.field_size.width as f32;
 
-        // Check conditions for late run
-        distance_to_goal < field_width * 0.3
+        if !(distance_to_goal < field_width * 0.3
             && ctx.team().is_control_ball()
-            && !self.is_offside_risk(ctx, ctx.player.position)
-            && ctx.player.skills.mental.off_the_ball > 12.0
+            && !self.is_offside_risk(ctx, ctx.player.position))
+        {
+            return false;
+        }
+        let p = SkillCurve::new(ctx.player.skills.mental.off_the_ball, 12.0, 0.6).probability();
+        rand::random::<f32>() < p
     }
 
     /// Create a passing triangle position

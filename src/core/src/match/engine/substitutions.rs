@@ -343,7 +343,9 @@ impl Substitutions {
 
             let jaded = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
             let cond = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
-            let nat_fit = (player.skills.physical.natural_fitness / 20.0).clamp(0.1, 1.0);
+            // Floor lowered 0.10 → 0.02 so a sub-5 natural_fitness
+            // player is meaningfully more injury-prone than a 10/20.
+            let nat_fit = (player.skills.physical.natural_fitness / 20.0).clamp(0.02, 1.0);
             let minutes_factor = (match_minute as f32 / 90.0).clamp(0.0, 1.2);
 
             // Base rate per substitution window (~10-15 minutes between calls).

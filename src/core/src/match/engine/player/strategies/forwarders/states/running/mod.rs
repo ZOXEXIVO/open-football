@@ -7,6 +7,7 @@ use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -1598,11 +1599,13 @@ impl ForwardRunningState {
             return false;
         }
 
-        // Core skills affecting passing decisions
-        let vision = ctx.player.skills.mental.vision / 20.0;
-        let passing = ctx.player.skills.technical.passing / 20.0;
-        let decisions = ctx.player.skills.mental.decisions / 20.0;
-        let teamwork = ctx.player.skills.mental.teamwork / 20.0;
+        // Core skill curves — sigmoid-rolled per evaluation so the
+        // full 1-20 range matters for each decision branch, replacing
+        // `> 0.7` cliffs that flattened mid-skill players.
+        let vision_raw = ctx.player.skills.mental.vision;
+        let passing_raw = ctx.player.skills.technical.passing;
+        let decisions_raw = ctx.player.skills.mental.decisions;
+        let teamwork_raw = ctx.player.skills.mental.teamwork;
 
         // Situational factors — use common pressure check
         let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
@@ -1610,8 +1613,11 @@ impl ForwardRunningState {
         let stamina = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
 
         // 1. MUST PASS: Heavy pressure or exhaustion
-        if under_pressure && (passing > 0.5 || stamina < 0.4) {
-            return self.has_safe_passing_option(ctx, &teammates);
+        if under_pressure {
+            let pass_p = SkillCurve::new(passing_raw, 10.0, 0.6).probability();
+            if rand::random::<f32>() < pass_p || stamina < 0.4 {
+                return self.has_safe_passing_option(ctx, &teammates);
+            }
         }
 
         // 2. PREFER TO RUN/SHOOT: Very close to goal - only pass if teammate is much better positioned
@@ -1624,16 +1630,20 @@ impl ForwardRunningState {
             return self.has_forward_pass_to_better_teammate(ctx, &teammates, distance_to_goal);
         }
 
-        // 3. LOOK FOR QUALITY OPPORTUNITIES: Good vision/passing players find better passes
-        if vision > 0.7 || passing > 0.7 {
-            // Check for teammates in free zones or making runs
-            if self.has_teammate_in_dangerous_position(ctx, &teammates, distance_to_goal) {
-                return true;
-            }
+        // 3. LOOK FOR QUALITY OPPORTUNITIES: vision/passing scale smoothly
+        let quality_p = SkillCurve::new(vision_raw, 14.0, 0.6)
+            .probability()
+            .max(SkillCurve::new(passing_raw, 14.0, 0.6).probability());
+        if rand::random::<f32>() < quality_p
+            && self.has_teammate_in_dangerous_position(ctx, &teammates, distance_to_goal)
+        {
+            return true;
         }
 
-        // 4. TEAM PLAY: High teamwork players share more
-        if teamwork > 0.7 && decisions > 0.6 {
+        // 4. TEAM PLAY: teamwork and decisions blend smoothly
+        let team_p = SkillCurve::new(teamwork_raw, 14.0, 0.6).probability()
+            * SkillCurve::new(decisions_raw, 12.0, 0.6).probability();
+        if rand::random::<f32>() < team_p {
             return self.has_good_passing_option(ctx, &teammates);
         }
 
@@ -1837,8 +1847,8 @@ impl ForwardRunningState {
     }
 
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
-        let pace = ctx.player.skills.physical.pace / 20.0;
+        let dribbling_raw = ctx.player.skills.technical.dribbling;
+        let pace_raw = ctx.player.skills.physical.pace;
 
         // Check for opponents directly ahead (not just any nearby)
         let goal_pos = ctx.player().opponent_goal_position();
@@ -1861,10 +1871,18 @@ impl ForwardRunningState {
             return false;
         }
 
-        // Skilled dribblers take on opponents
-        if dribbling_skill > 0.7 && pace > 0.6 {
+        // Take-on willingness scales smoothly with dribbling + pace.
+        // Two thresholds (skilled vs. modest) become two sigmoid pivots
+        // (14/12 dribbling, 12/10 pace) so a 7/20 dribbler still
+        // *sometimes* takes on a single defender and a 17/20 elite
+        // attempts 2-man take-ons most of the time.
+        let elite_take_on = SkillCurve::new(dribbling_raw, 14.0, 0.6).probability()
+            * SkillCurve::new(pace_raw, 12.0, 0.6).probability();
+        let modest_take_on = SkillCurve::new(dribbling_raw, 10.0, 0.6).probability();
+        let roll = rand::random::<f32>();
+        if roll < elite_take_on {
             opponents_blocking <= 2
-        } else if dribbling_skill > 0.5 {
+        } else if roll < modest_take_on {
             opponents_blocking <= 1
         } else {
             false

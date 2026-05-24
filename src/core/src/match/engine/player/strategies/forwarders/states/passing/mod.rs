@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
@@ -513,19 +514,20 @@ impl ForwardPassingState {
         ctx.player().pressure().is_under_heavy_pressure()
     }
 
-    /// Determine if player can effectively dribble out of pressure
+    /// Determine if player can effectively dribble out of pressure.
+    /// Dribbling+agility blended via two sigmoid pivots (both at 10/20)
+    /// so the full 1-20 range maps to a smooth probability instead of a
+    /// hard `> 0.5` cliff that collapsed the whole lower half.
     fn can_dribble_effectively(&self, ctx: &StateProcessingContext) -> bool {
-        // Forward players are generally better at dribbling under pressure
-        let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
-        let agility = ctx.player.skills.physical.agility / 20.0;
-
-        // Calculate combined dribbling effectiveness
-        let dribbling_effectiveness = (dribbling_skill * 0.7) + (agility * 0.3);
-
-        // Check if there's space to dribble into
         let has_space = !ctx.players().opponents().exists(15.0);
-
-        dribbling_effectiveness > 0.5 && has_space
+        if !has_space {
+            return false;
+        }
+        let drib_p = SkillCurve::new(ctx.player.skills.technical.dribbling, 10.0, 0.6).probability();
+        let agi_p = SkillCurve::new(ctx.player.skills.physical.agility, 10.0, 0.6).probability();
+        // Weighted blend matches old `drib*0.7 + agi*0.3`.
+        let combined = drib_p * 0.7 + agi_p * 0.3;
+        rand::random::<f32>() < combined
     }
 
     /// Determine if player should adjust position to find better passing angles

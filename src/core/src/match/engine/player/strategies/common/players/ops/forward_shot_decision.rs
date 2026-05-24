@@ -1,4 +1,5 @@
 use crate::r#match::StateProcessingContext;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
 #[cfg(feature = "match-logs")]
@@ -250,8 +251,8 @@ pub fn evaluate_forward_shot_decision(
     // ── Pass-vs-shot EV ───────────────────────────────────────────────
     // Cheap version of the comparison done in Running's full decision
     // tree — without it, RunningInBehind/Finishing always prefer the
-    // shot even when a teammate has a tap-in waiting.
-    let teamwork = (skills.mental.teamwork / 20.0).clamp(0.0, 1.0);
+    // shot even when a teammate has a tap-in waiting. The teamwork
+    // signal is consumed by the SkillCurve below.
     let best_pass_ev = ctx
         .player()
         .passing()
@@ -292,13 +293,10 @@ pub fn evaluate_forward_shot_decision(
 
     // Margin tightened — even a smart-passing forward should not
     // lay off a viable shot every time a teammate is somewhere upfield.
-    let margin = if teamwork > 0.75 {
-        0.06
-    } else if teamwork < 0.40 {
-        0.14
-    } else {
-        0.10
-    };
+    // Sigmoid-blended (pivot 12/20 teamwork) so the margin sweeps
+    // smoothly from 0.14 at low teamwork to 0.06 at high — instead of
+    // 3 hard tiers where 14/20 and 11/20 land in the same bucket.
+    let margin = SkillCurve::new(skills.mental.teamwork, 12.0, 0.6).lerp(0.14, 0.06);
     // Cap pass EV so a fantasy cutback doesn't talk us out of a real shot.
     let capped_pass_ev = best_pass_ev.min(0.55);
     let point_blank = distance < 24.0 && xg >= 0.18;

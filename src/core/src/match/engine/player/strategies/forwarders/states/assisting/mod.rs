@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
@@ -97,8 +98,14 @@ impl ForwardAssistingState {
     }
 
     fn should_make_quick_pass(&self, ctx: &StateProcessingContext) -> bool {
-        // Decision based on player's skills and game situation
-        ctx.player.skills.technical.passing > 70.0 && ctx.player.skills.mental.decisions > 65.0
+        // Quick-pass willingness blends passing and decision-making
+        // smoothly across 1-20. Sigmoid pivots (13/12) match the
+        // "competent passer" / "decent decision-maker" intent of the
+        // original `> 70/65` gate (which was bugged for the 1-20 scale
+        // and never fired). Product of two curves so both skills matter.
+        let pass_p = SkillCurve::new(ctx.player.skills.technical.passing, 13.0, 0.6).probability();
+        let dec_p = SkillCurve::new(ctx.player.skills.mental.decisions, 12.0, 0.6).probability();
+        rand::random::<f32>() < pass_p * dec_p
     }
 
     fn find_best_teammate_to_assist(&self, ctx: &StateProcessingContext) -> Option<u32> {
@@ -142,6 +149,13 @@ impl ForwardAssistingState {
     }
 
     fn should_create_space(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.player.skills.mental.off_the_ball > 15.0 && ctx.players().teammates().exists(100.0)
+        if !ctx.players().teammates().exists(100.0) {
+            return false;
+        }
+        // Off-the-ball skill scales the urge to create space smoothly —
+        // elite movers (15+) almost always do it; ordinary 10s do it
+        // sometimes; very poor (sub-5) almost never.
+        let p = SkillCurve::new(ctx.player.skills.mental.off_the_ball, 15.0, 0.6).probability();
+        rand::random::<f32>() < p
     }
 }

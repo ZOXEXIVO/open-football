@@ -1,4 +1,5 @@
 use crate::TacticalStyle;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::{
@@ -628,14 +629,19 @@ impl MidfielderCreatingSpaceState {
         facing_ball && controlled_movement
     }
 
-    /// Should make attacking run
+    /// Should make attacking run. Off-the-ball skill scales the
+    /// probability smoothly (sigmoid pivot at 12/20) so a 7/20 player
+    /// still occasionally makes runs and a 17/20 player almost always
+    /// does — instead of a hard cliff at 12.
     fn should_make_attacking_run(&self, ctx: &StateProcessingContext) -> bool {
         let ball_in_good_position = ctx.ball().distance_to_opponent_goal() < 300.0;
         let team_attacking = ctx.team().is_control_ball();
         let has_energy = ctx.player.player_attributes.condition_percentage() > 60;
-        let good_off_ball = ctx.player.skills.mental.off_the_ball > 12.0;
-
-        ball_in_good_position && team_attacking && has_energy && good_off_ball
+        if !(ball_in_good_position && team_attacking && has_energy) {
+            return false;
+        }
+        let p = SkillCurve::new(ctx.player.skills.mental.off_the_ball, 12.0, 0.6).probability();
+        rand::random::<f32>() < p
     }
 
     /// Check if space creation is valuable
