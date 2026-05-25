@@ -162,6 +162,22 @@ pub struct Ball {
     /// after `ball.update` returns, so the owner is on the ball before
     /// the next `move_to` distance check can null their ownership.
     pub pending_set_piece_teleport: Option<(u32, Vector3<f32>)>,
+    /// Attacking centre-backs to teleport into the box when a corner is
+    /// awarded — the dead-ball set-up (in real football the big men walk
+    /// up during the stoppage). Populated in the corner branch of
+    /// `check_wide_of_goal`, drained by the engine alongside the taker
+    /// teleport. Each entry is (player_id, box_target_position). Without
+    /// this the CBs cannot cover the length of the pitch before the cross
+    /// is delivered, so defenders never get to attack corners.
+    pub pending_corner_teleports: Vec<(u32, Vector3<f32>)>,
+    /// Fire-once guard for the discrete corner aerial contest. A played-out
+    /// lofted corner can't thread the congested box to a specific runner, so
+    /// once the cross is struck the engine resolves a single skill-weighted
+    /// aerial contest (attacking headers vs the defending line + GK command)
+    /// and, if an attacker wins, drops the ball on their head to be headed
+    /// on goal. False = armed (a corner has been awarded, not yet resolved);
+    /// true = nothing to resolve.
+    pub corner_contest_resolved: bool,
     /// Counter for "ball is owned but nothing is happening" stalls.
     /// The unowned-stall warning can't see these because ownership is
     /// set, but visually the ball sits with a player who isn't moving,
@@ -359,6 +375,8 @@ impl Ball {
             kickoff_team_side: None,
             cached_landing_position: Vector3::new(x, y, 0.0),
             pending_set_piece_teleport: None,
+            pending_corner_teleports: Vec::new(),
+            corner_contest_resolved: true,
             owned_stuck_ticks: 0,
             owned_stuck_logged: false,
             stall_anchor_pos: Vector3::new(x, y, 0.0),
@@ -629,6 +647,7 @@ impl Ball {
         self.unowned_ticks = 0;
         self.cached_landing_position = self.position;
         self.pending_set_piece_teleport = None;
+        self.pending_corner_teleports.clear();
         self.owned_stuck_ticks = 0;
         self.owned_stuck_logged = false;
         self.stall_anchor_pos = self.position;

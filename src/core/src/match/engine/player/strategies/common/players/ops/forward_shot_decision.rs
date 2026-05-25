@@ -35,6 +35,102 @@ pub mod helper_diag {
     }
 }
 
+/// Diagnostic counters for the midfielder box-run + cutback redistribution
+/// (`match-logs` only). These track the mechanism that funnels chances to
+/// arriving central midfielders so the dev harness can see WHY the
+/// GOALS-BY-LINE share moved (or didn't):
+///   * `RUNNER_BOX_TICKS`   — ticks an elected runner spent in a central
+///                            shooting position (≤62u, central corridor).
+///   * `FWD_CUTBACK`        — forward laid a cutback to an arriving runner.
+///   * `MID_CUTBACK`        — wide/advanced midfielder laid the cutback.
+#[cfg(feature = "match-logs")]
+pub mod mid_run_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    pub static RUNNER_BOX_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static FWD_CUTBACK: AtomicU64 = AtomicU64::new(0);
+    pub static MID_CUTBACK: AtomicU64 = AtomicU64::new(0);
+    /// Ticks a midfielder held the ball within shooting range (≤88u) and
+    /// reached the SHOOT-FIRST block — measures whether mids are being
+    /// fed into range at all.
+    pub static MID_INRANGE_TICKS: AtomicU64 = AtomicU64::new(0);
+    /// Times the midfielder SHOOT-FIRST block actually emitted a shot —
+    /// the conversion endpoint. INRANGE high + FIRED low ⇒ a shot gate is
+    /// blocking; INRANGE low ⇒ the feed isn't completing.
+    pub static MID_SHOOT_FIRED: AtomicU64 = AtomicU64::new(0);
+    /// Times a centre-back headed ON GOAL from an attacking corner — the
+    /// endpoint of the corner / defender-scoring mechanism.
+    pub static DEF_CORNER_HEADER: AtomicU64 = AtomicU64::new(0);
+    /// Attacking corners awarded (ball placed at the flag for our team).
+    pub static CORNERS_AWARDED: AtomicU64 = AtomicU64::new(0);
+    /// Ticks a centre-back spent in the AttackingCorner state (pushed up).
+    pub static DEF_CORNER_ATTACK_TICKS: AtomicU64 = AtomicU64::new(0);
+    /// Corner deliveries (crosses) actually struck.
+    pub static CORNER_CROSS_SENT: AtomicU64 = AtomicU64::new(0);
+    /// Corner deliveries aimed at a pushed-up centre-back.
+    pub static CORNER_CROSS_TO_CB: AtomicU64 = AtomicU64::new(0);
+    /// Times an aerial delivery actually came within a CB's heading reach
+    /// (the header CHANCE, before the win roll). CHANCE>0 + HEADER=0 ⇒ the
+    /// win roll / clearance is the gate; CHANCE=0 ⇒ the ball never reaches
+    /// the CB (intercepted / overshoots).
+    pub static DEF_CORNER_HEAD_CHANCE: AtomicU64 = AtomicU64::new(0);
+    /// Discrete corner contest: armed corner cross seen in flight (before
+    /// the z-loft gate). SEEN=0 ⇒ the resolver detection never matches.
+    pub static CORNER_CONTEST_SEEN: AtomicU64 = AtomicU64::new(0);
+    /// Discrete corner contest: passed every gate and a winner was picked.
+    /// SEEN>0 + FIRED=0 ⇒ the loft / box-occupancy gate blocks it.
+    pub static CORNER_CONTEST_FIRED: AtomicU64 = AtomicU64::new(0);
+    /// Discrete corner contest: the attacker won the aerial and the ball
+    /// was dropped on their head. WON>0 + DEF_CORNER_HEADER=0 ⇒ the winner
+    /// isn't heading the planted ball.
+    pub static CORNER_CONTEST_WON: AtomicU64 = AtomicU64::new(0);
+    /// Times the shot-BLOCK "deflect out for a corner" branch fired.
+    pub static BLOCK_CORNER_FIRED: AtomicU64 = AtomicU64::new(0);
+    /// Times the keeper SAFE-PARRY "palm wide for a corner" branch fired.
+    pub static SAVE_PARRY_FIRED: AtomicU64 = AtomicU64::new(0);
+    pub fn reset() {
+        for c in [
+            &RUNNER_BOX_TICKS,
+            &FWD_CUTBACK,
+            &MID_CUTBACK,
+            &MID_INRANGE_TICKS,
+            &MID_SHOOT_FIRED,
+            &DEF_CORNER_HEADER,
+            &CORNERS_AWARDED,
+            &DEF_CORNER_ATTACK_TICKS,
+            &CORNER_CROSS_SENT,
+            &CORNER_CROSS_TO_CB,
+            &DEF_CORNER_HEAD_CHANCE,
+            &CORNER_CONTEST_SEEN,
+            &CORNER_CONTEST_FIRED,
+            &CORNER_CONTEST_WON,
+            &BLOCK_CORNER_FIRED,
+            &SAVE_PARRY_FIRED,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+    pub fn snapshot() -> [u64; 16] {
+        [
+            RUNNER_BOX_TICKS.load(Ordering::Relaxed),
+            FWD_CUTBACK.load(Ordering::Relaxed),
+            MID_CUTBACK.load(Ordering::Relaxed),
+            MID_INRANGE_TICKS.load(Ordering::Relaxed),
+            MID_SHOOT_FIRED.load(Ordering::Relaxed),
+            DEF_CORNER_HEADER.load(Ordering::Relaxed),
+            CORNERS_AWARDED.load(Ordering::Relaxed),
+            DEF_CORNER_ATTACK_TICKS.load(Ordering::Relaxed),
+            CORNER_CROSS_SENT.load(Ordering::Relaxed),
+            CORNER_CROSS_TO_CB.load(Ordering::Relaxed),
+            DEF_CORNER_HEAD_CHANCE.load(Ordering::Relaxed),
+            CORNER_CONTEST_SEEN.load(Ordering::Relaxed),
+            CORNER_CONTEST_FIRED.load(Ordering::Relaxed),
+            CORNER_CONTEST_WON.load(Ordering::Relaxed),
+            BLOCK_CORNER_FIRED.load(Ordering::Relaxed),
+            SAVE_PARRY_FIRED.load(Ordering::Relaxed),
+        ]
+    }
+}
+
 /// Outcome of `evaluate_forward_shot_decision`.
 ///
 /// Centralised so every forward state (Running, RunningInBehind,
@@ -190,6 +286,18 @@ pub fn evaluate_forward_shot_decision(
         }
     };
     min_xg = min_xg.clamp(lo, hi);
+    // Anti-monopoly xG trim for an ISOLATED hog. The lay-off above
+    // redistributes when a team-mate is in range, but a striker the team
+    // funnels everything to is often alone in the box with no outlet — and
+    // then shoots ~12 low-xG looks/game. Only past a high count (8+), and
+    // CAPPED at +0.05, raise their bar so the near-worthless attempts
+    // (xG < ~0.10) are skipped while genuinely good chances still go. The
+    // cap is the lesson from the uncapped version, which rejected good
+    // chances too and dropped team scoring ~25%. Inside-six tap-ins exempt.
+    let hog_shots = ctx.memory().shots_taken;
+    if hog_shots > 7 {
+        min_xg += ((hog_shots - 7) as f32 * 0.010).min(0.05);
+    }
     let inside_six = distance <= 18.0;
     // Inside-six floor: skill-graded, so a 5/20 player floors near 0.15
     // instead of inheriting the unconditional 0.30 free pass.
@@ -306,6 +414,38 @@ pub fn evaluate_forward_shot_decision(
         return ShotDecision::Pass;
     }
 
+    // ── Anti-monopoly LAY-OFF ─────────────────────────────────────────
+    // A player who has already taken a stack of shots this match gives the
+    // ball up rather than force yet another — real team-mates demand it and
+    // defenders key on the hot striker. Crucially this DEFERS (lays off to
+    // a team-mate who shoots instead) rather than the willingness taper
+    // below, which only makes the hog Hold and re-shoot next tick —
+    // delaying, not redistributing. That delay is exactly how one forward
+    // ran up ~13 shots/game and 87% of the team's goals over a season.
+    // Because it redistributes (the shot moves to whoever's free) it's
+    // goal-neutral at team level — unlike raising the xG bar, which just
+    // discards the attempt and drops team scoring.
+    //
+    // Lay off when a team-mate's option is COMPARABLE to our own shot
+    // (not only clearly better, as the normal deferral above requires) —
+    // and the bar eases as the shot count climbs, so a player who's already
+    // monopolised the shooting gives the ball up even for a slightly worse
+    // option. Genuinely better personal chances (and point-blank tap-ins)
+    // are still taken; an isolated player with no outlet keeps shooting.
+    if !point_blank {
+        let shots_so_far = ctx.memory().shots_taken;
+        if shots_so_far > 4 {
+            // Outlet must be at least this fraction of our own shot's value.
+            // 5 shots → 0.85×; 8 → 0.55×; 11+ → floor 0.35×.
+            let factor = (0.95 - (shots_so_far - 4) as f32 * 0.10).max(0.35);
+            if best_pass_ev >= xg * factor {
+                #[cfg(feature = "match-logs")]
+                helper_diag::PASS_DEFERRAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return ShotDecision::Pass;
+            }
+        }
+    }
+
     // ── Willingness roll ──────────────────────────────────────────────
     // Skill-curved willingness — weighted heavily on `selection` so a
     // smart forward pulls the trigger on the right chance, not just any
@@ -348,6 +488,33 @@ pub fn evaluate_forward_shot_decision(
         let inside_six_will_floor = (0.10 + execution_skill * 0.30).clamp(0.10, 0.45);
         willingness = willingness.max(inside_six_will_floor);
     }
+
+    // ── Shot-share dampener (anti-monopoly) ───────────────────────────
+    // The engine funnels nearly every chance to whichever forward is
+    // highest up the pitch (midfielders rarely reach shooting range), so
+    // in a lone-striker shape one player can take ~16 shots/match and
+    // post a ~57-goal season — the inflated totals on the league pages.
+    // Real football spreads the threat: defenders key on a striker who's
+    // shot all game and team-mates demand the ball. This tapers a single
+    // player's willingness once he has already had a pathological number
+    // of attempts this match, pushing the next chance to the arriving
+    // attacking-mid / winger / second striker (who share this same shot
+    // helper). Real strikers take ~3-5 shots/match; the taper begins
+    // after the 5th attempt so a normal striker is untouched but a player
+    // who's hogging the team's chances is progressively shut down —
+    // 6→0.88, 8→0.64, 10→0.40, 12+→0.30 willingness — which is what stops
+    // a modest finisher posting 1.5-2 goals/game simply because every
+    // chance funnels to them. The previous >8 threshold let one player
+    // take ~13+ shots/match (most of the team's output). A point-blank
+    // tap-in is exempt: nobody passes up an open net.
+    if !inside_six {
+        let shots_so_far = ctx.memory().shots_taken;
+        if shots_so_far > 5 {
+            let hog_damp = (1.0 - (shots_so_far - 5) as f32 * 0.12).clamp(0.30, 1.0);
+            willingness *= hog_damp;
+        }
+    }
+
     let cap = if xg >= 0.35 { 0.60 } else { 0.48 };
     willingness = willingness.clamp(0.012, cap);
 
@@ -367,6 +534,71 @@ pub fn evaluate_forward_shot_decision(
     } else {
         ShotDecision::Hold
     }
+}
+
+/// Find a central midfielder arriving unmarked in a shooting position —
+/// the cutback target. Shared by the forward and the wide-midfielder
+/// ball-carriers so both feed the same arriving-runner pattern, which is
+/// the dominant real-football source of midfielder goals (a runner
+/// arriving at the penalty spot as the ball is worked to the byline).
+///
+/// Tightly gated so it never fires as a generic pass: the receiver must
+/// be a central midfielder, in the central corridor (real shooting
+/// angle), within shooting range of goal, no further from goal than the
+/// carrier (a true cutback / square ball, never a backward bail-out),
+/// unmarked, and on a clear passing lane.
+pub fn find_cutback_to_arriving_runner(
+    ctx: &StateProcessingContext,
+) -> Option<crate::r#match::MatchPlayerLite> {
+    let goal = ctx.player().opponent_goal_position();
+    let field_height = ctx.context.field_size.height as f32;
+    let center_y = field_height / 2.0;
+    let central_band = field_height * 0.17;
+    let carrier_goal_d = (goal - ctx.player.position).magnitude();
+
+    let mut best: Option<(crate::r#match::MatchPlayerLite, f32)> = None;
+    for t in ctx.players().teammates().nearby(75.0) {
+        if !t.tactical_positions.is_central_midfielder() {
+            continue;
+        }
+        // Central corridor — needed for a real shooting angle.
+        if (t.position.y - center_y).abs() > central_band {
+            continue;
+        }
+        // In a genuine central shooting position (inside the 62u band the
+        // arriving-runner target deepens into; above 14u so it isn't a
+        // pass into the keeper's hands).
+        let td = (goal - t.position).magnitude();
+        if !(14.0..=66.0).contains(&td) {
+            continue;
+        }
+        // Allow the classic lay-BACK to an arriving midfielder at the edge
+        // of the box (the iconic Lampard/Gerrard goal): the carrier is in
+        // the box but crowded (we only reach here after their own shot
+        // blocks declined), and an unmarked runner trailing with a clear
+        // strike is the better chance even though they are further from
+        // goal. Reject only a runner who is WAY behind (>25u further than
+        // the carrier) — that's a recycle, not a cutback.
+        if td > carrier_goal_d + 25.0 {
+            continue;
+        }
+        // A tightly-marked runner is not a cutback target, but a single
+        // light marker is fine — a first-time strike beats one defender,
+        // and the clarity/xG of the resulting shot is handled by the
+        // box-arrival helper. Reject only genuine double-marking.
+        if ctx.tick_context.grid.opponents(t.id, 8.0).count() >= 2 {
+            continue;
+        }
+        if !ctx.player().has_clear_pass(t.id) {
+            continue;
+        }
+        // Prefer the most central runner closest to goal.
+        let score = 200.0 - td - (t.position.y - center_y).abs();
+        if best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
+            best = Some((t, score));
+        }
+    }
+    best.map(|(t, _)| t)
 }
 
 #[cfg(test)]

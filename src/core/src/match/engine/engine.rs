@@ -1561,6 +1561,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::play_ball(field, context, tick_ctx, events);
         Self::apply_pending_set_piece_teleport(field);
         Self::apply_pending_save_credit(field);
+        Self::resolve_corner_contest(field, context);
         // Ownership may have changed inside play_ball (new claim, pass
         // target receive, etc.). Refresh the ball view so player state
         // dispatch sees the current owner — without this, the
@@ -1590,6 +1591,172 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 p.in_state_time = 0;
             }
         }
+
+        // Corner dead-ball set-up: teleport the pushed-up centre-backs
+        // into the box so they can attack the delivery (see
+        // `Ball::pending_corner_teleports` — there's no stoppage in the
+        // sim for them to walk up during, and they can't run the length
+        // of the pitch inside the cross window).
+        if !field.ball.pending_corner_teleports.is_empty() {
+            use crate::r#match::defenders::states::DefenderState;
+            use crate::r#match::player::state::PlayerState;
+            let teleports = std::mem::take(&mut field.ball.pending_corner_teleports);
+            for (player_id, pos) in teleports {
+                if let Some(idx) = field.player_index(player_id) {
+                    let p = &mut field.players[idx];
+                    p.position = pos;
+                    p.velocity = nalgebra::Vector3::zeros();
+                    p.in_state_time = 0;
+                    // Force the AttackingCorner state directly — the CB may
+                    // have been in any defensive state when the corner was
+                    // won, and not all of them carry the entry hook. This
+                    // guarantees they attack the delivery.
+                    p.state = PlayerState::Defender(DefenderState::AttackingCorner);
+                }
+            }
+        }
+    }
+
+    /// Discrete corner aerial contest — fires once, the instant the corner
+    /// cross is airborne. A played-out lofted corner can't thread the
+    /// congested box to the pushed-up centre-back: the cross is always
+    /// claimed/cleared mid-flight (`CB header chances` stayed 0 through
+    /// every piecemeal GK / defender-duel fix). So we resolve ONE
+    /// skill-weighted aerial contest — the best attacking header (a
+    /// pushed-up CB or a forward) vs the defending line + GK command of
+    /// area — and, if the attacker wins, drop the ball onto their head.
+    /// Their existing heading state then strikes it on goal through the
+    /// NORMAL shot/save pipeline, so the goal / shot / xG / save stats all
+    /// credit correctly (no bespoke scoring path). The win chance is tuned
+    /// (~0.30, modulated by the aerial mismatch and the keeper) so that —
+    /// carried by a corner header's ~0.10-0.14 xG in the shot pipeline —
+    /// only ~3-4% of corners end in a goal (real ≈ 3%), giving defenders
+    /// their realistic set-piece share without inflating totals.
+    fn resolve_corner_contest(field: &mut MatchField, context: &MatchContext) {
+        use crate::r#match::PassOriginRestart;
+        use nalgebra::Vector3;
+
+        let ball = &field.ball;
+        if ball.corner_contest_resolved
+            || ball.pass_origin_restart != PassOriginRestart::Corner
+        {
+            return;
+        }
+        // [diag] reached with an armed Corner origin.
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::CORNER_CONTEST_SEEN
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Only once the cross has actually left the taker and is airborne
+        // (not the dead-ball set-up while the taker still holds it, and not
+        // a short ground corner played along the floor).
+        if ball.current_owner.is_some() {
+            return;
+        }
+        // [diag] cross has left the taker (loose / in flight).
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::CORNER_CONTEST_FIRED
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if ball.position.z < 2.0 {
+            return;
+        }
+
+        let minute = (context.total_match_time / 60_000) as u32;
+
+        // The goal under attack is the one the corner is nearest to.
+        let gl = context.goal_positions.left;
+        let gr = context.goal_positions.right;
+        let ball_pos = ball.position;
+        let attacked_goal = if (ball_pos - gl).magnitude() < (ball_pos - gr).magnitude() {
+            gl
+        } else {
+            gr
+        };
+
+        // Attacking team = the cross taker's team.
+        let taker = ball.previous_owner.or(ball.current_owner);
+        let att_team = match taker
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+            .map(|p| p.team_id)
+        {
+            Some(t) => t,
+            None => {
+                field.ball.corner_contest_resolved = true;
+                return;
+            }
+        };
+
+        // Best attacking header, best defending header, and GK command of
+        // area — among the players inside the box (≈135u of the goal).
+        let mut best_att: Option<(usize, f32)> = None;
+        let mut best_def_score = 0.40_f32;
+        let mut gk_command = 0.35_f32;
+        for (i, p) in field.players.iter().enumerate() {
+            if (p.position - attacked_goal).magnitude() > 135.0 {
+                continue;
+            }
+            let is_gk = p.tactical_position.current_position.is_goalkeeper();
+            if p.team_id == att_team {
+                if is_gk {
+                    continue;
+                }
+                let s = sc::aerial_outfield_attacker(p, minute);
+                if best_att.map_or(true, |(_, bs)| s > bs) {
+                    best_att = Some((i, s));
+                }
+            } else if is_gk {
+                gk_command = (p.skills.goalkeeping.command_of_area * 0.6
+                    + p.skills.goalkeeping.aerial_reach * 0.4)
+                    / 20.0;
+            } else {
+                let s = sc::aerial_outfield_defender(p, minute);
+                if s > best_def_score {
+                    best_def_score = s;
+                }
+            }
+        }
+
+        let (att_idx, att_score) = match best_att {
+            Some(v) => v,
+            None => {
+                field.ball.corner_contest_resolved = true;
+                return;
+            }
+        };
+
+        let att_win =
+            (0.36 + (att_score - best_def_score) * 0.50 - gk_command * 0.18).clamp(0.10, 0.62);
+
+        if rand::random::<f32>() < att_win {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::CORNER_CONTEST_WON
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Attacker wins: drop the ball just behind them at head height,
+            // moving goalward, so it reads as an incoming header to their
+            // state (the CB's AttackingCorner, or a forward's run→heading).
+            // Loose so they head it; keep the Corner origin so the CB stays
+            // in AttackingCorner through the strike.
+            let winner_pos = field.players[att_idx].position;
+            let to_goal = attacked_goal - winner_pos;
+            let dir = if to_goal.magnitude() > 0.01 {
+                to_goal.normalize()
+            } else {
+                Vector3::new(1.0, 0.0, 0.0)
+            };
+            let b = &mut field.ball;
+            b.position = Vector3::new(
+                winner_pos.x - dir.x * 2.0,
+                winner_pos.y - dir.y * 2.0,
+                2.2,
+            );
+            b.velocity = Vector3::new(dir.x * 4.0, dir.y * 4.0, -1.0);
+            b.current_owner = None;
+            b.previous_owner = taker;
+            b.flags.in_flight_state = 1;
+        }
+        // Otherwise the cross plays out — the keeper claims or a defender
+        // clears (the realistic majority outcome).
+
+        field.ball.corner_contest_resolved = true;
     }
 
     /// Consume `Ball::pending_save_credit` left behind by the physics

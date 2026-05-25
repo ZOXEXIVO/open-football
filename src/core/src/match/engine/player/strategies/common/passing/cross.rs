@@ -9,6 +9,25 @@ use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, StateProcessingContext};
 use nalgebra::Vector3;
 
+/// True once an attacking corner's box is "loaded": at least one of our
+/// pushed-up centre-backs has arrived within heading range, or a full
+/// complement of attackers is in the box. The corner taker holds the
+/// delivery until this returns true (or the set-up window expires) so the
+/// run from defence has time to arrive — there is no dead-ball pause in
+/// the sim, so the taker has to create the window itself.
+pub fn box_loaded_for_corner(ctx: &StateProcessingContext) -> bool {
+    let goal = ctx.player().opponent_goal_position();
+    // Deliver once a pushed-up centre-back has reached heading range. This
+    // is the whole point of the set-up wait — the forwards/midfielders are
+    // already up, so keying off "≥N attackers" would fire instantly and
+    // the CB run from defence would never have time to arrive.
+    ctx.players().teammates().all().any(|t| {
+        t.id != ctx.player.id
+            && t.tactical_positions.is_central_defender()
+            && (t.position - goal).magnitude() < 130.0
+    })
+}
+
 /// Cross delivery type. Drives flight, target selection, and the
 /// downstream aerial-duel / header model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

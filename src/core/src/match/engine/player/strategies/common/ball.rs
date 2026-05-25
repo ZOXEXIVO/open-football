@@ -49,6 +49,37 @@ impl<'b> BallOperationsImpl<'b> {
         self.ctx.tick_context.ball.is_owned
     }
 
+    /// True while THIS player's team has an attacking corner in progress
+    /// — from the corner award, through the taker's set-up, the cross
+    /// flight, until the ball is next brought under open-play control (a
+    /// header / clearance / control resets the restart to OpenPlay).
+    /// Drives the corner set-up: the taker waits for the box to load and
+    /// centre-backs push up to attack the delivery. Keys off the
+    /// current-or-last owner being a teammate so it stays true during the
+    /// cross flight (when the ball is briefly unowned).
+    pub fn is_team_attacking_corner(&self) -> bool {
+        use crate::r#match::PassOriginRestart;
+        if self.ctx.tick_context.ball.pass_origin_restart != PassOriginRestart::Corner {
+            return false;
+        }
+        let owner = self
+            .ctx
+            .tick_context
+            .ball
+            .current_owner
+            .or(self.ctx.tick_context.ball.last_owner);
+        match owner {
+            Some(id) => self
+                .ctx
+                .context
+                .players
+                .by_id(id)
+                .map(|p| p.team_id == self.ctx.player.team_id)
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
     #[inline]
     pub fn is_in_flight(&self) -> bool {
         self.ctx.tick_context.ball.is_in_flight_state > 0

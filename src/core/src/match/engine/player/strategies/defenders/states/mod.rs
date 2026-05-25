@@ -1,3 +1,4 @@
+pub mod attacking_corner;
 pub mod clearing;
 pub mod common;
 pub mod covering;
@@ -20,6 +21,7 @@ pub mod takeball;
 pub mod tracking_back;
 pub mod walking;
 
+pub use attacking_corner::*;
 pub use clearing::*;
 pub use covering::*;
 pub use guarding::*;

@@ -1,4 +1,6 @@
-use crate::r#match::{MatchField, MatchObjectsPositions, ShotTarget, Space, SpatialGrid};
+use crate::r#match::{
+    MatchField, MatchObjectsPositions, PassOriginRestart, ShotTarget, Space, SpatialGrid,
+};
 
 pub struct GameTickContext {
     pub positions: MatchObjectsPositions,
@@ -71,6 +73,13 @@ pub struct BallMetadata {
     /// in flight. Read by the keeper's `PreparingForSave` /
     /// `Catching` states to commit to an intercept line.
     pub cached_shot_target: Option<ShotTarget>,
+
+    /// How the current possession started. Persists from a restart
+    /// (corner / goal-kick / throw-in / free-kick) until the ball is
+    /// next brought under open-play control. Read by the corner set-up
+    /// logic (taker waits for the box to load; centre-backs push up to
+    /// attack the delivery).
+    pub pass_origin_restart: PassOriginRestart,
 }
 
 impl BallMetadata {
@@ -108,6 +117,7 @@ impl BallMetadata {
         }
 
         self.cached_shot_target = field.ball.cached_shot_target;
+        self.pass_origin_restart = field.ball.pass_origin_restart;
     }
 }
 
@@ -124,6 +134,7 @@ impl From<&MatchField> for BallMetadata {
             recent_buf: [0; 5],
             recent_len: 0,
             cached_shot_target: None,
+            pass_origin_restart: PassOriginRestart::OpenPlay,
         };
         meta.update(field);
         meta

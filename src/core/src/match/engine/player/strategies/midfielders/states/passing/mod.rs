@@ -498,11 +498,11 @@ impl MidfielderPassingState {
         // selection profile AND the unified shot quality profile agree
         // it's a real chance. Distance bands scale with selection,
         // replacing the raw long_shots/finishing thresholds.
-        let max_range = if mid_profile.mid_shot_selection >= 0.72 {
+        let max_range = if mid_profile.mid_shot_selection >= 0.62 {
             50.0
-        } else if mid_profile.mid_shot_selection >= 0.55 {
+        } else if mid_profile.mid_shot_selection >= 0.46 {
             35.0
-        } else if mid_profile.mid_shot_selection >= 0.40 {
+        } else if mid_profile.mid_shot_selection >= 0.32 {
             25.0
         } else {
             20.0

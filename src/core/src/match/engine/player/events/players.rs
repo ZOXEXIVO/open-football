@@ -396,8 +396,18 @@ impl PlayerEventDispatcher {
                     }
                 }
                 field.ball.offside_snapshot = snapshot;
-                // After the kick, restart context decays back to OpenPlay.
-                field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
+                // After the kick, restart context decays back to OpenPlay —
+                // EXCEPT a corner cross, which keeps its Corner origin through
+                // the flight. That keeps the pushed-up centre-backs in
+                // AttackingCorner (is_team_attacking_corner) and lets the
+                // discrete corner aerial contest fire on the in-flight
+                // delivery (engine `resolve_corner_contest`); the origin
+                // decays to OpenPlay on the next touch / interception as usual.
+                if !(was_cross
+                    && field.ball.pass_origin_restart == PassOriginRestart::Corner)
+                {
+                    field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
+                }
             }
             PlayerEvent::ClaimBall(player_id) => {
                 Self::record_team_possession_if_switch(player_id, field, context);

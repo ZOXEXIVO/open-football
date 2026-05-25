@@ -198,6 +198,14 @@ impl StateProcessingHandler for ForwardRunningState {
 
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
+            // Corner taker: set the corner up via Crossing (which holds the
+            // delivery until centre-backs have pushed up to attack it).
+            if ctx.ball().is_team_attacking_corner() {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Crossing,
+                ));
+            }
+
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             let coach = ctx.team().coach_instruction();
             // Team-level cooldown (~500 ms between any team shot).
@@ -542,6 +550,43 @@ impl StateProcessingHandler for ForwardRunningState {
                     ShotDecision::Pass | ShotDecision::Hold => {
                         return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                     }
+                }
+            }
+
+            // CUTBACK TO ARRIVING RUNNER. A central midfielder arriving
+            // unmarked in the box is the textbook cutback target and a
+            // major source of midfielder goals in real football. We reach
+            // this point only AFTER the forward's own shot blocks declined
+            // (no clean shot this tick), so laying off to an unmarked
+            // central runner in a better spot is strictly additive — not a
+            // stolen chance. Fires only when the forward is genuinely STUCK
+            // (pressured or with no open path to goal) — exactly when a
+            // real forward releases the ball rather than forcing it — so it
+            // stays low-volume and never trades away a chance the forward
+            // could take themselves. The finder is tightly gated (runner
+            // central, in range, unmarked, clear lane, ≥8u closer to goal),
+            // and the runner converts via the box-arrival carve-out.
+            let fwd_stuck = ctx.player().pressure().is_under_immediate_pressure()
+                || !self.has_open_space_ahead(ctx);
+            if has_settled && distance_to_goal < 130.0 && fwd_stuck {
+                if let Some(runner) =
+                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
+                {
+                    #[cfg(feature = "match-logs")]
+                    {
+                        use std::sync::atomic::Ordering;
+                        crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::FWD_CUTBACK.fetch_add(1, Ordering::Relaxed);
+                    }
+                    return Some(StateChangeResult::with_forward_state_and_event(
+                        ForwardState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(runner.id)
+                                .with_reason("FWD_RUNNING_CUTBACK_TO_RUNNER")
+                                .build(ctx),
+                        )),
+                    ));
                 }
             }
 

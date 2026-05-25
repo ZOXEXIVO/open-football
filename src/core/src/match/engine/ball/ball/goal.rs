@@ -249,11 +249,19 @@ impl Ball {
             PlayerSide::Right => PlayerSide::Left,
         };
 
-        // Decide corner vs goal kick from the last player who touched the
+        // Decide corner vs goal kick from the last player who TOUCHED the
         // ball. If the defending team put it out, it's a corner for the
-        // attacking team. Unknown last-touch defaults to goal kick.
+        // attacking team. Use `last_touch_player_id` (the true last contact,
+        // maintained by `record_touch` on every control change / block /
+        // save) rather than `previous_owner` (the last OWNER). They differ
+        // exactly on a DEFLECTION: when a defender blocks/parries/clears a
+        // shot out, `previous_owner` is still the attacking SHOOTER, so the
+        // ball was wrongly given as a goal kick — which is the dominant
+        // reason the engine ran ~0.5 corners/match vs ~10 real. Falls back
+        // to the owner when no touch is recorded.
         let last_toucher_side: Option<PlayerSide> = self
-            .previous_owner
+            .last_touch_player_id
+            .or(self.previous_owner)
             .or(self.current_owner)
             .and_then(|pid| players.iter().find(|p| p.id == pid))
             .and_then(|p| p.side);
@@ -312,6 +320,11 @@ impl Ball {
                 // explanation).
                 self.cached_shot_target = None;
                 self.pass_origin_restart = crate::r#match::PassOriginRestart::Corner;
+                #[cfg(feature = "match-logs")]
+                {
+                    use std::sync::atomic::Ordering;
+                    crate::mid_run_diag::CORNERS_AWARDED.fetch_add(1, Ordering::Relaxed);
+                }
                 self.offside_snapshot = None;
                 self.record_touch(taker_id, taker_team, self.current_tick_cached, true);
 
@@ -322,6 +335,46 @@ impl Ball {
                 // here — record the teleport and let the engine apply
                 // it when it has &mut field.players.
                 self.pending_set_piece_teleport = Some((taker_id, self.position));
+
+                // Dead-ball set-up: send the two best-heading centre-backs
+                // up into the box to attack the delivery. In real football
+                // the big men walk up during the corner stoppage; the sim
+                // has no stoppage, and a CB can't cover the length of the
+                // pitch inside the cross window, so position them directly.
+                // AttackingCorner keeps them there until the corner
+                // resolves, then they sprint back into shape.
+                let box_x = match side {
+                    GoalSide::Home => 26.0,
+                    GoalSide::Away => field_width - 26.0,
+                };
+                let center_y = field_height / 2.0;
+                let mut cbs: Vec<(u32, f32)> = players
+                    .iter()
+                    .filter(|p| {
+                        p.side == Some(attacking_side)
+                            && p.id != taker_id
+                            && p.tactical_position.current_position.is_central_defender()
+                    })
+                    .map(|p| (p.id, p.skills.technical.heading))
+                    .collect();
+                cbs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                // Arm the discrete aerial contest for this corner: it fires
+                // once, the instant the cross is struck (see engine.rs
+                // resolve_corner_contest).
+                self.corner_contest_resolved = false;
+                self.pending_corner_teleports.clear();
+                for (i, (cb_id, _)) in cbs.iter().take(2).enumerate() {
+                    // Near / far post split — wide enough that the far CB
+                    // sits beyond the keeper's central cross-claim zone.
+                    let y = if i == 0 {
+                        center_y - field_height * 0.085
+                    } else {
+                        center_y + field_height * 0.085
+                    };
+                    self.pending_corner_teleports
+                        .push((*cb_id, Vector3::new(box_x, y, 0.0)));
+                }
+
                 return;
             }
             // If no eligible outfielder was found, fall through to goal kick
