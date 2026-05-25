@@ -381,29 +381,54 @@ impl Ball {
         // up. Possession is decided by whoever claims the loose ball
         // next, not by the block itself.
         if roll < p_corner {
-            // Deflection wide — push the ball toward the defender's own
-            // endline so it crosses out of play. The endline resolver
-            // will then award a corner (defender = last toucher, side
-            // matches → corner for attackers).
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::BLOCK_CORNER_FIRED
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Deflection out for a corner — push the ball past the
+            // defender's OWN byline and WIDE OF THE POST (toward the corner
+            // flag) so the endline resolver awards a corner (defender = last
+            // toucher → corner for the attackers). Aiming merely at the
+            // byline (the old ±1.2 y nudge) left a central block crossing
+            // BETWEEN the posts → goal kick / own goal, so blocks almost
+            // never became corners (engine ran ~0.5 corners/match vs ~10
+            // real). The ball must finish outside `center ± GOAL_WIDTH`.
             let endline_x = match blocker_side {
                 Some(PlayerSide::Left) => 0.0_f32,
                 Some(PlayerSide::Right) => self.field_width,
-                None => self.position.x + rev_x * 8.0,
+                None => {
+                    if self.position.x < self.field_width * 0.5 {
+                        0.0
+                    } else {
+                        self.field_width
+                    }
+                }
+            };
+            let center_y = self.field_height * 0.5;
+            // Deflect toward the touchline the ball is already drifting to
+            // (sign of the reverse-deflection y), past the post.
+            let to_top = if rev_y.abs() > 0.01 {
+                rev_y < 0.0
+            } else {
+                self.position.y < center_y
+            };
+            let wide_y = if to_top {
+                (center_y - GOAL_WIDTH - self.field_height * 0.05).max(2.0)
+            } else {
+                (center_y + GOAL_WIDTH + self.field_height * 0.05).min(self.field_height - 2.0)
             };
             let dx = endline_x - self.position.x;
-            let dist = dx.abs().max(1.0);
-            let speed = (ball_velocity_2d * 0.6).clamp(2.0, 5.0);
+            let dy = wide_y - self.position.y;
+            let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+            let speed = (ball_velocity_2d * 0.6).clamp(3.0, 6.0);
             self.velocity.x = (dx / dist) * speed;
-            // Slight outward y-component so the ball goes wide of the post.
-            self.velocity.y = if rand::random::<f32>() < 0.5 {
-                -1.0
-            } else {
-                1.0
-            } * 1.2;
+            self.velocity.y = (dy / dist) * speed;
             self.velocity.z = 0.0;
             self.current_owner = None;
             self.flags.in_flight_state = 30;
-            self.claim_cooldown = 0;
+            // Hold off re-claims so the deflection crosses the byline before
+            // a covering defender grabs it back (else it never becomes a
+            // corner — the whole point of this branch).
+            self.claim_cooldown = 16;
             return;
         }
 
@@ -703,40 +728,47 @@ impl Ball {
         }
 
         if outcome_roll < p_safe {
-            // Safe parry — palmed wide for a corner OR over the bar.
-            // Push the ball toward the keeper's own endline outside the
-            // post so the endline resolver awards a corner.
-            let endline_x = match keeper_side {
-                Some(PlayerSide::Left) => -1.0_f32,
-                Some(PlayerSide::Right) => self.field_width + 1.0,
-                None => self.position.x,
-            };
-            let dx = endline_x - self.position.x;
-            let dist = dx.abs().max(1.0);
-            let parry_speed = 4.0_f32;
-            self.velocity.x = (dx / dist) * parry_speed;
-            // Sideways spread so it goes wide of the post.
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::SAVE_PARRY_FIRED
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Parried OUT for a corner. The outcome is already decided, so
+            // resolve it POSITIONALLY — place the ball just past the byline,
+            // wide of the post — rather than driving it there by velocity.
+            // The velocity approach half-failed: the keeper sits on the goal
+            // line, so the ball only reached the post (y±GOAL_WIDTH) by the
+            // time it crossed x=0, landing borderline → ~half fell inside
+            // for a goal kick. Placing it out (outside `goal_y ± GOAL_WIDTH`,
+            // a few units past x=0) makes the endline resolver award the
+            // corner reliably next tick (keeper = last toucher → corner for
+            // the attackers; save already booked via `pending_save_credit`).
             let goal_y_for_side = match keeper_side {
                 Some(PlayerSide::Left) => context.goal_positions.left.y,
                 Some(PlayerSide::Right) => context.goal_positions.right.y,
                 None => self.position.y,
             };
-            let sign = if self.position.y < goal_y_for_side {
-                -1.0
-            } else {
-                1.0
+            let to_top = self.position.y < goal_y_for_side;
+            self.position.x = match keeper_side {
+                Some(PlayerSide::Left) => -3.0,
+                Some(PlayerSide::Right) => self.field_width + 3.0,
+                None => self.position.x,
             };
-            self.velocity.y = sign * 2.5;
-            self.velocity.z = 0.0;
+            self.position.y = if to_top {
+                (goal_y_for_side - GOAL_WIDTH - 10.0).max(3.0)
+            } else {
+                (goal_y_for_side + GOAL_WIDTH + 10.0).min(self.field_height - 3.0)
+            };
+            self.position.z = 0.0;
+            self.velocity = Vector3::zeros();
             self.current_owner = None;
-            self.flags.in_flight_state = 30;
-            self.claim_cooldown = 0;
+            self.flags.in_flight_state = 0;
+            self.claim_cooldown = 30;
             self.record_touch(keeper_id, keeper_team, tick, false);
-            // Save was successful but ball is still loose — emit
-            // Intercepted so the rating helper still sees the keeper
-            // touched the ball, and the endline resolver awards the
-            // corner on the next tick.
-            events.add_ball_event(BallEvent::Intercepted(keeper_id, self.previous_owner));
+            // NB: do NOT emit Intercepted here — its ClaimBall follow-up
+            // forces ownership onto the keeper, which CANCELS the corner
+            // (the ball must stay loose and cross out). The save is already
+            // booked via `pending_save_credit`, and `record_touch` marks the
+            // keeper as last toucher so the endline resolver awards the
+            // corner to the attackers.
             return;
         }
 

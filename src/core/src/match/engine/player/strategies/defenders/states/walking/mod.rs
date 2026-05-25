@@ -20,6 +20,20 @@ impl StateProcessingHandler for DefenderWalkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let mut result = StateChangeResult::new();
 
+        // Attacking corner: centre-backs push up to attack the delivery.
+        if !ctx.player.has_ball(ctx)
+            && ctx
+                .player
+                .tactical_position
+                .current_position
+                .is_central_defender()
+            && ctx.ball().is_team_attacking_corner()
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::AttackingCorner,
+            ));
+        }
+
         // Take ball only if best positioned — prevents swarming
         if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_defender_state(

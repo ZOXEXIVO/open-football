@@ -22,6 +22,21 @@ pub struct DefenderHoldingLineState {}
 
 impl StateProcessingHandler for DefenderHoldingLineState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Attacking corner: centre-backs push up to attack the delivery
+        // (self-terminates the instant the corner is over).
+        if !ctx.player.has_ball(ctx)
+            && ctx
+                .player
+                .tactical_position
+                .current_position
+                .is_central_defender()
+            && ctx.ball().is_team_attacking_corner()
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::AttackingCorner,
+            ));
+        }
+
         // BOX EMERGENCY — ball is in our penalty area with an opposing
         // carrier. Break shape and engage. The two closest defenders
         // attack; the rest hold line so the far side isn't exposed.

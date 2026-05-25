@@ -16,8 +16,8 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 // Shooting distance constants for midfielders — more conservative than forwards
-const MAX_SHOOTING_DISTANCE: f32 = 65.0; // Midfielders rarely shoot from beyond ~32m
-const STANDARD_SHOOTING_DISTANCE: f32 = 40.0; // Standard shooting range for midfielders
+const MAX_SHOOTING_DISTANCE: f32 = 88.0; // Edge-of-box / arriving-midfielder strikes
+const STANDARD_SHOOTING_DISTANCE: f32 = 52.0; // Standard shooting range for midfielders
 const POINT_BLANK_DISTANCE: f32 = 20.0; // ~10m - must shoot, goalkeeper is right there
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 
@@ -75,6 +75,14 @@ impl StateProcessingHandler for MidfielderRunningState {
         }
 
         if ctx.player.has_ball(ctx) {
+            // Corner taker: set the corner up via Crossing (which holds the
+            // delivery until centre-backs have pushed up to attack it).
+            if ctx.ball().is_team_attacking_corner() {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Crossing,
+                ));
+            }
+
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             let coach = ctx.team().coach_instruction();
             let can_shoot = ctx.team().can_shoot();
@@ -92,6 +100,95 @@ impl StateProcessingHandler for MidfielderRunningState {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing,
                 ));
+            }
+
+            // ── MIDFIELDER SHOOTING (unified, skill-driven) ──────────────
+            // Every midfielder in shooting range consults the SAME shot
+            // helper the forwards use, so the shoot/pass/hold decision
+            // scales continuously with the player's actual shooting
+            // attributes (selection / execution / composure) rather than
+            // the old binary `mid_shot_selection >= 0.32/0.42` cliffs —
+            // which scored a default central mid ~0 yet let an elite one
+            // fire unlimited, additive shots. The helper applies its xG
+            // floor, inside-six floor, GK / 1v1 read, pass-EV deferral
+            // (a playmaker lays it off when a teammate is better placed),
+            // and the anti-monopoly volume cap. Net effect: a deep regista
+            // rarely shoots, a box-to-box #8 arriving centrally shoots like
+            // a forward, and no single player monopolises the attempts.
+            // Hoisted above the possession / recycle defaults so a real
+            // opening isn't recycled back to a forward.
+            if can_shoot && distance_to_goal <= MAX_SHOOTING_DISTANCE {
+                #[cfg(feature = "match-logs")]
+                {
+                    use std::sync::atomic::Ordering;
+                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::MID_INRANGE_TICKS.fetch_add(1, Ordering::Relaxed);
+                }
+                // Tier 1 — a CLEAR, good-angle chance in range is taken by
+                // ANY midfielder. This is chance-quality, NOT a skill gate:
+                // whether you SHOOT a clear central look doesn't depend on
+                // how good a finisher you are (skill decides whether it goes
+                // IN — see the conversion gradient). Without this the
+                // willingness roll declines half of even the clean chances
+                // and they're recycled away, dropping mid goals AND team
+                // totals. The anti-monopoly cap still applies: once a player
+                // has hogged (>6 attempts) this falls through to the
+                // willingness roll like everyone else, so it can't be abused.
+                let sp = ctx.player().shooting().shot_profile();
+                let clear_good = distance_to_goal <= STANDARD_SHOOTING_DISTANCE
+                    && coach.shooting_reluctance() < 0.5
+                    && ctx.player().has_clear_shot()
+                    && ctx.player().shooting().has_good_angle()
+                    && sp.expected_xg(distance_to_goal, true) >= 0.12;
+                if clear_good && ctx.memory().shots_taken <= 6 {
+                    #[cfg(feature = "match-logs")]
+                    {
+                        use std::sync::atomic::Ordering;
+                        crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::MID_SHOOT_FIRED.fetch_add(1, Ordering::Relaxed);
+                    }
+                    return Some(
+                        StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                            .with_shot_reason("MID_CLEAR_CHANCE"),
+                    );
+                }
+                // Tier 2 — speculative / long-range / hogger: skill-driven
+                // willingness via the shared helper.
+                match evaluate_forward_shot_decision(ctx, "MID_SHOOT") {
+                    ShotDecision::Shoot { reason } => {
+                        #[cfg(feature = "match-logs")]
+                        {
+                            use std::sync::atomic::Ordering;
+                            crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::MID_SHOOT_FIRED.fetch_add(1, Ordering::Relaxed);
+                        }
+                        // Beyond standard range, route to the dedicated
+                        // long-range strike; closer is a normal finish.
+                        let state = if distance_to_goal > STANDARD_SHOOTING_DISTANCE {
+                            MidfielderState::DistanceShooting
+                        } else {
+                            MidfielderState::Shooting
+                        };
+                        return Some(
+                            StateChangeResult::with_midfielder_state(state)
+                                .with_shot_reason(reason),
+                        );
+                    }
+                    ShotDecision::Pass => {
+                        // Helper judged a teammate the better option — lay
+                        // it off (the playmaker's creative choice).
+                        if let Some((target, _)) = self.find_best_pass_option(ctx) {
+                            return Some(StateChangeResult::with_midfielder_state_and_event(
+                                MidfielderState::Standing,
+                                Event::PlayerEvent(PlayerEvent::PassTo(
+                                    PassingEventContext::new()
+                                        .with_from_player_id(ctx.player.id)
+                                        .with_to_player_id(target.id)
+                                        .with_reason("MID_SHOOT_LAYOFF")
+                                        .build(ctx),
+                                )),
+                            ));
+                        }
+                    }
+                    ShotDecision::Hold => {}
+                }
             }
 
             // Coach tempo: if wasting time or slowing down, prefer possession
@@ -141,82 +238,9 @@ impl StateProcessingHandler for MidfielderRunningState {
                 return None;
             }
 
-            // ── ATTACKING MIDFIELDER carve-out ──────────────────────────
-            // AML / AMC / AMR are grouped under `Midfielder` for shape
-            // and selection, but their shot expectations are forward-
-            // like — the strict `mid_shot_selection >= 0.40 / 0.58`
-            // gates below suppress non-elite #10s to near-zero goals
-            // (a Spartak AM posting 2G/3A in 93 apps is the symptom).
-            // Route them through the forward helper so a skill-graded
-            // willingness roll decides, matching the forwards' path.
-            // Non-AM midfielders keep the conservative gates.
-            if ctx
-                .player
-                .tactical_position
-                .current_position
-                .is_attacking_midfielder()
-                && can_shoot
-                && distance_to_goal <= MAX_SHOOTING_DISTANCE
-            {
-                match evaluate_forward_shot_decision(ctx, "AM_RUN_FWD") {
-                    ShotDecision::Shoot { reason } => {
-                        return Some(
-                            StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                                .with_shot_reason(reason),
-                        );
-                    }
-                    ShotDecision::Pass => {
-                        if let Some((target, _)) = self.find_best_pass_option(ctx) {
-                            return Some(StateChangeResult::with_midfielder_state_and_event(
-                                MidfielderState::Standing,
-                                Event::PlayerEvent(PlayerEvent::PassTo(
-                                    PassingEventContext::new()
-                                        .with_from_player_id(ctx.player.id)
-                                        .with_to_player_id(target.id)
-                                        .with_reason("AM_RUN_FWD_PASS")
-                                        .build(ctx),
-                                )),
-                            ));
-                        }
-                    }
-                    ShotDecision::Hold => {}
-                }
-            }
-
-            // Priority 0: Point-blank range — skill-graded willingness
-            // instead of an unconditional must-shoot. A 5/20 finisher
-            // hesitates / mishits at point blank far more often than an
-            // elite striker; the random roll stays bounded so even a
-            // poor midfielder still picks the shot most of the time.
-            if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE
-            {
-                let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
-                let shot_profile = ctx.player().shooting().shot_profile();
-                let point_blank_willingness = (0.10
-                    + shot_profile.selection_skill * 0.30
-                    + mid_profile.mid_shot_selection * 0.20
-                    + shot_profile.composure_skill * 0.10)
-                    .clamp(0.18, 0.85);
-                if rand::random::<f32>() < point_blank_willingness {
-                    return Some(
-                        StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                            .with_shot_reason("MID_RUN_POINT_BLANK"),
-                    );
-                }
-                // Roll failed — try cutback / pass before holding.
-                if let Some((target, _)) = self.find_best_pass_option(ctx) {
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(target.id)
-                                .with_reason("MID_RUN_POINT_BLANK_CUTBACK")
-                                .build(ctx),
-                        )),
-                    ));
-                }
-            }
+            // (Shooting — including the box arrival / cutback finish and
+            // point-blank chances — is handled by the unified skill-driven
+            // helper block hoisted above; no separate carve-outs needed.)
 
             // Priority: Clear ball if congested anywhere (not just boundaries)
             // Only attempt after carrying ball for a while to prevent instant pass-after-receive
@@ -274,42 +298,12 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Shooting evaluation for midfielders — gated on the
-            // unified shot profile + midfielder shot selection composite
-            // rather than raw long_shots / finishing thresholds.
+            // Shooting is evaluated earlier (the SHOOT-FIRST block above,
+            // hoisted ahead of the possession / pass-recycling defaults).
+            // `mid_profile` / `goal_dist` are still needed by the
+            // carry-forward and dribble gates below.
             let goal_dist = ctx.ball().distance_to_opponent_goal();
             let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
-            let shot_profile = ctx.player().shooting().shot_profile();
-
-            // Standard shooting — close range with clear shot, good
-            // angle, and an xG floor that scales with shot selection.
-            if can_shoot
-                && coach.shooting_reluctance() < 0.3
-                && goal_dist <= STANDARD_SHOOTING_DISTANCE
-                && ctx.player().has_clear_shot()
-                && ctx.player().shooting().has_good_angle()
-                && shot_profile.expected_xg(goal_dist, true) >= 0.13
-                && (mid_profile.mid_shot_selection >= 0.40 || shot_profile.execution_skill >= 0.55)
-            {
-                return Some(
-                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                        .with_shot_reason("MID_RUN_STANDARD"),
-                );
-            }
-
-            // Distance shooting — long range only with high midfielder
-            // shot selection (long_shots / technique / composure curve).
-            if can_shoot
-                && goal_dist <= MAX_SHOOTING_DISTANCE
-                && mid_profile.mid_shot_selection >= 0.58
-                && shot_profile.execution_skill >= 0.45
-                && ctx.player().has_clear_shot()
-                && ctx.player().shooting().has_good_angle()
-            {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::DistanceShooting,
-                ));
-            }
 
             // CARRY FORWARD: Open path to goal — gate on carry_selection
             // (dribbling / decisions / composure / acceleration / agility
@@ -419,6 +413,47 @@ impl StateProcessingHandler for MidfielderRunningState {
                                 .build(ctx),
                         )),
                     ));
+                }
+            }
+
+            // CUTBACK FROM WIDE: a wide carrier near the byline plays a low
+            // cutback to a central midfielder arriving unmarked in the box
+            // (a first-time shot for the runner) in preference to always
+            // launching an aerial cross at the forwards. In a 442 the byline
+            // carrier is usually a wide mid, so this is the main engine of
+            // midfielder goals. Restricted to a true cutback origin (wide +
+            // deep); the shared finder enforces the rest (central runner,
+            // in range, unmarked, clear lane). Checked just before CROSSING
+            // so a genuine cutback chance is taken over the speculative cross.
+            if ownership_ticks > 12 && ctx.ball().has_stable_possession() {
+                let field_h = ctx.context.field_size.height as f32;
+                let mid_goal = ctx.player().opponent_goal_position();
+                // "Deep" = near the byline in X; "off-centre" = poor own
+                // angle. Using goal-CENTRE distance here is wrong (a wide
+                // carrier is always far from centre), so key off byline X.
+                let carrier_byline = (mid_goal.x - ctx.player.position.x).abs() < 90.0;
+                let carrier_offcenter =
+                    (ctx.player.position.y - field_h / 2.0).abs() > field_h * 0.15;
+                if carrier_byline && carrier_offcenter {
+                    if let Some(runner) =
+                        crate::r#match::player::strategies::common::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
+                    {
+                        #[cfg(feature = "match-logs")]
+                        {
+                            use std::sync::atomic::Ordering;
+                            crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::MID_CUTBACK.fetch_add(1, Ordering::Relaxed);
+                        }
+                        return Some(StateChangeResult::with_midfielder_state_and_event(
+                            MidfielderState::Standing,
+                            Event::PlayerEvent(PlayerEvent::PassTo(
+                                PassingEventContext::new()
+                                    .with_from_player_id(ctx.player.id)
+                                    .with_to_player_id(runner.id)
+                                    .with_reason("MID_CUTBACK_TO_RUNNER")
+                                    .build(ctx),
+                            )),
+                        ));
+                    }
                 }
             }
 

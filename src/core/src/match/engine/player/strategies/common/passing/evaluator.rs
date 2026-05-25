@@ -583,6 +583,32 @@ impl PassEvaluator {
             0.0
         };
 
+        // === ARRIVING CENTRAL RUNNER BONUS ===
+        // A central midfielder who has arrived in the central box corridor
+        // in space is a high-value target the classic evaluator under-rates
+        // — the feed is often a short / square ball that scores low on
+        // forward-progress, so without this the carrier passes elsewhere
+        // and the late run is wasted. This biases carriers to FEED the
+        // arriving runner whenever they pass (it only shifts target
+        // SELECTION — it never forces an extra pass), which is the supply
+        // side of midfielders scoring. Gated tight: receiver is a central
+        // midfielder, deep in the central corridor, and unmarked. Skipped
+        // when the byline cutback already fired so the two don't stack.
+        let arriving_runner_bonus = if !cutback_pattern
+            && receiver.tactical_positions.is_central_midfielder()
+            && receiver_progress > 0.80
+            && receiver_y_offset < field_height * 0.15
+        {
+            let opps = ctx.tick_context.grid.opponents(receiver.id, 12.0).count();
+            match opps {
+                0 => 0.38,
+                1 => 0.18,
+                _ => 0.0,
+            }
+        } else {
+            0.0
+        };
+
         // === BUILD-UP RECYCLING BONUS ===
         // In build-up, a short pass to a CB / DM / GK that resets play
         // is a healthy modern pattern, not a panic option. Gated on:
@@ -692,6 +718,7 @@ impl PassEvaluator {
             width_bonus * 0.22 +
             switch_total +                   // Capped flat: classic + underload ≤ 0.45
             cutback_bonus +
+            arriving_runner_bonus +
             build_up_recycle_bonus +
             counter_first_pass_bonus +
             same_side_density_penalty +

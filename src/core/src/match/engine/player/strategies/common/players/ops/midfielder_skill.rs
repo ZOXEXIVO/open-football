@@ -294,13 +294,25 @@ impl MidfielderSkillProfile {
             .clamp(0.0, 1.0);
 
         // ── Midfielder shot selection ────────────────────────────────
-        let mid_shot_selection = (pow_curve(long_shots01, 1.75) * 0.28
-            + pow_curve(technique01, 1.50) * 0.18
-            + pow_curve(decisions01, 1.45) * 0.18
-            + pow_curve(composure01, 1.45) * 0.16
-            + pow_curve(finishing01, 1.55) * 0.10
-            + pow_curve(balance01, 1.25) * 0.06
-            + pow_curve(concentration01, 1.20) * 0.04)
+        // Real football: central midfielders take ~25-30% of a team's
+        // shots (edge-of-box strikes, second-balls, late runs). The old
+        // `long_shots^1.75 * 0.28` term punished the whole composite so
+        // hard that a typical CM (long_shots ~10, finishing ~9) landed
+        // ~0.30-0.39 and failed every `>= 0.40` shot gate — so 100% of a
+        // team's shots (and goals) flowed through the two forwards. Soften
+        // the exponents (a lower exponent on a 0..1 base RAISES the value)
+        // and shift weight off raw long_shots toward the skills midfielders
+        // actually have (technique / decisions / composure / finishing) so
+        // a competent CM clears the standard-shot gate and contributes a
+        // realistic share of attempts without flattering true long-range
+        // specialists, who still separate via the top of the curve.
+        let mid_shot_selection = (pow_curve(long_shots01, 1.45) * 0.23
+            + pow_curve(technique01, 1.35) * 0.19
+            + pow_curve(decisions01, 1.35) * 0.18
+            + pow_curve(composure01, 1.35) * 0.17
+            + pow_curve(finishing01, 1.45) * 0.13
+            + pow_curve(balance01, 1.20) * 0.06
+            + pow_curve(concentration01, 1.15) * 0.04)
             .clamp(0.0, 1.0);
 
         // ── Pressing ─────────────────────────────────────────────────
@@ -402,22 +414,28 @@ impl MidfielderSkillProfile {
         self.long_pass_profile >= 0.44
     }
 
-    /// True if the midfielder should carry into space.
+    /// True if the midfielder should carry into space. Lowered so a
+    /// typical central midfielder (carry_selection ~0.35-0.45) actually
+    /// drives the ball forward instead of recycling it on the first
+    /// touch — the user wants MCs running with the ball more.
     #[inline]
     pub fn allows_carry_into_space(&self) -> bool {
-        self.carry_selection >= 0.38 && self.mid_condition_mult >= 0.72
+        self.carry_selection >= 0.32 && self.mid_condition_mult >= 0.70
     }
 
     /// True if the midfielder should attempt to take on a single defender.
+    /// Lowered so MCs penetrate toward goal (a take-on is how they get
+    /// from the edge of the final third into shooting range) rather than
+    /// stopping at the first defender and passing back.
     #[inline]
     pub fn allows_take_on_one(&self) -> bool {
-        self.carry_selection >= 0.48
+        self.carry_selection >= 0.40
     }
 
     /// True if the midfielder should attempt to take on two defenders.
     #[inline]
     pub fn allows_take_on_two(&self) -> bool {
-        self.carry_selection >= 0.66
+        self.carry_selection >= 0.58
     }
 
     /// True if the midfielder should engage in counterpress chasing.

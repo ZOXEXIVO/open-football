@@ -52,8 +52,8 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // up in their personal "in_shooting_range" band.
         if has_clear_shot
             && distance_to_goal <= 32.0
-            && shot_profile.expected_xg(distance_to_goal, true) >= 0.13
-            && (mid_profile.mid_shot_selection >= 0.42 || shot_profile.execution_skill >= 0.55)
+            && shot_profile.expected_xg(distance_to_goal, true) >= 0.12
+            && (mid_profile.mid_shot_selection >= 0.34 || shot_profile.execution_skill >= 0.50)
         {
             return Some(
                 StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
@@ -94,7 +94,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // a hurried release.
         let close_opponents = ctx.players().opponents().nearby(15.0).count();
         if close_opponents >= 2 {
-            if distance_to_goal < 32.0 && has_clear_shot && mid_profile.mid_shot_selection >= 0.50 {
+            if distance_to_goal < 32.0 && has_clear_shot && mid_profile.mid_shot_selection >= 0.42 {
                 return Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                         .with_shot_reason("MID_DRIB_PRESSURED_SHOOT"),

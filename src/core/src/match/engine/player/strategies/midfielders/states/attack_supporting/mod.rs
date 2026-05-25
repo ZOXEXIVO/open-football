@@ -195,6 +195,35 @@ impl MidfielderAttackSupportingState {
 
         let distance_to_goal = (ball_position - goal_position).magnitude();
 
+        // ── ARRIVING RUNNER ──────────────────────────────────────────────
+        // The attacking central midfielder (highest attacking drive with
+        // cover behind — see should_make_attacking_run) makes a timed run
+        // into a central SHOOTING position once the attack reaches the
+        // final third. This is what lets midfielders score: their default
+        // "box runs" target 95-150u from goal — beyond the midfielder 88u
+        // shooting range — so they never threaten and goals funnel to
+        // forwards. Who runs is decided by attributes, not position, so a
+        // box-to-box #8 arrives while a deep regista holds. Depth scales
+        // with ball advancement so the runner arrives late, not camping
+        // offside at the penalty spot.
+        if distance_to_goal < field_width * 0.33 && self.should_make_attacking_run(ctx) {
+            let target = self
+                .calculate_arriving_runner_target(ctx, attacking_direction, field_height)
+                .clamp_to_field(field_width, field_height);
+            #[cfg(feature = "match-logs")]
+            {
+                use std::sync::atomic::Ordering;
+                let goal = goal_position;
+                let center_y = field_height / 2.0;
+                let in_box_central = (goal - player_position).magnitude() < 62.0
+                    && (player_position.y - center_y).abs() < field_height * 0.17;
+                if in_box_central {
+                    crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::RUNNER_BOX_TICKS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            return target;
+        }
+
         // Different run types based on position and situation
         let run_type = self.determine_run_type(ctx, distance_to_goal);
 
@@ -272,6 +301,112 @@ impl MidfielderAttackSupportingState {
                 diagonal_target.clamp_to_field(field_width, field_height)
             }
         }
+    }
+
+    /// Whether this central midfielder makes the late run into the box.
+    /// EMERGENT from attributes + tactical balance — not an arbitrary
+    /// "most-advanced, ties-by-id" election. A run is made when:
+    ///   * the player is a central midfielder (the dispatcher already
+    ///     guarantees `ctx.player` is a midfielder; we exclude wide mids);
+    ///   * they have the highest ATTACKING DRIVE (off-the-ball timing +
+    ///     work-rate engine + goal threat) among their central-mid
+    ///     teammates — so the box-to-box #8 goes and the deep regista
+    ///     holds, decided by who they ARE, not where they happen to stand;
+    ///   * there is DEFENSIVE COVER behind them — at least one central
+    ///     mid or defender is goal-side — so the midfield is never wholly
+    ///     vacated (which regresses team scoring).
+    /// A two-CM pivot naturally produces one runner + one holder; a side
+    /// with no genuine attacking mid produces no late runner (correct —
+    /// holding-midfield teams don't get bodies in the box).
+    fn should_make_attacking_run(&self, ctx: &StateProcessingContext) -> bool {
+        if !ctx
+            .player
+            .tactical_position
+            .current_position
+            .is_central_midfielder()
+        {
+            return false;
+        }
+        let goal = ctx.player().opponent_goal_position();
+        let my_d = (goal - ctx.player.position).magnitude();
+
+        // Defensive cover behind us? (a deeper central-mid or defender)
+        let cover_behind = ctx.players().teammates().all().any(|t| {
+            (t.tactical_positions.is_central_midfielder() || t.tactical_positions.is_defender())
+                && (goal - t.position).magnitude() > my_d + 8.0
+        });
+        if !cover_behind {
+            return false;
+        }
+
+        // Highest attacking drive among central-mid teammates wins the run.
+        let my_drive = Self::attacking_drive(&ctx.player.skills);
+        let my_id = ctx.player.id;
+        let beaten = ctx.players().teammates().all().any(|t| {
+            if !t.tactical_positions.is_central_midfielder() {
+                return false;
+            }
+            let t_drive = ctx
+                .context
+                .players
+                .by_id(t.id)
+                .map(|tp| Self::attacking_drive(&tp.skills))
+                .unwrap_or(0.0);
+            t_drive > my_drive + 0.01 || ((t_drive - my_drive).abs() <= 0.01 && t.id < my_id)
+        });
+        !beaten
+    }
+
+    /// A central midfielder's drive to get into the box. Off-the-ball is
+    /// the dominant signal (timing the run), work-rate is the box-to-box
+    /// engine, and finishing / long-shots are the goal threat that makes
+    /// the run worthwhile. A deep regista (low off-ball / work-rate) scores
+    /// low and holds; an advanced #8 scores high and runs.
+    fn attacking_drive(s: &crate::PlayerSkills) -> f32 {
+        s.mental.off_the_ball * 0.42
+            + s.mental.work_rate * 0.26
+            + (s.technical.finishing + s.technical.long_shots) * 0.5 * 0.32
+    }
+
+    /// Target for the elected arriving runner. Central position in the
+    /// box whose depth scales with how advanced the ball is (a real late
+    /// run: deep at the penalty spot when the ball reaches the byline,
+    /// holding at the top of the box when the ball is just entering the
+    /// final third). Both ends sit inside the midfielder 88u shooting
+    /// range; the deep end is inside STANDARD (52u) so the arrival clears
+    /// the standard-shot gate. Central y gives the angle the SHOOT-FIRST
+    /// block and the PassEvaluator cutback bonus both key off. Pulled
+    /// back behind the line if the target would be offside.
+    fn calculate_arriving_runner_target(
+        &self,
+        ctx: &StateProcessingContext,
+        attacking_direction: f32,
+        field_height: f32,
+    ) -> Vector3<f32> {
+        let goal = ctx.player().opponent_goal_position();
+        let center_y = field_height / 2.0;
+        let ball = ctx.tick_context.positions.ball.position;
+        let ball_d = (ball - goal).magnitude();
+
+        // 40u (penalty spot) when the ball is deep, easing to 82u (top of
+        // the box) when the ball is at the edge of the final third.
+        let t = ((ball_d - 55.0) / (230.0 - 55.0)).clamp(0.0, 1.0);
+        let depth = 40.0 + t * 42.0;
+        let target_x = goal.x - attacking_direction * depth;
+
+        // Stay central for the angle, drifting to the FAR side of the ball
+        // (back-post arrival) so the runner isn't standing in the
+        // cross / cutback lane the carrier will use.
+        let ball_above = ball.y < center_y;
+        let y_bias = if ball_above { 1.0 } else { -1.0 } * field_height * 0.07;
+        let max_off = field_height * 0.14;
+        let target_y = (center_y + y_bias).clamp(center_y - max_off, center_y + max_off);
+
+        let mut target = Vector3::new(target_x, target_y, 0.0);
+        if self.is_offside_risk(ctx, target) {
+            target.x -= attacking_direction * 18.0;
+        }
+        target
     }
 
     // Add new helper to determine run type
@@ -574,8 +709,14 @@ impl MidfielderAttackSupportingState {
         let channels = self.identify_free_channels(ctx, goal_position);
 
         if let Some(best_channel) = channels.first() {
-            // Run into the free channel
-            let target_x = goal_position.x - (attacking_direction * 150.0);
+            // Run into the free channel, all the way to the edge of the
+            // box (~95u from goal) instead of stopping at 150u — at 150u
+            // a midfielder making a "late box run" was still ~1.7x beyond
+            // shooting range, so the run never produced a shooting threat.
+            // The run *frequency* (should_make_late_box_run) is unchanged,
+            // so this deepens the few runs that already happen rather than
+            // pulling extra midfielders out of shape.
+            let target_x = goal_position.x - (attacking_direction * 95.0);
             let target_y = best_channel.center_y;
 
             // Add slight curve to the run to stay onside

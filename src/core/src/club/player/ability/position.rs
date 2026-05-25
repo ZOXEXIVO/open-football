@@ -124,6 +124,37 @@ impl PlayerPositionType {
         )
     }
 
+    /// True for central defenders (CB / sweeper) — the players sent up to
+    /// attack an attacking corner (they're the aerial threat). Excludes
+    /// full-backs / wing-backs, who stay back to cover the counter.
+    #[inline]
+    pub fn is_central_defender(&self) -> bool {
+        matches!(
+            self,
+            PlayerPositionType::DefenderCenterLeft
+                | PlayerPositionType::DefenderCenter
+                | PlayerPositionType::DefenderCenterRight
+                | PlayerPositionType::Sweeper
+        )
+    }
+
+    /// True for the central midfield band (CM / AMC) — the players who
+    /// make the late central run into the box and arrive for cutbacks.
+    /// Deliberately excludes wide mids (ML/MR), wingbacks and wide AMs,
+    /// who hold width and deliver crosses rather than arriving centrally.
+    /// This is the gate for the single elected "arriving runner" so the
+    /// box-run redistribution doesn't pull the whole midfield up.
+    #[inline]
+    pub fn is_central_midfielder(&self) -> bool {
+        matches!(
+            self,
+            PlayerPositionType::MidfielderCenterLeft
+                | PlayerPositionType::MidfielderCenter
+                | PlayerPositionType::MidfielderCenterRight
+                | PlayerPositionType::AttackingMidfielderCenter
+        )
+    }
+
     #[inline]
     pub fn position_group(&self) -> PlayerFieldPositionGroup {
         match *self {

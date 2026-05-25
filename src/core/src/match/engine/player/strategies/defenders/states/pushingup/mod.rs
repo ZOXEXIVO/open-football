@@ -21,6 +21,21 @@ impl StateProcessingHandler for DefenderPushingUpState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
 
+        // Attacking corner: centre-backs attack the delivery rather than
+        // the generic push-up (which would retreat at the box edge).
+        if !ctx.player.has_ball(ctx)
+            && ctx
+                .player
+                .tactical_position
+                .current_position
+                .is_central_defender()
+            && ctx.ball().is_team_attacking_corner()
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::AttackingCorner,
+            ));
+        }
+
         if ball_ops.on_own_side() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TrackingBack,

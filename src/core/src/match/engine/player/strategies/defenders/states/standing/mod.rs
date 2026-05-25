@@ -40,6 +40,21 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
+        // Attacking corner: centre-backs push up to attack the delivery.
+        // Only fires while our corner is live; AttackingCorner self-
+        // terminates the instant it's over, so open-play shape is untouched.
+        if ctx
+            .player
+            .tactical_position
+            .current_position
+            .is_central_defender()
+            && ctx.ball().is_team_attacking_corner()
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::AttackingCorner,
+            ));
+        }
+
         // BOX EMERGENCY — carrier is in our penalty area; one of the
         // two closest defenders engages regardless of role assignment.
         // The role system is geometry-driven and usually correct, but
