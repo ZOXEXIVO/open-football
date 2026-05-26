@@ -482,6 +482,9 @@ impl PipelineProcessor {
                     squad_avg_ability,
                     shortlist_score: top.score,
                     dossier: dossier_summary,
+                    // Economics dossier not yet wired from the pipeline;
+                    // the board falls back to its base governance.
+                    economics: None,
                 };
                 let board_decision = club.board.review_transfer_proposal(&proposal);
                 let veto_reason: Option<&str> = if board_decision.is_approved() {

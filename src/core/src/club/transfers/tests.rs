@@ -67,6 +67,7 @@ fn vision(financial_stance: FinancialStance) -> ClubVision {
         financial_stance,
         long_term_goal: None,
         long_term_horizon_seasons: 3,
+        ..Default::default()
     }
 }
 

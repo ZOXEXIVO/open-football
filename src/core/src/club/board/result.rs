@@ -1,8 +1,9 @@
 use crate::club::StaffPosition;
-use crate::club::board::BoardMoodState;
 use crate::club::board::manager_market;
+use crate::club::board::{BoardDecision, BoardFacility, BoardMoodState};
+use crate::club::facilities::FacilityLevel;
 use crate::league::result::LeagueProcessAccess;
-use crate::{Staff, StaffEventType, TeamType};
+use crate::{Club, Staff, StaffEventType, TeamType};
 use chrono::Datelike;
 use log::{debug, info};
 
@@ -43,6 +44,10 @@ pub struct BoardResult {
     /// Monthly board contact with the head coach: public backing, a formal
     /// warning, or a crisis meeting before/around dismissal risk.
     pub manager_meeting: Option<BoardManagerMeeting>,
+    /// Explainable, machine-readable board decisions emitted this tick.
+    /// `process` applies the ones with real effects (budgets, facilities,
+    /// takeover); the rest are informational for the UI.
+    pub decisions: Vec<BoardDecision>,
 }
 
 impl BoardResult {
@@ -64,6 +69,7 @@ impl BoardResult {
             manager_satisfaction_delta: 0.0,
             offer_manager_renewal: false,
             manager_meeting: None,
+            decisions: Vec::new(),
         }
     }
 
@@ -112,6 +118,11 @@ impl BoardResult {
                     budget.amount *= 1.20;
                 }
             }
+
+            // Apply amount-based / structural decisions (budgets, facility
+            // upgrades, takeover injections). Meeting / sack / search
+            // decisions are handled by the legacy fields below.
+            Self::apply_decisions(&self.decisions, club);
 
             // Push the board's mood onto the manager's own job satisfaction —
             // a coach at a happy club feels secure, a coach under Poor mood
@@ -241,6 +252,98 @@ impl BoardResult {
         }
         if do_confirm {
             data.queue_manager_appointment(self.club_id);
+        }
+    }
+
+    /// Apply the board decisions that have concrete club-state effects:
+    /// transfer/wage budget adjustments, approved facility upgrades, and a
+    /// takeover cash injection. Other variants (meetings, sackings, search,
+    /// rumours, demands) are informational or handled by legacy fields.
+    fn apply_decisions(decisions: &[BoardDecision], club: &mut Club) {
+        for decision in decisions {
+            match decision {
+                BoardDecision::IncreaseTransferBudget { amount, .. } => {
+                    if let Some(budget) = club.finance.transfer_budget.as_mut() {
+                        budget.amount += *amount as f64;
+                    }
+                    debug!(
+                        "Board raised transfer budget at {} by {}",
+                        club.name, amount
+                    );
+                }
+                BoardDecision::CutTransferBudget { amount, .. } => {
+                    if let Some(budget) = club.finance.transfer_budget.as_mut() {
+                        budget.amount = (budget.amount - *amount as f64).max(0.0);
+                    }
+                }
+                BoardDecision::AdjustWageBudget { amount, .. } => {
+                    if let Some(budget) = club.finance.wage_budget.as_mut() {
+                        budget.amount = (budget.amount + *amount as f64).max(0.0);
+                    }
+                }
+                BoardDecision::ApproveFacilityUpgrade { facility, cost } => {
+                    Self::apply_facility_upgrade(club, *facility, *cost);
+                }
+                BoardDecision::CompleteTakeover => {
+                    // New owner injects cash proportional to the club's wage
+                    // bill — a war chest to back the fresh ambition.
+                    let wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
+                    let injection = (wages as i64).max(20_000_000);
+                    club.finance.balance.push_income(injection);
+                    info!(
+                        "Takeover completed at {} — owner injects {}",
+                        club.name, injection
+                    );
+                }
+                // Informational / handled elsewhere.
+                BoardDecision::IssueManagerBacking
+                | BoardDecision::IssueFormalWarning
+                | BoardDecision::HoldCrisisMeeting
+                | BoardDecision::SackManager
+                | BoardDecision::RejectFacilityUpgrade { .. }
+                | BoardDecision::DemandPlayerSale { .. }
+                | BoardDecision::BlockTransfer { .. }
+                | BoardDecision::ApproveTransferException { .. }
+                | BoardDecision::StartTakeoverRumour => {}
+            }
+        }
+    }
+
+    /// Bump the targeted facility one level (debiting the cost) or expand
+    /// the stadium's capacity proxy. Costs draw down cash via the finance
+    /// balance so the upgrade has a real budget consequence.
+    fn apply_facility_upgrade(club: &mut Club, facility: BoardFacility, cost: i64) {
+        let upgraded = match facility {
+            BoardFacility::Training => {
+                Self::step_up(&mut club.facilities.training)
+            }
+            BoardFacility::Youth => Self::step_up(&mut club.facilities.youth),
+            BoardFacility::Academy => Self::step_up(&mut club.facilities.academy),
+            BoardFacility::Recruitment => {
+                Self::step_up(&mut club.facilities.recruitment)
+            }
+            BoardFacility::Stadium => {
+                // Expand capacity proxy by 15%.
+                let cur = club.facilities.average_attendance;
+                club.facilities.average_attendance = cur + (cur / 7).max(1);
+                true
+            }
+        };
+        if upgraded {
+            club.finance.balance.push_cash_outflow(cost.max(0));
+            info!(
+                "Board approved {:?} upgrade at {} (cost {})",
+                facility, club.name, cost
+            );
+        }
+    }
+
+    fn step_up(level: &mut FacilityLevel) -> bool {
+        if let Some(next) = level.next_better() {
+            *level = next;
+            true
+        } else {
+            false
         }
     }
 }

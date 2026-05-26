@@ -1,10 +1,23 @@
 use crate::MatchTacticType;
+use crate::club::board::BoardManagerMeeting;
 use crate::club::board::context::FfpStatus;
+use crate::club::board::decision::{BoardDecision, DecisionReason};
+use crate::club::board::infrastructure::FacilityReview;
 use crate::club::board::manager_market::ManagerCandidate;
+use crate::club::board::ownership::{OwnershipModel, OwnershipType};
+use crate::club::board::pressure::{BoardPressure, SupporterEvent};
+use crate::club::board::promise::PromiseLedger;
+use crate::club::board::relationship::ManagerRelationship;
+use crate::club::board::scoring::{BoardComponentScores, SeasonPhase};
+use crate::club::board::strategy::{
+    InfrastructurePriority, ManagerAutonomy, ReviewFrequency, SquadProfile,
+};
+use crate::club::board::takeover::{TakeoverEngine, TakeoverWatch};
 use crate::club::team::reputation::AchievementType;
 use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClubContract};
 use crate::context::{GlobalContext, SimulationContext};
 use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
+use crate::utils::IntegerUtils;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
@@ -21,6 +34,16 @@ pub struct ClubVision {
     pub long_term_goal: Option<LongTermGoal>,
     /// Seasons allotted for the manager to reach `long_term_goal`.
     pub long_term_horizon_seasons: u8,
+    /// The kind of squad the board wants assembled. Biases transfer
+    /// governance and the squad-building component score.
+    pub preferred_squad_profile: SquadProfile,
+    /// Where surplus capital should go — drives the yearly facility review.
+    pub infrastructure_priority: InfrastructurePriority,
+    /// How much football autonomy the manager is granted. Combined with
+    /// ownership interference to set autonomy, DoF override, and patience.
+    pub manager_autonomy: ManagerAutonomy,
+    /// How often the board runs a full confidence re-evaluation.
+    pub review_frequency: ReviewFrequency,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -233,6 +256,38 @@ pub struct BoardTransferProposal {
     /// When `None` the board falls back to the legacy decision path
     /// (preserves behaviour for non-pipeline call sites and tests).
     pub dossier: Option<BoardDossierSummary>,
+    /// Optional financial/profile dossier on the deal. When present the
+    /// board applies ownership-archetype governance (wage impact, resale,
+    /// risk, manager priority). `None` keeps the legacy path for tests and
+    /// call sites that don't build it yet.
+    pub economics: Option<BoardTransferEconomics>,
+}
+
+/// Financial + profile snapshot of a proposed signing, used by the board's
+/// ownership-archetype governance. Mirrors the recruitment dossier pattern
+/// — present for pipeline calls, `None` elsewhere.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BoardTransferEconomics {
+    /// Added annual wage this signing commits the club to.
+    pub wage_impact_annual: f64,
+    /// Remaining annual wage-budget headroom before the deal.
+    pub wage_budget_headroom: f64,
+    /// Agent fee on top of the transfer fee.
+    pub agent_fee: f64,
+    /// Proposed contract length in years.
+    pub contract_length_years: u8,
+    /// Projected resale value at the end of the deal.
+    pub resale_projection: f64,
+    /// Off-pitch risk 0..1 (1 = serious professionalism/discipline concern).
+    pub professionalism_risk: f32,
+    /// True when the player counts as home-grown / domestic for the club.
+    pub homegrown_fit: bool,
+    /// Injury proneness 0..1.
+    pub injury_risk: f32,
+    /// Commercial / shirt-sales appeal 0..1.
+    pub commercial_value: f32,
+    /// True when this is the manager's explicit priority target.
+    pub manager_priority: bool,
 }
 
 /// Compact, board-facing snapshot of the recruitment dossier. We pull
@@ -317,6 +372,30 @@ pub struct ClubBoard {
     /// and long-term tolerance. Populated at club creation; stable for
     /// the lifetime of the chairman.
     pub chairman: ChairmanProfile,
+    /// Richer ownership submodel layered on the chairman — wealth,
+    /// interference, risk appetite, exit pressure. Derived once from the
+    /// club's durable signals (reputation, finances, league) on the first
+    /// simulate tick, then stable for the chairman's tenure.
+    pub ownership: OwnershipModel,
+    /// Slow-moving pressure gauges (supporters, media, dressing room,
+    /// finances, regulatory) read as inputs to confidence and meetings.
+    pub pressure: BoardPressure,
+    /// Five-facet board↔manager trust relationship. Drives renewals,
+    /// relationship-driven dismissal, and transfer autonomy.
+    pub relationship: ManagerRelationship,
+    /// Live board promises to the manager and their kept/broken record.
+    pub promises: PromiseLedger,
+    /// Latest component scores from the monthly review — stored so the UI
+    /// and tests can inspect *why* the board feels how it does.
+    pub latest_scores: BoardComponentScores,
+    /// Rare ownership-change watch (takeover rumours / completion).
+    pub takeover: TakeoverWatch,
+    /// 0-based month index since the current season started — drives the
+    /// quarterly / season-end review cadence.
+    pub season_month_index: u32,
+    /// One-shot guard: ownership/personality is derived from club data on
+    /// the first simulate tick (which, unlike `new()`, has club context).
+    pub personality_initialized: bool,
 }
 
 impl ClubBoard {
@@ -336,6 +415,14 @@ impl ClubBoard {
             shortlist_built_at: None,
             search_window_days: 0,
             chairman: ChairmanProfile::new(),
+            ownership: OwnershipModel::new(),
+            pressure: BoardPressure::new(),
+            relationship: ManagerRelationship::new(),
+            promises: PromiseLedger::new(),
+            latest_scores: BoardComponentScores::default(),
+            takeover: TakeoverWatch::new(),
+            season_month_index: 0,
+            personality_initialized: false,
         }
     }
 
@@ -396,6 +483,17 @@ impl ClubBoard {
             ChairmanAmbition::Conservative => -0.15,
         };
 
+        // Ownership archetype risk appetite. Neutral owners (risk 50,
+        // LocalBusiness) contribute exactly 0 so legacy call sites and
+        // tests are unaffected.
+        tolerance += (self.ownership.risk_tolerance as f64 - 50.0) / 100.0 * 0.5;
+        tolerance += match self.ownership.ownership_type {
+            OwnershipType::StateBacked => 0.20,
+            OwnershipType::MemberOwned => -0.10,
+            OwnershipType::PrivateEquity => -0.05,
+            _ => 0.0,
+        };
+
         tolerance += match proposal.priority {
             TransferNeedPriority::Critical => 0.35,
             TransferNeedPriority::Important => 0.15,
@@ -406,6 +504,14 @@ impl ClubBoard {
             tolerance += 0.15;
         } else if self.confidence.level < 35 {
             tolerance -= 0.25;
+        }
+
+        // Low-autonomy boards under sliding confidence let the director of
+        // football intervene and tighten tolerance on the manager's asks.
+        if matches!(self.vision.manager_autonomy, ManagerAutonomy::Low)
+            && self.confidence.level < self.vision.manager_autonomy.dof_override_threshold()
+        {
+            tolerance -= 0.20;
         }
 
         if is_board_urgent_reason(&proposal.reason) {
@@ -471,11 +577,103 @@ impl ClubBoard {
             }
         }
 
+        // Ownership-archetype governance: squad-profile fit + deal
+        // economics (wage impact, resale, off-pitch risk). No-op for a
+        // Balanced profile with no economics dossier.
+        if let Some(decision) = self.review_governance(proposal) {
+            return decision;
+        }
+
         if over_allocated > 1.0 || remaining_budget <= allocated_budget * 0.25 {
             return BoardTransferDecision::Conditional(BoardTransferConcern::FinancialDiscipline);
         }
 
         BoardTransferDecision::Approved
+    }
+
+    /// Ownership-archetype governance layered on the base review:
+    /// squad-profile fit plus deal economics (wage impact, resale, risk).
+    /// Returns `Some` to override the base decision; `None` to defer to it.
+    /// A `Balanced` profile with no economics dossier always returns `None`.
+    fn review_governance(
+        &self,
+        proposal: &BoardTransferProposal,
+    ) -> Option<BoardTransferDecision> {
+        use BoardTransferConcern::*;
+
+        // ── Squad profile fit ──
+        if let Some(age) = proposal.player_age {
+            let critical = matches!(proposal.priority, TransferNeedPriority::Critical);
+            match self.vision.preferred_squad_profile {
+                // Youth project: accept weaker-but-young; block ageing depth
+                // outright (a hard veto, not a soft flag).
+                SquadProfile::Youth if age >= 29 && !critical => {
+                    return Some(BoardTransferDecision::Vetoed(ConflictsWithVision));
+                }
+                // Resale model: no point buying a player past resale age.
+                SquadProfile::ResaleValue if age >= 30 && !critical => {
+                    return Some(BoardTransferDecision::Conditional(ConflictsWithVision));
+                }
+                // Galáctico policy: signings must raise the bar.
+                SquadProfile::Stars => {
+                    if let Some(ability) = proposal.player_ability {
+                        if ability + 4 < proposal.squad_avg_ability {
+                            return Some(BoardTransferDecision::Vetoed(WeakSportingCase));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // ── Deal economics ──
+        let Some(e) = proposal.economics else {
+            return None;
+        };
+
+        let elite_exception = matches!(
+            self.chairman.ambition,
+            ChairmanAmbition::Reckless | ChairmanAmbition::Ambitious
+        ) && (matches!(proposal.priority, TransferNeedPriority::Critical)
+            || proposal
+                .player_ability
+                .is_some_and(|a| a >= proposal.squad_avg_ability.saturating_add(10)));
+
+        // Wage impact above the remaining headroom.
+        if e.wage_impact_annual > e.wage_budget_headroom.max(0.0) {
+            let austere = matches!(
+                self.vision.financial_stance,
+                FinancialStance::Conservative | FinancialStance::Austerity
+            );
+            if austere && !elite_exception {
+                return Some(BoardTransferDecision::Vetoed(FinancialDiscipline));
+            }
+            if !elite_exception {
+                return Some(BoardTransferDecision::Conditional(FinancialDiscipline));
+            }
+        }
+
+        // Private-equity / resale owners dislike ageing players with weak
+        // resale projection.
+        if self.ownership.ownership_type.resale_driven() {
+            let poor_resale = e.resale_projection < proposal.fee * 0.4;
+            let ageing = proposal.player_age.is_some_and(|a| a >= 28);
+            if poor_resale && ageing {
+                return Some(BoardTransferDecision::Conditional(ConflictsWithVision));
+            }
+        }
+
+        // Off-pitch risk worries prudent / fan-owned boards.
+        if e.professionalism_risk >= 0.7
+            && matches!(
+                self.vision.financial_stance,
+                FinancialStance::Conservative | FinancialStance::Austerity
+            )
+        {
+            return Some(BoardTransferDecision::Conditional(WeakSportingCase));
+        }
+
+        None
     }
 
     fn is_sporting_case_credible(&self, proposal: &BoardTransferProposal) -> bool {
@@ -528,6 +726,16 @@ impl ClubBoard {
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> BoardResult {
         let mut result = BoardResult::new();
         result.club_id = ctx.club.as_ref().map(|c| c.id).unwrap_or(0);
+        let today = ctx.simulation.date.date();
+
+        // Derive the ownership archetype + opening vision once, the first
+        // time we have club context to read. Different clubs get different
+        // boards purely from durable signals — no hard-coded names.
+        if !self.personality_initialized {
+            if let Some(board_ctx) = &ctx.board {
+                self.bootstrap_personality(board_ctx, result.club_id);
+            }
+        }
 
         if self.director.is_none() {
             self.run_director_election(&ctx.simulation);
@@ -542,36 +750,62 @@ impl ClubBoard {
             if self.is_sport_director_contract_expiring(&ctx.simulation) {}
         }
 
-        // Season start: calculate season targets and expectations
         let season = ctx
             .country
             .as_ref()
             .map(|c| c.season_dates)
             .unwrap_or_default();
-        if ctx.simulation.is_season_start(&season) {
+        let is_season_start = ctx.simulation.is_season_start(&season);
+        let is_month_beginning = ctx.simulation.is_month_beginning();
+
+        // ── Season start: targets, vision reckoning, facility review ──
+        if is_season_start {
             if let Some(board_ctx) = &ctx.board {
-                let current_year = ctx.simulation.date.date().year();
+                let current_year = today.year();
                 self.evaluate_long_term_vision(current_year, &mut result);
                 self.calculate_season_targets(board_ctx);
-                // Season-end review: if the manager's still in their seat
-                // and the board is happy with them, trigger a renewal
-                // offer. Carries the baseline confidence into the new
-                // season so the manager keeps the momentum.
+
+                // Promises whose deadline lapsed unfulfilled break now and
+                // cost the manager board trust.
+                let penalty = self.promises.break_overdue(today);
+                if penalty != 0 {
+                    self.relationship.adjust_communication(penalty);
+                }
+                self.promises.prune(today, 800);
+
+                // Yearly infrastructure review → facility decisions applied
+                // in `BoardResult::process`.
+                result
+                    .decisions
+                    .extend(FacilityReview::run(board_ctx, &self.vision, &self.ownership));
+
+                // Renewal: a happy board moves to tie the manager down, but
+                // only when the deal is genuinely running down (or its
+                // length is unknown). Driven by legacy confidence/loyalty OR
+                // sustained multi-facet trust.
+                let contract_at_risk = board_ctx.manager_contract_months_left == 0
+                    || board_ctx.manager_contract_months_left <= 18;
                 if !result.manager_sacked
-                    && self.confidence.level >= 70
-                    && self.chairman.manager_loyalty >= 55
+                    && contract_at_risk
+                    && ((self.confidence.level >= 70 && self.chairman.manager_loyalty >= 55)
+                        || self.relationship.merits_renewal())
                 {
                     result.offer_manager_renewal = true;
                 }
                 self.confidence.level = 65; // Reset confidence at season start
                 self.poor_mood_months = 0;
+                self.season_month_index = 0;
             }
         }
 
-        // Monthly: evaluate performance, mood, confidence
-        if ctx.simulation.is_month_beginning() {
+        // ── Monthly review + takeover watch ──
+        if is_month_beginning {
             if let Some(board_ctx) = &ctx.board {
                 self.evaluate_performance(board_ctx, &mut result);
+                self.tick_takeover(board_ctx, &mut result);
+            }
+            if !is_season_start {
+                self.season_month_index = self.season_month_index.saturating_add(1);
             }
         }
 
@@ -687,20 +921,35 @@ impl ClubBoard {
             0.0
         };
 
-        let revenue_budget = projected_free_cash * ambition_mult * chair_mult * ffp_mult;
+        // Ownership wealth/risk multiplier. Neutral owners resolve to 1.0
+        // so the legacy budget tests are unchanged; a deep-pocketed
+        // risk-taker can inflate the war chest, a cautious one throttles it.
+        let owner_mult = self.ownership.budget_multiplier();
+        let revenue_budget =
+            projected_free_cash * ambition_mult * chair_mult * ffp_mult * owner_mult;
         let raw_budget = (revenue_budget + seed_budget).max(0.0);
 
         let eco = board_ctx.country_economic_factor as f64;
         let price = board_ctx.country_price_level as f64;
         let price_ceiling = price * price * 80_000_000.0;
         let eco_ceiling = eco * eco * 300_000_000.0;
-        let budget_ceiling = price_ceiling.min(eco_ceiling);
+        // Division tier caps the war chest: lower leagues simply don't move
+        // the same money. Top flight (tier 1) is unconstrained here.
+        let tier_factor = match board_ctx.league_tier {
+            0 | 1 => 1.0,
+            2 => 0.6,
+            3 => 0.35,
+            _ => 0.2,
+        };
+        let budget_ceiling = price_ceiling.min(eco_ceiling) * tier_factor;
         let transfer_budget = raw_budget.min(budget_ceiling) as i32;
 
         // Wage budget: target wage/revenue ratio. Healthy clubs run
         // 55–65% wages on revenue; distressed clubs squeeze that down to
         // 45–50%; reckless elite owners are allowed to push to 70%.
-        let target_ratio = wage_revenue_target(board_ctx.ffp_status, self.chairman.ambition, rep);
+        let target_ratio = (wage_revenue_target(board_ctx.ffp_status, self.chairman.ambition, rep)
+            + self.ownership.wage_ratio_bonus())
+        .clamp(0.30, 0.80);
         let revenue_floor = projected_income.max(board_ctx.total_annual_wages as f64);
         let wage_budget =
             (revenue_floor * target_ratio).max(board_ctx.total_annual_wages as f64 * 0.95) as i32;
@@ -743,87 +992,76 @@ impl ClubBoard {
         });
     }
 
-    /// Monthly performance evaluation — the core of board behavior.
-    /// Considers: league position vs expectations, recent form, finances, squad state.
+    /// Monthly performance evaluation — the core of board behaviour. Scores
+    /// four independent dimensions (sporting / financial / squad-building /
+    /// strategy), folds in supporter & financial pressure, drifts the
+    /// manager relationship, and gates meetings / sackings / budget moves.
     fn evaluate_performance(&mut self, board_ctx: &BoardContext, result: &mut BoardResult) {
-        let targets = match &self.season_targets {
+        // Own a copy of the targets so we can freely mutate other board
+        // fields below without fighting the borrow checker.
+        let targets = match self.season_targets.clone() {
             Some(t) => t,
             None => return,
         };
 
-        let season_phase = season_phase(board_ctx.matches_played, board_ctx.total_matches);
+        let phase = SeasonPhase::classify(board_ctx.matches_played, board_ctx.total_matches);
 
-        // ── Factor 1: League performance vs expectations ──
-        let performance_delta = if board_ctx.league_position > 0 && board_ctx.matches_played >= 5 {
-            // Positive = above expectations, negative = below
-            let expected = targets.expected_position as i32;
-            let actual = board_ctx.league_position as i32;
-            expected - actual // e.g. expected 5th, actual 3rd → +2 (good)
-        } else {
-            0 // Not enough data yet
-        };
+        // Respect the board's review cadence — quarterly / season-end
+        // boards don't re-judge every month. Still surface current state.
+        if !self
+            .vision
+            .review_frequency
+            .evaluates_on_month(self.season_month_index)
+        {
+            result.mood = self.mood.state.clone();
+            result.confidence = self.confidence.level;
+            return;
+        }
 
-        // ── Factor 2: Recent form (last 5 matches) ──
-        let form_score: i32 = board_ctx.recent_wins as i32 - board_ctx.recent_losses as i32;
-        // form_score: -5 (all losses) to +5 (all wins)
-        let goal_trend = (board_ctx.recent_goal_difference as i32).clamp(-8, 8) / 2;
-
-        // ── Factor 3: Financial health ──
-        let mut financial_health = if board_ctx.balance > 0 {
-            1 // Healthy
-        } else if board_ctx.balance > -(board_ctx.total_annual_wages as i64 / 4) {
-            0 // Minor concern
-        } else {
-            -2 // Serious financial trouble
-        };
-        financial_health += match board_ctx.ffp_status {
-            FfpStatus::Clean => 0,
-            FfpStatus::Watchlist => -1,
-            FfpStatus::Breach => -3,
-        };
-        financial_health += if board_ctx.wage_budget_usage > 1.10 {
-            -2
-        } else if board_ctx.wage_budget_usage > 1.0 {
-            -1
-        } else if board_ctx.wage_budget_usage > 0.0 && board_ctx.wage_budget_usage < 0.85 {
-            1
-        } else {
-            0
-        };
-
-        // ── Factor 4: Squad state ──
-        let total_squad = board_ctx.main_squad_size + board_ctx.reserve_squad_size;
-        let squad_bloated = total_squad > (targets.max_squad_size as usize + 5);
-        let squad_thin = board_ctx.main_squad_size < targets.min_squad_size as usize;
-
-        let squad_health: i32 = if squad_bloated {
-            -1
-        } else if squad_thin {
-            -1
-        } else {
-            0
-        };
-
-        // ── Factor 5: Style fit ──
-        // How much does the chosen formation embody the board's preferred
-        // playing style? A non-default vision that the manager ignores
-        // erodes confidence, even when results are decent.
+        // Playing-style mismatch (legacy helper retained).
         let style_drag = match board_ctx.main_tactic {
             Some(t) => style_mismatch_drag(self.vision.playing_style, t),
             None => 0,
         };
 
-        // ── Update confidence (cumulative, carries across months) ──
-        let confidence_change = performance_delta * season_phase.performance_weight()     // League position is most important
-            + form_score * 2          // Recent form matters
-            + goal_trend              // Goal trend catches lucky / unlucky form
-            + financial_health * 2    // Financial stability
-            + squad_health            // Squad management
-            - style_drag; // Vision / tactics alignment
+        // ── Component scores ──
+        let scores = BoardComponentScores::evaluate(
+            board_ctx,
+            &targets,
+            &self.vision,
+            &self.promises,
+            phase,
+            style_drag,
+        );
+        self.latest_scores = scores;
 
+        // ── Pressure inputs (supporters / media / finances / regulatory) ──
+        self.refresh_pressure(board_ctx);
+        let pressure_drag = self.pressure.confidence_drag(self.ownership.ownership_type);
+
+        // ── Confidence: component delta minus pressure drag ──
+        let confidence_change = scores.confidence_delta(phase) - pressure_drag;
         self.confidence.level = (self.confidence.level + confidence_change).clamp(0, 100);
 
-        // ── Determine board mood from confidence level ──
+        // ── Manager relationship drift ──
+        self.relationship.update_from_scores(&scores, style_drag);
+        // Keep the legacy loyalty scalar broadly in step (blend, so the
+        // fast-moving transfer/achievement nudges from other systems
+        // aren't wholly overwritten).
+        let blended = ((self.chairman.manager_loyalty as i16
+            + self.relationship.overall_trust() as i16)
+            / 2)
+        .clamp(0, 100) as u8;
+        self.chairman.manager_loyalty = blended;
+
+        // Position-vs-expectation delta retained for backing / meetings.
+        let performance_delta = if board_ctx.league_position > 0 && board_ctx.matches_played >= 5 {
+            targets.expected_position as i32 - board_ctx.league_position as i32
+        } else {
+            0
+        };
+
+        // ── Mood from confidence ──
         let new_mood = if self.confidence.level >= 80 {
             BoardMoodState::Excellent
         } else if self.confidence.level >= 55 {
@@ -833,78 +1071,45 @@ impl ClubBoard {
         } else {
             BoardMoodState::Poor
         };
-
-        // Track consecutive poor months
         if matches!(new_mood, BoardMoodState::Poor) {
             self.poor_mood_months += 1;
         } else {
             self.poor_mood_months = 0;
         }
-
         self.mood.state = new_mood;
 
-        // ── Board actions based on mood ──
-
-        // Poor mood: cut transfer budget
+        // ── Mood-driven budget nudges (legacy percentage tweaks) ──
         if matches!(self.mood.state, BoardMoodState::Poor) {
             result.cut_transfer_budget = true;
         }
-
-        // Excellent mood + overperforming: board releases extra transfer funds
         if matches!(self.mood.state, BoardMoodState::Excellent) && performance_delta > 3 {
             result.bonus_transfer_funds = true;
         }
 
-        // Chairman loyalty drifts with results — trophies and strong league
-        // positions build personal trust, collapses erode it. Capped [0,100].
-        let loyalty_delta: i16 = if performance_delta >= 3 {
-            2
-        } else if performance_delta >= 1 {
-            1
-        } else if performance_delta <= -3 {
-            -3
-        } else if performance_delta <= -1 {
-            -1
-        } else {
-            0
-        };
-        self.chairman.manager_loyalty =
-            ((self.chairman.manager_loyalty as i16 + loyalty_delta).clamp(0, 100)) as u8;
-
-        // Manager's own morale tracks the board mood. A manager working
-        // for a happy chairman feels secure; a manager under Poor mood
-        // for months feels the pressure.
+        // ── Manager satisfaction (mood + style friction) ──
         let mood_delta = match self.mood.state {
             BoardMoodState::Excellent => 1.5,
             BoardMoodState::Good => 0.5,
             BoardMoodState::Normal => 0.0,
-            BoardMoodState::Poor => {
-                // Scaled by how long it's been — a second poor month lands
-                // much harder than the first.
-                -1.0 - (self.poor_mood_months as f32 * 0.5).min(3.0)
-            }
+            BoardMoodState::Poor => -1.0 - (self.poor_mood_months as f32 * 0.5).min(3.0),
         };
-        // Style-clash friction: if the manager's preferred tactic fights
-        // the board's vision, the manager also feels that tension (not
-        // just the board). Even in a Good-mood run, a coach pushed into
-        // a style they hate bleeds satisfaction slowly.
         let style_friction = (style_drag as f32 * 0.35).min(1.5);
         result.manager_satisfaction_delta = mood_delta - style_friction;
 
-        // Squad issues
-        if squad_bloated {
+        // ── Squad limits ──
+        let total_squad = board_ctx.main_squad_size + board_ctx.reserve_squad_size;
+        if total_squad > targets.max_squad_size as usize + 5 {
             result.squad_over_limit = true;
             result.squad_excess = total_squad.saturating_sub(targets.max_squad_size as usize);
         }
-
-        if squad_thin {
+        if board_ctx.main_squad_size < targets.min_squad_size as usize {
             result.squad_under_limit = true;
         }
 
-        // Position alarm: underperforming significantly
+        // ── Underperformance alarm ──
         if board_ctx.league_position > 0
             && board_ctx.league_position > targets.min_acceptable_position
-            && season_phase.can_judge_table()
+            && phase.can_judge_table()
         {
             result.underperforming = true;
         }
@@ -912,10 +1117,14 @@ impl ClubBoard {
         result.mood = self.mood.state.clone();
         result.confidence = self.confidence.level;
 
+        // ── Financial / FFP / owner-injection decisions ──
+        self.emit_financial_decisions(board_ctx, &targets, result);
+
         if result.underperforming || matches!(self.mood.state, BoardMoodState::Poor) {
             debug!(
-                "Board unhappy (confidence: {}, position: {}/{}, expected: {})",
+                "Board unhappy at confidence {} (weakest: {}): pos {}/{} expected {}",
                 self.confidence.level,
+                scores.headline(),
                 board_ctx.league_position,
                 board_ctx.league_size,
                 targets.expected_position
@@ -923,37 +1132,232 @@ impl ClubBoard {
         }
 
         // ── Sacking gate ──
-        // Three independent triggers, any one fires:
-        //   1. Confidence collapsed to zero (extreme, rare)
-        //   2. Poor mood ≥N consecutive months AND underperforming (chairman patience tunes N)
-        //   3. Poor mood ≥(N+2) consecutive months regardless
-        // Early-season grace: need at least 10 matches played so a bad August
-        // doesn't cost a job. Re-hires are out of scope here — the transfer
-        // pipeline / staff search will offer a replacement next tick.
-        let enough_data = season_phase.can_sack_manager();
+        // Triggers: zero confidence; sustained poor mood (+ underperformance);
+        // sustained poor mood regardless; or a full relationship breakdown.
+        // Patience is the chairman's threshold adjusted by manager autonomy.
+        // Early-season grace via `phase.can_sack_manager()`.
+        let enough_data = phase.can_sack_manager();
         let zero_confidence = self.confidence.level <= 0;
-        let patience_threshold = self.chairman.poor_mood_threshold();
+        let base_threshold = self.chairman.poor_mood_threshold() as i16;
+        let autonomy_adj = self.vision.manager_autonomy.patience_bonus() as i16;
+        let patience_threshold = (base_threshold + autonomy_adj).clamp(1, 12) as u8;
         let sustained_poor_with_underperformance =
             self.poor_mood_months >= patience_threshold && result.underperforming;
         let sustained_poor_absolute = self.poor_mood_months >= patience_threshold + 2;
+        let relationship_breakdown =
+            self.relationship.relationship_breakdown() && phase.can_judge_table();
 
-        if sustained_poor_with_underperformance || sustained_poor_absolute {
-            result.manager_meeting = Some(crate::club::board::BoardManagerMeeting::Crisis);
-        } else if result.underperforming || matches!(self.mood.state, BoardMoodState::Poor) {
-            result.manager_meeting = Some(crate::club::board::BoardManagerMeeting::Warning);
+        // Meetings + matching decisions.
+        if sustained_poor_with_underperformance
+            || sustained_poor_absolute
+            || relationship_breakdown
+        {
+            result.manager_meeting = Some(BoardManagerMeeting::Crisis);
+            result.decisions.push(BoardDecision::HoldCrisisMeeting);
+        } else if result.underperforming
+            || matches!(self.mood.state, BoardMoodState::Poor)
+            || self.pressure.demands_meeting(self.ownership.ownership_type)
+        {
+            result.manager_meeting = Some(BoardManagerMeeting::Warning);
+            result.decisions.push(BoardDecision::IssueFormalWarning);
         } else if matches!(self.mood.state, BoardMoodState::Excellent) && performance_delta >= 3 {
-            result.manager_meeting = Some(crate::club::board::BoardManagerMeeting::Backing);
+            result.manager_meeting = Some(BoardManagerMeeting::Backing);
+            result.decisions.push(BoardDecision::IssueManagerBacking);
         }
 
         if enough_data
-            && (zero_confidence || sustained_poor_with_underperformance || sustained_poor_absolute)
+            && (zero_confidence
+                || sustained_poor_with_underperformance
+                || sustained_poor_absolute
+                || relationship_breakdown)
         {
             result.manager_sacked = true;
-            // Reset confidence so the successor starts from a neutral base
-            // when the next board tick runs; avoids immediate re-sack.
+            result.decisions.push(BoardDecision::SackManager);
+            // Reset confidence / relationship so the successor starts neutral.
             self.confidence.level = 50;
             self.poor_mood_months = 0;
+            self.relationship.reset();
         }
+    }
+
+    /// Refresh the pressure gauges from this month's context: decay, then
+    /// re-derive the hard-number gauges and fold in inferable narrative
+    /// events (relegation scrap, winless run, promotion push, youth break).
+    fn refresh_pressure(&mut self, ctx: &BoardContext) {
+        self.pressure.decay();
+        self.pressure
+            .set_financial(ctx.wage_budget_usage, ctx.debt_ratio, ctx.profit_loss_12m);
+        self.pressure.set_regulatory(
+            matches!(ctx.ffp_status, FfpStatus::Breach),
+            matches!(ctx.ffp_status, FfpStatus::Watchlist),
+        );
+        self.pressure.set_dressing_room(ctx.key_player_unrest_count);
+
+        if ctx.matches_played >= 5 && ctx.distance_to_relegation <= 0 {
+            self.pressure.apply_event(SupporterEvent::InRelegationZone);
+        }
+        if ctx.matches_played >= 5 && ctx.recent_wins == 0 && ctx.recent_losses >= 3 {
+            self.pressure.apply_event(SupporterEvent::LongWinlessRun);
+        }
+        if ctx.league_position > 0 && ctx.distance_to_europe_or_playoff <= 0 {
+            self.pressure.apply_event(SupporterEvent::InPromotionRace);
+        }
+        if ctx.academy_graduates_this_season > 0 {
+            self.pressure
+                .apply_event(SupporterEvent::YouthProspectBreakthrough);
+        }
+        if ctx.supporter_mood < 0.35 {
+            self.pressure.supporter_pressure = self.pressure.supporter_pressure.max(40);
+        }
+    }
+
+    /// Emit amount-based financial decisions: FFP cuts, forced sales, and
+    /// owner cash injections after a strong run.
+    fn emit_financial_decisions(
+        &self,
+        ctx: &BoardContext,
+        targets: &SeasonTargets,
+        result: &mut BoardResult,
+    ) {
+        let austere = matches!(
+            self.vision.financial_stance,
+            FinancialStance::Conservative | FinancialStance::Austerity
+        );
+
+        if matches!(ctx.ffp_status, FfpStatus::Breach) {
+            let cut = (targets.transfer_budget as i64 / 3).max(0);
+            if cut > 0 {
+                result.decisions.push(BoardDecision::CutTransferBudget {
+                    amount: cut,
+                    reason: DecisionReason::FfpPressure,
+                });
+            }
+            if austere || self.ownership.ownership_type.resale_driven() {
+                result.decisions.push(BoardDecision::DemandPlayerSale {
+                    reason: DecisionReason::FfpPressure,
+                });
+            }
+        } else if ctx.wage_budget_usage > 1.1 && austere {
+            result.decisions.push(BoardDecision::DemandPlayerSale {
+                reason: DecisionReason::WageControl,
+            });
+        }
+
+        // Strong season + a wealthy, risk-tolerant owner → cash injection.
+        let strong = self.latest_scores.sporting > 18.0 && self.latest_scores.financial > 0.0;
+        if strong
+            && self.ownership.injection_appetite() > 0.6
+            && !matches!(ctx.ffp_status, FfpStatus::Breach)
+        {
+            let inject = ((targets.transfer_budget as i64) / 4).max(2_000_000);
+            result.decisions.push(BoardDecision::IncreaseTransferBudget {
+                amount: inject,
+                reason: DecisionReason::OwnerInjection,
+            });
+        }
+    }
+
+    /// Derive the ownership archetype + opening vision from durable club
+    /// signals. Runs once, on the first simulate tick that has context.
+    fn bootstrap_personality(&mut self, ctx: &BoardContext, seed: u32) {
+        let owner = OwnershipModel::derive(
+            ctx.reputation_score,
+            ctx.balance,
+            ctx.country_economic_factor,
+            seed,
+        );
+
+        // Map ownership → legacy chairman knobs so budget / patience logic
+        // reflects the derived owner.
+        self.chairman.ambition = match owner.ownership_type {
+            OwnershipType::StateBacked => ChairmanAmbition::Reckless,
+            OwnershipType::Consortium if owner.wealth >= 70 => ChairmanAmbition::Ambitious,
+            OwnershipType::FamilyOwned | OwnershipType::MemberOwned => ChairmanAmbition::Conservative,
+            _ => ChairmanAmbition::Balanced,
+        };
+        self.chairman.patience = match owner.ownership_type {
+            OwnershipType::StateBacked | OwnershipType::PrivateEquity => ChairmanPatience::Low,
+            OwnershipType::MemberOwned | OwnershipType::FamilyOwned => ChairmanPatience::High,
+            _ => ChairmanPatience::Medium,
+        };
+
+        // Opening vision from archetype — gives clubs distinct stories.
+        self.vision.preferred_squad_profile = match owner.ownership_type {
+            OwnershipType::StateBacked => SquadProfile::Stars,
+            OwnershipType::PrivateEquity => SquadProfile::ResaleValue,
+            OwnershipType::MemberOwned => SquadProfile::Youth,
+            OwnershipType::Consortium => SquadProfile::PrimeAge,
+            OwnershipType::LocalBusiness if ctx.reputation_score < 0.4 => SquadProfile::Youth,
+            _ => SquadProfile::Balanced,
+        };
+        self.vision.infrastructure_priority = match owner.ownership_type {
+            OwnershipType::MemberOwned => InfrastructurePriority::Youth,
+            OwnershipType::FamilyOwned | OwnershipType::StateBacked => {
+                InfrastructurePriority::Stadium
+            }
+            OwnershipType::Consortium => InfrastructurePriority::Commercial,
+            OwnershipType::PrivateEquity => InfrastructurePriority::None,
+            OwnershipType::LocalBusiness => InfrastructurePriority::Training,
+        };
+        self.vision.manager_autonomy = if owner.interference >= 60 {
+            ManagerAutonomy::Low
+        } else if owner.interference >= 35 {
+            ManagerAutonomy::Medium
+        } else {
+            ManagerAutonomy::High
+        };
+        self.vision.review_frequency = match owner.ownership_type {
+            OwnershipType::MemberOwned | OwnershipType::FamilyOwned => ReviewFrequency::Quarterly,
+            _ => ReviewFrequency::Monthly,
+        };
+        self.vision.financial_stance = match owner.ownership_type {
+            OwnershipType::StateBacked => FinancialStance::Ambitious,
+            OwnershipType::PrivateEquity
+            | OwnershipType::MemberOwned
+            | OwnershipType::FamilyOwned => FinancialStance::Conservative,
+            _ => FinancialStance::Balanced,
+        };
+
+        self.ownership = owner;
+        self.personality_initialized = true;
+    }
+
+    /// Monthly takeover watch. Opens / resolves rumours and, on completion,
+    /// installs a new owner and resets strategy + relationship.
+    fn tick_takeover(&mut self, ctx: &BoardContext, result: &mut BoardResult) {
+        let roll = IntegerUtils::random(0, 100).clamp(0, 99) as u8;
+        if let Some(decision) = self.takeover.tick(&self.ownership, ctx, roll) {
+            match decision {
+                BoardDecision::StartTakeoverRumour => {
+                    result.decisions.push(BoardDecision::StartTakeoverRumour);
+                }
+                BoardDecision::CompleteTakeover => {
+                    self.apply_takeover_completion(result.club_id ^ 0x9E37_79B9);
+                    result.decisions.push(BoardDecision::CompleteTakeover);
+                }
+                _ => {}
+            }
+        }
+
+        // A collapsed takeover leaves instability: morale dip + budget freeze.
+        if self.takeover.just_failed {
+            self.confidence.level = (self.confidence.level - 8).clamp(0, 100);
+            result.cut_transfer_budget = true;
+        }
+    }
+
+    /// Install a new owner after a successful takeover and reset the club's
+    /// strategy + manager relationship to match the fresh ambition.
+    fn apply_takeover_completion(&mut self, seed: u32) {
+        self.ownership = TakeoverEngine::post_takeover_owner(seed);
+        self.chairman.ambition = ChairmanAmbition::Reckless;
+        self.chairman.patience = ChairmanPatience::Low;
+        self.vision.preferred_squad_profile = SquadProfile::Stars;
+        self.vision.financial_stance = FinancialStance::Ambitious;
+        self.vision.long_term_goal = Some(LongTermGoal::WinLeague);
+        self.vision.manager_autonomy = ManagerAutonomy::Low;
+        self.relationship.reset();
+        self.confidence.level = 60;
     }
 
     fn is_director_contract_expiring(&self, simulation_ctx: &SimulationContext) -> bool {
@@ -1029,57 +1433,6 @@ fn is_board_urgent_reason(reason: &TransferNeedReason) -> bool {
     )
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SeasonPhase {
-    TooEarly,
-    Early,
-    Mid,
-    RunIn,
-}
-
-impl SeasonPhase {
-    fn performance_weight(self) -> i32 {
-        match self {
-            SeasonPhase::TooEarly => 1,
-            SeasonPhase::Early => 2,
-            SeasonPhase::Mid => 3,
-            SeasonPhase::RunIn => 4,
-        }
-    }
-
-    fn can_judge_table(self) -> bool {
-        matches!(self, SeasonPhase::Mid | SeasonPhase::RunIn)
-    }
-
-    fn can_sack_manager(self) -> bool {
-        matches!(self, SeasonPhase::Mid | SeasonPhase::RunIn)
-    }
-}
-
-fn season_phase(matches_played: u8, total_matches: u8) -> SeasonPhase {
-    if total_matches == 0 {
-        return if matches_played < 10 {
-            SeasonPhase::TooEarly
-        } else {
-            SeasonPhase::Mid
-        };
-    }
-
-    let played = matches_played as f32;
-    let total = total_matches.max(1) as f32;
-    let progress = played / total;
-
-    if matches_played < 5 {
-        SeasonPhase::TooEarly
-    } else if progress < 0.30 {
-        SeasonPhase::Early
-    } else if progress < 0.75 {
-        SeasonPhase::Mid
-    } else {
-        SeasonPhase::RunIn
-    }
-}
-
 /// How poorly does `tactic` embody `style`? 0 = fine, up to 2 = strong
 /// clash. Used as a monthly confidence drag so the board slowly loses
 /// patience with a manager whose football doesn't match what they were
@@ -1138,6 +1491,7 @@ mod style_fit_tests {
             squad_avg_ability: 60,
             shortlist_score: 1.0,
             dossier: None,
+            economics: None,
         }
     }
 
@@ -1433,11 +1787,11 @@ mod budget_tests {
 
     #[test]
     fn season_phase_delays_table_judgment_until_enough_matches() {
-        assert_eq!(season_phase(4, 38), SeasonPhase::TooEarly);
-        assert_eq!(season_phase(8, 38), SeasonPhase::Early);
-        assert!(!season_phase(8, 38).can_sack_manager());
-        assert!(season_phase(16, 38).can_sack_manager());
-        assert_eq!(season_phase(32, 38), SeasonPhase::RunIn);
+        assert_eq!(SeasonPhase::classify(4, 38), SeasonPhase::TooEarly);
+        assert_eq!(SeasonPhase::classify(8, 38), SeasonPhase::Early);
+        assert!(!SeasonPhase::classify(8, 38).can_sack_manager());
+        assert!(SeasonPhase::classify(16, 38).can_sack_manager());
+        assert_eq!(SeasonPhase::classify(32, 38), SeasonPhase::RunIn);
     }
 }
 
@@ -1472,4 +1826,278 @@ fn wage_revenue_target(ffp: FfpStatus, ambition: ChairmanAmbition, reputation_sc
         return (base - 0.05_f64).max(0.35);
     }
     base
+}
+
+#[cfg(test)]
+mod board_behaviour_tests {
+    //! Scenario tests for the expanded board: archetype governance,
+    //! season-phase sacking protection, FFP reactions, takeovers, and
+    //! manager-relationship renewals. These exercise the integrated
+    //! `evaluate_performance` / governance / takeover paths end to end.
+    use super::*;
+    use crate::club::board::ownership::{OwnershipModel, OwnershipType};
+
+    fn targets(expected: u8, min_acceptable: u8) -> SeasonTargets {
+        SeasonTargets {
+            transfer_budget: 30_000_000,
+            wage_budget: 50_000_000,
+            max_squad_size: 30,
+            min_squad_size: 18,
+            expected_position: expected,
+            min_acceptable_position: min_acceptable,
+        }
+    }
+
+    fn poor_ctx(matches_played: u8, total: u8, position: u8, size: u8) -> BoardContext {
+        let mut c = BoardContext::new();
+        c.total_annual_wages = 12_000_000;
+        c.balance = -5_000_000;
+        c.league_size = size;
+        c.league_position = position;
+        c.matches_played = matches_played;
+        c.total_matches = total;
+        c.points_per_match = 0.5;
+        c.recent_wins = 0;
+        c.recent_losses = 4;
+        c.recent_goal_difference = -8;
+        c.goal_difference = -25;
+        c.distance_to_relegation = -1;
+        c
+    }
+
+    fn strong_ctx(position: u8, size: u8) -> BoardContext {
+        let mut c = BoardContext::new();
+        c.total_annual_wages = 12_000_000;
+        c.balance = 30_000_000;
+        c.league_size = size;
+        c.league_position = position;
+        c.matches_played = 19;
+        c.total_matches = 38;
+        c.points_per_match = 2.2;
+        c.recent_wins = 4;
+        c.recent_losses = 0;
+        c.recent_goal_difference = 8;
+        c.goal_difference = 25;
+        c.distance_to_relegation = 15;
+        c.profit_loss_12m = 5_000_000;
+        c
+    }
+
+    fn proposal(
+        fee: f64,
+        age: u8,
+        ability: u8,
+        priority: TransferNeedPriority,
+        reason: TransferNeedReason,
+    ) -> BoardTransferProposal {
+        BoardTransferProposal {
+            fee,
+            allocated_budget: 1_000_000.0,
+            remaining_transfer_budget: 10_000_000.0,
+            priority,
+            reason,
+            player_age: Some(age),
+            player_ability: Some(ability),
+            squad_avg_ability: 65,
+            shortlist_score: 1.0,
+            dossier: None,
+            economics: None,
+        }
+    }
+
+    #[test]
+    fn early_season_bad_form_does_not_sack_manager() {
+        let mut board = ClubBoard::new();
+        board.season_targets = Some(targets(5, 8));
+        let ctx = poor_ctx(8, 38, 19, 20); // Early phase
+        let mut sacked = false;
+        for _ in 0..8 {
+            let mut r = BoardResult::new();
+            board.evaluate_performance(&ctx, &mut r);
+            sacked |= r.manager_sacked;
+        }
+        assert!(!sacked, "early-season form must not cost a job");
+    }
+
+    #[test]
+    fn run_in_underperformance_can_trigger_sacking() {
+        let mut board = ClubBoard::new();
+        board.season_targets = Some(targets(5, 8));
+        let ctx = poor_ctx(32, 38, 19, 20); // RunIn phase
+        let mut sacked = false;
+        for _ in 0..12 {
+            let mut r = BoardResult::new();
+            board.evaluate_performance(&ctx, &mut r);
+            if r.manager_sacked {
+                sacked = true;
+                break;
+            }
+        }
+        assert!(sacked, "sustained run-in collapse should cost the job");
+    }
+
+    #[test]
+    fn ffp_breach_cuts_budget_and_raises_financial_pressure() {
+        let mut board = ClubBoard::new();
+        board.season_targets = Some(targets(8, 12));
+        let mut ctx = strong_ctx(8, 20);
+        ctx.ffp_status = FfpStatus::Breach;
+        ctx.wage_budget_usage = 1.2;
+        ctx.debt_ratio = 1.2;
+        ctx.profit_loss_12m = -10_000_000;
+
+        let mut r = BoardResult::new();
+        board.evaluate_performance(&ctx, &mut r);
+
+        assert!(
+            r.decisions.iter().any(|d| matches!(
+                d,
+                BoardDecision::CutTransferBudget {
+                    reason: DecisionReason::FfpPressure,
+                    ..
+                }
+            )),
+            "FFP breach must emit a budget cut: {:?}",
+            r.decisions
+        );
+        assert!(board.pressure.regulatory_pressure > 0);
+        assert!(board.pressure.financial_pressure > 0);
+    }
+
+    #[test]
+    fn reckless_owner_increases_budget_but_lowers_patience() {
+        // Elite club, seed 0 -> StateBacked (reckless) ownership.
+        let mut ctx = BoardContext::new();
+        ctx.reputation_score = 0.9;
+        ctx.balance = 50_000_000;
+        ctx.country_economic_factor = 1.2;
+        ctx.country_price_level = 1.0;
+        ctx.trailing_annual_income = 60_000_000;
+        ctx.trailing_annual_outcome = 40_000_000;
+
+        let mut reckless = ClubBoard::new();
+        reckless.bootstrap_personality(&ctx, 0);
+        assert!(matches!(
+            reckless.ownership.ownership_type,
+            OwnershipType::StateBacked
+        ));
+        assert!(matches!(reckless.chairman.ambition, ChairmanAmbition::Reckless));
+        assert!(matches!(reckless.chairman.patience, ChairmanPatience::Low));
+
+        reckless.calculate_season_targets(&ctx);
+        let reckless_budget = reckless.season_targets.as_ref().unwrap().transfer_budget;
+
+        let mut neutral = ClubBoard::new();
+        neutral.calculate_season_targets(&ctx);
+        let neutral_budget = neutral.season_targets.as_ref().unwrap().transfer_budget;
+
+        assert!(
+            reckless_budget > neutral_budget,
+            "reckless owner should out-spend neutral: {reckless_budget} vs {neutral_budget}"
+        );
+        assert!(
+            reckless.chairman.poor_mood_threshold()
+                < ChairmanProfile::new().poor_mood_threshold(),
+            "reckless owner should be quicker to act"
+        );
+    }
+
+    #[test]
+    fn conservative_owner_blocks_wage_heavy_transfer() {
+        let mut board = ClubBoard::new();
+        board.vision.financial_stance = FinancialStance::Conservative;
+        let mut p = proposal(
+            500_000.0,
+            26,
+            70,
+            TransferNeedPriority::Important,
+            TransferNeedReason::QualityUpgrade,
+        );
+        p.economics = Some(BoardTransferEconomics {
+            wage_impact_annual: 5_000_000.0,
+            wage_budget_headroom: 0.0,
+            contract_length_years: 4,
+            ..Default::default()
+        });
+        assert!(matches!(
+            board.review_transfer_proposal(&p),
+            BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline)
+        ));
+    }
+
+    #[test]
+    fn youth_board_accepts_weak_young_blocks_old_depth() {
+        let mut board = ClubBoard::new();
+        board.vision.preferred_squad_profile = SquadProfile::Youth;
+
+        // Weaker-but-young development signing: welcomed.
+        let young = proposal(
+            300_000.0,
+            19,
+            50,
+            TransferNeedPriority::Optional,
+            TransferNeedReason::DevelopmentSigning,
+        );
+        assert!(
+            board.review_transfer_proposal(&young).is_approved(),
+            "youth board should accept a promising teenager"
+        );
+
+        // Ageing depth signing: blocked.
+        let old = proposal(
+            400_000.0,
+            31,
+            66,
+            TransferNeedPriority::Important,
+            TransferNeedReason::DepthCover,
+        );
+        assert!(matches!(
+            board.review_transfer_proposal(&old),
+            BoardTransferDecision::Vetoed(BoardTransferConcern::ConflictsWithVision)
+        ));
+    }
+
+    #[test]
+    fn manager_renewal_merited_after_sustained_high_trust() {
+        let mut board = ClubBoard::new();
+        board.season_targets = Some(targets(8, 12));
+        let ctx = strong_ctx(2, 20); // overachieving
+        for _ in 0..14 {
+            let mut r = BoardResult::new();
+            board.evaluate_performance(&ctx, &mut r);
+        }
+        assert!(
+            board.relationship.merits_renewal(),
+            "sustained overperformance should merit a renewal"
+        );
+        assert!(board.confidence.level >= 70);
+    }
+
+    #[test]
+    fn takeover_changes_personality_and_resets_strategy() {
+        let mut board = ClubBoard::new();
+        board.ownership = OwnershipModel {
+            ownership_type: OwnershipType::MemberOwned,
+            wealth: 25,
+            interference: 20,
+            risk_tolerance: 25,
+            exit_pressure: 60,
+        };
+        board.vision.financial_stance = FinancialStance::Conservative;
+        board.vision.long_term_goal = Some(LongTermGoal::Survive);
+
+        board.apply_takeover_completion(7);
+
+        assert!(board.ownership.wealth >= 70, "new owner should be wealthy");
+        assert!(matches!(
+            board.vision.financial_stance,
+            FinancialStance::Ambitious
+        ));
+        assert_eq!(board.vision.long_term_goal, Some(LongTermGoal::WinLeague));
+        assert!(matches!(board.chairman.ambition, ChairmanAmbition::Reckless));
+        assert!(matches!(
+            board.vision.preferred_squad_profile,
+            SquadProfile::Stars
+        ));
+    }
 }

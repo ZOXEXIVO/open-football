@@ -62,6 +62,36 @@ impl FacilityLevel {
     pub fn multiplier(&self) -> f32 {
         self.to_rating() as f32 / 20.0
     }
+
+    /// The next level up, or `None` if already `Best`. Wrapped on the type
+    /// so the board's facility review doesn't hard-code the ladder.
+    pub fn next_better(&self) -> Option<FacilityLevel> {
+        use FacilityLevel::*;
+        Some(match self {
+            Poor => Limited,
+            Limited => Basic,
+            Basic => FairlyBasic,
+            FairlyBasic => BelowAverage,
+            BelowAverage => Average,
+            Average => Adequate,
+            Adequate => Good,
+            Good => Great,
+            Great => Excellent,
+            Excellent => Superb,
+            Superb => Exceptional,
+            Exceptional => Best,
+            Best => return None,
+        })
+    }
+
+    /// Indicative cost (USD) of upgrading *to* this level. Scales with the
+    /// square of the target rating so each rung costs progressively more —
+    /// going from world-class to elite is far dearer than from poor to
+    /// basic. The board's review gates this against the club's finances.
+    pub fn upgrade_cost(&self) -> i64 {
+        let r = self.to_rating() as i64;
+        r * r * 250_000
+    }
 }
 
 impl Default for FacilityLevel {

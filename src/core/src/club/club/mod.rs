@@ -9,11 +9,13 @@ use crate::club::academy::ClubAcademy;
 use crate::club::board::{BoardContext, ClubBoard, FfpStatus};
 use crate::club::facilities::ClubFacilities;
 use crate::club::status::ClubStatus;
-use crate::club::{ClubFinances, ClubResult};
+use crate::club::{ClubFinances, ClubResult, StaffPosition};
 use crate::context::GlobalContext;
 use crate::shared::{Currency, CurrencyValue, Location};
 use crate::transfers::pipeline::ClubTransferPlan;
+use crate::utils::DateUtils;
 use crate::{ReputationLevel, TeamCollection, TeamType};
+use chrono::NaiveDate;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClubPhilosophy {
@@ -195,16 +197,25 @@ impl Club {
             .unwrap_or(1.0);
         let country_price_level = ctx.country.as_ref().map(|c| c.price_level).unwrap_or(1.0);
         // League position from country-level context
-        let (league_pos, league_sz, total_matches) = ctx
+        let (league_pos, league_sz, total_matches, league_tier) = ctx
             .club
             .as_ref()
-            .map(|c| (c.league_position, c.league_size, c.total_league_matches))
-            .unwrap_or((0, 0, 0));
+            .map(|c| {
+                (
+                    c.league_position,
+                    c.league_size,
+                    c.total_league_matches,
+                    c.main_league_tier,
+                )
+            })
+            .unwrap_or((0, 0, 0, 1));
 
-        let mut board_ctx = self.build_board_context(country_economic_factor, country_price_level);
+        let mut board_ctx =
+            self.build_board_context(country_economic_factor, country_price_level, date);
         board_ctx.league_position = league_pos;
         board_ctx.league_size = league_sz;
         board_ctx.total_matches = total_matches;
+        board_ctx.league_tier = league_tier.max(1);
         board_ctx.trailing_annual_income = self.finance.trailing_annual_income(date);
         board_ctx.trailing_annual_outcome = self.finance.trailing_annual_outcome(date);
         board_ctx.ffp_status = if self.finance.is_ffp_breach(date) {
@@ -214,6 +225,40 @@ impl Club {
         } else {
             FfpStatus::Clean
         };
+
+        // Derived finance signals for the board's component scoring.
+        board_ctx.profit_loss_12m =
+            board_ctx.trailing_annual_income - board_ctx.trailing_annual_outcome;
+        let debt = (-board_ctx.balance).max(0) as f64;
+        let revenue = board_ctx.trailing_annual_income.max(1) as f64;
+        board_ctx.debt_ratio = (debt / revenue) as f32;
+
+        // League-position-relative distances (top-tier conventions: bottom
+        // 3 relegate, top ~5 reach Europe / a playoff spot).
+        if league_sz > 0 && league_pos > 0 {
+            let relegation_edge = league_sz.saturating_sub(3);
+            board_ctx.distance_to_relegation = relegation_edge as i16 - league_pos as i16 + 1;
+            let europe_edge: u8 = 5.min(league_sz);
+            board_ctx.distance_to_europe_or_playoff = league_pos as i16 - europe_edge as i16;
+        }
+
+        // Attendance demand + supporter mood from recent form and standing.
+        let win_ratio = self
+            .teams
+            .main()
+            .map(|t| t.match_history.recent_wins_ratio(5))
+            .unwrap_or(0.5);
+        board_ctx.attendance_ratio = self.facilities.dynamic_attendance_multiplier(
+            win_ratio,
+            league_pos as u16,
+            league_sz as u16,
+        );
+        let standing = if league_sz > 0 && league_pos > 0 {
+            1.0 - (league_pos as f32 / league_sz as f32)
+        } else {
+            0.5
+        };
+        board_ctx.supporter_mood = (win_ratio * 0.55 + standing * 0.45).clamp(0.0, 1.0);
 
         // Build club context with facility data for training/academy + best
         // staff attribute scores so per-player systems can consult them
@@ -372,6 +417,7 @@ impl Club {
         &self,
         country_economic_factor: f32,
         country_price_level: f32,
+        date: NaiveDate,
     ) -> BoardContext {
         let main_team = self.teams.main();
 
@@ -431,6 +477,74 @@ impl Club {
             })
             .unwrap_or(0.0);
 
+        // Full-season points-per-match and goal difference from the match
+        // history (score.0 = us, score.1 = them).
+        let (points_per_match, goal_difference) = main_team
+            .map(|t| {
+                let items = t.match_history.items();
+                if items.is_empty() {
+                    return (0.0f32, 0i16);
+                }
+                let mut points = 0u32;
+                let mut gd = 0i16;
+                for m in items {
+                    let us = m.score.0.get() as i16;
+                    let them = m.score.1.get() as i16;
+                    gd += us - them;
+                    if us > them {
+                        points += 3;
+                    } else if us == them {
+                        points += 1;
+                    }
+                }
+                (points as f32 / items.len() as f32, gd)
+            })
+            .unwrap_or((0.0, 0));
+
+        // Squad age profile, youth share, injury crisis, and key-player
+        // unrest from the main squad. `u21_minutes_share` is approximated
+        // by the U21 headcount share (a true minutes figure isn't tracked
+        // at this layer yet).
+        let (squad_avg_age, u21_minutes_share, injury_crisis_score, key_player_unrest_count) =
+            main_team
+                .map(|t| {
+                    let players = t.players.players();
+                    let n = players.len();
+                    if n == 0 {
+                        return (0u8, 0.0f32, 0.0f32, 0u8);
+                    }
+                    let mut age_sum = 0u32;
+                    let mut u21 = 0u32;
+                    let mut injured = 0u32;
+                    let mut unrest = 0u32;
+                    for p in &players {
+                        let age = DateUtils::age(p.birth_date, date);
+                        age_sum += age as u32;
+                        if age <= 21 {
+                            u21 += 1;
+                        }
+                        if p.player_attributes.is_injured {
+                            injured += 1;
+                        }
+                        if p.happiness().morale < 35.0 {
+                            unrest += 1;
+                        }
+                    }
+                    (
+                        (age_sum / n as u32) as u8,
+                        u21 as f32 / n as f32,
+                        injured as f32 / n as f32,
+                        unrest.min(u8::MAX as u32) as u8,
+                    )
+                })
+                .unwrap_or((0, 0.0, 0.0, 0));
+
+        let manager_contract_months_left = main_team
+            .and_then(|t| t.staffs.find_by_position(StaffPosition::Manager))
+            .and_then(|s| s.contract.as_ref())
+            .map(|c| ((c.expired - date).num_days() / 30).max(0) as i32)
+            .unwrap_or(0);
+
         BoardContext {
             balance: self.finance.balance.balance,
             total_annual_wages,
@@ -450,8 +564,28 @@ impl Club {
             matches_played,
             total_matches: 0,
             avg_squad_ability,
+            squad_avg_age,
             wage_budget_usage,
             main_tactic,
+            league_tier: 1,
+            points_per_match,
+            goal_difference,
+            distance_to_relegation: 0,
+            distance_to_europe_or_playoff: 0,
+            attendance_ratio: 1.0,
+            supporter_mood: 0.5,
+            transfer_budget_usage: 0.0,
+            debt_ratio: 0.0,
+            profit_loss_12m: 0,
+            academy_graduates_this_season: 0,
+            u21_minutes_share,
+            injury_crisis_score,
+            manager_contract_months_left,
+            key_player_unrest_count,
+            facility_training: self.facilities.training.clone(),
+            facility_youth: self.facilities.youth.clone(),
+            facility_academy: self.facilities.academy.clone(),
+            facility_recruitment: self.facilities.recruitment.clone(),
         }
     }
 }
