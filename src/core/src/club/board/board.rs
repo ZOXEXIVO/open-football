@@ -751,6 +751,8 @@ impl ClubBoard {
             None => return,
         };
 
+        let season_phase = season_phase(board_ctx.matches_played, board_ctx.total_matches);
+
         // ── Factor 1: League performance vs expectations ──
         let performance_delta = if board_ctx.league_position > 0 && board_ctx.matches_played >= 5 {
             // Positive = above expectations, negative = below
@@ -764,14 +766,29 @@ impl ClubBoard {
         // ── Factor 2: Recent form (last 5 matches) ──
         let form_score: i32 = board_ctx.recent_wins as i32 - board_ctx.recent_losses as i32;
         // form_score: -5 (all losses) to +5 (all wins)
+        let goal_trend = (board_ctx.recent_goal_difference as i32).clamp(-8, 8) / 2;
 
         // ── Factor 3: Financial health ──
-        let financial_health = if board_ctx.balance > 0 {
+        let mut financial_health = if board_ctx.balance > 0 {
             1 // Healthy
         } else if board_ctx.balance > -(board_ctx.total_annual_wages as i64 / 4) {
             0 // Minor concern
         } else {
             -2 // Serious financial trouble
+        };
+        financial_health += match board_ctx.ffp_status {
+            FfpStatus::Clean => 0,
+            FfpStatus::Watchlist => -1,
+            FfpStatus::Breach => -3,
+        };
+        financial_health += if board_ctx.wage_budget_usage > 1.10 {
+            -2
+        } else if board_ctx.wage_budget_usage > 1.0 {
+            -1
+        } else if board_ctx.wage_budget_usage > 0.0 && board_ctx.wage_budget_usage < 0.85 {
+            1
+        } else {
+            0
         };
 
         // ── Factor 4: Squad state ──
@@ -797,8 +814,9 @@ impl ClubBoard {
         };
 
         // ── Update confidence (cumulative, carries across months) ──
-        let confidence_change = performance_delta * 3     // League position is most important
+        let confidence_change = performance_delta * season_phase.performance_weight()     // League position is most important
             + form_score * 2          // Recent form matters
+            + goal_trend              // Goal trend catches lucky / unlucky form
             + financial_health * 2    // Financial stability
             + squad_health            // Squad management
             - style_drag; // Vision / tactics alignment
@@ -886,7 +904,7 @@ impl ClubBoard {
         // Position alarm: underperforming significantly
         if board_ctx.league_position > 0
             && board_ctx.league_position > targets.min_acceptable_position
-            && board_ctx.matches_played >= 10
+            && season_phase.can_judge_table()
         {
             result.underperforming = true;
         }
@@ -912,7 +930,7 @@ impl ClubBoard {
         // Early-season grace: need at least 10 matches played so a bad August
         // doesn't cost a job. Re-hires are out of scope here — the transfer
         // pipeline / staff search will offer a replacement next tick.
-        let enough_data = board_ctx.matches_played >= 10;
+        let enough_data = season_phase.can_sack_manager();
         let zero_confidence = self.confidence.level <= 0;
         let patience_threshold = self.chairman.poor_mood_threshold();
         let sustained_poor_with_underperformance =
@@ -1009,6 +1027,57 @@ fn is_board_urgent_reason(reason: &TransferNeedReason) -> bool {
             | TransferNeedReason::InjuryCoverLoan
             | TransferNeedReason::OpportunisticLoanUpgrade
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeasonPhase {
+    TooEarly,
+    Early,
+    Mid,
+    RunIn,
+}
+
+impl SeasonPhase {
+    fn performance_weight(self) -> i32 {
+        match self {
+            SeasonPhase::TooEarly => 1,
+            SeasonPhase::Early => 2,
+            SeasonPhase::Mid => 3,
+            SeasonPhase::RunIn => 4,
+        }
+    }
+
+    fn can_judge_table(self) -> bool {
+        matches!(self, SeasonPhase::Mid | SeasonPhase::RunIn)
+    }
+
+    fn can_sack_manager(self) -> bool {
+        matches!(self, SeasonPhase::Mid | SeasonPhase::RunIn)
+    }
+}
+
+fn season_phase(matches_played: u8, total_matches: u8) -> SeasonPhase {
+    if total_matches == 0 {
+        return if matches_played < 10 {
+            SeasonPhase::TooEarly
+        } else {
+            SeasonPhase::Mid
+        };
+    }
+
+    let played = matches_played as f32;
+    let total = total_matches.max(1) as f32;
+    let progress = played / total;
+
+    if matches_played < 5 {
+        SeasonPhase::TooEarly
+    } else if progress < 0.30 {
+        SeasonPhase::Early
+    } else if progress < 0.75 {
+        SeasonPhase::Mid
+    } else {
+        SeasonPhase::RunIn
+    }
 }
 
 /// How poorly does `tactic` embody `style`? 0 = fine, up to 2 = strong
@@ -1360,6 +1429,15 @@ mod budget_tests {
             t_distress.wage_budget <= t_clean.wage_budget,
             "distressed wage budget should not exceed clean"
         );
+    }
+
+    #[test]
+    fn season_phase_delays_table_judgment_until_enough_matches() {
+        assert_eq!(season_phase(4, 38), SeasonPhase::TooEarly);
+        assert_eq!(season_phase(8, 38), SeasonPhase::Early);
+        assert!(!season_phase(8, 38).can_sack_manager());
+        assert!(season_phase(16, 38).can_sack_manager());
+        assert_eq!(season_phase(32, 38), SeasonPhase::RunIn);
     }
 }
 

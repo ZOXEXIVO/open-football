@@ -36,12 +36,17 @@ pub struct BoardContext {
     pub recent_wins: u8,
     /// Recent form: losses in last 5 matches
     pub recent_losses: u8,
+    /// Goal difference over the recent-form window.
+    pub recent_goal_difference: i16,
     /// Season progress: matches played
     pub matches_played: u8,
     /// Season progress: total matches in a full season
     pub total_matches: u8,
     /// Average squad CA (main team)
     pub avg_squad_ability: u8,
+    /// Annual wage spend divided by the current wage budget. 1.0 means
+    /// fully committed; >1.0 means the club is overspending its mandate.
+    pub wage_budget_usage: f32,
     /// Main team's currently selected tactical formation. None when the
     /// team has no tactics configured. Used to judge style fit against
     /// `ClubVision.playing_style`.
@@ -65,9 +70,11 @@ impl BoardContext {
             league_size: 0,
             recent_wins: 0,
             recent_losses: 0,
+            recent_goal_difference: 0,
             matches_played: 0,
             total_matches: 0,
             avg_squad_ability: 0,
+            wage_budget_usage: 0.0,
             main_tactic: None,
         }
     }

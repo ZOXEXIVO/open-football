@@ -394,6 +394,17 @@ impl Club {
         let (recent_wins, _draws, recent_losses) = main_team
             .map(|t| t.match_history.recent_results(5))
             .unwrap_or((0, 0, 0));
+        let recent_goal_difference = main_team
+            .map(|t| {
+                t.match_history
+                    .items()
+                    .iter()
+                    .rev()
+                    .take(5)
+                    .map(|m| m.score.0.get() as i16 - m.score.1.get() as i16)
+                    .sum()
+            })
+            .unwrap_or(0);
 
         let matches_played = main_team
             .map(|t| t.match_history.items().len().min(255) as u8)
@@ -407,6 +418,18 @@ impl Club {
         let main_tactic = main_team
             .and_then(|t| t.tactics.as_ref())
             .map(|tac| tac.tactic_type);
+        let wage_budget_usage = self
+            .finance
+            .wage_budget
+            .as_ref()
+            .map(|b| {
+                if b.amount <= 0.0 {
+                    0.0
+                } else {
+                    total_annual_wages as f32 / b.amount as f32
+                }
+            })
+            .unwrap_or(0.0);
 
         BoardContext {
             balance: self.finance.balance.balance,
@@ -423,9 +446,11 @@ impl Club {
             league_size: 0,
             recent_wins,
             recent_losses,
+            recent_goal_difference,
             matches_played,
             total_matches: 0,
             avg_squad_ability,
+            wage_budget_usage,
             main_tactic,
         }
     }
