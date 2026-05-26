@@ -16,7 +16,7 @@
 //!    itself is what unsettled them, not "stripping the armband" they no
 //!    longer wear at this club.
 
-use crate::club::team::team::Team;
+use crate::club::team::Team;
 use crate::utils::DateUtils;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,

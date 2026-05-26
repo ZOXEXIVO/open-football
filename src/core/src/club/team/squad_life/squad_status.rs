@@ -8,7 +8,7 @@
 //! elite club, and every downstream code path keyed on squad status would
 //! treat them as surplus.
 
-use crate::club::team::team::Team;
+use crate::club::team::Team;
 use crate::utils::DateUtils;
 use crate::{PlayerFieldPositionGroup, PlayerSquadStatus};
 use chrono::NaiveDate;

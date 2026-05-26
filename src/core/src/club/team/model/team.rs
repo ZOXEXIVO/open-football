@@ -1,14 +1,9 @@
 use crate::club::team::behaviour::TeamBehaviour;
-use crate::club::team::builder::TeamBuilder;
-use crate::club::team::captaincy::CaptaincyAssigner;
-use crate::club::team::chemistry_builder::ChemistryContextBuilder;
-use crate::club::team::fixture_window::TeamFixtureWindow;
-use crate::club::team::mentorship::MentorshipProcessor;
-use crate::club::team::preventive_rest::PreventiveRestPass;
-use crate::club::team::reputation::{Achievement, CompetitionType, MatchOutcome, MatchResultInfo};
-use crate::club::team::social_view::SquadSocialViewBuilder;
-use crate::club::team::squad_status::SquadStatusUpdater;
-use crate::club::team::team_type::TeamType;
+use crate::club::team::{
+    Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
+    MatchResultInfo, MentorshipProcessor, PreventiveRestPass, SquadSocialViewBuilder,
+    SquadStatusUpdater, TeamBuilder, TeamFixtureWindow, TeamType,
+};
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
 use crate::{

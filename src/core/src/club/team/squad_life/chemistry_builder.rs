@@ -7,7 +7,7 @@
 //! number — the one read by training, match rating, selection.
 
 use crate::club::relations::ChemistryContext;
-use crate::club::team::team::Team;
+use crate::club::team::Team;
 use chrono::NaiveDate;
 use std::collections::HashMap;
 

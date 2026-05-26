@@ -7,9 +7,7 @@ use crate::club::player::events::{MatchOutcome, MatchParticipation};
 use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
 };
-use crate::club::team::team_talks::{
-    MatchPhase, TeamTalkContext, TeamTalkTone, apply_team_talk_dated,
-};
+use crate::club::team::{MatchPhase, TeamTalkContext, TeamTalkTone, apply_team_talk_dated};
 use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, EUROPA_LEAGUE_ID};
 use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
@@ -559,7 +557,7 @@ impl LeagueResult {
     /// from the score outcome; the head coach's Man Management / Motivating
     /// attributes drive effectiveness. The actual magnitude-per-player uses
     /// personality (pressure, temperament, important_matches) via
-    /// `club::team::team_talks::apply_team_talk`.
+    /// `club::team::talks::team_talks::apply_team_talk`.
     fn apply_full_time_team_talks<D: LeagueProcessAccess>(
         result: &MatchResult,
         details: &MatchResultRaw,

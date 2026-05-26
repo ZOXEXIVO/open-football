@@ -1,42 +1,33 @@
-pub mod behaviour;
-pub mod builder;
-pub mod captaincy;
-pub mod chemistry_builder;
-pub mod collection;
-pub mod context;
-pub mod fixture_window;
-pub mod matches;
-pub mod mentorship;
-pub mod preventive_rest;
+// Core team data model: the Team struct, its builder/collection, the
+// per-team context, the simulation result, and the team-type taxonomy.
+pub mod model;
+// Squad-life helpers: captaincy, mentorship, squad-status, and the
+// derived social/chemistry views.
+pub mod squad_life;
+// Fitness & scheduling: fixture windows and preventive-rest passes.
+pub mod fitness;
+// Reputation domain: scores, achievements, competition types.
 pub mod reputation;
-pub mod result;
-pub mod social_view;
+// Team / dressing-room talks.
+pub mod talks;
+
+// Established domain folders.
+pub mod behaviour;
+pub mod matches;
 pub mod squad;
-pub mod squad_status;
 pub mod tactics;
-pub mod team;
-pub mod team_talks;
-pub mod team_type;
 pub mod training;
 pub mod transfers;
 
-pub use behaviour::*;
-pub use builder::*;
-pub use captaincy::*;
-pub use chemistry_builder::*;
-pub use collection::*;
-pub use context::*;
-pub use fixture_window::*;
-pub use matches::*;
-pub use preventive_rest::*;
+pub use fitness::*;
+pub use model::*;
 pub use reputation::*;
-pub use result::*;
-pub use social_view::*;
+pub use squad_life::*;
+pub use talks::*;
+
+pub use behaviour::*;
+pub use matches::*;
 pub use squad::*;
-pub use squad_status::*;
 pub use tactics::*;
-pub use team::*;
-pub use team_talks::*;
-pub use team_type::*;
 pub use training::*;
 pub use transfers::*;
