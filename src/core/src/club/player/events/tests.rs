@@ -4013,7 +4013,7 @@ fn match_readiness_stays_in_zero_to_twenty_band_and_never_overshoots() {
 
 use crate::club::StaffStub;
 use crate::club::player::training::training::PlayerTraining;
-use crate::club::staff::staff::Staff;
+use crate::club::staff::Staff;
 use crate::{TrainingIntensity, TrainingSession, TrainingType};
 use chrono::NaiveDateTime;
 

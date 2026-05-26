@@ -1,4 +1,4 @@
-use crate::club::staff::staff::Staff;
+use crate::club::staff::Staff;
 use serde::Serialize;
 
 #[derive(Serialize)]

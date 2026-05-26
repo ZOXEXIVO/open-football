@@ -1148,7 +1148,7 @@ impl PlayerTraining {
 mod training_load_tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::club::staff::staff_stub::StaffStub;
+    use crate::club::staff::StaffStub;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,

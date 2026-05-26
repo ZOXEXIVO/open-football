@@ -558,7 +558,7 @@ impl PipelineProcessor {
                     for team in &mut club.teams.teams {
                         if let Some(staff) = team.staffs.find_mut(scout_id) {
                             staff.add_event(
-                                crate::club::staff::staff::StaffEventType::BoardPresentation,
+                                crate::club::staff::StaffEventType::BoardPresentation,
                             );
                             break;
                         }

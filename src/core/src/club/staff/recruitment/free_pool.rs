@@ -12,7 +12,7 @@
 //! `tick_free_agent_staff_pool`.
 
 use crate::Staff;
-use crate::club::staff::contract::StaffPosition;
+use crate::club::staff::StaffPosition;
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
 use log::debug;
@@ -161,7 +161,7 @@ pub fn harvest_expired_staff(data: &mut crate::SimulatorData, today: NaiveDate) 
 mod tests {
     use super::*;
     use crate::club::StaffStub;
-    use crate::club::staff::contract::{StaffClubContract, StaffStatus};
+    use crate::club::staff::{StaffClubContract, StaffStatus};
     use chrono::{Datelike, NaiveDate};
 
     fn make_staff(id: u32, age: u8, today: NaiveDate) -> Staff {

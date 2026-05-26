@@ -2,7 +2,7 @@ use crate::club::player::contract::{
     AffordabilityInput, ContractStalemate, rejection_reason_token,
 };
 use crate::club::player::player::Player;
-use crate::club::staff::staff::Staff;
+use crate::club::staff::Staff;
 use crate::utils::DateUtils;
 use serde::Serialize;
 use std::collections::BTreeMap;

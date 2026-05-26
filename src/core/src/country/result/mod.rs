@@ -88,7 +88,7 @@ impl CountryResult {
         // no-op; left in place so the Phase-A ↔ Phase-C handshake
         // is wired end-to-end.
         for staff in self.deferred_global_ops.free_agent_staff {
-            crate::club::staff::free_pool::admit_to_pool(
+            crate::club::staff::admit_to_pool(
                 &mut data.free_agent_staff,
                 staff,
                 current_date,

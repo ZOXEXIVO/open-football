@@ -1,23 +1,13 @@
-pub mod attributes;
-pub mod context;
-pub mod contract;
-pub mod display;
-pub mod focus;
-pub mod free_pool;
+// Core staff entity: the Staff struct + collection, its attribute /
+// focus / responsibility / position descriptors, context, stub, display,
+// and the simulation result.
+pub mod model;
+// Recruitment / market: the free-agent staff pool and transfer-pipeline
+// staff resolution.
+pub mod recruitment;
+// Staff perception / scouting evaluation.
 pub mod perception;
-pub mod responsibility;
-pub mod result;
-pub mod staff;
-pub mod staff_stub;
-pub mod transfer_resolution;
 
-pub use attributes::*;
-pub use context::*;
-pub use contract::*;
-pub use focus::*;
+pub use model::*;
 pub use perception::*;
-pub use responsibility::*;
-pub use result::*;
-pub use staff::*;
-pub use staff_stub::*;
-pub use transfer_resolution::*;
+pub use recruitment::*;
