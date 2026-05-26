@@ -1,4 +1,4 @@
-<img src=".docs/images/banner.png" alt="Open Football Banner" width="900">
+<img src=".docs/images/banner.jpg" alt="Open Football Banner" width="900">
 
 # Open Football
 
