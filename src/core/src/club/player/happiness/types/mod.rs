@@ -1,50 +1,23 @@
-mod career_desire;
-mod contract;
-mod core;
-mod event_context;
-mod event_type;
-mod injury;
-mod leadership;
-mod life_simulation;
-mod loan;
-mod manager_interaction;
-mod match_performance;
-mod media_fan;
-mod national_team;
-mod personal_adaptation;
-mod recognition;
-mod regulation;
-mod role_status;
-mod season_outcome;
-mod selection;
-mod support;
-mod teammate_conflict;
-mod training;
-mod transfer_interest;
+// Shared event-context envelope (cause / severity / scope / evidence /
+// follow-up + the HappinessEventContext that carries every payload).
+mod context;
+// Core happiness state + the event-type taxonomy.
+mod model;
+// Specialized context payloads, grouped by the domain they describe.
+mod career;
+mod manager;
+mod matchday;
+mod squad;
+mod transfer;
 
-pub use career_desire::*;
-pub use contract::*;
-pub use core::*;
-pub use event_context::*;
-pub use event_type::*;
-pub use injury::*;
-pub use leadership::*;
-pub use life_simulation::*;
-pub use loan::*;
-pub use manager_interaction::*;
-pub use match_performance::*;
-pub use media_fan::*;
-pub use national_team::*;
-pub use personal_adaptation::*;
-pub use recognition::*;
-pub use regulation::*;
-pub use role_status::*;
-pub use season_outcome::*;
-pub use selection::*;
-pub use support::*;
-pub use teammate_conflict::*;
-pub use training::*;
-pub use transfer_interest::*;
+pub use context::*;
+pub use model::*;
+
+pub use career::*;
+pub use manager::*;
+pub use matchday::*;
+pub use squad::*;
+pub use transfer::*;
 
 #[cfg(test)]
 mod tests {

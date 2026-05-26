@@ -1,4 +1,5 @@
-use super::{HappinessEventContext, HappinessEventType};
+use super::super::HappinessEventContext;
+use super::HappinessEventType;
 use crate::club::player::behaviour_config::HappinessConfig;
 use chrono::NaiveDate;
 
