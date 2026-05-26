@@ -1,7 +1,7 @@
 use crate::MatchTacticType;
 use crate::club::board::BoardManagerMeeting;
 use crate::club::board::context::FfpStatus;
-use crate::club::board::decision::{BoardDecision, BoardFacility, DecisionReason};
+use crate::club::board::decision::{BoardDecision, DecisionReason};
 use crate::club::board::infrastructure::FacilityReview;
 use crate::club::board::manager_market::ManagerCandidate;
 use crate::club::board::ownership::{OwnershipModel, OwnershipType};

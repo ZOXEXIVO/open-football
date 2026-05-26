@@ -266,7 +266,7 @@ pub async fn league_transfers_action(
                 country_name: &country.name,
                 country_slug: &country.slug,
             };
-            views::league_menu(&mp, &league.slug, &cl_refs)
+            views::league_menu(&mp, &league.slug, &cl_refs, country.continent_id)
         },
         league_slug: league.slug.clone(),
         has_permanent_transfers: completed_transfers.iter().any(|t| !t.is_loan),

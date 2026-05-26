@@ -158,7 +158,7 @@ pub async fn country_free_agents_action(
                 country_name: &country.name,
                 country_slug: &route_params.country_slug,
             };
-            views::country_menu(&mp, &cl)
+            views::country_menu(&mp, &cl, country.continent_id)
         },
         lang: route_params.lang,
         i18n,

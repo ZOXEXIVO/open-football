@@ -343,7 +343,7 @@ pub async fn league_awards_action(
                 country_name: &country.name,
                 country_slug: &country.slug,
             };
-            views::league_menu(&mp, &league.slug, &cl_refs)
+            views::league_menu(&mp, &league.slug, &cl_refs, country.continent_id)
         },
         league_slug: league.slug.clone(),
         hero_player,

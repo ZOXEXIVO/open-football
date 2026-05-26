@@ -19,7 +19,6 @@ use nalgebra::Vector3;
 const MAX_SHOOTING_DISTANCE: f32 = 88.0; // Edge-of-box / arriving-midfielder strikes
 const STANDARD_SHOOTING_DISTANCE: f32 = 52.0; // Standard shooting range for midfielders
 const POINT_BLANK_DISTANCE: f32 = 20.0; // ~10m - must shoot, goalkeeper is right there
-const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 
 #[derive(Default, Clone)]
 pub struct MidfielderRunningState {}

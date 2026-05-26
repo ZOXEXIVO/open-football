@@ -98,6 +98,13 @@ pub struct MenuParams<'a> {
 
 impl<'a> MenuParams<'a> {
     fn home_and_country_sections(&self) -> Vec<MenuSection> {
+        // Country landing (→ leagues), then the two national-team squads.
+        // The level switch lives here in the left menu, not on-page tabs:
+        //   "England"      → senior squad (base country URL)
+        //   "England U21"  → U21 squad (`/u21`)
+        // Each national-team row is active only on its own page.
+        let senior_url = format!("/{}/countries/{}", self.lang, self.country_slug);
+        let u21_url = format!("/{}/countries/{}/u21", self.lang, self.country_slug);
         vec![
             home_section(self.i18n, self.lang),
             search_section(self.i18n, self.lang, self.current_path),
@@ -107,6 +114,20 @@ impl<'a> MenuParams<'a> {
                 icon: "fa-home".to_string(),
                 active: false,
             }]),
+            MenuSection::plain(vec![
+                MenuItem {
+                    active: self.current_path == senior_url,
+                    title: self.country_name.to_string(),
+                    url: senior_url,
+                    icon: "fa-users".to_string(),
+                },
+                MenuItem {
+                    active: self.current_path == u21_url,
+                    title: format!("{} {}", self.country_name, self.i18n.t("u21")),
+                    url: u21_url,
+                    icon: "fa-users".to_string(),
+                },
+            ]),
         ]
     }
 }
@@ -171,37 +192,46 @@ fn source_code_section() -> MenuSection {
     }])
 }
 
-fn continental_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
-    let cl_url = format!("/{}/champions-league", lang);
-    let el_url = format!("/{}/europa-league", lang);
-    let conf_url = format!("/{}/conference-league", lang);
-    let copa_url = format!("/{}/copa-libertadores", lang);
-    MenuSection::plain(vec![
-        MenuItem {
-            active: current_path == cl_url,
-            title: i18n.t("champions_league").to_string(),
-            url: cl_url,
-            icon: "fa-star".to_string(),
-        },
-        MenuItem {
-            active: current_path == el_url,
-            title: i18n.t("europa_league").to_string(),
-            url: el_url,
-            icon: "fa-star".to_string(),
-        },
-        MenuItem {
-            active: current_path == conf_url,
-            title: i18n.t("conference_league").to_string(),
-            url: conf_url,
-            icon: "fa-star".to_string(),
-        },
-        MenuItem {
-            active: current_path == copa_url,
-            title: i18n.t("copa_libertadores").to_string(),
-            url: copa_url,
-            icon: "fa-star".to_string(),
-        },
-    ])
+/// Continent ids (matching the embedded database).
+const CONTINENT_EUROPE: u32 = 1;
+const CONTINENT_SOUTH_AMERICA: u32 = 3;
+
+/// Continental-cup links scoped to the viewer's continent: UEFA club
+/// competitions (Champions/Europa/Conference League) for European
+/// countries, Copa Libertadores for South American ones. Other
+/// continents get no continental-cup section. Returns `None` when there
+/// is nothing relevant to show.
+fn continental_section(
+    i18n: &I18n,
+    lang: &str,
+    current_path: &str,
+    continent_id: u32,
+) -> Option<MenuSection> {
+    let star = |key: &str, path: String| MenuItem {
+        active: current_path == path,
+        title: i18n.t(key).to_string(),
+        url: path,
+        icon: "fa-star".to_string(),
+    };
+
+    let items = match continent_id {
+        CONTINENT_EUROPE => vec![
+            star("champions_league", format!("/{}/champions-league", lang)),
+            star("europa_league", format!("/{}/europa-league", lang)),
+            star("conference_league", format!("/{}/conference-league", lang)),
+        ],
+        CONTINENT_SOUTH_AMERICA => vec![star(
+            "copa_libertadores",
+            format!("/{}/copa-libertadores", lang),
+        )],
+        _ => Vec::new(),
+    };
+
+    if items.is_empty() {
+        None
+    } else {
+        Some(MenuSection::plain(items))
+    }
 }
 
 fn national_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
@@ -228,6 +258,7 @@ pub fn league_menu(
     p: &MenuParams,
     league_slug: &str,
     country_leagues: &[(&str, &str)],
+    continent_id: u32,
 ) -> Vec<MenuSection> {
     let transfers_url = format!("/{}/leagues/{}/transfers", p.lang, league_slug);
     let awards_url = format!("/{}/leagues/{}/awards", p.lang, league_slug);
@@ -265,7 +296,9 @@ pub fn league_menu(
         },
     ]));
 
-    sections.push(continental_section(p.i18n, p.lang, p.current_path));
+    if let Some(s) = continental_section(p.i18n, p.lang, p.current_path, continent_id) {
+        sections.push(s);
+    }
     sections.push(national_section(p.i18n, p.lang, p.current_path));
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
     sections.push(source_code_section());
@@ -334,7 +367,11 @@ pub fn team_menu(
     sections
 }
 
-pub fn country_menu(p: &MenuParams, country_leagues: &[(&str, &str)]) -> Vec<MenuSection> {
+pub fn country_menu(
+    p: &MenuParams,
+    country_leagues: &[(&str, &str)],
+    continent_id: u32,
+) -> Vec<MenuSection> {
     let mut sections = p.home_and_country_sections();
 
     if !country_leagues.is_empty() {
@@ -365,7 +402,9 @@ pub fn country_menu(p: &MenuParams, country_leagues: &[(&str, &str)]) -> Vec<Men
         }]));
     }
 
-    sections.push(continental_section(p.i18n, p.lang, p.current_path));
+    if let Some(s) = continental_section(p.i18n, p.lang, p.current_path, continent_id) {
+        sections.push(s);
+    }
     sections.push(national_section(p.i18n, p.lang, p.current_path));
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
     sections.push(source_code_section());

@@ -37,11 +37,14 @@ pub struct CountrySquadTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub country_slug: String,
+    /// Players for the single national-team level shown on this page.
     pub players: Vec<NationalSquadPlayerDto>,
-    /// Under-21 national-team squad, shown in its own section below the
-    /// senior squad. `international_apps`/`international_goals` carry the
-    /// U21 caps/goals for these rows.
-    pub u21_players: Vec<NationalSquadPlayerDto>,
+    /// i18n key for the squad panel title — "squad" (senior) or
+    /// "u21_national_team" (U21).
+    pub panel_title_key: &'static str,
+    /// i18n keys for the caps/goals column headers (level-appropriate).
+    pub caps_key: &'static str,
+    pub goals_key: &'static str,
 }
 
 pub struct NationalSquadPlayerDto {
@@ -62,9 +65,26 @@ pub struct NationalSquadPlayerDto {
     pub reason_key: &'static str,
 }
 
+/// Senior national-team squad — the country's default squad page.
 pub async fn country_squad_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<CountrySquadRequest>,
+) -> ApiResult<impl IntoResponse> {
+    render_country_squad(state, route_params, NationalTeamLevel::Senior).await
+}
+
+/// U21 national-team squad — reached via the left-menu switch.
+pub async fn country_u21_squad_action(
+    State(state): State<GameAppData>,
+    Path(route_params): Path<CountrySquadRequest>,
+) -> ApiResult<impl IntoResponse> {
+    render_country_squad(state, route_params, NationalTeamLevel::Under21).await
+}
+
+async fn render_country_squad(
+    state: GameAppData,
+    route_params: CountrySquadRequest,
+    level: NationalTeamLevel,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
@@ -108,16 +128,34 @@ pub async fn country_squad_action(
 
     let now = simulator_data.date.date();
 
-    // Build the senior and U21 squad tables. Each shows real call-ups +
-    // synthetic depth players (so weak nations don't render empty); the
-    // caps/goals columns are level-appropriate (senior vs. U21).
-    let players = build_squad_dtos(simulator_data, &country.national_team, now);
-    let u21_players = build_squad_dtos(simulator_data, &country.u21_national_team, now);
+    // Pick the team for the requested level. Each table shows real
+    // call-ups + synthetic depth players (so weak nations don't render
+    // empty); caps/goals columns are level-appropriate.
+    let (team, panel_title_key, caps_key, goals_key) = match level {
+        NationalTeamLevel::Senior => (&country.national_team, "squad", "int_apps", "int_goals"),
+        NationalTeamLevel::Under21 => (
+            &country.u21_national_team,
+            "u21_national_team",
+            "u21_caps",
+            "u21_goals",
+        ),
+    };
+    let players = build_squad_dtos(simulator_data, team, now);
 
-    let current_path = format!(
-        "/{}/countries/{}",
-        route_params.lang, route_params.country_slug
-    );
+    // Senior lives at the base country URL; U21 hangs off `/u21`. The
+    // menu's active-state checks key off this path.
+    let current_path = match level {
+        NationalTeamLevel::Senior => {
+            format!(
+                "/{}/countries/{}",
+                route_params.lang, route_params.country_slug
+            )
+        }
+        NationalTeamLevel::Under21 => format!(
+            "/{}/countries/{}/u21",
+            route_params.lang, route_params.country_slug
+        ),
+    };
     let cl: Vec<(&str, &str)> = country
         .leagues
         .leagues
@@ -147,14 +185,16 @@ pub async fn country_squad_action(
                 country_name: &country.name,
                 country_slug: &route_params.country_slug,
             };
-            views::country_menu(&mp, &cl)
+            views::country_menu(&mp, &cl, country.continent_id)
         },
         lang: route_params.lang,
         i18n,
         active_tab: "squad",
         country_slug: route_params.country_slug,
         players,
-        u21_players,
+        panel_title_key,
+        caps_key,
+        goals_key,
     })
 }
 
