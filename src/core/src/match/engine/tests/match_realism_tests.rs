@@ -10,9 +10,7 @@ use crate::r#match::engine::chemistry::{
     ChemistryInputs, ChemistryMap, Lane, Role, chemistry_modifiers, initial_chemistry,
 };
 use crate::r#match::engine::environment::{MatchEnvironment, Pitch, Weather};
-use crate::r#match::engine::game_management::{
-    TimeWastingRestart, home_advantage_deltas, time_wasting_delay_ms, time_wasting_yellow_prob,
-};
+use crate::r#match::engine::management::{HomeAdvantage, TimeWasting, TimeWastingRestart};
 use crate::r#match::engine::psychology::{
     NegativeEvent, PositiveEvent, PsychState, Psychology, PsychologyState,
 };
@@ -238,8 +236,8 @@ fn home_advantage_increases_with_crowd_but_stays_modest() {
         home_advantage: 1.0,
         ..Default::default()
     };
-    let nd = home_advantage_deltas(&neutral);
-    let bd = home_advantage_deltas(&big);
+    let nd = HomeAdvantage::deltas(&neutral);
+    let bd = HomeAdvantage::deltas(&big);
     assert!(bd.referee_marginal_call_home_bias > nd.referee_marginal_call_home_bias);
     // Spec: home buffs stay modest (no arcade-tier additive deltas).
     assert!(bd.home_confidence_bonus <= 0.05);
@@ -250,15 +248,15 @@ fn home_advantage_increases_with_crowd_but_stays_modest() {
 fn time_wasting_kicks_in_when_leading_late_and_can_book() {
     // No delay before 75'.
     assert_eq!(
-        time_wasting_delay_ms(1, 60, TimeWastingRestart::ThrowIn, 12.0),
+        TimeWasting::delay_ms(1, 60, TimeWastingRestart::ThrowIn, 12.0),
         0
     );
     // Substitution late while leading produces the longest delay.
-    let sub = time_wasting_delay_ms(1, 88, TimeWastingRestart::Substitution, 12.0);
-    let throw = time_wasting_delay_ms(1, 88, TimeWastingRestart::ThrowIn, 12.0);
+    let sub = TimeWasting::delay_ms(1, 88, TimeWastingRestart::Substitution, 12.0);
+    let throw = TimeWasting::delay_ms(1, 88, TimeWastingRestart::ThrowIn, 12.0);
     assert!(sub > throw);
     // Past 45s cumulative + strict referee → non-zero yellow chance.
-    assert!(time_wasting_yellow_prob(60_000, 0.9, 1) > 0.0);
+    assert!(TimeWasting::yellow_prob(60_000, 0.9, 1) > 0.0);
 }
 
 #[test]

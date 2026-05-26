@@ -1,66 +1,68 @@
 pub mod ball;
-pub mod chemistry;
-pub mod coach;
-pub mod context;
 pub mod engine;
-pub mod environment;
 pub mod events;
-pub mod field;
-pub mod game_management;
-pub mod goal;
+pub mod flow;
+pub mod officiating;
 pub mod player;
 pub mod psychology;
 pub mod rating;
 pub mod raycast;
-pub mod referee;
-pub mod result;
-pub mod set_pieces;
 pub mod state;
-pub mod sub_scoring;
-pub mod substitutions;
-pub mod zones;
+pub mod substitution;
+pub mod tactics;
+pub mod teamplay;
 
 #[cfg(test)]
-mod intelligence_tests;
-#[cfg(test)]
-mod match_realism_tests;
-pub mod tactical;
-pub mod tactics;
+mod tests;
 
 pub use ball::*;
-pub use chemistry::{
+pub use engine::*;
+pub use raycast::*;
+pub use state::*;
+
+// teamplay/ — re-export the modules (preserve `engine::<module>::` paths)
+// and the items previously surfaced at the engine root.
+pub use teamplay::{chemistry, coach, tactical, zones};
+pub use teamplay::chemistry::{
     ChemistryInputs, ChemistryMap, ChemistryModifiers, Lane, Role, TacticalFamiliarity,
     chemistry_modifiers, initial_chemistry,
 };
-pub use coach::*;
-pub use context::*;
-pub use engine::*;
-pub use environment::{EnvModifiers, MatchEnvironment, Pitch, Weather};
-pub use field::*;
-pub use game_management::{
-    CounterAttackThreat, HomeAdvantageDeltas, ProfessionalFoulCard, StoppageEvent,
-    TimeWastingRestart, home_advantage_deltas, professional_foul_prob, professional_foul_red_prob,
-    stoppage_for, time_wasting_delay_ms, time_wasting_yellow_prob,
+pub use teamplay::coach::*;
+pub use teamplay::tactical::*;
+pub use teamplay::zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
+
+// flow/
+pub use flow::{context, environment, field, goal, result};
+pub use flow::context::*;
+pub use flow::environment::{EnvModifiers, MatchEnvironment, Pitch, Weather};
+pub use flow::field::*;
+pub use flow::goal::*;
+pub use flow::result::*;
+
+// officiating/
+pub use officiating::{management, referee, set_pieces};
+pub use officiating::management::{
+    CounterAttackThreat, HomeAdvantage, HomeAdvantageDeltas, ProfessionalFoul,
+    ProfessionalFoulCard, StoppageEvent, StoppageTime, TimeWasting, TimeWastingRestart,
 };
-pub use goal::*;
-pub use psychology::{
-    NegativeEvent, PositiveEvent, PsychState, Psychology, PsychologyState, SkillModifiers,
-    TeamMomentum,
-};
-pub use rating::*;
-pub use raycast::*;
-pub use referee::{ContactLocation, FoulCallContext, RefereeProfile};
-pub use result::*;
-pub use set_pieces::{
+pub use officiating::referee::{ContactLocation, FoulCallContext, RefereeProfile};
+pub use officiating::set_pieces::{
     CornerRoutine, CornerScores, FreeKickBand, FreeKickChoice, FreeKickChoiceScores,
     ROUTINE_REPEAT_XG_THRESHOLD, SetPieceHistory, TakerScore, ThrowRoutine,
     penalty_conversion_prob, pick_corner_routine, pick_taker, pick_throw_routine,
     score_corner_routines, score_corner_taker, score_free_kick_choices, score_free_kick_taker,
     score_keeper_save, score_penalty_taker, wall_block_prob, wall_size_for,
 };
-pub use state::*;
-pub use tactical::*;
-pub use zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
+
+// substitution/ — full-path access only (no glob was exported originally).
+pub use substitution::{sub_scoring, substitutions};
+
+// rating + psychology — direct children of the engine module.
+pub use psychology::{
+    NegativeEvent, PositiveEvent, PsychState, Psychology, PsychologyState, SkillModifiers,
+    TeamMomentum,
+};
+pub use rating::*;
 
 // Re-export player items except conflicting ones
 pub use player::{

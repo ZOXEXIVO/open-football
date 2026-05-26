@@ -4,7 +4,7 @@ use crate::r#match::field::MatchField;
 use crate::r#match::{MatchContext, PlayerSide};
 use nalgebra::Vector3;
 
-use super::engine::MatchFieldSize;
+use super::super::engine::MatchFieldSize;
 
 pub const GOAL_WIDTH: f32 = 29.0; // half-width in game units (full goal = 58 units, real = 7.32m)
 pub const GOAL_HEIGHT: f32 = 2.44; // Crossbar height in meters (z-axis is in meters)
