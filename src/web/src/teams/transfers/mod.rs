@@ -187,127 +187,92 @@ pub async fn team_transfers_action(
     // Incoming/outgoing transfers: scan ALL countries because cross-country
     // transfers are recorded in the buying country's transfer_market, not the
     // selling country's. Without this, foreign sales/purchases are invisible.
+    // Transfers and loans both come from transfer_history so they are season-
+    // filterable. Loans are distinguished by TransferType::Loan, whose payload
+    // carries the loan end date.
     let mut incoming_transfers: Vec<TransferHistoryItem> = Vec::new();
     let mut outgoing_transfers: Vec<TransferHistoryItem> = Vec::new();
+    let mut incoming_loans: Vec<LoanHistoryItem> = Vec::new();
+    let mut outgoing_loans: Vec<LoanHistoryItem> = Vec::new();
 
     for continent in &simulator_data.continents {
         for c in &continent.countries {
             for t in &c.transfer_market.transfer_history {
-                if t.season_year != selected_season
-                    || matches!(t.transfer_type, TransferType::Loan(_))
-                {
+                if t.season_year != selected_season {
                     continue;
                 }
-                if t.to_club_id == club_id {
-                    let other_team_slug = find_team_slug(simulator_data, t.from_club_id);
-                    incoming_transfers.push(TransferHistoryItem {
-                        player_slug: player_history_slug(
-                            simulator_data,
-                            t.player_id,
-                            &t.player_name,
-                        ),
-                        player_name: t.player_name.clone(),
-                        other_team: t.from_team_name.clone(),
-                        other_team_slug,
-                        fee: if t.fee.amount > 0.0 {
-                            FormattingUtils::format_money(t.fee.amount)
-                        } else {
-                            "Free".to_string()
-                        },
-                        date: t.transfer_date.format("%d.%m.%Y").to_string(),
-                    });
+                let is_incoming = t.to_club_id == club_id;
+                let is_outgoing = t.from_club_id == club_id;
+                if !is_incoming && !is_outgoing {
+                    continue;
                 }
-                if t.from_club_id == club_id {
-                    let other_team_slug = find_team_slug(simulator_data, t.to_club_id);
-                    outgoing_transfers.push(TransferHistoryItem {
-                        player_slug: player_history_slug(
-                            simulator_data,
-                            t.player_id,
-                            &t.player_name,
-                        ),
-                        player_name: t.player_name.clone(),
-                        other_team: t.to_team_name.clone(),
-                        other_team_slug,
-                        fee: if t.fee.amount > 0.0 {
-                            FormattingUtils::format_money(t.fee.amount)
-                        } else {
-                            "Free".to_string()
-                        },
-                        date: t.transfer_date.format("%d.%m.%Y").to_string(),
-                    });
-                }
-            }
-        }
-    }
 
-    // Incoming loans: players on this team with a loan contract
-    let incoming_loans: Vec<LoanHistoryItem> = team
-        .players()
-        .iter()
-        .filter_map(|p| {
-            let loan_contract = p.contract_loan.as_ref()?;
-            let from_club_id = loan_contract.loan_from_club_id?;
-            let from_club = simulator_data.club(from_club_id);
-            let from_team_name = from_club
-                .and_then(|c| c.teams.teams.first())
-                .map(|t| t.name.clone())
-                .unwrap_or_default();
-            let from_team_slug = from_club
-                .and_then(|c| c.teams.teams.first())
-                .map(|t| t.slug.clone())
-                .unwrap_or_default();
-
-            Some(LoanHistoryItem {
-                player_slug: p.slug(),
-                player_name: format!(
-                    "{} {}",
-                    p.full_name.display_first_name(),
-                    p.full_name.display_last_name()
-                ),
-                other_team: from_team_name,
-                other_team_slug: from_team_slug,
-                date: p
-                    .last_transfer_date()
-                    .map(|d| d.format("%d.%m.%Y").to_string())
-                    .unwrap_or_default(),
-                end_date: loan_contract.expiration.format("%d.%m.%Y").to_string(),
-            })
-        })
-        .collect();
-
-    // Outgoing loans: players on other teams whose contract_loan has loan_from_club_id == this club
-    let mut outgoing_loans: Vec<LoanHistoryItem> = Vec::new();
-    for continent in &simulator_data.continents {
-        for country_iter in &continent.countries {
-            for club in &country_iter.clubs {
-                for team_iter in &club.teams.teams {
-                    for player in &team_iter.players.players {
-                        let is_loaned_from_us = player
-                            .contract_loan
-                            .as_ref()
-                            .map(|c| c.loan_from_club_id == Some(club_id))
-                            .unwrap_or(false);
-
-                        if !is_loaned_from_us {
-                            continue;
+                match &t.transfer_type {
+                    TransferType::Loan(end_date) => {
+                        let end_date = end_date.format("%d.%m.%Y").to_string();
+                        if is_incoming {
+                            incoming_loans.push(LoanHistoryItem {
+                                player_slug: player_history_slug(
+                                    simulator_data,
+                                    t.player_id,
+                                    &t.player_name,
+                                ),
+                                player_name: t.player_name.clone(),
+                                other_team: t.from_team_name.clone(),
+                                other_team_slug: find_team_slug(simulator_data, t.from_club_id),
+                                date: t.transfer_date.format("%d.%m.%Y").to_string(),
+                                end_date: end_date.clone(),
+                            });
                         }
-
-                        let contract = player.contract_loan.as_ref().unwrap();
-                        outgoing_loans.push(LoanHistoryItem {
-                            player_slug: player.slug(),
-                            player_name: format!(
-                                "{} {}",
-                                player.full_name.display_first_name(),
-                                player.full_name.display_last_name()
-                            ),
-                            other_team: team_iter.name.clone(),
-                            other_team_slug: team_iter.slug.clone(),
-                            date: player
-                                .last_transfer_date()
-                                .map(|d| d.format("%d.%m.%Y").to_string())
-                                .unwrap_or_default(),
-                            end_date: contract.expiration.format("%d.%m.%Y").to_string(),
-                        });
+                        if is_outgoing {
+                            outgoing_loans.push(LoanHistoryItem {
+                                player_slug: player_history_slug(
+                                    simulator_data,
+                                    t.player_id,
+                                    &t.player_name,
+                                ),
+                                player_name: t.player_name.clone(),
+                                other_team: t.to_team_name.clone(),
+                                other_team_slug: find_team_slug(simulator_data, t.to_club_id),
+                                date: t.transfer_date.format("%d.%m.%Y").to_string(),
+                                end_date,
+                            });
+                        }
+                    }
+                    TransferType::Permanent | TransferType::Free => {
+                        let fee = if t.fee.amount > 0.0 {
+                            FormattingUtils::format_money(t.fee.amount)
+                        } else {
+                            "Free".to_string()
+                        };
+                        if is_incoming {
+                            incoming_transfers.push(TransferHistoryItem {
+                                player_slug: player_history_slug(
+                                    simulator_data,
+                                    t.player_id,
+                                    &t.player_name,
+                                ),
+                                player_name: t.player_name.clone(),
+                                other_team: t.from_team_name.clone(),
+                                other_team_slug: find_team_slug(simulator_data, t.from_club_id),
+                                fee: fee.clone(),
+                                date: t.transfer_date.format("%d.%m.%Y").to_string(),
+                            });
+                        }
+                        if is_outgoing {
+                            outgoing_transfers.push(TransferHistoryItem {
+                                player_slug: player_history_slug(
+                                    simulator_data,
+                                    t.player_id,
+                                    &t.player_name,
+                                ),
+                                player_name: t.player_name.clone(),
+                                other_team: t.to_team_name.clone(),
+                                other_team_slug: find_team_slug(simulator_data, t.to_club_id),
+                                fee,
+                                date: t.transfer_date.format("%d.%m.%Y").to_string(),
+                            });
+                        }
                     }
                 }
             }
