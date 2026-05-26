@@ -11,9 +11,9 @@ use chrono::NaiveDate;
 use std::collections::{HashMap, HashSet};
 
 use super::lookups::world_country_elo;
-use crate::HappinessEventType;
 use crate::continent::Continent;
 use crate::country::national::{NationalTeamFixture, NationalTeamMatchResult};
+use crate::{HappinessEventType, NationalTeamLevel};
 
 /// Update apps/goals/reputation for every player who actually appeared
 /// in the match, no matter which continent their club sits on.
@@ -33,6 +33,50 @@ pub fn apply_world_international_stats(
     player_goals: &HashMap<u32, u16>,
     appearance_ids: &HashSet<u32>,
 ) {
+    apply_world_international_stats_for_level(
+        continents,
+        home_country_id,
+        away_country_id,
+        player_goals,
+        appearance_ids,
+        NationalTeamLevel::Senior,
+    );
+}
+
+/// Level-aware caps/goals update. Senior bumps `international_apps` /
+/// `international_goals`, reputation, and fires the first-cap debut event.
+/// U21 bumps only `under_21_international_apps` / `under_21_international_goals`
+/// — it never touches senior caps or fires the senior debut event, so a
+/// player's senior record is built solely by senior appearances.
+pub fn apply_world_international_stats_for_level(
+    continents: &mut [Continent],
+    home_country_id: u32,
+    away_country_id: u32,
+    player_goals: &HashMap<u32, u16>,
+    appearance_ids: &HashSet<u32>,
+    level: NationalTeamLevel,
+) {
+    if level == NationalTeamLevel::Under21 {
+        for continent in continents.iter_mut() {
+            for country in continent.countries.iter_mut() {
+                for club in country.clubs.iter_mut() {
+                    for team in club.teams.iter_mut() {
+                        for player in team.players.iter_mut() {
+                            if !appearance_ids.contains(&player.id) {
+                                continue;
+                            }
+                            player.player_attributes.under_21_international_apps += 1;
+                            if let Some(&goals) = player_goals.get(&player.id) {
+                                player.player_attributes.under_21_international_goals += goals;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     let mut country_weights: HashMap<u32, f32> = HashMap::new();
 
     for continent in continents.iter() {
@@ -137,11 +181,23 @@ pub fn record_world_country_schedule(
     away_score: u8,
     competition_name: &str,
     match_id: &str,
+    level: NationalTeamLevel,
 ) {
     for continent in continents.iter_mut() {
         for country in continent.countries.iter_mut() {
-            if country.id == home_country_id {
-                country.national_team.schedule.push(NationalTeamFixture {
+            // Route the fixture into the schedule of the matching level —
+            // U21 fixtures must not appear in the senior fixture list.
+            let is_home = country.id == home_country_id;
+            let is_away = country.id == away_country_id;
+            if !is_home && !is_away {
+                continue;
+            }
+            let schedule = match level {
+                NationalTeamLevel::Senior => &mut country.national_team.schedule,
+                NationalTeamLevel::Under21 => &mut country.u21_national_team.schedule,
+            };
+            if is_home {
+                schedule.push(NationalTeamFixture {
                     date,
                     opponent_country_id: away_country_id,
                     opponent_country_name: away_name.to_string(),
@@ -155,8 +211,8 @@ pub fn record_world_country_schedule(
                         opponent_country_id: away_country_id,
                     }),
                 });
-            } else if country.id == away_country_id {
-                country.national_team.schedule.push(NationalTeamFixture {
+            } else {
+                schedule.push(NationalTeamFixture {
                     date,
                     opponent_country_id: home_country_id,
                     opponent_country_name: home_name.to_string(),

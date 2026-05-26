@@ -15,10 +15,11 @@ use log::info;
 use std::collections::HashMap;
 
 use super::lookups::{world_country_name, world_country_reputation};
-use super::squad::build_world_match_squad;
+use super::squad::build_world_match_squad_for_level;
 use super::stats::{
-    apply_world_elo, apply_world_international_stats, record_world_country_schedule,
+    apply_world_elo, apply_world_international_stats_for_level, record_world_country_schedule,
 };
+use crate::NationalTeamLevel;
 use crate::continent::Continent;
 use crate::continent::national::NationalCompetitionFixture;
 use crate::r#match::{MatchResult, MatchSquad};
@@ -123,8 +124,19 @@ fn build_squads(
         .iter()
         .enumerate()
         .filter_map(|(stamp_idx, stamp)| {
-            let home = build_world_match_squad(continents, stamp.fixture.home_country_id, date)?;
-            let away = build_world_match_squad(continents, stamp.fixture.away_country_id, date)?;
+            let level = stamp.fixture.level;
+            let home = build_world_match_squad_for_level(
+                continents,
+                stamp.fixture.home_country_id,
+                date,
+                level,
+            )?;
+            let away = build_world_match_squad_for_level(
+                continents,
+                stamp.fixture.away_country_id,
+                date,
+                level,
+            )?;
             Some((stamp_idx, home, away, stamp.fixture.phase.is_knockout()))
         })
         .collect()
@@ -158,9 +170,18 @@ fn apply_match_outcome(
     let away_score = score.away_team.get();
     let home_country_id = fixture.home_country_id;
     let away_country_id = fixture.away_country_id;
+    let level = fixture.level;
 
+    // U21 matches carry a distinct id prefix so the match store / detail
+    // page can tell them apart from senior internationals. The
+    // `league_slug` stays "international" (match routing keys off it).
+    let id_prefix = match level {
+        NationalTeamLevel::Senior => "int",
+        NationalTeamLevel::Under21 => "u21-int",
+    };
     let match_id = format!(
-        "int-{}-{}-{}",
+        "{}-{}-{}-{}",
+        id_prefix,
         date.format("%Y%m%d"),
         home_country_id,
         away_country_id
@@ -223,12 +244,13 @@ fn apply_match_outcome(
         .collect();
     let appearance_ids: std::collections::HashSet<u32> = raw.player_stats.keys().copied().collect();
 
-    apply_world_international_stats(
+    apply_world_international_stats_for_level(
         continents,
         home_country_id,
         away_country_id,
         &player_goals,
         &appearance_ids,
+        level,
     );
     apply_world_elo(
         continents,
@@ -252,6 +274,7 @@ fn apply_match_outcome(
         away_score,
         &comp_full_name,
         &match_id,
+        level,
     );
 
     info!(

@@ -6,7 +6,7 @@ mod staffs;
 
 use crate::DatabaseEntity;
 use crate::generators::PlayerGenerator;
-use crate::generators::convert::convert_national_competition;
+use crate::generators::convert::{convert_national_competition, uefa_u21_championship_config};
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime};
 use core::competitions::GlobalCompetitions;
 use core::context::NaiveTime;
@@ -38,12 +38,16 @@ impl DatabaseGenerator {
             NaiveTime::default(),
         );
 
-        // Convert all national competition entities to runtime configs
-        let all_configs: Vec<NationalCompetitionConfig> = data
+        // Convert all national competition entities to runtime configs.
+        // The compiled database predates the `team_level` field, so the
+        // bundled UEFA U21 Championship is appended here to give the U21
+        // layer a competition to contest until the database ships one.
+        let mut all_configs: Vec<NationalCompetitionConfig> = data
             .national_competitions
             .iter()
             .map(|e| convert_national_competition(e))
             .collect();
+        all_configs.push(uefa_u21_championship_config());
 
         // Separate global configs for GlobalCompetitions
         let global_configs: Vec<NationalCompetitionConfig> = all_configs

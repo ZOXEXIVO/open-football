@@ -111,6 +111,74 @@ impl NationalTeam {
             });
     }
 
+    /// Apply / release `PlayerStatusType::IntU21` across every club based
+    /// on each country's current U21 squad. Mirrors the senior pass but
+    /// toggles only the U21 status, so it never disturbs a senior `Int`
+    /// flag — important because senior and U21 windows overlap. Happiness
+    /// events are intentionally omitted for the first pass (the senior
+    /// pass owns the national-team morale events).
+    pub(crate) fn apply_u21_callup_statuses_across_world(
+        continents: &mut [Continent],
+        date: NaiveDate,
+    ) {
+        let mut called_up: HashSet<u32> = HashSet::new();
+        for continent in continents.iter() {
+            for country in continent.countries.iter() {
+                for sp in &country.u21_national_team.squad {
+                    called_up.insert(sp.player_id);
+                }
+            }
+        }
+
+        continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
+                for club in country.clubs.iter_mut() {
+                    for team in club.teams.iter_mut() {
+                        for player in team.players.iter_mut() {
+                            let is_called_up = called_up.contains(&player.id);
+                            let was_in = player.statuses.get().contains(&PlayerStatusType::IntU21);
+                            if is_called_up && !was_in {
+                                player.statuses.add(date, PlayerStatusType::IntU21);
+                            } else if !is_called_up && was_in {
+                                player.statuses.remove(PlayerStatusType::IntU21);
+                            }
+                        }
+                    }
+                }
+            });
+    }
+
+    /// World-wide release of `PlayerStatusType::IntU21` for U21-selected
+    /// players. Removes only the U21 status — a player who is also a
+    /// senior international keeps their `Int` flag untouched.
+    pub(crate) fn release_u21_callup_statuses_across_world(continents: &mut [Continent]) {
+        let mut released_ids: HashSet<u32> = HashSet::new();
+        for continent in continents.iter() {
+            for country in continent.countries.iter() {
+                for sp in &country.u21_national_team.squad {
+                    released_ids.insert(sp.player_id);
+                }
+            }
+        }
+
+        continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
+                for club in country.clubs.iter_mut() {
+                    for team in club.teams.iter_mut() {
+                        for player in team.players.iter_mut() {
+                            if released_ids.contains(&player.id) {
+                                player.statuses.remove(PlayerStatusType::IntU21);
+                            }
+                        }
+                    }
+                }
+            });
+    }
+
     /// World-wide variant of `release_callup_statuses_across_continent`.
     pub(crate) fn release_callup_statuses_across_world(continents: &mut [Continent]) {
         let mut released_ids: HashSet<u32> = HashSet::new();

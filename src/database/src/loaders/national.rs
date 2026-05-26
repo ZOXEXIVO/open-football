@@ -9,6 +9,10 @@ pub struct NationalCompetitionEntity {
     pub short_name: String,
     pub scope: String,
     pub continent_id: Option<u32>,
+    /// National-team level: `"senior"` (default) or `"u21"`. Absent /
+    /// null in older databases, where it falls back to senior.
+    #[serde(default)]
+    pub team_level: Option<String>,
     pub cycle_years: u32,
     pub cycle_offset: u32,
     pub qualifying: QualifyingEntity,

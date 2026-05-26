@@ -32,6 +32,10 @@ use log::debug;
 pub struct NationalTeam {
     pub country_id: u32,
     pub country_name: String,
+    /// Which level this team represents (Senior or Under21). A `Country`
+    /// owns one `NationalTeam` per level; the field lets shared squad /
+    /// match / stats helpers branch without the caller passing it in.
+    pub level: NationalTeamLevel,
     pub staff: Vec<NationalTeamStaffMember>,
     pub squad: Vec<NationalSquadPlayer>,
     pub generated_squad: Vec<Player>,
@@ -42,12 +46,25 @@ pub struct NationalTeam {
 }
 
 impl NationalTeam {
+    /// Build a senior national team (the historical default).
     pub fn new(country_id: u32, names: &PeopleNameGeneratorData) -> Self {
+        Self::new_with_level(country_id, names, NationalTeamLevel::Senior)
+    }
+
+    /// Build a national team at an explicit level. Senior callers keep
+    /// using [`NationalTeam::new`]; the U21 container is created via this
+    /// with `NationalTeamLevel::Under21`.
+    pub fn new_with_level(
+        country_id: u32,
+        names: &PeopleNameGeneratorData,
+        level: NationalTeamLevel,
+    ) -> Self {
         let staff = Self::generate_staff(country_id, names);
 
         NationalTeam {
             country_id,
             country_name: String::new(),
+            level,
             staff,
             squad: Vec::new(),
             generated_squad: Vec::new(),

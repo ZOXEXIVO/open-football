@@ -94,6 +94,12 @@ fn make_team(team_id: u32, club_id: u32, players: Vec<crate::Player>) -> crate::
 
 fn make_club(id: u32, players: Vec<crate::Player>) -> Club {
     let team = make_team(id * 10, id, players);
+    make_club_from_teams(id, vec![team])
+}
+
+/// Build a club from a pre-built set of teams (used to mix Main/youth
+/// team types in one club for U21 candidate-collection tests).
+fn make_club_from_teams(id: u32, teams: Vec<crate::Team>) -> Club {
     Club::new(
         id,
         format!("Club{}", id),
@@ -102,9 +108,69 @@ fn make_club(id: u32, players: Vec<crate::Player>) -> Club {
         ClubAcademy::new(3),
         ClubStatus::Professional,
         ClubColors::default(),
-        TeamCollection::new(vec![team]),
+        TeamCollection::new(teams),
         crate::ClubFacilities::default(),
     )
+}
+
+/// A team of a specific `TeamType` (the default `make_team` is always Main).
+fn make_team_typed(
+    team_id: u32,
+    club_id: u32,
+    players: Vec<crate::Player>,
+    team_type: TeamType,
+) -> crate::Team {
+    TeamBuilder::new()
+        .id(team_id)
+        .league_id(Some(1))
+        .club_id(club_id)
+        .name(format!("Team{}", team_id))
+        .slug(format!("team{}", team_id))
+        .team_type(team_type)
+        .players(PlayerCollection::new(players))
+        .staffs(StaffCollection::new(Vec::new()))
+        .reputation(TeamReputation::new(3000, 3000, 3000))
+        .training_schedule(make_training_schedule())
+        .build()
+        .unwrap()
+}
+
+/// A player with an explicit birth year and potential — for age-cap and
+/// prospect-preference assertions in the U21 tests.
+fn make_player_aged(
+    id: u32,
+    country_id: u32,
+    position: PlayerPositionType,
+    birth_year: i32,
+    potential: u8,
+) -> crate::Player {
+    let mut p = PlayerBuilder::new()
+        .id(id)
+        .full_name(FullName::new("Test".to_string(), format!("Player{}", id)))
+        .birth_date(d(birth_year, 5, 1))
+        .country_id(country_id)
+        .attributes(PersonAttributes::default())
+        .skills(PlayerSkills::default())
+        .positions(PlayerPositions {
+            positions: vec![PlayerPosition {
+                position,
+                level: 16,
+            }],
+        })
+        .player_attributes(PlayerAttributes {
+            current_ability: 120,
+            potential_ability: potential,
+            condition: 10000,
+            world_reputation: 2000,
+            home_reputation: 3000,
+            current_reputation: 3000,
+            ..Default::default()
+        })
+        .build()
+        .unwrap();
+    p.statistics.played = 10;
+    p.statistics.average_rating = 7.0;
+    p
 }
 
 fn make_country(
@@ -553,4 +619,171 @@ fn world_country_reputation_lookup_works_across_continents() {
     assert_eq!(world_country_reputation(&continents, 1), 8000);
     assert_eq!(world_country_reputation(&continents, 2), 500);
     assert_eq!(world_country_reputation(&continents, 999), 0);
+}
+
+// ============================================================
+// U21 national-team layer
+// ============================================================
+
+/// U21 candidate collection reaches into youth team types and applies
+/// the 21-and-under age cap: a 20yo from the Main team and an 18yo from
+/// the U19 team are included; a 28yo from the Main team is excluded.
+#[test]
+fn u21_candidate_collection_includes_youth_teams_and_excludes_overage() {
+    // Ages on 2026-09-06: 2006 -> 20, 2008 -> 18, 1998 -> 28.
+    let young_main = make_player_aged(301, 1, PlayerPositionType::Striker, 2006, 160);
+    let overage_main = make_player_aged(302, 1, PlayerPositionType::DefenderCenter, 1998, 150);
+    let young_u19 = make_player_aged(303, 1, PlayerPositionType::MidfielderCenter, 2008, 155);
+
+    let main_team = make_team_typed(10, 1, vec![young_main, overage_main], TeamType::Main);
+    let u19_team = make_team_typed(11, 1, vec![young_u19], TeamType::U19);
+    let club = make_club_from_teams(1, vec![main_team, u19_team]);
+    let country = make_country(1, 1, "Brazil", vec![club], 8000);
+    let continents = vec![make_continent(1, vec![country])];
+
+    let policy = crate::NationalSelectionPolicy::under21();
+    let map = crate::NationalTeam::collect_all_candidates_by_country_with_policy(
+        continents.iter().flat_map(|c| c.countries.iter()),
+        d(2026, 9, 6),
+        &policy,
+    );
+    let ids: Vec<u32> = map
+        .get(&1)
+        .map(|v| v.iter().map(|c| c.player_id).collect())
+        .unwrap_or_default();
+
+    assert!(
+        ids.contains(&301),
+        "U21 pool must include the 20yo from the main team"
+    );
+    assert!(
+        ids.contains(&303),
+        "U21 pool must include the 18yo from the U19 team"
+    );
+    assert!(
+        !ids.contains(&302),
+        "U21 pool must exclude the 28yo (over the age cap)"
+    );
+}
+
+/// A player already taken by the senior squad must not be selected for
+/// the U21 squad in the same window (verified through the U21 emergency
+/// call-up path, which applies the senior-exclusion rule).
+#[test]
+fn u21_squad_excludes_senior_selected_player() {
+    let young = make_player_aged(301, 1, PlayerPositionType::Striker, 2006, 170);
+    let club = make_club(1, vec![young]); // Main team, id 10
+    let country = make_country(1, 1, "Brazil", vec![club], 8000);
+    let mut continents = vec![make_continent(1, vec![country])];
+
+    if let Some(brazil) = country_lookup_mut(&mut continents, 1) {
+        brazil.national_team.squad.push(NationalSquadPlayer {
+            player_id: 301,
+            club_id: 1,
+            team_id: 10,
+            primary_reason: crate::CallUpReason::KeyPlayer,
+            secondary_reasons: Vec::new(),
+        });
+    }
+
+    let _ = build_world_match_squad_for_level(
+        &mut continents,
+        1,
+        d(2026, 9, 6),
+        crate::NationalTeamLevel::Under21,
+    );
+
+    let brazil = country_lookup(&continents, 1).unwrap();
+    assert!(
+        !brazil
+            .u21_national_team
+            .squad
+            .iter()
+            .any(|p| p.player_id == 301),
+        "senior-selected player must not appear in the U21 squad"
+    );
+}
+
+/// A U21 international match bumps only the U21 caps/goals ledger — the
+/// senior caps/goals must stay untouched.
+#[test]
+fn u21_match_stats_increment_only_u21_caps() {
+    let player = make_player_aged(301, 1, PlayerPositionType::Striker, 2006, 160);
+    let club = make_club(1, vec![player]);
+    let country = make_country(1, 1, "Brazil", vec![club], 8000);
+    let mut continents = vec![make_continent(1, vec![country])];
+
+    let mut goals = HashMap::new();
+    goals.insert(301u32, 2u16);
+    let mut appearances = std::collections::HashSet::new();
+    appearances.insert(301u32);
+
+    apply_world_international_stats_for_level(
+        &mut continents,
+        1,
+        99,
+        &goals,
+        &appearances,
+        crate::NationalTeamLevel::Under21,
+    );
+
+    let attrs = continents[0].countries[0].clubs[0].teams.teams[0]
+        .players
+        .players
+        .iter()
+        .find(|p| p.id == 301)
+        .map(|p| p.player_attributes)
+        .unwrap();
+
+    assert_eq!(attrs.under_21_international_apps, 1);
+    assert_eq!(attrs.under_21_international_goals, 2);
+    assert_eq!(
+        attrs.international_apps, 0,
+        "U21 match must not bump senior caps"
+    );
+    assert_eq!(
+        attrs.international_goals, 0,
+        "U21 match must not bump senior goals"
+    );
+}
+
+/// Releasing U21 statuses clears `IntU21` for U21-selected players but
+/// leaves a co-existing senior `Int` flag intact.
+#[test]
+fn u21_release_clears_only_u21_status() {
+    let mut player = make_player_aged(301, 1, PlayerPositionType::Striker, 2006, 160);
+    player.statuses.add(d(2026, 9, 6), PlayerStatusType::Int);
+    player.statuses.add(d(2026, 9, 6), PlayerStatusType::IntU21);
+    let club = make_club(1, vec![player]);
+    let country = make_country(1, 1, "Brazil", vec![club], 8000);
+    let mut continents = vec![make_continent(1, vec![country])];
+
+    if let Some(brazil) = country_lookup_mut(&mut continents, 1) {
+        brazil.u21_national_team.squad.push(NationalSquadPlayer {
+            player_id: 301,
+            club_id: 1,
+            team_id: 10,
+            primary_reason: crate::CallUpReason::U21DevelopmentPick,
+            secondary_reasons: Vec::new(),
+        });
+    }
+
+    crate::NationalTeam::release_u21_callup_statuses_across_world(&mut continents);
+
+    let statuses = continents[0].countries[0].clubs[0].teams.teams[0]
+        .players
+        .players
+        .iter()
+        .find(|p| p.id == 301)
+        .map(|p| p.statuses.get())
+        .unwrap();
+
+    assert!(
+        statuses.contains(&PlayerStatusType::Int),
+        "senior Int must remain after a U21 release"
+    );
+    assert!(
+        !statuses.contains(&PlayerStatusType::IntU21),
+        "U21 status must be cleared by the U21 release"
+    );
 }

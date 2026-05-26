@@ -200,7 +200,12 @@ impl SimulatorData {
                         }
                     }
                 }
-                for player in &mut country.national_team.generated_squad {
+                for player in country
+                    .national_team
+                    .generated_squad
+                    .iter_mut()
+                    .chain(country.u21_national_team.generated_squad.iter_mut())
+                {
                     if player.nationality_continent_id == 0 {
                         if let Some(cid) = lookup.get(&player.country_id) {
                             player.nationality_continent_id = *cid;
@@ -262,7 +267,12 @@ impl SimulatorData {
                         max_id = player.id;
                     }
                 }
-                for player in &country.national_team.generated_squad {
+                for player in country
+                    .national_team
+                    .generated_squad
+                    .iter()
+                    .chain(country.u21_national_team.generated_squad.iter())
+                {
                     if player.id > max_id {
                         max_id = player.id;
                     }
@@ -599,12 +609,6 @@ impl SimulatorData {
             return;
         }
 
-        // Build a global candidate pool from every club in every country.
-        let mut candidates_by_country = crate::NationalTeam::collect_all_candidates_by_country(
-            self.continents.iter().flat_map(|c| c.countries.iter()),
-            date,
-        );
-
         // Country IDs across the whole world — used to draw friendly
         // opponents from any nation, not just same-continent.
         let country_ids: Vec<(u32, String)> = self
@@ -614,11 +618,15 @@ impl SimulatorData {
             .map(|c| (c.id, c.name.clone()))
             .collect();
 
-        // Pre-distribute candidates per country so each rayon worker owns
-        // its own slice — no shared HashMap, no lock. The serial drain
-        // here is O(countries) and trivial next to the parallel
-        // `call_up_squad` body.
-        let work_items: Vec<_> = self
+        // --- Senior selection -------------------------------------------------
+        // Build a global senior candidate pool (main teams only) and run
+        // the per-country call-up in parallel. Pre-distribute candidates
+        // so each rayon worker owns its own slice — no shared HashMap.
+        let mut candidates_by_country = crate::NationalTeam::collect_all_candidates_by_country(
+            self.continents.iter().flat_map(|c| c.countries.iter()),
+            date,
+        );
+        let senior_work: Vec<_> = self
             .continents
             .iter_mut()
             .flat_map(|c| c.countries.iter_mut())
@@ -629,8 +637,7 @@ impl SimulatorData {
                 (country, candidates)
             })
             .collect();
-
-        work_items
+        senior_work
             .into_par_iter()
             .for_each(|(country, candidates)| {
                 country.national_team.country_name = country.name.clone();
@@ -641,8 +648,56 @@ impl SimulatorData {
                     .call_up_squad(candidates, date, cid, &country_ids);
             });
 
-        // Apply Int status across every club in every continent.
+        // --- U21 selection ----------------------------------------------------
+        // Collect every player already taken by a senior squad in this
+        // window — they're excluded from the U21 pool so the youth side
+        // is a genuinely separate set of players, not a senior shadow.
+        let senior_selected: std::collections::HashSet<u32> = self
+            .continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .flat_map(|c| c.national_team.squad.iter().map(|sp| sp.player_id))
+            .collect();
+
+        let u21_policy = crate::NationalSelectionPolicy::under21();
+        let mut u21_candidates_by_country =
+            crate::NationalTeam::collect_all_candidates_by_country_with_policy(
+                self.continents.iter().flat_map(|c| c.countries.iter()),
+                date,
+                &u21_policy,
+            );
+        for candidates in u21_candidates_by_country.values_mut() {
+            candidates.retain(|c| !senior_selected.contains(&c.player_id));
+        }
+        let u21_work: Vec<_> = self
+            .continents
+            .iter_mut()
+            .flat_map(|c| c.countries.iter_mut())
+            .map(|country| {
+                let candidates = u21_candidates_by_country
+                    .remove(&country.id)
+                    .unwrap_or_default();
+                (country, candidates)
+            })
+            .collect();
+        u21_work.into_par_iter().for_each(|(country, candidates)| {
+            country.u21_national_team.country_name = country.name.clone();
+            country.u21_national_team.reputation = country.reputation;
+            let cid = country.id;
+            country.u21_national_team.call_up_squad_with_policy(
+                candidates,
+                date,
+                cid,
+                &country_ids,
+                &u21_policy,
+            );
+        });
+
+        // Apply Int / IntU21 statuses across every club in every continent.
+        // Senior first, then U21 — the U21 pass only toggles IntU21, so
+        // the two never clash on the same player (the pools are disjoint).
         crate::NationalTeam::apply_callup_statuses_across_world(&mut self.continents, date);
+        crate::NationalTeam::apply_u21_callup_statuses_across_world(&mut self.continents, date);
     }
 
     /// World-level Int release. Runs after all matches (continent
@@ -658,5 +713,6 @@ impl SimulatorData {
             return;
         }
         crate::NationalTeam::release_callup_statuses_across_world(&mut self.continents);
+        crate::NationalTeam::release_u21_callup_statuses_across_world(&mut self.continents);
     }
 }

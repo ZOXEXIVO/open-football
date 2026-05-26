@@ -15,6 +15,7 @@ use super::lookups::world_country_name;
 use super::stats::{
     apply_world_elo, apply_world_international_stats, record_world_country_schedule,
 };
+use crate::NationalTeamLevel;
 use crate::competitions::global::GlobalCompetitionFixture;
 use crate::continent::Continent;
 use crate::r#match::{MatchResult, MatchResultRaw};
@@ -82,6 +83,7 @@ pub fn apply_global_tournament_result(
         away_score,
         competition_full_name,
         &match_id,
+        NationalTeamLevel::Senior,
     );
 
     info!(

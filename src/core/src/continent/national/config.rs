@@ -1,3 +1,4 @@
+use crate::NationalTeamLevel;
 use chrono::NaiveDate;
 
 /// Scope of a national team competition
@@ -15,6 +16,9 @@ pub struct NationalCompetitionConfig {
     pub short_name: String,
     pub scope: CompetitionScope,
     pub continent_id: Option<u32>,
+    /// Which national-team level contests this competition. Defaults to
+    /// `Senior` for backward compatibility when the database omits it.
+    pub team_level: NationalTeamLevel,
     pub cycle_years: u32,
     pub cycle_offset: u32,
     pub qualifying: QualifyingConfig,

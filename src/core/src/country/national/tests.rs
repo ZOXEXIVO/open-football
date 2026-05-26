@@ -466,6 +466,7 @@ fn synthetic_fallback_still_works_for_weak_countries() {
     let mut nt = NationalTeam {
         country_id: 1,
         country_name: "Mini".to_string(),
+        level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
         generated_squad: Vec::new(),
@@ -485,6 +486,7 @@ fn no_pending_friendly_fixtures_are_created_by_call_up_squad() {
     let mut nt = NationalTeam {
         country_id: 1,
         country_name: "Test".to_string(),
+        level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
         generated_squad: Vec::new(),
@@ -694,6 +696,7 @@ fn call_up_squad_clears_generated_squad_on_subsequent_call() {
     let mut nt = NationalTeam {
         country_id: 1,
         country_name: "TestLand".to_string(),
+        level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
         generated_squad: Vec::new(),
@@ -726,6 +729,7 @@ fn call_up_squad_preserves_completed_fixtures_when_reselecting() {
     let mut nt = NationalTeam {
         country_id: 1,
         country_name: "TestLand".to_string(),
+        level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
         generated_squad: Vec::new(),
@@ -773,6 +777,7 @@ fn weak_country_still_gets_squad_but_no_friendlies() {
     let mut nt = NationalTeam {
         country_id: 1,
         country_name: "Tiny".to_string(),
+        level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
         generated_squad: Vec::new(),
@@ -842,6 +847,7 @@ fn stale_pending_friendlies_are_dropped_on_recall() {
     let mut nt = NationalTeam {
         country_id: 1,
         country_name: "TestLand".to_string(),
+        level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
         generated_squad: Vec::new(),
@@ -875,6 +881,7 @@ fn squad_picks_returns_real_then_synthetic_with_synthetic_depth_reason() {
     let mut nt = NationalTeam {
         country_id: 1,
         country_name: "TestLand".to_string(),
+        level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: vec![NationalSquadPlayer {
             player_id: 42,
@@ -916,4 +923,93 @@ fn squad_picks_returns_real_then_synthetic_with_synthetic_depth_reason() {
         }
         _ => panic!("second pick should be Synthetic"),
     }
+}
+
+// ============================================================
+// U21 selection
+// ============================================================
+
+fn u21_ctx() -> CallUpContext {
+    CallUpContext::new_with_level(
+        comp_date(),
+        1,
+        CallUpWindowType::CompetitiveWindow,
+        NationalTeamLevel::Under21,
+        23,
+    )
+}
+
+/// U21 blend weights potential and the age curve heavily: a high-ceiling
+/// 19-year-old should rank above an average 21-year-old even when the
+/// 21-year-old has slightly higher current ability.
+#[test]
+fn u21_scoring_prefers_high_potential_teenager_over_average_21yo() {
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let ctx = u21_ctx();
+
+    let mut prospect = make_candidate(1, 120, PlayerFieldPositionGroup::Midfielder);
+    prospect.age = 19;
+    prospect.potential_ability = 170;
+    prospect.international_apps = 0;
+
+    let mut average = make_candidate(2, 132, PlayerFieldPositionGroup::Midfielder);
+    average.age = 21;
+    average.potential_ability = 140;
+    average.international_apps = 0;
+
+    let s_prospect = NationalTeam::score_candidate(&prospect, &tactics, &ctx, &HashSet::new());
+    let s_average = NationalTeam::score_candidate(&average, &tactics, &ctx, &HashSet::new());
+    assert!(
+        s_prospect > s_average,
+        "U21 blend should rank the high-ceiling 19yo above the average 21yo (prospect={s_prospect}, average={s_average})"
+    );
+}
+
+/// Senior caps are heavily penalised in the U21 blend so genuine youth
+/// prospects are preferred over players already established at senior level.
+#[test]
+fn u21_scoring_penalises_senior_capped_players() {
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let ctx = u21_ctx();
+
+    let mut uncapped = make_candidate(1, 130, PlayerFieldPositionGroup::Midfielder);
+    uncapped.age = 20;
+    uncapped.international_apps = 0;
+
+    let mut senior_regular = make_candidate(2, 130, PlayerFieldPositionGroup::Midfielder);
+    senior_regular.age = 20;
+    senior_regular.international_apps = 15; // -45 penalty
+
+    let s_uncapped = NationalTeam::score_candidate(&uncapped, &tactics, &ctx, &HashSet::new());
+    let s_senior = NationalTeam::score_candidate(&senior_regular, &tactics, &ctx, &HashSet::new());
+    assert!(
+        s_uncapped > s_senior,
+        "a true U21 prospect should outscore an equally-able senior regular"
+    );
+}
+
+/// A high-ceiling youngster reads as `U21EliteProspect` under the U21
+/// reason-derivation path.
+#[test]
+fn u21_reason_is_elite_prospect_for_high_ceiling() {
+    let ctx = u21_ctx();
+    let mut c = make_candidate(1, 120, PlayerFieldPositionGroup::Forward);
+    c.age = 18;
+    c.potential_ability = 165;
+    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
+    assert_eq!(primary, CallUpReason::U21EliteProspect);
+}
+
+/// Senior scoring is unchanged: a senior context must not route through
+/// the U21 blend (regression guard for the level branch in `score_candidate`).
+#[test]
+fn senior_scoring_unaffected_by_u21_branch() {
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let senior_ctx = comp_ctx();
+    let c = make_candidate(1, 150, PlayerFieldPositionGroup::Midfielder);
+    let senior_score = NationalTeam::score_candidate(&c, &tactics, &senior_ctx, &HashSet::new());
+    let u21_score = NationalTeam::score_candidate(&c, &tactics, &u21_ctx(), &HashSet::new());
+    // The two blends are different functions; they should not coincide for
+    // a mid-tier 27-year-old (sanity that the branch actually diverges).
+    assert!((senior_score - u21_score).abs() > f32::EPSILON);
 }

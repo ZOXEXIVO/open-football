@@ -5,7 +5,7 @@
 //! conceding 17-0 with an empty net.
 
 use super::NationalTeam;
-use super::types::{SQUAD_SIZE, SYNTHETIC_POSITIONS};
+use super::types::{NationalSelectionPolicy, NationalTeamLevel, SQUAD_SIZE, SYNTHETIC_POSITIONS};
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::rapport::PlayerRapport;
@@ -22,17 +22,49 @@ use chrono::{Datelike, NaiveDate};
 
 impl NationalTeam {
     /// Generate synthetic players for countries without enough club players.
-    /// Ability is derived from country reputation.
+    /// Ability is derived from country reputation. Senior-level default;
+    /// U21 callers go through [`generate_synthetic_squad_with_policy`].
     pub(super) fn generate_synthetic_squad(&mut self, date: NaiveDate) {
+        self.generate_synthetic_squad_with_policy(date, &NationalSelectionPolicy::senior());
+    }
+
+    /// Policy-driven synthetic-squad generation. Fills up to the policy's
+    /// target size; synthetic player ages come from the policy's range
+    /// (22-34 senior, 17-21 U21) and the id band is offset per level so a
+    /// country's senior and U21 stand-ins never collide.
+    pub(super) fn generate_synthetic_squad_with_policy(
+        &mut self,
+        date: NaiveDate,
+        policy: &NationalSelectionPolicy,
+    ) {
         self.generated_squad.clear();
 
-        let slots_needed = SQUAD_SIZE.saturating_sub(self.squad.len());
+        let target = match policy.level {
+            NationalTeamLevel::Senior => SQUAD_SIZE,
+            NationalTeamLevel::Under21 => policy.target_squad_size,
+        };
+        let slots_needed = target.saturating_sub(self.squad.len());
         if slots_needed == 0 {
             return;
         }
 
-        // Derive ability from reputation (0-1000 reputation -> ~40-180 ability)
-        let base_ability = ((self.reputation as f32 / 1000.0) * 140.0 + 40.0) as u8;
+        // Derive ability from reputation (0-1000 reputation -> ~40-180 ability).
+        // U21 stand-ins are pitched a touch below the senior baseline.
+        let base_ability = {
+            let senior = (self.reputation as f32 / 1000.0) * 140.0 + 40.0;
+            match policy.level {
+                NationalTeamLevel::Senior => senior as u8,
+                NationalTeamLevel::Under21 => (senior * 0.85).clamp(30.0, 180.0) as u8,
+            }
+        };
+
+        let (age_min, age_max) = policy.synthetic_age_range();
+        // Offset U21 ids into a separate band so they can't collide with
+        // the same country's senior synthetic players.
+        let id_base = match policy.level {
+            NationalTeamLevel::Senior => 900_000,
+            NationalTeamLevel::Under21 => 1_000_000,
+        };
 
         let positions_to_fill = &SYNTHETIC_POSITIONS[..slots_needed.min(SYNTHETIC_POSITIONS.len())];
 
@@ -41,18 +73,22 @@ impl NationalTeam {
             let ability_variation = IntegerUtils::random(-10, 10) as i16;
             let ability = (base_ability as i16 + ability_variation).clamp(30, 200) as u8;
 
-            let player = Self::generate_synthetic_player(
+            let player = Self::generate_synthetic_player_aged(
                 self.country_id,
                 date,
                 position,
                 ability,
                 idx as u32,
+                age_min,
+                age_max,
+                id_base,
             );
             self.generated_squad.push(player);
         }
     }
 
-    /// Generate a single synthetic player with the given attributes
+    /// Generate a single synthetic player with senior defaults (age 22-34,
+    /// id band 900_000). Used by the synthetic friendly-opponent builder.
     pub(super) fn generate_synthetic_player(
         country_id: u32,
         now: NaiveDate,
@@ -60,13 +96,41 @@ impl NationalTeam {
         ability: u8,
         seed_offset: u32,
     ) -> Player {
-        let age = IntegerUtils::random(22, 34);
+        Self::generate_synthetic_player_aged(
+            country_id,
+            now,
+            position,
+            ability,
+            seed_offset,
+            22,
+            34,
+            900_000,
+        )
+    }
+
+    /// Generate a single synthetic player with an explicit age range and
+    /// id band, so U21 stand-ins are both age-appropriate and id-distinct
+    /// from senior ones.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn generate_synthetic_player_aged(
+        country_id: u32,
+        now: NaiveDate,
+        position: PlayerPositionType,
+        ability: u8,
+        seed_offset: u32,
+        age_min: i32,
+        age_max: i32,
+        id_base: u32,
+    ) -> Player {
+        // `IntegerUtils::random` is exclusive of `max`, matching the
+        // original senior call of `random(22, 34)` (ages 22-33).
+        let age = IntegerUtils::random(age_min, age_max);
         let year = now.year() - age;
         let month = ((country_id + seed_offset) % 12 + 1) as u32;
         let day = ((country_id + seed_offset * 7) % 28 + 1) as u32;
 
         // Use deterministic ID based on country + position + offset
-        let id = 900_000 + country_id * 100 + seed_offset;
+        let id = id_base + country_id * 100 + seed_offset;
 
         // Scale skills based on ability (ability 0-200 -> skill factor 0.25-1.0)
         let skill_factor = (ability as f32 / 200.0).clamp(0.25, 1.0);

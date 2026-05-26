@@ -28,11 +28,12 @@
 use super::NationalTeam;
 use super::types::{
     BREAK_WINDOWS, CallUpCandidate, CallUpContext, CallUpReason, CallUpWindowType,
-    MIN_REAL_PLAYERS, NationalCoachProfile, NationalSquadPlayer, TOURNAMENT_SQUAD_SIZE,
+    NationalCoachProfile, NationalSelectionPolicy, NationalSquadPlayer, NationalTeamLevel,
+    TOURNAMENT_SQUAD_SIZE,
 };
 use crate::{
     Country, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatistics,
-    PlayerStatusType, Tactics, TeamType,
+    PlayerStatusType, Tactics,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, warn};
@@ -114,12 +115,33 @@ impl NationalTeam {
     where
         I: IntoIterator<Item = &'a Country>,
     {
+        Self::collect_all_candidates_by_country_with_policy(
+            countries,
+            date,
+            &NationalSelectionPolicy::senior(),
+        )
+    }
+
+    /// Policy-driven candidate collection. The senior path
+    /// ([`collect_all_candidates_by_country`]) delegates here with the
+    /// senior policy, preserving the original behaviour exactly; the U21
+    /// path passes [`NationalSelectionPolicy::under21`] to reach into
+    /// reserve / youth team types and apply the 21-and-under age cap.
+    pub(crate) fn collect_all_candidates_by_country_with_policy<'a, I>(
+        countries: I,
+        date: NaiveDate,
+        policy: &NationalSelectionPolicy,
+    ) -> HashMap<u32, Vec<CallUpCandidate>>
+    where
+        I: IntoIterator<Item = &'a Country>,
+    {
         let mut map: HashMap<u32, Vec<CallUpCandidate>> = HashMap::new();
+        let min_condition = policy.min_condition();
 
         for country in countries {
             for club in &country.clubs {
                 for team in &club.teams.teams {
-                    if team.team_type != TeamType::Main {
+                    if !policy.include_team_types.contains(&team.team_type) {
                         continue;
                     }
 
@@ -140,9 +162,18 @@ impl NationalTeam {
                         if player.player_attributes.is_injured
                             || player.player_attributes.is_banned
                             || player.statuses.get().contains(&PlayerStatusType::Loa)
-                            || player.player_attributes.condition < 5000
+                            || player.player_attributes.condition < min_condition
                         {
                             continue;
+                        }
+
+                        // Age cap (U21: 21-and-under). `age` uses the same
+                        // year-difference convention as `build_candidate`.
+                        if let Some(max_age) = policy.max_age {
+                            let age = date.year() - player.birth_date.year();
+                            if age > max_age {
+                                continue;
+                            }
                         }
 
                         // Eligibility check is its own helper so a future
@@ -152,14 +183,29 @@ impl NationalTeam {
                             continue;
                         }
 
-                        if let Some(candidate) = Self::build_candidate(
-                            player,
-                            club.id,
-                            team.id,
-                            club_reputation,
-                            league_reputation,
-                            date,
-                        ) {
+                        // Senior uses the original `build_candidate`;
+                        // U21 the policy-aware variant with the looser
+                        // youth gate.
+                        let candidate = match policy.level {
+                            NationalTeamLevel::Senior => Self::build_candidate(
+                                player,
+                                club.id,
+                                team.id,
+                                club_reputation,
+                                league_reputation,
+                                date,
+                            ),
+                            NationalTeamLevel::Under21 => Self::build_candidate_with_policy(
+                                player,
+                                club.id,
+                                team.id,
+                                club_reputation,
+                                league_reputation,
+                                date,
+                                policy,
+                            ),
+                        };
+                        if let Some(candidate) = candidate {
                             map.entry(player.country_id).or_default().push(candidate);
                         }
                     }
@@ -187,6 +233,30 @@ impl NationalTeam {
         league_reputation: u16,
         date: NaiveDate,
     ) -> Option<CallUpCandidate> {
+        Self::build_candidate_with_policy(
+            player,
+            club_id,
+            team_id,
+            club_reputation,
+            league_reputation,
+            date,
+            &NationalSelectionPolicy::senior(),
+        )
+    }
+
+    /// Policy-aware candidate builder. The senior gate is unchanged; the
+    /// U21 gate is deliberately looser — youth-team prospects naturally
+    /// have thin game logs, so any 21-and-under player with a credible
+    /// potential ceiling is admitted even with only a handful of minutes.
+    pub(super) fn build_candidate_with_policy(
+        player: &Player,
+        club_id: u32,
+        team_id: u32,
+        club_reputation: u16,
+        league_reputation: u16,
+        date: NaiveDate,
+        policy: &NationalSelectionPolicy,
+    ) -> Option<CallUpCandidate> {
         let ability = player.player_attributes.current_ability;
         let potential = player.player_attributes.potential_ability;
         let age = date.year() - player.birth_date.year();
@@ -207,13 +277,24 @@ impl NationalTeam {
         let proven_international = international_caps >= 5;
         let has_track_record = veteran_history || proven_international;
 
-        if !(active_now || veteran_history || proven_international || promising_youth) {
+        // U21 prospects bypass the minutes-based gate: a 17-year-old with
+        // a high ceiling but barely any senior minutes is exactly who the
+        // youth setup exists to blood.
+        let u21_prospect = policy.level.is_under21() && potential >= 70;
+
+        if !(active_now
+            || veteran_history
+            || proven_international
+            || promising_youth
+            || u21_prospect)
+        {
             return None;
         }
 
         // Ability gate: weak players can sneak in if they're either a
-        // promising youth, a recent regular, or already an international.
-        if ability < 40 && !promising_youth && !has_track_record {
+        // promising youth, a recent regular, an already-capped
+        // international, or (at U21) a credible prospect.
+        if ability < 40 && !promising_youth && !has_track_record && !u21_prospect {
             return None;
         }
 
@@ -422,6 +503,27 @@ impl NationalTeam {
         country_id: u32,
         country_ids: &[(u32, String)],
     ) {
+        self.call_up_squad_with_policy(
+            candidates,
+            date,
+            country_id,
+            country_ids,
+            &NationalSelectionPolicy::senior(),
+        );
+    }
+
+    /// Policy-driven squad call-up. The senior path delegates here with
+    /// the senior policy (squad size still window-derived: 23 or 26); the
+    /// U21 path passes [`NationalSelectionPolicy::under21`] for a fixed
+    /// 23-man youth squad scored with the U21 blend.
+    pub(crate) fn call_up_squad_with_policy(
+        &mut self,
+        candidates: Vec<CallUpCandidate>,
+        date: NaiveDate,
+        country_id: u32,
+        country_ids: &[(u32, String)],
+        policy: &NationalSelectionPolicy,
+    ) {
         // Capture incumbents BEFORE we clear — continuity scoring needs
         // to know who held a place in the prior cycle.
         let incumbents: HashSet<u32> = self.squad.iter().map(|sp| sp.player_id).collect();
@@ -430,7 +532,19 @@ impl NationalTeam {
         self.generated_squad.clear();
 
         let window_type = Self::window_for_date(date);
-        let ctx = CallUpContext::new(date, country_id, window_type);
+        // Senior keeps the window-derived squad size (26 at finals, 23
+        // otherwise) via the original `CallUpContext::new`; U21 uses the
+        // policy's fixed target regardless of window.
+        let ctx = match policy.level {
+            NationalTeamLevel::Senior => CallUpContext::new(date, country_id, window_type),
+            NationalTeamLevel::Under21 => CallUpContext::new_with_level(
+                date,
+                country_id,
+                window_type,
+                policy.level,
+                policy.target_squad_size,
+            ),
+        };
 
         let selected = Self::select_balanced_squad(&candidates, &self.tactics, &ctx, &incumbents);
 
@@ -446,12 +560,19 @@ impl NationalTeam {
         }
 
         let real_count = self.squad.len();
-        if real_count < MIN_REAL_PLAYERS {
+        if real_count < policy.min_real_players {
             warn!(
-                "National team {} ({}) generated synthetic squad: real_selected={}, min_required={}",
-                self.country_name, country_id, real_count, MIN_REAL_PLAYERS
+                "National team {} ({}, {:?}) generated synthetic squad: real_selected={}, min_required={}",
+                self.country_name, country_id, policy.level, real_count, policy.min_real_players
             );
-            self.generate_synthetic_squad(date);
+            // Senior uses the default synthetic generator; U21 passes the
+            // policy so stand-ins are age-appropriate (17-21).
+            match policy.level {
+                NationalTeamLevel::Senior => self.generate_synthetic_squad(date),
+                NationalTeamLevel::Under21 => {
+                    self.generate_synthetic_squad_with_policy(date, policy)
+                }
+            }
         }
 
         // Schedule retention rules:
@@ -813,6 +934,71 @@ impl NationalTeam {
         bonus
     }
 
+    /// U21 ideal-age curve (0..100). Peaks across the 18-19 development
+    /// sweet spot and tapers towards the 21 cut-off — a 16/17-year-old
+    /// is a longer-term project, a 21-year-old is about to age out.
+    fn u21_age_curve(age: i32) -> f32 {
+        match age {
+            ..=17 => 75.0,
+            18..=19 => 100.0,
+            20 => 95.0,
+            21 => 85.0,
+            // Over-age players shouldn't normally reach here (the policy
+            // caps the pool at 21) but score them low if they do.
+            _ => 40.0,
+        }
+    }
+
+    /// Senior-caps penalty applied to U21 candidates. True prospects are
+    /// preferred over players already established in the senior side: a
+    /// handful of senior caps is a moderate ding, double-digit caps make
+    /// the player almost ineligible on merit.
+    fn u21_senior_caps_penalty(international_apps: u16) -> f32 {
+        match international_apps {
+            0 => 0.0,
+            1..=2 => 8.0,
+            3..=9 => 20.0,
+            _ => 45.0,
+        }
+    }
+
+    /// U21 scoring blend. Weighs potential above current ability, leans
+    /// on the age curve, rewards a wide potential-current gap (raw upside
+    /// matters more than at senior level), and penalises senior caps so
+    /// genuine youth prospects rise to the top.
+    fn score_candidate_u21(c: &CallUpCandidate, tactics: &Tactics) -> f32 {
+        let ability = Self::ability_score(c);
+        let potential = Self::potential_score(c);
+        let form = Self::form_score(c);
+        let role_fit = Self::role_fit_score(c, tactics);
+        let club_league = {
+            let club = (c.club_reputation as f32 / 10_000.0 * 100.0).clamp(0.0, 100.0);
+            let league = Self::league_score(c);
+            (club + league) / 2.0
+        };
+        let age_bonus = Self::u21_age_curve(c.age);
+
+        let mut score = ability * 0.25
+            + potential * 0.35
+            + form * 0.15
+            + role_fit * 0.10
+            + club_league * 0.08
+            + age_bonus * 0.07;
+
+        // Prefer high ceilings: an explicit boost for elite potential
+        // plus a gap term (potential − current) that carries more weight
+        // than it would in the senior model.
+        if c.potential_ability >= 150 {
+            score += 8.0;
+        }
+        let gap = (c.potential_ability as i16 - c.current_ability as i16).max(0) as f32;
+        score += gap * 0.10;
+
+        score -= Self::u21_senior_caps_penalty(c.international_apps);
+
+        score
+    }
+
     /// Main scoring entry point — composes the per-axis component
     /// scores into a single number per candidate, with mode-specific
     /// weights and a coach bias term.
@@ -822,6 +1008,12 @@ impl NationalTeam {
         ctx: &CallUpContext,
         incumbents: &HashSet<u32>,
     ) -> f32 {
+        // U21 uses a dedicated youth/potential blend rather than the
+        // senior axes — see `score_candidate_u21`.
+        if ctx.level == NationalTeamLevel::Under21 {
+            return Self::score_candidate_u21(c, tactics);
+        }
+
         let ability = Self::ability_score(c);
         let league = Self::league_score(c);
         let tactical = Self::tactical_score(c, tactics);
@@ -1190,6 +1382,51 @@ impl NationalTeam {
         }
     }
 
+    /// U21 reason derivation. Selection-driven reasons (position need /
+    /// role coverage) win; otherwise an elite ceiling reads as
+    /// `U21EliteProspect`, with form / tactical-fit / regular-starter as
+    /// secondaries, falling back to the generic `U21DevelopmentPick`.
+    fn derive_reasons_u21(
+        c: &CallUpCandidate,
+        position_need: bool,
+        role_coverage: bool,
+    ) -> (CallUpReason, Vec<CallUpReason>) {
+        let mut applicable: Vec<CallUpReason> = Vec::new();
+
+        if c.potential_ability >= 150 {
+            applicable.push(CallUpReason::U21EliteProspect);
+        }
+        if c.average_rating >= 7.2 && c.played >= 5 {
+            applicable.push(CallUpReason::CurrentForm);
+        }
+        let best_position_level = c
+            .position_levels
+            .iter()
+            .map(|(_, level)| *level)
+            .max()
+            .unwrap_or(0);
+        if best_position_level >= 18 {
+            applicable.push(CallUpReason::TacticalFit);
+        }
+        let blended_apps = c.played as f32 + c.last_season_apps as f32 * 0.6;
+        if blended_apps >= 15.0 {
+            applicable.push(CallUpReason::RegularStarter);
+        }
+
+        if position_need {
+            return (CallUpReason::PositionNeed, applicable);
+        }
+        if role_coverage {
+            return (CallUpReason::RoleCoverage, applicable);
+        }
+        if applicable.is_empty() {
+            return (CallUpReason::U21DevelopmentPick, Vec::new());
+        }
+        let primary = applicable[0];
+        let secondaries = applicable[1..].to_vec();
+        (primary, secondaries)
+    }
+
     /// Decide a player's primary call-up reason from their candidate
     /// profile, plus a list of secondary reasons that also apply.
     pub(super) fn derive_reasons(
@@ -1199,6 +1436,11 @@ impl NationalTeam {
         ctx: &CallUpContext,
         incumbents: &HashSet<u32>,
     ) -> (CallUpReason, Vec<CallUpReason>) {
+        // U21 picks get youth-specific reasons.
+        if ctx.level == NationalTeamLevel::Under21 {
+            return Self::derive_reasons_u21(c, position_need, role_coverage);
+        }
+
         // Order matters — earlier entries win the primary slot.
         let mut applicable: Vec<CallUpReason> = Vec::new();
 

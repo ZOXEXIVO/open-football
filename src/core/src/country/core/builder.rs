@@ -1,4 +1,4 @@
-use crate::country::national::NationalTeam;
+use crate::country::national::{NationalTeam, NationalTeamLevel};
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::{
@@ -23,6 +23,7 @@ pub struct CountryBuilder {
     transfer_market: Option<TransferMarket>,
     economic_factors: Option<CountryEconomicFactors>,
     national_team: Option<NationalTeam>,
+    u21_national_team: Option<NationalTeam>,
     international_competitions: Option<Vec<InternationalCompetition>>,
     media_coverage: Option<MediaCoverage>,
     regulations: Option<CountryRegulations>,
@@ -121,6 +122,11 @@ impl CountryBuilder {
         self
     }
 
+    pub fn u21_national_team(mut self, u21_national_team: NationalTeam) -> Self {
+        self.u21_national_team = Some(u21_national_team);
+        self
+    }
+
     pub fn regulations(mut self, regulations: CountryRegulations) -> Self {
         self.regulations = Some(regulations);
         self
@@ -134,6 +140,13 @@ impl CountryBuilder {
         let national_team = self
             .national_team
             .unwrap_or_else(|| NationalTeam::new(id, &generator_data.people_names));
+        let u21_national_team = self.u21_national_team.unwrap_or_else(|| {
+            NationalTeam::new_with_level(
+                id,
+                &generator_data.people_names,
+                NationalTeamLevel::Under21,
+            )
+        });
         Ok(Country {
             id,
             code: self.code.ok_or("code is required")?,
@@ -152,6 +165,7 @@ impl CountryBuilder {
             settings: self.settings.unwrap_or_default(),
             generator_data,
             national_team,
+            u21_national_team,
             transfer_market: self.transfer_market.unwrap_or_else(TransferMarket::new),
             economic_factors: self.economic_factors.unwrap_or_else(|| {
                 let rep = self.reputation.unwrap_or(500);

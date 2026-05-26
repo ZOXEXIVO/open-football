@@ -197,7 +197,7 @@ impl SquadSelector {
                 .count();
             let int_count = all_players
                 .iter()
-                .filter(|p| p.statuses.get().contains(&PlayerStatusType::Int))
+                .filter(|p| p.statuses.is_on_international_duty())
                 .count();
             let low_condition = all_players
                 .iter()

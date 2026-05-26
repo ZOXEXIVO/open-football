@@ -6,6 +6,7 @@ pub mod world;
 pub use competition::*;
 pub use config::*;
 
+use crate::NationalTeamLevel;
 use chrono::{Datelike, NaiveDate};
 
 /// Phase of a national competition fixture
@@ -102,6 +103,7 @@ impl NationalTeamCompetitions {
                                     phase: NationalCompetitionPhase::Qualifying,
                                     group_idx: group_idx as usize,
                                     fixture_idx: fix_idx,
+                                    level: comp.config.team_level,
                                 });
                             }
                         }
@@ -118,6 +120,7 @@ impl NationalTeamCompetitions {
                                     phase: NationalCompetitionPhase::GroupStage,
                                     group_idx: group_idx as usize,
                                     fixture_idx: fix_idx,
+                                    level: comp.config.team_level,
                                 });
                             }
                         }
@@ -134,6 +137,7 @@ impl NationalTeamCompetitions {
                                     phase: NationalCompetitionPhase::Knockout,
                                     group_idx: bracket_idx,
                                     fixture_idx: fix_idx,
+                                    level: comp.config.team_level,
                                 });
                             }
                         }
@@ -230,4 +234,8 @@ pub struct NationalCompetitionFixture {
     pub phase: NationalCompetitionPhase,
     pub group_idx: usize,
     pub fixture_idx: usize,
+    /// National-team level this fixture is contested at — stamped from
+    /// the owning competition's `config.team_level`. Drives squad
+    /// building, stats, and schedule routing in the world orchestrator.
+    pub level: NationalTeamLevel,
 }

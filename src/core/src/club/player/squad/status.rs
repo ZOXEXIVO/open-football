@@ -38,6 +38,15 @@ impl PlayerStatus {
     pub fn get(&self) -> Vec<PlayerStatusType> {
         self.statuses.iter().map(|s| s.status).collect()
     }
+
+    /// True iff the player is currently away on international duty at any
+    /// level — senior (`Int`) or under-21 (`IntU21`). Club match-day
+    /// selection treats both the same: the player is unavailable.
+    pub fn is_on_international_duty(&self) -> bool {
+        self.statuses
+            .iter()
+            .any(|s| matches!(s.status, PlayerStatusType::Int | PlayerStatusType::IntU21))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Serialize)]
@@ -72,6 +81,8 @@ pub enum PlayerStatusType {
     Inj,
     //The player is away on international duty
     Int,
+    //The player is away on under-21 international duty
+    IntU21,
     //When a player is short on match fitness (perhaps after a long spell on the sidelines), and needs perhaps to play with the reserves in order to regain full fitness
     Lmp,
     //Player is available for loan

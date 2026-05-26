@@ -1,7 +1,7 @@
 use crate::context::GlobalContext;
 use crate::league::{League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable};
 use crate::r#match::{Match, MatchResult, SelectionContext};
-use crate::{Club, ClubPhilosophy, Person, Player, PlayerStatusType, Team, TeamType};
+use crate::{Club, ClubPhilosophy, Person, Player, Team, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 use std::collections::HashMap;
@@ -522,7 +522,7 @@ impl League {
         if player.player_attributes.is_injured {
             return false;
         }
-        if player.statuses.get().contains(&PlayerStatusType::Int) {
+        if player.statuses.is_on_international_duty() {
             return false;
         }
         if !is_friendly && player.player_attributes.is_banned {

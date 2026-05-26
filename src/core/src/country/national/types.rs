@@ -2,8 +2,33 @@
 //! `country::national`. Kept together so adding a new call-up reason or
 //! tweaking a window only touches one file.
 
-use crate::{Player, PlayerFieldPositionGroup, PlayerPositionType};
+use crate::{Player, PlayerFieldPositionGroup, PlayerPositionType, TeamType};
 use chrono::NaiveDate;
+
+/// Which national-team level a squad / competition / call-up belongs to.
+/// Senior is the established full international side; Under21 is the
+/// parallel youth side selected from a separate (younger) candidate pool
+/// with its own caps, schedule, and match-day statuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NationalTeamLevel {
+    #[default]
+    Senior,
+    Under21,
+}
+
+impl NationalTeamLevel {
+    /// i18n key for the level label shown in squad / competition UI.
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            NationalTeamLevel::Senior => "senior",
+            NationalTeamLevel::Under21 => "u21",
+        }
+    }
+
+    pub fn is_under21(&self) -> bool {
+        matches!(self, NationalTeamLevel::Under21)
+    }
+}
 
 #[derive(Clone)]
 pub struct NationalTeamStaffMember {
@@ -88,6 +113,11 @@ pub enum CallUpReason {
     FriendlyExperiment,
     /// Tournament: brought along primarily for big-stage experience.
     TournamentExperience,
+    /// U21 squad: standard developmental pick — a young player given
+    /// minutes to grow into the senior setup.
+    U21DevelopmentPick,
+    /// U21 squad: stand-out prospect with an elite potential ceiling.
+    U21EliteProspect,
 }
 
 impl CallUpReason {
@@ -107,6 +137,8 @@ impl CallUpReason {
             CallUpReason::RoleCoverage => "callup_reason_role_coverage",
             CallUpReason::FriendlyExperiment => "callup_reason_friendly_experiment",
             CallUpReason::TournamentExperience => "callup_reason_tournament_experience",
+            CallUpReason::U21DevelopmentPick => "callup_reason_u21_development_pick",
+            CallUpReason::U21EliteProspect => "callup_reason_u21_elite_prospect",
         }
     }
 }
@@ -177,6 +209,10 @@ pub struct CallUpContext {
     pub country_id: u32,
     pub window_type: CallUpWindowType,
     pub target_squad_size: usize,
+    /// Which national-team level this selection cycle is for. Drives the
+    /// scoring blend (senior axes vs. the U21 youth/potential blend) and
+    /// the reason-derivation path.
+    pub level: NationalTeamLevel,
 }
 
 impl CallUpContext {
@@ -191,6 +227,102 @@ impl CallUpContext {
             country_id,
             window_type,
             target_squad_size,
+            level: NationalTeamLevel::Senior,
+        }
+    }
+
+    /// Build a context for a specific level with an explicit squad size.
+    /// Senior callers should prefer [`CallUpContext::new`] so the
+    /// window-derived size (23 / 26) is preserved unchanged.
+    pub(crate) fn new_with_level(
+        date: NaiveDate,
+        country_id: u32,
+        window_type: CallUpWindowType,
+        level: NationalTeamLevel,
+        target_squad_size: usize,
+    ) -> Self {
+        Self {
+            date,
+            country_id,
+            window_type,
+            target_squad_size,
+            level,
+        }
+    }
+}
+
+/// Declarative description of who is eligible for a national squad and
+/// how big it should be. Replaces the hard-coded senior assumptions in
+/// the candidate-collection / call-up pipeline so the same code paths
+/// serve both Senior and U21 selection by swapping the policy.
+#[derive(Debug, Clone)]
+pub struct NationalSelectionPolicy {
+    pub level: NationalTeamLevel,
+    /// Inclusive maximum age (`date.year() - birth_year`). `None` = no cap.
+    pub max_age: Option<i32>,
+    /// Club team types whose players are scouted for this level. Senior
+    /// scouts the main team only; U21 reaches into reserve / youth setups.
+    pub include_team_types: Vec<TeamType>,
+    /// Target call-up size for non-tournament windows.
+    pub target_squad_size: usize,
+    /// Minimum real club players before synthetic depth is generated.
+    pub min_real_players: usize,
+}
+
+impl NationalSelectionPolicy {
+    /// Senior policy — preserves the historical behaviour exactly:
+    /// main team only, no age cap, window-derived squad size, the
+    /// existing 16-player synthetic floor.
+    pub fn senior() -> Self {
+        NationalSelectionPolicy {
+            level: NationalTeamLevel::Senior,
+            max_age: None,
+            include_team_types: vec![TeamType::Main],
+            target_squad_size: SQUAD_SIZE,
+            min_real_players: MIN_REAL_PLAYERS,
+        }
+    }
+
+    /// U21 policy — younger candidate pool drawn from the whole club
+    /// pyramid, a 21-and-under cap, a 23-man target, and a lower
+    /// synthetic floor (youth pools are thinner than senior ones).
+    pub fn under21() -> Self {
+        NationalSelectionPolicy {
+            level: NationalTeamLevel::Under21,
+            max_age: Some(21),
+            include_team_types: vec![
+                TeamType::Main,
+                TeamType::Reserve,
+                TeamType::B,
+                TeamType::Second,
+                TeamType::U23,
+                TeamType::U21,
+                TeamType::U20,
+                TeamType::U19,
+                TeamType::U18,
+            ],
+            target_squad_size: 23,
+            min_real_players: 14,
+        }
+    }
+
+    /// Minimum match-fitness condition for eligibility. U21 prospects are
+    /// allowed in slightly less match-sharp (4500 vs the senior 5000)
+    /// because youth players naturally accumulate fewer minutes.
+    pub fn min_condition(&self) -> i16 {
+        match self.level {
+            NationalTeamLevel::Senior => 5000,
+            NationalTeamLevel::Under21 => 4500,
+        }
+    }
+
+    /// Synthetic-player age range `(min, max_exclusive)` for filling a
+    /// thin pool. `IntegerUtils::random` is exclusive of `max`, so senior
+    /// yields ages 22-33 (unchanged) and U21 yields 17-21.
+    pub fn synthetic_age_range(&self) -> (i32, i32) {
+        match self.level {
+            NationalTeamLevel::Senior => (22, 34),
+            NationalTeamLevel::Under21 => (17, 22),
         }
     }
 }
@@ -259,7 +391,7 @@ pub(super) const SYNTHETIC_POSITIONS: [PlayerPositionType; 23] = [
 /// underlying Player struct.
 #[derive(Clone)]
 pub(crate) struct CallUpCandidate {
-    pub(super) player_id: u32,
+    pub(crate) player_id: u32,
     pub(super) club_id: u32,
     pub(super) team_id: u32,
     pub(super) current_ability: u8,

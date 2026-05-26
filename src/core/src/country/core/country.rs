@@ -37,6 +37,11 @@ pub struct Country {
     pub generator_data: CountryGeneratorData,
 
     pub national_team: NationalTeam,
+    /// Under-21 national team — a parallel youth side selected from a
+    /// separate (younger) candidate pool, with its own squad, schedule,
+    /// caps, and match-day statuses. Mirrors `national_team` but at
+    /// `NationalTeamLevel::Under21`.
+    pub u21_national_team: NationalTeam,
 
     pub transfer_market: TransferMarket,
     pub economic_factors: CountryEconomicFactors,

@@ -1,6 +1,6 @@
 use crate::PlayerPreferredFoot;
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
-use crate::{Player, PlayerStatusType, TacticalStyle, Tactics};
+use crate::{Player, TacticalStyle, Tactics};
 
 pub const DEFAULT_SQUAD_SIZE: usize = 11;
 pub const DEFAULT_BENCH_SIZE: usize = 7;
@@ -12,7 +12,7 @@ pub fn is_available(player: &Player, is_friendly: bool) -> bool {
     if player.player_attributes.is_injured {
         return false;
     }
-    if player.statuses.get().contains(&PlayerStatusType::Int) {
+    if player.statuses.is_on_international_duty() {
         return false;
     }
 

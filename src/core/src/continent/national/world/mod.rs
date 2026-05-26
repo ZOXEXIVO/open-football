@@ -30,8 +30,13 @@ pub mod tournament;
 
 pub use continental::simulate_world_national_competitions;
 pub use lookups::{world_country_elo, world_country_name, world_country_reputation};
-pub use squad::{build_world_match_squad, emergency_callups_total};
-pub use stats::{apply_world_elo, apply_world_international_stats, record_world_country_schedule};
+pub use squad::{
+    build_world_match_squad, build_world_match_squad_for_level, emergency_callups_total,
+};
+pub use stats::{
+    apply_world_elo, apply_world_international_stats, apply_world_international_stats_for_level,
+    record_world_country_schedule,
+};
 pub use tournament::apply_global_tournament_result;
 
 #[cfg(test)]

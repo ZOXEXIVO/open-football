@@ -38,6 +38,8 @@ pub struct NationalCompetitionsGetTemplate {
 pub struct CompetitionDto {
     pub name: String,
     pub phase: String,
+    /// i18n key for the team-level label ("senior" / "u21").
+    pub level_key: &'static str,
     pub groups: Vec<GroupDto>,
     pub knockout: Vec<KnockoutDto>,
 }
@@ -191,6 +193,7 @@ pub async fn national_competitions_get_action(
             competitions.push(CompetitionDto {
                 name: format!("{} {}", comp.config.name, comp.cycle_year),
                 phase: phase_label(&comp.phase).to_string(),
+                level_key: comp.config.team_level.as_i18n_key(),
                 groups,
                 knockout,
             });

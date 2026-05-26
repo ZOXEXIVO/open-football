@@ -18,9 +18,10 @@ impl Club {
                     player.player_attributes.condition = 8500;
                 }
 
-                // Clear stale Int status (should have been released by national team,
-                // but safety net in case tournament release was missed)
+                // Clear stale Int / IntU21 status (should have been released by
+                // national team, but safety net in case tournament release was missed)
                 player.statuses.remove(PlayerStatusType::Int);
+                player.statuses.remove(PlayerStatusType::IntU21);
 
                 // Reset ban flags for new season
                 player.player_attributes.is_banned = false;
