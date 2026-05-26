@@ -839,11 +839,7 @@ impl Player {
         if self.pending_signing.is_some() {
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             let club_rep = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
-            let league_rep = ctx
-                .club
-                .as_ref()
-                .map(|c| c.league_reputation)
-                .unwrap_or(0);
+            let league_rep = ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0);
             let formation = ctx.team.as_ref().and_then(|t| t.formation);
             self.process_transfer_shock(
                 now.date(),
@@ -892,11 +888,7 @@ impl Player {
                     })
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0),
-                league_reputation: ctx
-                    .club
-                    .as_ref()
-                    .map(|c| c.league_reputation)
-                    .unwrap_or(0),
+                league_reputation: ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0),
             };
             let club_morale_ctx = ctx
                 .club
@@ -919,11 +911,7 @@ impl Player {
             );
             // Natural skill development (weekly). Build the coaching effect
             // once per player from the club's best coach scores.
-            let league_reputation = ctx
-                .club
-                .as_ref()
-                .map(|c| c.league_reputation)
-                .unwrap_or(0);
+            let league_reputation = ctx.club.as_ref().map(|c| c.league_reputation).unwrap_or(0);
             let coach_effect = ctx
                 .club
                 .as_ref()

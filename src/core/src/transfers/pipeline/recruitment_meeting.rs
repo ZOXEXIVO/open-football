@@ -26,8 +26,8 @@
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
-use crate::club::staff::StaffPosition;
 use crate::club::staff::Staff;
+use crate::club::staff::StaffPosition;
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::recruitment::{
     BoardRecruitmentDossier, RecruitmentDecision, RecruitmentDecisionType, RecruitmentMeeting,

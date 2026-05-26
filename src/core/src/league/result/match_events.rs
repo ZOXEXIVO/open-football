@@ -8,7 +8,9 @@ use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
 };
 use crate::club::team::{MatchPhase, TeamTalkContext, TeamTalkTone, apply_team_talk_dated};
-use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, EUROPA_LEAGUE_ID};
+use crate::continent::competitions::{
+    CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
+};
 use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult};
@@ -35,7 +37,7 @@ impl LeagueResult {
         // cup statistics bucket.
         let is_continental_cup = matches!(
             result.league_id,
-            CHAMPIONS_LEAGUE_ID | EUROPA_LEAGUE_ID | CONFERENCE_LEAGUE_ID
+            CHAMPIONS_LEAGUE_ID | EUROPA_LEAGUE_ID | CONFERENCE_LEAGUE_ID | COPA_LIBERTADORES_ID
         );
         let (is_cup, is_friendly) = if is_continental_cup {
             (true, false)
@@ -323,9 +325,11 @@ impl LeagueResult {
         };
 
         let comp = match (result.league_id, is_cup) {
-            (CHAMPIONS_LEAGUE_ID | EUROPA_LEAGUE_ID | CONFERENCE_LEAGUE_ID, _) => {
-                RepCompetition::ContinentalCup
-            }
+            (
+                CHAMPIONS_LEAGUE_ID | EUROPA_LEAGUE_ID | CONFERENCE_LEAGUE_ID
+                | COPA_LIBERTADORES_ID,
+                _,
+            ) => RepCompetition::ContinentalCup,
             (_, true) => RepCompetition::DomesticCup,
             _ => RepCompetition::League,
         };
@@ -1520,6 +1524,8 @@ fn reputation_weights<D: LeagueProcessAccess>(
 ) -> (f32, f32) {
     if result.league_id == CHAMPIONS_LEAGUE_ID {
         (1.5, 1.2)
+    } else if result.league_id == COPA_LIBERTADORES_ID {
+        (1.45, 1.0)
     } else if result.league_id == EUROPA_LEAGUE_ID {
         (1.3, 0.8)
     } else if result.league_id == CONFERENCE_LEAGUE_ID {

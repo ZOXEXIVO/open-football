@@ -11,25 +11,25 @@ use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DefenderState {
-    Standing,     // Standing
-    Covering,     // Covering the ball
-    PushingUp,    // Pushing the ball up
-    Resting,      // Resting after an attack
-    Passing,      // Passing the ball
-    Running,      // Running in the direction of the ball
-    Intercepting, // Intercepting a pass
-    Marking,      // Marking an attacker
-    Clearing,     // Clearing the ball from the danger zone
-    Heading,      // Heading the ball, often during corners or crosses
-    Tackling,     // Tackling the ball
-    Pressing,     // Pressing the opponent
-    TrackingBack, // Tracking back to defense after an attack
-    HoldingLine,  // Holding the defensive line
-    Returning,    // Returning the ball,
-    Walking,      // Walking around,
-    TakeBall,     // Take the ball,
-    Shooting,     // Shoting the ball,
-    Guarding,     // Guarding an attacker — denying space and preventing them from getting open
+    Standing,        // Standing
+    Covering,        // Covering the ball
+    PushingUp,       // Pushing the ball up
+    Resting,         // Resting after an attack
+    Passing,         // Passing the ball
+    Running,         // Running in the direction of the ball
+    Intercepting,    // Intercepting a pass
+    Marking,         // Marking an attacker
+    Clearing,        // Clearing the ball from the danger zone
+    Heading,         // Heading the ball, often during corners or crosses
+    Tackling,        // Tackling the ball
+    Pressing,        // Pressing the opponent
+    TrackingBack,    // Tracking back to defense after an attack
+    HoldingLine,     // Holding the defensive line
+    Returning,       // Returning the ball,
+    Walking,         // Walking around,
+    TakeBall,        // Take the ball,
+    Shooting,        // Shoting the ball,
+    Guarding,        // Guarding an attacker — denying space and preventing them from getting open
     AttackingCorner, // Pushed up to attack an attacking corner (run into the box, head on goal)
 }
 

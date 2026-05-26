@@ -75,14 +75,37 @@ pub enum BoardDecision {
     IssueFormalWarning,
     HoldCrisisMeeting,
     SackManager,
-    IncreaseTransferBudget { amount: i64, reason: DecisionReason },
-    CutTransferBudget { amount: i64, reason: DecisionReason },
-    AdjustWageBudget { amount: i64, reason: DecisionReason },
-    ApproveFacilityUpgrade { facility: BoardFacility, cost: i64 },
-    RejectFacilityUpgrade { facility: BoardFacility, reason: DecisionReason },
-    DemandPlayerSale { reason: DecisionReason },
-    BlockTransfer { player_id: u32, reason: DecisionReason },
-    ApproveTransferException { player_id: u32, reason: DecisionReason },
+    IncreaseTransferBudget {
+        amount: i64,
+        reason: DecisionReason,
+    },
+    CutTransferBudget {
+        amount: i64,
+        reason: DecisionReason,
+    },
+    AdjustWageBudget {
+        amount: i64,
+        reason: DecisionReason,
+    },
+    ApproveFacilityUpgrade {
+        facility: BoardFacility,
+        cost: i64,
+    },
+    RejectFacilityUpgrade {
+        facility: BoardFacility,
+        reason: DecisionReason,
+    },
+    DemandPlayerSale {
+        reason: DecisionReason,
+    },
+    BlockTransfer {
+        player_id: u32,
+        reason: DecisionReason,
+    },
+    ApproveTransferException {
+        player_id: u32,
+        reason: DecisionReason,
+    },
     StartTakeoverRumour,
     CompleteTakeover,
 }
@@ -127,7 +150,9 @@ impl BoardDecision {
             BoardDecision::RejectFacilityUpgrade { .. } => DecisionKind::RejectFacilityUpgrade,
             BoardDecision::DemandPlayerSale { .. } => DecisionKind::DemandPlayerSale,
             BoardDecision::BlockTransfer { .. } => DecisionKind::BlockTransfer,
-            BoardDecision::ApproveTransferException { .. } => DecisionKind::ApproveTransferException,
+            BoardDecision::ApproveTransferException { .. } => {
+                DecisionKind::ApproveTransferException
+            }
             BoardDecision::StartTakeoverRumour => DecisionKind::StartTakeoverRumour,
             BoardDecision::CompleteTakeover => DecisionKind::CompleteTakeover,
         }

@@ -62,12 +62,11 @@ impl<'b> BallOperationsImpl<'b> {
         if self.ctx.tick_context.ball.pass_origin_restart != PassOriginRestart::Corner {
             return false;
         }
-        let owner = self
+        let owner = self.ctx.tick_context.ball.current_owner.or(self
             .ctx
             .tick_context
             .ball
-            .current_owner
-            .or(self.ctx.tick_context.ball.last_owner);
+            .last_owner);
         match owner {
             Some(id) => self
                 .ctx

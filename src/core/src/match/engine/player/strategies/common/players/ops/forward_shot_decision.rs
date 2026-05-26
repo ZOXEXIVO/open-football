@@ -1,6 +1,6 @@
 use crate::r#match::StateProcessingContext;
-use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 
 #[cfg(feature = "match-logs")]
 pub mod helper_diag {

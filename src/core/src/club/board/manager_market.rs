@@ -21,8 +21,8 @@
 use crate::club::Club;
 use crate::club::Team;
 use crate::club::board::ClubBoard;
-use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
 use crate::club::staff::free_pool;
+use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
 use crate::utils::DateUtils;
 use crate::{SimulatorData, Staff, TeamType};
 use chrono::{Datelike, NaiveDate};

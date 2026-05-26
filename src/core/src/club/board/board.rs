@@ -608,10 +608,7 @@ impl ClubBoard {
     /// squad-profile fit plus deal economics (wage impact, resale, risk).
     /// Returns `Some` to override the base decision; `None` to defer to it.
     /// A `Balanced` profile with no economics dossier always returns `None`.
-    fn review_governance(
-        &self,
-        proposal: &BoardTransferProposal,
-    ) -> Option<BoardTransferDecision> {
+    fn review_governance(&self, proposal: &BoardTransferProposal) -> Option<BoardTransferDecision> {
         use BoardTransferConcern::*;
 
         // ── Squad profile fit ──
@@ -1029,8 +1026,7 @@ impl ClubBoard {
             }
 
             frac = frac.clamp(0.02, 0.97);
-            let expected =
-                ((frac * league_sz).round() as u8).clamp(1, board_ctx.league_size);
+            let expected = ((frac * league_sz).round() as u8).clamp(1, board_ctx.league_size);
             // Acceptable floor sits a quarter-table below the target.
             let buffer = (league_sz * 0.25).max(2.0) as u8;
             let min_acceptable = expected.saturating_add(buffer).min(board_ctx.league_size);
@@ -1105,10 +1101,9 @@ impl ClubBoard {
         // Keep the legacy loyalty scalar broadly in step (blend, so the
         // fast-moving transfer/achievement nudges from other systems
         // aren't wholly overwritten).
-        let blended = ((self.chairman.manager_loyalty as i16
-            + self.relationship.overall_trust() as i16)
-            / 2)
-        .clamp(0, 100) as u8;
+        let blended =
+            ((self.chairman.manager_loyalty as i16 + self.relationship.overall_trust() as i16) / 2)
+                .clamp(0, 100) as u8;
         self.chairman.manager_loyalty = blended;
 
         // Position-vs-expectation delta retained for backing / meetings.
@@ -1200,9 +1195,7 @@ impl ClubBoard {
             self.relationship.relationship_breakdown() && phase.can_judge_table();
 
         // Meetings + matching decisions.
-        if sustained_poor_with_underperformance
-            || sustained_poor_absolute
-            || relationship_breakdown
+        if sustained_poor_with_underperformance || sustained_poor_absolute || relationship_breakdown
         {
             result.manager_meeting = Some(BoardManagerMeeting::Crisis);
             result.decisions.push(BoardDecision::HoldCrisisMeeting);
@@ -1247,7 +1240,8 @@ impl ClubBoard {
         // Headline season-outcome promise (survival / continental / title).
         if let Some(kind) = self.season_outcome_promise(ctx) {
             if !self.promises.has_active(kind) {
-                self.promises.add(BoardPromise::new(kind, today, season_due));
+                self.promises
+                    .add(BoardPromise::new(kind, today, season_due));
             }
         }
 
@@ -1256,8 +1250,11 @@ impl ClubBoard {
         let youth_minded = matches!(self.vision.youth_focus, VisionYouthFocus::DevelopYouth)
             || matches!(self.ownership.ownership_type, OwnershipType::MemberOwned);
         if youth_minded && !self.promises.has_active(PromiseType::YouthMinutes) {
-            self.promises
-                .add(BoardPromise::new(PromiseType::YouthMinutes, today, season_due));
+            self.promises.add(BoardPromise::new(
+                PromiseType::YouthMinutes,
+                today,
+                season_due,
+            ));
         }
 
         // A requested upgrade the board declined *purely* on affordability
@@ -1487,19 +1484,23 @@ impl ClubBoard {
         let strong = self.latest_scores.sporting > 18.0 && self.latest_scores.financial > 0.0;
         if strong && self.ownership.injection_appetite() > 0.6 {
             let inject = (budget / 4).max(2_000_000);
-            result.decisions.push(BoardDecision::IncreaseTransferBudget {
-                amount: inject,
-                reason: DecisionReason::OwnerInjection,
-            });
+            result
+                .decisions
+                .push(BoardDecision::IncreaseTransferBudget {
+                    amount: inject,
+                    reason: DecisionReason::OwnerInjection,
+                });
             result.bonus_transfer_funds = true; // UI flag only
         } else if matches!(self.mood.state, BoardMoodState::Excellent) && performance_delta > 3 {
             // Modest reward (~20% of target) for clearly beating expectations.
             let bonus = (budget / 5).max(0);
             if bonus > 0 {
-                result.decisions.push(BoardDecision::IncreaseTransferBudget {
-                    amount: bonus,
-                    reason: DecisionReason::Overperformance,
-                });
+                result
+                    .decisions
+                    .push(BoardDecision::IncreaseTransferBudget {
+                        amount: bonus,
+                        reason: DecisionReason::Overperformance,
+                    });
                 result.bonus_transfer_funds = true; // UI flag only
             }
         }
@@ -1520,7 +1521,9 @@ impl ClubBoard {
         self.chairman.ambition = match owner.ownership_type {
             OwnershipType::StateBacked => ChairmanAmbition::Reckless,
             OwnershipType::Consortium if owner.wealth >= 70 => ChairmanAmbition::Ambitious,
-            OwnershipType::FamilyOwned | OwnershipType::MemberOwned => ChairmanAmbition::Conservative,
+            OwnershipType::FamilyOwned | OwnershipType::MemberOwned => {
+                ChairmanAmbition::Conservative
+            }
             _ => ChairmanAmbition::Balanced,
         };
         self.chairman.patience = match owner.ownership_type {
@@ -1773,7 +1776,9 @@ fn takeover_roll(club_id: u32, date: NaiveDate, months_in_status: u8) -> u8 {
     let day = date.num_days_from_ce() as u64;
     let mut x = ((club_id as u64) << 32)
         ^ day.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ ((months_in_status as u64).wrapping_add(1).wrapping_mul(0xD1B5_4A32_D192_ED03));
+        ^ ((months_in_status as u64)
+            .wrapping_add(1)
+            .wrapping_mul(0xD1B5_4A32_D192_ED03));
     // splitmix64 finalizer.
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -2149,8 +2154,14 @@ mod budget_tests {
         modest.calculate_season_targets(&ctx);
         let mid = modest.season_targets.unwrap().expected_position;
 
-        assert!(amb < mid, "title-chasing owner expects higher: {amb} vs {mid}");
-        assert!(amb <= 3, "a reckless title goal targets the very top: {amb}");
+        assert!(
+            amb < mid,
+            "title-chasing owner expects higher: {amb} vs {mid}"
+        );
+        assert!(
+            amb <= 3,
+            "a reckless title goal targets the very top: {amb}"
+        );
     }
 
     #[test]
@@ -2409,7 +2420,10 @@ mod board_behaviour_tests {
             reckless.ownership.ownership_type,
             OwnershipType::StateBacked
         ));
-        assert!(matches!(reckless.chairman.ambition, ChairmanAmbition::Reckless));
+        assert!(matches!(
+            reckless.chairman.ambition,
+            ChairmanAmbition::Reckless
+        ));
         assert!(matches!(reckless.chairman.patience, ChairmanPatience::Low));
 
         reckless.calculate_season_targets(&ctx);
@@ -2424,8 +2438,7 @@ mod board_behaviour_tests {
             "reckless owner should out-spend neutral: {reckless_budget} vs {neutral_budget}"
         );
         assert!(
-            reckless.chairman.poor_mood_threshold()
-                < ChairmanProfile::new().poor_mood_threshold(),
+            reckless.chairman.poor_mood_threshold() < ChairmanProfile::new().poor_mood_threshold(),
             "reckless owner should be quicker to act"
         );
     }
@@ -2687,11 +2700,7 @@ mod board_behaviour_tests {
         assert!(
             takeover_roll(43, date, 0) != a
                 || takeover_roll(42, date, 1) != a
-                || takeover_roll(
-                    42,
-                    chrono::NaiveDate::from_ymd_opt(2025, 9, 1).unwrap(),
-                    0
-                ) != a,
+                || takeover_roll(42, chrono::NaiveDate::from_ymd_opt(2025, 9, 1).unwrap(), 0) != a,
             "roll should vary across club / date / status"
         );
     }
@@ -2778,7 +2787,10 @@ mod board_behaviour_tests {
             FinancialStance::Ambitious
         ));
         assert_eq!(board.vision.long_term_goal, Some(LongTermGoal::WinLeague));
-        assert!(matches!(board.chairman.ambition, ChairmanAmbition::Reckless));
+        assert!(matches!(
+            board.chairman.ambition,
+            ChairmanAmbition::Reckless
+        ));
     }
 
     #[test]
@@ -2942,7 +2954,9 @@ mod board_behaviour_tests {
 
         let before = board.relationship.trust_communication;
         // Mirror simulate's season-start reckoning a year later.
-        let penalty = board.promises.break_overdue(today + chrono::Duration::days(366));
+        let penalty = board
+            .promises
+            .break_overdue(today + chrono::Duration::days(366));
         assert!(penalty < 0, "an unmet survival promise must break");
         board.relationship.adjust_communication(penalty);
         assert!(board.relationship.trust_communication < before);
@@ -2991,7 +3005,11 @@ mod board_behaviour_tests {
             facility: BoardFacility::Training,
             cost: 5_000_000,
         });
-        board.resolve_promises(&strong_ctx(8, 20), today + chrono::Duration::days(370), &mut r);
+        board.resolve_promises(
+            &strong_ctx(8, 20),
+            today + chrono::Duration::days(370),
+            &mut r,
+        );
         assert!(!board.promises.has_active(PromiseType::FacilityImprovement));
     }
 

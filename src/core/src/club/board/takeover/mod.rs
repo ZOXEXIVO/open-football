@@ -40,9 +40,7 @@ impl TakeoverWatch {
     const RESOLVE_AFTER_MONTHS: u8 = 3;
 
     fn financial_trouble(ctx: &BoardContext) -> bool {
-        ctx.balance < 0
-            || matches!(ctx.ffp_status, FfpStatus::Breach)
-            || ctx.profit_loss_12m < 0
+        ctx.balance < 0 || matches!(ctx.ffp_status, FfpStatus::Breach) || ctx.profit_loss_12m < 0
     }
 
     /// Is the club ripe for a takeover rumour right now?
@@ -155,7 +153,10 @@ mod tests {
             exit_pressure: 60,
             ..Default::default()
         };
-        assert!(TakeoverWatch::eligible_for_rumour(&owner, &distressed_ctx()));
+        assert!(TakeoverWatch::eligible_for_rumour(
+            &owner,
+            &distressed_ctx()
+        ));
     }
 
     #[test]

@@ -121,11 +121,7 @@ impl LeagueProcessAccess for SimulatorData {
         SimulatorData::player_mut(self, id)
     }
     fn admit_free_agent_staff(&mut self, staff: crate::Staff) {
-        crate::club::staff::admit_to_pool(
-            &mut self.free_agent_staff,
-            staff,
-            self.date.date(),
-        );
+        crate::club::staff::admit_to_pool(&mut self.free_agent_staff, staff, self.date.date());
     }
     fn queue_manager_appointment(&mut self, club_id: u32) {
         crate::club::board::manager_market::ManagerMarketTick::execute_appointment(

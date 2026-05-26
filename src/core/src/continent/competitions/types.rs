@@ -5,6 +5,7 @@ use chrono::NaiveDate;
 pub const CHAMPIONS_LEAGUE_ID: u32 = 900_000_001;
 pub const EUROPA_LEAGUE_ID: u32 = 900_000_002;
 pub const CONFERENCE_LEAGUE_ID: u32 = 900_000_003;
+pub const COPA_LIBERTADORES_ID: u32 = 900_000_004;
 
 #[derive(Debug, Clone)]
 pub enum CompetitionStage {
@@ -42,6 +43,7 @@ pub enum CompetitionTier {
     ChampionsLeague,
     EuropaLeague,
     ConferenceLeague,
+    CopaLibertadores,
 }
 
 // ─── Shared group / knockout types for all continental competitions ──
@@ -248,6 +250,24 @@ pub struct TransferNegotiation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn continental_reserved_ids_are_distinct() {
+        let ids = [
+            CHAMPIONS_LEAGUE_ID,
+            EUROPA_LEAGUE_ID,
+            CONFERENCE_LEAGUE_ID,
+            COPA_LIBERTADORES_ID,
+        ];
+        // Copa Libertadores must claim its own reserved slot so match-event
+        // routing can recognise it as a continental cup.
+        assert_eq!(COPA_LIBERTADORES_ID, 900_000_004);
+        for (i, a) in ids.iter().enumerate() {
+            for b in ids.iter().skip(i + 1) {
+                assert_ne!(a, b, "reserved continental ids must be unique");
+            }
+        }
+    }
 
     #[test]
     fn knockout_aggregate_winner_decides_when_unequal() {

@@ -175,6 +175,7 @@ fn continental_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSecti
     let cl_url = format!("/{}/champions-league", lang);
     let el_url = format!("/{}/europa-league", lang);
     let conf_url = format!("/{}/conference-league", lang);
+    let copa_url = format!("/{}/copa-libertadores", lang);
     MenuSection::plain(vec![
         MenuItem {
             active: current_path == cl_url,
@@ -192,6 +193,12 @@ fn continental_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSecti
             active: current_path == conf_url,
             title: i18n.t("conference_league").to_string(),
             url: conf_url,
+            icon: "fa-star".to_string(),
+        },
+        MenuItem {
+            active: current_path == copa_url,
+            title: i18n.t("copa_libertadores").to_string(),
+            url: copa_url,
             icon: "fa-star".to_string(),
         },
     ])
@@ -379,6 +386,7 @@ fn continental_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) ->
     let cl_url = format!("/{}/champions-league", lang);
     let el_url = format!("/{}/europa-league", lang);
     let conf_url = format!("/{}/conference-league", lang);
+    let copa_url = format!("/{}/copa-libertadores", lang);
     let nat_url = format!("/{}/national-competitions", lang);
     vec![
         home_section(i18n, lang),
@@ -402,6 +410,12 @@ fn continental_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) ->
                 url: conf_url,
                 icon: "fa-trophy".to_string(),
             },
+            MenuItem {
+                active: current_path == copa_url,
+                title: i18n.t("copa_libertadores").to_string(),
+                url: copa_url,
+                icon: "fa-trophy".to_string(),
+            },
         ]),
         MenuSection::plain(vec![MenuItem {
             active: current_path == nat_url,
@@ -423,6 +437,10 @@ pub fn europa_league_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<Me
 }
 
 pub fn conference_league_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    continental_competitions_menu(i18n, lang, current_path)
+}
+
+pub fn copa_libertadores_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
     continental_competitions_menu(i18n, lang, current_path)
 }
 

@@ -162,6 +162,11 @@ impl ContinentResult {
         if let Some((w, l)) = comps.conference_league.final_result() {
             finals.push((w, l, 1.2, 1.0));
         }
+        // Copa Libertadores is South America's elite trophy — same prestige
+        // band as the Champions League within its own continent.
+        if let Some((w, l)) = comps.copa_libertadores.final_result() {
+            finals.push((w, l, 1.5, 1.4));
+        }
 
         for (winner_team, loser_team, win_prestige, lose_prestige) in finals {
             // Continental cups can span the whole continent, so we walk

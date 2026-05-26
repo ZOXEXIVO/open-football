@@ -296,26 +296,22 @@ impl BoardResult {
     /// balance so the upgrade has a real budget consequence.
     fn apply_facility_upgrade(club: &mut Club, facility: BoardFacility, cost: i64) {
         let upgraded = match facility {
-            BoardFacility::Training => {
-                Self::step_up(&mut club.facilities.training)
-            }
+            BoardFacility::Training => Self::step_up(&mut club.facilities.training),
             BoardFacility::Youth => Self::step_up(&mut club.facilities.youth),
             BoardFacility::Academy => Self::step_up(&mut club.facilities.academy),
-            BoardFacility::Recruitment => {
-                Self::step_up(&mut club.facilities.recruitment)
-            }
-            BoardFacility::Stadium => match Self::expanded_attendance(
-                club.facilities.average_attendance,
-            ) {
-                Some(next) => {
-                    club.facilities.average_attendance = next;
-                    true
+            BoardFacility::Recruitment => Self::step_up(&mut club.facilities.recruitment),
+            BoardFacility::Stadium => {
+                match Self::expanded_attendance(club.facilities.average_attendance) {
+                    Some(next) => {
+                        club.facilities.average_attendance = next;
+                        true
+                    }
+                    // No real stadium/attendance model for this club — the
+                    // expansion is a news-only announcement, so we must NOT
+                    // debit cash for a change nothing can see.
+                    None => false,
                 }
-                // No real stadium/attendance model for this club — the
-                // expansion is a news-only announcement, so we must NOT
-                // debit cash for a change nothing can see.
-                None => false,
-            },
+            }
         };
         if upgraded {
             club.finance.balance.push_cash_outflow(cost.max(0));
@@ -364,6 +360,9 @@ mod tests {
     #[test]
     fn stadium_expansion_grows_a_real_attendance() {
         let next = BoardResult::expanded_attendance(28_000).expect("modelled stadium expands");
-        assert!(next > 28_000, "expansion should raise attendance, got {next}");
+        assert!(
+            next > 28_000,
+            "expansion should raise attendance, got {next}"
+        );
     }
 }

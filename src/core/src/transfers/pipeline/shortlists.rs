@@ -431,11 +431,7 @@ impl PipelineProcessor {
                             age: player.age(date),
                             ability: player.player_attributes.current_ability,
                             potential: player.player_attributes.potential_ability,
-                            annual_salary: player
-                                .contract
-                                .as_ref()
-                                .map(|c| c.salary)
-                                .unwrap_or(0),
+                            annual_salary: player.contract.as_ref().map(|c| c.salary).unwrap_or(0),
                             country_id: player.country_id,
                             injury_proneness: player.player_attributes.injury_proneness,
                             world_reputation: player.player_attributes.world_reputation,
@@ -643,9 +639,7 @@ impl PipelineProcessor {
                 if let Some(scout_id) = d.lead_scout_staff_id {
                     for team in &mut club.teams.teams {
                         if let Some(staff) = team.staffs.find_mut(scout_id) {
-                            staff.add_event(
-                                crate::club::staff::StaffEventType::BoardPresentation,
-                            );
+                            staff.add_event(crate::club::staff::StaffEventType::BoardPresentation);
                             break;
                         }
                     }

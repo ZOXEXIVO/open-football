@@ -13,9 +13,9 @@
 //! mirror real-world staff cover: a small club's manager genuinely does
 //! everything.
 
+use crate::club::staff::Staff;
 use crate::club::staff::StaffCollection;
 use crate::club::staff::StaffPosition;
-use crate::club::staff::Staff;
 
 /// Snapshot of every staff member needed to drive the transfer pipeline
 /// for a single club. Borrowed for the lifetime of the underlying

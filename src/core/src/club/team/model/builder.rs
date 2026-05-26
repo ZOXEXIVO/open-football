@@ -1,5 +1,5 @@
-use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::TeamFixtureWindow;
+use crate::club::team::behaviour::TeamBehaviour;
 use crate::{
     MatchHistory, PlayerCollection, StaffCollection, Tactics, Team, TeamReputation, TeamType,
     TrainingSchedule, Transfers,

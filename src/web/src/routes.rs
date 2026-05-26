@@ -3,6 +3,7 @@ use crate::ai::ai_routes;
 use crate::champions_league::champions_league_routes;
 use crate::common::default_handler::default_handler;
 use crate::conference_league::conference_league_routes;
+use crate::copa_libertadores::copa_libertadores_routes;
 use crate::countries::country_routes;
 use crate::date::current_date_routes;
 use crate::europa_league::europa_league_routes;
@@ -120,6 +121,7 @@ impl ServerRoutes {
             .merge(champions_league_routes())
             .merge(europa_league_routes())
             .merge(conference_league_routes())
+            .merge(copa_libertadores_routes())
             .merge(national_competitions_routes())
             .merge(performance_routes())
             .merge(country_routes())

@@ -34,21 +34,25 @@ impl StateProcessingHandler for DefenderHeadingState {
         let attacking_corner = ctx.ball().is_team_attacking_corner();
 
         if ctx.ball().distance() > HEADING_DISTANCE_THRESHOLD {
-            return Some(StateChangeResult::with_defender_state(if attacking_corner {
-                DefenderState::AttackingCorner
-            } else {
-                DefenderState::HoldingLine
-            }));
+            return Some(StateChangeResult::with_defender_state(
+                if attacking_corner {
+                    DefenderState::AttackingCorner
+                } else {
+                    DefenderState::HoldingLine
+                },
+            ));
         }
 
         // Check if the ball is at a height suitable for heading
         if ball_position.z < HEADING_HEIGHT_THRESHOLD {
             // Ball is too low to head
-            return Some(StateChangeResult::with_defender_state(if attacking_corner {
-                DefenderState::AttackingCorner
-            } else {
-                DefenderState::Standing
-            }));
+            return Some(StateChangeResult::with_defender_state(
+                if attacking_corner {
+                    DefenderState::AttackingCorner
+                } else {
+                    DefenderState::Standing
+                },
+            ));
         }
 
         // 2. Attempt to head the ball

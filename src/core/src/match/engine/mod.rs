@@ -22,7 +22,6 @@ pub use state::*;
 
 // teamplay/ — re-export the modules (preserve `engine::<module>::` paths)
 // and the items previously surfaced at the engine root.
-pub use teamplay::{chemistry, coach, tactical, zones};
 pub use teamplay::chemistry::{
     ChemistryInputs, ChemistryMap, ChemistryModifiers, Lane, Role, TacticalFamiliarity,
     chemistry_modifiers, initial_chemistry,
@@ -30,17 +29,17 @@ pub use teamplay::chemistry::{
 pub use teamplay::coach::*;
 pub use teamplay::tactical::*;
 pub use teamplay::zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
+pub use teamplay::{chemistry, coach, tactical, zones};
 
 // flow/
-pub use flow::{context, environment, field, goal, result};
 pub use flow::context::*;
 pub use flow::environment::{EnvModifiers, MatchEnvironment, Pitch, Weather};
 pub use flow::field::*;
 pub use flow::goal::*;
 pub use flow::result::*;
+pub use flow::{context, environment, field, goal, result};
 
 // officiating/
-pub use officiating::{management, referee, set_pieces};
 pub use officiating::management::{
     CounterAttackThreat, HomeAdvantage, HomeAdvantageDeltas, ProfessionalFoul,
     ProfessionalFoulCard, StoppageEvent, StoppageTime, TimeWasting, TimeWastingRestart,
@@ -53,6 +52,7 @@ pub use officiating::set_pieces::{
     score_corner_routines, score_corner_taker, score_free_kick_choices, score_free_kick_taker,
     score_keeper_save, score_penalty_taker, wall_block_prob, wall_size_for,
 };
+pub use officiating::{management, referee, set_pieces};
 
 // substitution/ — full-path access only (no glob was exported originally).
 pub use substitution::{sub_scoring, substitutions};

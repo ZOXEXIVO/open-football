@@ -2,6 +2,7 @@ pub mod ai;
 mod champions_league;
 mod common;
 mod conference_league;
+mod copa_libertadores;
 mod countries;
 mod date;
 mod error;

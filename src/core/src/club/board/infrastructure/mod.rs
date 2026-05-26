@@ -8,11 +8,11 @@
 //! `Club::build_board_context`) so the whole review lives on the board
 //! side and the decisions flow back through the normal result pipeline.
 
+use super::ClubVision;
 use super::context::{BoardContext, FfpStatus};
 use super::decision::{BoardDecision, BoardFacility, DecisionReason};
 use super::ownership::OwnershipModel;
 use super::strategy::InfrastructurePriority;
-use super::ClubVision;
 use crate::club::facilities::FacilityLevel;
 
 pub struct FacilityReview;
@@ -105,7 +105,11 @@ impl FacilityReview {
     }
 
     /// Run the review and return the (usually one) facility decision.
-    pub fn run(ctx: &BoardContext, vision: &ClubVision, owner: &OwnershipModel) -> Vec<BoardDecision> {
+    pub fn run(
+        ctx: &BoardContext,
+        vision: &ClubVision,
+        owner: &OwnershipModel,
+    ) -> Vec<BoardDecision> {
         let mut out = Vec::new();
         let capacity = Self::capex_capacity(ctx, owner);
 
@@ -125,7 +129,10 @@ impl FacilityReview {
                     cost,
                 });
                 return out;
-            } else if matches!(vision.infrastructure_priority, InfrastructurePriority::Stadium) {
+            } else if matches!(
+                vision.infrastructure_priority,
+                InfrastructurePriority::Stadium
+            ) {
                 out.push(BoardDecision::RejectFacilityUpgrade {
                     facility: BoardFacility::Stadium,
                     reason: DecisionReason::DebtTooHigh,

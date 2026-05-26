@@ -1,13 +1,13 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
-use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     GoalDetail, MatchContext, MatchField, MatchPlayer, OffsideSnapshot, PassOriginRestart,
     PlayerSide, ResultMatchPositionData, ShotTarget,
@@ -403,9 +403,7 @@ impl PlayerEventDispatcher {
                 // discrete corner aerial contest fire on the in-flight
                 // delivery (engine `resolve_corner_contest`); the origin
                 // decays to OpenPlay on the next touch / interception as usual.
-                if !(was_cross
-                    && field.ball.pass_origin_restart == PassOriginRestart::Corner)
-                {
+                if !(was_cross && field.ball.pass_origin_restart == PassOriginRestart::Corner) {
                     field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
                 }
             }
@@ -1581,10 +1579,8 @@ impl PlayerEventDispatcher {
             // old `> 0.7` (=14/20) thresholds — `skills.*` are already
             // normalised 0-1 so we re-scale to raw 1-20 for the curve.
             let many_obstacles = obstacles_in_lane >= 2;
-            let crossing_p =
-                SkillCurve::new(skills.crossing * 20.0, 14.0, 0.6).probability();
-            let vision_p =
-                SkillCurve::new(vision_quality * 20.0, 14.0, 0.6).probability();
+            let crossing_p = SkillCurve::new(skills.crossing * 20.0, 14.0, 0.6).probability();
+            let vision_p = SkillCurve::new(vision_quality * 20.0, 14.0, 0.6).probability();
             let has_good_crossing = rng.random_range(0.0..1.0) < crossing_p;
 
             if is_short {

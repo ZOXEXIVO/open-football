@@ -1,8 +1,8 @@
-use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -523,7 +523,8 @@ impl ForwardPassingState {
         if !has_space {
             return false;
         }
-        let drib_p = SkillCurve::new(ctx.player.skills.technical.dribbling, 10.0, 0.6).probability();
+        let drib_p =
+            SkillCurve::new(ctx.player.skills.technical.dribbling, 10.0, 0.6).probability();
         let agi_p = SkillCurve::new(ctx.player.skills.physical.agility, 10.0, 0.6).probability();
         // Weighted blend matches old `drib*0.7 + agi*0.3`.
         let combined = drib_p * 0.7 + agi_p * 0.3;

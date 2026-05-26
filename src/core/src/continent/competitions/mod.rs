@@ -1,11 +1,13 @@
 mod champions_league;
 mod conference_league;
+mod copa_libertadores;
 mod europa_league;
 mod super_cup;
 mod types;
 
 pub use champions_league::*;
 pub use conference_league::*;
+pub use copa_libertadores::*;
 pub use europa_league::*;
 pub use super_cup::*;
 pub use types::*;
@@ -15,6 +17,7 @@ pub struct ContinentalCompetitions {
     pub champions_league: ChampionsLeague,
     pub europa_league: EuropaLeague,
     pub conference_league: ConferenceLeague,
+    pub copa_libertadores: CopaLibertadores,
     pub super_cup: SuperCup,
 }
 
@@ -30,6 +33,7 @@ impl ContinentalCompetitions {
             champions_league: ChampionsLeague::new(),
             europa_league: EuropaLeague::new(),
             conference_league: ConferenceLeague::new(),
+            copa_libertadores: CopaLibertadores::new(),
             super_cup: SuperCup::new(),
         }
     }
@@ -40,6 +44,7 @@ impl ContinentalCompetitions {
         points += self.champions_league.get_club_points(club_id);
         points += self.europa_league.get_club_points(club_id);
         points += self.conference_league.get_club_points(club_id);
+        points += self.copa_libertadores.get_club_points(club_id);
 
         points
     }
@@ -48,6 +53,7 @@ impl ContinentalCompetitions {
         self.champions_league.prize_pool
             + self.europa_league.prize_pool
             + self.conference_league.prize_pool
+            + self.copa_libertadores.prize_pool
             + self.super_cup.prize_pool
     }
 }

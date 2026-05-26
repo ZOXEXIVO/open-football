@@ -2,8 +2,8 @@ use crate::PlayerFieldPositionGroup;
 use crate::club::player::behaviour_config::PassEvaluatorConfig;
 use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
-use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     BallSideZone, GamePhase, MatchPlayer, MatchPlayerLite, PlayerSide, StateProcessingContext,
 };
@@ -1231,8 +1231,7 @@ impl PassEvaluator {
             let interception_blocked = if interception_risk >= 0.85 {
                 // 2+ opponents in the lane — almost always reject
                 if is_playmaker
-                    && rand::random::<f32>()
-                        < SkillCurve::new(vision_raw, 16.0, 0.6).probability()
+                    && rand::random::<f32>() < SkillCurve::new(vision_raw, 16.0, 0.6).probability()
                 {
                     false // Elite playmakers can attempt
                 } else {

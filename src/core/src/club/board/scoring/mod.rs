@@ -434,13 +434,18 @@ mod tests {
             ..targets()
         };
 
-        let survivor = BoardComponentScores::sporting_score(&ctx, &survivor_targets, SeasonPhase::Mid);
-        let big_club = BoardComponentScores::sporting_score(&ctx, &big_club_targets, SeasonPhase::Mid);
+        let survivor =
+            BoardComponentScores::sporting_score(&ctx, &survivor_targets, SeasonPhase::Mid);
+        let big_club =
+            BoardComponentScores::sporting_score(&ctx, &big_club_targets, SeasonPhase::Mid);
         assert!(
             survivor > big_club,
             "15th should hurt a title side far more than a survival one: {survivor} vs {big_club}"
         );
-        assert!(survivor >= 0.0, "a survivor over-achieving in 15th isn't punished");
+        assert!(
+            survivor >= 0.0,
+            "a survivor over-achieving in 15th isn't punished"
+        );
     }
 
     #[test]
@@ -462,8 +467,16 @@ mod tests {
             SeasonPhase::Mid,
             0,
         );
-        assert!(scores.financial < -10.0, "breach must bite finances: {}", scores.financial);
-        assert!(scores.sporting > 20.0, "a runaway leader's sporting stays strong: {}", scores.sporting);
+        assert!(
+            scores.financial < -10.0,
+            "breach must bite finances: {}",
+            scores.financial
+        );
+        assert!(
+            scores.sporting > 20.0,
+            "a runaway leader's sporting stays strong: {}",
+            scores.sporting
+        );
         // Sporting still wins out: overall confidence stays positive despite
         // the financial hit, so good football isn't made irrelevant.
         assert!(
@@ -547,7 +560,11 @@ mod tests {
             Case {
                 name: "elite state-backed title challenger",
                 ctx: c,
-                targets: SeasonTargets { expected_position: 1, min_acceptable_position: 4, ..targets() },
+                targets: SeasonTargets {
+                    expected_position: 1,
+                    min_acceptable_position: 4,
+                    ..targets()
+                },
                 vision: ClubVision::default(),
                 sporting: Some(true),
                 financial: Some(true),
@@ -564,7 +581,11 @@ mod tests {
             Case {
                 name: "private-equity selling club",
                 ctx: c,
-                targets: SeasonTargets { expected_position: 9, min_acceptable_position: 14, ..targets() },
+                targets: SeasonTargets {
+                    expected_position: 9,
+                    min_acceptable_position: 14,
+                    ..targets()
+                },
                 vision: ClubVision::default(),
                 sporting: None,
                 financial: Some(true),
@@ -580,7 +601,11 @@ mod tests {
             Case {
                 name: "relegation survivor over-achieving",
                 ctx: c,
-                targets: SeasonTargets { expected_position: 18, min_acceptable_position: 20, ..targets() },
+                targets: SeasonTargets {
+                    expected_position: 18,
+                    min_acceptable_position: 20,
+                    ..targets()
+                },
                 vision: ClubVision::default(),
                 sporting: Some(true), // beating a survival brief
                 financial: None,

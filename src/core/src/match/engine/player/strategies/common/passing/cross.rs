@@ -4,8 +4,8 @@
 //! model is consistent across roles.
 
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, StateProcessingContext};
 use nalgebra::Vector3;
 
@@ -193,8 +193,7 @@ fn pick_cross_type(
 
     if near_byline && target_inside_box {
         // Pulled-back option for a runner trailing the play.
-        if target_pos.x.abs() > crosser_pos.x.abs()
-            && rand::random::<f32>() < p_poor_header_byline
+        if target_pos.x.abs() > crosser_pos.x.abs() && rand::random::<f32>() < p_poor_header_byline
         {
             return CrossType::Cutback;
         }

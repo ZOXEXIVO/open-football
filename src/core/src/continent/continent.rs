@@ -12,6 +12,13 @@ use log::debug;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelRefMutIterator;
 
+/// Reserved continent ids used to scope continental club competitions.
+/// UEFA competitions only run in Europe; Copa Libertadores only runs in
+/// South America. The id is the primary check; the name is a readable
+/// fallback for data sets that haven't pinned the canonical id.
+pub const CONTINENT_EUROPE_ID: u32 = 1;
+pub const CONTINENT_SOUTH_AMERICA_ID: u32 = 3;
+
 #[derive(Clone)]
 pub struct Continent {
     pub id: u32,
@@ -42,6 +49,18 @@ impl Continent {
             economic_zone: EconomicZone::new(),
             national_team_competitions: NationalTeamCompetitions::new(competition_configs),
         }
+    }
+
+    /// True when this continent hosts the UEFA club competitions
+    /// (Champions / Europa / Conference League).
+    pub fn is_europe(&self) -> bool {
+        self.id == CONTINENT_EUROPE_ID || self.name == "Europe"
+    }
+
+    /// True when this continent hosts the CONMEBOL club competition
+    /// (Copa Libertadores).
+    pub fn is_south_america(&self) -> bool {
+        self.id == CONTINENT_SOUTH_AMERICA_ID || self.name == "South America"
     }
 
     pub fn simulate(

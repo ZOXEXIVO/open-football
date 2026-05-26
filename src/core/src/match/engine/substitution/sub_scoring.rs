@@ -11,8 +11,8 @@
 //! the stronger the case for the swap. The substitution loop combines
 //! a `sub_off_score` and a `sub_in_score` to choose pairs.
 
-use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::engine::rating::RatingContext;
+use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{MatchPlayer, engine::coach::TacticalNeed};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 

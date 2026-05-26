@@ -1,6 +1,6 @@
 use crate::Staff;
-use crate::club::staff::StaffCoaching;
 use crate::club::staff::CoachingStyle;
+use crate::club::staff::StaffCoaching;
 
 // ─── PerceptionLens ─────────────────────────────────────────────────
 
