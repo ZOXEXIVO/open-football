@@ -130,7 +130,14 @@ impl BoardComponentScores {
             s -= 4.0;
         }
 
-        (s * phase.sporting_scale()).clamp(-40.0, 40.0)
+        let mut total = s * phase.sporting_scale();
+        // An injury crisis softens the blame for poor results — you can't
+        // judge a depleted side as harshly. Only pulls negatives towards
+        // zero; it never rewards bad form.
+        if ctx.injury_crisis_score > 0.3 && total < 0.0 {
+            total *= 1.0 - (ctx.injury_crisis_score * 0.4).clamp(0.0, 0.4);
+        }
+        total.clamp(-40.0, 40.0)
     }
 
     fn financial_score(ctx: &BoardContext) -> f32 {
@@ -375,5 +382,248 @@ mod tests {
         assert!(!SeasonPhase::classify(8, 38).can_sack_manager());
         assert!(SeasonPhase::classify(16, 38).can_sack_manager());
         assert_eq!(SeasonPhase::classify(32, 38), SeasonPhase::RunIn);
+    }
+
+    #[test]
+    fn mid_table_club_meeting_expectations_is_roughly_neutral() {
+        // A textbook mid-table side, finishing where expected on a par
+        // points haul, should barely move board confidence.
+        let mut ctx = base_ctx();
+        ctx.league_position = 8;
+        ctx.points_per_match = 1.3;
+        ctx.recent_wins = 2;
+        ctx.recent_losses = 2;
+        ctx.goal_difference = 0;
+        ctx.distance_to_relegation = 5;
+        let scores = BoardComponentScores::evaluate(
+            &ctx,
+            &targets(), // expected 8
+            &ClubVision::default(),
+            &PromiseLedger::new(),
+            SeasonPhase::Mid,
+            0,
+        );
+        assert!(
+            scores.sporting.abs() < 8.0,
+            "meeting expectations should be near-neutral sporting: {}",
+            scores.sporting
+        );
+        assert!(
+            scores.confidence_delta(SeasonPhase::Mid).abs() <= 2,
+            "confidence should barely move: {}",
+            scores.confidence_delta(SeasonPhase::Mid)
+        );
+    }
+
+    #[test]
+    fn relegation_survivor_is_judged_more_kindly_than_a_big_club_in_the_same_spot() {
+        // Same league position (15th), wildly different expectations.
+        let mut ctx = base_ctx();
+        ctx.league_position = 15;
+        ctx.points_per_match = 1.0;
+        ctx.distance_to_relegation = 3;
+
+        let survivor_targets = SeasonTargets {
+            expected_position: 17,
+            min_acceptable_position: 20,
+            ..targets()
+        };
+        let big_club_targets = SeasonTargets {
+            expected_position: 3,
+            min_acceptable_position: 8,
+            ..targets()
+        };
+
+        let survivor = BoardComponentScores::sporting_score(&ctx, &survivor_targets, SeasonPhase::Mid);
+        let big_club = BoardComponentScores::sporting_score(&ctx, &big_club_targets, SeasonPhase::Mid);
+        assert!(
+            survivor > big_club,
+            "15th should hurt a title side far more than a survival one: {survivor} vs {big_club}"
+        );
+        assert!(survivor >= 0.0, "a survivor over-achieving in 15th isn't punished");
+    }
+
+    #[test]
+    fn ffp_breach_hits_finances_hard_without_drowning_sporting() {
+        // A title-challenging side that breaches FFP.
+        let mut ctx = base_ctx();
+        ctx.league_position = 1;
+        ctx.points_per_match = 2.3;
+        ctx.recent_wins = 5;
+        ctx.goal_difference = 30;
+        ctx.distance_to_relegation = 18;
+        ctx.ffp_status = FfpStatus::Breach;
+
+        let scores = BoardComponentScores::evaluate(
+            &ctx,
+            &targets(),
+            &ClubVision::default(),
+            &PromiseLedger::new(),
+            SeasonPhase::Mid,
+            0,
+        );
+        assert!(scores.financial < -10.0, "breach must bite finances: {}", scores.financial);
+        assert!(scores.sporting > 20.0, "a runaway leader's sporting stays strong: {}", scores.sporting);
+        // Sporting still wins out: overall confidence stays positive despite
+        // the financial hit, so good football isn't made irrelevant.
+        assert!(
+            scores.confidence_delta(SeasonPhase::Mid) > 0,
+            "strong football should still lift confidence through an FFP breach"
+        );
+    }
+
+    #[test]
+    fn injury_crisis_softens_both_sporting_and_squad_blame() {
+        let mut ctx = base_ctx();
+        ctx.league_position = 16;
+        ctx.points_per_match = 0.8;
+        ctx.recent_losses = 4;
+        ctx.goal_difference = -12;
+        ctx.distance_to_relegation = 1;
+        ctx.main_squad_size = 15; // under min → squad penalty
+
+        let healthy = {
+            let mut c = ctx.clone();
+            c.injury_crisis_score = 0.0;
+            BoardComponentScores::evaluate(
+                &c,
+                &targets(),
+                &ClubVision::default(),
+                &PromiseLedger::new(),
+                SeasonPhase::Mid,
+                0,
+            )
+        };
+        let crisis = {
+            let mut c = ctx.clone();
+            c.injury_crisis_score = 0.6;
+            BoardComponentScores::evaluate(
+                &c,
+                &targets(),
+                &ClubVision::default(),
+                &PromiseLedger::new(),
+                SeasonPhase::Mid,
+                0,
+            )
+        };
+        assert!(
+            crisis.sporting > healthy.sporting,
+            "injury crisis should soften sporting blame: {} vs {}",
+            crisis.sporting,
+            healthy.sporting
+        );
+        assert!(
+            crisis.squad_building >= healthy.squad_building,
+            "injury crisis should soften squad blame: {} vs {}",
+            crisis.squad_building,
+            healthy.squad_building
+        );
+    }
+
+    /// Table-driven archetype check: each club profile should produce the
+    /// expected *signs* of component movement (not fragile exact scores).
+    #[test]
+    fn archetype_component_signs() {
+        struct Case {
+            name: &'static str,
+            ctx: BoardContext,
+            targets: SeasonTargets,
+            vision: ClubVision,
+            // Expected sign of each component: Some(true)=positive,
+            // Some(false)=negative, None=don't care.
+            sporting: Option<bool>,
+            financial: Option<bool>,
+            confidence_up: Option<bool>,
+        }
+
+        let elite_title = {
+            let mut c = base_ctx();
+            c.league_position = 1;
+            c.points_per_match = 2.4;
+            c.recent_wins = 5;
+            c.goal_difference = 35;
+            c.distance_to_relegation = 18;
+            c.profit_loss_12m = 20_000_000;
+            Case {
+                name: "elite state-backed title challenger",
+                ctx: c,
+                targets: SeasonTargets { expected_position: 1, min_acceptable_position: 4, ..targets() },
+                vision: ClubVision::default(),
+                sporting: Some(true),
+                financial: Some(true),
+                confidence_up: Some(true),
+            }
+        };
+
+        let pe_selling = {
+            let mut c = base_ctx();
+            c.league_position = 9;
+            c.points_per_match = 1.35;
+            c.profit_loss_12m = 30_000_000; // sold to profit
+            c.balance = 40_000_000;
+            Case {
+                name: "private-equity selling club",
+                ctx: c,
+                targets: SeasonTargets { expected_position: 9, min_acceptable_position: 14, ..targets() },
+                vision: ClubVision::default(),
+                sporting: None,
+                financial: Some(true),
+                confidence_up: None,
+            }
+        };
+
+        let relegation_survivor = {
+            let mut c = base_ctx();
+            c.league_position = 15;
+            c.points_per_match = 1.1;
+            c.distance_to_relegation = 4; // a real cushion, not in the scrap
+            Case {
+                name: "relegation survivor over-achieving",
+                ctx: c,
+                targets: SeasonTargets { expected_position: 18, min_acceptable_position: 20, ..targets() },
+                vision: ClubVision::default(),
+                sporting: Some(true), // beating a survival brief
+                financial: None,
+                confidence_up: None,
+            }
+        };
+
+        for case in [elite_title, pe_selling, relegation_survivor] {
+            let scores = BoardComponentScores::evaluate(
+                &case.ctx,
+                &case.targets,
+                &case.vision,
+                &PromiseLedger::new(),
+                SeasonPhase::Mid,
+                0,
+            );
+            if let Some(pos) = case.sporting {
+                assert_eq!(
+                    scores.sporting > 0.0,
+                    pos,
+                    "{}: sporting sign wrong ({})",
+                    case.name,
+                    scores.sporting
+                );
+            }
+            if let Some(pos) = case.financial {
+                assert_eq!(
+                    scores.financial > 0.0,
+                    pos,
+                    "{}: financial sign wrong ({})",
+                    case.name,
+                    scores.financial
+                );
+            }
+            if let Some(up) = case.confidence_up {
+                assert_eq!(
+                    scores.confidence_delta(SeasonPhase::Mid) > 0,
+                    up,
+                    "{}: confidence direction wrong ({})",
+                    case.name,
+                    scores.confidence_delta(SeasonPhase::Mid)
+                );
+            }
+        }
     }
 }

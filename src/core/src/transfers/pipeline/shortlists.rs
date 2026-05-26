@@ -3,7 +3,7 @@ use log::debug;
 use std::collections::HashMap;
 
 use crate::club::BoardTransferProposal;
-use crate::club::board::BoardDossierSummary;
+use crate::club::board::{BoardDossierSummary, BoardTransferEconomics};
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
@@ -371,11 +371,41 @@ impl PipelineProcessor {
     /// drifts down, and the manager takes a job_satisfaction hit. Named
     /// targets that DO pass the filter get `board_approved = Some(true)`
     /// so the downstream negotiation pipeline can pin them as priority #1.
+    /// Rough resale projection at the end of a standard deal. A buy-low /
+    /// sell-high heuristic: younger players with growth headroom (potential
+    /// above current ability) hold or grow their value, while ageing
+    /// signings depreciate. Deliberately simple — the board only uses it to
+    /// gauge whether a deal is sound for a resale-driven owner.
+    fn project_resale(fee: f64, age: u8, ability: u8, potential: u8) -> f64 {
+        let age_factor = if age <= 23 {
+            1.15
+        } else if age <= 26 {
+            1.0
+        } else if age <= 29 {
+            0.8
+        } else if age <= 32 {
+            0.55
+        } else {
+            0.3
+        };
+        // Unrealised potential adds upside; a maxed-out player has none.
+        let growth = ((potential as f32 - ability as f32) / 50.0).clamp(0.0, 1.0) as f64;
+        fee * age_factor * (0.85 + growth * 0.4)
+    }
+
     pub fn evaluate_board_approvals(country: &mut Country, date: NaiveDate) {
         #[derive(Clone, Copy)]
         struct PlayerApprovalSnapshot {
             age: u8,
             ability: u8,
+            potential: u8,
+            /// Current annual wage — the best signal we have at shortlist
+            /// stage for what the player would commit the club to.
+            annual_salary: u32,
+            /// Nationality country id, for the homegrown / domestic check.
+            country_id: u32,
+            injury_proneness: u8,
+            world_reputation: i16,
         }
         struct Decision {
             club_id: u32,
@@ -400,12 +430,22 @@ impl PipelineProcessor {
                         PlayerApprovalSnapshot {
                             age: player.age(date),
                             ability: player.player_attributes.current_ability,
+                            potential: player.player_attributes.potential_ability,
+                            annual_salary: player
+                                .contract
+                                .as_ref()
+                                .map(|c| c.salary)
+                                .unwrap_or(0),
+                            country_id: player.country_id,
+                            injury_proneness: player.player_attributes.injury_proneness,
+                            world_reputation: player.player_attributes.world_reputation,
                         },
                     );
                 }
             }
         }
 
+        let league_country_id = country.id;
         for club in &country.clubs {
             let plan = &club.transfer_plan;
             let remaining_transfer_budget = club
@@ -419,6 +459,21 @@ impl PipelineProcessor {
                 .main()
                 .map(|t| t.players.current_ability_avg())
                 .unwrap_or(0);
+
+            // Wage-budget headroom for the economics dossier: the board's
+            // wage mandate (season target) minus what the club already pays.
+            // `None` when no target has been set yet (test fixtures / cold
+            // start) — the dossier then treats wages as neutral.
+            let committed_wages: f64 = club
+                .teams
+                .iter()
+                .map(|t| t.get_annual_salary() as f64)
+                .sum();
+            let wage_budget = club
+                .board
+                .season_targets
+                .as_ref()
+                .map(|t| t.wage_budget.max(0) as f64);
 
             for shortlist in &plan.shortlists {
                 // Skip anything already approved / vetoed / drained.
@@ -471,6 +526,36 @@ impl PipelineProcessor {
                     None
                 };
                 let snapshot = player_snapshots.get(&top.player_id).copied();
+
+                // Build the economics dossier from real data where we have
+                // it, leaving genuinely unavailable signals neutral rather
+                // than invented (a bad proxy is worse than a neutral 0).
+                let economics = snapshot.map(|s| {
+                    let wage_impact = s.annual_salary as f64;
+                    // Headroom = wage mandate − committed wages. With no
+                    // mandate set we leave it equal to the impact, so the
+                    // board's wage-breach rule stays neutral.
+                    let headroom = wage_budget
+                        .map(|wb| (wb - committed_wages).max(0.0))
+                        .unwrap_or(wage_impact);
+                    BoardTransferEconomics {
+                        wage_impact_annual: wage_impact,
+                        wage_budget_headroom: headroom,
+                        // Agent fee isn't modelled at this stage.
+                        agent_fee: 0.0,
+                        // Standard projection length; real terms are agreed
+                        // later in negotiation.
+                        contract_length_years: 4,
+                        resale_projection: Self::project_resale(fee, s.age, s.ability, s.potential),
+                        // No discipline/professionalism signal sourced yet.
+                        professionalism_risk: 0.0,
+                        homegrown_fit: s.country_id == league_country_id,
+                        injury_risk: (s.injury_proneness as f32 / 20.0).clamp(0.0, 1.0),
+                        commercial_value: (s.world_reputation as f32 / 10_000.0).clamp(0.0, 1.0),
+                        manager_priority: dossier_summary.is_some(),
+                    }
+                });
+
                 let proposal = BoardTransferProposal {
                     fee,
                     allocated_budget: alloc,
@@ -482,9 +567,7 @@ impl PipelineProcessor {
                     squad_avg_ability,
                     shortlist_score: top.score,
                     dossier: dossier_summary,
-                    // Economics dossier not yet wired from the pipeline;
-                    // the board falls back to its base governance.
-                    economics: None,
+                    economics,
                 };
                 let board_decision = club.board.review_transfer_proposal(&proposal);
                 let veto_reason: Option<&str> = if board_decision.is_approved() {

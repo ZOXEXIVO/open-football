@@ -22,6 +22,11 @@ impl FacilityReview {
     /// turnout demand.
     pub const STADIUM_EXPANSION_BASE_COST: i64 = 30_000_000;
 
+    /// Minimum seasons between two board-funded facility upgrades. The board
+    /// enforces this cooldown (see `ClubBoard::run_facility_review`) so even
+    /// a rich owner upgrades at a believable cadence rather than every year.
+    pub const COOLDOWN_SEASONS: i32 = 2;
+
     /// Capital the board is willing to commit to infrastructure this year:
     /// half of positive cash, all of trailing profit, plus a wealthy
     /// owner's optional injection. FFP trouble zeroes it out.
@@ -81,15 +86,20 @@ impl FacilityReview {
     }
 
     fn cost_of(ctx: &BoardContext, facility: BoardFacility) -> i64 {
+        // Costs scale with the country's price level — building in an
+        // expensive economy costs more — on top of the club-level scaling
+        // already baked into `upgrade_cost` (square of the target rating).
+        let price = ctx.country_price_level.max(0.1);
         match facility {
             BoardFacility::Stadium => {
                 // Pricier when the ground is already busy (demand is
                 // there, but expansion is a bigger job).
-                (Self::STADIUM_EXPANSION_BASE_COST as f32 * ctx.attendance_ratio.max(1.0)) as i64
+                (Self::STADIUM_EXPANSION_BASE_COST as f32 * ctx.attendance_ratio.max(1.0) * price)
+                    as i64
             }
             other => Self::level_of(ctx, other)
                 .and_then(|l| l.next_better())
-                .map(|l| l.upgrade_cost())
+                .map(|l| (l.upgrade_cost() as f32 * price) as i64)
                 .unwrap_or(i64::MAX),
         }
     }
@@ -99,11 +109,14 @@ impl FacilityReview {
         let mut out = Vec::new();
         let capacity = Self::capex_capacity(ctx, owner);
 
-        // Stadium expansion is its own track — only when fans are turning
-        // up in numbers (high attendance ratio) and the owner has appetite.
-        let wants_stadium = ctx.attendance_ratio >= 1.1
-            && (matches!(vision.infrastructure_priority, InfrastructurePriority::Stadium)
-                || owner.wealth >= 70);
+        // Stadium expansion is its own track. It's only justified by an
+        // explicit board mandate at solid demand, OR by genuinely strong
+        // sustained demand — a wealthy owner alone is *not* enough, so the
+        // board doesn't pour concrete on the back of one good month.
+        let wants_stadium = match vision.infrastructure_priority {
+            InfrastructurePriority::Stadium => ctx.attendance_ratio >= 1.1,
+            _ => owner.wealth >= 70 && ctx.attendance_ratio >= 1.2,
+        };
         if wants_stadium {
             let cost = Self::cost_of(ctx, BoardFacility::Stadium);
             if cost <= capacity {
@@ -243,5 +256,43 @@ mod tests {
     #[test]
     fn upgrade_cost_increases_with_level() {
         assert!(FacilityLevel::Average.upgrade_cost() < FacilityLevel::Superb.upgrade_cost());
+    }
+
+    #[test]
+    fn wealthy_owner_alone_does_not_expand_stadium_on_modest_demand() {
+        // A rich owner with only mildly-above-average demand (1.15) and no
+        // explicit stadium mandate should NOT trigger an expansion — that's
+        // the over-eager behaviour we want to avoid.
+        let mut ctx = rich_ctx();
+        ctx.attendance_ratio = 1.15;
+        let vision = ClubVision::default(); // no stadium priority
+        let owner = OwnershipModel {
+            wealth: 90,
+            ..Default::default()
+        };
+        let decisions = FacilityReview::run(&ctx, &vision, &owner);
+        assert!(
+            !decisions.iter().any(|d| matches!(
+                d,
+                BoardDecision::ApproveFacilityUpgrade {
+                    facility: BoardFacility::Stadium,
+                    ..
+                }
+            )),
+            "modest demand + no mandate must not expand the stadium: {decisions:?}"
+        );
+    }
+
+    #[test]
+    fn cost_scales_with_country_price_level() {
+        let mut cheap = rich_ctx();
+        cheap.country_price_level = 0.5;
+        let mut dear = rich_ctx();
+        dear.country_price_level = 2.0;
+        assert!(
+            FacilityReview::cost_of(&dear, BoardFacility::Training)
+                > FacilityReview::cost_of(&cheap, BoardFacility::Training),
+            "a pricier economy should cost more to build in"
+        );
     }
 }

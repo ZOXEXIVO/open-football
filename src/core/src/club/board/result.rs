@@ -97,31 +97,13 @@ impl BoardResult {
                 None => return,
             };
 
-            // Poor mood: board pressures the club by reducing transfer budget
-            if matches!(self.mood, BoardMoodState::Poor) {
-                debug!(
-                    "Board mood Poor at {} (confidence: {}) — cutting transfer budget by 25%",
-                    club.name, self.confidence
-                );
-                if let Some(ref mut budget) = club.finance.transfer_budget {
-                    budget.amount *= 0.75;
-                }
-            }
-
-            // Excellent mood + overperforming: board adds 20% bonus to transfer budget
-            if self.bonus_transfer_funds {
-                debug!(
-                    "Board pleased at {} — releasing extra transfer funds (+20%)",
-                    club.name
-                );
-                if let Some(ref mut budget) = club.finance.transfer_budget {
-                    budget.amount *= 1.20;
-                }
-            }
-
-            // Apply amount-based / structural decisions (budgets, facility
-            // upgrades, takeover injections). Meeting / sack / search
-            // decisions are handled by the legacy fields below.
+            // Budget movements flow exclusively through `BoardDecision`
+            // entries now — see `ClubBoard::emit_budget_decisions`. The
+            // legacy `cut_transfer_budget` / `bonus_transfer_funds` flags
+            // and the board mood are kept for the UI but no longer drive a
+            // separate percentage tweak here (that double-applied with the
+            // decision amounts). `apply_decisions` is the single mutation
+            // point for budgets, facility upgrades, and takeover injections.
             Self::apply_decisions(&self.decisions, club);
 
             // Push the board's mood onto the manager's own job satisfaction —
@@ -322,12 +304,18 @@ impl BoardResult {
             BoardFacility::Recruitment => {
                 Self::step_up(&mut club.facilities.recruitment)
             }
-            BoardFacility::Stadium => {
-                // Expand capacity proxy by 15%.
-                let cur = club.facilities.average_attendance;
-                club.facilities.average_attendance = cur + (cur / 7).max(1);
-                true
-            }
+            BoardFacility::Stadium => match Self::expanded_attendance(
+                club.facilities.average_attendance,
+            ) {
+                Some(next) => {
+                    club.facilities.average_attendance = next;
+                    true
+                }
+                // No real stadium/attendance model for this club — the
+                // expansion is a news-only announcement, so we must NOT
+                // debit cash for a change nothing can see.
+                None => false,
+            },
         };
         if upgraded {
             club.finance.balance.push_cash_outflow(cost.max(0));
@@ -345,5 +333,37 @@ impl BoardResult {
         } else {
             false
         }
+    }
+
+    /// Post-expansion average attendance for a stadium upgrade (~+15%), or
+    /// `None` when there's no stadium model to change. `average_attendance`
+    /// of 0 means "unmodelled" — expanding it would change nothing visible,
+    /// so the caller must not debit cash for it.
+    ///
+    /// TODO: when real stadium capacity is modelled, key this off capacity
+    /// rather than the average-attendance proxy.
+    fn expanded_attendance(current: u32) -> Option<u32> {
+        if current == 0 {
+            None
+        } else {
+            Some(current + (current / 7).max(1))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stadium_expansion_is_news_only_when_unmodelled() {
+        // No attendance model (0) → no state change → caller must not debit.
+        assert_eq!(BoardResult::expanded_attendance(0), None);
+    }
+
+    #[test]
+    fn stadium_expansion_grows_a_real_attendance() {
+        let next = BoardResult::expanded_attendance(28_000).expect("modelled stadium expands");
+        assert!(next > 28_000, "expansion should raise attendance, got {next}");
     }
 }

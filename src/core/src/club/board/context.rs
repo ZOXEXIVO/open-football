@@ -73,19 +73,32 @@ pub struct BoardContext {
     pub attendance_ratio: f32,
     /// Aggregate supporter mood 0.0 (mutinous) .. 1.0 (euphoric).
     pub supporter_mood: f32,
-    /// Spent transfer budget / allocated transfer budget. 0.0 = unknown.
-    /// TODO: thread real spent-this-window figure from the transfer
-    /// pipeline; for now the financial score treats 0.0 as neutral.
+    /// Spent transfer budget / allocated transfer budget. 0.0 = unknown
+    /// (treated as neutral by the financial score).
+    ///
+    /// Kept neutral on purpose: the only locally derivable figure is
+    /// `(season_target − remaining_budget) / season_target`, but that
+    /// conflates board-ordered budget *cuts* with genuine spend and would
+    /// wrongly penalise a club whose budget was slashed. A bad proxy is
+    /// worse than a neutral default.
+    /// TODO: source a real per-window gross-fees-paid accumulator (reset at
+    /// the season-start budget sync in `Club::simulate`) and divide by the
+    /// season target.
     pub transfer_budget_usage: f32,
     /// Net debt / trailing annual revenue. 0.0 = no debt or unknown.
     pub debt_ratio: f32,
     /// Trailing-twelve-month profit (income − outcome).
     pub profit_loss_12m: i64,
-    /// Academy players promoted to a senior squad this season.
-    /// TODO: source the precise per-season count from the academy
-    /// pipeline; defaults to 0 until then.
+    /// Academy players promoted to a senior squad this season. Neutral
+    /// default of 0 until wired.
+    /// TODO: add a per-season counter on `ClubAcademy`, incremented by
+    /// `Club::process_academy_graduations` (which already returns the
+    /// graduating transfers at season start) and read here.
     pub academy_graduates_this_season: u32,
-    /// Share of the main squad that is U21 — a proxy for youth minutes.
+    /// Share of the main squad that is U21 — a *headcount* proxy for youth
+    /// minutes (real per-player match minutes aren't tracked at this layer).
+    /// TODO: replace with actual U21 share of minutes played once the match
+    /// engine exposes per-player season minutes.
     pub u21_minutes_share: f32,
     /// Fraction of the main squad currently injured (0.0..1.0). Softens
     /// the squad-building blame when high.
