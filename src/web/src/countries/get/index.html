@@ -8,10 +8,12 @@
         </div>
         <div class="fm-league-list">
             {% for league in leagues %}
-            <a href="/{{ lang }}/{% if league.is_cup %}cups{% else %}leagues{% endif %}/{{ league.slug }}" class="fm-league-item">
+            {% if !league.is_cup %}
+            <a href="/{{ lang }}/leagues/{{ league.slug }}" class="fm-league-item">
                 <i class="fa fa-trophy"></i>
                 <span>{{ league.name }}</span>
             </a>
+            {% endif %}
             {% endfor %}
         </div>
     </section>

@@ -1718,7 +1718,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-round.is-final .fm-round-hd {
-    color: #c9a949;
+    color: #4a9d5b;
 }
 
 .fm-round-cnt {
@@ -1838,12 +1838,12 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-round.is-final .fm-tie {
-    border-color: rgba(232, 193, 74, 0.4);
-    box-shadow: 0 0 20px rgba(232, 193, 74, 0.07);
+    border-color: rgba(74, 157, 91, 0.4);
+    box-shadow: 0 0 20px rgba(74, 157, 91, 0.07);
 }
 
 .fm-round.is-final .fm-tie:hover {
-    border-color: rgba(232, 193, 74, 0.6);
+    border-color: rgba(74, 157, 91, 0.6);
 }
 
 .fm-bye {
