@@ -105,25 +105,31 @@ impl<'a> MenuParams<'a> {
         // Each national-team row is active only on its own page.
         let senior_url = format!("/{}/countries/{}", self.lang, self.country_slug);
         let u21_url = format!("/{}/countries/{}/u21", self.lang, self.country_slug);
+        let leagues_url = format!("/{}/countries/{}/leagues", self.lang, self.country_slug);
         vec![
             home_section(self.i18n, self.lang),
             search_section(self.i18n, self.lang, self.current_path),
             MenuSection::plain(vec![MenuItem {
                 title: self.country_name.to_string(),
-                url: format!("/{}/countries/{}/leagues", self.lang, self.country_slug),
+                active: self.current_path == leagues_url,
+                url: leagues_url,
                 icon: "fa-home".to_string(),
-                active: false,
             }]),
             MenuSection::plain(vec![
                 MenuItem {
                     active: self.current_path == senior_url,
-                    title: self.country_name.to_string(),
+                    title: format!("{} {}", self.country_name, self.i18n.t("team")),
                     url: senior_url,
                     icon: "fa-users".to_string(),
                 },
                 MenuItem {
                     active: self.current_path == u21_url,
-                    title: format!("{} {}", self.country_name, self.i18n.t("u21")),
+                    title: format!(
+                        "{} {} {}",
+                        self.country_name,
+                        self.i18n.t("u21"),
+                        self.i18n.t("team")
+                    ),
                     url: u21_url,
                     icon: "fa-users".to_string(),
                 },
