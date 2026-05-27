@@ -6,7 +6,7 @@ use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
-use crate::transfers::pipeline::recruitment::{ScoutMonitoringSource, ScoutPlayerMonitoring};
+use crate::transfers::pipeline::recruitment::ScoutMonitoringSource;
 use crate::transfers::pipeline::scouting_config::ScoutingConfig;
 use crate::transfers::pipeline::{
     ClubTransferPlan, DetailedScoutingReport, PlayerObservation, ReportRiskFlag,
@@ -83,53 +83,26 @@ struct MonitoringUpdate {
 /// creates a fresh one. Pure-state mutation — no side effects beyond
 /// the plan.
 fn apply_monitoring_update(plan: &mut ClubTransferPlan, update: MonitoringUpdate, date: NaiveDate) {
-    if let Some(existing) = plan.find_monitoring_mut(update.scout_staff_id, update.player_id) {
-        // Refresh linkage if monitoring originated from a different
-        // request and now matches an active one — prefer the newer
-        // active linkage so meeting agendas stay coherent.
-        if update.transfer_request_id.is_some() && existing.transfer_request_id.is_none() {
-            existing.transfer_request_id = update.transfer_request_id;
-        }
-        if update.origin_assignment_id.is_some() && existing.origin_assignment_id.is_none() {
-            existing.origin_assignment_id = update.origin_assignment_id;
-        }
-        if existing.region.is_none() {
-            existing.region = update.region;
-        }
-        existing.record_observation(
-            update.assessed_ability,
-            update.assessed_potential,
-            update.confidence,
-            update.role_fit,
-            update.estimated_value,
-            update.risk_flags,
-            date,
-            update.is_match,
-        );
-    } else {
-        let id = plan.next_monitoring_id();
-        let mut row = ScoutPlayerMonitoring::new(
-            id,
-            update.scout_staff_id,
-            update.player_id,
-            update.source,
-            date,
-        );
-        row.transfer_request_id = update.transfer_request_id;
-        row.origin_assignment_id = update.origin_assignment_id;
-        row.region = update.region;
-        row.record_observation(
-            update.assessed_ability,
-            update.assessed_potential,
-            update.confidence,
-            update.role_fit,
-            update.estimated_value,
-            update.risk_flags,
-            date,
-            update.is_match,
-        );
-        plan.scout_monitoring.push(row);
-    }
+    // The upsert itself lives on `ClubTransferPlan` so the match-result
+    // showcase path (`LeagueResult::record_domestic_cup_showcase_scouting`)
+    // shares the exact same row lifecycle — this wrapper just unpacks the
+    // pipeline's read-pass payload.
+    plan.upsert_monitoring(
+        update.scout_staff_id,
+        update.player_id,
+        update.source,
+        update.transfer_request_id,
+        update.origin_assignment_id,
+        update.region,
+        update.assessed_ability,
+        update.assessed_potential,
+        update.confidence,
+        update.role_fit,
+        update.estimated_value,
+        update.risk_flags,
+        date,
+        update.is_match,
+    );
 }
 
 impl PipelineProcessor {

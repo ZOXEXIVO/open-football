@@ -1,3 +1,4 @@
+mod cup_showcase;
 pub mod data_access;
 mod match_events;
 mod physical;

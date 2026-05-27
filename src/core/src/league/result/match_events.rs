@@ -137,6 +137,23 @@ impl LeagueResult {
         Self::apply_post_match_physical_effects(details, data, is_friendly);
         Self::apply_post_match_reputation(result, data, is_friendly, is_cup);
 
+        // Domestic-cup breakout scouting: a lower-league hero who shines
+        // against a stronger club in a cup tie becomes visible to scouts.
+        // Gated to domestic cups only — friendlies and continental cups
+        // (which already have world-stage exposure) are excluded.
+        if is_cup && !is_friendly && !is_continental_cup {
+            Self::record_domestic_cup_showcase_scouting(
+                details,
+                data,
+                now_date,
+                home_team_id,
+                away_team_id,
+                home_goals,
+                away_goals,
+                best_player_id,
+            );
+        }
+
         // Disciplinary fallout — apply yellow / red card stats to each
         // player who featured, and serve a match for any banned player
         // on either side who didn't appear (their team played without

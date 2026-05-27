@@ -10,6 +10,7 @@ mod scouting;
 pub(crate) mod scouting_config;
 mod shortlists;
 
+use crate::transfers::ScoutingRegion;
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use chrono::NaiveDate;
 
@@ -985,6 +986,93 @@ impl ClubTransferPlan {
         self.scout_monitoring.iter_mut().find(|m| {
             m.scout_staff_id == scout_staff_id && m.player_id == player_id && m.is_active_interest()
         })
+    }
+
+    /// Read-only counterpart to `find_monitoring_mut`. Lets a caller peek
+    /// at the current confidence / matches-watched of an active row before
+    /// deciding what observation to record against it.
+    pub fn find_monitoring(
+        &self,
+        scout_staff_id: u32,
+        player_id: u32,
+    ) -> Option<&recruitment::ScoutPlayerMonitoring> {
+        self.scout_monitoring.iter().find(|m| {
+            m.scout_staff_id == scout_staff_id && m.player_id == player_id && m.is_active_interest()
+        })
+    }
+
+    /// Upsert a monitoring row for `(scout_staff_id, player_id)`. Either
+    /// refreshes the existing active row (preserving its first-seen linkage
+    /// and merging in any newly-known request/assignment/region) or creates
+    /// a fresh one. Single source of truth for the monitoring upsert so the
+    /// transfer-window scouting passes and the match-result showcase path
+    /// stay in lock-step — see `scouting::apply_monitoring_update` and
+    /// `LeagueResult::record_domestic_cup_showcase_scouting`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_monitoring(
+        &mut self,
+        scout_staff_id: u32,
+        player_id: u32,
+        source: recruitment::ScoutMonitoringSource,
+        transfer_request_id: Option<u32>,
+        origin_assignment_id: Option<u32>,
+        region: Option<ScoutingRegion>,
+        assessed_ability: u8,
+        assessed_potential: u8,
+        confidence: f32,
+        role_fit: f32,
+        estimated_value: f64,
+        risk_flags: Vec<ReportRiskFlag>,
+        date: NaiveDate,
+        is_match: bool,
+    ) {
+        if let Some(existing) = self.find_monitoring_mut(scout_staff_id, player_id) {
+            // Refresh linkage if monitoring originated from a different
+            // request and now matches an active one — prefer the newer
+            // active linkage so meeting agendas stay coherent.
+            if transfer_request_id.is_some() && existing.transfer_request_id.is_none() {
+                existing.transfer_request_id = transfer_request_id;
+            }
+            if origin_assignment_id.is_some() && existing.origin_assignment_id.is_none() {
+                existing.origin_assignment_id = origin_assignment_id;
+            }
+            if existing.region.is_none() {
+                existing.region = region;
+            }
+            existing.record_observation(
+                assessed_ability,
+                assessed_potential,
+                confidence,
+                role_fit,
+                estimated_value,
+                risk_flags,
+                date,
+                is_match,
+            );
+        } else {
+            let id = self.next_monitoring_id();
+            let mut row = recruitment::ScoutPlayerMonitoring::new(
+                id,
+                scout_staff_id,
+                player_id,
+                source,
+                date,
+            );
+            row.transfer_request_id = transfer_request_id;
+            row.origin_assignment_id = origin_assignment_id;
+            row.region = region;
+            row.record_observation(
+                assessed_ability,
+                assessed_potential,
+                confidence,
+                role_fit,
+                estimated_value,
+                risk_flags,
+                date,
+                is_match,
+            );
+            self.scout_monitoring.push(row);
+        }
     }
 
     /// All active monitoring rows for a given player across the club.
