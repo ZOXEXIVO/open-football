@@ -223,7 +223,7 @@ impl SquadComposition {
                 }
             }
 
-            execute_moves(teams, m.from_team_index, m.to_team_index, &[m.player_id]);
+            execute_moves(teams, m.from_team_index, m.to_team_index, &[m.player_id], date);
             record_player_decisions(
                 teams,
                 m.from_team_index,

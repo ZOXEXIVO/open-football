@@ -274,6 +274,17 @@ impl PlayerStatisticsHistory {
     /// row. Without this, the same team accumulates one entry per
     /// promotion cycle and the player history shows duplicate rows for
     /// the same season.
+    ///
+    /// Pass-through suppression: if the player never actually played for a
+    /// senior `from` team (0 games) before moving on to another senior
+    /// team, that row is just a registration stop — typically a fresh
+    /// signing parked on the Main team for a few days before being sent to
+    /// the "2"/B side. We drop it entirely instead of leaving a phantom
+    /// 0-game row, and carry any join fee forward onto the destination so
+    /// the signing record (and the "Free"/fee label) isn't lost. This is
+    /// safe to do here because the move is known to be intra-club; the
+    /// equivalent merge-layer trick can't tell an inter-club transfer apart
+    /// from an intra-club move and would wrongly delete real transfer rows.
     pub fn record_intra_club_move(
         &mut self,
         old_stats: PlayerStatistics,
@@ -283,9 +294,26 @@ impl PlayerStatisticsHistory {
         to_senior: bool,
         date: NaiveDate,
     ) {
+        let mut carried_fee: Option<f64> = None;
         if from_senior {
             self.upsert_current(from, old_stats, false, None, date);
-            self.mark_departed(&from.slug, false, date);
+
+            // A senior `from` spell with no games that the player is
+            // leaving for another senior team is a pass-through stop —
+            // remove it and carry its join fee to the destination. Only
+            // when `to` is senior (so the fee has somewhere to land);
+            // otherwise keep the historical "departed" row as before.
+            let from_pos = self
+                .current
+                .iter()
+                .rposition(|e| e.team_slug == from.slug && !e.is_loan);
+            match from_pos {
+                Some(pos) if to_senior && self.current[pos].statistics.total_games() == 0 => {
+                    carried_fee = self.current[pos].transfer_fee;
+                    self.current.remove(pos);
+                }
+                _ => self.mark_departed(&from.slug, false, date),
+            }
         }
         if to_senior {
             // Reactivate an existing senior entry for this team if one is
@@ -300,8 +328,11 @@ impl PlayerStatisticsHistory {
                 .find(|e| e.team_slug == to.slug && !e.is_loan)
             {
                 existing.departed_date = None;
+                if existing.transfer_fee.is_none() {
+                    existing.transfer_fee = carried_fee;
+                }
             } else {
-                self.push_new_entry(to, PlayerStatistics::default(), false, None, date);
+                self.push_new_entry(to, PlayerStatistics::default(), false, carried_fee, date);
             }
         }
     }
@@ -949,6 +980,20 @@ impl PlayerStatisticsHistory {
 
         let is_first_season = self.items.is_empty();
         let first_seq = self.current.iter().map(|e| e.seq_id).min();
+        // The player's active spell must never be merged away — see
+        // `merge_same_season_team_view`.
+        let active_seq = self
+            .current
+            .iter()
+            .find(|e| e.departed_date.is_none())
+            .map(|e| e.seq_id);
+        // The player's first-ever career record (their starting club) must
+        // also survive: when this is their only season, a manual transfer
+        // out before playing leaves the origin row at 0 games / no fee,
+        // which the phantom-drop would otherwise delete alongside the
+        // destination row's fee — erasing the original club entirely.
+        let initial_seq = if is_first_season { first_seq } else { None };
+        let protected_seqs: Vec<u32> = [active_seq, initial_seq].into_iter().flatten().collect();
 
         for entry in &self.current {
             let is_active = entry.departed_date.is_none();
@@ -1009,7 +1054,7 @@ impl PlayerStatisticsHistory {
         // inside the same season. New data goes through the merge at
         // `record_season_end`, but older data already in `items` (from
         // before this fix) needs to be cleaned up at render time too.
-        merge_same_season_team_view(&mut result);
+        merge_same_season_team_view(&mut result, &protected_seqs);
 
         result.sort_by(|a, b| {
             b.season
@@ -1152,8 +1197,24 @@ fn merge_same_season_team_items(items: &mut Vec<PlayerStatisticsHistoryItem>, se
         }
     }
 
+    // First-and-only season: the player's earliest record is their starting
+    // club. A manual transfer out before playing leaves it at 0 games / no
+    // fee; protect it so the destination row's fee doesn't trigger the
+    // phantom-drop and erase the origin club. Once any other season is
+    // recorded (`other` non-empty), the empty origin stub is dropped as
+    // before — the user's rule: keep the original only when it's the sole
+    // record.
+    let protected_seq = if other.is_empty() {
+        merged.iter().map(|m| m.seq_id).min()
+    } else {
+        None
+    };
+
     let merged_snapshot = merged.clone();
     merged.retain(|i| {
+        if protected_seq.is_some() && Some(i.seq_id) == protected_seq {
+            return true;
+        }
         let has_content = i.statistics.total_games() > 0 || i.transfer_fee.is_some();
         if has_content {
             return true;
@@ -1179,7 +1240,16 @@ fn merge_same_season_team_items(items: &mut Vec<PlayerStatisticsHistoryItem>, se
 /// every season the view contains so legacy duplicate rows already
 /// frozen in `items` (from before the season-end merge existed) are
 /// collapsed at render time.
-fn merge_same_season_team_view(items: &mut Vec<PlayerStatisticsHistoryItem>) {
+///
+/// `protected_seqs` are `seq_id`s that must never be phantom-dropped: the
+/// player's *active* current-season spell (where they are right now, shown
+/// even at 0 games) and — on a first/only season — their initial career
+/// record (their starting club, which must survive a manual transfer out
+/// before they ever played a game there).
+fn merge_same_season_team_view(
+    items: &mut Vec<PlayerStatisticsHistoryItem>,
+    protected_seqs: &[u32],
+) {
     let mut merged: Vec<PlayerStatisticsHistoryItem> = Vec::with_capacity(items.len());
     for entry in items.drain(..) {
         if let Some(target) = merged.iter_mut().find(|m| {
@@ -1207,6 +1277,11 @@ fn merge_same_season_team_view(items: &mut Vec<PlayerStatisticsHistoryItem>) {
     let merged_snapshot = merged.clone();
 
     merged.retain(|i| {
+        // Protected rows (active spell, initial career record) are always
+        // shown — even at 0 games / no fee.
+        if protected_seqs.contains(&i.seq_id) {
+            return true;
+        }
         let has_content = i.statistics.total_games() > 0 || i.transfer_fee.is_some();
         if has_content {
             return true;
@@ -2059,6 +2134,215 @@ mod club_career_apps_tests {
             seasons.contains(&2025) && seasons.contains(&2026) && seasons.contains(&2027),
             "view must keep every Main row across consecutive seasons, got: {:?}",
             seasons
+        );
+    }
+
+    #[test]
+    fn manual_transfer_keeps_original_team_when_it_is_the_only_record() {
+        // User repro: fresh simulation, player manually transferred from
+        // their starting club before playing a game. With only this one
+        // record, the original club must survive alongside the new club —
+        // not vanish because the new row carries a transfer fee.
+        let mut hist = PlayerStatisticsHistory::new();
+        let a = season_team("lokomotiv-moscow");
+        let b = season_team("spartak-moscow");
+        hist.seed_initial_team(&a, d(2026, 8, 1), false);
+
+        // Manual transfer (Edit menu) routes through record_departure_transfer.
+        hist.record_departure_transfer(
+            PlayerStatistics::default(),
+            &a,
+            &b,
+            Some(1_000_000.0),
+            false,
+            d(2026, 9, 1),
+        );
+
+        let view = hist.view_items(Some(&PlayerStatistics::default()), d(2026, 10, 1));
+        assert!(
+            view.iter().any(|i| i.team_slug == "lokomotiv-moscow"),
+            "the original club must be kept as the player's sole prior record, got: {:?}",
+            view.iter().map(|i| &i.team_slug).collect::<Vec<_>>()
+        );
+        assert!(
+            view.iter().any(|i| i.team_slug == "spartak-moscow"),
+            "the destination club must show too"
+        );
+
+        // And it survives the season-end freeze (so it doesn't vanish after
+        // a rollover).
+        hist.record_season_end(Season::new(2026), PlayerStatistics::default(), &b, false, None);
+        assert!(
+            hist.items.iter().any(|i| i.team_slug == "lokomotiv-moscow"),
+            "the original club must persist into frozen history"
+        );
+    }
+
+    #[test]
+    fn manual_transfer_drops_empty_origin_stub_when_other_records_exist() {
+        // Contrast: a player with prior career history who is manually
+        // transferred out of the current club before playing this season
+        // should NOT keep an empty 0-game origin stub for the current
+        // season — only the destination row (the user said that's fine
+        // when other records are present).
+        let mut prior = PlayerStatistics::default();
+        prior.played = 30;
+        let mut hist = PlayerStatisticsHistory::from_items(vec![PlayerStatisticsHistoryItem {
+            season: Season::new(2024),
+            team_name: "CSKA Moscow".to_string(),
+            team_slug: "cska-moscow".to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: prior,
+            seq_id: 0,
+        }]);
+        let a = season_team("lokomotiv-moscow");
+        let b = season_team("spartak-moscow");
+        hist.seed_initial_team(&a, d(2026, 8, 1), false);
+        hist.record_departure_transfer(
+            PlayerStatistics::default(),
+            &a,
+            &b,
+            Some(1_000_000.0),
+            false,
+            d(2026, 9, 1),
+        );
+
+        let view = hist.view_items(Some(&PlayerStatistics::default()), d(2026, 10, 1));
+        // The empty current-season origin stub is dropped.
+        assert!(
+            !view
+                .iter()
+                .any(|i| i.season.start_year == 2026 && i.team_slug == "lokomotiv-moscow"),
+            "empty origin stub should be dropped when prior records exist, got: {:?}",
+            view.iter()
+                .map(|i| (i.season.start_year, i.team_slug.clone()))
+                .collect::<Vec<_>>()
+        );
+        // Destination and prior history remain.
+        assert!(view.iter().any(|i| i.team_slug == "spartak-moscow"));
+        assert!(view.iter().any(|i| i.team_slug == "cska-moscow"));
+    }
+
+    #[test]
+    fn intra_club_move_drops_zero_game_transfer_in_row_and_carries_fee() {
+        // User repro: a free signing joins the main team, plays 0 games,
+        // and is moved to the "2" team. The main-team row must NOT linger
+        // — only the team the player actually moved to should show — and
+        // the "Free" join fee carries onto the 2-team row so the signing
+        // record survives.
+        let mut hist = PlayerStatisticsHistory::new();
+        let main = season_team("spartak-moscow");
+        let second = season_team("spartak-moscow-2");
+
+        // Free transfer into the main team: 0-game current entry with a fee.
+        hist.push_new_entry(&main, PlayerStatistics::default(), false, Some(0.0), d(2026, 7, 1));
+
+        // Moved to the "2" team without playing for the main team.
+        hist.record_intra_club_move(
+            PlayerStatistics::default(),
+            &main,
+            &second,
+            true,
+            true,
+            d(2026, 9, 1),
+        );
+
+        // No main-team row survives — it was a pass-through stop.
+        assert!(
+            !hist.current.iter().any(|e| e.team_slug == "spartak-moscow"),
+            "the 0-game main-team row must be dropped"
+        );
+        // The 2-team row is active and inherited the join fee.
+        let second_entry = hist
+            .current
+            .iter()
+            .find(|e| e.team_slug == "spartak-moscow-2")
+            .expect("the 2-team spell must exist");
+        assert!(second_entry.departed_date.is_none(), "2-team spell is active");
+        assert_eq!(
+            second_entry.transfer_fee,
+            Some(0.0),
+            "join fee carries onto the destination row"
+        );
+
+        // And it renders in the history view.
+        let view = hist.view_items(Some(&PlayerStatistics::default()), d(2026, 10, 1));
+        assert!(view.iter().any(|i| i.team_slug == "spartak-moscow-2"));
+        assert!(!view.iter().any(|i| i.team_slug == "spartak-moscow"));
+    }
+
+    #[test]
+    fn intra_club_move_keeps_played_from_row() {
+        // Contrast: when the player DID play for the main team before the
+        // move, that row must be preserved (marked departed), not dropped.
+        let mut hist = PlayerStatisticsHistory::new();
+        let main = season_team("spartak-moscow");
+        let second = season_team("spartak-moscow-2");
+        hist.seed_initial_team(&main, d(2026, 8, 1), false);
+
+        let mut played = PlayerStatistics::default();
+        played.played = 6;
+        hist.record_intra_club_move(played, &main, &second, true, true, d(2026, 11, 1));
+
+        let main_entry = hist
+            .current
+            .iter()
+            .find(|e| e.team_slug == "spartak-moscow")
+            .expect("played main spell must be kept");
+        assert_eq!(main_entry.statistics.played, 6);
+        assert!(main_entry.departed_date.is_some(), "main spell is closed");
+    }
+
+    #[test]
+    fn view_items_keeps_active_second_spell_over_zero_game_main_transfer_row() {
+        // User repro: a player transfers INTO Spartak's main team (a free
+        // transfer, so the Main current entry carries a fee), plays 0 games
+        // for the main team, and is then moved to the "2" team. Before he
+        // logs a Second-team game, the history must show the 2 team — not
+        // the stale Main transfer row. The Main row's fee made it "content"
+        // and the phantom-merge dropped the 0-game Second row; protecting
+        // the active spell keeps it visible.
+        let mut hist = PlayerStatisticsHistory::new();
+
+        // Free transfer into the main team (fee = Some(0.0)), 0 games.
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Spartak Moscow".to_string(),
+            team_slug: "spartak-moscow".to_string(),
+            team_reputation: 5_000,
+            league_name: "Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+            is_loan: false,
+            transfer_fee: Some(0.0),
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2026, 7, 1),
+            departed_date: Some(d(2026, 9, 1)),
+            seq_id: 0,
+        });
+        // Moved to the "2" team — active spell, no games yet.
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "Spartak Moscow 2".to_string(),
+            team_slug: "spartak-moscow-2".to_string(),
+            team_reputation: 1_000,
+            league_name: "Second Division".to_string(),
+            league_slug: "russian-second-division-b-group-2".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2026, 9, 1),
+            departed_date: None,
+            seq_id: 1,
+        });
+
+        let view = hist.view_items(Some(&PlayerStatistics::default()), d(2026, 10, 1));
+
+        assert!(
+            view.iter().any(|i| i.team_slug == "spartak-moscow-2"),
+            "the active 2-team spell must be shown even at 0 games, got: {:?}",
+            view.iter().map(|i| &i.team_slug).collect::<Vec<_>>()
         );
     }
 
