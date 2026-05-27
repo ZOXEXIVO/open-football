@@ -294,8 +294,7 @@ pub async fn team_get_action(
         country_name: cn,
         country_slug: cs,
     };
-    let menu_sections =
-        views::team_menu(&menu_params, &neighbor_refs, &league_refs);
+    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &league_refs);
     let title = team.name.clone();
 
     let league_title = league

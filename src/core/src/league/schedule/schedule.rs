@@ -76,6 +76,9 @@ impl Schedule {
                 home_team_id: sm.home_team_id,
                 away_team_id: sm.away_team_id,
                 result: None,
+                // League fixtures carry no knockout bracket position.
+                cup_round: None,
+                cup_total_rounds: None,
             })
             .collect();
 

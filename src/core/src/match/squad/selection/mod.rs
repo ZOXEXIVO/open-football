@@ -1,4 +1,5 @@
 mod competitive;
+mod cup_rotation;
 pub(crate) mod helpers;
 mod omissions;
 mod rotation;
@@ -48,6 +49,107 @@ pub struct SelectionContext {
     /// tactically astute, `get_enhanced_match_squad` flips to a counter
     /// formation instead of the pre-selected one.
     pub opponent_tactic: Option<MatchTacticType>,
+    /// Which competition the match belongs to. Lets the selector apply a
+    /// domestic-cup opportunity bias (rotate hard in early rounds, field a
+    /// strong XI in semis/finals) instead of inferring everything from a
+    /// `knockout` bool.
+    pub competition: SelectionCompetition,
+}
+
+/// Competition context for squad selection. Replaces inferring the cup
+/// rotation policy from a bare `knockout` flag — a `DomesticCup` tie
+/// carries its bracket position and the two sides' reputations so the
+/// selector can tell an early-round romp from a final.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionCompetition {
+    League,
+    DomesticCup {
+        /// 1-based round index within the bracket.
+        round: u8,
+        /// Total rounds needed to resolve the bracket (final == total).
+        total_rounds: u8,
+        /// Selecting side's reputation (market-value score).
+        own_reputation: u16,
+        /// Opponent's reputation (market-value score).
+        opponent_reputation: u16,
+    },
+    ContinentalCup,
+    Friendly,
+}
+
+impl SelectionCompetition {
+    /// Build the per-side opportunity context for a domestic cup tie.
+    /// `None` for league / continental / friendly games, which don't get
+    /// the rotation bias.
+    pub(crate) fn domestic_cup_context(&self, date: NaiveDate) -> Option<DomesticCupContext> {
+        match *self {
+            SelectionCompetition::DomesticCup {
+                round,
+                total_rounds,
+                own_reputation,
+                opponent_reputation,
+            } => Some(DomesticCupContext {
+                round,
+                total_rounds,
+                opponent_ratio: opponent_reputation as f32 / own_reputation.max(1) as f32,
+                date,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Knockout stage a domestic cup tie sits at, derived from the round
+/// index and bracket size. Drives how hard the selector rotates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CupStage {
+    /// Anything earlier than the quarterfinal — the rounds the manager rotates
+    /// through most freely.
+    Early,
+    /// "Last eight" or equivalent third-from-final stage (`round + 2 ==
+    /// total_rounds`). Still rotatable: its importance clamp deliberately stays
+    /// in the early/mid band so a quarterfinal against a weak opponent can
+    /// still be rested, but the opportunity bias is roughly half the early one.
+    Quarter,
+    /// Semifinal (`round + 1 == total_rounds`).
+    Semi,
+    /// Final (the last round, or a single-round bracket).
+    Final,
+}
+
+impl CupStage {
+    pub(crate) fn classify(round: u8, total_rounds: u8) -> Self {
+        if total_rounds <= 1 || round >= total_rounds {
+            CupStage::Final
+        } else if round + 1 == total_rounds {
+            CupStage::Semi
+        } else if round + 2 == total_rounds {
+            CupStage::Quarter
+        } else {
+            CupStage::Early
+        }
+    }
+}
+
+/// Per-side domestic-cup context consumed by the scoring engine's
+/// opportunity bias: the bracket position decides the rotation strength
+/// (via [`DomesticCupContext::stage`]), the reputation ratio nudges it back
+/// toward a strong XI against a stronger opponent. `round`/`total_rounds` are
+/// the raw bracket position — the single source of truth for the stage, and
+/// readable for tests and debug output.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DomesticCupContext {
+    pub round: u8,
+    pub total_rounds: u8,
+    pub opponent_ratio: f32,
+    pub date: NaiveDate,
+}
+
+impl DomesticCupContext {
+    /// Knockout stage this tie sits at, derived from its bracket position.
+    pub(crate) fn stage(&self) -> CupStage {
+        CupStage::classify(self.round, self.total_rounds)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +187,7 @@ impl Default for SelectionContext {
             match_importance: 0.7,
             philosophy: None,
             opponent_tactic: None,
+            competition: SelectionCompetition::League,
         }
     }
 }
@@ -125,6 +228,10 @@ impl SquadSelector {
         let engine =
             ScoringEngine::from_staff_for_team(staff, ctx.philosophy.clone(), is_main_team);
         let policy = SelectionPolicy::from_context(ctx);
+        // Domestic-cup opportunity bias, built once per side. `None` for
+        // league / continental / friendly games — those keep the existing
+        // quality/readiness/status logic untouched.
+        let cup = ctx.competition.domestic_cup_context(ctx.date);
 
         // Force-selection is a Main-team pin: a flagged player is committed
         // to the senior XI, so non-Main squads must drop them from every
@@ -252,17 +359,18 @@ impl SquadSelector {
             );
         }
 
-        let main_squad = competitive::select_starting_eleven(
-            team.id,
-            &available,
+        let scx = competitive::SelectionScoringContext {
             staff,
             tactics,
-            &engine,
-            ctx.date,
-            ctx.is_friendly,
-            ctx.match_importance,
+            engine: &engine,
+            date: ctx.date,
+            is_friendly: ctx.is_friendly,
+            match_importance: ctx.match_importance,
             policy,
-        );
+            cup: cup.as_ref(),
+        };
+
+        let main_squad = scx.select_starting_eleven(team.id, &available);
 
         let main_squad_ids: HashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
         let remaining: Vec<&Player> = available
@@ -271,17 +379,7 @@ impl SquadSelector {
             .copied()
             .collect();
 
-        let mut substitutes = competitive::select_substitutes(
-            team.id,
-            &remaining,
-            staff,
-            tactics,
-            &engine,
-            ctx.date,
-            ctx.is_friendly,
-            ctx.match_importance,
-            policy,
-        );
+        let mut substitutes = scx.select_substitutes(team.id, &remaining);
 
         if substitutes.is_empty() && !remaining.is_empty() {
             debug!(
@@ -313,6 +411,7 @@ impl SquadSelector {
             date: ctx.date,
             is_friendly: ctx.is_friendly,
             match_importance: ctx.match_importance,
+            cup: cup.as_ref(),
         }
         .build();
 
@@ -460,18 +559,8 @@ impl SquadSelector {
         tactics: &Tactics,
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
-        let date = Utc::now().date_naive();
-        competitive::select_starting_eleven(
-            team_id,
-            players,
-            staff,
-            tactics,
-            &engine,
-            date,
-            false,
-            0.7,
-            SelectionPolicy::StrongWithRotation,
-        )
+        let scx = Self::legacy_scoring_context(staff, tactics, &engine);
+        scx.select_starting_eleven(team_id, players)
     }
 
     pub fn select_substitutes_legacy(
@@ -481,17 +570,26 @@ impl SquadSelector {
         tactics: &Tactics,
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
-        let date = Utc::now().date_naive();
-        competitive::select_substitutes(
-            team_id,
-            players,
+        let scx = Self::legacy_scoring_context(staff, tactics, &engine);
+        scx.select_substitutes(team_id, players)
+    }
+
+    /// Scoring context for the legacy public selectors: today's date, a
+    /// competitive non-friendly fixture with no cup bias, mid importance.
+    fn legacy_scoring_context<'a>(
+        staff: &'a Staff,
+        tactics: &'a Tactics,
+        engine: &'a ScoringEngine,
+    ) -> competitive::SelectionScoringContext<'a> {
+        competitive::SelectionScoringContext {
             staff,
             tactics,
-            &engine,
-            date,
-            false,
-            0.7,
-            SelectionPolicy::StrongWithRotation,
-        )
+            engine,
+            date: Utc::now().date_naive(),
+            is_friendly: false,
+            match_importance: 0.7,
+            policy: SelectionPolicy::StrongWithRotation,
+            cup: None,
+        }
     }
 }

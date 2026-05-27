@@ -5,7 +5,7 @@ use super::{
 use crate::Club;
 use crate::MatchRuntime;
 use crate::continent::ContinentalRankings;
-use crate::r#match::{Match, MatchResult, SelectionContext};
+use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use std::collections::HashMap;
@@ -250,6 +250,7 @@ impl CopaLibertadores {
                     match_importance: 1.0,
                     philosophy: None,
                     opponent_tactic: away_baseline,
+                    competition: SelectionCompetition::ContinentalCup,
                 };
                 let away_ctx = SelectionContext {
                     is_friendly: false,
@@ -257,6 +258,7 @@ impl CopaLibertadores {
                     match_importance: 1.0,
                     philosophy: None,
                     opponent_tactic: home_baseline,
+                    competition: SelectionCompetition::ContinentalCup,
                 };
 
                 let home_squad = home_team.get_enhanced_match_squad(&home_force, &home_ctx);

@@ -190,8 +190,14 @@ impl League {
             let in_left_main = details.left_team_players.main.contains(&player_id);
             let in_right_main = details.right_team_players.main.contains(&player_id);
             let is_starter = in_left_main || in_right_main;
-            let is_sub = details.left_team_players.substitutes_used.contains(&player_id)
-                || details.right_team_players.substitutes_used.contains(&player_id);
+            let is_sub = details
+                .left_team_players
+                .substitutes_used
+                .contains(&player_id)
+                || details
+                    .right_team_players
+                    .substitutes_used
+                    .contains(&player_id);
             if !is_starter && !is_sub {
                 continue;
             }

@@ -8,7 +8,9 @@ use crate::utils::DateUtils;
 use crate::{Player, SelectionScoreFactor, Tactics};
 use chrono::NaiveDate;
 
+use super::cup_rotation::CupRotation;
 use super::helpers;
+use super::{CupStage, DomesticCupContext};
 use std::cmp::Ordering;
 
 /// Per-component breakdown of a slot score. Mirrors what
@@ -36,6 +38,15 @@ pub struct SlotScoreBreakdown {
     pub force_selection: f32,
     pub philosophy: f32,
     pub group_mismatch: f32,
+    /// External adjustments applied on top of the pure slot score by the
+    /// competitive selector (`development_minutes_bonus`, the domestic-cup
+    /// opportunity bias, the injury-risk penalty). Left at zero by
+    /// `score_player_for_slot_with_breakdown` — the pure slot score is
+    /// unchanged — and populated by the omissions builder so the
+    /// comparison can explain a backup/prospect being preferred.
+    pub development_minutes: f32,
+    pub domestic_cup_opportunity: f32,
+    pub injury_risk: f32,
 }
 
 impl SlotScoreBreakdown {
@@ -56,6 +67,9 @@ impl SlotScoreBreakdown {
             + self.force_selection
             + self.philosophy
             + self.group_mismatch
+            + self.development_minutes
+            + self.domestic_cup_opportunity
+            + self.injury_risk
     }
 
     /// Pairwise comparison: rank scoring factors where `selected`
@@ -68,7 +82,7 @@ impl SlotScoreBreakdown {
         omitted: &SlotScoreBreakdown,
         limit: usize,
     ) -> Vec<SelectionScoreFactor> {
-        let factors: [(SelectionScoreFactor, f32); 16] = [
+        let factors: [(SelectionScoreFactor, f32); 19] = [
             (
                 SelectionScoreFactor::PositionFit,
                 self.position_fit - omitted.position_fit,
@@ -136,6 +150,23 @@ impl SlotScoreBreakdown {
             (
                 SelectionScoreFactor::PositionFit,
                 self.group_mismatch - omitted.group_mismatch,
+            ),
+            // External adjustments. development_minutes surfaces as the
+            // generic DevelopmentMinutes factor; the domestic-cup opportunity
+            // bias has its own CupOpportunity factor. injury_risk is stored as
+            // a non-positive penalty — a smaller (less negative) value for the
+            // selected player means he was the safer pick.
+            (
+                SelectionScoreFactor::DevelopmentMinutes,
+                self.development_minutes - omitted.development_minutes,
+            ),
+            (
+                SelectionScoreFactor::CupOpportunity,
+                self.domestic_cup_opportunity - omitted.domestic_cup_opportunity,
+            ),
+            (
+                SelectionScoreFactor::InjuryRisk,
+                self.injury_risk - omitted.injury_risk,
             ),
         ];
 
@@ -725,6 +756,110 @@ impl ScoringEngine {
         };
 
         (rest_bonus + minutes_bonus) * rotation_factor
+    }
+
+    /// Domestic-cup opportunity bias. On top of the normal quality /
+    /// readiness / status scoring, early cup rounds tilt minutes toward
+    /// rotation players, backups and prospects while protecting overloaded
+    /// stars; the tilt fades round by round so semis and finals revert to
+    /// the strongest available XI. Only called when the match is a domestic
+    /// cup tie — league / continental / friendly games never see it.
+    ///
+    /// `for_starting` distinguishes the starting-XI bias from the lighter
+    /// bench bias (a star kept fresh on the bench, a recovering player only
+    /// trusted with cameo minutes).
+    pub fn domestic_cup_opportunity_bonus(
+        &self,
+        player: &Player,
+        cup: &DomesticCupContext,
+        for_starting: bool,
+    ) -> f32 {
+        let stage = cup.stage();
+        let mut bonus = 0.0f32;
+
+        // Base by squad status — the further from the final, the harder the
+        // manager rotates away from the established XI toward the fringe.
+        if let Some(contract) = player.contract.as_ref() {
+            bonus += stage.status_base(&contract.squad_status);
+        }
+
+        // Youth get extra rope to play their way in during early rounds.
+        let age = DateUtils::age(player.birth_date, cup.date);
+        bonus += stage.youth_bonus(age);
+
+        // Underplayed players need minutes — strongest signal in the early
+        // rounds, gone by the final.
+        let idle = player.player_attributes.days_since_last_match;
+        let idle_factor = (idle as f32 / CupRotation::IDLE_FULL_DAYS).min(1.0);
+        bonus += idle_factor * stage.idle_weight();
+
+        let appearances = (player.statistics.played
+            + player.statistics.played_subs
+            + player.cup_statistics.played) as f32;
+        if appearances < CupRotation::APPEARANCE_TARGET {
+            let factor = ((CupRotation::APPEARANCE_TARGET - appearances)
+                / CupRotation::APPEARANCE_TARGET)
+                .clamp(0.0, 1.0);
+            bonus += factor * stage.appearance_weight();
+        }
+
+        // Fitness protection: pull overloaded stars even harder out of the
+        // early-round XI, and keep a recovering player off the pitch unless
+        // it's the final.
+        if CupRotation::is_established(player)
+            && (player.load.physical_load_7 >= CupRotation::OVERLOAD_PHYSICAL_LOAD
+                || player.load.minutes_last_7 >= CupRotation::OVERLOAD_MINUTES)
+        {
+            bonus += stage.overload_protection();
+        }
+        if player.load.recovery_debt >= CupRotation::RECOVERY_DEBT_THRESHOLD {
+            bonus += stage.recovery_debt_penalty();
+        }
+        if player.player_attributes.is_in_recovery() {
+            if for_starting {
+                // Don't risk a recovering player in the early/mid rounds; the
+                // final is left to the injury-risk penalty + squad depth.
+                if stage != CupStage::Final {
+                    bonus += CupRotation::RECOVERY_STARTING_PENALTY;
+                }
+            } else if player.player_attributes.condition_percentage() as f32
+                >= CupRotation::CAMEO_MIN_CONDITION
+                && idle >= CupRotation::CAMEO_MIN_IDLE_DAYS
+            {
+                bonus += CupRotation::RECOVERING_BENCH_CAMEO;
+            }
+        }
+
+        bonus
+    }
+
+    /// Domestic-cup goalkeeper adjustment. Early rounds are when a backup
+    /// keeper plausibly gets a run, so a rested non-first-choice keeper is
+    /// nudged up and the established #1 nudged down against a weaker
+    /// opponent. Fades to zero by the final.
+    pub fn domestic_cup_goalkeeper_adjustment(
+        &self,
+        player: &Player,
+        cup: &DomesticCupContext,
+    ) -> f32 {
+        let stage = cup.stage();
+        if CupRotation::is_established(player) {
+            // Established #1 only steps aside against a comparable/weaker
+            // opponent, and only in the early rounds.
+            if stage == CupStage::Early
+                && cup.opponent_ratio < CupRotation::GK_FIRST_CHOICE_OPPONENT_RATIO_CAP
+            {
+                CupRotation::GK_FIRST_CHOICE_EARLY_PENALTY
+            } else {
+                0.0
+            }
+        } else if player.player_attributes.days_since_last_match
+            >= CupRotation::GK_BACKUP_MIN_IDLE_DAYS
+        {
+            stage.gk_backup()
+        } else {
+            0.0
+        }
     }
 
     /// Risk of asking a player to start while physically fragile. This is

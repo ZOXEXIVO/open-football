@@ -1,7 +1,7 @@
 use crate::context::GlobalContext;
 use crate::league::{League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable};
 use crate::r#match::MatchSquad;
-use crate::r#match::{Match, MatchResult, SelectionContext};
+use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
 use crate::{Club, ClubPhilosophy, MatchRuntime, Person, Player, Team, TeamType};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
@@ -85,6 +85,7 @@ impl League {
         knockout: bool,
     ) -> Vec<MatchResult> {
         let today = ctx.simulation.date.date();
+        let is_cup = self.is_cup;
         let lookup = MatchdayLookup::build(clubs);
         let matches: Vec<Match> = scheduled_matches
             .iter()
@@ -112,6 +113,7 @@ impl League {
                     &self.table,
                     friendly,
                     knockout,
+                    is_cup,
                     (home_upcoming, away_upcoming),
                 )
             })
@@ -144,6 +146,7 @@ impl League {
         table: &LeagueTable,
         friendly: bool,
         knockout: bool,
+        is_cup: bool,
         upcoming_fixtures: (u8, u8),
     ) -> Match {
         let home_team = lookup
@@ -165,27 +168,72 @@ impl League {
             table,
         );
 
-        // Calculate match importance for squad selection decisions.
-        // Knockout cup ties are inherently high-stakes — there's no table
-        // to read, and a defeat ends the campaign — so they get a high
-        // fixed importance to push the squad selector toward a strong XI.
-        let base_importance = if friendly {
-            0.1
-        } else if knockout {
-            0.9
+        // Match importance for squad selection decisions. A league game
+        // reads the table; continental ties build their own context and
+        // never reach this builder. A domestic cup tie scales importance by
+        // bracket stage and the reputation gap — early rounds rotate, finals
+        // demand the strongest XI — computed per side because the two clubs
+        // face different opponents.
+        let date = ctx.simulation.date.date();
+        let domestic_cup_round = if knockout && is_cup {
+            scheduled_match
+                .cup_round
+                .map(|round| (round, scheduled_match.cup_total_rounds.unwrap_or(round)))
         } else {
-            Self::calculate_match_importance(
-                table,
-                home_team,
-                away_team,
-                ctx.simulation.date.date(),
+            None
+        };
+
+        let home_rep = home_team.reputation.market_value_score();
+        let away_rep = away_team.reputation.market_value_score();
+
+        let (home_base, away_base, home_competition, away_competition) = if friendly {
+            (
+                0.1,
+                0.1,
+                SelectionCompetition::Friendly,
+                SelectionCompetition::Friendly,
+            )
+        } else if let Some((round, total_rounds)) = domestic_cup_round {
+            (
+                Self::domestic_cup_importance(round, total_rounds, home_rep, away_rep),
+                Self::domestic_cup_importance(round, total_rounds, away_rep, home_rep),
+                SelectionCompetition::DomesticCup {
+                    round,
+                    total_rounds,
+                    own_reputation: home_rep,
+                    opponent_reputation: away_rep,
+                },
+                SelectionCompetition::DomesticCup {
+                    round,
+                    total_rounds,
+                    own_reputation: away_rep,
+                    opponent_reputation: home_rep,
+                },
+            )
+        } else if knockout {
+            // Non-cup knockout run through the league scheduler keeps the
+            // historical high fixed importance.
+            (
+                0.9,
+                0.9,
+                SelectionCompetition::League,
+                SelectionCompetition::League,
+            )
+        } else {
+            let imp = Self::calculate_match_importance(table, home_team, away_team, date);
+            (
+                imp,
+                imp,
+                SelectionCompetition::League,
+                SelectionCompetition::League,
             )
         };
+
         // Fixture congestion tilt: if a team has another competitive
         // fixture within the next 5 days, dampen this match's importance
         // for them so the rotation/development logic kicks in. Applied
-        // per team individually — both teams may be congested, neither
-        // may be. Pre-computed by the caller from the schedule.
+        // per team individually. A domestic cup final is floored so
+        // congestion can never rotate it down into a weak XI.
         let congestion_dampen = |ups: u8| -> f32 {
             if ups >= 2 {
                 0.55
@@ -195,8 +243,22 @@ impl League {
                 1.0
             }
         };
-        let home_importance = base_importance * congestion_dampen(upcoming_fixtures.0);
-        let away_importance = base_importance * congestion_dampen(upcoming_fixtures.1);
+        let final_floor = |competition: &SelectionCompetition| -> f32 {
+            match competition {
+                SelectionCompetition::DomesticCup {
+                    round,
+                    total_rounds,
+                    ..
+                } if *total_rounds <= 1 || *round >= *total_rounds => {
+                    Self::DOMESTIC_CUP_FINAL_IMPORTANCE_FLOOR
+                }
+                _ => 0.0,
+            }
+        };
+        let home_importance = (home_base * congestion_dampen(upcoming_fixtures.0))
+            .max(final_floor(&home_competition));
+        let away_importance = (away_base * congestion_dampen(upcoming_fixtures.1))
+            .max(final_floor(&away_competition));
 
         // Surface each team's club philosophy to the selector so
         // DevelopAndSell / LoanFocused sides actually put their archetype
@@ -214,17 +276,19 @@ impl League {
 
         let home_ctx = SelectionContext {
             is_friendly: friendly,
-            date: ctx.simulation.date.date(),
+            date,
             match_importance: home_importance,
             philosophy: home_philosophy,
             opponent_tactic: away_baseline,
+            competition: home_competition,
         };
         let away_ctx = SelectionContext {
             is_friendly: friendly,
-            date: ctx.simulation.date.date(),
+            date,
             match_importance: away_importance,
             philosophy: away_philosophy,
             opponent_tactic: home_baseline,
+            competition: away_competition,
         };
         let selection_ctx = home_ctx;
 
@@ -430,6 +494,69 @@ impl League {
         candidates
     }
 
+    /// Lower bound a domestic cup final's importance is clamped to after the
+    /// congestion dampener. Kept just above the `BestEleven` selection-policy
+    /// threshold (0.82) rather than exactly on it, so the final stays a
+    /// strong-XI affair even if that threshold or the comparison ever shifts.
+    const DOMESTIC_CUP_FINAL_IMPORTANCE_FLOOR: f32 = 0.83;
+
+    /// Domestic-cup match importance for one side's squad selection.
+    /// Scales by bracket stage — early rounds rotate hard, semis and finals
+    /// demand a strong XI — and nudges up against a stronger opponent.
+    /// `own_rep`/`opp_rep` are the two sides' market-value scores. The
+    /// result is clamped per stage; the caller then applies the shared
+    /// congestion dampener (with a final-stage floor).
+    ///
+    /// Quarterfinals deliberately share the early/mid clamp band (max 0.62)
+    /// rather than getting their own higher band: a "last eight" tie against a
+    /// weak opponent should still be rotatable, while the stronger-opponent
+    /// nudge can lift it toward managed-minutes / strong-with-rotation.
+    fn domestic_cup_importance(round: u8, total_rounds: u8, own_rep: u16, opp_rep: u16) -> f32 {
+        let total = total_rounds.max(1);
+        let round_progress = round as f32 / total as f32;
+        let opponent_ratio = opp_rep as f32 / own_rep.max(1) as f32;
+
+        let is_final = total_rounds <= 1 || round >= total_rounds;
+        let is_semi = !is_final && round + 1 == total_rounds;
+        let is_quarter = !is_final && !is_semi && round + 2 == total_rounds;
+
+        let stage_base = if is_final {
+            0.95
+        } else if is_semi {
+            0.76
+        } else if is_quarter {
+            0.58
+        } else if round_progress < 0.40 {
+            0.30
+        } else if round_progress < 0.70 {
+            0.42
+        } else {
+            0.52
+        };
+
+        let opponent_adjust = if opponent_ratio < 0.45 {
+            -0.08
+        } else if opponent_ratio < 0.70 {
+            -0.04
+        } else if opponent_ratio <= 1.15 {
+            0.0
+        } else if opponent_ratio <= 1.50 {
+            0.08
+        } else {
+            0.14
+        };
+
+        let importance: f32 = stage_base + opponent_adjust;
+        if is_final {
+            importance.clamp(0.90, 0.98)
+        } else if is_semi {
+            importance.clamp(0.68, 0.86)
+        } else {
+            // Quarterfinal shares the early/mid clamp band.
+            importance.clamp(0.22, 0.62)
+        }
+    }
+
     /// Calculate how important a match is for squad selection decisions.
     /// Returns 0.0 (dead rubber) to 1.0 (must-win).
     ///
@@ -606,6 +733,123 @@ impl League {
         debug!(
             "Team {} - Momentum: {:.2}, Pressure: {:.2}",
             squad.team_name, momentum, pressure
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::League;
+    use crate::r#match::{SelectionCompetition, SelectionContext, SelectionPolicy};
+
+    fn cup_ctx(
+        round: u8,
+        total_rounds: u8,
+        own: u16,
+        opp: u16,
+        importance: f32,
+    ) -> SelectionContext {
+        SelectionContext {
+            match_importance: importance,
+            competition: SelectionCompetition::DomesticCup {
+                round,
+                total_rounds,
+                own_reputation: own,
+                opponent_reputation: opp,
+            },
+            ..SelectionContext::default()
+        }
+    }
+
+    #[test]
+    fn domestic_cup_early_round_rotates() {
+        // Round 1 of 5 against an equal-reputation opponent: low importance,
+        // selector falls into CupRotation.
+        let imp = League::domestic_cup_importance(1, 5, 1000, 1000);
+        assert!(imp < 0.40, "early round importance should be low: {imp}");
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(1, 5, 1000, 1000, imp)),
+            SelectionPolicy::CupRotation
+        );
+    }
+
+    #[test]
+    fn domestic_cup_final_is_best_eleven() {
+        // Round 5 of 5: the final demands the strongest available XI.
+        let imp = League::domestic_cup_importance(5, 5, 1000, 1000);
+        assert!(imp >= 0.90, "final importance should be high: {imp}");
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(5, 5, 1000, 1000, imp)),
+            SelectionPolicy::BestEleven
+        );
+    }
+
+    #[test]
+    fn domestic_cup_strong_opponent_raises_importance() {
+        // A much stronger opponent (ratio > 1.5) in an early round lifts
+        // importance out of full youth-development territory.
+        let weak_equal = League::domestic_cup_importance(1, 5, 1000, 1000);
+        let strong_opp = League::domestic_cup_importance(1, 5, 1000, 1800);
+        assert!(
+            strong_opp > weak_equal,
+            "stronger opponent must raise importance: {strong_opp} vs {weak_equal}"
+        );
+        let policy = SelectionPolicy::from_context(&cup_ctx(1, 5, 1000, 1800, strong_opp));
+        assert!(
+            matches!(
+                policy,
+                SelectionPolicy::ManagedMinutes | SelectionPolicy::StrongWithRotation
+            ),
+            "strong opponent early cup should manage minutes, not full youth: {policy:?}"
+        );
+    }
+
+    #[test]
+    fn domestic_cup_importance_rises_monotonically_by_stage() {
+        // Equal opponents, 5-round bracket: importance must climb round by
+        // round, and the derived policy must walk up the rotation ladder.
+        let r1 = League::domestic_cup_importance(1, 5, 1000, 1000);
+        let r3 = League::domestic_cup_importance(3, 5, 1000, 1000);
+        let r4 = League::domestic_cup_importance(4, 5, 1000, 1000);
+        let r5 = League::domestic_cup_importance(5, 5, 1000, 1000);
+        assert!(
+            r1 < r3 && r3 < r4 && r4 < r5,
+            "importance must increase by stage: {r1} {r3} {r4} {r5}"
+        );
+
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(1, 5, 1000, 1000, r1)),
+            SelectionPolicy::CupRotation
+        );
+        // Quarterfinal (round 3 of 5) lands in the managed/strong band.
+        assert!(matches!(
+            SelectionPolicy::from_context(&cup_ctx(3, 5, 1000, 1000, r3)),
+            SelectionPolicy::ManagedMinutes | SelectionPolicy::StrongWithRotation
+        ));
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(4, 5, 1000, 1000, r4)),
+            SelectionPolicy::StrongWithRotation
+        );
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(5, 5, 1000, 1000, r5)),
+            SelectionPolicy::BestEleven
+        );
+    }
+
+    #[test]
+    fn domestic_cup_final_floor_holds_under_congestion() {
+        // The importance formula caps the final at <=0.98, and the build
+        // path floors it above the BestEleven threshold even when congestion
+        // would dampen it.
+        let final_importance = League::domestic_cup_importance(4, 4, 1000, 1000);
+        assert!((0.90..=0.98).contains(&final_importance));
+        // Heavy congestion dampener (0.55) would pull it to ~0.52; the floor
+        // keeps a final a strong-XI affair.
+        let dampened = (final_importance * 0.55).max(League::DOMESTIC_CUP_FINAL_IMPORTANCE_FLOOR);
+        assert!(dampened >= 0.83);
+        assert_eq!(
+            SelectionPolicy::from_context(&cup_ctx(4, 4, 1000, 1000, dampened)),
+            SelectionPolicy::BestEleven
         );
     }
 }

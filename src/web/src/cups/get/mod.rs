@@ -128,11 +128,10 @@ pub async fn cup_get_action(
     // The cup route only serves domestic cups. A normal league slug here
     // (or any non-cup competition) is bounced to the standings page.
     if !league.is_cup {
-        return Ok(Redirect::to(&format!(
-            "/{}/leagues/{}",
-            route_params.lang, league.slug
-        ))
-        .into_response());
+        return Ok(
+            Redirect::to(&format!("/{}/leagues/{}", route_params.lang, league.slug))
+                .into_response(),
+        );
     }
 
     let country = simulator_data.country(league.country_id).unwrap();

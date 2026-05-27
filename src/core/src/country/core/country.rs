@@ -184,7 +184,12 @@ impl Country {
             .leagues
             .iter()
             .find(|l| l.id == id)
-            .or_else(|| self.domestic_cup.as_ref().filter(|c| c.id() == id).map(|c| &c.league))
+            .or_else(|| {
+                self.domestic_cup
+                    .as_ref()
+                    .filter(|c| c.id() == id)
+                    .map(|c| &c.league)
+            })
     }
     pub fn league_mut(&mut self, id: u32) -> Option<&mut League> {
         if self.leagues.leagues.iter().any(|l| l.id == id) {
@@ -244,8 +249,12 @@ impl Country {
         {
             let clubs = &self.clubs;
             if let Some(cup) = self.domestic_cup.as_mut() {
-                let cup_ctx =
-                    ctx.with_league(cup.league.id, cup.league.slug.clone(), &[], cup.league.reputation);
+                let cup_ctx = ctx.with_league(
+                    cup.league.id,
+                    cup.league.slug.clone(),
+                    &[],
+                    cup.league.reputation,
+                );
                 let cup_result = cup.simulate(clubs, &cup_ctx);
                 league_results.push(cup_result);
             }

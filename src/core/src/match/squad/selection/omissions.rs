@@ -20,6 +20,7 @@ use crate::{
 };
 use chrono::NaiveDate;
 
+use super::DomesticCupContext;
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
 use crate::HappinessEventType;
 
@@ -42,6 +43,9 @@ pub(crate) struct OmissionBuilder<'a> {
     pub date: NaiveDate,
     pub is_friendly: bool,
     pub match_importance: f32,
+    /// Present only for domestic cup ties — gates `CupRotation` so a
+    /// league dead rubber doesn't borrow the cup-rotation copy.
+    pub cup: Option<&'a DomesticCupContext>,
 }
 
 impl<'a> OmissionBuilder<'a> {
@@ -250,7 +254,7 @@ impl<'a> OmissionBuilder<'a> {
         slot: PlayerPositionType,
         group: PlayerFieldPositionGroup,
     ) -> SlotScoreBreakdown {
-        let (_, b) = self.engine.score_player_for_slot_with_breakdown(
+        let (_, mut b) = self.engine.score_player_for_slot_with_breakdown(
             player,
             slot,
             group,
@@ -260,6 +264,22 @@ impl<'a> OmissionBuilder<'a> {
             self.is_friendly,
             &[],
         );
+        // Fold in the external adjustments the competitive selector applies
+        // on top of the pure slot score, so the comparison can explain a
+        // backup/prospect winning the slot on opportunity/development rather
+        // than raw quality. The pure breakdown leaves these at zero.
+        b.development_minutes = self
+            .engine
+            .development_minutes_bonus(player, self.match_importance);
+        b.injury_risk =
+            -self
+                .engine
+                .injury_risk_penalty(player, self.match_importance, self.is_friendly);
+        if let Some(cup) = self.cup {
+            b.domestic_cup_opportunity = self
+                .engine
+                .domestic_cup_opportunity_bonus(player, cup, true);
+        }
         b
     }
 
@@ -284,7 +304,10 @@ impl<'a> OmissionBuilder<'a> {
             return SelectionOmissionReason::FatigueManagement;
         }
         if matches!(scope, SelectionDecisionScope::Rotation) {
-            if self.match_importance < 0.30 {
+            // CupRotation is reserved for actual domestic cup ties — a
+            // low-importance league fixture (dead rubber, congestion) reads
+            // as LowMatchImportanceRotation instead.
+            if self.cup.is_some() {
                 let age = DateUtils::age(omitted.birth_date, self.date);
                 if age <= 21 {
                     return SelectionOmissionReason::YouthDevelopmentRotation;
@@ -314,6 +337,7 @@ impl<'a> OmissionBuilder<'a> {
                     F::YouthPreference => SelectionOmissionReason::YouthDevelopmentRotation,
                     F::ClubPhilosophy => SelectionOmissionReason::TacticalMismatch,
                     F::DevelopmentMinutes => SelectionOmissionReason::LowMatchImportanceRotation,
+                    F::CupOpportunity => SelectionOmissionReason::CupRotation,
                     F::InjuryRisk => SelectionOmissionReason::FitnessProtection,
                 };
             }

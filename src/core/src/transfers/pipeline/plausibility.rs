@@ -385,10 +385,7 @@ impl TransferPlausibilityEvaluator {
         // budget no longer reads as unlimited — a listed/unhappy player is
         // *available*, but a far smaller club still can't fund the fee.
         let max_fee = inputs.affordability_max_fee();
-        if !inputs.release_clause_triggered
-            && !inputs.is_loan
-            && inputs.estimated_value > max_fee
-        {
+        if !inputs.release_clause_triggered && !inputs.is_loan && inputs.estimated_value > max_fee {
             return TransferPlausibilityVerdict::HardReject(
                 TransferPlausibilityReason::UnaffordableFee,
             );

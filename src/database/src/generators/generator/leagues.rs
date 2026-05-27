@@ -254,14 +254,19 @@ impl DatabaseGenerator {
 
 #[cfg(test)]
 mod tests {
-    use super::{slugify, DatabaseGenerator, DOMESTIC_CUP_ID_BASE};
+    use super::{DOMESTIC_CUP_ID_BASE, DatabaseGenerator, slugify};
     use crate::DomesticCupEntity;
     use crate::loaders::country::{
         CountryEntity, CountryPricingEntity, CountrySettingsEntity, SkinColorsEntity,
     };
     use core::league::{DayMonthPeriod, League, LeagueSettings};
 
-    fn country_entity(id: u32, name: &str, slug: &str, cup: Option<DomesticCupEntity>) -> CountryEntity {
+    fn country_entity(
+        id: u32,
+        name: &str,
+        slug: &str,
+        cup: Option<DomesticCupEntity>,
+    ) -> CountryEntity {
         CountryEntity {
             id,
             code: "xx".into(),
@@ -318,7 +323,10 @@ mod tests {
             DatabaseGenerator::generate_domestic_cup(&country, &[tier1_league(1, 765)]).unwrap();
 
         assert!(cup.league.is_cup, "cup must be flagged is_cup");
-        assert!(!cup.league.friendly, "cup must be competitive (not friendly)");
+        assert!(
+            !cup.league.friendly,
+            "cup must be competitive (not friendly)"
+        );
         assert_eq!(cup.league.id, DOMESTIC_CUP_ID_BASE + 765);
         assert_eq!(cup.league.name, "FA Cup");
         assert_eq!(cup.league.slug, "fa-cup");
@@ -331,7 +339,8 @@ mod tests {
     #[test]
     fn unconfigured_cup_falls_back_to_country_name() {
         let country = country_entity(763, "Czech Republic", "czech republic", None);
-        let cup = DatabaseGenerator::generate_domestic_cup(&country, &[tier1_league(1, 763)]).unwrap();
+        let cup =
+            DatabaseGenerator::generate_domestic_cup(&country, &[tier1_league(1, 763)]).unwrap();
         assert_eq!(cup.league.name, "Czech Republic Cup");
         assert_eq!(cup.league.slug, "czech-republic-cup");
         assert!(cup.league.is_cup && !cup.league.friendly);

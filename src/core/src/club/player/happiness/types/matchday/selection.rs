@@ -260,6 +260,10 @@ pub enum SelectionScoreFactor {
     ClubPhilosophy,
     InjuryRisk,
     DevelopmentMinutes,
+    /// Domestic-cup rotation opportunity — the chosen player got cup minutes
+    /// as part of the manager's early-round rotation (status / age / fresh
+    /// legs), distinct from the generic development-minutes nudge.
+    CupOpportunity,
 }
 
 impl SelectionScoreFactor {
@@ -282,6 +286,7 @@ impl SelectionScoreFactor {
             SelectionScoreFactor::ClubPhilosophy => "selection_factor_club_philosophy",
             SelectionScoreFactor::InjuryRisk => "selection_factor_injury_risk",
             SelectionScoreFactor::DevelopmentMinutes => "selection_factor_development_minutes",
+            SelectionScoreFactor::CupOpportunity => "selection_factor_cup_opportunity",
         }
     }
 }

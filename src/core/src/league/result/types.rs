@@ -14,6 +14,14 @@ pub struct LeagueMatch {
     pub away_team_id: u32,
 
     pub result: Option<LeagueMatchResultResult>,
+
+    /// Domestic-cup bracket metadata. `Some` only when the fixture is a
+    /// knockout cup tie — `DomesticCup::collect_today_matches` fills these
+    /// so `build_match` can compute a stage/opponent-aware importance and
+    /// hand the selector a `SelectionCompetition::DomesticCup`. Normal
+    /// league fixtures leave them `None`.
+    pub cup_round: Option<u8>,
+    pub cup_total_rounds: Option<u8>,
 }
 
 pub struct LeagueMatchResultResult {
@@ -42,6 +50,8 @@ impl From<ScheduleItem> for LeagueMatch {
             home_team_id: item.home_team_id,
             away_team_id: item.away_team_id,
             result: None,
+            cup_round: None,
+            cup_total_rounds: None,
         };
 
         if let Some(res) = item.result {

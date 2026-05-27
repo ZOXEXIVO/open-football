@@ -123,14 +123,21 @@ impl DomesticCup {
         tour
     }
 
-    fn collect_today_matches(&self, current_date: NaiveDate) -> Vec<LeagueMatch> {
+    /// Today's unplayed cup ties, tagged with their bracket position. The
+    /// tour number is the 1-based round; `total_rounds` is the size of the
+    /// whole bracket (passed in precomputed from the seeded field) so the
+    /// match builder can tell an early round from the final.
+    fn collect_today_matches(&self, current_date: NaiveDate, total_rounds: u8) -> Vec<LeagueMatch> {
         self.league
             .schedule
             .tours
             .iter()
-            .flat_map(|t| &t.items)
-            .filter(|i| i.date.date() == current_date && i.result.is_none())
-            .map(|i| LeagueMatch {
+            .flat_map(|t| {
+                let round = t.num;
+                t.items.iter().map(move |i| (round, i))
+            })
+            .filter(|(_, i)| i.date.date() == current_date && i.result.is_none())
+            .map(|(round, i)| LeagueMatch {
                 id: i.id.clone(),
                 league_id: i.league_id,
                 league_slug: i.league_slug.clone(),
@@ -138,6 +145,8 @@ impl DomesticCup {
                 home_team_id: i.home_team_id,
                 away_team_id: i.away_team_id,
                 result: None,
+                cup_round: Some(round),
+                cup_total_rounds: Some(total_rounds),
             })
             .collect()
     }
@@ -239,12 +248,19 @@ impl DomesticCup {
         let current_date = ctx.simulation.date.date();
 
         let new_schedule = self.league.schedule.tours.is_empty()
-            || self.league.settings.is_time_for_new_schedule(&ctx.simulation);
+            || self
+                .league
+                .settings
+                .is_time_for_new_schedule(&ctx.simulation);
         if new_schedule {
             self.regenerate_bracket(clubs, ctx);
         }
 
-        let mut scheduled = self.collect_today_matches(current_date);
+        // Bracket size resolves which round is the final, so the match
+        // builder can scale importance by stage. Computed from the seeded
+        // field that round one was drawn from.
+        let total_rounds = cup::total_rounds(Self::seeded_participants(clubs).len());
+        let mut scheduled = self.collect_today_matches(current_date, total_rounds);
         if scheduled.is_empty() {
             return LeagueResult::new(self.league.id, LeagueTableResult {});
         }
@@ -263,9 +279,7 @@ impl DomesticCup {
             self.league
                 .matches
                 .push(mr.copy_without_data_positions(), current_date);
-            self.league
-                .schedule
-                .update_match_result(&mr.id, &mr.score);
+            self.league.schedule.update_match_result(&mr.id, &mr.score);
         }
 
         // If the round just completed, draw the next one immediately so its
@@ -281,6 +295,7 @@ mod tests {
     use super::DomesticCup;
     use crate::academy::ClubAcademy;
     use crate::context::{GlobalContext, SimulationContext};
+    use crate::league::schedule::cup;
     use crate::league::{DayMonthPeriod, League, LeagueSettings};
     use crate::shared::Location;
     use crate::{
@@ -395,7 +410,12 @@ mod tests {
             .and_hms_opt(0, 0, 0)
             .unwrap();
         let base = GlobalContext::new(SimulationContext::new(date));
-        let ctx = base.with_league(cup.league.id, cup.league.slug.clone(), &[], cup.league.reputation);
+        let ctx = base.with_league(
+            cup.league.id,
+            cup.league.slug.clone(),
+            &[],
+            cup.league.reputation,
+        );
 
         let result = cup.simulate(&clubs, &ctx);
 
@@ -414,5 +434,52 @@ mod tests {
         let tie_date = cup.league.schedule.tours[0].items[0].date.date();
         assert!(tie_date > date.date());
         assert_eq!(tie_date.weekday(), chrono::Weekday::Wed);
+    }
+
+    #[test]
+    fn collect_today_matches_tags_cup_round_metadata() {
+        // Plumbing guard: the LeagueMatch values handed to the match builder
+        // must carry the round, total bracket size, and cup league id so
+        // `build_match` can pick the DomesticCup competition + stage.
+        let clubs: Vec<Club> = (0..6)
+            .map(|i| {
+                let id = (i + 1) as u32;
+                club(
+                    id,
+                    vec![team(id * 10, id, TeamType::Main, 6000 - (i as u16) * 200)],
+                )
+            })
+            .collect();
+
+        let mut cup = make_cup();
+        let date = NaiveDate::from_ymd_opt(2026, 8, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let base = GlobalContext::new(SimulationContext::new(date));
+        let ctx = base.with_league(
+            cup.league.id,
+            cup.league.slug.clone(),
+            &[],
+            cup.league.reputation,
+        );
+        cup.simulate(&clubs, &ctx);
+
+        let tie_date = cup.league.schedule.tours[0].items[0].date.date();
+        let total = cup::total_rounds(DomesticCup::seeded_participants(&clubs).len());
+        let matches = cup.collect_today_matches(tie_date, total);
+
+        assert!(
+            !matches.is_empty(),
+            "the round-one ties should be collected"
+        );
+        for m in &matches {
+            assert_eq!(m.cup_round, Some(1), "round-one fixtures tagged as round 1");
+            assert_eq!(m.cup_total_rounds, Some(total), "bracket size carried");
+            assert_eq!(
+                m.league_id, cup.league.id,
+                "fixtures keyed to the cup league"
+            );
+        }
     }
 }
