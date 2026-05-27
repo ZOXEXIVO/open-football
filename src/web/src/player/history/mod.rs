@@ -178,9 +178,19 @@ pub async fn player_history_action(
     } else {
         None
     };
-    let view = player
+    let mut view = player
         .statistics_history
         .view_items(live_stats, simulator_data.date.date());
+    // Fold continental-cup appearances (Champions League, Europa League,
+    // Conference League, Copa Libertadores) into each season's league line so
+    // they accumulate in career history. The active current-season row reads
+    // the live per-spell cup tally; past seasons read the persisted per-season
+    // ledger frozen at each transfer / loan / season boundary.
+    player.statistics_history.fold_continental(
+        &mut view,
+        &player.continental_cup_statistics(),
+        simulator_data.date.date(),
+    );
     let career_totals = core::PlayerStatisticsHistory::career_totals(&view);
 
     let mut location_cache: std::collections::HashMap<String, TeamLocationInfo> =

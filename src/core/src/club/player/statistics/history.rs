@@ -9,7 +9,26 @@ pub struct PlayerStatisticsHistory {
     pub items: Vec<PlayerStatisticsHistoryItem>,
     /// Current-season entries. Append-only during season, drained at season end.
     pub current: Vec<CurrentSeasonEntry>,
+    /// Continental-cup statistics captured per (season, team spell). The
+    /// player history page folds these into each season's league line so a
+    /// player's Champions League / Europa League / Conference League / Copa
+    /// Libertadores appearances count toward their career totals. Kept apart
+    /// from `items` on purpose: the league-only career record other systems
+    /// rely on (career-apps wage clauses, favourite-club evaluation) must not
+    /// pick up cup games.
+    pub continental: Vec<ContinentalSeasonStats>,
     next_seq: u32,
+}
+
+/// One (season, club) slice of a player's continental-cup statistics,
+/// frozen when the live per-spell cup bucket is about to be reset
+/// (transfer / loan / season end). Read back by the player history page
+/// to merge continental appearances into the season's league line.
+#[derive(Debug, Clone)]
+pub struct ContinentalSeasonStats {
+    pub season_year: u16,
+    pub team_slug: String,
+    pub statistics: PlayerStatistics,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +74,7 @@ impl PlayerStatisticsHistory {
         PlayerStatisticsHistory {
             items: Vec::new(),
             current: Vec::new(),
+            continental: Vec::new(),
             next_seq: 0,
         }
     }
@@ -68,6 +88,7 @@ impl PlayerStatisticsHistory {
         PlayerStatisticsHistory {
             items,
             current: Vec::new(),
+            continental: Vec::new(),
             next_seq,
         }
     }
@@ -1084,6 +1105,73 @@ impl PlayerStatisticsHistory {
             totals.merge_from(&item.statistics);
         }
         totals
+    }
+
+    /// Freeze a closed spell's continental-cup statistics into the per-season
+    /// ledger, keyed by `(season_year, team)`. Called when the live cup bucket
+    /// is about to be reset (transfer, loan, season end). Zero-appearance
+    /// inputs are ignored so the ledger never grows empty rows.
+    pub fn record_continental(
+        &mut self,
+        season_year: u16,
+        team: &TeamInfo,
+        stats: PlayerStatistics,
+    ) {
+        if stats.total_games() == 0 {
+            return;
+        }
+        if let Some(existing) = self
+            .continental
+            .iter_mut()
+            .find(|c| c.season_year == season_year && c.team_slug == team.slug)
+        {
+            existing.statistics.merge_from(&stats);
+        } else {
+            self.continental.push(ContinentalSeasonStats {
+                season_year,
+                team_slug: team.slug.clone(),
+                statistics: stats,
+            });
+        }
+    }
+
+    /// Continental-cup statistics recorded for a given `(season, team)` spell,
+    /// if the player featured in any continental match there.
+    pub fn continental_for(&self, season_year: u16, team_slug: &str) -> Option<&PlayerStatistics> {
+        self.continental
+            .iter()
+            .find(|c| c.season_year == season_year && c.team_slug == team_slug)
+            .map(|c| &c.statistics)
+    }
+
+    /// Fold continental-cup statistics into a [`Self::view_items`] result so
+    /// the player history page shows Champions League / Europa League /
+    /// Conference League / Copa Libertadores appearances inside each season's
+    /// line. Past seasons read the persisted per-season ledger; the active
+    /// current-season row uses `live_continental` (the live per-spell cup
+    /// breakdown that has not been frozen into the ledger yet). The active
+    /// row never also reads the ledger, so a stat is never counted twice.
+    pub fn fold_continental(
+        &self,
+        items: &mut [PlayerStatisticsHistoryItem],
+        live_continental: &PlayerStatistics,
+        current_date: NaiveDate,
+    ) {
+        let today_year = Season::from_date(current_date).start_year;
+        let active_slug = self.active_team_slug();
+        for item in items.iter_mut() {
+            let is_active_row = active_slug == Some(item.team_slug.as_str())
+                && item.season.start_year == today_year;
+            if is_active_row {
+                if live_continental.total_games() > 0 {
+                    item.statistics.merge_from(live_continental);
+                }
+            } else if let Some(cont) =
+                self.continental_for(item.season.start_year, &item.team_slug)
+            {
+                item.statistics.merge_from(cont);
+            }
+        }
     }
 
     /// Slug of the player's currently active club spell — the entry in
@@ -2395,5 +2483,132 @@ mod club_career_apps_tests {
             "view must collapse legacy duplicate rows"
         );
         assert_eq!(spartak_2025[0].statistics.played, 18);
+    }
+}
+
+#[cfg(test)]
+mod continental_tests {
+    use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn stats(played: u16, goals: u16) -> PlayerStatistics {
+        let mut s = PlayerStatistics::default();
+        s.played = played;
+        s.goals = goals;
+        s
+    }
+
+    fn team(slug: &str) -> TeamInfo {
+        TeamInfo {
+            name: slug.to_string(),
+            slug: slug.to_string(),
+            reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+        }
+    }
+
+    fn frozen(season_start: u16, slug: &str, played: u16, goals: u16) -> PlayerStatisticsHistoryItem {
+        PlayerStatisticsHistoryItem {
+            season: Season::new(season_start),
+            team_name: slug.to_string(),
+            team_slug: slug.to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: stats(played, goals),
+            seq_id: season_start as u32,
+        }
+    }
+
+    #[test]
+    fn record_continental_ignores_empty_and_merges_repeat_spells() {
+        let mut hist = PlayerStatisticsHistory::new();
+        // 0-game input is dropped — no empty rows.
+        hist.record_continental(2025, &team("juventus"), PlayerStatistics::default());
+        assert!(hist.continental.is_empty());
+
+        // First continental spell at the club this season.
+        hist.record_continental(2025, &team("juventus"), stats(6, 2));
+        // A second stint (e.g. left and came back) merges into the same row.
+        hist.record_continental(2025, &team("juventus"), stats(2, 1));
+        assert_eq!(hist.continental.len(), 1);
+        let cl = hist.continental_for(2025, "juventus").unwrap();
+        assert_eq!(cl.played, 8);
+        assert_eq!(cl.goals, 3);
+
+        // A different season/club keeps its own row.
+        hist.record_continental(2026, &team("juventus"), stats(10, 4));
+        assert_eq!(hist.continental.len(), 2);
+        assert!(hist.continental_for(2024, "juventus").is_none());
+    }
+
+    #[test]
+    fn fold_continental_merges_past_seasons_from_ledger() {
+        // Two frozen league seasons; continental ledger has games for the
+        // 2025 row only. After folding, that row's league line picks up the
+        // continental apps/goals while 2026 is untouched.
+        let mut hist = PlayerStatisticsHistory::from_items(vec![
+            frozen(2025, "juventus", 30, 8),
+            frozen(2026, "juventus", 28, 6),
+        ]);
+        hist.record_continental(2025, &team("juventus"), stats(10, 5));
+
+        let mut view = hist.view_items(None, d(2027, 9, 1));
+        hist.fold_continental(&mut view, &PlayerStatistics::default(), d(2027, 9, 1));
+
+        let row_2025 = view
+            .iter()
+            .find(|i| i.season.start_year == 2025 && i.team_slug == "juventus")
+            .unwrap();
+        assert_eq!(row_2025.statistics.played, 40, "30 league + 10 continental");
+        assert_eq!(row_2025.statistics.goals, 13, "8 league + 5 continental");
+
+        let row_2026 = view
+            .iter()
+            .find(|i| i.season.start_year == 2026 && i.team_slug == "juventus")
+            .unwrap();
+        assert_eq!(row_2026.statistics.played, 28, "no continental ledger row");
+        assert_eq!(row_2026.statistics.goals, 6);
+    }
+
+    #[test]
+    fn fold_continental_active_row_uses_live_not_ledger() {
+        // Active current-season spell at juventus. The live continental tally
+        // (not yet frozen) must be the one merged into the active row, and the
+        // ledger must NOT be double-applied to it.
+        let mut hist = PlayerStatisticsHistory::from_items(vec![frozen(2025, "juventus", 30, 8)]);
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "juventus".to_string(),
+            team_slug: "juventus".to_string(),
+            team_reputation: 5_000,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2026, 8, 1),
+            departed_date: None,
+            seq_id: 99,
+        });
+
+        let mut live_league = stats(20, 4);
+        live_league.played = 20;
+        let live_continental = stats(7, 3);
+
+        let mut view = hist.view_items(Some(&live_league), d(2026, 10, 1));
+        hist.fold_continental(&mut view, &live_continental, d(2026, 10, 1));
+
+        let active = view
+            .iter()
+            .find(|i| i.season.start_year == 2026 && i.team_slug == "juventus")
+            .unwrap();
+        assert_eq!(active.statistics.played, 27, "20 live league + 7 live cup");
+        assert_eq!(active.statistics.goals, 7, "4 live league + 3 live cup");
     }
 }

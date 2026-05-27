@@ -1,8 +1,22 @@
 use crate::PlayerStatistics;
 use crate::TeamInfo;
 use crate::club::player::player::Player;
+use crate::continent::competitions::{
+    CHAMPIONS_LEAGUE_SLUG, CONFERENCE_LEAGUE_SLUG, COPA_LIBERTADORES_SLUG, EUROPA_LEAGUE_SLUG,
+};
 use crate::league::Season;
 use chrono::{Datelike, NaiveDate};
+
+/// True for the four continental club competitions whose per-season
+/// appearances are folded into the player history page's league line.
+/// Domestic cups (real `League`s with their own slugs) are deliberately
+/// excluded — only international competitions are merged.
+fn is_continental_slug(slug: &str) -> bool {
+    matches!(
+        slug,
+        CHAMPIONS_LEAGUE_SLUG | EUROPA_LEAGUE_SLUG | CONFERENCE_LEAGUE_SLUG | COPA_LIBERTADORES_SLUG
+    )
+}
 
 impl Player {
     /// Clear the cup tally as a unit: the rolled-up aggregate *and* the
@@ -14,11 +28,39 @@ impl Player {
         self.cup_statistics_by_competition.clear();
     }
 
+    /// Aggregate the player's current-spell statistics across the four
+    /// continental club competitions (Champions League, Europa League,
+    /// Conference League, Copa Libertadores). These live in the per-spell
+    /// cup breakdown until the spell closes; the player history page folds
+    /// them into the season's league line, and [`Self::record_continental_spell`]
+    /// freezes them into the per-season ledger when the spell ends.
+    pub fn continental_cup_statistics(&self) -> PlayerStatistics {
+        let mut total = PlayerStatistics::default();
+        for comp in &self.cup_statistics_by_competition {
+            if is_continental_slug(&comp.competition_slug) {
+                total.merge_from(&comp.statistics);
+            }
+        }
+        total
+    }
+
+    /// Freeze the current spell's continental-cup statistics into the
+    /// per-season ledger for `team`, attributing them to the season that
+    /// contains `date`. Call this immediately before the live cup bucket is
+    /// reset so a transfer / loan / season boundary doesn't discard the
+    /// player's continental appearances.
+    fn record_continental_spell(&mut self, season_year: u16, team: &TeamInfo) {
+        let continental = self.continental_cup_statistics();
+        self.statistics_history
+            .record_continental(season_year, team, continental);
+    }
+
     /// Record a permanent transfer (called by transfer execution).
     /// Resets stats, saves history for both clubs, sets transfer date.
     pub fn on_transfer(&mut self, from: &TeamInfo, to: &TeamInfo, fee: f64, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.record_continental_spell(Season::from_date(date).start_year, from);
         self.reset_cup_statistics();
         self.statistics_history
             .record_transfer(stats, from, to, fee, date);
@@ -118,6 +160,7 @@ impl Player {
         let stats = std::mem::take(&mut self.statistics);
         // Youth-league + cup buckets get cleared like the senior path.
         self.friendly_statistics = Default::default();
+        self.record_continental_spell(season.start_year, main_team_info);
         self.reset_cup_statistics();
 
         // Drain through the regular season-end path. Any callup games
@@ -141,6 +184,7 @@ impl Player {
     pub fn on_loan(&mut self, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.record_continental_spell(Season::from_date(date).start_year, from);
         self.reset_cup_statistics();
         self.statistics_history
             .record_loan(stats, from, to, loan_fee, date);
@@ -162,6 +206,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.record_continental_spell(season.start_year, team);
         self.reset_cup_statistics();
         self.statistics_history.record_season_end(
             season,
@@ -276,6 +321,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.record_continental_spell(Season::from_date(date).start_year, borrowing);
         self.reset_cup_statistics();
         self.statistics_history
             .record_cancel_loan(stats, borrowing, parent, is_loan, date);
@@ -294,6 +340,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.record_continental_spell(Season::from_date(date).start_year, from);
         self.reset_cup_statistics();
         self.statistics_history
             .record_departure_transfer(stats, from, to, fee, is_loan, date);
@@ -312,6 +359,7 @@ impl Player {
     pub fn on_release(&mut self, from: &TeamInfo, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.record_continental_spell(Season::from_date(date).start_year, from);
         self.reset_cup_statistics();
         self.statistics_history.record_release(stats, from, date);
         self.last_transfer_date = Some(date);
@@ -344,6 +392,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.record_continental_spell(Season::from_date(date).start_year, from);
         self.reset_cup_statistics();
         self.statistics_history
             .record_departure_loan(stats, from, parent, to, is_loan, date);
