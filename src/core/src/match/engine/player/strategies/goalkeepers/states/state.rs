@@ -8,6 +8,7 @@ use crate::r#match::goalkeepers::states::{
     GoalkeeperTakeBallState, GoalkeeperThrowingState, GoalkeeperWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
+use std::fmt::Result;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -97,7 +98,7 @@ impl GoalkeeperStrategies {
 }
 
 impl Display for GoalkeeperState {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             GoalkeeperState::Standing => write!(f, "Standing"),
             GoalkeeperState::Resting => write!(f, "Resting"),

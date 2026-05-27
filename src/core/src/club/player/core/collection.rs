@@ -4,6 +4,8 @@ use crate::club::{PlayerCollectionResult, PlayerResult};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
 use std::ops::Index;
+use std::slice::Iter;
+use std::slice::IterMut;
 
 #[derive(Debug, Clone)]
 pub struct PlayerCollection {
@@ -120,12 +122,12 @@ impl PlayerCollection {
     }
 
     /// Shorthand for `self.players.iter()`.
-    pub fn iter(&self) -> std::slice::Iter<'_, Player> {
+    pub fn iter(&self) -> Iter<'_, Player> {
         self.players.iter()
     }
 
     /// Shorthand for `self.players.iter_mut()`.
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Player> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, Player> {
         self.players.iter_mut()
     }
 

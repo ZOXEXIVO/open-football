@@ -4,12 +4,13 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use super::{MIN_FIRST_TEAM_SQUAD, execute_moves, record_moves, record_player_decisions};
+use serde_json::Value;
 
 // ─── AI prompt data types ──────────────────────────────────────────
 
 #[derive(Serialize)]
 struct SquadQueryLlm {
-    staff: serde_json::Value,
+    staff: Value,
     teams: Vec<TeamPlayersLlm>,
 }
 
@@ -17,7 +18,7 @@ struct SquadQueryLlm {
 struct TeamPlayersLlm {
     label: String,
     team_index: usize,
-    players: Vec<serde_json::Value>,
+    players: Vec<Value>,
 }
 
 // ─── AI response types ─────────────────────────────────────────────
@@ -115,14 +116,14 @@ impl SquadComposition {
         staff_data: &str,
         sim_date: NaiveDate,
     ) -> String {
-        let staff_json: serde_json::Value = serde_json::from_str(staff_data).unwrap();
+        let staff_json: Value = serde_json::from_str(staff_data).unwrap();
 
         let squad_teams: Vec<TeamPlayersLlm> = team_indices
             .iter()
             .map(|&(idx, label)| {
                 let team = &teams[idx];
                 let head_coach = team.staffs.head_coach();
-                let players: Vec<serde_json::Value> = team
+                let players: Vec<Value> = team
                     .players
                     .players
                     .iter()

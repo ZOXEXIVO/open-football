@@ -8,6 +8,8 @@ use log::debug;
 use super::SelectionPolicy;
 use super::helpers;
 use super::scoring::ScoringEngine;
+use chrono::Utc;
+use std::cmp::Ordering;
 
 /// Select the best starting 11 for competitive matches.
 pub(crate) fn select_starting_eleven(
@@ -115,7 +117,7 @@ pub(crate) fn select_starting_eleven(
                 let sb = engine.overall_quality(b, staff, tactics, date, is_friendly)
                     + engine.development_minutes_bonus(b, match_importance)
                     + engine.fatigue_penalty(b, is_friendly);
-                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
             })
             .copied();
 
@@ -228,7 +230,7 @@ pub(crate) fn select_substitutes(
                     match_importance,
                     policy,
                 );
-                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
             })
             .copied();
 
@@ -272,7 +274,7 @@ pub(crate) fn select_substitutes(
                     match_importance,
                     policy,
                 );
-                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
             })
             .copied();
 
@@ -655,7 +657,7 @@ fn bench_role_fit(player: &Player, role: BenchRole, tactics: &Tactics) -> f32 {
             attacking.clamp(0.0, 1.0)
         }
         BenchRole::Prospect => {
-            let age = DateUtils::age(player.birth_date, chrono::Utc::now().date_naive());
+            let age = DateUtils::age(player.birth_date, Utc::now().date_naive());
             if age <= 19 {
                 1.0
             } else if age <= 22 {
@@ -711,7 +713,7 @@ fn pick_any_goalkeeper_fallback<'p>(
         .max_by(|a, b| {
             let sa = a.skills.goalkeeping.handling + a.skills.goalkeeping.reflexes;
             let sb = b.skills.goalkeeping.handling + b.skills.goalkeeping.reflexes;
-            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+            sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
         })
         .copied()
 }
@@ -742,9 +744,7 @@ fn pick_best_goalkeeper<'p>(
                 + engine.development_minutes_bonus(a, match_importance);
             let score_b = engine.goalkeeper_score(b, staff, is_friendly)
                 + engine.development_minutes_bonus(b, match_importance);
-            score_a
-                .partial_cmp(&score_b)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            score_a.partial_cmp(&score_b).unwrap_or(Ordering::Equal)
         })
         .copied()
 }

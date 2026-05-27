@@ -47,6 +47,22 @@ pub struct PlayerStatistics {
     pub clean_sheets: u16,
 }
 
+/// One competition's slice of a player's cup statistics, tagged with the
+/// competition it was earned in. Recorded at match time keyed by the
+/// match's `league_slug`, so every cup the player features in keeps its
+/// own line on the player overview — continental cups today, domestic
+/// cups once they're modelled — instead of collapsing into a single
+/// hardcoded row. The rolled-up [`Player::cup_statistics`] aggregate is
+/// recomputed from these, so existing aggregate readers are unaffected.
+#[derive(Debug, Clone, Default)]
+pub struct CompetitionStatistics {
+    /// Stable competition identifier — the match's `league_slug`
+    /// (e.g. `"copa-libertadores"`, `"champions-league"`). The display
+    /// layer resolves a localized name from it.
+    pub competition_slug: String,
+    pub statistics: PlayerStatistics,
+}
+
 impl PlayerStatistics {
     /// Total appearances (started + substitute)
     #[inline]

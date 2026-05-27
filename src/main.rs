@@ -32,7 +32,7 @@ async fn main() {
     // ).await;
 
     // Register service so core can use it via trait — no tokio in core
-    simulator_core::ai::set_ai_service(Box::new(RegistryAiService {
+    simulator_core::ai::AiServiceRegistry::set(Box::new(RegistryAiService {
         registry: Arc::clone(&ai_registry),
     }));
 

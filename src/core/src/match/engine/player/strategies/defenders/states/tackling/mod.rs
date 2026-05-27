@@ -10,6 +10,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use rand::RngExt;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering;
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 10.0; // ~1.25m — proper engagement range.
 // Previously 14u (~1.75m). Even with that, attempts ran at 174/team/match
@@ -26,7 +28,7 @@ pub struct DefenderTacklingState {}
 impl StateProcessingHandler for DefenderTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         #[cfg(feature = "match-logs")]
-        crate::tackle_stats::DEF_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::tackle_stats::DEF_ENTRIES.fetch_add(1, Ordering::Relaxed);
 
         // If we have the ball or our team controls it, transition to running
         if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
@@ -90,14 +92,13 @@ impl StateProcessingHandler for DefenderTacklingState {
             // We're close enough to tackle! One shot per Tackling entry,
             // enforced by the cooldown.
             #[cfg(feature = "match-logs")]
-            crate::tackle_stats::DEF_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::tackle_stats::DEF_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
             let (tackle_success, committed_foul, foul_severity) =
                 self.attempt_sliding_tackle(ctx, &opponent);
 
             return if tackle_success {
                 #[cfg(feature = "match-logs")]
-                crate::tackle_stats::DEF_SUCCESSES
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::tackle_stats::DEF_SUCCESSES.fetch_add(1, Ordering::Relaxed);
                 let mut result = StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),

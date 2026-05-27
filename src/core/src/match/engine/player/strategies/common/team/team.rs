@@ -3,6 +3,7 @@ use crate::r#match::{
 };
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 pub struct TeamOperationsImpl<'b> {
     ctx: &'b StateProcessingContext<'b>,
@@ -254,7 +255,7 @@ impl<'b> TeamOperationsImpl<'b> {
             .teammates()
             .all()
             .map(|p| (p.position - ball_pos).norm_squared())
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
         let closest_opponent_dist_sq = self
             .ctx
@@ -262,7 +263,7 @@ impl<'b> TeamOperationsImpl<'b> {
             .opponents()
             .all()
             .map(|p| (p.position - ball_pos).norm_squared())
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
         // If a teammate is significantly closer to the ball than any opponent
         // 0.7 distance ratio = 0.49 squared ratio

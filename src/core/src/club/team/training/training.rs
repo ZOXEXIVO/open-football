@@ -4,6 +4,7 @@ use crate::{
     ChangeType, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerTraining,
     RelationshipChange, Staff, Team, TeamTrainingResult,
 };
+use chrono::Duration;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Weekday};
 use std::collections::HashMap;
 
@@ -11,7 +12,7 @@ use std::collections::HashMap;
 /// of player ids on a given date. Same pair + date always returns the same
 /// number — keeps weekly tests stable. The `salt` parameter lets us run
 /// independent bond / friction rolls that don't collide.
-fn pair_roll(a: u32, b: u32, salt: u32, date: chrono::NaiveDate) -> f32 {
+fn pair_roll(a: u32, b: u32, salt: u32, date: NaiveDate) -> f32 {
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
     // Cheap hash — wrapping multiplication on a couple of large primes.
     // Determinism over cryptographic strength is what we need here.
@@ -235,7 +236,7 @@ impl TeamTraining {
     fn apply_team_cohesion_effects(
         team: &mut Team,
         training_results: &TeamTrainingResult,
-        sim_date: chrono::NaiveDate,
+        sim_date: NaiveDate,
     ) {
         // Players training together build relationships
         let participant_ids: Vec<u32> = training_results
@@ -318,7 +319,7 @@ impl TeamTraining {
         team: &mut Team,
         participant_ids: &[u32],
         training_results: &TeamTrainingResult,
-        sim_date: chrono::NaiveDate,
+        sim_date: NaiveDate,
     ) {
         use crate::{
             ConflictLocation, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
@@ -527,9 +528,9 @@ impl TeamTraining {
         for eff in effects {
             if let Some(player) = team.players.find_mut(eff.from) {
                 let change_type = if eff.bond {
-                    crate::ChangeType::TrainingBonding
+                    ChangeType::TrainingBonding
                 } else {
-                    crate::ChangeType::TrainingFriction
+                    ChangeType::TrainingFriction
                 };
                 player.relations.update_with_type(
                     eff.to,
@@ -633,7 +634,7 @@ impl TeamTraining {
     /// history. Used as a fallback when the league-side fixture window
     /// has not been written yet (early simulation tick or unit test).
     fn matches_last_14_days(team: &Team, date: NaiveDateTime) -> u8 {
-        let cutoff = date.date() - chrono::Duration::days(14);
+        let cutoff = date.date() - Duration::days(14);
         team.match_history
             .items()
             .iter()

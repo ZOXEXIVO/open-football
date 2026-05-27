@@ -18,6 +18,7 @@ mod world_status;
 
 pub use types::*;
 
+use crate::HappinessEventType;
 use crate::country::PeopleNameGeneratorData;
 use crate::r#match::{MatchPlayer, MatchResultRaw, MatchSquad};
 use crate::utils::IntegerUtils;
@@ -27,6 +28,7 @@ use crate::{
 };
 use chrono::NaiveDate;
 use log::debug;
+use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct NationalTeam {
@@ -157,8 +159,7 @@ impl NationalTeam {
         // bumped and the debut transition. Squad members who travelled
         // but didn't get on the pitch are not "capped" — call-up alone
         // already emits `NationalTeamCallup`.
-        let appearance_ids: std::collections::HashSet<u32> =
-            match_result.player_stats.keys().copied().collect();
+        let appearance_ids: HashSet<u32> = match_result.player_stats.keys().copied().collect();
 
         for club in clubs.iter_mut() {
             for team in club.teams.iter_mut() {
@@ -182,7 +183,7 @@ impl NationalTeam {
                                 .with_first_time(true)
                                 .with_previous_caps(0);
                         player.on_recognition_award(
-                            crate::HappinessEventType::NationalTeamDebut,
+                            HappinessEventType::NationalTeamDebut,
                             ctx,
                             3650,
                         );

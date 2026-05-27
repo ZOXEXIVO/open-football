@@ -1,5 +1,6 @@
 use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
 use crate::{Player, PlayerSquadStatus, PlayerStatusType};
+use chrono::Duration;
 use chrono::NaiveDate;
 
 /// Renewal-history labels emitted by the renewal pipeline. Mirrored here
@@ -102,7 +103,7 @@ pub struct AffordabilityInput {
 
 impl ContractStalemate {
     pub fn assess(player: &Player, today: NaiveDate, affordability: AffordabilityInput) -> Self {
-        let cutoff = today - chrono::Duration::days(STALEMATE_WINDOW_DAYS);
+        let cutoff = today - Duration::days(STALEMATE_WINDOW_DAYS);
         let mut offers = 0u32;
         let mut rejections = 0u32;
         let mut last_reject: Option<NaiveDate> = None;

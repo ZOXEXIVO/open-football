@@ -7,6 +7,7 @@ use crate::r#match::defenders::states::{
     DefenderTrackingBackState, DefenderWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
+use std::fmt::Result;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,7 +78,7 @@ impl DefenderStrategies {
 }
 
 impl Display for DefenderState {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             DefenderState::Standing => write!(f, "Standing"),
             DefenderState::Resting => write!(f, "Resting"),

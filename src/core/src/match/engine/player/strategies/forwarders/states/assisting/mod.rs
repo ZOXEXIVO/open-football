@@ -6,6 +6,7 @@ use crate::r#match::{
     SteeringBehavior,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 #[derive(Default, Clone)]
 pub struct ForwardAssistingState {}
@@ -114,9 +115,7 @@ impl ForwardAssistingState {
             .nearby_ids(200.0)
             .filter(|(id, _)| self.is_in_good_scoring_position(ctx, *id))
             .min_by(|(_, dist_a), (_, dist_b)| {
-                dist_a
-                    .partial_cmp(dist_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                dist_a.partial_cmp(dist_b).unwrap_or(Ordering::Equal)
             })
             .map(|(id, _)| id)
     }

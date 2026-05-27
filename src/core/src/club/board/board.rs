@@ -17,6 +17,7 @@ use crate::club::team::reputation::AchievementType;
 use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClubContract};
 use crate::context::{GlobalContext, SimulationContext};
 use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
+use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
@@ -1235,7 +1236,7 @@ impl ClubBoard {
         today: NaiveDate,
         facility_decisions: &[BoardDecision],
     ) {
-        let season_due = today + chrono::Duration::days(330);
+        let season_due = today + Duration::days(330);
 
         // Headline season-outcome promise (survival / continental / title).
         if let Some(kind) = self.season_outcome_promise(ctx) {
@@ -1271,7 +1272,7 @@ impl ClubBoard {
             )
         });
         if deferred_capex && !self.promises.has_active(PromiseType::FacilityImprovement) {
-            let revisit_due = today + chrono::Duration::days(400);
+            let revisit_due = today + Duration::days(400);
             self.promises.add(BoardPromise::new(
                 PromiseType::FacilityImprovement,
                 today,
@@ -1374,7 +1375,7 @@ impl ClubBoard {
         if matches!(result.manager_meeting, Some(BoardManagerMeeting::Backing))
             && !self.promises.has_active(PromiseType::TransferBudget)
         {
-            let due = today + chrono::Duration::days(210);
+            let due = today + Duration::days(210);
             self.promises
                 .add(BoardPromise::new(PromiseType::TransferBudget, today, due));
         }

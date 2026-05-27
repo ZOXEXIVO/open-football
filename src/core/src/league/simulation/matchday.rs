@@ -1,7 +1,9 @@
 use crate::context::GlobalContext;
 use crate::league::{League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable};
+use crate::r#match::MatchSquad;
 use crate::r#match::{Match, MatchResult, SelectionContext};
-use crate::{Club, ClubPhilosophy, Person, Player, Team, TeamType};
+use crate::{Club, ClubPhilosophy, MatchRuntime, Person, Player, Team, TeamType};
+use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 use std::collections::HashMap;
@@ -80,6 +82,7 @@ impl League {
         clubs: &[Club],
         ctx: &GlobalContext<'_>,
         friendly: bool,
+        knockout: bool,
     ) -> Vec<MatchResult> {
         let today = ctx.simulation.date.date();
         let lookup = MatchdayLookup::build(clubs);
@@ -92,12 +95,12 @@ impl League {
                 // would otherwise be high-importance.
                 let home_upcoming = self.schedule.count_matches_for_team_in_days(
                     scheduled_match.home_team_id,
-                    today + chrono::Duration::days(1),
+                    today + Duration::days(1),
                     5,
                 ) as u8;
                 let away_upcoming = self.schedule.count_matches_for_team_in_days(
                     scheduled_match.away_team_id,
-                    today + chrono::Duration::days(1),
+                    today + Duration::days(1),
                     5,
                 ) as u8;
                 Self::build_match(
@@ -108,12 +111,13 @@ impl League {
                     &self.dynamics,
                     &self.table,
                     friendly,
+                    knockout,
                     (home_upcoming, away_upcoming),
                 )
             })
             .collect();
 
-        let match_results = crate::match_engine_pool().play(matches);
+        let match_results = MatchRuntime::engine_pool().play(matches);
 
         for (scheduled_match, result) in scheduled_matches.iter_mut().zip(match_results.iter()) {
             scheduled_match.result = Some(LeagueMatchResultResult::from_score(&result.score));
@@ -130,6 +134,7 @@ impl League {
         match_results
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_match(
         scheduled_match: &LeagueMatch,
         clubs: &[Club],
@@ -138,6 +143,7 @@ impl League {
         dynamics: &LeagueDynamics,
         table: &LeagueTable,
         friendly: bool,
+        knockout: bool,
         upcoming_fixtures: (u8, u8),
     ) -> Match {
         let home_team = lookup
@@ -159,9 +165,14 @@ impl League {
             table,
         );
 
-        // Calculate match importance for squad selection decisions
+        // Calculate match importance for squad selection decisions.
+        // Knockout cup ties are inherently high-stakes — there's no table
+        // to read, and a defeat ends the campaign — so they get a high
+        // fixed importance to push the squad selector toward a strong XI.
         let base_importance = if friendly {
             0.1
+        } else if knockout {
+            0.9
         } else {
             Self::calculate_match_importance(
                 table,
@@ -278,14 +289,24 @@ impl League {
         Self::apply_psychological_factors_static(&mut home_squad, home_momentum, home_pressure);
         Self::apply_psychological_factors_static(&mut away_squad, away_momentum, away_pressure);
 
-        Match::make(
-            scheduled_match.id.clone(),
-            scheduled_match.league_id,
-            &scheduled_match.league_slug,
-            home_squad,
-            away_squad,
-            friendly,
-        )
+        if knockout {
+            Match::make_knockout(
+                scheduled_match.id.clone(),
+                scheduled_match.league_id,
+                &scheduled_match.league_slug,
+                home_squad,
+                away_squad,
+            )
+        } else {
+            Match::make(
+                scheduled_match.id.clone(),
+                scheduled_match.league_id,
+                &scheduled_match.league_slug,
+                home_squad,
+                away_squad,
+                friendly,
+            )
+        }
     }
 
     /// Collect available reserve players from the same club.
@@ -549,12 +570,19 @@ impl League {
         _current_date: NaiveDate,
         dynamics: &LeagueDynamics,
     ) -> f32 {
+        let total_teams = table.rows.len();
+        // Cup (knockout) leagues have no standings table — guard the
+        // position arithmetic so `total_teams - 3` can't underflow and so
+        // an empty table doesn't masquerade as "top of the league".
+        if total_teams == 0 {
+            return 0.5;
+        }
+
         let position = table
             .rows
             .iter()
             .position(|r| r.team_id == team.id)
             .unwrap_or(0);
-        let total_teams = table.rows.len();
 
         let mut pressure: f32 = 0.5;
 
@@ -562,7 +590,7 @@ impl League {
             pressure += 0.3;
         }
 
-        if position >= total_teams - 3 {
+        if position >= total_teams.saturating_sub(3) {
             pressure += 0.4;
         }
 
@@ -574,11 +602,7 @@ impl League {
         pressure.min(1.0)
     }
 
-    fn apply_psychological_factors_static(
-        squad: &mut crate::r#match::MatchSquad,
-        momentum: f32,
-        pressure: f32,
-    ) {
+    fn apply_psychological_factors_static(squad: &mut MatchSquad, momentum: f32, pressure: f32) {
         debug!(
             "Team {} - Momentum: {:.2}, Pressure: {:.2}",
             squad.team_name, momentum, pressure

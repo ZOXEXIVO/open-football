@@ -61,6 +61,10 @@ impl DatabaseGenerator {
                 );
 
                 let mut leagues_vec = Self::generate_leagues(country.id, country.reputation, data);
+                // Build the domestic cup from the real leagues (before youth
+                // sub-leagues are appended) so the tier-1 season window is
+                // picked up cleanly.
+                let domestic_cup = Self::generate_domestic_cup(country, &leagues_vec);
                 Self::create_subteams_leagues(country.id, &mut clubs, &mut leagues_vec, data);
                 let leagues = LeagueCollection::new(leagues_vec);
 
@@ -84,6 +88,7 @@ impl DatabaseGenerator {
                     .foreground_color(country.foreground_color.clone())
                     .continent_id(continent.id)
                     .leagues(leagues)
+                    .domestic_cup(domestic_cup)
                     .clubs(clubs)
                     .reputation(country.reputation)
                     .settings(settings)

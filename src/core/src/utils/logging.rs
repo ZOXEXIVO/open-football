@@ -1,5 +1,6 @@
 use crate::utils::TimeEstimation;
 use log::{debug, info};
+use std::time::Instant;
 
 const MAX_DURATION_THRESHOLD_MS: u32 = 1000;
 
@@ -39,7 +40,7 @@ impl Logging {
     where
         Fut: Future<Output = T>,
     {
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         let result = action.await;
         let duration_ms = now.elapsed().as_millis() as u32;
 

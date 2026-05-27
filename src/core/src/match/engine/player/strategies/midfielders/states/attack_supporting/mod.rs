@@ -1,3 +1,4 @@
+use crate::PlayerSkills;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::strategies::players::skills::SkillCurve;
@@ -6,6 +7,7 @@ use crate::r#match::{
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 const TACKLE_RANGE: f32 = 40.0;
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300;
@@ -362,7 +364,7 @@ impl MidfielderAttackSupportingState {
     /// engine, and finishing / long-shots are the goal threat that makes
     /// the run worthwhile. A deep regista (low off-ball / work-rate) scores
     /// low and holds; an advanced #8 scores high and runs.
-    fn attacking_drive(s: &crate::PlayerSkills) -> f32 {
+    fn attacking_drive(s: &PlayerSkills) -> f32 {
         s.mental.off_the_ball * 0.42
             + s.mental.work_rate * 0.26
             + (s.technical.finishing + s.technical.long_shots) * 0.5 * 0.32
@@ -825,7 +827,7 @@ impl MidfielderAttackSupportingState {
             }];
         }
 
-        defender_ys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        defender_ys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
         let mut channels: Vec<Channel> = Vec::with_capacity(defender_ys.len().saturating_sub(1));
 
@@ -845,7 +847,7 @@ impl MidfielderAttackSupportingState {
         channels.sort_by(|a, b| {
             a.congestion
                 .partial_cmp(&b.congestion)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
         });
 
         channels
@@ -869,7 +871,7 @@ impl MidfielderAttackSupportingState {
                     Some(PlayerSide::Right) => -b.position.x,
                     None => 0.0,
                 };
-                b_x.partial_cmp(&a_x).unwrap_or(std::cmp::Ordering::Equal)
+                b_x.partial_cmp(&a_x).unwrap_or(Ordering::Equal)
             });
 
         if let Some(defender) = last_defender {
@@ -914,9 +916,7 @@ impl MidfielderAttackSupportingState {
         let forward = attacking_players.iter().max_by(|a, b| {
             let a_advance = a.position.x * attacking_direction;
             let b_advance = b.position.x * attacking_direction;
-            a_advance
-                .partial_cmp(&b_advance)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a_advance.partial_cmp(&b_advance).unwrap_or(Ordering::Equal)
         });
 
         if let Some(forward) = forward {

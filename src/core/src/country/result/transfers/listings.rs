@@ -3,6 +3,7 @@ use crate::club::player::contract::{AffordabilityInput, ContractStalemate};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
+use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::{TransferListing, TransferListingType};
 use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus,
@@ -456,22 +457,12 @@ impl CountryResult {
 
         if let Some(candidate) = loan_candidate {
             let reason = match &candidate.reason {
-                crate::transfers::pipeline::LoanOutReason::NeedsGameTime => {
-                    "dec_reason_needs_game_time"
-                }
-                crate::transfers::pipeline::LoanOutReason::BlockedByBetterPlayer => {
-                    "dec_reason_blocked_by_better"
-                }
-                crate::transfers::pipeline::LoanOutReason::Surplus => "dec_reason_surplus_tactical",
-                crate::transfers::pipeline::LoanOutReason::FinancialRelief => {
-                    "dec_reason_financial_relief"
-                }
-                crate::transfers::pipeline::LoanOutReason::LackOfPlayingTime => {
-                    "dec_reason_lack_playing_time"
-                }
-                crate::transfers::pipeline::LoanOutReason::PostInjuryFitness => {
-                    "dec_reason_post_injury_fitness"
-                }
+                LoanOutReason::NeedsGameTime => "dec_reason_needs_game_time",
+                LoanOutReason::BlockedByBetterPlayer => "dec_reason_blocked_by_better",
+                LoanOutReason::Surplus => "dec_reason_surplus_tactical",
+                LoanOutReason::FinancialRelief => "dec_reason_financial_relief",
+                LoanOutReason::LackOfPlayingTime => "dec_reason_lack_playing_time",
+                LoanOutReason::PostInjuryFitness => "dec_reason_post_injury_fitness",
             };
             return ListingDecision::Loan {
                 reason: reason.to_string(),

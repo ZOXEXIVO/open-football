@@ -3,9 +3,9 @@ use super::{
     ContinentalMatchResult, GroupTable, KnockoutTie,
 };
 use crate::Club;
+use crate::MatchRuntime;
 use crate::continent::ContinentalRankings;
 use crate::r#match::{Match, MatchResult, SelectionContext};
-use crate::match_engine_pool;
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use std::collections::HashMap;
@@ -306,7 +306,7 @@ impl CopaLibertadores {
         }
 
         // Play all matches through the engine pool
-        let results = match_engine_pool().play(engine_matches);
+        let results = MatchRuntime::engine_pool().play(engine_matches);
 
         // Store results back on the matches
         for (cm, result) in todays_matches.iter().zip(results.iter()) {

@@ -1,3 +1,4 @@
+use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::language::PlayerLanguage;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::rapport::PlayerRapport;
@@ -214,6 +215,7 @@ impl PlayerBuilder {
             statistics: self.statistics.unwrap_or_default(),
             friendly_statistics: self.friendly_statistics.unwrap_or_default(),
             cup_statistics: self.cup_statistics.unwrap_or_default(),
+            cup_statistics_by_competition: Vec::new(),
             statistics_history: self
                 .statistics_history
                 .unwrap_or_else(PlayerStatisticsHistory::new),
@@ -230,7 +232,7 @@ impl PlayerBuilder {
             is_force_match_selection: false,
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
-            interactions: crate::club::player::interaction::ManagerInteractionLog::new(),
+            interactions: ManagerInteractionLog::new(),
             pending_signing: None,
             generated: self.generated.unwrap_or(false),
             retired: false,

@@ -4,6 +4,8 @@ use super::seeding::{
     ClubSeedingContext, build_league_lookup, club_has_players_needing_seed,
     team_has_players_needing_seed, team_ids_for_league,
 };
+use crate::NationalSelectionPolicy;
+use crate::NationalTeam;
 use crate::PlayerSquadStatus;
 use crate::club::board::manager_market::ManagerApproach;
 use crate::club::player::calculators::WageCalculator;
@@ -21,6 +23,7 @@ use crate::{Person, Player, Staff};
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct SimulatorData {
@@ -85,10 +88,11 @@ impl SimulatorData {
     /// per worker thread; Rayon scheduling still reorders draws across
     /// threads, so this is a debugging aid, not a replay tool.
     ///
-    /// **Note: the seed is process-global state.** `set_seed` writes to
-    /// the RNG engine's static; building two `SimulatorData` back-to-back
-    /// means the second silently inherits whatever seed the first left
-    /// behind unless this function (or `set_seed`) is called again.
+    /// **Note: the seed is process-global state.** `RandomEngine::set_seed`
+    /// writes to the RNG engine's static; building two `SimulatorData`
+    /// back-to-back means the second silently inherits whatever seed the
+    /// first left behind unless this function (or `RandomEngine::set_seed`)
+    /// is called again.
     /// Don't rely on this constructor to fully isolate two simulators
     /// running in the same process.
     pub fn new_seeded(
@@ -97,7 +101,7 @@ impl SimulatorData {
         global_competitions: GlobalCompetitions,
         seed: u64,
     ) -> Self {
-        rng_engine::set_seed(seed);
+        rng_engine::RandomEngine::set_seed(seed);
         Self::new(date, continents, global_competitions)
     }
 
@@ -170,7 +174,7 @@ impl SimulatorData {
     /// pool. Called once at construction time after `country_info` is
     /// populated. Cheap parallel pass.
     pub fn seed_player_nationality_continents(&mut self) {
-        let lookup: std::collections::HashMap<u32, u32> = self
+        let lookup: HashMap<u32, u32> = self
             .country_info
             .iter()
             .map(|(k, v)| (*k, v.continent_id))
@@ -414,7 +418,7 @@ impl SimulatorData {
                 // the free-agent pool. Pre-collect once per country —
                 // immutable read before the mutable club iteration
                 // takes the borrow.
-                let league_reputations: std::collections::HashMap<u32, u16> = country
+                let league_reputations: HashMap<u32, u16> = country
                     .leagues
                     .leagues
                     .iter()
@@ -603,8 +607,8 @@ impl SimulatorData {
     /// pool without per-continent plumbing.
     pub fn process_world_national_team_callups(&mut self) {
         let date = self.date.date();
-        let need_callups = crate::NationalTeam::is_break_start(date)
-            || crate::NationalTeam::is_tournament_start(date);
+        let need_callups =
+            NationalTeam::is_break_start(date) || NationalTeam::is_tournament_start(date);
         if !need_callups {
             return;
         }
@@ -622,7 +626,7 @@ impl SimulatorData {
         // Build a global senior candidate pool (main teams only) and run
         // the per-country call-up in parallel. Pre-distribute candidates
         // so each rayon worker owns its own slice — no shared HashMap.
-        let mut candidates_by_country = crate::NationalTeam::collect_all_candidates_by_country(
+        let mut candidates_by_country = NationalTeam::collect_all_candidates_by_country(
             self.continents.iter().flat_map(|c| c.countries.iter()),
             date,
         );
@@ -652,16 +656,16 @@ impl SimulatorData {
         // Collect every player already taken by a senior squad in this
         // window — they're excluded from the U21 pool so the youth side
         // is a genuinely separate set of players, not a senior shadow.
-        let senior_selected: std::collections::HashSet<u32> = self
+        let senior_selected: HashSet<u32> = self
             .continents
             .iter()
             .flat_map(|c| c.countries.iter())
             .flat_map(|c| c.national_team.squad.iter().map(|sp| sp.player_id))
             .collect();
 
-        let u21_policy = crate::NationalSelectionPolicy::under21();
+        let u21_policy = NationalSelectionPolicy::under21();
         let mut u21_candidates_by_country =
-            crate::NationalTeam::collect_all_candidates_by_country_with_policy(
+            NationalTeam::collect_all_candidates_by_country_with_policy(
                 self.continents.iter().flat_map(|c| c.countries.iter()),
                 date,
                 &u21_policy,
@@ -696,8 +700,8 @@ impl SimulatorData {
         // Apply Int / IntU21 statuses across every club in every continent.
         // Senior first, then U21 — the U21 pass only toggles IntU21, so
         // the two never clash on the same player (the pools are disjoint).
-        crate::NationalTeam::apply_callup_statuses_across_world(&mut self.continents, date);
-        crate::NationalTeam::apply_u21_callup_statuses_across_world(&mut self.continents, date);
+        NationalTeam::apply_callup_statuses_across_world(&mut self.continents, date);
+        NationalTeam::apply_u21_callup_statuses_across_world(&mut self.continents, date);
     }
 
     /// World-level Int release. Runs after all matches (continent
@@ -708,11 +712,11 @@ impl SimulatorData {
     pub fn process_world_national_team_release(&mut self) {
         let date = self.date.date();
         let need_release =
-            crate::NationalTeam::is_break_end(date) || crate::NationalTeam::is_tournament_end(date);
+            NationalTeam::is_break_end(date) || NationalTeam::is_tournament_end(date);
         if !need_release {
             return;
         }
-        crate::NationalTeam::release_callup_statuses_across_world(&mut self.continents);
-        crate::NationalTeam::release_u21_callup_statuses_across_world(&mut self.continents);
+        NationalTeam::release_callup_statuses_across_world(&mut self.continents);
+        NationalTeam::release_u21_callup_statuses_across_world(&mut self.continents);
     }
 }

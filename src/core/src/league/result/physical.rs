@@ -4,6 +4,7 @@ use crate::club::player::events::match_exertion::MatchExertionInputs;
 use crate::r#match::FieldSquad;
 use crate::r#match::MatchResultRaw;
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
+use chrono::NaiveDate;
 use std::collections::HashMap;
 
 /// Regulation match duration in minutes. Used as the upper bound for
@@ -77,7 +78,7 @@ fn apply_side<D: LeagueProcessAccess>(
     subbed_in_at: &HashMap<u32, u64>,
     physical_snapshots: &HashMap<u32, PlayerMatchPhysicalSnapshot>,
     data: &mut D,
-    now: chrono::NaiveDate,
+    now: NaiveDate,
     is_friendly: bool,
     actual_match_minutes: f32,
 ) {
@@ -124,7 +125,7 @@ fn apply_to_player<D: LeagueProcessAccess>(
     player_id: u32,
     snapshot: Option<PlayerMatchPhysicalSnapshot>,
     fallback_minutes: f32,
-    now: chrono::NaiveDate,
+    now: NaiveDate,
     is_friendly: bool,
 ) {
     if let Some(player) = data.player_mut(player_id) {

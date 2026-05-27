@@ -5,6 +5,7 @@ use crate::r#match::{
     SteeringBehavior,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 #[derive(Default, Clone)]
 pub struct MidfielderInterceptingState {}
@@ -86,7 +87,7 @@ impl MidfielderInterceptingState {
                 let opponent_distance = (interception_point - opponent.position).magnitude();
                 opponent_distance / opponent_speed
             })
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
             .unwrap_or(f32::MAX);
 
         // Return true if defender can reach before any opponent

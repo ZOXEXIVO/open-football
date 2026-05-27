@@ -9,6 +9,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use rand::RngExt;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering;
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 12.0; // ~1.5m — midfielder ball-winner engagement range.
 
@@ -18,7 +20,7 @@ pub struct MidfielderTacklingState {}
 impl StateProcessingHandler for MidfielderTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         #[cfg(feature = "match-logs")]
-        crate::tackle_stats::MID_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::tackle_stats::MID_ENTRIES.fetch_add(1, Ordering::Relaxed);
 
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
@@ -83,16 +85,14 @@ impl StateProcessingHandler for MidfielderTacklingState {
             let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
                 #[cfg(feature = "match-logs")]
-                crate::tackle_stats::MID_ATTEMPTS
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::tackle_stats::MID_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
                 let (tackle_success, committed_foul, foul_severity) =
                     self.attempt_tackle(ctx, &opponent);
                 if tackle_success {
                     // Double-check ball is not in flight before claiming.
                     if !ctx.ball().is_in_flight() {
                         #[cfg(feature = "match-logs")]
-                        crate::tackle_stats::MID_SUCCESSES
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        crate::tackle_stats::MID_SUCCESSES.fetch_add(1, Ordering::Relaxed);
                         let mut result = StateChangeResult::with_midfielder_state_and_event(
                             MidfielderState::Standing,
                             Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),

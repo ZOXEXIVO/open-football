@@ -3,6 +3,7 @@ use crate::club::finance::balance::DistressLevel;
 use crate::club::{ClubSponsorshipContract, SponsorPerformance, SponsorRenewalContext};
 use crate::league::result::LeagueProcessAccess;
 use log::debug;
+use std::marker::PhantomData;
 
 pub struct ClubFinanceResult {
     pub club_id: u32,
@@ -119,6 +120,6 @@ impl ClubFinanceResult {
             );
         }
         // Suppress unused-import warning if a feature path drops the type.
-        let _ = std::marker::PhantomData::<ClubSponsorshipContract>;
+        let _ = PhantomData::<ClubSponsorshipContract>;
     }
 }

@@ -5,7 +5,9 @@ use crate::SimulatorData;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::{TransferListing, TransferListingOrigin, TransferListingType};
+use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{TransferClause, TransferOffer};
+use crate::transfers::pipeline::ScoutMonitoringStatus;
 use crate::transfers::pipeline::plausibility::{
     TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
 };
@@ -312,8 +314,7 @@ impl PipelineProcessor {
                                 && n.buying_club_id != club.id
                                 && matches!(
                                     n.status,
-                                    crate::transfers::negotiation::NegotiationStatus::Pending
-                                        | crate::transfers::negotiation::NegotiationStatus::Countered
+                                    NegotiationStatus::Pending | NegotiationStatus::Countered
                                 )
                         })
                         .count() as u32;
@@ -777,15 +778,9 @@ impl PipelineProcessor {
             // onto every active monitoring row for this player. Signed
             // = scouts got their man; Lost = the pursuit collapsed.
             if accepted {
-                plan.set_monitoring_status_for_player(
-                    player_id,
-                    crate::transfers::pipeline::ScoutMonitoringStatus::Signed,
-                );
+                plan.set_monitoring_status_for_player(player_id, ScoutMonitoringStatus::Signed);
             } else {
-                plan.set_monitoring_status_for_player(
-                    player_id,
-                    crate::transfers::pipeline::ScoutMonitoringStatus::Lost,
-                );
+                plan.set_monitoring_status_for_player(player_id, ScoutMonitoringStatus::Lost);
             }
 
             for shortlist in &mut plan.shortlists {

@@ -9,7 +9,10 @@ use crate::{
     Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub,
     TeamType, TrainingIntensity, TrainingType,
 };
+use chrono::Weekday;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
+use std::slice::Iter;
+use std::slice::IterMut;
 
 #[derive(Debug, Clone)]
 pub struct StaffEvent {
@@ -180,11 +183,11 @@ impl StaffCollection {
         self.staffs.iter().any(|s| s.id == staff_id)
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, Staff> {
+    pub fn iter(&self) -> Iter<'_, Staff> {
         self.staffs.iter()
     }
 
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Staff> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, Staff> {
         self.staffs.iter_mut()
     }
 
@@ -745,8 +748,8 @@ impl Staff {
         self.fatigue -= 2.0;
 
         // Recovery on weekends
-        if ctx.simulation.date.weekday() == chrono::Weekday::Sun
-            || ctx.simulation.date.weekday() == chrono::Weekday::Sat
+        if ctx.simulation.date.weekday() == Weekday::Sun
+            || ctx.simulation.date.weekday() == Weekday::Sat
         {
             self.fatigue -= 5.0;
         }
@@ -1051,11 +1054,11 @@ impl Staff {
         // Map weekday to training session
         let weekday = date.weekday();
         let index = match weekday {
-            chrono::Weekday::Mon => 0,
-            chrono::Weekday::Tue => 1,
-            chrono::Weekday::Wed => 2,
-            chrono::Weekday::Thu => 3,
-            chrono::Weekday::Fri => 4,
+            Weekday::Mon => 0,
+            Weekday::Tue => 1,
+            Weekday::Wed => 2,
+            Weekday::Thu => 3,
+            Weekday::Fri => 4,
             _ => return None, // No training on weekends
         };
 

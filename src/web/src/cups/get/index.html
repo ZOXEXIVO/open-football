@@ -1,0 +1,156 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab active" href="/{{ lang }}/cups/{{ cup_slug }}">{{ i18n.t("cup_bracket") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-cup-hero">
+            <div class="fm-trophy-badge{% if !is_decided %} live{% endif %}">
+                <i class="fa fa-trophy"></i>
+            </div>
+            <div class="fm-cup-hero-main">
+                {% if is_decided %}
+                <span class="fm-cup-hero-label">{{ i18n.t("champion") }}</span>
+                <span class="fm-cup-hero-name">
+                    <a href="/{{ lang }}/teams/{{ champion_slug }}">{{ champion_name }}</a>
+                </span>
+                <span class="fm-cup-hero-sub">{{ title }}</span>
+                {% else %}
+                <span class="fm-cup-hero-label live">{{ i18n.t("knockout_competition") }}</span>
+                <span class="fm-cup-hero-name">{% if !stage_label.is_empty() %}{{ stage_label }}{% else %}{{ title }}{% endif %}</span>
+                <span class="fm-cup-hero-sub">{{ sub_title }}</span>
+                {% endif %}
+            </div>
+            <div class="fm-cup-stats">
+                <div class="fm-cup-stat"><b>{{ entrants }}</b><span>{{ i18n.t("entrants") }}</span></div>
+                <div class="fm-cup-stat"><b>{{ rounds_count }}</b><span>{{ i18n.t("rounds") }}</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="fm-panel mt-3">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("cup_bracket") }}</h3>
+        </div>
+        {% if bracket.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("knockout_competition") }}</div>
+        {% else %}
+        <div class="fm-bracket-scroll">
+            <div class="fm-bracket">
+                {% for round in bracket %}
+                {% let is_first = loop.first %}
+                {% let is_final = loop.last %}
+                <div class="fm-round{% if is_first %} is-first{% endif %}{% if is_final %} is-final{% endif %}">
+                    <div class="fm-round-hd">{{ round.label }} <span class="fm-round-cnt">{{ round.ties.len() }}</span></div>
+                    <div class="fm-round-body">
+                        {% for tie in round.ties %}
+                        <div class="fm-tie{% if !tie.played %} unplayed{% endif %}">
+                            <div class="fm-tie-row{% if tie.home_winner %} winner{% endif %}">
+                                <a class="fm-tie-team" href="/{{ lang }}/teams/{{ tie.home_slug }}">
+                                    <span class="fm-tie-name">{{ tie.home_name }}</span>
+                                    {% if is_final && tie.home_winner %}<i class="fa fa-crown fm-tie-crown"></i>{% endif %}
+                                </a>
+                                <a class="fm-tie-score" href="/{{ lang }}/match/{{ tie.match_id }}">{% if let Some(g) = tie.home_goals %}{{ g }}{% else %}–{% endif %}{% if let Some(p) = tie.home_pens %} <span class="fm-pen">({{ p }})</span>{% endif %}</a>
+                            </div>
+                            <div class="fm-tie-row{% if tie.away_winner %} winner{% endif %}">
+                                <a class="fm-tie-team" href="/{{ lang }}/teams/{{ tie.away_slug }}">
+                                    <span class="fm-tie-name">{{ tie.away_name }}</span>
+                                    {% if is_final && tie.away_winner %}<i class="fa fa-crown fm-tie-crown"></i>{% endif %}
+                                </a>
+                                <a class="fm-tie-score" href="/{{ lang }}/match/{{ tie.match_id }}">{% if let Some(g) = tie.away_goals %}{{ g }}{% else %}–{% endif %}{% if let Some(p) = tie.away_pens %} <span class="fm-pen">({{ p }})</span>{% endif %}</a>
+                            </div>
+                        </div>
+                        {% endfor %}
+                        {% for bye in round.byes %}
+                        <a class="fm-bye" href="/{{ lang }}/teams/{{ bye.slug }}">
+                            <span class="name">{{ bye.name }}</span>
+                            <span class="tag">{{ i18n.t("bye") }}</span>
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </section>
+
+    {% if !top_scorers.is_empty() || !top_assisters.is_empty() %}
+    <div class="row g-3 mt-0">
+        <div class="col-lg-6">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("top_scorers") }}</h3>
+                </div>
+                {% if top_scorers.is_empty() %}
+                <div class="fm-empty">{{ i18n.t("no_goals_scored") }}</div>
+                {% else %}
+                <table class="fm-player-stats">
+                    <thead>
+                        <tr>
+                            <th class="ps-pos">#</th>
+                            <th class="ps-name">{{ i18n.t("player") }}</th>
+                            <th class="ps-apps">{{ i18n.t("apps") }}</th>
+                            <th class="ps-val">{{ i18n.t("gls") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in top_scorers %}
+                        <tr>
+                            <td class="ps-pos">{{ loop.index }}</td>
+                            <td class="ps-name">
+                                <a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a>
+                                <span class="ps-team"><a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
+                            </td>
+                            <td class="ps-apps">{{ item.played }}</td>
+                            <td class="ps-val">{{ item.stat_value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </section>
+        </div>
+        <div class="col-lg-6">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("top_assisters") }}</h3>
+                </div>
+                {% if top_assisters.is_empty() %}
+                <div class="fm-empty">{{ i18n.t("no_assists_recorded") }}</div>
+                {% else %}
+                <table class="fm-player-stats">
+                    <thead>
+                        <tr>
+                            <th class="ps-pos">#</th>
+                            <th class="ps-name">{{ i18n.t("player") }}</th>
+                            <th class="ps-apps">{{ i18n.t("apps") }}</th>
+                            <th class="ps-val">{{ i18n.t("ast") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in top_assisters %}
+                        <tr>
+                            <td class="ps-pos">{{ loop.index }}</td>
+                            <td class="ps-name">
+                                <a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a>
+                                <span class="ps-team"><a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
+                            </td>
+                            <td class="ps-apps">{{ item.played }}</td>
+                            <td class="ps-val">{{ item.stat_value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </section>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

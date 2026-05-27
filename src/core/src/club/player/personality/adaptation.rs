@@ -1,5 +1,6 @@
 use crate::HappinessEventType;
 use crate::club::player::behaviour_config::AdaptationConfig;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::language::Language;
 use crate::club::player::player::{ManagerPromiseKind, Player};
 use crate::club::{Person, PlayerPositionType};
@@ -10,6 +11,7 @@ use crate::{
     PersonalAdaptationEventContext, PersonalAdaptationKind, RoleStatusEventContext, RoleStatusKind,
 };
 use chrono::NaiveDate;
+use std::cmp::Reverse;
 
 /// Multi-axis reputation gap between the player and his current
 /// surroundings. Used by morale-factor calculators (pressure_load,
@@ -526,7 +528,7 @@ impl Player {
         if club_rep_0_to_1 < 0.55 {
             return;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.continental_ambition_satisfied;
         let mut desire_ctx = if pending.had_libertadores_desire {
             CareerDesireEventContext::new(CareerDesireKind::CopaLibertadoresAmbition)
@@ -565,7 +567,7 @@ impl Player {
         if !(european || libertadores) {
             return;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.continental_ambition_satisfied;
         let mut desire_ctx = if libertadores {
             CareerDesireEventContext::new(CareerDesireKind::CopaLibertadoresAmbition)
@@ -612,7 +614,7 @@ impl Player {
         if !(is_favourite || speaks_native) {
             return;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.home_return_opportunity;
         let mut desire_ctx =
             CareerDesireEventContext::new(CareerDesireKind::ReturnHomeAfterPoorAdaptation);
@@ -1115,7 +1117,7 @@ impl Player {
             return false;
         }
 
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.wants_return_home;
 
         let mut desire_ctx =
@@ -1579,7 +1581,7 @@ impl EnvCandidatePool {
             .iter()
             .enumerate()
             .filter(|(_, c)| c.role == role)
-            .max_by_key(|(i, c)| (c.priority, std::cmp::Reverse(*i)))
+            .max_by_key(|(i, c)| (c.priority, Reverse(*i)))
             .map(|(i, _)| i)?;
         Some(self.items.remove(idx))
     }
@@ -1602,7 +1604,7 @@ impl EnvCandidatePool {
 
 impl TransferEnvironmentProfile {
     fn top_club_opportunity_candidate(&self) -> Option<EnvCandidate> {
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.top_club_opportunity;
         let mag = base
             * Player::age_amplifier_for_top_club(self.age)
@@ -1630,7 +1632,7 @@ impl TransferEnvironmentProfile {
         if (self.adaptability + self.professionalism) < 24.0 {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.elite_training_lift;
         let mag = base * Player::ambition_amplifier_for_aspirational(self.ambition);
         let ctx = HappinessEventContext::new(
@@ -1660,7 +1662,7 @@ impl TransferEnvironmentProfile {
         if self.pressure > 8.0 && !depth_blocked {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.overawed_by_elite_club;
         let mag = base
             * Player::age_amplifier_for_top_club(self.age)
@@ -1694,7 +1696,7 @@ impl TransferEnvironmentProfile {
         if !depth_blocked {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.role_path_blocked_at_elite_club;
         let mag = base
             * Player::age_amplifier_for_top_club(self.age)
@@ -1740,7 +1742,7 @@ impl TransferEnvironmentProfile {
         if !(depth_blocked || below_standard) {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.dressing_room_status_shock;
         let mag = base * Player::professionalism_dampener_for_negatives(self.professionalism);
         let mut ctx = HappinessEventContext::new(
@@ -1771,7 +1773,7 @@ impl TransferEnvironmentProfile {
         if !s.has_support_anchor() && self.professionalism < 12.0 {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.senior_mentor_support;
         let mut mul = 1.0;
         if s.same_nationality_teammates >= 1 {
@@ -1813,7 +1815,7 @@ impl TransferEnvironmentProfile {
         if self.destination_is_favorite && self.ambition < 16.0 {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.too_good_for_level;
         let mut mul = if self.ambition >= 15.0 { 1.30 } else { 1.0 };
         if self.loyalty >= 15.0 && self.destination_is_favorite {
@@ -1853,7 +1855,7 @@ impl TransferEnvironmentProfile {
             // framing — surfaced as `DreamMove` elsewhere.
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.step_down_embarrassment;
         let mut mul = 1.0;
         if self.age >= 33 {
@@ -1889,7 +1891,7 @@ impl TransferEnvironmentProfile {
         if !setup_gap {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.training_standard_frustration;
         let mul = if self.professionalism >= 15.0 {
             1.20
@@ -1930,7 +1932,7 @@ impl TransferEnvironmentProfile {
         if !(high_fee || high_rep_gap) {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.fan_expectation_burden;
         let mul = if self.pressure <= 8.0 { 1.30 } else { 1.0 };
         let mag = base * mul;
@@ -1963,7 +1965,7 @@ impl TransferEnvironmentProfile {
         if !(big_step_up || low_pressure) {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.media_spotlight_pressure;
         let mag = base * Player::professionalism_dampener_for_negatives(self.professionalism);
         let mut ctx = HappinessEventContext::new(
@@ -1992,7 +1994,7 @@ impl TransferEnvironmentProfile {
         if !(down_mismatch || up_mismatch) {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.loan_level_mismatch;
         let ctx = HappinessEventContext::new(
             HappinessEventCause::TacticalDisagreement,
@@ -2038,7 +2040,7 @@ impl WeeklyEnvSignals {
         if !(self.adaptation_score >= 65.0 && self.had_recent_isolation && self.roll < 0.50) {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.adaptation_breakthrough;
         let ctx = HappinessEventContext::new(
             HappinessEventCause::AdaptationIsolation,
@@ -2067,7 +2069,7 @@ impl WeeklyEnvSignals {
         {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.trusted_after_step_up
             * Player::ambition_amplifier_for_aspirational(self.ambition);
         let ctx = HappinessEventContext::new(
@@ -2093,7 +2095,7 @@ impl WeeklyEnvSignals {
         if !(self.apps >= 6.0 && self.avg_rating >= 7.0 && self.roll < 0.45) {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.proved_level_after_move;
         let ctx = HappinessEventContext::new(
             HappinessEventCause::ReputationAdmiration,
@@ -2121,7 +2123,7 @@ impl WeeklyEnvSignals {
         if !(self.days_since <= 60 && self.adaptation_score < 45.0 && self.roll < 0.40) {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.overawed_by_elite_club
             * Player::professionalism_dampener_for_negatives(self.professionalism);
         let ctx = HappinessEventContext::new(
@@ -2158,7 +2160,7 @@ impl WeeklyEnvSignals {
             // Player has a proper sample and is performing — no event.
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.too_good_for_level;
         let mut ctx = HappinessEventContext::new(
             HappinessEventCause::ReputationTension,
@@ -2188,7 +2190,7 @@ impl WeeklyEnvSignals {
         if !((self.league_reputation as i32) < 4500 && self.roll < 0.30) {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.training_standard_frustration;
         let ctx = HappinessEventContext::new(
             HappinessEventCause::TrainingFriction,
@@ -2220,7 +2222,7 @@ impl WeeklyEnvSignals {
         {
             return None;
         }
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let mag = cfg.catalog.fan_expectation_burden;
         let ctx = HappinessEventContext::new(
             HappinessEventCause::MediaPressure,

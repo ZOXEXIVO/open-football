@@ -1,4 +1,5 @@
 use super::*;
+use chrono::Utc;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub fn new() -> Self {
@@ -37,7 +38,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut match_position_data = if !match_recordings {
             ResultMatchPositionData::empty()
-        } else if is_match_events_mode() {
+        } else if MatchRuntime::events_mode() {
             ResultMatchPositionData::new_with_tracking()
         } else {
             ResultMatchPositionData::new()
@@ -52,7 +53,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         context.starting_home_tactic = starting_home_tactic;
         context.starting_away_tactic = starting_away_tactic;
 
-        if is_match_events_mode() {
+        if MatchRuntime::events_mode() {
             context.enable_logging();
         }
 
@@ -756,7 +757,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     // Wall-clock today — the engine doesn't track sim
                     // date directly. Used only for the youth-protection
                     // sub branch, where the comparison is age <= 17.
-                    let today = chrono::Utc::now().naive_utc().date();
+                    let today = Utc::now().naive_utc().date();
                     let per_pass_cap = context.max_substitutions_per_pass;
                     process_substitutions(field, context, per_pass_cap, today);
                     let mut rng = rand::rng();

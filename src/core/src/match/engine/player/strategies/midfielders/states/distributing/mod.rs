@@ -7,6 +7,7 @@ use crate::r#match::{
     StateProcessingHandler,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 #[derive(Default, Clone)]
 pub struct MidfielderDistributingState {}
@@ -71,9 +72,7 @@ impl MidfielderDistributingState {
                 let recency_b = ctx.ball().passer_recency_penalty(b.id);
                 let space_a = self.calculate_space_around_player(ctx, a) * recency_a;
                 let space_b = self.calculate_space_around_player(ctx, b) * recency_b;
-                space_a
-                    .partial_cmp(&space_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                space_a.partial_cmp(&space_b).unwrap_or(Ordering::Equal)
             })
     }
 

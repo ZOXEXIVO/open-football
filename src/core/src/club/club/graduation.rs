@@ -1,4 +1,5 @@
 use super::Club;
+use crate::Player;
 use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::{CompletedTransfer, TransferType};
@@ -46,9 +47,9 @@ impl Club {
         &mut self,
         date: NaiveDate,
         country_code: &str,
-    ) -> (Vec<CompletedTransfer>, Vec<crate::Player>) {
+    ) -> (Vec<CompletedTransfer>, Vec<Player>) {
         let mut transfers = Vec::new();
-        let mut released_players: Vec<crate::Player> = Vec::new();
+        let mut released_players: Vec<Player> = Vec::new();
 
         // Find the lowest youth team to graduate into (U18 → U19 → U20 → U21 → U23)
         let youth_idx = TeamType::YOUTH_PROGRESSION

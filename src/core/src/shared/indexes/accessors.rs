@@ -324,7 +324,8 @@ impl SimulatorData {
         }
 
         // Fallback: ID-based walk for stale-index recovery.
-        self.indexes
+        if let Some(league) = self
+            .indexes
             .as_ref()
             .and_then(|indexes| indexes.get_league_location(id))
             .and_then(|(league_continent_id, league_country_id)| {
@@ -343,6 +344,20 @@ impl SimulatorData {
                             .find(|league| league.id == id)
                     })
             })
+        {
+            return Some(league);
+        }
+
+        // Domestic cups live on `Country::domestic_cup`, outside the
+        // positional `leagues` index, so resolve them by a direct scan.
+        // Only the web/global read path reaches here for cups; in-sim cup
+        // lookups go through the country-local `CountryProcessCtx`.
+        self.continents
+            .iter()
+            .flat_map(|c| &c.countries)
+            .filter_map(|country| country.domestic_cup.as_ref())
+            .map(|cup| &cup.league)
+            .find(|league| league.id == id)
     }
 
     pub fn league_mut(&mut self, id: u32) -> Option<&mut League> {
@@ -367,26 +382,28 @@ impl SimulatorData {
             }
         }
 
-        // Fallback: ID-based walk for stale-index recovery.
-        self.indexes
+        // Fallback: ID-based walk for stale-index recovery. The location
+        // index covers both standings leagues and domestic cups (both call
+        // `add_league_location`), so resolve the (continent, country) once
+        // and then take a single mutable borrow — checking the standings
+        // list first and the cup second.
+        let (cont_id, country_id) = self
+            .indexes
             .as_ref()
-            .and_then(|indexes| indexes.get_league_location(id))
-            .and_then(|(league_continent_id, league_country_id)| {
-                self.continent_mut(league_continent_id)
-                    .and_then(|continent| {
-                        continent
-                            .countries
-                            .iter_mut()
-                            .find(|country| country.id == league_country_id)
-                    })
-                    .and_then(|country| {
-                        country
-                            .leagues
-                            .leagues
-                            .iter_mut()
-                            .find(|league| league.id == id)
-                    })
-            })
+            .and_then(|indexes| indexes.get_league_location(id))?;
+        let continent = self.continent_mut(cont_id)?;
+        let country = continent
+            .countries
+            .iter_mut()
+            .find(|country| country.id == country_id)?;
+        if let Some(idx) = country.leagues.leagues.iter().position(|l| l.id == id) {
+            return country.leagues.leagues.get_mut(idx);
+        }
+        country
+            .domestic_cup
+            .as_mut()
+            .filter(|c| c.league.id == id)
+            .map(|c| &mut c.league)
     }
 
     pub fn team_data(&self, id: u32) -> Option<&TeamData> {
@@ -421,7 +438,7 @@ impl SimulatorData {
     pub fn continental_matches_for_club(
         &self,
         club_id: u32,
-    ) -> Vec<(&str, u32, u32, chrono::NaiveDate, &str, Option<(u8, u8)>)> {
+    ) -> Vec<(&str, u32, u32, NaiveDate, &str, Option<(u8, u8)>)> {
         let Some(continent) = self.continent_by_club(club_id) else {
             return Vec::new();
         };
@@ -963,22 +980,14 @@ impl SimulatorData {
                             .staff_with_team(m.scout_staff_id)
                             .map(|(s, _)| Self::full_name(s));
                         let status = match m.status {
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Active => "active",
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Paused => "paused",
-                            crate::transfers::pipeline::ScoutMonitoringStatus::ReportReady => {
-                                "report_ready"
-                            }
-                            crate::transfers::pipeline::ScoutMonitoringStatus::PromotedToShortlist => {
-                                "shortlisted"
-                            }
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Negotiating => {
-                                "negotiating"
-                            }
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Signed => "signed",
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Lost => "lost",
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Rejected => {
-                                "rejected"
-                            }
+                            ScoutMonitoringStatus::Active => "active",
+                            ScoutMonitoringStatus::Paused => "paused",
+                            ScoutMonitoringStatus::ReportReady => "report_ready",
+                            ScoutMonitoringStatus::PromotedToShortlist => "shortlisted",
+                            ScoutMonitoringStatus::Negotiating => "negotiating",
+                            ScoutMonitoringStatus::Signed => "signed",
+                            ScoutMonitoringStatus::Lost => "lost",
+                            ScoutMonitoringStatus::Rejected => "rejected",
                         };
                         out.push(PlayerMonitoringDetail {
                             club_id: club.id,
@@ -1050,22 +1059,14 @@ impl SimulatorData {
                             })
                             .unwrap_or_default();
                         let status = match m.status {
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Active => "active",
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Paused => "paused",
-                            crate::transfers::pipeline::ScoutMonitoringStatus::ReportReady => {
-                                "report_ready"
-                            }
-                            crate::transfers::pipeline::ScoutMonitoringStatus::PromotedToShortlist => {
-                                "shortlisted"
-                            }
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Negotiating => {
-                                "negotiating"
-                            }
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Signed => "signed",
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Lost => "lost",
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Rejected => {
-                                "rejected"
-                            }
+                            ScoutMonitoringStatus::Active => "active",
+                            ScoutMonitoringStatus::Paused => "paused",
+                            ScoutMonitoringStatus::ReportReady => "report_ready",
+                            ScoutMonitoringStatus::PromotedToShortlist => "shortlisted",
+                            ScoutMonitoringStatus::Negotiating => "negotiating",
+                            ScoutMonitoringStatus::Signed => "signed",
+                            ScoutMonitoringStatus::Lost => "lost",
+                            ScoutMonitoringStatus::Rejected => "rejected",
                         };
                         // Latest meeting vote by this scout for this player, if any.
                         let latest_vote = plan
@@ -1075,15 +1076,11 @@ impl SimulatorData {
                             .flat_map(|mtg| mtg.player_votes.iter())
                             .find(|v| v.scout_staff_id == staff_id && v.player_id == m.player_id)
                             .map(|v| match v.vote {
-                                crate::transfers::pipeline::ScoutVoteChoice::StrongApprove => {
-                                    "strong_approve"
-                                }
-                                crate::transfers::pipeline::ScoutVoteChoice::Approve => "approve",
-                                crate::transfers::pipeline::ScoutVoteChoice::Monitor => "monitor",
-                                crate::transfers::pipeline::ScoutVoteChoice::Reject => "reject",
-                                crate::transfers::pipeline::ScoutVoteChoice::NeedsMoreInfo => {
-                                    "needs_more_info"
-                                }
+                                ScoutVoteChoice::StrongApprove => "strong_approve",
+                                ScoutVoteChoice::Approve => "approve",
+                                ScoutVoteChoice::Monitor => "monitor",
+                                ScoutVoteChoice::Reject => "reject",
+                                ScoutVoteChoice::NeedsMoreInfo => "needs_more_info",
                             });
                         out.push(StaffMonitoringRow {
                             scouting_club_id: club.id,
@@ -1210,10 +1207,15 @@ impl SimulatorData {
 // impl block to keep the SimulatorData accessor surface focused.
 // ════════════════════════════════════════════════════════════════════
 
+use crate::StaffPosition;
+use crate::TeamType;
 use crate::transfers::pipeline::{
     DetailedScoutingReport, RecruitmentDecisionType, ScoutMonitoringStatus, ScoutVoteChoice,
     ScoutingAssignment, ScoutingRecommendation, ShortlistCandidateStatus, TransferRequest,
 };
+use crate::utils::DateUtils;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Holds references to the simulator, club, and pre-computed lookups
 /// used while assembling a `ClubScoutingDashboard`. Build once via
@@ -1223,13 +1225,13 @@ pub struct ClubScoutingDashboardBuilder<'a> {
     club: &'a Club,
     today: NaiveDate,
     /// Latest scout vote per player across the meeting history.
-    latest_vote_per_player: std::collections::HashMap<u32, ScoutVoteChoice>,
+    latest_vote_per_player: HashMap<u32, ScoutVoteChoice>,
     /// Latest meeting decision per player.
-    latest_decision_per_player: std::collections::HashMap<u32, RecruitmentDecisionType>,
+    latest_decision_per_player: HashMap<u32, RecruitmentDecisionType>,
     /// Open transfer requests indexed by id, used for monitoring context.
-    request_lookup: std::collections::HashMap<u32, &'a TransferRequest>,
+    request_lookup: HashMap<u32, &'a TransferRequest>,
     /// Scouting assignments indexed by id, used for report context.
-    assignment_lookup: std::collections::HashMap<u32, &'a ScoutingAssignment>,
+    assignment_lookup: HashMap<u32, &'a ScoutingAssignment>,
 }
 
 /// Per-scout accumulator built up while folding monitoring rows; later
@@ -1243,7 +1245,7 @@ struct ScoutWorkAccumulator {
     confidence_sum: f32,
     confidence_count: u32,
     last_observed: Option<NaiveDate>,
-    regions: std::collections::HashSet<ScoutingRegion>,
+    regions: HashSet<ScoutingRegion>,
 }
 
 impl<'a> ClubScoutingDashboardBuilder<'a> {
@@ -1253,8 +1255,8 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
 
         // Walk meeting history newest-first so the first hit per player
         // wins for both votes and decisions.
-        let mut latest_vote_per_player = std::collections::HashMap::new();
-        let mut latest_decision_per_player = std::collections::HashMap::new();
+        let mut latest_vote_per_player = HashMap::new();
+        let mut latest_decision_per_player = HashMap::new();
         for meeting in plan.recruitment_meetings.iter().rev() {
             for v in &meeting.player_votes {
                 latest_vote_per_player.entry(v.player_id).or_insert(v.vote);
@@ -1266,9 +1268,9 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
             }
         }
 
-        let request_lookup: std::collections::HashMap<u32, &TransferRequest> =
+        let request_lookup: HashMap<u32, &TransferRequest> =
             plan.transfer_requests.iter().map(|r| (r.id, r)).collect();
-        let assignment_lookup: std::collections::HashMap<u32, &ScoutingAssignment> = plan
+        let assignment_lookup: HashMap<u32, &ScoutingAssignment> = plan
             .scouting_assignments
             .iter()
             .map(|a| (a.id, a))
@@ -1415,7 +1417,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
         } else {
             0
         };
-        let mut scout_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut scout_set: HashSet<u32> = HashSet::new();
         for m in &active_monitorings {
             scout_set.insert(m.scout_staff_id);
         }
@@ -1440,8 +1442,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
 
     fn build_scout_workload(&self) -> Vec<ScoutWorkloadRow> {
         let plan = self.plan();
-        let mut workload_map: std::collections::HashMap<u32, ScoutWorkAccumulator> =
-            std::collections::HashMap::new();
+        let mut workload_map: HashMap<u32, ScoutWorkAccumulator> = HashMap::new();
 
         // Seed every scouting-relevant staff on the club so empty rows
         // still show up in the workload table.
@@ -1451,8 +1452,8 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                     continue;
                 };
                 let position = &contract.position;
-                let included = position.is_scouting()
-                    || matches!(position, crate::StaffPosition::DirectorOfFootball);
+                let included =
+                    position.is_scouting() || matches!(position, StaffPosition::DirectorOfFootball);
                 if !included {
                     continue;
                 }
@@ -1467,7 +1468,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                         confidence_sum: 0.0,
                         confidence_count: 0,
                         last_observed: None,
-                        regions: std::collections::HashSet::new(),
+                        regions: HashSet::new(),
                     });
             }
         }
@@ -1489,7 +1490,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                         confidence_sum: 0.0,
                         confidence_count: 0,
                         last_observed: None,
-                        regions: std::collections::HashSet::new(),
+                        regions: HashSet::new(),
                     });
             entry.active += 1;
             if matches!(m.status, ScoutMonitoringStatus::ReportReady) {
@@ -1560,7 +1561,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                         ),
                         p.slug(),
                         p.position().get_short_name().to_string(),
-                        Some(crate::utils::DateUtils::age(p.birth_date, self.today)),
+                        Some(DateUtils::age(p.birth_date, self.today)),
                     ),
                     None => {
                         let (n, s) = self.resolve_player_link(m.player_id);
@@ -1689,7 +1690,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
 
     fn build_scouting_reports(&self) -> Vec<ScoutingReportRow> {
         let plan = self.plan();
-        let active_report_player_ids: std::collections::HashSet<u32> =
+        let active_report_player_ids: HashSet<u32> =
             plan.scouting_reports.iter().map(|r| r.player_id).collect();
         let mut rows: Vec<ScoutingReportRow> = plan
             .scouting_reports
@@ -1849,7 +1850,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                             .teams
                             .teams
                             .iter()
-                            .find(|t| t.team_type == crate::TeamType::Main)
+                            .find(|t| t.team_type == TeamType::Main)
                             .or_else(|| c.teams.teams.first())
                             .map(|t| t.slug.clone())
                             .unwrap_or_default();

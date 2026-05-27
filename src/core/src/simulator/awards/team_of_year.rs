@@ -9,6 +9,7 @@ use crate::{
     RecognitionEventKind,
 };
 use chrono::Datelike;
+use chrono::NaiveDate;
 use rayon::prelude::*;
 
 /// Calendar-year XI per league. Runs once on December 31. Aggregates
@@ -40,12 +41,11 @@ impl TeamOfTheYearTick {
 
     fn collect(
         data: &SimulatorData,
-        year_end_date: chrono::NaiveDate,
+        year_end_date: NaiveDate,
         year: i32,
     ) -> Vec<PendingTeamOfYear> {
-        let year_start = chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(year_end_date);
-        let next_year_start =
-            chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap_or(year_end_date);
+        let year_start = NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(year_end_date);
+        let next_year_start = NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap_or(year_end_date);
 
         data.continents
             .par_iter()

@@ -9,6 +9,7 @@ use crate::r#match::{
     StateProcessingHandler,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 #[derive(Default, Clone)]
 pub struct MidfielderDribblingState {}
@@ -152,7 +153,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
         let nearest_opponent = ctx.players().opponents().nearby(30.0).min_by(|a, b| {
             let da = (a.position - player_pos).magnitude();
             let db = (b.position - player_pos).magnitude();
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
         });
 
         let direction = if let Some(opponent) = nearest_opponent {

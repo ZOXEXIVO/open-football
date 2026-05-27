@@ -10,8 +10,10 @@ use crate::{
     AwardReputationInput, AwardReputationKind, HappinessEventType, RecognitionEventContext,
     RecognitionEventKind,
 };
+use chrono::NaiveDate;
 use chrono::{Datelike, Duration};
 use rayon::prelude::*;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 const MONTHLY_TOP_N: usize = 5;
@@ -54,23 +56,21 @@ impl MonthlyAwardsTick {
 
     /// First-of-month → start = first of previous month, end = first of
     /// this month (exclusive in `iter_in_range`).
-    fn previous_month_window(
-        today: chrono::NaiveDate,
-    ) -> Option<(chrono::NaiveDate, chrono::NaiveDate)> {
-        let first_this_month = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)?;
+    fn previous_month_window(today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+        let first_this_month = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)?;
         let prev_month = if today.month() == 1 {
-            chrono::NaiveDate::from_ymd_opt(today.year() - 1, 12, 1)?
+            NaiveDate::from_ymd_opt(today.year() - 1, 12, 1)?
         } else {
-            chrono::NaiveDate::from_ymd_opt(today.year(), today.month() - 1, 1)?
+            NaiveDate::from_ymd_opt(today.year(), today.month() - 1, 1)?
         };
         Some((prev_month, first_this_month))
     }
 
     fn collect(
         data: &SimulatorData,
-        today: chrono::NaiveDate,
-        start: chrono::NaiveDate,
-        end: chrono::NaiveDate,
+        today: NaiveDate,
+        start: NaiveDate,
+        end: NaiveDate,
     ) -> Vec<PendingMonthlyAward> {
         let month_end = end - Duration::days(1);
 
@@ -145,7 +145,7 @@ impl MonthlyAwardsTick {
         data: &SimulatorData,
         scores: &HashMap<u32, CandidateAggregate>,
         league_reputation: u16,
-        month_end: chrono::NaiveDate,
+        month_end: NaiveDate,
     ) -> Option<MonthlyPlayerAward> {
         let (id, agg, score) =
             MonthlyAwardSelector::pick_best(scores, league_reputation, 3, |_| true)?;
@@ -156,8 +156,8 @@ impl MonthlyAwardsTick {
         data: &SimulatorData,
         scores: &HashMap<u32, CandidateAggregate>,
         league_reputation: u16,
-        today: chrono::NaiveDate,
-        month_end: chrono::NaiveDate,
+        today: NaiveDate,
+        month_end: NaiveDate,
     ) -> Option<MonthlyPlayerAward> {
         let (id, agg, score) =
             MonthlyAwardSelector::pick_best(scores, league_reputation, 2, |id| {
@@ -173,7 +173,7 @@ impl MonthlyAwardsTick {
         id: u32,
         agg: CandidateAggregate,
         score: f32,
-        month_end: chrono::NaiveDate,
+        month_end: NaiveDate,
     ) -> Option<MonthlyPlayerAward> {
         let player = data.player(id)?;
         let (club_id, club_name, club_slug) = WeeklyAwardsTick::resolve_club_card(data, id);
@@ -260,7 +260,7 @@ impl MonthlyAwardsTick {
                 .then(
                     ab.average_rating()
                         .partial_cmp(&aa.average_rating())
-                        .unwrap_or(std::cmp::Ordering::Equal),
+                        .unwrap_or(Ordering::Equal),
                 )
                 .then(la.cmp(lb))
         });
@@ -286,7 +286,7 @@ impl MonthlyAwardsTick {
                 .then(
                     ab.average_rating()
                         .partial_cmp(&aa.average_rating())
-                        .unwrap_or(std::cmp::Ordering::Equal),
+                        .unwrap_or(Ordering::Equal),
                 )
                 .then(la.cmp(lb))
         });
@@ -308,7 +308,7 @@ impl MonthlyAwardsTick {
         all.sort_by(|(la, aa), (lb, ab)| {
             ab.average_rating()
                 .partial_cmp(&aa.average_rating())
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
                 .then(ab.matches_played.cmp(&aa.matches_played))
                 .then(ab.goals.cmp(&aa.goals))
                 .then(la.cmp(lb))

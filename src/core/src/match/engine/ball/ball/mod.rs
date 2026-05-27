@@ -765,7 +765,7 @@ impl Ball {
     /// a `BallEvent::CarryEnded` for the previous carrier; the
     /// dispatcher classifies the carry and credits the carrier's stats.
     /// A new carry starts the moment ownership lands on a player.
-    pub fn tick_carry_tracker(&mut self, events: &mut crate::r#match::events::EventCollection) {
+    pub fn tick_carry_tracker(&mut self, events: &mut EventCollection) {
         match (self.carry_owner, self.current_owner) {
             (Some(prev), Some(curr)) if prev == curr => {
                 // Same carrier — nothing to emit.

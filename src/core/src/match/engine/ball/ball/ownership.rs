@@ -9,6 +9,7 @@ use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 #[cfg(feature = "match-logs")]
 use crate::match_log_debug;
+use nalgebra::Vector3;
 
 impl Ball {
     pub fn process_ownership(
@@ -65,7 +66,7 @@ impl Ball {
                     // no need to re-check the origin here.
                     if let Some(snap) = self.offside_snapshot {
                         if snap.receiver_id == target_id && snap.is_offside() {
-                            let restart_pos = nalgebra::Vector3::new(
+                            let restart_pos = Vector3::new(
                                 snap.receiver_x_at_kick.clamp(0.0, self.field_width),
                                 snap.receiver_y_at_kick.clamp(0.0, self.field_height),
                                 0.0,

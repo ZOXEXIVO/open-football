@@ -15,6 +15,7 @@ use serde::Deserialize;
 use super::club::ClubEntity;
 use super::continent::ContinentEntity;
 use super::country::CountryEntity;
+use super::domestic_cup::DomesticCupEntity;
 use super::league::LeagueEntity;
 use super::names::NamesByCountryEntity;
 use super::national::NationalCompetitionEntity;
@@ -30,6 +31,10 @@ pub struct CompiledDatabase {
     pub continents: Vec<ContinentEntity>,
     pub countries: Vec<CountryEntity>,
     pub national_competitions: Vec<NationalCompetitionEntity>,
+    /// Named domestic cups, keyed by country slug. Optional — older
+    /// databases predate the field and parse to an empty list.
+    #[serde(default)]
+    pub domestic_cups: Vec<DomesticCupEntity>,
     pub leagues: Vec<LeagueEntity>,
     pub clubs: Vec<ClubEntity>,
     pub names: Vec<NamesByCountryEntity>,

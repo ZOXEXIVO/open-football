@@ -254,48 +254,81 @@ fn watchlist_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection
     }])
 }
 
+/// Build the country's league-pyramid menu section: each league links to
+/// `/leagues/{slug}`, collapsing to the first two with a toggle when there
+/// are more. Active state is derived from `current_path`, so the same
+/// builder serves the league, country and cup pages.
+fn leagues_section(p: &MenuParams, country_leagues: &[(&str, &str)]) -> MenuSection {
+    let is_active = |url: &str| -> bool {
+        p.current_path == url || p.current_path.starts_with(&format!("{}/", url))
+    };
+    let items: Vec<MenuItem> = country_leagues
+        .iter()
+        .map(|(name, slug)| {
+            let url = format!("/{}/leagues/{}", p.lang, slug);
+            MenuItem {
+                active: is_active(&url),
+                title: name.to_string(),
+                url,
+                icon: "fa-trophy".to_string(),
+            }
+        })
+        .collect();
+    MenuSection::collapsible_after_two(items)
+}
+
+/// Build the domestic-cup menu section. Kept as its own standalone section
+/// — sitting directly beneath the league pyramid and separated from it by
+/// the usual section divider — rather than appended to the (collapsible)
+/// league list, so the cup link always stays visible and never hides
+/// behind the "more leagues" toggle.
+fn cup_section(p: &MenuParams, cup: (&str, &str)) -> MenuSection {
+    let (name, slug) = cup;
+    let url = format!("/{}/cups/{}", p.lang, slug);
+    let active = p.current_path == url || p.current_path.starts_with(&format!("{}/", url));
+    MenuSection::plain(vec![MenuItem {
+        active,
+        title: name.to_string(),
+        url,
+        icon: "fa-trophy".to_string(),
+    }])
+}
+
 pub fn league_menu(
     p: &MenuParams,
-    league_slug: &str,
     country_leagues: &[(&str, &str)],
-    continent_id: u32,
+    cup: Option<(&str, &str)>,
 ) -> Vec<MenuSection> {
-    let transfers_url = format!("/{}/leagues/{}/transfers", p.lang, league_slug);
-    let awards_url = format!("/{}/leagues/{}/awards", p.lang, league_slug);
     let mut sections = p.home_and_country_sections();
 
-    sections.push(MenuSection::collapsible_after_two(
-        country_leagues
-            .iter()
-            .map(|(name, slug)| {
-                let url = format!("/{}/leagues/{}", p.lang, slug);
-                let is_active =
-                    p.current_path == url || p.current_path.starts_with(&format!("{}/", url));
-                MenuItem {
-                    active: is_active,
-                    title: name.to_string(),
-                    url,
-                    icon: "fa-trophy".to_string(),
-                }
-            })
-            .collect(),
-    ));
+    if !country_leagues.is_empty() {
+        sections.push(leagues_section(p, country_leagues));
+    }
+    if let Some(c) = cup {
+        sections.push(cup_section(p, c));
+    }
 
-    sections.push(MenuSection::plain(vec![
-        MenuItem {
-            active: p.current_path == transfers_url,
-            title: p.i18n.t("transfers").to_string(),
-            url: transfers_url,
-            icon: "fa-exchange".to_string(),
-        },
-        MenuItem {
-            active: p.current_path == awards_url,
-            title: p.i18n.t("awards").to_string(),
-            url: awards_url,
-            icon: "fa-medal".to_string(),
-        },
-    ]));
+    sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
+    sections.push(source_code_section());
+    sections
+}
 
+/// Left-menu for the domestic-cup page. Same competition layout as
+/// `league_menu` (the country's league pyramid plus the cup), with the cup
+/// itself marked active via `current_path`. The cup has no transfers/awards
+/// sub-pages, so those league-only links are omitted.
+pub fn cup_menu(
+    p: &MenuParams,
+    _cup_slug: &str,
+    country_leagues: &[(&str, &str)],
+    cup_name: &str,
+    continent_id: u32,
+) -> Vec<MenuSection> {
+    let mut sections = p.home_and_country_sections();
+    if !country_leagues.is_empty() {
+        sections.push(leagues_section(p, country_leagues));
+    }
+    sections.push(cup_section(p, (cup_name, _cup_slug)));
     if let Some(s) = continental_section(p.i18n, p.lang, p.current_path, continent_id) {
         sections.push(s);
     }
@@ -308,9 +341,7 @@ pub fn league_menu(
 pub fn team_menu(
     p: &MenuParams,
     neighbor_teams: &[(&str, &str)],
-    team_slug: &str,
     leagues: &[(&str, &str)],
-    show_staff_link: bool,
 ) -> Vec<MenuSection> {
     let mut sections = p.home_and_country_sections();
 
@@ -350,17 +381,6 @@ pub fn team_menu(
         ));
     }
 
-    if show_staff_link {
-        let staff_url = format!("/{}/teams/{}/staff", p.lang, team_slug);
-
-        sections.push(MenuSection::plain(vec![MenuItem {
-            active: p.current_path == staff_url,
-            title: p.i18n.t("staff").to_string(),
-            url: staff_url,
-            icon: "fa-id-badge".to_string(),
-        }]));
-    }
-
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
     sections.push(source_code_section());
 
@@ -370,36 +390,16 @@ pub fn team_menu(
 pub fn country_menu(
     p: &MenuParams,
     country_leagues: &[(&str, &str)],
+    cup: Option<(&str, &str)>,
     continent_id: u32,
 ) -> Vec<MenuSection> {
     let mut sections = p.home_and_country_sections();
 
     if !country_leagues.is_empty() {
-        sections.push(MenuSection::collapsible_after_two(
-            country_leagues
-                .iter()
-                .map(|(name, slug)| {
-                    let url = format!("/{}/leagues/{}", p.lang, slug);
-                    let is_active =
-                        p.current_path == url || p.current_path.starts_with(&format!("{}/", url));
-                    MenuItem {
-                        active: is_active,
-                        title: name.to_string(),
-                        url,
-                        icon: "fa-trophy".to_string(),
-                    }
-                })
-                .collect(),
-        ));
-
-        let first_league_slug = country_leagues[0].1;
-        let transfers_url = format!("/{}/leagues/{}/transfers", p.lang, first_league_slug);
-        sections.push(MenuSection::plain(vec![MenuItem {
-            active: p.current_path == transfers_url,
-            title: p.i18n.t("transfers").to_string(),
-            url: transfers_url,
-            icon: "fa-exchange".to_string(),
-        }]));
+        sections.push(leagues_section(p, country_leagues));
+    }
+    if let Some(c) = cup {
+        sections.push(cup_section(p, c));
     }
 
     if let Some(s) = continental_section(p.i18n, p.lang, p.current_path, continent_id) {

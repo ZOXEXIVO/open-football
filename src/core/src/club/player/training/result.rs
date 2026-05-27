@@ -1,3 +1,5 @@
+use crate::PersonBehaviourState;
+use crate::Player;
 use crate::club::player::condition::{
     ConditionRecoveryModel, ConditionTargetInputs, InjuryRiskInputs,
 };
@@ -10,6 +12,7 @@ use crate::{
     TrainingEffects, TrainingEventContext, TrainingEventEvidence, TrainingEventReason,
 };
 use chrono::Datelike;
+use chrono::NaiveDate;
 
 /// Per-session outcome breakdown built by `PlayerTraining::train`.
 /// Carries the sub-scores (effort / focus / physical / coach / psychological
@@ -87,7 +90,7 @@ impl PlayerTrainingResult {
     /// isolation without standing up a full `SimulatorData`. The
     /// `process()` entry point is still the canonical caller — it
     /// owns the data lookup and date threading.
-    pub fn apply_to_player(&self, player: &mut crate::Player, current_date: chrono::NaiveDate) {
+    pub fn apply_to_player(&self, player: &mut Player, current_date: NaiveDate) {
         {
             // Gate skill gains by ability gap: players near potential barely grow
             let current_ability = player.player_attributes.current_ability as f32;
@@ -510,10 +513,10 @@ impl PlayerTrainingResult {
     }
 
     fn maybe_emit_training_event(
-        player: &mut crate::Player,
+        player: &mut Player,
         outcome: &TrainingOutcomeBreakdown,
         morale_change: f32,
-        current_date: chrono::NaiveDate,
+        current_date: NaiveDate,
     ) {
         // Hard gates — outcome quality, not session-type morale.
         let raw = outcome.raw_score;
@@ -634,8 +637,8 @@ impl PlayerTrainingResult {
             && morale_change.abs() > 0.4
         {
             player.behaviour.state = match player.behaviour.state {
-                crate::PersonBehaviourState::Good => crate::PersonBehaviourState::Normal,
-                crate::PersonBehaviourState::Normal => crate::PersonBehaviourState::Poor,
+                PersonBehaviourState::Good => PersonBehaviourState::Normal,
+                PersonBehaviourState::Normal => PersonBehaviourState::Poor,
                 other => other,
             };
         }
@@ -667,7 +670,7 @@ impl PlayerTrainingResult {
     }
 
     fn recent_training_event_with_reason(
-        player: &crate::Player,
+        player: &Player,
         event_type: HappinessEventType,
         reason: TrainingEventReason,
         days: u16,

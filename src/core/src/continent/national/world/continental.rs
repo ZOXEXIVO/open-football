@@ -19,10 +19,12 @@ use super::squad::build_world_match_squad_for_level;
 use super::stats::{
     apply_world_elo, apply_world_international_stats_for_level, record_world_country_schedule,
 };
-use crate::NationalTeamLevel;
 use crate::continent::Continent;
 use crate::continent::national::NationalCompetitionFixture;
+use crate::r#match::MatchResultRaw;
 use crate::r#match::{MatchResult, MatchSquad};
+use crate::{MatchRuntime, NationalTeamLevel};
+use std::collections::HashSet;
 
 /// Pair a continent index with one of its national-competition
 /// fixtures so the orchestrator can fan match results back to the
@@ -60,7 +62,7 @@ pub fn simulate_world_national_competitions(
     }
 
     let prepared = build_squads(continents, &stamped, date);
-    let engine_results = crate::match_engine_pool().play_squads_with_knockout(prepared);
+    let engine_results = MatchRuntime::engine_pool().play_squads_with_knockout(prepared);
 
     let mut collected: Vec<MatchResult> = Vec::with_capacity(engine_results.len());
     for (stamp_idx, raw) in engine_results {
@@ -159,7 +161,7 @@ fn run_phase_transitions(continents: &mut [Continent]) {
 fn apply_match_outcome(
     continents: &mut [Continent],
     stamp: &StampedFixture,
-    raw: crate::r#match::MatchResultRaw,
+    raw: MatchResultRaw,
     date: NaiveDate,
 ) -> Option<MatchResult> {
     let fixture = stamp.fixture.clone();
@@ -242,7 +244,7 @@ fn apply_match_outcome(
         .filter(|(_, stats)| stats.goals > 0)
         .map(|(&id, stats)| (id, stats.goals))
         .collect();
-    let appearance_ids: std::collections::HashSet<u32> = raw.player_stats.keys().copied().collect();
+    let appearance_ids: HashSet<u32> = raw.player_stats.keys().copied().collect();
 
     apply_world_international_stats_for_level(
         continents,

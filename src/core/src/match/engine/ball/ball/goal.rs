@@ -4,11 +4,13 @@
 //! since the ball can't move other players' positions itself.
 
 use super::Ball;
+use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 impl Ball {
     pub(super) fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
@@ -191,7 +193,7 @@ impl Ball {
             // for a shot that never reached the keeper.
             self.cached_shot_target = None;
             self.recent_passers.clear();
-            self.pass_origin_restart = crate::r#match::PassOriginRestart::GoalKick;
+            self.pass_origin_restart = PassOriginRestart::GoalKick;
             self.offside_snapshot = None;
             self.record_touch(gk_id, gk_team, self.current_tick_cached, true);
 
@@ -296,7 +298,7 @@ impl Ball {
                     let sb = b.skills.technical.crossing * 0.6
                         + b.skills.technical.technique * 0.3
                         + b.skills.technical.corners * 0.1;
-                    sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                    sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
                 });
 
             if let Some(taker) = taker {
@@ -319,7 +321,7 @@ impl Ball {
                 // a phantom save (see check_over_goal for the full bug
                 // explanation).
                 self.cached_shot_target = None;
-                self.pass_origin_restart = crate::r#match::PassOriginRestart::Corner;
+                self.pass_origin_restart = PassOriginRestart::Corner;
                 #[cfg(feature = "match-logs")]
                 {
                     use std::sync::atomic::Ordering;
@@ -357,7 +359,7 @@ impl Ball {
                     })
                     .map(|p| (p.id, p.skills.technical.heading))
                     .collect();
-                cbs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                cbs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
                 // Arm the discrete aerial contest for this corner: it fires
                 // once, the instant the cross is struck (see engine.rs
                 // resolve_corner_contest).
@@ -407,7 +409,7 @@ impl Ball {
             // target so the eventual GK clearance can't false-credit a
             // save for a shot that ended out of play.
             self.cached_shot_target = None;
-            self.pass_origin_restart = crate::r#match::PassOriginRestart::GoalKick;
+            self.pass_origin_restart = PassOriginRestart::GoalKick;
             self.offside_snapshot = None;
             self.record_touch(gk_id, gk_team, self.current_tick_cached, true);
 

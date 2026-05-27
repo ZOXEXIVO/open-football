@@ -12,6 +12,7 @@ use crate::r#match::{
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 #[derive(Default, Clone)]
 pub struct MidfielderPassingState {}
@@ -256,9 +257,7 @@ impl MidfielderPassingState {
             .max_by(|a, b| {
                 let a_value = self.calculate_breakthrough_value(ctx, a);
                 let b_value = self.calculate_breakthrough_value(ctx, b);
-                a_value
-                    .partial_cmp(&b_value)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                a_value.partial_cmp(&b_value).unwrap_or(Ordering::Equal)
             })
     }
 
@@ -563,8 +562,8 @@ impl MidfielderPassingState {
         // Target: halfway line, centre-ish. Pull Y toward centre so the
         // ball doesn't drift to a sideline.
         let target_x = match ctx.player.side {
-            Some(crate::r#match::PlayerSide::Left) => halfway_x.max(ball_pos.x + 40.0),
-            Some(crate::r#match::PlayerSide::Right) => halfway_x.min(ball_pos.x - 40.0),
+            Some(PlayerSide::Left) => halfway_x.max(ball_pos.x + 40.0),
+            Some(PlayerSide::Right) => halfway_x.min(ball_pos.x - 40.0),
             None => halfway_x,
         };
         let target_y = ball_pos.y + (mid_y - ball_pos.y) * 0.6;

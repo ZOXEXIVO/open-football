@@ -28,6 +28,7 @@ use log::debug;
 
 use crate::club::staff::Staff;
 use crate::club::staff::StaffPosition;
+use crate::transfers::pipeline::TransferNeedPriority;
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::recruitment::{
     BoardRecruitmentDossier, RecruitmentDecision, RecruitmentDecisionType, RecruitmentMeeting,
@@ -39,6 +40,8 @@ use crate::transfers::pipeline::{
 };
 use crate::utils::IntegerUtils;
 use crate::{Country, StaffEventType};
+use chrono::Weekday;
+use std::cmp::Ordering;
 
 /// Captured snapshot of a scout for vote calculation. Decoupling
 /// from the live `Staff` borrow lets us compute votes in pass 1
@@ -97,7 +100,7 @@ impl PipelineProcessor {
     /// No-op outside windows / non-Monday dates so it can be called
     /// unconditionally from the country tick.
     pub fn run_recruitment_meetings(country: &mut Country, date: NaiveDate) {
-        if date.weekday() != chrono::Weekday::Mon {
+        if date.weekday() != Weekday::Mon {
             return;
         }
 
@@ -288,7 +291,7 @@ impl PipelineProcessor {
                 let strongest = monitorings.iter().max_by(|a, b| {
                     a.confidence
                         .partial_cmp(&b.confidence)
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .unwrap_or(Ordering::Equal)
                 });
                 let estimated_fee = strongest
                     .map(|m| m.estimated_value)
@@ -438,12 +441,7 @@ impl PipelineProcessor {
                 let active_request =
                     request_id.and_then(|id| plan.transfer_requests.iter().find(|r| r.id == id));
                 let priority_critical = active_request
-                    .map(|r| {
-                        matches!(
-                            r.priority,
-                            crate::transfers::pipeline::TransferNeedPriority::Critical
-                        )
-                    })
+                    .map(|r| matches!(r.priority, TransferNeedPriority::Critical))
                     .unwrap_or(false);
 
                 let decision_type: RecruitmentDecisionType;
@@ -488,7 +486,7 @@ impl PipelineProcessor {
                             .max_by(|a, b| {
                                 a.confidence
                                     .partial_cmp(&b.confidence)
-                                    .unwrap_or(std::cmp::Ordering::Equal)
+                                    .unwrap_or(Ordering::Equal)
                             })
                             .map(|m| m.scout_staff_id);
                         promotions.push(PromotionPlan {
@@ -721,11 +719,9 @@ fn apply_promotion(plan: &mut ClubTransferPlan, promo: PromotionPlan) {
             .any(|c| c.player_id == promo.player_id)
         {
             shortlist.candidates.push(candidate);
-            shortlist.candidates.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            shortlist
+                .candidates
+                .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
         }
     } else {
         let allocation = plan

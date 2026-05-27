@@ -8,6 +8,7 @@ use crate::league::awards::{
 use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
 use crate::{AwardReputationInput, AwardReputationKind};
+use chrono::NaiveDate;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -30,7 +31,7 @@ impl YoungTeamOfTheWeekTick {
 
     fn collect(
         data: &SimulatorData,
-        today: chrono::NaiveDate,
+        today: NaiveDate,
         cache: &MondayAwardCache,
     ) -> Vec<PendingYoungTeamOfWeek> {
         let week_end = today;

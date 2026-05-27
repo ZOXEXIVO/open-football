@@ -1,6 +1,7 @@
 use super::types::{PlayerStatistics, TeamInfo};
 use crate::league::Season;
 use chrono::NaiveDate;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct PlayerStatisticsHistory {
@@ -187,7 +188,7 @@ impl PlayerStatisticsHistory {
         // otherwise). Used for the sole-record carve-out so a U18..U23
         // player's only 0-game alias row for a season isn't dropped as
         // a trivial stint.
-        let years_with_any_content: std::collections::HashSet<u16> = stale
+        let years_with_any_content: HashSet<u16> = stale
             .iter()
             .filter(|e| e.statistics.total_games() > 0 || e.transfer_fee.is_some())
             .map(|e| Season::from_date(e.joined_date).start_year)
@@ -521,7 +522,7 @@ impl PlayerStatisticsHistory {
         // drives the "sole season record" carve-out so a quiet U18..U23
         // season's single 0-game alias row isn't lost to the trivial-
         // stint filter when its seed date sits late in the season.
-        let years_with_any_content: std::collections::HashSet<u16> = stale
+        let years_with_any_content: HashSet<u16> = stale
             .iter()
             .filter(|e| e.statistics.total_games() > 0 || e.transfer_fee.is_some())
             .map(|e| Season::from_date(e.joined_date).start_year)

@@ -16,6 +16,7 @@
 //!    itself is what unsettled them, not "stripping the armband" they no
 //!    longer wear at this club.
 
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::team::Team;
 use crate::utils::DateUtils;
 use crate::{
@@ -23,6 +24,7 @@ use crate::{
     HappinessEventType, LeadershipEventContext, LeadershipEventKind, Player,
 };
 use chrono::{Datelike, NaiveDate};
+use std::cmp::Ordering;
 
 /// Cooldown (days) on each captaincy event so monthly recalculation
 /// oscillation around an evenly-matched leadership group doesn't spam
@@ -91,7 +93,7 @@ impl CaptaincyAssigner {
             })
             .collect();
 
-        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         ranked
     }
 
@@ -158,7 +160,7 @@ impl CaptaincyMagnitude {
     /// than a 30-year-old club legend who's earned it). Returns a value
     /// near the catalog default (7.0) but in the band ~5..10.
     pub fn awarded(p: &Player) -> f32 {
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.captaincy_awarded;
         let leadership_lift = (p.skills.mental.leadership.clamp(0.0, 20.0) / 20.0) * 0.30;
         let loyalty_lift = (p.attributes.loyalty.clamp(0.0, 20.0) / 20.0) * 0.20;
@@ -175,7 +177,7 @@ impl CaptaincyMagnitude {
     /// temperament read this as a public humiliation), softened by
     /// professionalism (high-pro players keep it together).
     pub fn removed(p: &Player) -> f32 {
-        let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+        let cfg = HappinessConfig::default();
         let base = cfg.catalog.captaincy_removed;
         let rep_amp = crate::club::player::events::scaling::reputation_amplifier(
             p.player_attributes.current_reputation,

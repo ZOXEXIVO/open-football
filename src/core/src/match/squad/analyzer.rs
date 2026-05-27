@@ -2,6 +2,7 @@ use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::MatchResult;
 use crate::{MatchTacticType, Player, TacticSelectionReason, TacticalStyle, Tactics, Team};
 use log::info;
+use std::cmp::Ordering;
 
 /// Enhanced tactical analysis for squad selection
 pub struct TacticalSquadAnalyzer;
@@ -42,7 +43,7 @@ impl TacticalSquadAnalyzer {
             .collect();
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
                 .then(a.0.id.cmp(&b.0.id))
         });
         scored.into_iter().take(n).map(|(p, _)| p).collect()
@@ -151,7 +152,7 @@ impl TacticalSquadAnalyzer {
             .into_iter()
             .max_by(|a, b| {
                 a.1.partial_cmp(&b.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
                     .then((b.0 as u8).cmp(&(a.0 as u8)))
             })
             .map(|(formation, _)| formation)

@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use helpers::*;
 use scoring::ScoringEngine;
 
+use chrono::Utc;
 pub use omissions::OmittedPlayer;
 
 pub struct SquadSelector;
@@ -80,7 +81,7 @@ impl Default for SelectionContext {
     fn default() -> Self {
         SelectionContext {
             is_friendly: false,
-            date: chrono::Utc::now().date_naive(),
+            date: Utc::now().date_naive(),
             match_importance: 0.7,
             philosophy: None,
             opponent_tactic: None,
@@ -448,7 +449,7 @@ impl SquadSelector {
     ) -> f32 {
         let group = position.position_group();
         let engine = ScoringEngine::from_staff(staff);
-        let date = chrono::Utc::now().date_naive();
+        let date = Utc::now().date_naive();
         engine.score_player_for_slot(player, position, group, staff, tactics, date, false, &[])
     }
 
@@ -459,7 +460,7 @@ impl SquadSelector {
         tactics: &Tactics,
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
-        let date = chrono::Utc::now().date_naive();
+        let date = Utc::now().date_naive();
         competitive::select_starting_eleven(
             team_id,
             players,
@@ -480,7 +481,7 @@ impl SquadSelector {
         tactics: &Tactics,
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
-        let date = chrono::Utc::now().date_naive();
+        let date = Utc::now().date_naive();
         competitive::select_substitutes(
             team_id,
             players,

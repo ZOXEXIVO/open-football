@@ -1,5 +1,6 @@
 pub mod awards;
 pub mod core;
+pub mod domestic_cup;
 pub mod result;
 pub mod rules;
 pub mod schedule;
@@ -16,6 +17,7 @@ pub use awards::{
     TeamOfTheWeekSelector, TeamOfTheWeekSlot, TeamOfTheYearAward,
 };
 pub use core::*;
+pub use domestic_cup::DomesticCup;
 pub use result::*;
 pub use rules::*;
 pub use schedule::*;

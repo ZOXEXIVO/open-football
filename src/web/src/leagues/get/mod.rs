@@ -8,7 +8,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Duration;
-use core::league::ScheduleTour;
+use core::league::{ScheduleItem, ScheduleTour};
 use core::r#match::GoalDetail;
 use core::r#match::player::statistics::MatchStatisticType;
 use itertools::*;
@@ -109,7 +109,7 @@ pub struct LeagueTableRow {
 pub async fn league_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<LeagueGetRequest>,
-) -> ApiResult<impl IntoResponse> {
+) -> ApiResult<axum::response::Response> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
@@ -129,6 +129,17 @@ pub async fn league_get_action(
         })?;
 
     let league = simulator_data.league(league_id).unwrap();
+
+    // Domestic cups have their own bracket page; bounce there so this
+    // handler only ever renders a standings table.
+    if league.is_cup {
+        return Ok(axum::response::Redirect::to(&format!(
+            "/{}/cups/{}",
+            route_params.lang, league.slug
+        ))
+        .into_response());
+    }
+
     let country = simulator_data.country(league.country_id).unwrap();
     let league_table = league.table.get();
 
@@ -150,16 +161,94 @@ pub async fn league_get_action(
         })
         .collect();
 
+    // Build a single fixture view-item for the current tour.
+    let map_item = |item: &ScheduleItem| -> LeagueScheduleItem {
+        let home_team_data = simulator_data.team_data(item.home_team_id).unwrap();
+        let home_team = simulator_data.team(item.home_team_id).unwrap();
+        let away_team_data = simulator_data.team_data(item.away_team_id).unwrap();
+        let away_team = simulator_data.team(item.away_team_id).unwrap();
+
+        LeagueScheduleItem {
+            match_id: item.id.clone(),
+            result: item.result.as_ref().map(|res| {
+                let details: Vec<&GoalDetail> = res
+                    .details
+                    .iter()
+                    .filter(|detail| detail.stat_type == MatchStatisticType::Goal)
+                    .collect();
+
+                LeagueScheduleItemResult {
+                    home_goals: if item.home_team_id == res.home_team.team_id {
+                        res.home_team.get()
+                    } else {
+                        res.away_team.get()
+                    },
+                    home_goalscorers: details
+                        .iter()
+                        .filter_map(|detail| {
+                            let player = simulator_data.player(detail.player_id)?;
+                            if home_team.players.contains(player.id) {
+                                Some(LeagueTableGoalscorer {
+                                    id: detail.player_id,
+                                    name: player.full_name.to_string(),
+                                    time: format!(
+                                        "('{})",
+                                        Duration::new((detail.time / 1000) as i64, 0)
+                                            .unwrap()
+                                            .num_minutes()
+                                    ),
+                                    auto_goal: detail.is_auto_goal,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                    away_goals: if item.away_team_id == res.away_team.team_id {
+                        res.away_team.get()
+                    } else {
+                        res.home_team.get()
+                    },
+                    away_goalscorers: details
+                        .iter()
+                        .filter_map(|detail| {
+                            let player = simulator_data.player(detail.player_id)?;
+                            if away_team.players.contains(player.id) {
+                                Some(LeagueTableGoalscorer {
+                                    id: detail.player_id,
+                                    name: player.full_name.to_string(),
+                                    time: format!(
+                                        "('{})",
+                                        Duration::new((detail.time / 1000) as i64, 0)
+                                            .unwrap()
+                                            .num_minutes()
+                                    ),
+                                    auto_goal: detail.is_auto_goal,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                }
+            }),
+            home_team_name: home_team_data.name.clone(),
+            home_team_slug: home_team_data.slug.clone(),
+            away_team_name: away_team_data.name.clone(),
+            away_team_slug: away_team_data.slug.clone(),
+        }
+    };
+
+    let mut current_tour_schedule = Vec::new();
+
     let now = simulator_data.date.date() + Duration::days(3);
 
     let mut current_tour: Option<&ScheduleTour> = None;
-
     for tour in league.schedule.tours.iter() {
         if now >= tour.start_date() && now <= tour.end_date() {
             current_tour = Some(tour);
         }
     }
-
     if current_tour.is_none() {
         for tour in league.schedule.tours.iter() {
             if now >= tour.end_date() {
@@ -168,98 +257,12 @@ pub async fn league_get_action(
         }
     }
 
-    let mut current_tour_schedule = Vec::new();
-
     if let Some(tour) = current_tour {
         for (key, group) in &tour.items.iter().chunk_by(|t| t.date.date()) {
-            let tour_schedule = TourSchedule {
+            current_tour_schedule.push(TourSchedule {
                 date: key.format("%d.%m.%Y").to_string(),
-                matches: group
-                    .map(|item| {
-                        let home_team_data = simulator_data.team_data(item.home_team_id).unwrap();
-                        let home_team = simulator_data.team(item.home_team_id).unwrap();
-                        let away_team_data = simulator_data.team_data(item.away_team_id).unwrap();
-                        let away_team = simulator_data.team(item.away_team_id).unwrap();
-
-                        LeagueScheduleItem {
-                            match_id: item.id.clone(),
-                            result: item.result.as_ref().map(|res| {
-                                let details: Vec<&GoalDetail> = res
-                                    .details
-                                    .iter()
-                                    .filter(|detail| detail.stat_type == MatchStatisticType::Goal)
-                                    .collect();
-
-                                LeagueScheduleItemResult {
-                                    home_goals: if item.home_team_id == res.home_team.team_id {
-                                        res.home_team.get()
-                                    } else {
-                                        res.away_team.get()
-                                    },
-                                    home_goalscorers: details
-                                        .iter()
-                                        .filter_map(|detail| {
-                                            let player = simulator_data.player(detail.player_id)?;
-                                            if home_team.players.contains(player.id) {
-                                                Some(LeagueTableGoalscorer {
-                                                    id: detail.player_id,
-                                                    name: player.full_name.to_string(),
-                                                    time: format!(
-                                                        "('{})",
-                                                        Duration::new(
-                                                            (detail.time / 1000) as i64,
-                                                            0
-                                                        )
-                                                        .unwrap()
-                                                        .num_minutes()
-                                                    ),
-                                                    auto_goal: detail.is_auto_goal,
-                                                })
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect(),
-                                    away_goals: if item.away_team_id == res.away_team.team_id {
-                                        res.away_team.get()
-                                    } else {
-                                        res.home_team.get()
-                                    },
-                                    away_goalscorers: details
-                                        .iter()
-                                        .filter_map(|detail| {
-                                            let player = simulator_data.player(detail.player_id)?;
-                                            if away_team.players.contains(player.id) {
-                                                Some(LeagueTableGoalscorer {
-                                                    id: detail.player_id,
-                                                    name: player.full_name.to_string(),
-                                                    time: format!(
-                                                        "('{})",
-                                                        Duration::new(
-                                                            (detail.time / 1000) as i64,
-                                                            0
-                                                        )
-                                                        .unwrap()
-                                                        .num_minutes()
-                                                    ),
-                                                    auto_goal: detail.is_auto_goal,
-                                                })
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect(),
-                                }
-                            }),
-                            home_team_name: home_team_data.name.clone(),
-                            home_team_slug: home_team_data.slug.clone(),
-                            away_team_name: away_team_data.name.clone(),
-                            away_team_slug: away_team_data.slug.clone(),
-                        }
-                    })
-                    .collect(),
-            };
-            current_tour_schedule.push(tour_schedule);
+                matches: group.map(|item| map_item(item)).collect(),
+            });
         }
     }
 
@@ -544,7 +547,15 @@ pub async fn league_get_action(
                 country_name: &country.name,
                 country_slug: &country.slug,
             };
-            views::league_menu(&mp, &league.slug, &cl_refs, country.continent_id)
+            // The domestic cup links to its dedicated /cups/ bracket page.
+            views::league_menu(
+                &mp,
+                &cl_refs,
+                country
+                    .domestic_cup
+                    .as_ref()
+                    .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
+            )
         },
         league_slug: league.slug.clone(),
         table_rows,
@@ -555,5 +566,6 @@ pub async fn league_get_action(
         top_rated,
         lang: route_params.lang,
         i18n,
-    })
+    }
+    .into_response())
 }

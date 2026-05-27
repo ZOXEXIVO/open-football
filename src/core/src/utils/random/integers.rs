@@ -5,7 +5,7 @@ pub struct IntegerUtils;
 impl IntegerUtils {
     #[inline]
     pub fn random(min: i32, max: i32) -> i32 {
-        let random_val: f64 = engine::gen_f64();
+        let random_val: f64 = engine::RandomEngine::gen_f64();
         min + (random_val * ((max - min) as f64)) as i32
     }
 }

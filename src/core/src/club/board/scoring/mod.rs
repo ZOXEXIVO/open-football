@@ -9,6 +9,7 @@ use super::context::{BoardContext, FfpStatus};
 use super::promise::PromiseLedger;
 use super::strategy::SquadProfile;
 use super::{ClubVision, SeasonTargets, VisionYouthFocus};
+use std::cmp::Ordering;
 
 /// Where in the season we are. Early months are judged softly; the run-in
 /// is judged harshly and is the only window in which sackings/table
@@ -299,7 +300,7 @@ impl BoardComponentScores {
             (self.strategy, "strategy"),
         ]
         .into_iter()
-        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal))
         .map(|(_, name)| name)
         .unwrap_or("none");
         worst

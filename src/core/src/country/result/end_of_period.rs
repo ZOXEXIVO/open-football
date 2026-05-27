@@ -1,4 +1,6 @@
 use super::CountryResult;
+use crate::ContractBonusType;
+use crate::PlayerContractProposal;
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::simulator::SimulatorData;
@@ -422,7 +424,7 @@ impl CountryResult {
         // coach_name) queue without mutating anything.
         struct LoaneeOffer {
             loanee_id: u32,
-            proposal: crate::PlayerContractProposal,
+            proposal: PlayerContractProposal,
             coach_name: String,
         }
         let mut queue: Vec<LoaneeOffer> = Vec::new();
@@ -1140,10 +1142,8 @@ impl CountryResult {
                                 // one-shot lump sum to every player on
                                 // the promoted team who has the bonus.
                                 for bonus in &c.bonuses {
-                                    if matches!(
-                                        bonus.bonus_type,
-                                        crate::ContractBonusType::PromotionFee
-                                    ) && bonus.value > 0
+                                    if matches!(bonus.bonus_type, ContractBonusType::PromotionFee)
+                                        && bonus.value > 0
                                     {
                                         bonus_total += bonus.value as i64;
                                     }
@@ -1164,7 +1164,7 @@ impl CountryResult {
                                     for bonus in &c.bonuses {
                                         if matches!(
                                             bonus.bonus_type,
-                                            crate::ContractBonusType::AvoidRelegationFee
+                                            ContractBonusType::AvoidRelegationFee
                                         ) && bonus.value > 0
                                         {
                                             bonus_total += bonus.value as i64;

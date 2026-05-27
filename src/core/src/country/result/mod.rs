@@ -6,6 +6,7 @@ mod statistics;
 pub mod transfers;
 
 use crate::ai::PendingAiRequest;
+use crate::club::board::manager_market::ManagerMarketTick;
 use crate::country::result::transfers::DeferredTransferOps;
 use crate::league::LeagueResult;
 use crate::league::result::DeferredGlobalOps;
@@ -91,11 +92,7 @@ impl CountryResult {
             crate::club::staff::admit_to_pool(&mut data.free_agent_staff, staff, current_date);
         }
         for club_id in self.deferred_global_ops.pending_appointments {
-            crate::club::board::manager_market::ManagerMarketTick::execute_appointment(
-                data,
-                club_id,
-                current_date,
-            );
+            ManagerMarketTick::execute_appointment(data, club_id, current_date);
         }
         if !self.deferred_global_ops.free_agent_players.is_empty() {
             // Academy-aged-out releases. The players already have

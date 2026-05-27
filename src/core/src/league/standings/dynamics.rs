@@ -1,5 +1,6 @@
 use crate::league::LeagueTable;
 use crate::r#match::{MatchResult, MatchResultOutcome, Score};
+use chrono::Weekday;
 use log::debug;
 use std::collections::HashMap;
 
@@ -165,12 +166,12 @@ impl LeagueDynamics {
     pub fn update_attendance_predictions(
         &mut self,
         table: &LeagueTable,
-        day_of_week: chrono::Weekday,
+        day_of_week: Weekday,
         month: u32,
     ) {
         self.attendance_multiplier = 1.0;
 
-        if day_of_week == chrono::Weekday::Sat || day_of_week == chrono::Weekday::Sun {
+        if day_of_week == Weekday::Sat || day_of_week == Weekday::Sun {
             self.attendance_multiplier *= 1.2;
         }
 

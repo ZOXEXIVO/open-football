@@ -3,6 +3,7 @@ use crate::{
     ContractBonus, ContractBonusType, ContractClause, ContractClauseType, ContractType, Player,
     PlayerClubContract, PlayerContractProposal, PlayerSquadStatus,
 };
+use chrono::Duration;
 use chrono::NaiveDate;
 
 pub struct AcceptContractHandler;
@@ -10,7 +11,7 @@ pub struct AcceptContractHandler;
 impl AcceptContractHandler {
     pub fn process(player: &mut Player, proposal: PlayerContractProposal, now: NaiveDate) {
         let expiration = now
-            .checked_add_signed(chrono::Duration::days(365 * proposal.years as i64))
+            .checked_add_signed(Duration::days(365 * proposal.years as i64))
             .unwrap_or(now);
 
         // Preserve existing shirt number; squad status is taken from the

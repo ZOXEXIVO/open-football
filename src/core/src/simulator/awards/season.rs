@@ -4,6 +4,7 @@ use crate::{
     AwardReputationInput, AwardReputationKind, HappinessEventType, RecognitionEventContext,
     RecognitionEventKind,
 };
+use chrono::NaiveDate;
 use rayon::prelude::*;
 
 /// Season awards — drains each league's pending snapshot (built inside
@@ -117,7 +118,7 @@ impl SeasonAwardsTick {
         player_id: u32,
         league_id: u32,
         league_rep: Option<u16>,
-        now: chrono::NaiveDate,
+        now: NaiveDate,
         happiness_event: HappinessEventType,
         recognition_kind: RecognitionEventKind,
         reputation_kind: AwardReputationKind,

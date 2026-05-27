@@ -6,6 +6,7 @@
 use super::TeamBehaviour;
 use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::{ChangeType, Player, PlayerCollection};
+use std::cmp::Ordering;
 
 impl TeamBehaviour {
     /// A respected captain mediates dressing-room conflicts. For each
@@ -34,7 +35,7 @@ impl TeamBehaviour {
                 let sb = b.skills.mental.leadership * 1.0
                     + b.attributes.professionalism * 0.6
                     + b.attributes.loyalty * 0.4;
-                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
             });
 
         let Some(captain) = captain else { return };
@@ -147,7 +148,7 @@ impl TeamBehaviour {
                 let sb = b.skills.mental.leadership * 1.0
                     + b.attributes.loyalty * 0.5
                     + b.player_attributes.current_reputation as f32 / 2000.0;
-                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
             })
             .map(|p| p.id);
 

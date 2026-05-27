@@ -7,6 +7,7 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 120.0;
 const MIN_DISTANCE_FROM_BALL: f32 = 25.0;
@@ -359,7 +360,7 @@ impl MidfielderCreatingSpaceState {
             .tick_context
             .grid
             .opponents(ctx.player.id, 50.0)
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
         {
             let Some(nearest_opponent) = ctx.context.players.by_id(nearest_id) else {
                 return target;
@@ -798,7 +799,7 @@ impl MidfielderCreatingSpaceState {
             .map(|p| p.position.y)
             .collect::<Vec<_>>();
 
-        all_positions.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        all_positions.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
         // Find biggest gap
         let mut max_gap = 0.0;
@@ -901,9 +902,7 @@ impl MidfielderCreatingSpaceState {
             .min_by(|a, b| {
                 let dist_a = (a.position - ball_holder.position).magnitude();
                 let dist_b = (b.position - ball_holder.position).magnitude();
-                dist_a
-                    .partial_cmp(&dist_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                dist_a.partial_cmp(&dist_b).unwrap_or(Ordering::Equal)
             })
     }
 

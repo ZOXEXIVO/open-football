@@ -19,6 +19,7 @@
 // AdaptationConfig — post-transfer settlement & shock events
 // ============================================================
 
+use crate::HappinessEventType;
 #[derive(Debug, Clone)]
 pub struct AdaptationConfig {
     /// Window (in days) over which settlement form / shock events apply.
@@ -638,7 +639,7 @@ impl MoraleEventCatalog {
     /// Default magnitude for `source`. Lookup is a match arm — switching
     /// from a HashMap means O(1) without hashing and exhaustiveness checks
     /// flag missing variants if the enum grows.
-    pub fn magnitude(&self, source: crate::HappinessEventType) -> f32 {
+    pub fn magnitude(&self, source: HappinessEventType) -> f32 {
         use crate::HappinessEventType::*;
         match source {
             ManagerPraise => self.manager_praise,

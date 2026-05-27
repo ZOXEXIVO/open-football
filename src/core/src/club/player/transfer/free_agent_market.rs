@@ -12,6 +12,7 @@
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::player::Player;
 use crate::{Person, PlayerSquadStatus};
+use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 
 /// Snapshot of where the player came from and how the market has treated
@@ -49,7 +50,7 @@ impl FreeAgentMarketState {
     /// `recent_offer_dates`; the helper prunes stale entries on every
     /// `on_offer_received` so the vector stays small.
     pub fn offers_received_30d(&self, today: NaiveDate) -> u8 {
-        let cutoff = today - chrono::Duration::days(30);
+        let cutoff = today - Duration::days(30);
         self.recent_offer_dates
             .iter()
             .filter(|d| **d >= cutoff)
@@ -187,7 +188,7 @@ impl Player {
         // free agent isn't treated as "released yesterday". They've
         // been on the market — the engine just hasn't been simulating
         // their sit until now.
-        let free_since = date - chrono::Duration::days(30);
+        let free_since = date - Duration::days(30);
         self.free_agent_state = Some(FreeAgentMarketState {
             free_since,
             last_club_id: None,
@@ -207,7 +208,7 @@ impl Player {
     /// sweep. No-op if the player isn't a free agent.
     pub fn on_offer_received(&mut self, date: NaiveDate) {
         if let Some(state) = self.free_agent_state.as_mut() {
-            let cutoff = date - chrono::Duration::days(30);
+            let cutoff = date - Duration::days(30);
             state.recent_offer_dates.retain(|d| *d >= cutoff);
             state.recent_offer_dates.push(date);
         }

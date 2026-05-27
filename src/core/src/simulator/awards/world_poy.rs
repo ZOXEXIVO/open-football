@@ -6,6 +6,7 @@ use crate::{
     RecognitionEventKind,
 };
 use rayon::prelude::*;
+use std::cmp::Ordering;
 
 /// World player-of-year. Runs once on year-end. Pools each continent's
 /// ranking, picks the global top 3 (nominees) and the global #1
@@ -27,7 +28,7 @@ impl WorldPlayerOfYearTick {
             .collect();
         combined.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
                 .then(a.0.cmp(&b.0))
         });
 

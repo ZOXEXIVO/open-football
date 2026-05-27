@@ -2,6 +2,7 @@ use crate::shared::CurrencyValue;
 use crate::transfers::negotiation::{NegotiationStatus, TransferNegotiation};
 use crate::transfers::offer::TransferOffer;
 use crate::transfers::{CompletedTransfer, TransferType};
+use chrono::Duration;
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
@@ -266,12 +267,12 @@ impl TransferMarket {
                     .contract_length
                     .map(|months| {
                         current_date
-                            .checked_add_signed(chrono::Duration::days(months as i64 * 30))
+                            .checked_add_signed(Duration::days(months as i64 * 30))
                             .unwrap_or(current_date)
                     })
                     .unwrap_or_else(|| {
                         current_date
-                            .checked_add_signed(chrono::Duration::days(180))
+                            .checked_add_signed(Duration::days(180))
                             .unwrap_or(current_date)
                     });
                 TransferType::Loan(loan_end)
@@ -350,7 +351,7 @@ impl TransferMarket {
             listing.asking_price.amount = decayed;
             listing.last_decay_date = listing
                 .last_decay_date
-                .checked_add_signed(chrono::Duration::days(steps as i64 * 7))
+                .checked_add_signed(Duration::days(steps as i64 * 7))
                 .unwrap_or(current_date);
         }
 

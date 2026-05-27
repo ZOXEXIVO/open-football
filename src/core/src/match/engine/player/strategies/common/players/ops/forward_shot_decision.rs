@@ -1,6 +1,9 @@
+use crate::r#match::MatchPlayerLite;
 use crate::r#match::StateProcessingContext;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering;
 
 #[cfg(feature = "match-logs")]
 pub mod helper_diag {
@@ -185,7 +188,7 @@ pub fn evaluate_forward_shot_decision(
     let can_player = ctx.player().can_shoot();
     if !can_team || !can_player {
         #[cfg(feature = "match-logs")]
-        helper_diag::HOLD_HARDGATE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::HOLD_HARDGATE.fetch_add(1, Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -194,7 +197,7 @@ pub fn evaluate_forward_shot_decision(
     // for elite long-shooters — keep the ball.
     if distance > 110.0 {
         #[cfg(feature = "match-logs")]
-        helper_diag::HOLD_FAR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::HOLD_FAR.fetch_add(1, Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -304,12 +307,12 @@ pub fn evaluate_forward_shot_decision(
     let inside_six_floor = 0.12 + execution_skill * 0.28;
     if !inside_six && xg < min_xg {
         #[cfg(feature = "match-logs")]
-        helper_diag::HOLD_XG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::HOLD_XG.fetch_add(1, Ordering::Relaxed);
         return ShotDecision::Hold;
     }
     if inside_six && xg < (inside_six_floor.min(min_xg)) {
         #[cfg(feature = "match-logs")]
-        helper_diag::HOLD_INSIDE_SIX_XG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::HOLD_INSIDE_SIX_XG.fetch_add(1, Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -317,7 +320,7 @@ pub fn evaluate_forward_shot_decision(
     let clarity = ctx.player().shot_clarity();
     if !ctx.player().has_clear_shot() && !inside_six {
         #[cfg(feature = "match-logs")]
-        helper_diag::HOLD_NO_CLEAR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::HOLD_NO_CLEAR.fetch_add(1, Ordering::Relaxed);
         return ShotDecision::Hold;
     }
 
@@ -410,7 +413,7 @@ pub fn evaluate_forward_shot_decision(
     let point_blank = distance < 24.0 && xg >= 0.18;
     if !point_blank && capped_pass_ev > xg + margin {
         #[cfg(feature = "match-logs")]
-        helper_diag::PASS_DEFERRAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::PASS_DEFERRAL.fetch_add(1, Ordering::Relaxed);
         return ShotDecision::Pass;
     }
 
@@ -440,7 +443,7 @@ pub fn evaluate_forward_shot_decision(
             let factor = (0.95 - (shots_so_far - 4) as f32 * 0.10).max(0.35);
             if best_pass_ev >= xg * factor {
                 #[cfg(feature = "match-logs")]
-                helper_diag::PASS_DEFERRAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                helper_diag::PASS_DEFERRAL.fetch_add(1, Ordering::Relaxed);
                 return ShotDecision::Pass;
             }
         }
@@ -529,7 +532,7 @@ pub fn evaluate_forward_shot_decision(
 
     if rand::random::<f32>() < willingness {
         #[cfg(feature = "match-logs")]
-        helper_diag::ROLL_PASSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        helper_diag::ROLL_PASSED.fetch_add(1, Ordering::Relaxed);
         ShotDecision::Shoot { reason: tag }
     } else {
         ShotDecision::Hold
@@ -547,16 +550,14 @@ pub fn evaluate_forward_shot_decision(
 /// angle), within shooting range of goal, no further from goal than the
 /// carrier (a true cutback / square ball, never a backward bail-out),
 /// unmarked, and on a clear passing lane.
-pub fn find_cutback_to_arriving_runner(
-    ctx: &StateProcessingContext,
-) -> Option<crate::r#match::MatchPlayerLite> {
+pub fn find_cutback_to_arriving_runner(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
     let goal = ctx.player().opponent_goal_position();
     let field_height = ctx.context.field_size.height as f32;
     let center_y = field_height / 2.0;
     let central_band = field_height * 0.17;
     let carrier_goal_d = (goal - ctx.player.position).magnitude();
 
-    let mut best: Option<(crate::r#match::MatchPlayerLite, f32)> = None;
+    let mut best: Option<(MatchPlayerLite, f32)> = None;
     for t in ctx.players().teammates().nearby(75.0) {
         if !t.tactical_positions.is_central_midfielder() {
             continue;

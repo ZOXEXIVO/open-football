@@ -8,6 +8,7 @@ use crate::r#match::midfielders::states::{
     MidfielderWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
+use std::fmt::Result;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,7 +96,7 @@ impl MidfielderStrategies {
 }
 
 impl Display for MidfielderState {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             MidfielderState::Standing => write!(f, "Standing"),
             MidfielderState::Distributing => write!(f, "Distributing"),

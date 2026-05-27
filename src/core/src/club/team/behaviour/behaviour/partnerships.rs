@@ -23,6 +23,7 @@ use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviour
 use crate::context::GlobalContext;
 use crate::utils::DateUtils;
 use crate::{ChangeType, Player, PlayerCollection, PlayerPositionType, PlayerSquadStatus};
+use chrono::NaiveDate;
 
 /// How a tactical pair relates on the pitch.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -259,7 +260,7 @@ fn tactical_dependency(
     role: PairRole,
     shared_lang: bool,
     same_country: bool,
-    date: chrono::NaiveDate,
+    date: NaiveDate,
 ) -> f32 {
     // Only on-pitch partnerships pick up the tactical bonus.
     let mut score: f32 = 0.0;
@@ -325,7 +326,7 @@ fn tactical_dependency(
 fn cultural_pair_needs_lift(
     a: &Player,
     b: &Player,
-    today: chrono::NaiveDate,
+    today: NaiveDate,
     rel_a: f32,
     rel_b: f32,
 ) -> bool {

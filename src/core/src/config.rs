@@ -7,6 +7,7 @@
 //! instead of calling `default()` internally).
 
 use chrono::Datelike;
+use chrono::NaiveDate;
 
 #[derive(Debug, Clone)]
 pub struct SimulatorConfig {
@@ -26,7 +27,7 @@ impl Default for SimulatorConfig {
 
 impl SimulatorConfig {
     /// Whether `now` falls on the configured trim day (compared by day-of-month).
-    pub fn is_trim_day(&self, now: chrono::NaiveDate) -> bool {
+    pub fn is_trim_day(&self, now: NaiveDate) -> bool {
         now.day() == self.match_store_trim_day_of_month
     }
 }

@@ -1,6 +1,7 @@
 use crate::r#match::ball::events::{BallEvent, BallEventDispatcher};
 use crate::r#match::player::events::{PlayerEvent, PlayerEventDispatcher};
 use crate::r#match::{MatchContext, MatchField, ResultMatchPositionData};
+use std::vec::IntoIter;
 
 pub enum Event {
     BallEvent(BallEvent),
@@ -146,7 +147,7 @@ pub struct EventDrain<'a> {
     coll: &'a mut EventCollection,
     inline_idx: usize,
     inline_total: usize,
-    overflow_iter: std::vec::IntoIter<Event>,
+    overflow_iter: IntoIter<Event>,
 }
 
 impl<'a> Iterator for EventDrain<'a> {

@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub use ai::*;
 pub use competitions::*;
 pub use config::SimulatorConfig;
-pub use continent::national::world::emergency_callups_total;
+pub use continent::national::world::EmergencyCallupMetrics;
 pub use continent::national::{
     CompetitionPhase, CompetitionScope, FixtureResult, GroupFixture, GroupStanding,
     KnockoutBracket, KnockoutFixture, KnockoutResult, KnockoutRound, NationalCompetitionConfig,
@@ -84,6 +84,7 @@ pub use club::{
     CoachFocus,
     CoachingPhilosophy,
     CoachingStyle,
+    CompetitionStatistics,
     ConflictInfo,
     ConflictLocation,
     ConflictSeverity,
@@ -395,39 +396,51 @@ static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(false);
 static MATCH_STORE_MAX_THREADS: AtomicUsize = AtomicUsize::new(4);
 static MATCH_ENGINE_POOL: OnceLock<r#match::MatchPlayEnginePool> = OnceLock::new();
 
-pub fn set_match_events_mode(enabled: bool) {
-    STORE_MATCH_EVENTS_MODE.store(enabled, Ordering::SeqCst);
-}
+/// Process-global match-engine runtime configuration and the shared engine
+/// pool. The web crate flips these flags at startup (see `settings.rs`) and
+/// the engine/orchestrator read them back; grouping them behind one facade
+/// keeps the otherwise-scattered statics discoverable.
+pub struct MatchRuntime;
 
-pub fn is_match_events_mode() -> bool {
-    STORE_MATCH_EVENTS_MODE.load(Ordering::SeqCst)
-}
+impl MatchRuntime {
+    pub fn set_events_mode(enabled: bool) {
+        STORE_MATCH_EVENTS_MODE.store(enabled, Ordering::SeqCst);
+    }
 
-pub fn set_match_recordings_mode(enabled: bool) {
-    MATCH_RECORDINGS_MODE.store(enabled, Ordering::SeqCst);
-}
+    pub fn events_mode() -> bool {
+        STORE_MATCH_EVENTS_MODE.load(Ordering::SeqCst)
+    }
 
-pub fn is_match_recordings_mode() -> bool {
-    MATCH_RECORDINGS_MODE.load(Ordering::SeqCst)
-}
+    pub fn set_recordings_mode(enabled: bool) {
+        MATCH_RECORDINGS_MODE.store(enabled, Ordering::SeqCst);
+    }
 
-pub fn set_match_store_max_threads(n: usize) {
-    MATCH_STORE_MAX_THREADS.store(n, Ordering::SeqCst);
-}
+    pub fn recordings_mode() -> bool {
+        MATCH_RECORDINGS_MODE.load(Ordering::SeqCst)
+    }
 
-pub fn match_store_max_threads() -> usize {
-    MATCH_STORE_MAX_THREADS.load(Ordering::SeqCst)
-}
+    pub fn set_store_max_threads(n: usize) {
+        MATCH_STORE_MAX_THREADS.store(n, Ordering::SeqCst);
+    }
 
-pub fn init_match_engine_pool(num_threads: usize) {
-    MATCH_ENGINE_POOL.get_or_init(|| r#match::MatchPlayEnginePool::new(num_threads));
-}
+    pub fn store_max_threads() -> usize {
+        MATCH_STORE_MAX_THREADS.load(Ordering::SeqCst)
+    }
 
-pub fn match_engine_pool() -> &'static r#match::MatchPlayEnginePool {
-    MATCH_ENGINE_POOL.get_or_init(|| {
-        let cpus = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-        r#match::MatchPlayEnginePool::new(cpus)
-    })
+    /// Eagerly build the shared engine pool with a fixed worker count.
+    /// No-op if the pool was already initialised.
+    pub fn init_engine_pool(num_threads: usize) {
+        MATCH_ENGINE_POOL.get_or_init(|| r#match::MatchPlayEnginePool::new(num_threads));
+    }
+
+    /// Borrow the shared engine pool, lazily initialising it sized to the
+    /// available parallelism if `init_engine_pool` was never called.
+    pub fn engine_pool() -> &'static r#match::MatchPlayEnginePool {
+        MATCH_ENGINE_POOL.get_or_init(|| {
+            let cpus = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4);
+            r#match::MatchPlayEnginePool::new(cpus)
+        })
+    }
 }

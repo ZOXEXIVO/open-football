@@ -1,3 +1,4 @@
+use chrono::Duration;
 use chrono::NaiveDateTime;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
 
@@ -439,7 +440,7 @@ impl PlayerClubContract {
         let target_year = self.expiration.year() + years;
         let new_exp = self.expiration.with_year(target_year).or_else(|| {
             self.expiration
-                .checked_add_signed(chrono::Duration::days(365 * years as i64))
+                .checked_add_signed(Duration::days(365 * years as i64))
         })?;
         self.expiration = new_exp;
         self.clauses.remove(pos);
@@ -475,10 +476,7 @@ impl PlayerClubContract {
         let new_exp = self
             .expiration
             .with_year(self.expiration.year() + 1)
-            .or_else(|| {
-                self.expiration
-                    .checked_add_signed(chrono::Duration::days(365))
-            })?;
+            .or_else(|| self.expiration.checked_add_signed(Duration::days(365)))?;
         self.expiration = new_exp;
         self.clauses.remove(pos);
         Some(self.expiration)

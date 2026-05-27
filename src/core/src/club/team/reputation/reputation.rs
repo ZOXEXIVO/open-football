@@ -395,7 +395,7 @@ struct ReputationFactors {
 }
 
 impl ReputationFactors {
-    fn decay(&mut self, today: chrono::NaiveDate) {
+    fn decay(&mut self, today: NaiveDate) {
         // Remove old achievements
         self.achievements.retain(|a| !a.is_expired(today));
 
@@ -475,7 +475,7 @@ impl Achievement {
         }
     }
 
-    fn is_expired(&self, today: chrono::NaiveDate) -> bool {
+    fn is_expired(&self, today: NaiveDate) -> bool {
         // Achievements expire after 2 years
         (today - self.date).num_days() > 730
     }

@@ -1,5 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::{MatchPlayerLite, StateProcessingContext};
+use nalgebra::Vector3;
 
 pub struct PlayerOpponentsOperationsImpl<'b> {
     ctx: &'b StateProcessingContext<'b>,
@@ -46,7 +47,7 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
     /// grid so a small cell window replaces the previous full-team scan.
     pub fn nearby_at(
         &self,
-        center: nalgebra::Vector3<f32>,
+        center: Vector3<f32>,
         distance: f32,
     ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
         self.ctx

@@ -1,5 +1,6 @@
 use crate::Team;
 use crate::club::{PersonBehaviourState, Player, PlayerPositionType, Staff};
+use std::cmp::Ordering;
 
 #[derive(Debug, Clone)]
 pub struct Tactics {
@@ -587,7 +588,7 @@ impl TacticsSelector {
             .max_by(|a, b| {
                 a.formation_strength
                     .partial_cmp(&b.formation_strength)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
             })
             .unwrap_or_else(|| {
                 Tactics::with_reason(MatchTacticType::T442, TacticSelectionReason::Default, 0.5)

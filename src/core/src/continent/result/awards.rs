@@ -3,7 +3,9 @@ use crate::continent::Continent;
 use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind, HappinessEventType};
+use chrono::NaiveDate;
 use log::debug;
+use std::cmp::Ordering;
 
 /// Year-end award outcome staged by the parallel continent pass so the
 /// orchestrator can apply the cross-continent player events serially.
@@ -23,7 +25,7 @@ impl ContinentResult {
     /// serially (`data.player_mut` walks every continent).
     pub(crate) fn build_continental_award_outcome(
         continent: &mut Continent,
-        date: chrono::NaiveDate,
+        date: NaiveDate,
     ) -> ContinentAwardOutcome {
         debug!("Processing continental awards");
 
@@ -49,7 +51,7 @@ impl ContinentResult {
     pub(crate) fn apply_continental_award_outcome(
         data: &mut SimulatorData,
         outcome: ContinentAwardOutcome,
-        date: chrono::NaiveDate,
+        date: NaiveDate,
     ) {
         // Nomination events for the top 3 — guard with cooldowns so a
         // back-to-back year-end recompute doesn't double-emit.
@@ -81,10 +83,7 @@ impl ContinentResult {
     /// continent. Scoring leans on real performance (rating, goals,
     /// assists, motm) with a league-reputation envelope; current
     /// reputation participates only as a tiebreak.
-    pub(crate) fn rank_continent(
-        continent: &Continent,
-        _date: chrono::NaiveDate,
-    ) -> Vec<(u32, f32)> {
+    pub(crate) fn rank_continent(continent: &Continent, _date: NaiveDate) -> Vec<(u32, f32)> {
         let mut out: Vec<(u32, f32)> = Vec::new();
         for country in &continent.countries {
             for league in &country.leagues.leagues {
@@ -135,7 +134,7 @@ impl ContinentResult {
         }
         out.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
                 .then(a.0.cmp(&b.0))
         });
         out
@@ -147,7 +146,7 @@ impl ContinentResult {
     /// 365 days so back-to-back end-of-period ticks don't double-fire.
     /// Continent-local — only touches the continent's own countries, so
     /// it's safe to run inside the parallel pass.
-    fn apply_continental_cup_finals_local(continent: &mut Continent, date: chrono::NaiveDate) {
+    fn apply_continental_cup_finals_local(continent: &mut Continent, date: NaiveDate) {
         // Snapshot finals up front so we don't keep an immutable borrow
         // while emitting. (CL 1.5 / EL 1.3 / Conference 1.2 reflect the
         // real-world prestige gap.)

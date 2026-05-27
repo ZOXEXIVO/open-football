@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::MatchResult;
 use crate::r#match::engine::result::PlayerMatchEndStats;
+use std::cmp::Ordering;
 
 /// One historical award entry. The denormalised name/club fields let the
 /// UI render past awards without re-resolving entities that may have moved
@@ -253,11 +254,11 @@ impl PlayerOfTheWeekSelector {
             .max_by(|(la, a), (lb, b)| {
                 a.score
                     .partial_cmp(&b.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
                     .then(
                         a.best_rating
                             .partial_cmp(&b.best_rating)
-                            .unwrap_or(std::cmp::Ordering::Equal),
+                            .unwrap_or(Ordering::Equal),
                     )
                     .then(lb.cmp(la))
             })

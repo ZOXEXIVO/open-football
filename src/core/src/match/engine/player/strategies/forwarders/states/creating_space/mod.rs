@@ -20,6 +20,7 @@ enum ForwardMovementPattern {
 }
 
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 80.0;
 const MIN_DISTANCE_FROM_BALL: f32 = 30.0;
@@ -135,7 +136,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         opp_ys_len += 1;
         opp_ys[opp_ys_len] = field_height;
         opp_ys_len += 1;
-        opp_ys[..opp_ys_len].sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        opp_ys[..opp_ys_len].sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
         // Build (gap_width, gap_center_y) list in a fixed-size array
         // and track the widest gap inline so we don't have to sort.
@@ -148,7 +149,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             gaps[gaps_len] = (width, center);
             gaps_len += 1;
         }
-        gaps[..gaps_len].sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        gaps[..gaps_len].sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
         // Rank THIS forward among our forwards by id so each one picks
         // a distinct gap (id-based so the assignment is stable tick

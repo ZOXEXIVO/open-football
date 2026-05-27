@@ -1,3 +1,4 @@
+pub mod cup;
 pub mod result;
 pub mod round;
 pub mod schedule;

@@ -30,7 +30,7 @@ impl TeamBehaviour {
         players: &PlayerCollection,
         staffs: &StaffCollection,
         result: &mut TeamBehaviourResult,
-        today: Option<chrono::NaiveDate>,
+        today: Option<NaiveDate>,
     ) {
         // Find the manager
         let manager = match staffs.find_by_position(StaffPosition::Manager) {

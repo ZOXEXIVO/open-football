@@ -2,6 +2,7 @@ use super::cache::MondayAwardCache;
 use crate::league::player_of_week::{PlayerOfTheWeekAward, PlayerOfTheWeekSelector};
 use crate::simulator::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind};
+use chrono::NaiveDate;
 use rayon::prelude::*;
 
 /// Monday-only orchestration that walks every non-friendly league, picks
@@ -19,7 +20,7 @@ impl WeeklyAwardsTick {
 
     fn collect_pending(
         data: &SimulatorData,
-        week_end: chrono::NaiveDate,
+        week_end: NaiveDate,
         cache: &MondayAwardCache,
     ) -> Vec<PendingWeeklyAward> {
         data.continents

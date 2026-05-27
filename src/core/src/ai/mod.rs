@@ -24,10 +24,20 @@ pub trait AiService: Send + Sync {
 
 static AI_SERVICE: OnceLock<Box<dyn AiService>> = OnceLock::new();
 
-pub fn set_ai_service(service: Box<dyn AiService>) {
-    let _ = AI_SERVICE.set(service);
-}
+/// Process-global registry holding the single [`AiService`] implementation
+/// the web crate installs at startup. Core reads it back through
+/// [`AiServiceRegistry::get`] so the engine stays runtime-agnostic.
+pub struct AiServiceRegistry;
 
-pub fn ai_service() -> Option<&'static dyn AiService> {
-    AI_SERVICE.get().map(|b| b.as_ref())
+impl AiServiceRegistry {
+    /// Install the service. Idempotent — the first call wins; later calls
+    /// are ignored (the underlying `OnceLock` is write-once).
+    pub fn set(service: Box<dyn AiService>) {
+        let _ = AI_SERVICE.set(service);
+    }
+
+    /// Borrow the installed service, if any.
+    pub fn get() -> Option<&'static dyn AiService> {
+        AI_SERVICE.get().map(|b| b.as_ref())
+    }
 }

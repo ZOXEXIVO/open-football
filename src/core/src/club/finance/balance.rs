@@ -1,8 +1,10 @@
 use crate::context::GlobalContext;
+use crate::shared::Currency;
 use crate::shared::CurrencyValue;
 use crate::{
     ClubFinanceResult, ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract,
 };
+use chrono::Duration;
 use chrono::NaiveDate;
 use log::debug;
 
@@ -112,7 +114,7 @@ impl ClubFinances {
     /// `current_monthly_wage_estimate`. A floor of $1 keeps comparisons
     /// well-formed for a brand-new club with no history.
     pub fn trailing_avg_monthly_wages(&self, today: NaiveDate) -> i64 {
-        let cutoff = today - chrono::Duration::days(95);
+        let cutoff = today - Duration::days(95);
         let mut total = 0i64;
         let mut months = 0i64;
         for (date, snap) in self.history.iter() {
@@ -251,7 +253,7 @@ impl ClubFinances {
         } else {
             self.transfer_budget = Some(CurrencyValue {
                 amount: amount * 0.5,
-                currency: crate::shared::Currency::Usd,
+                currency: Currency::Usd,
             });
         }
     }
@@ -260,7 +262,7 @@ impl ClubFinances {
     /// Used by the board to size next season's transfer/wage budgets from
     /// projected revenue rather than current cash.
     pub fn trailing_annual_income(&self, today: NaiveDate) -> i64 {
-        let cutoff = today - chrono::Duration::days(365);
+        let cutoff = today - Duration::days(365);
         let mut total = 0i64;
         for (date, snap) in self.history.iter() {
             if *date < cutoff {
@@ -274,7 +276,7 @@ impl ClubFinances {
     /// Trailing twelve months of total operating expenses across the
     /// history snapshots — counterpart to `trailing_annual_income`.
     pub fn trailing_annual_outcome(&self, today: NaiveDate) -> i64 {
-        let cutoff = today - chrono::Duration::days(365);
+        let cutoff = today - Duration::days(365);
         let mut total = 0i64;
         for (date, snap) in self.history.iter() {
             if *date < cutoff {
@@ -290,7 +292,7 @@ impl ClubFinances {
     /// ones; a non-positive return means the club is cash-neutral or
     /// profitable over the period.
     pub fn three_year_loss(&self, today: NaiveDate) -> i64 {
-        let cutoff = today - chrono::Duration::days(365 * 3);
+        let cutoff = today - Duration::days(365 * 3);
         let mut losses = 0i64;
         for (date, snap) in self.history.iter() {
             if *date < cutoff {
@@ -305,7 +307,7 @@ impl ClubFinances {
     /// scale for the FFP breach threshold so wealthy clubs aren't flagged
     /// for the same absolute losses that would cripple a smaller side.
     pub fn trailing_annual_wages(&self, today: NaiveDate) -> u64 {
-        let cutoff = today - chrono::Duration::days(365);
+        let cutoff = today - Duration::days(365);
         let mut total = 0u64;
         for (date, snap) in self.history.iter() {
             if *date < cutoff {

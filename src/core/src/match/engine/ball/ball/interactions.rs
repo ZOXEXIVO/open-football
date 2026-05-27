@@ -16,6 +16,8 @@ use crate::r#match::player::strategies::players::ops::effective_skill::{
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart, PlayerSide};
 use nalgebra::Vector3;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering;
 
 impl Ball {
     /// Opposing players near the ball's flight path can intercept passes.
@@ -382,8 +384,7 @@ impl Ball {
         // next, not by the block itself.
         if roll < p_corner {
             #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::BLOCK_CORNER_FIRED
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::mid_run_diag::BLOCK_CORNER_FIRED.fetch_add(1, Ordering::Relaxed);
             // Deflection out for a corner — push the ball past the
             // defender's OWN byline and WIDE OF THE POST (toward the corner
             // flag) so the endline resolver awards a corner (defender = last
@@ -530,8 +531,7 @@ impl Ball {
         };
         if past_goal_line {
             #[cfg(feature = "match-logs")]
-            save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE.fetch_add(1, Ordering::Relaxed);
             self.cached_shot_target = None;
             return;
         }
@@ -540,13 +540,11 @@ impl Ball {
         let ball_vx = self.velocity.x.abs().max(0.5);
         if dist_to_goal_x > ball_vx * 2.5 {
             #[cfg(feature = "match-logs")]
-            save_accounting_stats::SAVE_TICKS_OUT_OF_REACH
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            save_accounting_stats::SAVE_TICKS_OUT_OF_REACH.fetch_add(1, Ordering::Relaxed);
             return;
         }
         #[cfg(feature = "match-logs")]
-        save_accounting_stats::SAVE_TICKS_REACHED
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        save_accounting_stats::SAVE_TICKS_REACHED.fetch_add(1, Ordering::Relaxed);
 
         // Ball must still be traveling toward that goal line.
         let moving_toward_goal = match shot_target.defending_side {
@@ -650,15 +648,13 @@ impl Ball {
         let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.05, 0.68);
 
         #[cfg(feature = "match-logs")]
-        save_accounting_stats::SAVE_PHYSICS_FIRED
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        save_accounting_stats::SAVE_PHYSICS_FIRED.fetch_add(1, Ordering::Relaxed);
 
         if rand::random::<f32>() >= save_prob {
             return; // Keeper beaten — shot goes on.
         }
         #[cfg(feature = "match-logs")]
-        save_accounting_stats::SAVE_PHYSICS_PASSED
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        save_accounting_stats::SAVE_PHYSICS_PASSED.fetch_add(1, Ordering::Relaxed);
 
         // Save outcome distribution. Catch / safe parry / dangerous
         // parry / corner — the previous code always caught.
@@ -729,8 +725,7 @@ impl Ball {
 
         if outcome_roll < p_safe {
             #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::SAVE_PARRY_FIRED
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::mid_run_diag::SAVE_PARRY_FIRED.fetch_add(1, Ordering::Relaxed);
             // Parried OUT for a corner. The outcome is already decided, so
             // resolve it POSITIONALLY — place the ball just past the byline,
             // wide of the post — rather than driving it there by velocity.

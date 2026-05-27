@@ -1,6 +1,7 @@
 use crate::MatchTacticType;
 use crate::r#match::TeamScore;
 use chrono::NaiveDateTime;
+use std::cmp::Ordering;
 
 const DEFAULT_MATCH_LIST_SIZE: usize = 10;
 
@@ -41,9 +42,9 @@ impl MatchHistory {
             let us = m.score.0.get();
             let them = m.score.1.get();
             match us.cmp(&them) {
-                std::cmp::Ordering::Greater => wins = wins.saturating_add(1),
-                std::cmp::Ordering::Less => losses = losses.saturating_add(1),
-                std::cmp::Ordering::Equal => draws = draws.saturating_add(1),
+                Ordering::Greater => wins = wins.saturating_add(1),
+                Ordering::Less => losses = losses.saturating_add(1),
+                Ordering::Equal => draws = draws.saturating_add(1),
             }
         }
         (wins, draws, losses)

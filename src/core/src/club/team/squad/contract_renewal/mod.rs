@@ -1,3 +1,4 @@
+use crate::ContractClauseType;
 use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::mailbox::RejectionReason;
 use crate::club::player::mailbox::handlers::contract_proposal::{
@@ -5,6 +6,7 @@ use crate::club::player::mailbox::handlers::contract_proposal::{
 };
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
+use crate::utils::FormattingUtils;
 use crate::{
     PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerSquadStatus, PlayerStatusType,
     Team,
@@ -164,7 +166,7 @@ impl ContractRenewalManager {
                 let movement = format!(
                     "{}y · ${}/y",
                     proposal.years,
-                    crate::utils::FormattingUtils::format_money(proposal.salary as f64)
+                    FormattingUtils::format_money(proposal.salary as f64)
                 );
                 player.decision_history.add(
                     date,
@@ -229,8 +231,8 @@ impl ContractRenewalManager {
                     c.clauses.iter().any(|cl| {
                         matches!(
                             cl.bonus_type,
-                            crate::ContractClauseType::MatchHighestEarner
-                                | crate::ContractClauseType::OptionalContractExtensionByClub
+                            ContractClauseType::MatchHighestEarner
+                                | ContractClauseType::OptionalContractExtensionByClub
                         )
                     })
                 })
@@ -266,16 +268,14 @@ impl ContractRenewalManager {
                 (player.statistics.played as f32).max(player.statistics.played_subs as f32 / 2.0);
             let is_contributor = matches!(
                 now_status.as_ref(),
-                Some(crate::PlayerSquadStatus::KeyPlayer)
-                    | Some(crate::PlayerSquadStatus::FirstTeamRegular)
-                    | Some(crate::PlayerSquadStatus::FirstTeamSquadRotation)
+                Some(PlayerSquadStatus::KeyPlayer)
+                    | Some(PlayerSquadStatus::FirstTeamRegular)
+                    | Some(PlayerSquadStatus::FirstTeamSquadRotation)
             ) && played_share >= 8.0;
             let unsettled = player.statuses.get().iter().any(|s| {
                 matches!(
                     s,
-                    crate::PlayerStatusType::Req
-                        | crate::PlayerStatusType::Lst
-                        | crate::PlayerStatusType::Frt
+                    PlayerStatusType::Req | PlayerStatusType::Lst | PlayerStatusType::Frt
                 )
             }) || player
                 .contract
@@ -298,7 +298,7 @@ impl ContractRenewalManager {
                     c.clauses.retain(|cl| {
                         !matches!(
                             cl.bonus_type,
-                            crate::ContractClauseType::OptionalContractExtensionByClub
+                            ContractClauseType::OptionalContractExtensionByClub
                         )
                     });
                 }

@@ -1,7 +1,7 @@
 //! Seedable RNG for the sim utilities. Call sites go through
 //! `IntegerUtils::random` / `FloatUtils::random` and draw from a thread-local
 //! `SmallRng` seeded from a global seed. Callers pin reproducibility by
-//! calling [`set_seed`] before building `SimulatorData`.
+//! calling [`RandomEngine::set_seed`] before building `SimulatorData`.
 //!
 //! Parallelism caveat: Rayon worker scheduling is non-deterministic, so
 //! seeding alone does not guarantee bit-identical runs — it guarantees a
@@ -13,7 +13,7 @@ use rand::{RngExt, SeedableRng};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Global sim seed. Generation bumps whenever `set_seed` is called so
+/// Global sim seed. Generation bumps whenever `RandomEngine::set_seed` is called so
 /// thread-local RNGs notice and rebuild from the new base.
 static SIM_SEED: AtomicU64 = AtomicU64::new(0);
 static SEED_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -62,31 +62,40 @@ impl ThreadRng {
     }
 }
 
-/// Pin the sim RNG to a specific seed. Takes effect lazily on each thread's
-/// next draw. Pass 0 to return to OS-entropy seeding (i.e. disable pinning).
-pub fn set_seed(seed: u64) {
-    SIM_SEED.store(seed, Ordering::Relaxed);
-    SEED_GENERATION.fetch_add(1, Ordering::Relaxed);
-}
+/// Process-global seedable RNG facade. Wraps the sim seed and the
+/// per-thread `SmallRng` streams behind associated functions so call sites
+/// read `RandomEngine::set_seed(..)` / `RandomEngine::gen_f32()` rather than
+/// touching the module-level statics directly.
+pub struct RandomEngine;
 
-/// Current sim seed. Zero means unseeded (process-unique base).
-pub fn current_seed() -> u64 {
-    SIM_SEED.load(Ordering::Relaxed)
-}
+impl RandomEngine {
+    /// Pin the sim RNG to a specific seed. Takes effect lazily on each
+    /// thread's next draw. Pass 0 to return to OS-entropy seeding (i.e.
+    /// disable pinning).
+    pub fn set_seed(seed: u64) {
+        SIM_SEED.store(seed, Ordering::Relaxed);
+        SEED_GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
 
-pub fn gen_f32() -> f32 {
-    with_rng(|rng| rng.random::<f32>())
-}
+    /// Current sim seed. Zero means unseeded (process-unique base).
+    pub fn current_seed() -> u64 {
+        SIM_SEED.load(Ordering::Relaxed)
+    }
 
-pub fn gen_f64() -> f64 {
-    with_rng(|rng| rng.random::<f64>())
-}
+    pub fn gen_f32() -> f32 {
+        Self::with_rng(|rng| rng.random::<f32>())
+    }
 
-fn with_rng<R>(f: impl FnOnce(&mut SmallRng) -> R) -> R {
-    let id = TL_ID.with(|id| *id);
-    TL_RNG.with(|cell| {
-        let mut guard = cell.borrow_mut();
-        guard.ensure_fresh(id);
-        f(&mut guard.rng)
-    })
+    pub fn gen_f64() -> f64 {
+        Self::with_rng(|rng| rng.random::<f64>())
+    }
+
+    fn with_rng<R>(f: impl FnOnce(&mut SmallRng) -> R) -> R {
+        let id = TL_ID.with(|id| *id);
+        TL_RNG.with(|cell| {
+            let mut guard = cell.borrow_mut();
+            guard.ensure_fresh(id);
+            f(&mut guard.rng)
+        })
+    }
 }

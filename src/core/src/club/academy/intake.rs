@@ -1,4 +1,5 @@
 use super::{AcademyTier, ClubAcademy};
+use crate::Player;
 use crate::academy::result::ProduceYouthPlayersResult;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
@@ -8,6 +9,7 @@ use crate::{
 };
 use chrono::Datelike;
 use log::debug;
+use std::cmp::Ordering;
 
 impl ClubAcademy {
     pub(super) fn produce_youth_players(
@@ -76,7 +78,7 @@ impl ClubAcademy {
         let min_pool = self.tuning.min_pool_size.max(intake_count);
         let pool_size = pool_size.max(min_pool);
 
-        let mut pool: Vec<crate::Player> = Vec::with_capacity(pool_size);
+        let mut pool: Vec<Player> = Vec::with_capacity(pool_size);
         let needs = self.recruitment_priorities.clone();
         let position_assigner = PositionAssigner::new(intake_count, &needs);
 
@@ -104,14 +106,14 @@ impl ClubAcademy {
         // score are kept simple but meaningful: a 17-professionalism
         // prospect outranks a 5-professionalism prospect when CA/PA tie.
         let scorer = CandidateScorer::new(&needs);
-        let mut scored: Vec<(f32, crate::Player)> = pool
+        let mut scored: Vec<(f32, Player)> = pool
             .into_iter()
             .map(|p| {
                 let score = scorer.score(&p);
                 (score, p)
             })
             .collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
         // Elite-cluster control is applied at selection time: we walk
         // the sorted list and probabilistically reject *additional*
@@ -122,8 +124,8 @@ impl ClubAcademy {
         let world_class_pa = self.tuning.world_class_pa_threshold;
         let elite_pa = self.tuning.elite_pa_threshold;
         let mut gate = EliteSelectionGate::new(world_class_pa, elite_pa);
-        let mut signed: Vec<crate::Player> = Vec::with_capacity(intake_count);
-        let mut rejected: Vec<crate::Player> = Vec::new();
+        let mut signed: Vec<Player> = Vec::with_capacity(intake_count);
+        let mut rejected: Vec<Player> = Vec::new();
         for (_, player) in scored.into_iter() {
             if signed.len() >= intake_count {
                 break;
@@ -455,7 +457,7 @@ impl<'a> CandidateScorer<'a> {
         CandidateScorer { needs }
     }
 
-    pub fn score(&self, player: &crate::Player) -> f32 {
+    pub fn score(&self, player: &Player) -> f32 {
         let pa = player.player_attributes.potential_ability as f32;
         let ca = player.player_attributes.current_ability as f32;
 

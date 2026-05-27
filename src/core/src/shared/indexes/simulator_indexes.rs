@@ -95,6 +95,16 @@ impl SimulatorDataIndexes {
                 self.slug_indexes.add_league_slug(&league.slug, league.id);
             }
 
+            // The domestic cup is a `League` stored outside `leagues`, so it
+            // gets a slug entry (for the web route) and a location entry, but
+            // no positional index — `SimulatorData::league` resolves cups via
+            // a direct `domestic_cup` scan.
+            if let Some(cup) = &country.domestic_cup {
+                self.add_league_location(cup.league.id, continent.id, country.id);
+                self.slug_indexes
+                    .add_league_slug(&cup.league.slug, cup.league.id);
+            }
+
             for (club_idx, club) in country.clubs.iter().enumerate() {
                 let club_idx = club_idx as u32;
                 self.add_club_location(club.id, continent.id, country.id);

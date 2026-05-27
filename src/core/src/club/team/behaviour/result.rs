@@ -4,6 +4,7 @@ use crate::club::player::interaction::{
     default_cooldown_days,
 };
 use crate::league::result::LeagueProcessAccess;
+use crate::transfers::pipeline::PipelineProcessor;
 use crate::{
     ChangeType, ConflictLocation, HappinessEventCause, HappinessEventChangeKind,
     HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
@@ -74,10 +75,7 @@ impl TeamBehaviourResult {
             // scouting, and loan-out lists in this country so stale interest
             // records don't linger.
             if let Some(country) = data.country_mut(country_id) {
-                crate::transfers::pipeline::PipelineProcessor::clear_player_interest(
-                    country,
-                    termination.player_id,
-                );
+                PipelineProcessor::clear_player_interest(country, termination.player_id);
             }
             log::debug!(
                 "Contract terminated: player {} by club {} — payout {} ({})",

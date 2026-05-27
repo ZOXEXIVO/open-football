@@ -1,6 +1,7 @@
 use crate::league::awards::{AwardAggregator, CandidateAggregate, WeeklyAggregate};
 use crate::league::player_of_week::PlayerOfTheWeekSelector;
 use crate::simulator::SimulatorData;
+use chrono::NaiveDate;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -18,11 +19,7 @@ pub(crate) struct MondayAwardCache {
 }
 
 impl MondayAwardCache {
-    pub(crate) fn build(
-        data: &SimulatorData,
-        week_start: chrono::NaiveDate,
-        week_end: chrono::NaiveDate,
-    ) -> Self {
+    pub(crate) fn build(data: &SimulatorData, week_start: NaiveDate, week_end: NaiveDate) -> Self {
         let entries: Vec<(
             u32,
             HashMap<u32, WeeklyAggregate>,

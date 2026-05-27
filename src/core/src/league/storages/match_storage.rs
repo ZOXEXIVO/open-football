@@ -1,4 +1,5 @@
 use crate::r#match::MatchResult;
+use chrono::Duration;
 use chrono::NaiveDate;
 use std::collections::{BTreeMap, HashMap};
 
@@ -87,7 +88,7 @@ impl MatchStorage {
     /// Drop every match recorded before `today − retention_days`. O(K log N)
     /// in the number of evicted dates; cheap to call on season boundaries.
     pub fn trim(&mut self, today: NaiveDate) {
-        let cutoff = today - chrono::Duration::days(self.retention_days);
+        let cutoff = today - Duration::days(self.retention_days);
         let evict_dates: Vec<NaiveDate> = self.by_date.range(..cutoff).map(|(d, _)| *d).collect();
         for date in evict_dates {
             if let Some(ids) = self.by_date.remove(&date) {

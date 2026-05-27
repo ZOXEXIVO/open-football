@@ -9,6 +9,7 @@ use crate::{Player, SelectionScoreFactor, Tactics};
 use chrono::NaiveDate;
 
 use super::helpers;
+use std::cmp::Ordering;
 
 /// Per-component breakdown of a slot score. Mirrors what
 /// `score_player_for_slot` adds together — each field is the same
@@ -142,7 +143,7 @@ impl SlotScoreBreakdown {
             .into_iter()
             .filter(|(_, delta)| *delta > 0.05)
             .collect();
-        wins.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        wins.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         wins.truncate(limit);
         wins.into_iter().map(|(f, _)| f).collect()
     }

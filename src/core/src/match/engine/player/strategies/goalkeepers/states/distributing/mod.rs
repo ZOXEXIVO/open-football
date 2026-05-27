@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::PlayerSide;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
@@ -110,8 +111,8 @@ impl GoalkeeperDistributingState {
             // back toward own goal.
             let forward_progress = teammate.position.x - ctx.player.position.x;
             let is_forward = match ctx.player.side {
-                Some(crate::r#match::PlayerSide::Left) => forward_progress > 0.0,
-                Some(crate::r#match::PlayerSide::Right) => forward_progress < 0.0,
+                Some(PlayerSide::Left) => forward_progress > 0.0,
+                Some(PlayerSide::Right) => forward_progress < 0.0,
                 None => true,
             };
             if !is_forward {

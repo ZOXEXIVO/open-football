@@ -2,8 +2,10 @@ use super::CountryResult;
 use crate::TeamInfo;
 use crate::league::Season;
 use crate::simulator::SimulatorData;
+use chrono::NaiveDate;
 use log::info;
 use rayon::prelude::*;
+use std::collections::HashMap;
 
 impl CountryResult {
     /// Snapshot every player's statistics into career history for one or
@@ -58,7 +60,7 @@ impl CountryResult {
         data: &mut SimulatorData,
         country_id: u32,
         ended_season: Season,
-        date: chrono::NaiveDate,
+        date: NaiveDate,
     ) {
         info!(
             "📋 Season snapshot: saving player statistics for season {} (country {})",
@@ -71,7 +73,7 @@ impl CountryResult {
         };
 
         // Build league lookup so we can resolve team.league_id -> (name, slug)
-        let league_lookup: std::collections::HashMap<u32, (String, String)> = country
+        let league_lookup: HashMap<u32, (String, String)> = country
             .leagues
             .leagues
             .iter()

@@ -2,9 +2,9 @@ use super::{
     CONFERENCE_LEAGUE_ID, CompetitionStage, CompetitionTier, ContinentalMatch,
     ContinentalMatchResult, GroupTable, KnockoutTie,
 };
-use crate::Club;
 use crate::continent::ContinentalRankings;
 use crate::r#match::{Match, MatchResult, SelectionContext};
+use crate::{Club, MatchRuntime};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use std::collections::HashMap;
@@ -283,7 +283,7 @@ impl ConferenceLeague {
             return Vec::new();
         }
 
-        let results = crate::match_engine_pool().play(engine_matches);
+        let results = MatchRuntime::engine_pool().play(engine_matches);
 
         // Store results back on the matches
         for (cm, result) in todays_matches.iter().zip(results.iter()) {

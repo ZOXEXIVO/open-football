@@ -9,6 +9,7 @@
 use chrono::{Duration, NaiveDate};
 
 use super::types::{LoanCompletion, TransferCompletion};
+use crate::TeamInfo;
 use crate::club::PlayerClubContract;
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::calculators::WageCalculator;
@@ -74,7 +75,7 @@ impl Player {
     /// promise events. Fee is always 0 for a free signing.
     pub fn complete_free_agent_signing(
         &mut self,
-        to: &crate::TeamInfo,
+        to: &TeamInfo,
         date: NaiveDate,
         buying_club_id: u32,
         buying_league_reputation: u16,

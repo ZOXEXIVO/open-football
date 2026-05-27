@@ -1,6 +1,7 @@
 use super::{ContinentResult, ContinentalCompetitionResults};
 use crate::continent::{CompetitionTier, ContinentalMatchResult};
 use crate::league::League;
+use crate::league::LeagueResult;
 use crate::simulator::SimulatorData;
 use crate::{Club, Country, SimulationResult};
 use chrono::{Datelike, NaiveDate};
@@ -521,7 +522,7 @@ impl ContinentResult {
         // and store in global match store so match detail pages can find them
         let today = data.date.date();
         for mut match_result in comp_results.match_results {
-            crate::league::LeagueResult::process_cup_match(&mut match_result, data);
+            LeagueResult::process_cup_match(&mut match_result, data);
             data.match_store.push(match_result.clone(), today);
             result.match_results.push(match_result);
         }

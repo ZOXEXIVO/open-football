@@ -1,0 +1,18 @@
+# Formatting style baseline — matches the workspace `edition = "2024"`.
+style_edition = "2024"
+
+# Enforce LF line endings to match `.gitattributes` (`eol=lf`); keeps the
+# format stable for Windows checkouts instead of relying on per-file detection.
+newline_style = "Unix"
+
+# Sort `use` statements and `mod` declarations alphabetically (both default on,
+# set explicitly so the intent is documented and survives default changes).
+reorder_imports = true
+reorder_modules = true
+
+# Collapse redundant `derive` attributes into a single `#[derive(...)]`.
+merge_derives = true
+
+# Prefer concise idioms: `Foo { x }` over `Foo { x: x }`, and `?` over `try!`.
+use_field_init_shorthand = true
+use_try_shorthand = true

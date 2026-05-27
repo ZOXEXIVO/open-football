@@ -21,6 +21,7 @@ use crate::{
 use chrono::NaiveDate;
 
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
+use crate::HappinessEventType;
 
 /// Output of the omissions builder — one entry per important
 /// omission. The simulator ultimately surfaces the carried context on
@@ -171,7 +172,7 @@ impl<'a> OmissionBuilder<'a> {
             .recent_events
             .iter()
             .filter(|e| {
-                matches!(e.event_type, crate::HappinessEventType::MatchDropped) && e.days_ago <= 14
+                matches!(e.event_type, HappinessEventType::MatchDropped) && e.days_ago <= 14
             })
             .count();
         recent_drops >= 2

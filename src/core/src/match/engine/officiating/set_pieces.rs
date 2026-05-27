@@ -6,6 +6,7 @@
 //! attributes are the 0–20 scale exposed by `PlayerSkills` / `PersonAttributes`.
 
 use crate::r#match::engine::environment::{MatchEnvironment, Pitch, Weather};
+use std::cmp::Ordering;
 
 /// Distance band of a direct free kick from goal, in field units (where
 /// 1u ≈ 0.125m). 90u ≈ 11m, 130u ≈ 16m.
@@ -558,7 +559,7 @@ pub fn pick_corner_routine(
     alternatives
         .iter()
         .filter(|(r, _)| *r != winner)
-        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
         .map(|(r, _)| *r)
         .unwrap_or(winner)
 }
@@ -577,11 +578,7 @@ pub fn pick_taker(
     }
     candidates
         .iter()
-        .max_by(|a, b| {
-            a.score
-                .partial_cmp(&b.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal))
         .map(|t| t.player_id)
 }
 

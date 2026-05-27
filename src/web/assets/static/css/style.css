@@ -1544,6 +1544,386 @@ a:link, a:visited, a:hover, a:active {
 }
 
 /* ============================================
+   CUP PAGE - BRACKET
+   ============================================ */
+
+/* ---- Hero ---- */
+.fm-cup-hero {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    padding: 22px 24px;
+    overflow: hidden;
+    background:
+        radial-gradient(150% 130% at 100% 0%, rgba(74, 157, 91, 0.06), transparent 55%),
+        radial-gradient(120% 140% at 0% 0%, rgba(232, 193, 74, 0.13), transparent 46%);
+}
+
+.fm-trophy-badge {
+    position: relative;
+    flex: 0 0 auto;
+    width: 62px;
+    height: 62px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: radial-gradient(circle at 32% 26%, #3a3420, #1c2128);
+    box-shadow: inset 0 0 0 1px rgba(232, 193, 74, 0.45), inset 0 -6px 14px rgba(0, 0, 0, 0.5), 0 0 26px rgba(232, 193, 74, 0.14);
+}
+
+.fm-trophy-badge i {
+    font-size: 25px;
+    color: #f0cf63;
+    filter: drop-shadow(0 1px 4px rgba(232, 193, 74, 0.4));
+}
+
+.fm-trophy-badge.live {
+    background: radial-gradient(circle at 32% 26%, #28323b, #1a2128);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), inset 0 -6px 14px rgba(0, 0, 0, 0.5);
+}
+
+.fm-trophy-badge.live i {
+    color: #9fb0bd;
+    filter: none;
+}
+
+.fm-cup-hero-main {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.fm-cup-hero-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #9c8838;
+}
+
+.fm-cup-hero-label.live {
+    color: #5a7a86;
+}
+
+.fm-cup-hero-name {
+    font-size: 23px;
+    font-weight: 600;
+    line-height: 1.1;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fm-cup-hero-name a {
+    color: #fff;
+}
+
+.fm-cup-hero-name a:hover {
+    color: #ffe9a8;
+}
+
+.fm-cup-hero-sub {
+    font-size: 12px;
+    color: #7c8893;
+}
+
+.fm-cup-stats {
+    margin-left: auto;
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.fm-cup-stat {
+    min-width: 80px;
+    padding: 11px 14px;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.24);
+    border: 1px solid #263340;
+    border-radius: 6px;
+}
+
+.fm-cup-stat b {
+    display: block;
+    font-size: 21px;
+    font-weight: 600;
+    color: #e6edf2;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.fm-cup-stat span {
+    display: block;
+    margin-top: 5px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: #5e6e78;
+}
+
+/* ---- Bracket ----
+   Rounds are fixed-width columns sitting side by side; the scroller takes
+   over horizontally rather than letting columns stretch into long rows.
+   Each later round spreads its ties with space-around, so the column
+   heights match and the field visibly narrows toward the final — the
+   pyramid. Faint nubs on each tie bridge the gap to the neighbouring
+   round, reading as a knockout bracket without claiming exact pairings
+   (which byes would otherwise break). */
+.fm-bracket-scroll {
+    overflow-x: auto;
+    padding: 16px 6px 20px;
+    -webkit-overflow-scrolling: touch;
+}
+
+.fm-bracket-scroll::-webkit-scrollbar {
+    height: 8px;
+}
+
+.fm-bracket-scroll::-webkit-scrollbar-thumb {
+    background: #2a3744;
+    border-radius: 4px;
+}
+
+.fm-bracket {
+    display: flex;
+    align-items: stretch;
+    min-width: min-content;
+}
+
+.fm-round {
+    flex: 0 0 230px;
+    width: 230px;
+    display: flex;
+    flex-direction: column;
+    padding: 0 16px;
+    position: relative;
+}
+
+.fm-round-hd {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 6px 0 11px;
+    margin-bottom: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    color: #5d6a74;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.fm-round.is-final .fm-round-hd {
+    color: #c9a949;
+}
+
+.fm-round-cnt {
+    font-size: 9px;
+    font-weight: 600;
+    color: #566571;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    padding: 2px 7px;
+    letter-spacing: 0.3px;
+}
+
+.fm-round-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    gap: 13px;
+    padding: 10px 0;
+}
+
+.fm-tie {
+    position: relative;
+    background: linear-gradient(180deg, #1a242c, #161e25);
+    border: 1px solid #283643;
+    border-radius: 7px;
+    overflow: hidden;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.fm-tie:hover {
+    border-color: #3b4f61;
+    box-shadow: 0 5px 16px rgba(0, 0, 0, 0.32);
+}
+
+.fm-tie-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: stretch;
+    min-height: 35px;
+}
+
+.fm-tie-row + .fm-tie-row {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.fm-tie-team {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 7px 4px 7px 11px;
+    color: #aab4bd;
+    font-size: 13px;
+}
+
+.fm-tie-team:hover {
+    color: #fff;
+}
+
+.fm-tie-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.fm-tie-crown {
+    margin-left: auto;
+    flex-shrink: 0;
+    color: #f0cf63;
+    font-size: 11px;
+}
+
+.fm-tie-score {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 36px;
+    padding: 0 9px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #828f99;
+    font-variant-numeric: tabular-nums;
+    background: rgba(0, 0, 0, 0.2);
+    border-left: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.fm-tie-score:hover {
+    color: #5cb86c;
+}
+
+.fm-tie-row.winner {
+    background: linear-gradient(90deg, rgba(74, 157, 91, 0.16), rgba(74, 157, 91, 0.03));
+    box-shadow: inset 3px 0 0 #4a9d5b;
+}
+
+.fm-tie-row.winner .fm-tie-team {
+    color: #fff;
+    font-weight: 600;
+    padding-left: 8px;
+}
+
+.fm-tie-row.winner .fm-tie-score {
+    color: #eaf0f4;
+}
+
+.fm-pen {
+    font-size: 9px;
+    font-weight: 700;
+    color: #e0b94a;
+}
+
+.fm-tie.unplayed .fm-tie-score {
+    color: #46535d;
+}
+
+.fm-round.is-final .fm-tie {
+    border-color: rgba(232, 193, 74, 0.4);
+    box-shadow: 0 0 20px rgba(232, 193, 74, 0.07);
+}
+
+.fm-round.is-final .fm-tie:hover {
+    border-color: rgba(232, 193, 74, 0.6);
+}
+
+.fm-bye {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 11px;
+    border: 1px solid #283643;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.014);
+    color: #6b7580;
+    font-size: 12.5px;
+}
+
+.fm-bye:hover {
+    color: #9aa4ad;
+}
+
+.fm-bye .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fm-bye .tag {
+    flex-shrink: 0;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: #566270;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 3px 6px;
+    border-radius: 4px;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 640px) {
+    .fm-cup-hero {
+        gap: 14px;
+        padding: 16px;
+        flex-wrap: wrap;
+    }
+
+    .fm-trophy-badge {
+        width: 50px;
+        height: 50px;
+    }
+
+    .fm-trophy-badge i {
+        font-size: 20px;
+    }
+
+    .fm-cup-hero-name {
+        font-size: 19px;
+    }
+
+    .fm-cup-stats {
+        margin-left: 0;
+        flex-basis: 100%;
+    }
+
+    .fm-cup-stat {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .fm-bracket-scroll {
+        padding: 12px 4px 16px;
+    }
+
+    .fm-round {
+        flex-basis: 200px;
+        width: 200px;
+        padding: 0 12px;
+    }
+}
+
+/* ============================================
    LEAGUE PAGE - REPUTATION
    ============================================ */
 

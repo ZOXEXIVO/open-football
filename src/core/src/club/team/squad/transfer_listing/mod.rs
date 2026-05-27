@@ -4,6 +4,7 @@ use crate::shared::{Currency, CurrencyValue};
 use crate::{PlayerSquadStatus, PlayerStatusType, Team, TeamType, TransferItem};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 // ─── AI response types ─────────────────────────────────────────────
 
@@ -24,7 +25,7 @@ struct AiListingDecision {
 
 #[derive(Serialize)]
 struct TransferListQueryLlm {
-    staff: serde_json::Value,
+    staff: Value,
     current_transfer_list: Vec<TransferListEntryLlm>,
     teams: Vec<TeamPlayersLlm>,
 }
@@ -40,7 +41,7 @@ struct TeamPlayersLlm {
     label: String,
     team_index: usize,
     player_count: usize,
-    players: Vec<serde_json::Value>,
+    players: Vec<Value>,
 }
 
 // ─── Public API ────────────────────────────────────────────────────
@@ -140,7 +141,7 @@ impl TransferListManager {
         sim_date: NaiveDate,
         wage_budget_headroom: Option<u32>,
     ) -> String {
-        let staff_json: serde_json::Value = serde_json::from_str(staff_data).unwrap();
+        let staff_json: Value = serde_json::from_str(staff_data).unwrap();
 
         let current_transfer_list: Vec<TransferListEntryLlm> = teams[main_idx]
             .transfer_list
@@ -163,7 +164,7 @@ impl TransferListManager {
             .map(|&(idx, label)| {
                 let team = &teams[idx];
                 let head_coach = team.staffs.head_coach();
-                let players: Vec<serde_json::Value> = team
+                let players: Vec<Value> = team
                     .players
                     .players
                     .iter()

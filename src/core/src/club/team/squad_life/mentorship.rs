@@ -31,6 +31,8 @@ use crate::{
     TeammateConflictReason,
 };
 use chrono::NaiveDate;
+use std::cmp::Ordering;
+use std::collections::HashSet;
 
 /// Compatibility threshold below which a candidate mentor/mentee pair is
 /// rejected outright. Stops the system from forcing mismatched pairs that
@@ -161,7 +163,7 @@ impl MentorshipScorer {
     }
 
     fn languages_overlap(a: &Player, b: &Player) -> bool {
-        let a_set: std::collections::HashSet<Language> = a
+        let a_set: HashSet<Language> = a
             .languages
             .iter()
             .filter(|l| l.is_native || l.proficiency >= 60)
@@ -220,8 +222,8 @@ impl MentorshipProcessor {
         }
 
         // Sort by score — best mentors/mentees first.
-        mentors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        mentees.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        mentors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        mentees.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
 
         // Greedy same-position-group matching, gated on compatibility.
         let mut used_mentors: Vec<bool> = vec![false; mentors.len()];

@@ -1,8 +1,13 @@
 use super::*;
+use crate::PlayerPositions;
+use crate::StaffStub;
+use crate::Team;
+use crate::club::PlayerFieldPositionGroup;
 use crate::{
     IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerCollection, PlayerGenerator,
     PlayerPosition, StaffCollection, TeamBuilder, TeamReputation, TeamType, TrainingSchedule,
 };
+use chrono::NaiveDate;
 use chrono::{NaiveTime, Utc};
 
 fn test_names() -> PeopleNameGeneratorData {
@@ -63,7 +68,7 @@ fn test_position_group_matching() {
     let score = helpers::position_fit_score(
         &generate_defender_center(),
         PlayerPositionType::DefenderCenterLeft,
-        crate::club::PlayerFieldPositionGroup::Defender,
+        PlayerFieldPositionGroup::Defender,
     );
     assert!(
         score > 5.0,
@@ -203,7 +208,7 @@ fn score_player_for_slot_with_breakdown_total_matches_legacy() {
 
 // ========== Test helpers ==========
 
-fn generate_test_team() -> crate::Team {
+fn generate_test_team() -> Team {
     let mut team = TeamBuilder::new()
         .id(1)
         .league_id(Some(1))
@@ -227,7 +232,7 @@ fn generate_test_team() -> crate::Team {
 }
 
 fn generate_test_staff() -> Staff {
-    crate::StaffStub::default()
+    StaffStub::default()
 }
 
 fn generate_test_players() -> Vec<Player> {
@@ -270,12 +275,12 @@ fn make_test_player(
     id: u32,
     positions: &[(PlayerPositionType, u8)],
     current_ability: u8,
-    date: chrono::NaiveDate,
+    date: NaiveDate,
 ) -> Player {
     let mut player =
         PlayerGenerator::generate(1, date, positions[0].0, positions[0].1, &test_names());
     player.id = id;
-    player.positions = crate::PlayerPositions {
+    player.positions = PlayerPositions {
         positions: positions
             .iter()
             .map(|(position, level)| PlayerPosition {

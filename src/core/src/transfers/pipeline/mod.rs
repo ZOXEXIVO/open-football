@@ -22,6 +22,8 @@ pub use self::recruitment::{
     ScoutMonitoringSource, ScoutMonitoringStatus, ScoutPlayerMonitoring, ScoutVote,
     ScoutVoteChoice, ScoutVoteReason,
 };
+use chrono::Duration;
+use std::cmp::Ordering;
 
 mod processor {
     use crate::{PlayerFieldPositionGroup, PlayerPositionType};
@@ -844,7 +846,7 @@ impl ClubTransferPlan {
 
     /// Mark a player as rejected for the next `months` calendar months.
     pub fn reject_player(&mut self, player_id: u32, date: NaiveDate, months: i64) {
-        let until = date + chrono::Duration::days(months * 30);
+        let until = date + Duration::days(months * 30);
         if let Some(existing) = self
             .rejected_players
             .iter_mut()
@@ -1081,9 +1083,7 @@ impl ClubTransferPlan {
                 let sb = &self.shadow_reports[*b];
                 let score_a = sa.report.assessed_ability as f32 * sa.report.confidence;
                 let score_b = sb.report.assessed_ability as f32 * sb.report.confidence;
-                score_b
-                    .partial_cmp(&score_a)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                score_b.partial_cmp(&score_a).unwrap_or(Ordering::Equal)
             });
             let to_drop: Vec<usize> = indices.into_iter().skip(shadow_cap_per_group).collect();
             // Drop in reverse to preserve indices
@@ -1176,9 +1176,7 @@ impl ClubTransferPlan {
             self.known_players.sort_by(|a, b| {
                 let score_a = a.assessed_ability as f32 * a.confidence;
                 let score_b = b.assessed_ability as f32 * b.confidence;
-                score_b
-                    .partial_cmp(&score_a)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                score_b.partial_cmp(&score_a).unwrap_or(Ordering::Equal)
             });
             self.known_players.truncate(known_cap);
         }

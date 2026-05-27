@@ -2,6 +2,8 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 
 use crate::transfers::TransferWindowManager;
+use crate::transfers::pipeline::ScoutMonitoringSource;
+use crate::transfers::pipeline::ScoutPlayerMonitoring;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
@@ -17,6 +19,8 @@ use crate::{
     Country, Person, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType,
     ReputationLevel, WageCalculator,
 };
+use chrono::Duration;
+use std::cmp::Ordering;
 
 /// Compact view of a listed-target candidate. Decouples the filter
 /// from the live `PlayerSnapshot` so tests can construct synthetic
@@ -460,7 +464,7 @@ impl PipelineProcessor {
                         break;
                     }
                     if memory.last_known_club_id == club.id
-                        || memory.last_seen < date - chrono::Duration::days(540)
+                        || memory.last_seen < date - Duration::days(540)
                         || memory.confidence < 0.25
                         || already_recommended.contains(&memory.player_id)
                         || actions.iter().any(|a| {
@@ -797,7 +801,7 @@ impl PipelineProcessor {
                 .collect();
 
             let mut ranked = scored_targets;
-            ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
 
             for (target, _score) in ranked.iter().take(3) {
                 let current_recs = plan.staff_recommendations.len()
@@ -1120,17 +1124,17 @@ impl PipelineProcessor {
                     let confidence = rec.confidence;
                     let estimated_fee = rec.estimated_fee;
                     let source = match rec.source {
-                        crate::transfers::pipeline::RecommendationSource::ScoutNetwork => {
-                            crate::transfers::pipeline::ScoutMonitoringSource::StaffRecommendation
+                        RecommendationSource::ScoutNetwork => {
+                            ScoutMonitoringSource::StaffRecommendation
                         }
-                        crate::transfers::pipeline::RecommendationSource::ChiefScoutReport => {
-                            crate::transfers::pipeline::ScoutMonitoringSource::StaffRecommendation
+                        RecommendationSource::ChiefScoutReport => {
+                            ScoutMonitoringSource::StaffRecommendation
                         }
-                        crate::transfers::pipeline::RecommendationSource::DirectorOfFootball => {
-                            crate::transfers::pipeline::ScoutMonitoringSource::StaffRecommendation
+                        RecommendationSource::DirectorOfFootball => {
+                            ScoutMonitoringSource::StaffRecommendation
                         }
-                        crate::transfers::pipeline::RecommendationSource::HeadCoach => {
-                            crate::transfers::pipeline::ScoutMonitoringSource::StaffRecommendation
+                        RecommendationSource::HeadCoach => {
+                            ScoutMonitoringSource::StaffRecommendation
                         }
                     };
                     club.transfer_plan.staff_recommendations.push(rec);
@@ -1144,13 +1148,8 @@ impl PipelineProcessor {
                         .is_none()
                     {
                         let id = plan.next_monitoring_id();
-                        let mut row = crate::transfers::pipeline::ScoutPlayerMonitoring::new(
-                            id,
-                            recommender_id,
-                            player_id,
-                            source,
-                            date,
-                        );
+                        let mut row =
+                            ScoutPlayerMonitoring::new(id, recommender_id, player_id, source, date);
                         row.record_observation(
                             assessed_ability,
                             assessed_potential,
@@ -1191,7 +1190,7 @@ impl PipelineProcessor {
         }
 
         let mut actions: Vec<RecommendationProcessAction> = Vec::new();
-        let seven_days_ago = date - chrono::Duration::days(7);
+        let seven_days_ago = date - Duration::days(7);
 
         for club in &country.clubs {
             let plan = &club.transfer_plan;

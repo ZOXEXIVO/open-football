@@ -330,7 +330,7 @@ impl Substitutions {
         for player in field.players.iter() {
             // Skip subs (they're not on the pitch) and goalkeepers (rarely
             // forced off for non-contact injury mid-match).
-            if player.tactical_position.current_position == crate::PlayerPositionType::Goalkeeper {
+            if player.tactical_position.current_position == PlayerPositionType::Goalkeeper {
                 continue;
             }
             // Already destroyed condition — no extra work needed.

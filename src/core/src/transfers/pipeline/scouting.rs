@@ -18,6 +18,9 @@ use crate::utils::IntegerUtils;
 use crate::{
     ClubPhilosophy, Country, Person, PlayerStatusType, StaffEventType, StaffPosition, TeamType,
 };
+use chrono::Weekday;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 
 struct ScoutAssignmentAction {
     club_id: u32,
@@ -1007,8 +1010,7 @@ impl PipelineProcessor {
                             (*p, score + jitter)
                         })
                         .collect();
-                    scored
-                        .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
                     matching = scored
                         .into_iter()
                         .take(target_pool)
@@ -1333,7 +1335,7 @@ impl PipelineProcessor {
     /// shift by the scout's judging skill. This keeps tracked players from
     /// drifting out of sync while the window is closed.
     pub fn refresh_shadow_reports(country: &mut Country, date: NaiveDate) {
-        if date.weekday() != chrono::Weekday::Mon {
+        if date.weekday() != Weekday::Mon {
             return;
         }
         let config = ScoutingConfig::default();
@@ -1349,8 +1351,7 @@ impl PipelineProcessor {
         // Build a lookup of current player abilities from every club in the
         // country once — shadow targets may have moved clubs since we first
         // observed them, so we search all teams.
-        let mut current_ability: std::collections::HashMap<u32, u8> =
-            std::collections::HashMap::new();
+        let mut current_ability: HashMap<u32, u8> = HashMap::new();
         for c in &country.clubs {
             for t in &c.teams.teams {
                 for p in &t.players.players {

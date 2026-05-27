@@ -4,6 +4,7 @@ use crate::club::player::contract::{
 use crate::club::player::player::Player;
 use crate::club::staff::Staff;
 use crate::utils::DateUtils;
+use chrono::NaiveDate;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -171,7 +172,7 @@ fn pct(val: f32) -> String {
 // ─── Implementation ─────────────────────────────────────────────────
 
 impl Player {
-    pub fn as_llm(&self, staff: &Staff, sim_date: chrono::NaiveDate) -> String {
+    pub fn as_llm(&self, staff: &Staff, sim_date: NaiveDate) -> String {
         self.as_llm_with_affordability(staff, sim_date, None)
     }
 
@@ -183,7 +184,7 @@ impl Player {
     pub fn as_llm_with_affordability(
         &self,
         staff: &Staff,
-        sim_date: chrono::NaiveDate,
+        sim_date: NaiveDate,
         affordability_headroom: Option<u32>,
     ) -> String {
         let age = DateUtils::age(self.birth_date, sim_date);

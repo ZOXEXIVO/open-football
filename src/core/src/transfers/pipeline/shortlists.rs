@@ -4,6 +4,8 @@ use std::collections::HashMap;
 
 use crate::club::BoardTransferProposal;
 use crate::club::board::{BoardDossierSummary, BoardTransferEconomics};
+use crate::club::staff::StaffEventType;
+use crate::transfers::pipeline::ScoutMonitoringStatus;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
@@ -13,6 +15,7 @@ use crate::transfers::pipeline::{
     ShortlistCandidate, ShortlistCandidateStatus, TransferRequestStatus, TransferShortlist,
 };
 use crate::{Club, Country, Person, PlayerFieldPositionGroup, StaffPosition, TeamType};
+use std::cmp::Ordering;
 
 struct ShortlistResult {
     club_id: u32,
@@ -195,18 +198,14 @@ impl PipelineProcessor {
                         // Players the meeting rejected are filtered
                         // out via `rejected_players`, so the negative
                         // case is handled there.
-                        let meeting_mult = if plan
-                            .scout_monitoring
-                            .iter()
-                            .any(|m| {
-                                m.player_id == r.player_id
-                                    && matches!(
-                                        m.status,
-                                        crate::transfers::pipeline::ScoutMonitoringStatus::PromotedToShortlist
-                                            | crate::transfers::pipeline::ScoutMonitoringStatus::Negotiating
-                                    )
-                            })
-                        {
+                        let meeting_mult = if plan.scout_monitoring.iter().any(|m| {
+                            m.player_id == r.player_id
+                                && matches!(
+                                    m.status,
+                                    ScoutMonitoringStatus::PromotedToShortlist
+                                        | ScoutMonitoringStatus::Negotiating
+                                )
+                        }) {
                             1.10
                         } else {
                             1.0
@@ -227,11 +226,7 @@ impl PipelineProcessor {
                     })
                     .collect();
 
-                candidates.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
                 candidates.truncate(10);
 
                 if !candidates.is_empty() {
@@ -322,11 +317,8 @@ impl PipelineProcessor {
                     })
                     .collect();
 
-                market_candidates.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                market_candidates
+                    .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
                 market_candidates.truncate(5);
 
                 if !market_candidates.is_empty() {
@@ -504,7 +496,7 @@ impl PipelineProcessor {
                     .max_by(|a, b| {
                         a.confidence
                             .partial_cmp(&b.confidence)
-                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .unwrap_or(Ordering::Equal)
                     })
                     .map(|m| m.scout_staff_id);
                 let dossier_summary = if dossier.scout_votes > 0 || dossier.matches_watched > 0 {
@@ -639,7 +631,7 @@ impl PipelineProcessor {
                 if let Some(scout_id) = d.lead_scout_staff_id {
                     for team in &mut club.teams.teams {
                         if let Some(staff) = team.staffs.find_mut(scout_id) {
-                            staff.add_event(crate::club::staff::StaffEventType::BoardPresentation);
+                            staff.add_event(StaffEventType::BoardPresentation);
                             break;
                         }
                     }
@@ -651,7 +643,7 @@ impl PipelineProcessor {
                     if let Some(player_id) = d.named_target {
                         club.transfer_plan.set_monitoring_status_for_player(
                             player_id,
-                            crate::transfers::pipeline::ScoutMonitoringStatus::Negotiating,
+                            ScoutMonitoringStatus::Negotiating,
                         );
                     }
                 }
@@ -661,13 +653,9 @@ impl PipelineProcessor {
                     if let Some(player_id) = d.named_target {
                         for m in club.transfer_plan.scout_monitoring.iter_mut() {
                             if m.player_id == player_id
-                                && matches!(
-                                    m.status,
-                                    crate::transfers::pipeline::ScoutMonitoringStatus::PromotedToShortlist
-                                )
+                                && matches!(m.status, ScoutMonitoringStatus::PromotedToShortlist)
                             {
-                                m.status =
-                                    crate::transfers::pipeline::ScoutMonitoringStatus::Active;
+                                m.status = ScoutMonitoringStatus::Active;
                             }
                         }
                     }

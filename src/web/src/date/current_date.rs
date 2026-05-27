@@ -1,4 +1,4 @@
-﻿use crate::GameAppData;
+use crate::GameAppData;
 use axum::Json;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};

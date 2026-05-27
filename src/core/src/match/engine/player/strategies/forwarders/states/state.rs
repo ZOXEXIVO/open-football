@@ -6,6 +6,7 @@ use crate::r#match::forwarders::states::{
     ForwardStandingState, ForwardTacklingState, ForwardTakeBallState, ForwardWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
+use std::fmt::Result;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,7 +69,7 @@ impl ForwardStrategies {
 }
 
 impl Display for ForwardState {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             ForwardState::Standing => write!(f, "Standing"),
             ForwardState::Walking => write!(f, "Walking"),

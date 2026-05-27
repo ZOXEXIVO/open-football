@@ -1,2 +1,2 @@
-﻿pub mod decision;
+pub mod decision;
 pub mod states;

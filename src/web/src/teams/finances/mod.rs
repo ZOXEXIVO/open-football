@@ -259,7 +259,7 @@ pub async fn team_finances_get_action(
         country_slug: cs,
     };
     let menu_sections =
-        views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, true);
+        views::team_menu(&menu_params, &neighbor_refs, &league_refs);
     let title = team.name.clone();
     let league_title = league
         .map(|l| views::league_display_name(l, &i18n, simulator_data))

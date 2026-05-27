@@ -1,4 +1,4 @@
-﻿mod common;
+mod common;
 pub mod defenders;
 pub mod forwarders;
 pub mod goalkeepers;

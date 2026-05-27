@@ -22,7 +22,7 @@ use crate::r#match::{
     TeamTacticalState,
 };
 use crate::performance::PerfCounters;
-use crate::{PlayerFieldPositionGroup, is_match_events_mode};
+use crate::{MatchRuntime, PlayerFieldPositionGroup};
 #[cfg(feature = "match-logs")]
 use crate::{match_log_debug, match_log_info};
 use rand::RngExt;
@@ -206,7 +206,7 @@ impl SkillAccumulator {
         self.conc_team_count += 1;
     }
 
-    fn finalize(self) -> crate::r#match::TeamSkillAggregates {
+    fn finalize(self) -> TeamSkillAggregates {
         let weighted = |sum: f32, weight: f32, default: f32| -> f32 {
             if weight <= 0.0 {
                 default
@@ -221,7 +221,7 @@ impl SkillAccumulator {
                 (sum / count as f32).clamp(0.0, 1.0)
             }
         };
-        crate::r#match::TeamSkillAggregates {
+        TeamSkillAggregates {
             build_up_quality: weighted(self.build_up_sum, self.build_up_weight, 0.5),
             press_quality: weighted(self.press_sum, self.press_weight, 0.5),
             defensive_quality: weighted(self.defensive_sum, self.defensive_weight, 0.5),
@@ -263,6 +263,7 @@ mod shootout;
 mod tick;
 mod types;
 
+use crate::r#match::TeamSkillAggregates;
 pub use types::*;
 
 #[cfg(test)]

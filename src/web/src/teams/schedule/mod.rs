@@ -172,6 +172,59 @@ pub async fn team_schedule_get_action(
         ));
     }
 
+    // Domestic cup matches. The knockout cup lives on `Country::domestic_cup`,
+    // outside the league programme, so it is not covered by the league
+    // schedule gathered above — collect its fixtures for this team here.
+    // Only `Main` squads enter the cup, so non-senior teams yield nothing.
+    if let Some(cup_league) = simulator_data
+        .country_by_club(team.club_id)
+        .and_then(|country| country.domestic_cup.as_ref())
+        .map(|cup| &cup.league)
+    {
+        for schedule in cup_league.schedule.get_matches_for_team(team.id) {
+            let is_home = schedule.home_team_id == team.id;
+
+            let home_team_data = simulator_data.team_data(schedule.home_team_id).unwrap();
+            let away_team_data = simulator_data.team_data(schedule.away_team_id).unwrap();
+
+            items.push((
+                schedule.date,
+                TeamScheduleItem {
+                    date: schedule.date.format("%d.%m.%Y").to_string(),
+                    time: schedule.date.format("%H:%M").to_string(),
+                    opponent_slug: if is_home {
+                        away_team_data.slug.clone()
+                    } else {
+                        home_team_data.slug.clone()
+                    },
+                    opponent_name: if is_home {
+                        away_team_data.name.clone()
+                    } else {
+                        home_team_data.name.clone()
+                    },
+                    is_home,
+                    competition_name: cup_league.name.clone(),
+                    // A cup `Score` may store its sides in either order
+                    // relative to the fixture; map goals back through the
+                    // recorded `team_id`s (mirrors the cup-page mapping).
+                    result: schedule.result.as_ref().map(|res| {
+                        let home_first = schedule.home_team_id == res.home_team.team_id;
+                        let (home_goals, away_goals) = if home_first {
+                            (res.home_team.get(), res.away_team.get())
+                        } else {
+                            (res.away_team.get(), res.home_team.get())
+                        };
+                        TeamScheduleItemResult {
+                            match_id: schedule.id.clone(),
+                            home_goals,
+                            away_goals,
+                        }
+                    }),
+                },
+            ));
+        }
+    }
+
     // Sort all matches by date
     items.sort_by_key(|(dt, _)| *dt);
     let items: Vec<TeamScheduleItem> = items.into_iter().map(|(_, item)| item).collect();
@@ -186,7 +239,7 @@ pub async fn team_schedule_get_action(
         country_slug: cs,
     };
     let menu_sections =
-        views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, true);
+        views::team_menu(&menu_params, &neighbor_refs, &league_refs);
     let title = team.name.clone();
     let league_title = league
         .map(|l| views::league_display_name(l, &i18n, simulator_data))

@@ -3,6 +3,7 @@ use crate::r#match::player::MatchPlayer;
 use crate::{Player, Staff, Tactics};
 
 use super::helpers;
+use std::cmp::Ordering;
 
 /// Select starting 11 with rotation priority (friendly/development matches).
 pub(crate) fn select_rotation_starting_eleven(
@@ -47,7 +48,7 @@ pub(crate) fn select_rotation_starting_eleven(
             .max_by(|a, b| {
                 let sa = rotation_score_for_slot(a, pos, target_group, staff, tactics);
                 let sb = rotation_score_for_slot(b, pos, target_group, staff, tactics);
-                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
             })
             .copied();
 
@@ -65,7 +66,7 @@ pub(crate) fn select_rotation_starting_eleven(
             .max_by(|a, b| {
                 let sa = rotation_overall_quality(a);
                 let sb = rotation_overall_quality(b);
-                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
             })
             .copied();
 
@@ -131,7 +132,7 @@ pub(crate) fn select_rotation_substitutes(
             .max_by(|a, b| {
                 let sa = rotation_overall_quality(a);
                 let sb = rotation_overall_quality(b);
-                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
             })
             .copied();
 

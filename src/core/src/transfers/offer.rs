@@ -1,3 +1,4 @@
+use crate::shared::Currency;
 use crate::shared::CurrencyValue;
 use chrono::NaiveDate;
 
@@ -27,7 +28,7 @@ impl Default for TransferOffer {
         TransferOffer {
             base_fee: CurrencyValue {
                 amount: 0.0,
-                currency: crate::shared::Currency::Usd,
+                currency: Currency::Usd,
             },
             clauses: Vec::new(),
             salary_contribution: None,

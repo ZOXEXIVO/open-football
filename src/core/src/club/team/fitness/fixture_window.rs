@@ -1,3 +1,4 @@
+use chrono::Duration;
 use chrono::NaiveDate;
 
 /// Cached competitive-fixture window for this team. Populated by the
@@ -28,7 +29,7 @@ impl TeamFixtureWindow {
     /// Number of fixtures (recent or upcoming) within `days` calendar
     /// days of `today`. Drives the double-match-week dampener.
     pub fn fixtures_within(&self, today: NaiveDate, days: i64) -> u8 {
-        let half = chrono::Duration::days(days);
+        let half = Duration::days(days);
         let lo = today - half;
         let hi = today + half;
         let r = self

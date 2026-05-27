@@ -9,6 +9,7 @@ pub use country_info::CountryInfo;
 pub use data::SimulatorData;
 pub use result::{SimulationResult, WorldWorkloadCounts};
 
+use crate::MatchRuntime;
 use crate::ai::{AiBatchProcessor, PendingAiRequest};
 use crate::club::ai::apply_ai_responses;
 use crate::club::board::manager_market;
@@ -19,6 +20,7 @@ use crate::continent::ContinentAwardOutcome;
 use crate::continent::ContinentResult;
 use crate::continent::national::world as national_world;
 use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
+use crate::league::result::WorldSnapshot;
 use crate::performance::{PerfCounters, PerfPhase, TickEndContext};
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::utils::DateUtils;
@@ -28,10 +30,11 @@ use awards::{
 };
 use chrono::{Datelike, Duration, Weekday};
 use rayon::prelude::*;
+use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> &'static str {
+fn panic_message(payload: &(dyn Any + Send)) -> &'static str {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         s
     } else if payload.downcast_ref::<String>().is_some() {
@@ -45,12 +48,22 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &'static str {
 /// `simulate` loop catches a panicking continent and substitutes an empty
 /// result so the rest of the world keeps ticking — this counter exposes
 /// that silent failure to operators and tests. Read from anywhere via
-/// `panicked_continents_total()`.
+/// `ContinentPanicMetrics::total()`.
 static PANICKED_CONTINENTS: AtomicU64 = AtomicU64::new(0);
 
-/// Total continent panics swallowed since process start.
-pub fn panicked_continents_total() -> u64 {
-    PANICKED_CONTINENTS.load(Ordering::Relaxed)
+/// Process-global accessor for the swallowed-continent-panic counter.
+pub struct ContinentPanicMetrics;
+
+impl ContinentPanicMetrics {
+    /// Total continent panics swallowed since process start.
+    pub fn total() -> u64 {
+        PANICKED_CONTINENTS.load(Ordering::Relaxed)
+    }
+
+    /// Record one swallowed continent panic.
+    pub fn record() {
+        PANICKED_CONTINENTS.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub struct FootballSimulator;
@@ -127,7 +140,7 @@ impl FootballSimulator {
         // log line; surviving continents still advance. Per-tick count
         // is recovered as the delta on the atomic since map closures
         // running in parallel can't share a `&mut u32`.
-        let panicks_before = PANICKED_CONTINENTS.load(Ordering::Relaxed);
+        let panicks_before = ContinentPanicMetrics::total();
         // Build the read-only world snapshot once, before the parallel
         // pass starts. Each worker thread gets a Copy of the struct
         // (it's only references inside) so the borrow checker sees
@@ -147,7 +160,7 @@ impl FootballSimulator {
             snapshot_global_free_agents(data, pool_date);
         let world_country_info = &data.country_info;
         let world_indexes = data.indexes.as_ref();
-        let world = crate::league::result::WorldSnapshot {
+        let world = WorldSnapshot {
             date: world_date,
             country_info: world_country_info,
             indexes: world_indexes,
@@ -167,7 +180,7 @@ impl FootballSimulator {
                         continent.simulate(ctx_ref.with_continent(cid), world)
                     }))
                     .unwrap_or_else(|payload| {
-                        PANICKED_CONTINENTS.fetch_add(1, Ordering::Relaxed);
+                        ContinentPanicMetrics::record();
                         let msg = panic_message(&payload);
                         log::error!(
                             "event=continent_panic continent_id={} continent_name={:?} message={:?} tick_action=continue_with_empty_result",
@@ -178,8 +191,7 @@ impl FootballSimulator {
                 })
                 .collect()
         };
-        result.panicked_continents =
-            (PANICKED_CONTINENTS.load(Ordering::Relaxed) - panicks_before) as u32;
+        result.panicked_continents = (ContinentPanicMetrics::total() - panicks_before) as u32;
 
         // Phase B: drain AI requests staged on each ContinentResult and
         // batch-execute them. Lock-free — every request travelled up the
@@ -387,7 +399,7 @@ impl FootballSimulator {
             players: workload.players,
             match_results_written: result.match_results.len() as u64,
             panicked_continents: result.panicked_continents,
-            recording_mode: crate::is_match_recordings_mode(),
+            recording_mode: MatchRuntime::recordings_mode(),
         });
 
         result

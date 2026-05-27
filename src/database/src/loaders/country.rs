@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 use super::compiled::compiled;
+use super::domestic_cup::DomesticCupEntity;
 
 #[derive(Deserialize, Clone)]
 pub struct CountryEntity {
@@ -15,6 +16,12 @@ pub struct CountryEntity {
     pub settings: CountrySettingsEntity,
     #[serde(default)]
     pub skin_colors: SkinColorsEntity,
+    /// The country's named domestic cup, resolved from the compiled
+    /// `domestic_cups` table by `CountryLoader::load`. Not present in
+    /// countries.json (hence `skip_deserializing`); `None` means the
+    /// runtime generator falls back to a "{Country} Cup".
+    #[serde(skip_deserializing, default)]
+    pub domestic_cup: Option<DomesticCupEntity>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -48,7 +55,24 @@ pub struct CountryLoader;
 
 impl CountryLoader {
     pub fn load() -> Vec<CountryEntity> {
-        compiled().countries.clone()
+        let db = compiled();
+        db.countries
+            .iter()
+            .cloned()
+            .map(|mut country| {
+                // Attach the named cup (if configured) by country slug.
+                // Matching is case-insensitive on the trimmed slug so a
+                // stray space or capitalisation in the data doesn't drop
+                // the cup — the fallback generator covers any misses.
+                let key = country.slug.trim().to_ascii_lowercase();
+                country.domestic_cup = db
+                    .domestic_cups
+                    .iter()
+                    .find(|c| c.country_slug.trim().to_ascii_lowercase() == key)
+                    .cloned();
+                country
+            })
+            .collect()
     }
 
     /// Look up a country code by its ID. Always returns lowercase ASCII —
@@ -64,5 +88,33 @@ impl CountryLoader {
             .find(|c| c.id == country_id)
             .map(|c| c.code.to_ascii_lowercase())
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CountryLoader;
+
+    #[test]
+    fn named_domestic_cups_resolve_onto_countries() {
+        let countries = CountryLoader::load();
+        let cup_name = |slug: &str| {
+            countries
+                .iter()
+                .find(|c| c.slug == slug)
+                .unwrap_or_else(|| panic!("country {slug} missing"))
+                .domestic_cup
+                .as_ref()
+                .map(|c| c.name.as_str())
+        };
+
+        assert_eq!(cup_name("england"), Some("FA Cup"));
+        assert_eq!(cup_name("spain"), Some("Copa del Rey"));
+        assert_eq!(cup_name("italy"), Some("Coppa Italia"));
+        assert_eq!(cup_name("germany"), Some("DFB-Pokal"));
+
+        // A country with no configured cup resolves to `None`; the runtime
+        // generator gives it a "{Country} Cup" fallback.
+        assert_eq!(cup_name("afghanistan"), None);
     }
 }

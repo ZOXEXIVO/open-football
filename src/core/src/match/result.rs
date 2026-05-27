@@ -1,7 +1,9 @@
 use nalgebra::Vector3;
 use serde::Serialize;
+use serde::Serializer;
 use serde::ser::{SerializeMap, SerializeSeq};
 use std::collections::HashMap;
+use std::fmt::Display;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PassEventData {
@@ -49,7 +51,7 @@ impl ResultPositionDataItem {
 impl Serialize for ResultPositionDataItem {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: Serializer,
     {
         // Round to 1 decimal for compact JSON output
         let x = (self.position.x * 10.0).round() / 10.0;
@@ -115,7 +117,7 @@ pub struct PlayerStateEntry {
 impl Serialize for PlayerStateEntry {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: Serializer,
     {
         let mut seq = serializer.serialize_seq(Some(2))?;
         seq.serialize_element(&self.timestamp)?;
@@ -143,7 +145,7 @@ pub struct ResultMatchPositionData {
 impl Serialize for ResultMatchPositionData {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: Serializer,
     {
         let has_states = self.track_events && !self.player_states.is_empty();
         let field_count =
@@ -543,7 +545,7 @@ impl ResultMatchPositionData {
         player_id: u32,
         timestamp: u64,
         state_id: u16,
-        state: &impl std::fmt::Display,
+        state: &impl Display,
     ) {
         if !self.track_events {
             return;

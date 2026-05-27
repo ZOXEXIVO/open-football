@@ -7,6 +7,7 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::MatchRuntime;
 use core::SimulatorData;
 use core::r#match::MatchResultRaw;
 use core::r#match::player::statistics::MatchStatisticType;
@@ -114,13 +115,27 @@ pub async fn match_get_action(
         .match_store
         .get(&route_params.match_id)
         .or_else(|| {
-            // Fall back: scan all leagues for the match (league matches stored per-league)
+            // Fall back: scan each country's per-league match stores. The
+            // domestic cup lives on `Country::domestic_cup`, outside the
+            // `leagues` collection, so scan its inner league too — otherwise
+            // cup ties linked from the bracket would 404.
             simulator_data
                 .continents
                 .iter()
                 .flat_map(|c| &c.countries)
-                .flat_map(|c| &c.leagues.leagues)
-                .find_map(|l| l.matches.get(&route_params.match_id))
+                .find_map(|country| {
+                    country
+                        .leagues
+                        .leagues
+                        .iter()
+                        .find_map(|l| l.matches.get(&route_params.match_id))
+                        .or_else(|| {
+                            country
+                                .domestic_cup
+                                .as_ref()
+                                .and_then(|cup| cup.league.matches.get(&route_params.match_id))
+                        })
+                })
         })
         .ok_or_else(|| {
             ApiError::NotFound(format!("Match '{}' not found", route_params.match_id))
@@ -542,7 +557,7 @@ pub async fn match_get_action(
         player_of_the_match_id: motm_id.unwrap_or(0),
         player_of_the_match_slug: motm_slug,
         player_of_the_match_name: motm_name,
-        match_recordings_enabled: core::is_match_recordings_mode()
+        match_recordings_enabled: MatchRuntime::recordings_mode()
             && league.is_some_and(|l| !l.friendly),
     })
 }

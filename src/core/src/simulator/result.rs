@@ -13,7 +13,7 @@ pub struct SimulationResult {
     /// Number of continents whose `simulate` call panicked during this
     /// tick. Surfaces silent failures the orchestrator catches and
     /// substitutes empty results for. Sum across ticks via the
-    /// process-global `panicked_continents_total()`.
+    /// process-global `ContinentPanicMetrics::total()`.
     pub panicked_continents: u32,
 }
 

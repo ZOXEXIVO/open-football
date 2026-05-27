@@ -5,6 +5,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use core::FootballSimulator;
+use core::MatchRuntime;
 use core::PerfCounters;
 use core::SimulationResult;
 use log::debug;
@@ -62,7 +63,7 @@ pub async fn game_process_action(
             }
 
             let result = handle.block_on(FootballSimulator::simulate(&mut simulator_data));
-            if result.has_match_results() && core::is_match_recordings_mode() {
+            if result.has_match_results() && MatchRuntime::recordings_mode() {
                 handle.block_on(write_match_results(result));
             }
 
@@ -116,7 +117,7 @@ pub async fn game_cancel_action(State(state): State<GameAppData>) -> StatusCode 
 async fn write_match_results(result: SimulationResult) {
     let now = Instant::now();
 
-    let max_concurrent = core::match_store_max_threads();
+    let max_concurrent = MatchRuntime::store_max_threads();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
     let mut tasks = JoinSet::new();

@@ -3,6 +3,8 @@ use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
+use crate::r#match::player::strategies::players::ShotSkillInputs;
+use crate::r#match::player::strategies::players::ShotSkillProfile;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
 };
@@ -1966,7 +1968,7 @@ impl PlayerEventDispatcher {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
         field.ball.pass_target_player_id = None;
-        field.ball.velocity = nalgebra::Vector3::zeros();
+        field.ball.velocity = Vector3::zeros();
         field.ball.flags.in_flight_state = 0;
         field.ball.cached_shot_target = None;
     }
@@ -2060,7 +2062,7 @@ impl PlayerEventDispatcher {
             })
             .map(|gk| (gk.position - shooter_position).magnitude());
 
-        let inputs = crate::r#match::player::strategies::players::ShotSkillInputs {
+        let inputs = ShotSkillInputs {
             distance: pre_distance,
             minute,
             condition_pct,
@@ -2075,9 +2077,7 @@ impl PlayerEventDispatcher {
         };
         let profile = {
             let player = field.get_player(shoot_event_model.from_player_id).unwrap();
-            crate::r#match::player::strategies::players::ShotSkillProfile::from_player(
-                player, &inputs,
-            )
+            ShotSkillProfile::from_player(player, &inputs)
         };
 
         // Skill bands derived from the unified profile.

@@ -7,8 +7,11 @@ use crate::league::awards::{
 };
 use crate::r#match::MatchResult;
 use crate::utils::DateUtils;
+use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 
 impl League {
     pub(in crate::league) fn process_match_day_results(
@@ -247,8 +250,8 @@ impl League {
     ) -> SeasonAwardsSnapshot {
         // Aggregate every match this season.
         let scores = AwardAggregator::aggregate(self.matches.iter_in_range(
-            current_date - chrono::Duration::days(366),
-            current_date + chrono::Duration::days(1),
+            current_date - Duration::days(366),
+            current_date + Duration::days(1),
         ));
 
         // Min apps gate: 15 apps OR 40% of league matches per team.
@@ -289,8 +292,7 @@ impl League {
         // Build a player-id → (age, position-group, club-team-id) lookup
         // from the league's clubs once so per-candidate filtering doesn't
         // walk the world.
-        let mut player_meta: std::collections::HashMap<u32, (u8, Option<u32>)> =
-            std::collections::HashMap::new();
+        let mut player_meta: HashMap<u32, (u8, Option<u32>)> = HashMap::new();
         for club in clubs {
             for team in &club.teams.teams {
                 if team.league_id != Some(self.id) {
@@ -325,11 +327,11 @@ impl League {
                 .filter(|(_, s, _)| *s > 0.0)
                 .max_by(|(la, sa, aa), (lb, sb, ab)| {
                     sa.partial_cmp(sb)
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .unwrap_or(Ordering::Equal)
                         .then(
                             aa.best_rating
                                 .partial_cmp(&ab.best_rating)
-                                .unwrap_or(std::cmp::Ordering::Equal),
+                                .unwrap_or(Ordering::Equal),
                         )
                         .then(aa.matches_played.cmp(&ab.matches_played))
                         .then(lb.cmp(la))

@@ -8,6 +8,7 @@
 
 use chrono::{Datelike, NaiveDate};
 
+use crate::PlayerPositionType;
 use crate::PlayerStatusType;
 use crate::club::PlayerFieldPositionGroup;
 use crate::club::player::condition::{ConditionRecoveryModel, InjuryRiskInputs};
@@ -504,7 +505,7 @@ impl PositionLoad {
     /// computing physical load. Calibrated so a CB at neutral intensity
     /// is the reference (1.0 ≈ minute-equivalent), keepers materially
     /// under, and modern fullbacks/wide-mids over.
-    pub fn match_load_factor(position: crate::PlayerPositionType) -> f32 {
+    pub fn match_load_factor(position: PlayerPositionType) -> f32 {
         use crate::PlayerPositionType::*;
         match position {
             Goalkeeper => 0.45,

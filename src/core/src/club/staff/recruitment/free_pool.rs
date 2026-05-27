@@ -11,6 +11,8 @@
 //! free agent. Aging, retirement, and reputation decay run via
 //! `tick_free_agent_staff_pool`.
 
+use crate::Relations;
+use crate::SimulatorData;
 use crate::Staff;
 use crate::club::staff::StaffPosition;
 use crate::utils::DateUtils;
@@ -56,7 +58,7 @@ pub fn admit_to_pool(pool: &mut Vec<Staff>, mut staff: Staff, today: NaiveDate) 
     staff.contract = None;
     // Wipe relations — they refer to the previous squad's player ids
     // which the pool member no longer has any line of sight to.
-    staff.relations = crate::Relations::new();
+    staff.relations = Relations::new();
     // Drop fatigue accrued from the last job; a free agent is "rested".
     staff.fatigue = 0.0;
     // Job satisfaction stays — a happy departing coach is more selective
@@ -113,7 +115,7 @@ pub fn tick_free_agent_staff_pool(pool: &mut Vec<Staff>, today: NaiveDate) {
 /// Returns the number of staff moved this tick. Cheap when nothing
 /// expires (the common case): just a contract-date comparison per
 /// staff member.
-pub fn harvest_expired_staff(data: &mut crate::SimulatorData, today: NaiveDate) -> usize {
+pub fn harvest_expired_staff(data: &mut SimulatorData, today: NaiveDate) -> usize {
     let mut harvested: Vec<Staff> = Vec::new();
 
     for continent in &mut data.continents {

@@ -8,8 +8,10 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 
+use nalgebra::Vector3;
 use std::fmt::Display;
 use std::fmt::Formatter;
+use std::fmt::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PlayerState {
@@ -36,7 +38,7 @@ impl PlayerState {
 }
 
 impl Display for PlayerState {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             PlayerState::Injured => write!(f, "Injured"),
             PlayerState::Goalkeeper(state) => write!(f, "Goalkeeper: {}", state),
@@ -143,11 +145,7 @@ impl PlayerMatchState {
             // here at the single integration point so no state has to
             // remember to self-sanitize. Non-finite → zero this tick.
             let finite = velocity.x.is_finite() && velocity.y.is_finite() && velocity.z.is_finite();
-            let velocity = if finite {
-                velocity
-            } else {
-                nalgebra::Vector3::zeros()
-            };
+            let velocity = if finite { velocity } else { Vector3::zeros() };
 
             let velocity_sq = velocity.norm_squared();
             let max_speed_sq = max_speed * max_speed;

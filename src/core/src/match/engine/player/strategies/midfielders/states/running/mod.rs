@@ -14,6 +14,7 @@ use crate::r#match::{
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 // Shooting distance constants for midfielders — more conservative than forwards
 const MAX_SHOOTING_DISTANCE: f32 = 88.0; // Edge-of-box / arriving-midfielder strikes
@@ -281,7 +282,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                         // Prefer the farthest teammate in open space
                         let da = (a.position - ctx.player.position).magnitude();
                         let db = (b.position - ctx.player.position).magnitude();
-                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                        da.partial_cmp(&db).unwrap_or(Ordering::Equal)
                     })
                 {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
@@ -1196,7 +1197,7 @@ impl MidfielderRunningState {
             .min_by(|a, b| {
                 let da = (a.position - player_pos).magnitude();
                 let db = (b.position - player_pos).magnitude();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
             })?;
 
         // The space the opponent is vacating is roughly behind them (opposite of their movement)
@@ -1222,7 +1223,7 @@ impl MidfielderRunningState {
             .min_by(|a, b| {
                 let da = (a.position - vacated_zone).magnitude();
                 let db = (b.position - vacated_zone).magnitude();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
             })?;
 
         Some(best_teammate)

@@ -1,8 +1,11 @@
+use crate::HappinessEventType;
 use crate::club::player::training::result::{PlayerTrainingResult, TrainingOutcomeBreakdown};
+use crate::utils::DateUtils;
 use crate::{
     MentalGains, Person, PhysicalGains, Player, Staff, TechnicalGains, TrainingEffects,
     TrainingEventEvidence, TrainingEventReason, TrainingIntensity, TrainingSession, TrainingType,
 };
+use chrono::NaiveDate;
 use chrono::{Datelike, NaiveDateTime};
 
 /// Inputs to the reason-picking logic. Keeps the function signature
@@ -518,22 +521,22 @@ impl PlayerTraining {
         let in_recovery = player.player_attributes.is_in_recovery();
         let has_recent_criticism = player.happiness.recent_events.iter().any(|e| {
             e.days_ago <= 14
-                && (e.event_type == crate::HappinessEventType::ManagerCriticism
-                    || e.event_type == crate::HappinessEventType::ManagerDiscipline
-                    || e.event_type == crate::HappinessEventType::MatchDropped)
+                && (e.event_type == HappinessEventType::ManagerCriticism
+                    || e.event_type == HappinessEventType::ManagerDiscipline
+                    || e.event_type == HappinessEventType::MatchDropped)
         });
         let has_transfer_speculation = player.happiness.recent_events.iter().any(|e| {
             e.days_ago <= 21
                 && matches!(
                     e.event_type,
-                    crate::HappinessEventType::TransferRumour
-                        | crate::HappinessEventType::AgentStirsInterest
-                        | crate::HappinessEventType::TransferSpeculationDistracts
-                        | crate::HappinessEventType::WantedByBiggerClub
-                        | crate::HappinessEventType::InterestFromBiggerClub
+                    HappinessEventType::TransferRumour
+                        | HappinessEventType::AgentStirsInterest
+                        | HappinessEventType::TransferSpeculationDistracts
+                        | HappinessEventType::WantedByBiggerClub
+                        | HappinessEventType::InterestFromBiggerClub
                 )
         });
-        let age = crate::utils::DateUtils::age(player.birth_date, date.date());
+        let age = DateUtils::age(player.birth_date, date.date());
         let workload_spike = player.load.is_workload_spike();
         let recovery_debt = player.load.recovery_debt;
         let leadership = sk.mental.leadership;
@@ -959,11 +962,7 @@ impl PlayerTraining {
         (base_effectiveness * 0.7 + determination_factor * 0.3).min(1.0)
     }
 
-    fn calculate_player_receptiveness(
-        player: &Player,
-        coach: &Staff,
-        sim_date: chrono::NaiveDate,
-    ) -> f32 {
+    fn calculate_player_receptiveness(player: &Player, coach: &Staff, sim_date: NaiveDate) -> f32 {
         // Base receptiveness from player attributes
         let base = (player.attributes.professionalism + player.attributes.ambition) / 40.0;
 
@@ -1041,7 +1040,7 @@ impl PlayerTraining {
 
     /// Players with large gap between potential and current ability develop faster.
     /// The effect is amplified for younger players who have more room to grow.
-    fn calculate_potential_development_factor(player: &Player, sim_date: chrono::NaiveDate) -> f32 {
+    fn calculate_potential_development_factor(player: &Player, sim_date: NaiveDate) -> f32 {
         let pa = player.player_attributes.potential_ability as f32;
         let ca = player.player_attributes.current_ability as f32;
 

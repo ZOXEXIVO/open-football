@@ -1,8 +1,11 @@
-use crate::SimulatorData;
 use crate::competitions::global::GlobalCompetitionFixture;
 use crate::continent::Continent;
 use crate::continent::national::world as national_world;
 use crate::r#match::MatchSquad;
+use crate::r#match::Score;
+use crate::utils::FloatUtils;
+use crate::{MatchRuntime, SimulatorData};
+use chrono::NaiveDate;
 
 pub struct GlobalCompetitionSimulator;
 
@@ -15,7 +18,7 @@ impl GlobalCompetitionSimulator {
         data.global_competitions.check_phase_transitions();
     }
 
-    fn simulate_matches(data: &mut SimulatorData, date: chrono::NaiveDate) {
+    fn simulate_matches(data: &mut SimulatorData, date: NaiveDate) {
         let todays_matches = data.global_competitions.get_todays_matches(date);
         if todays_matches.is_empty() {
             return;
@@ -39,7 +42,7 @@ impl GlobalCompetitionSimulator {
             })
             .collect();
 
-        let engine_results = crate::match_engine_pool().play_squads_with_knockout(prepared);
+        let engine_results = MatchRuntime::engine_pool().play_squads_with_knockout(prepared);
 
         for (fixture_idx, raw_result) in engine_results {
             let fixture = &todays_matches[fixture_idx];
@@ -90,7 +93,7 @@ impl GlobalCompetitionSimulator {
     fn resolve_knockout_winner(
         continents: &[Continent],
         fixture: &GlobalCompetitionFixture,
-        score: &crate::r#match::Score,
+        score: &Score,
         home_score: u8,
         away_score: u8,
     ) -> Option<u32> {
@@ -128,7 +131,7 @@ impl GlobalCompetitionSimulator {
         let total_rep = (home_rep + away_rep).max(1.0);
         let rep_share = home_rep / total_rep;
         let home_chance = (0.5 + (rep_share - 0.5) * 0.30).clamp(0.35, 0.65);
-        let roll = crate::utils::FloatUtils::random(0.0, 1.0);
+        let roll = FloatUtils::random(0.0, 1.0);
         Some(if roll < home_chance {
             fixture.home_country_id
         } else {

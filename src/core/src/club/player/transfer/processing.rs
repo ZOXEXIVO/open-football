@@ -11,6 +11,7 @@ use crate::{
     HappinessEventType, LifeSimulationDesireContext, LifeSimulationDesireKind,
     LifeSimulationSeverity, LifeSimulationTrigger,
 };
+use chrono::NaiveTime;
 use chrono::{NaiveDate, NaiveDateTime};
 
 /// Continent ids matching the values documented in
@@ -991,10 +992,7 @@ impl LifeSimulationDesireDetector {
             .contract
             .as_ref()
             .map(|c| {
-                let now_dt = chrono::NaiveDateTime::new(
-                    now,
-                    chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
-                );
+                let now_dt = NaiveDateTime::new(now, NaiveTime::from_hms_opt(0, 0, 0).unwrap());
                 c.days_to_expiration(now_dt) < 540
             })
             .unwrap_or(true);

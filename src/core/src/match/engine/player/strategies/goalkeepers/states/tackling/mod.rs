@@ -7,6 +7,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use rand::RngExt;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering;
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt a tackle (in meters)
 const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.7; // Base chance of successful tackle for goalkeeper
@@ -18,7 +20,7 @@ pub struct GoalkeeperTacklingState {}
 impl StateProcessingHandler for GoalkeeperTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         #[cfg(feature = "match-logs")]
-        crate::tackle_stats::GK_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::tackle_stats::GK_ENTRIES.fetch_add(1, Ordering::Relaxed);
 
         // Shared tackle cooldown. Without it the keeper re-attempts every
         // tick while the attacker is in range, generating fouls and/or
@@ -42,13 +44,12 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
             }
 
             #[cfg(feature = "match-logs")]
-            crate::tackle_stats::GK_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::tackle_stats::GK_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
             let (tackle_success, committed_foul, foul_severity) = self.attempt_tackle(ctx);
 
             if tackle_success {
                 #[cfg(feature = "match-logs")]
-                crate::tackle_stats::GK_SUCCESSES
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::tackle_stats::GK_SUCCESSES.fetch_add(1, Ordering::Relaxed);
                 let mut state_change =
                     StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
                 state_change

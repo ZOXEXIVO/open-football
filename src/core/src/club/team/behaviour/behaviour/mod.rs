@@ -18,6 +18,8 @@ use crate::club::team::behaviour::TeamBehaviourResult;
 use crate::context::GlobalContext;
 use crate::{PlayerCollection, StaffCollection};
 use chrono::Datelike;
+use chrono::NaiveDateTime;
+use chrono::Weekday;
 use log::debug;
 
 mod calculations;
@@ -33,8 +35,8 @@ mod relationships;
 
 #[derive(Debug, Clone)]
 pub struct TeamBehaviour {
-    last_full_update: Option<chrono::NaiveDateTime>,
-    last_minor_update: Option<chrono::NaiveDateTime>,
+    last_full_update: Option<NaiveDateTime>,
+    last_minor_update: Option<NaiveDateTime>,
 }
 
 impl Default for TeamBehaviour {
@@ -76,21 +78,21 @@ impl TeamBehaviour {
         }
     }
 
-    fn should_run_full_update(&self, current_time: chrono::NaiveDateTime) -> bool {
+    fn should_run_full_update(&self, current_time: NaiveDateTime) -> bool {
         match self.last_full_update {
             None => true,
             Some(last) => {
                 let days_since = current_time.signed_duration_since(last).num_days();
                 days_since >= 7
                     || (days_since >= 1
-                        && (current_time.weekday() == chrono::Weekday::Sat
-                            || current_time.weekday() == chrono::Weekday::Sun
+                        && (current_time.weekday() == Weekday::Sat
+                            || current_time.weekday() == Weekday::Sun
                             || current_time.day() == 1))
             }
         }
     }
 
-    fn should_run_minor_update(&self, current_time: chrono::NaiveDateTime) -> bool {
+    fn should_run_minor_update(&self, current_time: NaiveDateTime) -> bool {
         match self.last_minor_update {
             None => true,
             Some(last) => {
@@ -99,7 +101,7 @@ impl TeamBehaviour {
                     || (days_since >= 1
                         && matches!(
                             current_time.weekday(),
-                            chrono::Weekday::Tue | chrono::Weekday::Wed | chrono::Weekday::Thu
+                            Weekday::Tue | Weekday::Wed | Weekday::Thu
                         ))
             }
         }

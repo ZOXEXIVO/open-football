@@ -8,7 +8,9 @@
 
 use crate::club::relations::ChemistryContext;
 use crate::club::team::Team;
+use chrono::Duration;
 use chrono::NaiveDate;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 /// Cutoff window for "recent signing" status used by the chemistry model.
@@ -49,7 +51,7 @@ impl ChemistryContextBuilder {
             .iter()
             .map(|p| p.skills.mental.leadership.clamp(0.0, 20.0))
             .collect();
-        leadership.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        leadership.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
         leadership.into_iter().take(TOP_RANK_SCORES).collect()
     }
 
@@ -64,12 +66,12 @@ impl ChemistryContextBuilder {
             }
         }
         let mut influences: Vec<f32> = influence_totals.into_values().collect();
-        influences.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        influences.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
         influences.into_iter().take(TOP_RANK_SCORES).collect()
     }
 
     fn recent_signings(team: &Team, today: NaiveDate) -> u8 {
-        let cutoff = today - chrono::Duration::days(RECENT_SIGNING_WINDOW_DAYS);
+        let cutoff = today - Duration::days(RECENT_SIGNING_WINDOW_DAYS);
         team.players
             .players
             .iter()

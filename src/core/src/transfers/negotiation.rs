@@ -1,5 +1,6 @@
 use crate::transfers::offer::TransferOffer;
 use crate::utils::IntegerUtils;
+use chrono::Duration;
 use chrono::NaiveDate;
 
 #[derive(Debug, Clone)]
@@ -103,13 +104,13 @@ impl TransferNegotiation {
     ) -> Self {
         // Overall deadline: 45 days
         let expiry_date = created_date
-            .checked_add_signed(chrono::Duration::days(45))
+            .checked_add_signed(Duration::days(45))
             .unwrap_or(created_date);
 
         // Initial approach phase: 1 day
         let phase_duration = 1i64;
         let phase_expiry = created_date
-            .checked_add_signed(chrono::Duration::days(phase_duration))
+            .checked_add_signed(Duration::days(phase_duration))
             .unwrap_or(created_date);
 
         TransferNegotiation {
@@ -181,7 +182,7 @@ impl TransferNegotiation {
             round: 1,
         };
         self.phase_expiry = current_date
-            .checked_add_signed(chrono::Duration::days(duration))
+            .checked_add_signed(Duration::days(duration))
             .unwrap_or(current_date);
     }
 
@@ -193,7 +194,7 @@ impl TransferNegotiation {
                 round: round + 1,
             };
             self.phase_expiry = current_date
-                .checked_add_signed(chrono::Duration::days(duration))
+                .checked_add_signed(Duration::days(duration))
                 .unwrap_or(current_date);
         }
     }
@@ -204,7 +205,7 @@ impl TransferNegotiation {
             started: current_date,
         };
         self.phase_expiry = current_date
-            .checked_add_signed(chrono::Duration::days(duration))
+            .checked_add_signed(Duration::days(duration))
             .unwrap_or(current_date);
     }
 
@@ -214,7 +215,7 @@ impl TransferNegotiation {
             started: current_date,
         };
         self.phase_expiry = current_date
-            .checked_add_signed(chrono::Duration::days(duration))
+            .checked_add_signed(Duration::days(duration))
             .unwrap_or(current_date);
     }
 

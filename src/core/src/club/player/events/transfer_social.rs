@@ -10,6 +10,9 @@
 use chrono::NaiveDate;
 
 use super::scaling;
+use crate::CareerDesireEventContext;
+use crate::CareerDesireEvidence;
+use crate::CareerDesireKind;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
 use crate::{
@@ -490,10 +493,9 @@ impl Player {
         }
         let cfg = HappinessConfig::default();
         let mag = cfg.catalog.home_return_opportunity;
-        let mut desire_ctx = crate::CareerDesireEventContext::new(
-            crate::CareerDesireKind::ReturnHomeAfterPoorAdaptation,
-        );
-        desire_ctx = desire_ctx.with_evidence(crate::CareerDesireEvidence::HomeOrFavouriteLink);
+        let mut desire_ctx =
+            CareerDesireEventContext::new(CareerDesireKind::ReturnHomeAfterPoorAdaptation);
+        desire_ctx = desire_ctx.with_evidence(CareerDesireEvidence::HomeOrFavouriteLink);
         let happiness_ctx = HappinessEventContext::new(
             HappinessEventCause::AdaptationIsolation,
             HappinessEventSeverity::from_magnitude(mag),

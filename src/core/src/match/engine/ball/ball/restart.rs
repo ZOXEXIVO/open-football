@@ -11,6 +11,7 @@
 
 use super::Ball;
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
@@ -77,7 +78,7 @@ impl Ball {
         self.recent_passers.clear();
         self.cached_shot_target = None;
         self.offside_snapshot = None;
-        self.pass_origin_restart = crate::r#match::PassOriginRestart::ThrowIn;
+        self.pass_origin_restart = PassOriginRestart::ThrowIn;
 
         let team_id = players
             .iter()
@@ -99,8 +100,8 @@ impl Ball {
             let now = context.current_tick();
             if now.saturating_sub(snap.set_tick) > OFFSIDE_LIFETIME_TICKS {
                 self.offside_snapshot = None;
-                if self.pass_origin_restart != crate::r#match::PassOriginRestart::OpenPlay {
-                    self.pass_origin_restart = crate::r#match::PassOriginRestart::OpenPlay;
+                if self.pass_origin_restart != PassOriginRestart::OpenPlay {
+                    self.pass_origin_restart = PassOriginRestart::OpenPlay;
                 }
             }
         }

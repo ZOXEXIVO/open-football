@@ -1,3 +1,4 @@
+use chrono::Duration;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1164,7 +1165,7 @@ impl RelationshipHistory {
     }
 
     fn cleanup_old_events(&mut self, current_date: NaiveDate) {
-        let cutoff = current_date - chrono::Duration::days(365);
+        let cutoff = current_date - Duration::days(365);
         self.events.retain(|e| e.date > cutoff);
     }
 }

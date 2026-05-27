@@ -1,4 +1,5 @@
 use super::*;
+use std::cmp::Ordering;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
@@ -42,7 +43,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     (p.id, score)
                 })
                 .collect();
-            candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
             candidates.into_iter().take(11).map(|(id, _)| id).collect()
         };
 
@@ -77,7 +78,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     let sb = b.skills.goalkeeping.reflexes * 0.4
                         + b.skills.goalkeeping.handling * 0.3
                         + b.skills.goalkeeping.one_on_ones * 0.3;
-                    sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                    sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
                 })
                 .map(|p| p.id)
         };

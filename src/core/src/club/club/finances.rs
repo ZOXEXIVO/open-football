@@ -3,6 +3,7 @@ use crate::club::{DistressLevel, classify_distress};
 use crate::context::GlobalContext;
 use crate::{ContractBonusType, ReputationLevel};
 use chrono::Datelike;
+use chrono::NaiveDate;
 
 /// Country price level: scales ticket prices, merchandising etc. by local economy.
 /// England 1.5, Colombia 0.4, default 1.0.
@@ -308,7 +309,7 @@ impl Club {
 /// current calendar year. Used to gate annual loyalty payouts so a
 /// Dec-31 contract doesn't accidentally pay a Jan-1 loyalty in the
 /// following year — the contract hasn't reached its anniversary yet.
-fn has_reached_anniversary(today: chrono::NaiveDate, started: chrono::NaiveDate) -> bool {
+fn has_reached_anniversary(today: NaiveDate, started: NaiveDate) -> bool {
     if today.month() > started.month() {
         return true;
     }
@@ -373,7 +374,7 @@ mod anniversary_tests {
 ///     Tracked via `last_intl_caps_paid` so the difference is the new caps.
 ///
 /// Returns the total expense to charge to the club this month.
-fn settle_lump_sum_bonuses(club: &mut Club, date: chrono::NaiveDate) -> i64 {
+fn settle_lump_sum_bonuses(club: &mut Club, date: NaiveDate) -> i64 {
     let year = date.year();
     let mut total: i64 = 0;
     for team in club.teams.teams.iter_mut() {

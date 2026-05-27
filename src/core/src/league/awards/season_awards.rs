@@ -11,6 +11,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::league::awards::player_of_week::PlayerOfTheWeekAward;
 use crate::r#match::MatchResult;
 use crate::r#match::engine::result::PlayerMatchEndStats;
+use std::cmp::Ordering;
 
 /// Position group breakdown the Team of the Week selector enforces.
 const TOTW_GK: usize = 1;
@@ -566,11 +567,11 @@ impl TeamOfTheWeekSelector {
         }
         let cmp = |a: &(u32, f32, CandidateAggregate), b: &(u32, f32, CandidateAggregate)| {
             b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
                 .then(
                     b.2.best_rating
                         .partial_cmp(&a.2.best_rating)
-                        .unwrap_or(std::cmp::Ordering::Equal),
+                        .unwrap_or(Ordering::Equal),
                 )
                 .then(b.2.matches_played.cmp(&a.2.matches_played))
                 .then(a.0.cmp(&b.0))
@@ -679,11 +680,11 @@ impl MonthlyAwardSelector {
             .filter(|(_, _, s)| *s > 0.0)
             .max_by(|(la, aa, sa), (lb, ab, sb)| {
                 sa.partial_cmp(sb)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
                     .then(
                         aa.best_rating
                             .partial_cmp(&ab.best_rating)
-                            .unwrap_or(std::cmp::Ordering::Equal),
+                            .unwrap_or(Ordering::Equal),
                     )
                     .then(aa.matches_played.cmp(&ab.matches_played))
                     .then(lb.cmp(la))

@@ -1,10 +1,12 @@
 use super::types::{DeferredTransfer, can_club_accept_player};
 use crate::club::Person;
+use crate::club::player::calculators::WageCalculator;
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
 use crate::simulator::SimulatorData;
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::{Country, Player, PlayerClubContract, TeamInfo, TeamType};
+use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
@@ -1108,11 +1110,7 @@ fn build_loan_contract(
     // softens it when the parent is loaning the player out for development
     // (a small parent club won't subsidise a Premier League borrower).
     let (borrower_wage, match_fee) =
-        crate::club::player::calculators::WageCalculator::loan_wage_split_v2(
-            parent_wage,
-            borrower_score,
-            parent_desire_to_develop,
-        );
+        WageCalculator::loan_wage_split_v2(parent_wage, borrower_score, parent_desire_to_develop);
 
     // Wage-contribution percentage = borrower share of total. Computed
     // back from borrower_wage / parent_wage so it stays consistent with
@@ -1142,7 +1140,7 @@ fn build_loan_contract(
     .with_loan_wage_contribution(contribution_pct)
     .with_loan_recall(
         loan_end
-            .checked_sub_signed(chrono::Duration::days(90))
+            .checked_sub_signed(Duration::days(90))
             .unwrap_or(loan_end),
     )
     .with_loan_min_appearances(min_apps);

@@ -1,6 +1,8 @@
 use crate::r#match::squad::PlayerSelectionResult;
 use crate::r#match::{MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
 use crate::{Player, Tactics, TacticsSelector, Team};
+use std::cmp::Ordering;
+use std::collections::HashMap;
 
 impl Team {
     /// Get match squad using rotation — prioritizes players who haven't played recently.
@@ -126,7 +128,7 @@ impl Team {
             );
         }
 
-        let mut position_coverage = std::collections::HashMap::new();
+        let mut position_coverage = HashMap::new();
         for match_player in &squad_result.main_squad {
             let pos = match_player.tactical_position.current_position;
             *position_coverage.entry(pos).or_insert(0) += 1;
@@ -156,7 +158,7 @@ impl Team {
 
                 (leadership_a + experience_a as f32 / 10.0)
                     .partial_cmp(&(leadership_b + experience_b as f32 / 10.0))
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
             })
             .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
     }
@@ -178,7 +180,7 @@ impl Team {
 
                 (leadership_a + experience_a as f32 / 10.0)
                     .partial_cmp(&(leadership_b + experience_b as f32 / 10.0))
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
             })
             .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
     }
@@ -195,7 +197,7 @@ impl Team {
 
                 penalty_skill_a
                     .partial_cmp(&penalty_skill_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
             })
             .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
     }
@@ -212,7 +214,7 @@ impl Team {
 
                 fk_skill_a
                     .partial_cmp(&fk_skill_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
             })
             .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
     }

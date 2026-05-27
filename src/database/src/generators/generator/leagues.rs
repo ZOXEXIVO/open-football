@@ -1,9 +1,37 @@
-use crate::DatabaseEntity;
-use core::league::{DayMonthPeriod, League, LeagueFinancials, LeagueGroup, LeagueSettings};
+use crate::{CountryEntity, DatabaseEntity};
+use core::league::{
+    DayMonthPeriod, DomesticCup, League, LeagueFinancials, LeagueGroup, LeagueSettings,
+};
 use core::{Club, TeamType};
 use std::str::FromStr;
 
 use super::DatabaseGenerator;
+
+/// Base for generated domestic-cup league ids: `BASE + country_id`. Country
+/// ids top out in the low thousands, so the cup band is `800_000_005 ..=
+/// 800_002_000` — clear of every real league id (which are either small or
+/// in the ~2.0e9 Russian range) and of the continental cups (900_000_001+).
+const DOMESTIC_CUP_ID_BASE: u32 = 800_000_000;
+
+/// Lowercase, hyphenate, and strip non-alphanumerics from a string so a
+/// country slug like "czech republic" yields a URL-safe "czech-republic".
+fn slugify(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = false;
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !out.is_empty() && !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
 
 impl DatabaseGenerator {
     pub(super) fn generate_leagues(
@@ -56,6 +84,56 @@ impl DatabaseGenerator {
                 l
             })
             .collect()
+    }
+
+    /// Build the country's single domestic cup as a `DomesticCup` (a
+    /// `League` flagged `is_cup = true`, `friendly = false`). Mirrors the
+    /// primary (tier-1, else first) league's season window so the cup runs
+    /// across the same calendar. Returns `None` only when the country has
+    /// no leagues to feed participants.
+    ///
+    /// Uses the named cup from the data when configured for this country
+    /// (FA Cup, Copa del Rey, …); otherwise falls back to "{Country} Cup".
+    pub(super) fn generate_domestic_cup(
+        country: &CountryEntity,
+        leagues: &[League],
+    ) -> Option<DomesticCup> {
+        let primary = leagues
+            .iter()
+            .find(|l| l.settings.tier == 1)
+            .or_else(|| leagues.first())?;
+
+        let settings = LeagueSettings {
+            season_starting_half: primary.settings.season_starting_half,
+            season_ending_half: primary.settings.season_ending_half,
+            tier: 0,
+            promotion_spots: 0,
+            relegation_spots: 0,
+            league_group: None,
+        };
+
+        let (slug, name, configured_rep) = match &country.domestic_cup {
+            Some(cfg) => (cfg.slug.clone(), cfg.name.clone(), cfg.reputation),
+            None => (
+                format!("{}-cup", slugify(&country.slug)),
+                format!("{} Cup", country.name),
+                None,
+            ),
+        };
+        let reputation = configured_rep.unwrap_or(primary.reputation);
+
+        let mut league = League::new(
+            DOMESTIC_CUP_ID_BASE + country.id,
+            name,
+            slug,
+            country.id,
+            reputation,
+            settings,
+            false,
+        );
+        league.is_cup = true;
+
+        Some(DomesticCup::new(league))
     }
 
     pub(super) fn create_subteams_leagues(
@@ -171,5 +249,98 @@ impl DatabaseGenerator {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{slugify, DatabaseGenerator, DOMESTIC_CUP_ID_BASE};
+    use crate::DomesticCupEntity;
+    use crate::loaders::country::{
+        CountryEntity, CountryPricingEntity, CountrySettingsEntity, SkinColorsEntity,
+    };
+    use core::league::{DayMonthPeriod, League, LeagueSettings};
+
+    fn country_entity(id: u32, name: &str, slug: &str, cup: Option<DomesticCupEntity>) -> CountryEntity {
+        CountryEntity {
+            id,
+            code: "xx".into(),
+            slug: slug.into(),
+            name: name.into(),
+            background_color: "#000000".into(),
+            foreground_color: "#ffffff".into(),
+            continent_id: 1,
+            reputation: 5000,
+            settings: CountrySettingsEntity {
+                pricing: CountryPricingEntity { price_level: 1.0 },
+            },
+            skin_colors: SkinColorsEntity::default(),
+            domestic_cup: cup,
+        }
+    }
+
+    fn tier1_league(id: u32, country_id: u32) -> League {
+        League::new(
+            id,
+            "Top Flight".into(),
+            "top-flight".into(),
+            country_id,
+            8000,
+            LeagueSettings {
+                season_starting_half: DayMonthPeriod::new(1, 8, 30, 12),
+                season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                tier: 1,
+                promotion_spots: 0,
+                relegation_spots: 3,
+                league_group: None,
+            },
+            false,
+        )
+    }
+
+    #[test]
+    fn slugify_handles_spaces_and_punctuation() {
+        assert_eq!(slugify("czech republic"), "czech-republic");
+        assert_eq!(slugify("United Arab Emirates"), "united-arab-emirates");
+        assert_eq!(slugify("USA"), "usa");
+    }
+
+    #[test]
+    fn configured_cup_uses_named_slug_and_competitive_flags() {
+        let cfg = DomesticCupEntity {
+            country_slug: "england".into(),
+            slug: "fa-cup".into(),
+            name: "FA Cup".into(),
+            reputation: None,
+        };
+        let country = country_entity(765, "England", "england", Some(cfg));
+        let cup =
+            DatabaseGenerator::generate_domestic_cup(&country, &[tier1_league(1, 765)]).unwrap();
+
+        assert!(cup.league.is_cup, "cup must be flagged is_cup");
+        assert!(!cup.league.friendly, "cup must be competitive (not friendly)");
+        assert_eq!(cup.league.id, DOMESTIC_CUP_ID_BASE + 765);
+        assert_eq!(cup.league.name, "FA Cup");
+        assert_eq!(cup.league.slug, "fa-cup");
+        assert_eq!(cup.league.settings.tier, 0);
+        // Season window mirrors the tier-1 league.
+        assert_eq!(cup.league.settings.season_starting_half.from_month, 8);
+        assert_eq!(cup.league.settings.season_ending_half.to_month, 5);
+    }
+
+    #[test]
+    fn unconfigured_cup_falls_back_to_country_name() {
+        let country = country_entity(763, "Czech Republic", "czech republic", None);
+        let cup = DatabaseGenerator::generate_domestic_cup(&country, &[tier1_league(1, 763)]).unwrap();
+        assert_eq!(cup.league.name, "Czech Republic Cup");
+        assert_eq!(cup.league.slug, "czech-republic-cup");
+        assert!(cup.league.is_cup && !cup.league.friendly);
+        assert_eq!(cup.league.id, DOMESTIC_CUP_ID_BASE + 763);
+    }
+
+    #[test]
+    fn no_leagues_yields_no_cup() {
+        let country = country_entity(1, "Nowhere", "nowhere", None);
+        assert!(DatabaseGenerator::generate_domestic_cup(&country, &[]).is_none());
     }
 }

@@ -4,6 +4,7 @@ mod common;
 mod conference_league;
 mod copa_libertadores;
 mod countries;
+mod cups;
 mod date;
 mod error;
 mod europa_league;
@@ -53,8 +54,7 @@ impl FootballSimulatorServer {
 
     pub async fn run(&self) {
         let app = ServerRoutes::create()
-            .layer(
-                ServiceBuilder::new()
+            .layer(ServiceBuilder::new()
                     // Catch panics in handlers and convert them to 500 errors
                     .layer(CatchPanicLayer::custom(|_err| {
                         (
@@ -62,8 +62,7 @@ impl FootballSimulatorServer {
                             "Internal server error - handler panicked".to_string(),
                         )
                             .into_response()
-                    })),
-            )
+                    })))
             .with_state(self.data.clone());
 
         let addr = SocketAddr::from(([0, 0, 0, 0], 18000));

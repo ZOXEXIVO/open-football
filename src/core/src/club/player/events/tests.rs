@@ -116,6 +116,7 @@ fn outcome<'a>(
         participation,
         is_friendly,
         is_cup,
+        competition_slug: if is_cup { "champions-league" } else { "league" },
         is_motm,
         team_goals_for: team_for,
         team_goals_against: team_against,
@@ -793,9 +794,9 @@ fn season_event_prestige_scales_magnitude() {
     );
 }
 
-fn build_player_with_status(status: crate::PlayerSquadStatus) -> Player {
+fn build_player_with_status(status: PlayerSquadStatus) -> Player {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut contract = crate::PlayerClubContract::new(10_000, d(2035, 6, 30));
+    let mut contract = PlayerClubContract::new(10_000, d(2035, 6, 30));
     contract.squad_status = status;
     p.contract = Some(contract);
     p.statistics.played = 30;
@@ -804,8 +805,8 @@ fn build_player_with_status(status: crate::PlayerSquadStatus) -> Player {
 
 #[test]
 fn key_player_takes_bigger_relegation_hit_than_rotation() {
-    let mut key = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
-    let mut rotation = build_player_with_status(crate::PlayerSquadStatus::FirstTeamSquadRotation);
+    let mut key = build_player_with_status(PlayerSquadStatus::KeyPlayer);
+    let mut rotation = build_player_with_status(PlayerSquadStatus::FirstTeamSquadRotation);
     let date = d(2032, 5, 30);
     key.on_team_season_event(HappinessEventType::Relegated, 365, date);
     rotation.on_team_season_event(HappinessEventType::Relegated, 365, date);
@@ -834,8 +835,8 @@ fn key_player_takes_bigger_relegation_hit_than_rotation() {
 
 #[test]
 fn fringe_not_needed_softens_relegation_hit() {
-    let mut not_needed = build_player_with_status(crate::PlayerSquadStatus::NotNeeded);
-    let mut regular = build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
+    let mut not_needed = build_player_with_status(PlayerSquadStatus::NotNeeded);
+    let mut regular = build_player_with_status(PlayerSquadStatus::FirstTeamRegular);
     let date = d(2032, 5, 30);
     not_needed.on_team_season_event(HappinessEventType::Relegated, 365, date);
     regular.on_team_season_event(HappinessEventType::Relegated, 365, date);
@@ -997,9 +998,9 @@ fn lost_starting_place_fires_after_drop() {
 fn run_match_with_status(
     p: &mut Player,
     participation: MatchParticipation,
-    status: crate::PlayerSquadStatus,
+    status: PlayerSquadStatus,
 ) {
-    let mut contract = crate::PlayerClubContract::new(10_000, d(2035, 6, 30));
+    let mut contract = PlayerClubContract::new(10_000, d(2035, 6, 30));
     contract.squad_status = status;
     p.contract = Some(contract);
     let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
@@ -1019,14 +1020,14 @@ fn key_player_lost_starting_place_hit_exceeds_rotation() {
         run_match_with_status(
             &mut key,
             MatchParticipation::Starter,
-            crate::PlayerSquadStatus::KeyPlayer,
+            PlayerSquadStatus::KeyPlayer,
         );
     }
     for _ in 0..10 {
         run_match_with_status(
             &mut key,
             MatchParticipation::Substitute,
-            crate::PlayerSquadStatus::KeyPlayer,
+            PlayerSquadStatus::KeyPlayer,
         );
     }
 
@@ -1038,14 +1039,14 @@ fn key_player_lost_starting_place_hit_exceeds_rotation() {
         run_match_with_status(
             &mut rot,
             MatchParticipation::Starter,
-            crate::PlayerSquadStatus::FirstTeamSquadRotation,
+            PlayerSquadStatus::FirstTeamSquadRotation,
         );
     }
     for _ in 0..10 {
         run_match_with_status(
             &mut rot,
             MatchParticipation::Substitute,
-            crate::PlayerSquadStatus::FirstTeamSquadRotation,
+            PlayerSquadStatus::FirstTeamSquadRotation,
         );
     }
 
@@ -1082,7 +1083,7 @@ fn prospect_won_starting_place_hit_exceeds_senior() {
         run_match_with_status(
             &mut prospect,
             MatchParticipation::Starter,
-            crate::PlayerSquadStatus::HotProspectForTheFuture,
+            PlayerSquadStatus::HotProspectForTheFuture,
         );
     }
 
@@ -1094,7 +1095,7 @@ fn prospect_won_starting_place_hit_exceeds_senior() {
         run_match_with_status(
             &mut senior,
             MatchParticipation::Starter,
-            crate::PlayerSquadStatus::KeyPlayer,
+            PlayerSquadStatus::KeyPlayer,
         );
     }
 
@@ -1136,24 +1137,24 @@ fn high_professionalism_softens_lost_starting_place() {
         run_match_with_status(
             &mut hi,
             MatchParticipation::Starter,
-            crate::PlayerSquadStatus::FirstTeamRegular,
+            PlayerSquadStatus::FirstTeamRegular,
         );
         run_match_with_status(
             &mut lo,
             MatchParticipation::Starter,
-            crate::PlayerSquadStatus::FirstTeamRegular,
+            PlayerSquadStatus::FirstTeamRegular,
         );
     }
     for _ in 0..10 {
         run_match_with_status(
             &mut hi,
             MatchParticipation::Substitute,
-            crate::PlayerSquadStatus::FirstTeamRegular,
+            PlayerSquadStatus::FirstTeamRegular,
         );
         run_match_with_status(
             &mut lo,
             MatchParticipation::Substitute,
-            crate::PlayerSquadStatus::FirstTeamRegular,
+            PlayerSquadStatus::FirstTeamRegular,
         );
     }
     let m_hi = hi
@@ -1912,16 +1913,16 @@ fn under_15_competitive_match_carries_far_more_load_than_adult_peer() {
 // ── MatchDropped + structured selection context ─────────────
 
 fn drop_ctx(
-    scope: crate::SelectionDecisionScope,
-    reason: crate::SelectionOmissionReason,
+    scope: SelectionDecisionScope,
+    reason: SelectionOmissionReason,
     importance: f32,
     is_friendly: bool,
-) -> crate::MatchSelectionContext {
-    crate::MatchSelectionContext {
+) -> MatchSelectionContext {
+    MatchSelectionContext {
         scope,
         reason,
         comparison: None,
-        role: crate::SelectionRole::Striker,
+        role: SelectionRole::Striker,
         match_importance: importance,
         repeated: false,
         is_friendly,
@@ -1930,10 +1931,10 @@ fn drop_ctx(
 
 #[test]
 fn match_dropped_carries_structured_selection_context() {
-    let mut p = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
+    let mut p = build_player_with_status(PlayerSquadStatus::KeyPlayer);
     let ctx = drop_ctx(
-        crate::SelectionDecisionScope::DroppedToBench,
-        crate::SelectionOmissionReason::TeammatePreferredOnFitness,
+        SelectionDecisionScope::DroppedToBench,
+        SelectionOmissionReason::TeammatePreferredOnFitness,
         0.8,
         false,
     );
@@ -1950,20 +1951,20 @@ fn match_dropped_carries_structured_selection_context() {
         .as_ref()
         .and_then(|c| c.selection_context.as_ref())
         .expect("selection context must round-trip into the event");
-    assert_eq!(stored.scope, crate::SelectionDecisionScope::DroppedToBench);
+    assert_eq!(stored.scope, SelectionDecisionScope::DroppedToBench);
     assert_eq!(
         stored.reason,
-        crate::SelectionOmissionReason::TeammatePreferredOnFitness
+        SelectionOmissionReason::TeammatePreferredOnFitness
     );
 }
 
 #[test]
 fn match_dropped_key_player_severity_exceeds_rotation_player() {
-    let mut key = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
-    let mut rotation = build_player_with_status(crate::PlayerSquadStatus::FirstTeamSquadRotation);
+    let mut key = build_player_with_status(PlayerSquadStatus::KeyPlayer);
+    let mut rotation = build_player_with_status(PlayerSquadStatus::FirstTeamSquadRotation);
     let ctx = drop_ctx(
-        crate::SelectionDecisionScope::LeftOutOfMatchdaySquad,
-        crate::SelectionOmissionReason::TeammatePreferredOnAbility,
+        SelectionDecisionScope::LeftOutOfMatchdaySquad,
+        SelectionOmissionReason::TeammatePreferredOnAbility,
         0.8,
         false,
     );
@@ -1994,17 +1995,17 @@ fn match_dropped_key_player_severity_exceeds_rotation_player() {
 
 #[test]
 fn match_dropped_rest_softer_than_tactical_rejection() {
-    let mut rested = build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
-    let mut rejected = build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
+    let mut rested = build_player_with_status(PlayerSquadStatus::FirstTeamRegular);
+    let mut rejected = build_player_with_status(PlayerSquadStatus::FirstTeamRegular);
     rested.on_match_dropped_with_context(drop_ctx(
-        crate::SelectionDecisionScope::Rested,
-        crate::SelectionOmissionReason::FatigueManagement,
+        SelectionDecisionScope::Rested,
+        SelectionOmissionReason::FatigueManagement,
         0.8,
         false,
     ));
     rejected.on_match_dropped_with_context(drop_ctx(
-        crate::SelectionDecisionScope::DroppedToBench,
-        crate::SelectionOmissionReason::PoorRecentForm,
+        SelectionDecisionScope::DroppedToBench,
+        SelectionOmissionReason::PoorRecentForm,
         0.8,
         false,
     ));
@@ -2030,17 +2031,17 @@ fn match_dropped_rest_softer_than_tactical_rejection() {
 
 #[test]
 fn match_dropped_friendly_dampens_magnitude_below_competitive() {
-    let mut friendly = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
-    let mut competitive = build_player_with_status(crate::PlayerSquadStatus::KeyPlayer);
+    let mut friendly = build_player_with_status(PlayerSquadStatus::KeyPlayer);
+    let mut competitive = build_player_with_status(PlayerSquadStatus::KeyPlayer);
     friendly.on_match_dropped_with_context(drop_ctx(
-        crate::SelectionDecisionScope::DroppedToBench,
-        crate::SelectionOmissionReason::PoorRecentForm,
+        SelectionDecisionScope::DroppedToBench,
+        SelectionOmissionReason::PoorRecentForm,
         0.6,
         true,
     ));
     competitive.on_match_dropped_with_context(drop_ctx(
-        crate::SelectionDecisionScope::DroppedToBench,
-        crate::SelectionOmissionReason::PoorRecentForm,
+        SelectionDecisionScope::DroppedToBench,
+        SelectionOmissionReason::PoorRecentForm,
         0.6,
         false,
     ));
@@ -2073,7 +2074,7 @@ fn on_match_dropped_synthesises_a_default_selection_context() {
     // event therefore carries structured selection metadata, and the
     // renderer never needs the bare "Dropped from match squad"
     // fallback string.
-    let mut p = build_player_with_status(crate::PlayerSquadStatus::FirstTeamRegular);
+    let mut p = build_player_with_status(PlayerSquadStatus::FirstTeamRegular);
     p.on_match_dropped();
     let event = p
         .happiness
@@ -2091,12 +2092,12 @@ fn on_match_dropped_synthesises_a_default_selection_context() {
         .expect("default path must populate selection_context");
     assert_eq!(
         sel.scope,
-        crate::SelectionDecisionScope::UnusedSubstitute,
+        SelectionDecisionScope::UnusedSubstitute,
         "default scope is bench-warming"
     );
     assert_eq!(
         sel.reason,
-        crate::SelectionOmissionReason::BenchBalance,
+        SelectionOmissionReason::BenchBalance,
         "default reason is bench-balance"
     );
 }
@@ -2580,7 +2581,7 @@ fn goal_milestone_fires_when_threshold_crossed() {
 
 #[test]
 fn catalog_handles_every_new_variant() {
-    let cat = crate::club::player::behaviour_config::MoraleEventCatalog::default();
+    let cat = MoraleEventCatalog::default();
     // Spec defaults — exhaustive checks for the new variants.
     assert_eq!(cat.magnitude(HappinessEventType::PlayerOfTheMonth), 8.0);
     assert_eq!(
@@ -2634,7 +2635,7 @@ fn catalog_handles_every_new_variant() {
 
 #[test]
 fn catalog_polarity_for_new_variants() {
-    let cat = crate::club::player::behaviour_config::MoraleEventCatalog::default();
+    let cat = MoraleEventCatalog::default();
     let positives = [
         HappinessEventType::PlayerOfTheMonth,
         HappinessEventType::TeamOfTheWeekSelection,
@@ -2761,7 +2762,7 @@ fn media_pressure_old_lows_age_out_of_sliding_window() {
 #[test]
 fn award_emissions_respect_recent_events_cap() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+    let cfg = HappinessConfig::default();
     let cap = cfg.recent_events_cap;
     // Fire many bursty events of varied types. The cap enforces bound.
     for i in 0..(cap + 50) {
@@ -2777,9 +2778,7 @@ fn award_emissions_respect_recent_events_cap() {
 
 // ── Transfer-interest signal tests ───────────────────────────
 
-fn make_signal(
-    stage: crate::TransferInterestStage,
-) -> super::transfer_social::TransferInterestSignal {
+fn make_signal(stage: TransferInterestStage) -> super::transfer_social::TransferInterestSignal {
     super::transfer_social::TransferInterestSignal {
         interested_club_id: 9001,
         interested_league_id: Some(2),
@@ -2788,7 +2787,7 @@ fn make_signal(
         buyer_league_rep: 8000,
         seller_league_rep: 5000,
         stage,
-        source: crate::TransferInterestSource::ConfirmedApproach,
+        source: TransferInterestSource::ConfirmedApproach,
         repeated_attention: false,
         is_rival: false,
         is_home_country: false,
@@ -2805,7 +2804,7 @@ fn make_signal(
 fn transfer_interest_signal_fires_for_concrete_step_up_for_ambitious_player() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     p.attributes.ambition = 17.0;
-    let sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let sig = make_signal(TransferInterestStage::ConcreteInterest);
     let landed = p.on_transfer_interest_signal(&sig);
     assert!(landed, "concrete interest from a bigger club should land");
     let count = count_events(&p, &HappinessEventType::InterestFromBiggerClub);
@@ -2821,7 +2820,7 @@ fn transfer_interest_signal_fires_for_concrete_step_up_for_ambitious_player() {
     assert_eq!(stored_ctx.interested_club_id, Some(9001));
     assert_eq!(
         stored_ctx.player_reaction,
-        crate::TransferInterestReaction::Excited
+        TransferInterestReaction::Excited
     );
 }
 
@@ -2830,7 +2829,7 @@ fn transfer_interest_high_loyalty_player_reacts_calmly() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     p.attributes.ambition = 10.0;
     p.attributes.loyalty = 17.0;
-    let sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let sig = make_signal(TransferInterestStage::ConcreteInterest);
     p.on_transfer_interest_signal(&sig);
     let stored_ctx = p
         .happiness
@@ -2842,7 +2841,7 @@ fn transfer_interest_high_loyalty_player_reacts_calmly() {
         .expect("context attached");
     assert_eq!(
         stored_ctx.player_reaction,
-        crate::TransferInterestReaction::PubliclyCalmPrivatelyInterested,
+        TransferInterestReaction::PubliclyCalmPrivatelyInterested,
         "loyal player should appear calm publicly even on a step-up link"
     );
 }
@@ -2853,7 +2852,7 @@ fn transfer_interest_ambitious_player_magnitude_exceeds_low_ambition() {
     let mut low = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     high.attributes.ambition = 18.0;
     low.attributes.ambition = 4.0;
-    let sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let sig = make_signal(TransferInterestStage::ConcreteInterest);
     high.on_transfer_interest_signal(&sig);
     low.on_transfer_interest_signal(&sig);
     let m_high = high
@@ -2881,11 +2880,11 @@ fn transfer_interest_ambitious_player_magnitude_exceeds_low_ambition() {
 #[test]
 fn transfer_interest_scout_only_does_not_emit_for_peer_buyer() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut sig = make_signal(crate::TransferInterestStage::ScoutWatched);
+    let mut sig = make_signal(TransferInterestStage::ScoutWatched);
     sig.buyer_rep = 0.51;
     sig.seller_rep = 0.50;
     sig.repeated_attention = false;
-    sig.source = crate::TransferInterestSource::ScoutAttendance;
+    sig.source = TransferInterestSource::ScoutAttendance;
     let landed = p.on_transfer_interest_signal(&sig);
     assert!(
         !landed,
@@ -2896,11 +2895,11 @@ fn transfer_interest_scout_only_does_not_emit_for_peer_buyer() {
 #[test]
 fn transfer_interest_repeated_scout_attention_emits_event() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut sig = make_signal(crate::TransferInterestStage::ScoutWatched);
+    let mut sig = make_signal(TransferInterestStage::ScoutWatched);
     sig.buyer_rep = 0.55;
     sig.seller_rep = 0.50;
     sig.repeated_attention = true;
-    sig.source = crate::TransferInterestSource::ScoutAttendance;
+    sig.source = TransferInterestSource::ScoutAttendance;
     let landed = p.on_transfer_interest_signal(&sig);
     assert!(
         landed,
@@ -2913,11 +2912,11 @@ fn transfer_interest_repeated_scout_attention_emits_event() {
 #[test]
 fn transfer_interest_scout_cooldown_blocks_repeat() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut sig = make_signal(crate::TransferInterestStage::ScoutWatched);
+    let mut sig = make_signal(TransferInterestStage::ScoutWatched);
     sig.buyer_rep = 0.55;
     sig.seller_rep = 0.50;
     sig.repeated_attention = true;
-    sig.source = crate::TransferInterestSource::ScoutAttendance;
+    sig.source = TransferInterestSource::ScoutAttendance;
     p.on_transfer_interest_signal(&sig);
     // Same scout, same window — cooldown gate should block the duplicate.
     let landed_again = p.on_transfer_interest_signal(&sig);
@@ -2932,7 +2931,7 @@ fn transfer_interest_scout_cooldown_blocks_repeat() {
 #[test]
 fn transfer_interest_rival_kind_attaches_rival_evidence() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let mut sig = make_signal(TransferInterestStage::ConcreteInterest);
     sig.is_rival = true;
     p.on_transfer_interest_signal(&sig);
     let event = p
@@ -2947,10 +2946,7 @@ fn transfer_interest_rival_kind_attaches_rival_evidence() {
         .and_then(|c| c.transfer_interest_context.as_ref())
         .expect("rival context attached");
     assert!(tic.is_rival);
-    assert!(
-        tic.evidence
-            .contains(&crate::TransferInterestEvidence::RivalClub)
-    );
+    assert!(tic.evidence.contains(&TransferInterestEvidence::RivalClub));
 }
 
 #[test]
@@ -2958,15 +2954,15 @@ fn transfer_interest_underused_player_reads_smaller_club_offer_as_escape() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     p.attributes.ambition = 12.0;
     p.attributes.loyalty = 8.0;
-    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let mut sig = make_signal(TransferInterestStage::ConcreteInterest);
     // Smaller club, but offering more minutes
     sig.buyer_rep = 0.30;
     sig.seller_rep = 0.55;
     // Install a contract with fringe squad status so the fringe-detection
     // branch lights up. `build_player` starts the player with no contract;
     // without one the classifier can't read squad status.
-    let mut contract = crate::PlayerClubContract::new(10_000, d(2035, 6, 30));
-    contract.squad_status = crate::PlayerSquadStatus::MainBackupPlayer;
+    let mut contract = PlayerClubContract::new(10_000, d(2035, 6, 30));
+    contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
     p.contract = Some(contract);
     p.on_transfer_interest_signal(&sig);
     let event =
@@ -2980,20 +2976,17 @@ fn transfer_interest_underused_player_reads_smaller_club_offer_as_escape() {
         .expect("context attached");
     assert_eq!(
         tic.interest_kind,
-        crate::TransferInterestKind::EscapeRoute,
+        TransferInterestKind::EscapeRoute,
         "fringe player offered minutes elsewhere should classify as EscapeRoute"
     );
-    assert_eq!(
-        tic.player_reaction,
-        crate::TransferInterestReaction::WantsTalks
-    );
+    assert_eq!(tic.player_reaction, TransferInterestReaction::WantsTalks);
 }
 
 #[test]
 fn transfer_interest_bid_rejected_signal_emits_with_rejected_evidence() {
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     p.attributes.ambition = 16.0;
-    let sig = make_signal(crate::TransferInterestStage::BidRejected);
+    let sig = make_signal(TransferInterestStage::BidRejected);
     let landed = p.on_transfer_interest_signal(&sig);
     assert!(
         landed,
@@ -3012,7 +3005,7 @@ fn transfer_interest_bid_rejected_signal_emits_with_rejected_evidence() {
         .expect("context attached for bid rejected");
     assert!(
         tic.evidence
-            .contains(&crate::TransferInterestEvidence::RejectedBid)
+            .contains(&TransferInterestEvidence::RejectedBid)
     );
 }
 
@@ -3022,7 +3015,7 @@ fn transfer_interest_already_home_domestic_move_is_not_homecoming() {
     // the buyer is in the player's home country, but the player is also
     // already there — this is a domestic lateral move, not a homecoming.
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let mut sig = make_signal(TransferInterestStage::ConcreteInterest);
     sig.buyer_rep = 0.55;
     sig.seller_rep = 0.55;
     sig.buyer_league_rep = 6000;
@@ -3046,7 +3039,7 @@ fn transfer_interest_already_home_domestic_move_is_not_homecoming() {
         .map(|tic| tic.interest_kind);
     assert_ne!(
         last_kind,
-        Some(crate::TransferInterestKind::Homecoming),
+        Some(TransferInterestKind::Homecoming),
         "domestic same-country move should fall through to a non-homecoming kind"
     );
     let tic = p
@@ -3063,7 +3056,7 @@ fn transfer_interest_already_home_domestic_move_is_not_homecoming() {
     );
     assert!(
         !tic.evidence
-            .contains(&crate::TransferInterestEvidence::HomeCountry),
+            .contains(&TransferInterestEvidence::HomeCountry),
         "an already-home domestic move must not carry HomeCountry evidence"
     );
 }
@@ -3073,7 +3066,7 @@ fn transfer_interest_player_abroad_linked_with_home_club_is_homecoming() {
     // Russian player playing abroad, linked with a Russian club —
     // proper homecoming narrative.
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let mut sig = make_signal(TransferInterestStage::ConcreteInterest);
     sig.buyer_rep = 0.55;
     sig.seller_rep = 0.55;
     sig.buyer_league_rep = 6000;
@@ -3098,7 +3091,7 @@ fn transfer_interest_player_abroad_linked_with_home_club_is_homecoming() {
         .as_ref()
         .and_then(|c| c.transfer_interest_context.as_ref())
         .expect("context attached for homecoming");
-    assert_eq!(tic.interest_kind, crate::TransferInterestKind::Homecoming);
+    assert_eq!(tic.interest_kind, TransferInterestKind::Homecoming);
     assert!(tic.is_home_country);
 }
 
@@ -3108,7 +3101,7 @@ fn transfer_interest_former_club_precedence_over_homecoming() {
     // classify as FormerClubReturn even though the home-country signal
     // is also set.
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
-    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let mut sig = make_signal(TransferInterestStage::ConcreteInterest);
     sig.buyer_rep = 0.55;
     sig.seller_rep = 0.55;
     sig.is_home_country = true;
@@ -3126,10 +3119,7 @@ fn transfer_interest_former_club_precedence_over_homecoming() {
         .as_ref()
         .and_then(|c| c.transfer_interest_context.as_ref())
         .expect("context attached for former-club return");
-    assert_eq!(
-        tic.interest_kind,
-        crate::TransferInterestKind::FormerClubReturn
-    );
+    assert_eq!(tic.interest_kind, TransferInterestKind::FormerClubReturn);
 }
 
 #[test]
@@ -3139,7 +3129,7 @@ fn transfer_interest_favorite_club_precedence_over_homecoming() {
     // emotional framing.
     let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
     p.favorite_clubs.push(9001);
-    let mut sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let mut sig = make_signal(TransferInterestStage::ConcreteInterest);
     sig.buyer_rep = 0.55;
     sig.seller_rep = 0.55;
     sig.is_home_country = true;
@@ -3158,7 +3148,7 @@ fn transfer_interest_favorite_club_precedence_over_homecoming() {
         .expect("context attached for favourite club");
     assert_eq!(
         tic.interest_kind,
-        crate::TransferInterestKind::FavoriteClubInterest
+        TransferInterestKind::FavoriteClubInterest
     );
 }
 
@@ -3169,7 +3159,7 @@ fn transfer_interest_count_helper_only_counts_interest_events() {
         .add_event_default(HappinessEventType::PoorTraining);
     p.happiness
         .add_event_default(HappinessEventType::ManagerPraise);
-    let sig = make_signal(crate::TransferInterestStage::ConcreteInterest);
+    let sig = make_signal(TransferInterestStage::ConcreteInterest);
     p.on_transfer_interest_signal(&sig);
     let n = p.count_recent_transfer_interest_events(60);
     assert_eq!(
@@ -3560,7 +3550,7 @@ fn award_reputation_player_of_season_more_than_team_of_year() {
 
 #[test]
 fn catalog_magnitude_team_of_the_month_between_week_and_season() {
-    let cat = crate::club::player::behaviour_config::MoraleEventCatalog::default();
+    let cat = MoraleEventCatalog::default();
     let week = cat.magnitude(HappinessEventType::TeamOfTheWeekSelection);
     let month = cat.magnitude(HappinessEventType::TeamOfTheMonthSelection);
     let season = cat.magnitude(HappinessEventType::TeamOfTheSeasonSelection);
@@ -3652,7 +3642,7 @@ fn award_reputation_pom_then_totm_dampens_totm() {
     // same tick. POM happiness event is the dampener trigger.
     stacked.on_recognition_award(
         HappinessEventType::PlayerOfTheMonth,
-        crate::RecognitionEventContext::new(crate::RecognitionEventKind::PlayerOfTheMonth),
+        RecognitionEventContext::new(RecognitionEventKind::PlayerOfTheMonth),
         28,
     );
     let stacked_after_pom_cur = stacked.player_attributes.current_reputation;
@@ -3692,7 +3682,7 @@ fn award_reputation_young_pom_then_young_totm_dampens() {
 
     stacked.on_recognition_award(
         HappinessEventType::YoungPlayerOfTheMonth,
-        crate::RecognitionEventContext::new(crate::RecognitionEventKind::YoungPlayerOfTheMonth),
+        RecognitionEventContext::new(RecognitionEventKind::YoungPlayerOfTheMonth),
         28,
     );
     let stacked_after_ypom = stacked.player_attributes.current_reputation;
@@ -3716,7 +3706,7 @@ fn on_recognition_award_records_team_of_the_month_event() {
     let mut p = build_award_player(d(1995, 1, 1), 5_000, 5_000, 4_000);
     let recorded = p.on_recognition_award(
         HappinessEventType::TeamOfTheMonthSelection,
-        crate::RecognitionEventContext::new(crate::RecognitionEventKind::TeamOfTheMonthSelection),
+        RecognitionEventContext::new(RecognitionEventKind::TeamOfTheMonthSelection),
         28,
     );
     assert!(recorded, "first-time TOTM emit must record");
@@ -3727,7 +3717,7 @@ fn on_recognition_award_records_team_of_the_month_event() {
     // Cooldown of 28 days suppresses a same-tick double-fire.
     let second = p.on_recognition_award(
         HappinessEventType::TeamOfTheMonthSelection,
-        crate::RecognitionEventContext::new(crate::RecognitionEventKind::TeamOfTheMonthSelection),
+        RecognitionEventContext::new(RecognitionEventKind::TeamOfTheMonthSelection),
         28,
     );
     assert!(
@@ -3741,9 +3731,7 @@ fn on_recognition_award_records_young_team_of_the_month_event() {
     let mut p = build_award_player(d(2007, 1, 1), 1_500, 1_500, 800);
     let recorded = p.on_recognition_award(
         HappinessEventType::YoungTeamOfTheMonthSelection,
-        crate::RecognitionEventContext::new(
-            crate::RecognitionEventKind::YoungTeamOfTheMonthSelection,
-        ),
+        RecognitionEventContext::new(RecognitionEventKind::YoungTeamOfTheMonthSelection),
         28,
     );
     assert!(recorded, "first-time Young TOTM emit must record");
@@ -4011,11 +3999,28 @@ fn match_readiness_stays_in_zero_to_twenty_band_and_never_overshoots() {
 // recovery-debt model that now responds to player condition.
 // ════════════════════════════════════════════════════════════════════
 
+use crate::MatchSelectionContext;
+use crate::PlayerClubContract;
+use crate::PlayerSquadStatus;
+use crate::RecognitionEventContext;
+use crate::RecognitionEventKind;
+use crate::SelectionDecisionScope;
+use crate::SelectionOmissionReason;
+use crate::SelectionRole;
+use crate::TransferInterestEvidence;
+use crate::TransferInterestKind;
+use crate::TransferInterestReaction;
+use crate::TransferInterestSource;
+use crate::TransferInterestStage;
 use crate::club::StaffStub;
+use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::behaviour_config::MoraleEventCatalog;
 use crate::club::player::training::training::PlayerTraining;
 use crate::club::staff::Staff;
 use crate::{TrainingIntensity, TrainingSession, TrainingType};
+use chrono::Duration;
 use chrono::NaiveDateTime;
+use chrono::NaiveTime;
 
 fn make_test_coach() -> Staff {
     let mut staff = StaffStub::default();
@@ -4041,10 +4046,7 @@ fn ninety_minute_pressing_costs_more_than_forty_five_minute_pressing() {
     // fatigue and load.
     let p = fresh_player(PlayerPositionType::MidfielderCenter);
     let coach = make_test_coach();
-    let date = NaiveDateTime::new(
-        d(2025, 9, 14),
-        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-    );
+    let date = NaiveDateTime::new(d(2025, 9, 14), NaiveTime::from_hms_opt(10, 0, 0).unwrap());
     let short = make_session(TrainingType::PressingDrills, 45);
     let long = make_session(TrainingType::PressingDrills, 90);
     let r_short = PlayerTraining::train(&p, &coach, &short, date, 0.5);
@@ -4072,10 +4074,7 @@ fn heavy_training_on_tired_player_accrues_more_debt_and_jadedness() {
     let mut tired = fresh_player(PlayerPositionType::ForwardLeft);
     tired.player_attributes.condition = 5000; // 50%
     let coach = make_test_coach();
-    let date_t = NaiveDateTime::new(
-        d(2025, 9, 14),
-        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-    );
+    let date_t = NaiveDateTime::new(d(2025, 9, 14), NaiveTime::from_hms_opt(10, 0, 0).unwrap());
     let session = make_session(TrainingType::PressingDrills, 60);
     let r_fresh = PlayerTraining::train(&fresh, &coach, &session, date_t, 0.5);
     let r_tired = PlayerTraining::train(&tired, &coach, &session, date_t, 0.5);
@@ -4128,10 +4127,7 @@ fn recovery_session_does_not_push_every_profile_to_same_post_session_condition()
     tired_vet.birth_date = d(1990, 1, 1); // ~35
 
     let coach = make_test_coach();
-    let date_t = NaiveDateTime::new(
-        d(2025, 9, 14),
-        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-    );
+    let date_t = NaiveDateTime::new(d(2025, 9, 14), NaiveTime::from_hms_opt(10, 0, 0).unwrap());
     for p in [&mut elite, &mut average, &mut tired_vet] {
         let session = make_session(TrainingType::Recovery, 60);
         let r = PlayerTraining::train(p, &coach, &session, date_t, 1.0);
@@ -4170,10 +4166,7 @@ fn recovery_session_restores_condition_but_caps_at_individualized_target() {
     p.player_attributes.condition = 5000; // 50%
     p.skills.physical.natural_fitness = 20.0; // elite — high target.
     let coach = make_test_coach();
-    let date_t = NaiveDateTime::new(
-        d(2025, 9, 14),
-        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-    );
+    let date_t = NaiveDateTime::new(d(2025, 9, 14), NaiveTime::from_hms_opt(10, 0, 0).unwrap());
     // Run three recovery sessions back-to-back — even with massive
     // negative fatigue_change, the cap must hold.
     for _ in 0..3 {
@@ -4207,7 +4200,7 @@ fn daily_recovery_caps_at_dynamic_normal_for_elite_natural_fitness() {
     // Recovery over 30 days — condition should sit at the dynamic
     // cap (9500), never overshooting.
     for i in 0..30 {
-        p.process_condition_recovery(d(2025, 11, 1) + chrono::Duration::days(i));
+        p.process_condition_recovery(d(2025, 11, 1) + Duration::days(i));
     }
     assert!(p.player_attributes.condition <= 9500);
     assert!(p.player_attributes.condition >= 9000);
@@ -4477,10 +4470,7 @@ fn current_session_debt_does_not_block_its_own_fitness_gain() {
     p.load.recovery_debt = 490.0;
     let pre_fitness = p.player_attributes.fitness;
     let coach = make_test_coach();
-    let date_t = NaiveDateTime::new(
-        d(2025, 9, 14),
-        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-    );
+    let date_t = NaiveDateTime::new(d(2025, 9, 14), NaiveTime::from_hms_opt(10, 0, 0).unwrap());
     let session = make_session(TrainingType::PressingDrills, 90);
     let r = PlayerTraining::train(&p, &coach, &session, date_t, 0.5);
     r.apply_to_player(&mut p, date_t.date());
@@ -4510,10 +4500,7 @@ fn strength_session_at_intensity_share_boundary_still_builds_fitness() {
     p.player_attributes.fitness = 7_000;
     let pre_fitness = p.player_attributes.fitness;
     let coach = make_test_coach();
-    let date_t = NaiveDateTime::new(
-        d(2025, 9, 14),
-        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-    );
+    let date_t = NaiveDateTime::new(d(2025, 9, 14), NaiveTime::from_hms_opt(10, 0, 0).unwrap());
     let session = make_session(TrainingType::Strength, 90);
     let r = PlayerTraining::train(&p, &coach, &session, date_t, 0.5);
     // Verify the boundary value the test relies on hasn't drifted.
@@ -4543,10 +4530,7 @@ fn elevated_debt_attenuates_fitness_gain_but_does_not_zero_it() {
     tired.player_attributes.fitness = 7_000;
     tired.load.recovery_debt = 800.0;
     let coach = make_test_coach();
-    let date_t = NaiveDateTime::new(
-        d(2025, 9, 14),
-        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-    );
+    let date_t = NaiveDateTime::new(d(2025, 9, 14), NaiveTime::from_hms_opt(10, 0, 0).unwrap());
     let session = make_session(TrainingType::PressingDrills, 60);
     let r_fresh = PlayerTraining::train(&fresh, &coach, &session, date_t, 0.5);
     let r_tired = PlayerTraining::train(&tired, &coach, &session, date_t, 0.5);
@@ -4580,10 +4564,7 @@ fn very_low_condition_blocks_fitness_gain_entirely() {
     p.player_attributes.condition = 4_000; // 40% — below the 45 floor.
     let pre_fitness = p.player_attributes.fitness;
     let coach = make_test_coach();
-    let date_t = NaiveDateTime::new(
-        d(2025, 9, 14),
-        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-    );
+    let date_t = NaiveDateTime::new(d(2025, 9, 14), NaiveTime::from_hms_opt(10, 0, 0).unwrap());
     let session = make_session(TrainingType::PressingDrills, 60);
     let r = PlayerTraining::train(&p, &coach, &session, date_t, 0.5);
     r.apply_to_player(&mut p, date_t.date());
@@ -4601,10 +4582,7 @@ fn smooth_absorption_responds_to_pre_session_condition_continuously() {
     // gains less than one at 90% but more than one at 50%. Pin the
     // ordering — there must be no plateau in the middle.
     let coach = make_test_coach();
-    let date_t = NaiveDateTime::new(
-        d(2025, 9, 14),
-        chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
-    );
+    let date_t = NaiveDateTime::new(d(2025, 9, 14), NaiveTime::from_hms_opt(10, 0, 0).unwrap());
     let session = make_session(TrainingType::PressingDrills, 60);
 
     let gain_at = |start_cond: i16| -> i16 {
@@ -5003,8 +4981,7 @@ fn four_week_calibration_spread_across_positions_and_profiles() {
     for week in 0..4 {
         for day_offset in 0..7 {
             let date = start + Duration::days((week * 7 + day_offset) as i64);
-            let date_t =
-                NaiveDateTime::new(date, chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap());
+            let date_t = NaiveDateTime::new(date, NaiveTime::from_hms_opt(10, 0, 0).unwrap());
             let mut players: [&mut Player; 6] = [
                 &mut gk,
                 &mut wingback,

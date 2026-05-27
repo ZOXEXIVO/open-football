@@ -16,10 +16,17 @@ use log::debug;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelRefMutIterator;
 
+use crate::SimulationResult;
+use crate::Team;
 use crate::country::{
     CountryEconomicFactors, CountryGeneratorData, CountryRegulations, CountrySettings,
     InternationalCompetition, MediaCoverage,
 };
+use crate::league::DomesticCup;
+use crate::league::League;
+use crate::league::LeagueResult;
+use crate::league::LeagueTableResult;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct Country {
@@ -31,6 +38,11 @@ pub struct Country {
     pub foreground_color: String,
     pub continent_id: u32,
     pub leagues: LeagueCollection,
+    /// Domestic knockout cup (FA Cup, Copa del Rey, …). Stored apart from
+    /// `leagues` so the standings programme stays purely round-robin; the
+    /// cup is a first-class competition with its own knockout bracket.
+    /// `None` only for countries with no enabled leagues.
+    pub domestic_cup: Option<DomesticCup>,
     pub clubs: Vec<Club>,
     pub reputation: u16,
     pub settings: CountrySettings,
@@ -119,7 +131,7 @@ impl Country {
     pub fn club_mut(&mut self, id: u32) -> Option<&mut Club> {
         self.clubs.iter_mut().find(|c| c.id == id)
     }
-    pub fn team(&self, id: u32) -> Option<&crate::Team> {
+    pub fn team(&self, id: u32) -> Option<&Team> {
         for club in &self.clubs {
             for team in &club.teams.teams {
                 if team.id == id {
@@ -129,7 +141,7 @@ impl Country {
         }
         None
     }
-    pub fn team_mut(&mut self, id: u32) -> Option<&mut crate::Team> {
+    pub fn team_mut(&mut self, id: u32) -> Option<&mut Team> {
         for club in &mut self.clubs {
             for team in &mut club.teams.teams {
                 if team.id == id {
@@ -163,11 +175,25 @@ impl Country {
         }
         None
     }
-    pub fn league(&self, id: u32) -> Option<&crate::league::League> {
-        self.leagues.leagues.iter().find(|l| l.id == id)
+    pub fn league(&self, id: u32) -> Option<&League> {
+        // The domestic cup lives outside `leagues` but is still a `League`
+        // under the hood, so id-based lookups (stat routing, schedule
+        // updates, web) must see it too — otherwise cup matches would be
+        // classified as league games (`is_cup == false`).
+        self.leagues
+            .leagues
+            .iter()
+            .find(|l| l.id == id)
+            .or_else(|| self.domestic_cup.as_ref().filter(|c| c.id() == id).map(|c| &c.league))
     }
-    pub fn league_mut(&mut self, id: u32) -> Option<&mut crate::league::League> {
-        self.leagues.leagues.iter_mut().find(|l| l.id == id)
+    pub fn league_mut(&mut self, id: u32) -> Option<&mut League> {
+        if self.leagues.leagues.iter().any(|l| l.id == id) {
+            return self.leagues.leagues.iter_mut().find(|l| l.id == id);
+        }
+        self.domestic_cup
+            .as_mut()
+            .filter(|c| c.id() == id)
+            .map(|c| &mut c.league)
     }
 
     /// True iff `club_id` belongs to this country. Used as a cheap
@@ -207,7 +233,23 @@ impl Country {
         );
 
         // Phase 1: League Competitions
-        let league_results = self.leagues.simulate(&self.clubs, &ctx);
+        let mut league_results = self.leagues.simulate(&self.clubs, &ctx);
+
+        // Phase 1a: Domestic cup. Runs alongside the league programme and
+        // appends its day's results to `league_results` so the same Phase
+        // 1b `process_local` fan-out records cup stats, morale, discipline
+        // and reputation — routed into the cup buckets because the inner
+        // league carries `is_cup = true`. Disjoint field borrows: the cup
+        // is read mutably while `clubs` is read immutably.
+        {
+            let clubs = &self.clubs;
+            if let Some(cup) = self.domestic_cup.as_mut() {
+                let cup_ctx =
+                    ctx.with_league(cup.league.id, cup.league.slug.clone(), &[], cup.league.reputation);
+                let cup_result = cup.simulate(clubs, &cup_ctx);
+                league_results.push(cup_result);
+            }
+        }
 
         // Bridge between league and club passes: refresh each team's
         // fixture window from the (now-current) league schedule so
@@ -299,10 +341,7 @@ impl Country {
                 // to push them into `SimulationResult.match_results`.
                 // `LeagueTableResult` is a unit-like marker so there's
                 // no state to copy from the consumed result.
-                let mut placeholder = crate::league::LeagueResult::new(
-                    league_id,
-                    crate::league::LeagueTableResult {},
-                );
+                let mut placeholder = LeagueResult::new(league_id, LeagueTableResult {});
                 placeholder.new_season_started = new_season_started;
                 league_results_after.push(placeholder);
             } else {
@@ -353,7 +392,7 @@ impl Country {
             // placeholder for Phase C's iteration cost-of-bookkeeping.
             // (Phase C no longer calls ClubResult::process — the shell
             // is just for typing.)
-            cr.process(&mut ctx_local, &mut crate::SimulationResult::new());
+            cr.process(&mut ctx_local, &mut SimulationResult::new());
             // Keep a placeholder ClubResult to satisfy the existing
             // CountryResult.clubs surface. The data Phase C cares about
             // (academy_transfers, pending_ai_requests) were already
@@ -408,8 +447,7 @@ impl Country {
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {
         // Build team_id → (position, league_size, total_matches, matches_played, tier, league_rep)
-        let mut team_league_info: std::collections::HashMap<u32, (u8, u8, u8, u8, u8, u16)> =
-            std::collections::HashMap::new();
+        let mut team_league_info: HashMap<u32, (u8, u8, u8, u8, u8, u16)> = HashMap::new();
         for league in &self.leagues.leagues {
             if league.friendly {
                 continue;
@@ -496,11 +534,18 @@ impl Country {
         use std::collections::HashMap;
         let mut upcoming_map: HashMap<u32, Vec<NaiveDate>> = HashMap::new();
         let mut recent_map: HashMap<u32, Vec<NaiveDate>> = HashMap::new();
-        for league in &self.leagues.leagues {
-            if league.friendly {
-                continue;
-            }
-            for tour in &league.schedule.tours {
+        // Cup ties count toward fixture congestion just like league games,
+        // so fold the cup's bracket into the same window maps.
+        let cup_schedule = self.domestic_cup.as_ref().map(|c| &c.league.schedule);
+        let schedules = self
+            .leagues
+            .leagues
+            .iter()
+            .filter(|l| !l.friendly)
+            .map(|l| &l.schedule)
+            .chain(cup_schedule);
+        for schedule in schedules {
+            for tour in &schedule.tours {
                 for item in &tour.items {
                     let d = item.date.date();
                     if d > today && item.result.is_none() {

@@ -8,6 +8,7 @@ use crate::r#match::{
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 const MAX_PASS_DURATION: u64 = 30; // Ticks before trying alternative action (reduced for faster decision-making)
 const MIN_POSITION_ADJUSTMENT_TIME: u64 = 5; // Minimum ticks before adjusting position (prevents immediate twitching)
@@ -152,9 +153,7 @@ impl ForwardPassingState {
             })
             .filter(|(_, score)| *score >= MIN_FWD_PASS_SCORE)
             .max_by(|(_, score_a), (_, score_b)| {
-                score_a
-                    .partial_cmp(score_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                score_a.partial_cmp(score_b).unwrap_or(Ordering::Equal)
             })
             .map(|(teammate, _)| teammate);
 
@@ -178,9 +177,7 @@ impl ForwardPassingState {
             })
             .filter(|(_, score)| *score >= MIN_FWD_PASS_SCORE)
             .max_by(|(_, score_a), (_, score_b)| {
-                score_a
-                    .partial_cmp(score_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                score_a.partial_cmp(score_b).unwrap_or(Ordering::Equal)
             })
             .map(|(teammate, _)| teammate)
     }

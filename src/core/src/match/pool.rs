@@ -1,14 +1,16 @@
 use crate::r#match::engine::FootballEngine;
 use crate::r#match::{Match, MatchResult, MatchResultRaw, MatchSquad};
+use rayon::ThreadPool;
+use rayon::ThreadPoolBuilder;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 pub struct MatchPlayEnginePool {
-    pool: rayon::ThreadPool,
+    pool: ThreadPool,
 }
 
 impl MatchPlayEnginePool {
     pub fn new(num_threads: usize) -> Self {
-        let pool = rayon::ThreadPoolBuilder::new()
+        let pool = ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .thread_name(|idx| format!("match-worker-{}", idx))
             .build()

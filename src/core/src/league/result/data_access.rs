@@ -25,10 +25,14 @@
 //! into a `DeferredGlobalOps` queue that the simulator drains serially
 //! after the parallel pass.
 
+use crate::Staff;
+use crate::club::board::manager_market::ManagerMarketTick;
+use crate::country::result::transfers::GlobalFreeAgentSummary;
 use crate::league::League;
 use crate::shared::indexes::SimulatorDataIndexes;
 use crate::simulator::CountryInfo;
 use crate::simulator::SimulatorData;
+use crate::transfers::pipeline::PlayerSummary;
 use crate::{Club, Country, Player, Team};
 use chrono::NaiveDateTime;
 use std::collections::HashMap;
@@ -63,7 +67,7 @@ pub trait LeagueProcessAccess {
 
     /// Admit a freshly sacked staff member to the global free-agent
     /// pool. SimulatorData applies inline; CountryProcessCtx defers.
-    fn admit_free_agent_staff(&mut self, staff: crate::Staff);
+    fn admit_free_agent_staff(&mut self, staff: Staff);
     /// Queue a permanent manager appointment for a club. The actual
     /// `manager_market::execute_appointment` reads cross-club state
     /// and the global free-agent pool, so the parallel path can only
@@ -120,15 +124,11 @@ impl LeagueProcessAccess for SimulatorData {
     fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
         SimulatorData::player_mut(self, id)
     }
-    fn admit_free_agent_staff(&mut self, staff: crate::Staff) {
+    fn admit_free_agent_staff(&mut self, staff: Staff) {
         crate::club::staff::admit_to_pool(&mut self.free_agent_staff, staff, self.date.date());
     }
     fn queue_manager_appointment(&mut self, club_id: u32) {
-        crate::club::board::manager_market::ManagerMarketTick::execute_appointment(
-            self,
-            club_id,
-            self.date.date(),
-        );
+        ManagerMarketTick::execute_appointment(self, club_id, self.date.date());
     }
     fn random_player_mut(&mut self) -> Option<&mut Player> {
         let player_count: usize = self
@@ -359,7 +359,7 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
         }
         self.country.player_mut(id)
     }
-    fn admit_free_agent_staff(&mut self, staff: crate::Staff) {
+    fn admit_free_agent_staff(&mut self, staff: Staff) {
         self.deferred.free_agent_staff.push(staff);
     }
     fn queue_manager_appointment(&mut self, club_id: u32) {
@@ -406,11 +406,11 @@ pub struct WorldSnapshot<'a> {
     /// World-wide foreign-player pool — every country's transferable
     /// players, walked once before the parallel pass. Each country's
     /// `simulate_transfer_market_local` filters out own-country entries.
-    pub world_pool: &'a [crate::transfers::pipeline::PlayerSummary],
+    pub world_pool: &'a [PlayerSummary],
     /// Snapshot of the global "Move on Free" pool. Read-only during
     /// Phase A; `apply_deferred_transfer_ops` mutates `data.free_agents`
     /// in Phase C.
-    pub global_free_agents: &'a [crate::country::result::transfers::GlobalFreeAgentSummary],
+    pub global_free_agents: &'a [GlobalFreeAgentSummary],
 }
 
 /// Cross-country / global mutations that the parallel Phase-A pass
@@ -426,7 +426,7 @@ pub struct WorldSnapshot<'a> {
 pub struct DeferredGlobalOps {
     /// Sacked staff that should be admitted to `data.free_agent_staff`
     /// after the parallel pass. Produced by board sacking logic.
-    pub free_agent_staff: Vec<crate::Staff>,
+    pub free_agent_staff: Vec<Staff>,
     /// Club ids that need `manager_market::execute_appointment` to
     /// finalise a permanent hire from the global free-agent staff
     /// pool. Produced when the board's search window has elapsed.
@@ -435,7 +435,7 @@ pub struct DeferredGlobalOps {
     /// `contract = None`, `Frt` status already stamped — Phase C
     /// extends them onto `data.free_agents` so they remain
     /// discoverable through the senior market.
-    pub free_agent_players: Vec<crate::Player>,
+    pub free_agent_players: Vec<Player>,
 }
 
 impl DeferredGlobalOps {

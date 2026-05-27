@@ -5,11 +5,12 @@ use super::constants::{
 };
 use crate::r#match::ConditionContext;
 use log::trace;
+use std::marker::PhantomData;
 
 /// Generic condition processor with role-specific configurations
 pub struct ConditionProcessor<T: ActivityIntensityConfig> {
     intensity: ActivityIntensity,
-    _phantom: std::marker::PhantomData<T>,
+    _phantom: PhantomData<T>,
 }
 
 impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
@@ -17,7 +18,7 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
     pub fn new(intensity: ActivityIntensity) -> Self {
         Self {
             intensity,
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 

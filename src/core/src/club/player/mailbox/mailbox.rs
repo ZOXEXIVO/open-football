@@ -134,7 +134,7 @@ impl PlayerContractProposal {
 pub struct PlayerContractAsk {
     pub desired_salary: u32,
     pub desired_years: u8,
-    pub recorded_on: chrono::NaiveDate,
+    pub recorded_on: NaiveDate,
     /// Status the player wants if role was the deal-breaker.
     pub demanded_status: Option<PlayerSquadStatus>,
     /// Fee threshold the player wants on a release clause.

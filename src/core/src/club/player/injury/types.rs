@@ -1,3 +1,6 @@
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fmt::Result;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InjurySeverity {
     Minor,
@@ -347,8 +350,8 @@ impl InjuryType {
     }
 }
 
-impl std::fmt::Display for InjuryType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for InjuryType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             InjuryType::Bruise => write!(f, "Bruise"),
             InjuryType::MinorKnock => write!(f, "Minor Knock"),

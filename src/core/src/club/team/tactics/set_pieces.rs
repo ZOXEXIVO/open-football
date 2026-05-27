@@ -9,6 +9,7 @@ use crate::PersonAttributes;
 use crate::club::PlayerPositionType;
 use crate::club::player::Player;
 use crate::club::player::skills::Mental;
+use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Default)]
 pub struct SetPieceSetup {
@@ -70,7 +71,7 @@ impl SetPieceSetup {
                 .max_by(|a, b| {
                     score_fn(a)
                         .partial_cmp(&score_fn(b))
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .unwrap_or(Ordering::Equal)
                 })
                 .map(|p| p.id)
         };
@@ -113,7 +114,7 @@ impl SetPieceSetup {
                 (*p, score)
             })
             .collect();
-        ordered.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ordered.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         let penalty_order: Vec<u32> = ordered.iter().take(11).map(|(p, _)| p.id).collect();
 
         SetPieceSetup {

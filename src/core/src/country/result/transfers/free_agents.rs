@@ -18,6 +18,7 @@ use chrono::NaiveDate;
 use log::debug;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Lightweight snapshot of a player in the global `sim.free_agents` pool.
 /// Built before the per-country borrow so `handle_free_agents` can match
@@ -711,8 +712,7 @@ pub(crate) fn snapshot_global_free_agents(
     // fall back to permissive defaults and an Argentinian free agent
     // slips through to a Mali buyer. Build a cache keyed by country_id
     // so the mutable pass below doesn't need a SimulatorData borrow.
-    let unique_country_ids: std::collections::HashSet<u32> =
-        data.free_agents.iter().map(|p| p.country_id).collect();
+    let unique_country_ids: HashSet<u32> = data.free_agents.iter().map(|p| p.country_id).collect();
     let nationality_cache: HashMap<u32, (u16, u32, String)> = {
         let data_ref: &SimulatorData = data;
         unique_country_ids

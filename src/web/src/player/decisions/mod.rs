@@ -179,7 +179,7 @@ pub async fn player_decisions_action(
                 country_name: cn,
                 country_slug: cs,
             };
-            views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, false)
+            views::team_menu(&mp, &neighbor_refs, &league_refs)
         } else {
             Vec::new()
         },

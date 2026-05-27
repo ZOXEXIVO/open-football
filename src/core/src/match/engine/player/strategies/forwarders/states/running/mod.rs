@@ -13,6 +13,7 @@ use crate::r#match::{
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Shot-gate rejection counters — `match-logs` feature only. A forward tick
@@ -294,7 +295,7 @@ impl StateProcessingHandler for ForwardRunningState {
                         } else {
                             0.0
                         };
-                        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                        sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
                     });
                 if let Some(target) = safe_outlet {
                     return Some(StateChangeResult::with_forward_state_and_event(
@@ -915,7 +916,7 @@ impl StateProcessingHandler for ForwardRunningState {
                         .opponents()
                         .all()
                         .map(|opp| (opp.position, (opp.position - carrier.position).magnitude()))
-                        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
                     if let Some((opp_pos, opp_dist)) = nearest_opp_to_carrier {
                         if opp_dist < 15.0 {
                             // Support target: 22u from carrier, on the
@@ -2124,7 +2125,7 @@ impl ForwardRunningState {
                 // Prefer farther teammates — they're more likely outside the congested group
                 let da = (a.position - player_pos).magnitude();
                 let db = (b.position - player_pos).magnitude();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
             })
     }
 
@@ -2159,7 +2160,7 @@ impl ForwardRunningState {
             .min_by(|a, b| {
                 let da = (a.position - player_pos).magnitude();
                 let db = (b.position - player_pos).magnitude();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
             })?;
 
         // Space the opponent is vacating
@@ -2186,7 +2187,7 @@ impl ForwardRunningState {
             .min_by(|a, b| {
                 let da = (a.position - vacated_zone).magnitude();
                 let db = (b.position - vacated_zone).magnitude();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
             })
     }
 

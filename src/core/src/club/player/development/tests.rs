@@ -9,6 +9,7 @@ use crate::club::player::player::Player;
 use crate::club::player::position::{PlayerPosition, PlayerPositions};
 use crate::shared::fullname::FullName;
 use crate::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills};
+use chrono::Duration;
 use chrono::NaiveDate;
 
 // ── Test helpers ──────────────────────────────────────────────────────
@@ -535,7 +536,7 @@ fn run_weekly_ticks(
     club_rep: f32,
 ) {
     for w in 0..weeks {
-        let now = start + chrono::Duration::weeks(w as i64);
+        let now = start + Duration::weeks(w as i64);
         p.process_development_with(now, league_rep, coach, club_rep, &mut FixedRolls(1.0));
     }
 }
@@ -937,11 +938,11 @@ fn simulate_weekly(
     club_rep: f32,
 ) {
     for w in 0..weeks {
-        let match_day = start + chrono::Duration::weeks(w as i64);
+        let match_day = start + Duration::weeks(w as i64);
         // Age the rolling windows day-by-day across the week leading
         // into the match. The first iteration seeds the decay clock.
         for offset in 0..7 {
-            let day = match_day - chrono::Duration::days(6 - offset);
+            let day = match_day - Duration::days(6 - offset);
             p.load.daily_decay(day);
         }
         if minutes_per_week > 0.0 {
@@ -1039,9 +1040,9 @@ fn managed_cameo_pipeline_outgrows_overloaded_full_start_pipeline() {
     // out of shape just for this test.
     let weeks = 24u32;
     for w in 0..weeks {
-        let match_day = start + chrono::Duration::weeks(w as i64);
+        let match_day = start + Duration::weeks(w as i64);
         for offset in 0..7 {
-            let day = match_day - chrono::Duration::days(6 - offset);
+            let day = match_day - Duration::days(6 - offset);
             managed.load.daily_decay(day);
             overloaded.load.daily_decay(day);
         }

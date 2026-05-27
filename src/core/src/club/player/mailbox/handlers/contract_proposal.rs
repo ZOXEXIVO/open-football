@@ -6,6 +6,7 @@ use crate::club::player::calculators::{
 use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
 use crate::handlers::AcceptContractHandler;
 use crate::utils::DateUtils;
+use crate::utils::FormattingUtils;
 use crate::{
     ContractEventContext, ContractEventEvidence, ContractEventKind, HappinessEventCause,
     HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
@@ -26,7 +27,7 @@ fn log_rejection(player: &mut Player, proposal: &PlayerContractProposal, now: Na
     let movement = format!(
         "{}y · ${}/y",
         proposal.years,
-        crate::utils::FormattingUtils::format_money(proposal.salary as f64)
+        FormattingUtils::format_money(proposal.salary as f64)
     );
     player.decision_history.add(
         now,

@@ -4,7 +4,8 @@ use crate::league::{
     LeagueStatistics, LeagueTable, LeagueTableRow, MatchStorage, PlayerOfTheWeekHistory, Schedule,
     ScheduleItem,
 };
-use crate::{Club, Team};
+use crate::{Club, PlayerFieldPositionGroup, PlayerStatistics, Team};
+use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
@@ -139,6 +140,7 @@ impl League {
                 clubs,
                 &ctx,
                 self.friendly,
+                false,
             );
 
             self.process_match_day_results(&match_results, clubs, &ctx, current_date);
@@ -162,6 +164,92 @@ impl League {
             .flat_map(|c| &c.teams.teams)
             .find(|team| team.id == id)
             .unwrap()
+    }
+
+    /// Aggregate one player's statistics across this league's stored match
+    /// records, replicating the in-match stat fan-out (`record_match_*`)
+    /// over each match's recorded `player_stats`. The web layer uses this
+    /// to render a player's cup row straight from the authoritative match
+    /// records — the same source the cup pages read — rather than the live
+    /// per-spell counter, which can be incomplete for a player who changed
+    /// clubs mid-season. Because it consumes the same per-match stats the
+    /// live counter was fed, the totals match for players who never moved.
+    /// Returns `None` when the player never featured in a stored match.
+    pub fn aggregate_player_statistics(&self, player_id: u32) -> Option<PlayerStatistics> {
+        let mut s = PlayerStatistics::default();
+        let mut featured = false;
+
+        for mr in self.matches.iter() {
+            let Some(details) = mr.details.as_ref() else {
+                continue;
+            };
+            let Some(ps) = details.player_stats.get(&player_id) else {
+                continue;
+            };
+
+            let in_left_main = details.left_team_players.main.contains(&player_id);
+            let in_right_main = details.right_team_players.main.contains(&player_id);
+            let is_starter = in_left_main || in_right_main;
+            let is_sub = details.left_team_players.substitutes_used.contains(&player_id)
+                || details.right_team_players.substitutes_used.contains(&player_id);
+            if !is_starter && !is_sub {
+                continue;
+            }
+            featured = true;
+
+            if is_starter {
+                s.played += 1;
+            } else {
+                s.played_subs += 1;
+            }
+
+            s.goals += ps.goals;
+            s.assists += ps.assists;
+            s.shots_on_target += ps.shots_on_target as f32;
+            s.tackling += ps.tackles as f32;
+            s.yellow_cards = s.yellow_cards.saturating_add(ps.yellow_cards as u8);
+            s.red_cards = s.red_cards.saturating_add(ps.red_cards as u8);
+
+            if ps.passes_attempted > 0 {
+                let match_pct =
+                    (ps.passes_completed as f32 / ps.passes_attempted as f32 * 100.0) as u8;
+                let games = s.played + s.played_subs;
+                s.passes = if games <= 1 {
+                    match_pct
+                } else {
+                    let prev = s.passes as f32;
+                    ((prev * (games - 1) as f32 + match_pct as f32) / games as f32) as u8
+                };
+            }
+
+            s.record_match_rating(ps.match_rating, ps.minutes_played, is_starter);
+
+            if details.player_of_the_match_id == Some(player_id) {
+                s.player_of_the_match = s.player_of_the_match.saturating_add(1);
+            }
+
+            // GK conceded / clean sheets — starting keepers only, mirroring
+            // `record_match_stats`. The player's side is resolved from the
+            // squad's `team_id`; goals against come from the other side.
+            if is_starter && ps.position_group == PlayerFieldPositionGroup::Goalkeeper {
+                let side_team_id = if in_left_main {
+                    details.left_team_players.team_id
+                } else {
+                    details.right_team_players.team_id
+                };
+                let conceded = if mr.score.home_team.team_id == side_team_id {
+                    mr.score.away_team.get()
+                } else {
+                    mr.score.home_team.get()
+                };
+                s.conceded += conceded as u16;
+                if conceded == 0 {
+                    s.clean_sheets += 1;
+                }
+            }
+        }
+
+        if featured { Some(s) } else { None }
     }
 }
 
@@ -214,7 +302,7 @@ impl LeagueSettings {
 // Schedule extensions for enhanced functionality
 impl Schedule {
     pub fn get_matches_in_next_days(&self, from_date: NaiveDate, days: i64) -> Vec<&ScheduleItem> {
-        let end_date = from_date + chrono::Duration::days(days);
+        let end_date = from_date + Duration::days(days);
 
         self.tours
             .iter()
@@ -245,7 +333,7 @@ impl Schedule {
         from_date: NaiveDate,
         days: i64,
     ) -> impl Iterator<Item = &ScheduleItem> + '_ {
-        let end_date = from_date + chrono::Duration::days(days);
+        let end_date = from_date + Duration::days(days);
         self.tours
             .iter()
             .flat_map(|t| &t.items)

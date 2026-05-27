@@ -9,6 +9,7 @@ use crate::r#match::{
     SteeringBehavior,
 };
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 const HEADING_HEIGHT_THRESHOLD: f32 = 1.5;
 const HEADING_DISTANCE_THRESHOLD: f32 = 4.0;
@@ -49,7 +50,7 @@ impl StateProcessingHandler for ForwardHeadingState {
             .min_by(|a, b| {
                 let da = (a.position - ctx.player.position).magnitude();
                 let db = (b.position - ctx.player.position).magnitude();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                da.partial_cmp(&db).unwrap_or(Ordering::Equal)
             })
             .and_then(|m| ctx.context.players.by_id(m.id));
 

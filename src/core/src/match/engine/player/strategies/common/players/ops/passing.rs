@@ -1,5 +1,6 @@
 use crate::r#match::{MatchPlayerLite, PassEvaluator, PlayerSide, StateProcessingContext};
 use nalgebra::Vector3;
+use std::cmp::Ordering;
 
 /// Operations for passing decision-making
 pub struct PassingOperationsImpl<'p> {
@@ -47,9 +48,7 @@ impl<'p> PassingOperationsImpl<'p> {
                 // Compare how "away from danger" the pass would be
                 let a_safety = self.calculate_pass_safety(a);
                 let b_safety = self.calculate_pass_safety(b);
-                b_safety
-                    .partial_cmp(&a_safety)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                b_safety.partial_cmp(&a_safety).unwrap_or(Ordering::Equal)
             })
     }
 
@@ -126,9 +125,7 @@ impl<'p> PassingOperationsImpl<'p> {
             .min_by(|a, b| {
                 let dist_a = (a.position - self.ctx.player.position).magnitude();
                 let dist_b = (b.position - self.ctx.player.position).magnitude();
-                dist_a
-                    .partial_cmp(&dist_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                dist_a.partial_cmp(&dist_b).unwrap_or(Ordering::Equal)
             })
     }
 

@@ -6,8 +6,8 @@
 //! at a foreign club is reachable when the match actually fires.
 //!
 //! The emergency path triggers only when a fixture fires before the
-//! regular world-level call-up has populated the squad — the
-//! [`EMERGENCY_CALLUPS`] counter exposes that to operators so a drift
+//! regular world-level call-up has populated the squad —
+//! [`EmergencyCallupMetrics`] exposes that to operators so a drift
 //! between the schedule and the call-up window can be detected.
 
 use chrono::NaiveDate;
@@ -18,14 +18,25 @@ use super::lookups::{country_lookup, country_lookup_mut};
 use crate::continent::Continent;
 use crate::r#match::MatchSquad;
 use crate::{Club, Country, NationalSelectionPolicy, NationalTeam, NationalTeamLevel};
+use std::collections::HashSet;
 
 static EMERGENCY_CALLUPS: AtomicU64 = AtomicU64::new(0);
 
-/// Total emergency call-ups since process start. Bumps every time
-/// [`build_world_match_squad`] has to repopulate an empty squad on the
-/// fly; healthy runs see this stay flat.
-pub fn emergency_callups_total() -> u64 {
-    EMERGENCY_CALLUPS.load(Ordering::Relaxed)
+/// Process-global counter of world-squad emergency call-ups. Bumps every
+/// time [`build_world_match_squad`] has to repopulate an empty squad on the
+/// fly; healthy runs see [`EmergencyCallupMetrics::total`] stay flat.
+pub struct EmergencyCallupMetrics;
+
+impl EmergencyCallupMetrics {
+    /// Total emergency call-ups since process start.
+    pub fn total() -> u64 {
+        EMERGENCY_CALLUPS.load(Ordering::Relaxed)
+    }
+
+    /// Record one emergency call-up. Invoked from the emergency path.
+    pub fn record() {
+        EMERGENCY_CALLUPS.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// World-aware squad builder. Searches every club in every continent
@@ -37,8 +48,8 @@ pub fn emergency_callups_total() -> u64 {
 /// real nor a synthetic squad — which only happens before the first
 /// `process_world_national_team_callups` of the run, or if a fixture
 /// has somehow been scheduled outside the regular break/tournament
-/// window. Frequent emergency call-ups indicate a scheduling bug; the
-/// [`EMERGENCY_CALLUPS`] counter exposes that to operators.
+/// window. Frequent emergency call-ups indicate a scheduling bug;
+/// [`EmergencyCallupMetrics`] exposes that to operators.
 pub fn build_world_match_squad(
     continents: &mut [Continent],
     country_id: u32,
@@ -95,7 +106,7 @@ fn emergency_world_callup(
     date: NaiveDate,
     level: NationalTeamLevel,
 ) {
-    EMERGENCY_CALLUPS.fetch_add(1, Ordering::Relaxed);
+    EmergencyCallupMetrics::record();
 
     let country_name = country_lookup(continents, country_id)
         .map(|c| c.name.clone())
@@ -128,7 +139,7 @@ fn emergency_world_callup(
 
     // For U21, keep the youth pool disjoint from the current senior squad.
     if level == NationalTeamLevel::Under21 {
-        let senior_selected: std::collections::HashSet<u32> = continents
+        let senior_selected: HashSet<u32> = continents
             .iter()
             .flat_map(|c| c.countries.iter())
             .flat_map(|c| c.national_team.squad.iter().map(|sp| sp.player_id))

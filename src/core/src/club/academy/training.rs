@@ -1,4 +1,5 @@
 use super::{AcademyDevelopmentIdentity, AcademyPlayerPhase, AcademyTier, ClubAcademy};
+use crate::Staff;
 use crate::context::GlobalContext;
 use crate::{Person, Player, PlayerFieldPositionGroup};
 
@@ -359,9 +360,8 @@ impl ClubAcademy {
             };
         }
 
-        let best = |f: fn(&crate::Staff) -> u8| -> u8 {
-            self.staff.staffs.iter().map(f).max().unwrap_or(0)
-        };
+        let best =
+            |f: fn(&Staff) -> u8| -> u8 { self.staff.staffs.iter().map(f).max().unwrap_or(0) };
 
         let best_technical = best(|s| s.staff_attributes.coaching.technical);
         let best_tactical = best(|s| s.staff_attributes.coaching.tactical);

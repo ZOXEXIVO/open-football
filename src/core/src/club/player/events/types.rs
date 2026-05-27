@@ -25,6 +25,11 @@ pub struct MatchOutcome<'a> {
     pub participation: MatchParticipation,
     pub is_friendly: bool,
     pub is_cup: bool,
+    /// Slug of the competition this match belongs to (the match's
+    /// `league_slug`). For cup matches it keys the per-competition cup
+    /// stats bucket so each cup keeps its own line; ignored for league
+    /// and friendly matches.
+    pub competition_slug: &'a str,
     pub is_motm: bool,
     /// Goals scored by this player's team. Available for everyone on the
     /// matchday squad — used for decisive-goal / score-margin gating.

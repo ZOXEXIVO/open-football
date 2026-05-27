@@ -1,4 +1,9 @@
 use super::*;
+use crate::MatchTacticType;
+use crate::TacticSelectionReason;
+use crate::Tactics;
+use crate::r#match::MatchCoach;
+use crate::r#match::RollingTeamMetrics;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
@@ -55,7 +60,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // without mutating yet. Lets us stamp the change minute and
         // last-change tick exactly once per probe even when both
         // sides flip simultaneously.
-        let probe_target = |current: crate::MatchTacticType, is_home: bool, score_diff: i8| {
+        let probe_target = |current: MatchTacticType, is_home: bool, score_diff: i8| {
             TacticsSelector::situational_shape(current, is_home, score_diff, minutes)
         };
 
@@ -70,17 +75,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut any_change = false;
         if let Some(new_shape) = home_target {
-            *home_tactics_ref = crate::Tactics::with_reason(
+            *home_tactics_ref = Tactics::with_reason(
                 new_shape,
-                crate::TacticSelectionReason::GameSituation,
+                TacticSelectionReason::GameSituation,
                 home_tactics_ref.formation_strength,
             );
             any_change = true;
         }
         if let Some(new_shape) = away_target {
-            *away_tactics_ref = crate::Tactics::with_reason(
+            *away_tactics_ref = Tactics::with_reason(
                 new_shape,
-                crate::TacticSelectionReason::GameSituation,
+                TacticSelectionReason::GameSituation,
                 away_tactics_ref.formation_strength,
             );
             any_change = true;
@@ -228,10 +233,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// minutes (≈ 90 000 ticks) of play have elapsed since the last
     /// rotation.
     pub(super) fn build_rolling_metrics(
-        coach: &mut crate::r#match::MatchCoach,
+        coach: &mut MatchCoach,
         current_tick: u64,
         input: &RollingMetricsInput,
-    ) -> crate::r#match::RollingTeamMetrics {
+    ) -> RollingTeamMetrics {
         use crate::r#match::engine::coach::MetricSnapshot;
         const WINDOW_TICKS: u64 = 90_000; // 15 sim minutes
         const POSSESSION_WINDOW_TICKS: u64 = 60_000; // 10 sim minutes
@@ -285,7 +290,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             };
         }
 
-        let mut metrics = crate::r#match::RollingTeamMetrics::default();
+        let mut metrics = RollingTeamMetrics::default();
         metrics.xg_for_last_15 = xg_for;
         metrics.xg_against_last_15 = xg_against;
         metrics.shots_for_last_15 = shots_for;

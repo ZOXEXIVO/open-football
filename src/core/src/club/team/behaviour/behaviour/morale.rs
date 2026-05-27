@@ -3,6 +3,7 @@
 //! the periodic peer-wage envy sweep.
 
 use super::TeamBehaviour;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
 use crate::{
@@ -314,7 +315,7 @@ impl TeamBehaviour {
                     let prof_dampen = crate::club::player::events::scaling::criticism_dampener(
                         offender.attributes.professionalism,
                     );
-                    let cfg = crate::club::player::behaviour_config::HappinessConfig::default();
+                    let cfg = HappinessConfig::default();
                     let mag = cfg.catalog.training_ground_bust_up * prof_dampen;
                     let bust_up_ctx = HappinessEventContext::new(
                         HappinessEventCause::PersonalityClash,

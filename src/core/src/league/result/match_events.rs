@@ -1,5 +1,7 @@
 use super::LeagueResult;
 use super::data_access::LeagueProcessAccess;
+use crate::PlayerFieldPositionGroup;
+use crate::PlayerPositionType;
 use crate::club::StaffPosition;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
@@ -17,6 +19,8 @@ use crate::r#match::{FieldSquad, MatchResult};
 use crate::transfers::pipeline::KnownPlayerMemory;
 use crate::transfers::window::PlayerValuationCalculator;
 use chrono::Datelike;
+use chrono::NaiveDate;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 impl LeagueResult {
@@ -92,6 +96,7 @@ impl LeagueResult {
                 best_player_id,
                 is_friendly,
                 is_cup,
+                &result.league_slug,
                 league_weight,
                 world_weight,
                 is_derby,
@@ -153,7 +158,7 @@ impl LeagueResult {
         details: &MatchResultRaw,
         data: &mut D,
         is_friendly: bool,
-        date: chrono::NaiveDate,
+        date: NaiveDate,
         home_team_id: u32,
         away_team_id: u32,
     ) {
@@ -319,9 +324,9 @@ impl LeagueResult {
             .unwrap_or(0);
 
         let (home_outcome, away_outcome) = match home_goals.cmp(&away_goals) {
-            std::cmp::Ordering::Greater => (RepOutcome::Win, RepOutcome::Loss),
-            std::cmp::Ordering::Less => (RepOutcome::Loss, RepOutcome::Win),
-            std::cmp::Ordering::Equal => (RepOutcome::Draw, RepOutcome::Draw),
+            Ordering::Greater => (RepOutcome::Win, RepOutcome::Loss),
+            Ordering::Less => (RepOutcome::Loss, RepOutcome::Win),
+            Ordering::Equal => (RepOutcome::Draw, RepOutcome::Draw),
         };
 
         let comp = match (result.league_id, is_cup) {
@@ -671,7 +676,7 @@ impl LeagueResult {
         result: &MatchResult,
         details: &MatchResultRaw,
         data: &mut D,
-        now: chrono::NaiveDate,
+        now: NaiveDate,
         home_team_id: u32,
         best_player_id: Option<u32>,
     ) {
@@ -707,8 +712,8 @@ impl LeagueResult {
             // personality bits. Walk once.
             struct SidePlayer {
                 id: u32,
-                group: crate::PlayerFieldPositionGroup,
-                position: crate::PlayerPositionType,
+                group: PlayerFieldPositionGroup,
+                position: PlayerPositionType,
                 temperament: f32,
                 controversy: f32,
                 professionalism: f32,
@@ -796,7 +801,7 @@ impl LeagueResult {
             if conceded == 0 {
                 let gk_ids: Vec<u32> = players
                     .iter()
-                    .filter(|p| p.group == crate::PlayerFieldPositionGroup::Goalkeeper)
+                    .filter(|p| p.group == PlayerFieldPositionGroup::Goalkeeper)
                     .map(|p| p.id)
                     .collect();
                 let cb_ids: Vec<u32> = players
@@ -804,9 +809,9 @@ impl LeagueResult {
                     .filter(|p| {
                         matches!(
                             p.position,
-                            crate::PlayerPositionType::DefenderCenter
-                                | crate::PlayerPositionType::DefenderCenterLeft
-                                | crate::PlayerPositionType::DefenderCenterRight
+                            PlayerPositionType::DefenderCenter
+                                | PlayerPositionType::DefenderCenterLeft
+                                | PlayerPositionType::DefenderCenterRight
                         )
                     })
                     .map(|p| p.id)
@@ -998,17 +1003,13 @@ impl LeagueResult {
                 // visible rows — the offender takes the (separate) card
                 // event, the dressing room simmers in the simulation
                 // layer, and the feed stays quiet.
-                visible_reactors.sort_by(|a, b| {
-                    b.1.score
-                        .partial_cmp(&a.1.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-                let visible_reactors: std::collections::HashMap<u32, ReactorProfile> =
-                    visible_reactors
-                        .into_iter()
-                        .filter(|(_, prof)| prof.score >= 1.5)
-                        .take(2)
-                        .collect();
+                visible_reactors
+                    .sort_by(|a, b| b.1.score.partial_cmp(&a.1.score).unwrap_or(Ordering::Equal));
+                let visible_reactors: HashMap<u32, ReactorProfile> = visible_reactors
+                    .into_iter()
+                    .filter(|(_, prof)| prof.score >= 1.5)
+                    .take(2)
+                    .collect();
 
                 for p in players
                     .iter()
@@ -1383,7 +1384,7 @@ impl LeagueResult {
 fn compute_effective_ratings<D: LeagueProcessAccess>(
     details: &MatchResultRaw,
     data: &D,
-    now: chrono::NaiveDate,
+    now: NaiveDate,
 ) -> HashMap<u32, f32> {
     let mut out = HashMap::with_capacity(details.player_stats.len());
     for (player_id, stats) in &details.player_stats {
@@ -1553,6 +1554,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     best_player_id: Option<u32>,
     is_friendly: bool,
     is_cup: bool,
+    competition_slug: &str,
     league_weight: f32,
     world_weight: f32,
     is_derby: bool,
@@ -1585,6 +1587,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 participation,
                 is_friendly,
                 is_cup,
+                competition_slug,
                 is_motm,
                 team_goals_for: team_scored,
                 team_goals_against: team_conceded,

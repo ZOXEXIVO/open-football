@@ -29,6 +29,12 @@ impl Player {
     pub fn on_match_played(&mut self, o: &MatchOutcome<'_>) {
         self.record_match_appearance(o);
         self.record_match_stats(o);
+        // Cup appearances land in the per-competition buckets; rebuild the
+        // rolled-up aggregate before the event pass reads it for
+        // milestones (first-club goal, appearance / goal milestones, …).
+        if o.is_cup {
+            self.recompute_cup_statistics();
+        }
         self.record_match_events(o);
         self.record_match_reputation(o);
     }
@@ -94,7 +100,7 @@ impl Player {
     }
 
     fn record_match_appearance(&mut self, o: &MatchOutcome<'_>) {
-        let s = stats_bucket_mut(self, o.is_cup, o.is_friendly);
+        let s = stats_bucket_mut(self, o);
         match o.participation {
             MatchParticipation::Starter => s.played += 1,
             MatchParticipation::Substitute => s.played_subs += 1,
@@ -109,7 +115,7 @@ impl Player {
             self.load.update_form(o.effective_rating);
         }
 
-        let s = stats_bucket_mut(self, o.is_cup, o.is_friendly);
+        let s = stats_bucket_mut(self, o);
         s.goals += o.stats.goals;
         s.assists += o.stats.assists;
         s.shots_on_target += o.stats.shots_on_target as f32;
@@ -155,7 +161,7 @@ impl Player {
         // Subs who came on briefly don't get attributed the full team conceded.
         if self.position().is_goalkeeper() && matches!(o.participation, MatchParticipation::Starter)
         {
-            let s = stats_bucket_mut(self, o.is_cup, o.is_friendly);
+            let s = stats_bucket_mut(self, o);
             s.conceded += o.team_goals_against as u16;
             if o.team_goals_against == 0 {
                 s.clean_sheets += 1;
@@ -821,11 +827,16 @@ impl Player {
 
 /// Pick the right `PlayerStatistics` bucket for the match — league,
 /// cup, or pre-season friendly — so the call sites read declaratively
-/// (`stats_bucket_mut(p, is_cup, is_friendly).goals += …`).
-fn stats_bucket_mut(player: &mut Player, is_cup: bool, is_friendly: bool) -> &mut PlayerStatistics {
-    if is_cup {
-        &mut player.cup_statistics
-    } else if is_friendly {
+/// (`stats_bucket_mut(p, o).goals += …`).
+///
+/// Cup matches route into the per-competition bucket keyed by the
+/// match's competition slug; the rolled-up `cup_statistics` aggregate is
+/// rebuilt from those buckets in `on_match_played` once recording is
+/// done.
+fn stats_bucket_mut<'a>(player: &'a mut Player, o: &MatchOutcome<'_>) -> &'a mut PlayerStatistics {
+    if o.is_cup {
+        player.cup_competition_statistics_mut(o.competition_slug)
+    } else if o.is_friendly {
         &mut player.friendly_statistics
     } else {
         &mut player.statistics

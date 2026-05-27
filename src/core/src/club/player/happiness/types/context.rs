@@ -6,6 +6,7 @@ use super::{
     RecognitionEventContext, RegulationEventContext, RoleStatusEventContext, SeasonOutcomeContext,
     SupportEventContext, TeammateConflictContext, TrainingEventContext, TransferInterestContext,
 };
+use crate::ChangeType;
 
 /// Severity tier derived from applied magnitude. Renderers and tests treat
 /// these as ordinal — Minor < Moderate < Serious < Major.
@@ -197,7 +198,7 @@ impl HappinessEventChangeKind {
     /// Render-safe mirror of the relations crate's `ChangeType`.
     /// Total mapping — `Other` keeps adding a new ChangeType variant
     /// from being a breaking change in the events crate.
-    pub fn from_change_type(change_type: &crate::ChangeType) -> Self {
+    pub fn from_change_type(change_type: &ChangeType) -> Self {
         use crate::ChangeType as C;
         match change_type {
             C::MatchCooperation => HappinessEventChangeKind::MatchCooperation,

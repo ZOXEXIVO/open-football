@@ -5,6 +5,7 @@ use crate::r#match::{MatchContext, PlayerSide};
 use nalgebra::Vector3;
 
 use super::super::engine::MatchFieldSize;
+use std::cmp::Ordering;
 
 pub const GOAL_WIDTH: f32 = 29.0; // half-width in game units (full goal = 58 units, real = 7.32m)
 pub const GOAL_HEIGHT: f32 = 2.44; // Crossbar height in meters (z-axis is in meters)
@@ -85,7 +86,7 @@ pub fn assign_kickoff(field: &mut MatchField, side: PlayerSide) {
         .min_by(|a, b| {
             let da = (a.position - ball_pos).norm_squared();
             let db = (b.position - ball_pos).norm_squared();
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
         })
         .map(|p| p.id);
 

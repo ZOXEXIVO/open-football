@@ -1,6 +1,7 @@
 use super::CountryResult;
 use crate::Country;
 use crate::league::League;
+use crate::league::LeagueResult;
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
 use log::debug;
@@ -18,10 +19,7 @@ impl CountryResult {
         }
     }
 
-    pub(crate) fn simulate_media_coverage(
-        country: &mut Country,
-        league_results: &[crate::league::LeagueResult],
-    ) {
+    pub(crate) fn simulate_media_coverage(country: &mut Country, league_results: &[LeagueResult]) {
         country.media_coverage.update_from_results(league_results);
         country
             .media_coverage

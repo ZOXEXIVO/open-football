@@ -518,7 +518,7 @@ impl MatchPlayer {
         // position. The player briefly teleports rather than vanishing.
         if !self.position.x.is_finite() || !self.position.y.is_finite() {
             self.position = self.start_position;
-            self.velocity = nalgebra::Vector3::zeros();
+            self.velocity = Vector3::zeros();
         }
 
         #[cfg(debug_assertions)]

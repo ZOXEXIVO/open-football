@@ -1,4 +1,4 @@
-﻿use crate::r#match::MatchPlayer;
+use crate::r#match::MatchPlayer;
 use nalgebra::Vector3;
 
 pub enum SteeringBehavior<'a> {

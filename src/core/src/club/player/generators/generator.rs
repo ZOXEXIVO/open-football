@@ -1,3 +1,5 @@
+use crate::Goalkeeping;
+use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::rapport::PlayerRapport;
 use crate::shared::FullName;
@@ -9,6 +11,7 @@ use crate::{
     PlayerSkills, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerTraining,
     PlayerTrainingHistory, Relations, Technical,
 };
+use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -108,7 +111,7 @@ pub(crate) fn exact_age_birth_date(now: NaiveDate, age: u8) -> NaiveDate {
     let lo = age as i64 * 365;
     let hi = (age as i64 + 1) * 365 - 1;
     let days_back = IntegerUtils::random(lo as i32, hi as i32) as i64;
-    now - chrono::Duration::days(days_back)
+    now - Duration::days(days_back)
 }
 
 #[derive(Copy, Clone)]
@@ -643,7 +646,7 @@ fn skills_from_array(arr: &[f32; SKILL_COUNT]) -> PlayerSkills {
 
 /// Generate GK-specific skills from the PA budget.
 /// Role archetypes: Shot Stopper, Sweeper Keeper, Commanding, All-Rounder
-fn generate_gk_skills(pa_final: f32, age: u32) -> crate::Goalkeeping {
+fn generate_gk_skills(pa_final: f32, age: u32) -> Goalkeeping {
     use crate::Goalkeeping;
 
     let gk_age_ratio = match age {
@@ -1134,6 +1137,7 @@ impl PlayerGenerator {
             statistics: PlayerStatistics::default(),
             friendly_statistics: PlayerStatistics::default(),
             cup_statistics: PlayerStatistics::default(),
+            cup_statistics_by_competition: Vec::new(),
             statistics_history: PlayerStatisticsHistory::new(),
             decision_history: PlayerDecisionHistory::new(),
             languages: Vec::new(), // Academy youth — languages set at graduation
@@ -1146,7 +1150,7 @@ impl PlayerGenerator {
             is_force_match_selection: false,
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
-            interactions: crate::club::player::interaction::ManagerInteractionLog::new(),
+            interactions: ManagerInteractionLog::new(),
             pending_signing: None,
             generated: true,
             retired: false,

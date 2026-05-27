@@ -9,6 +9,8 @@ use crate::{HappinessEventType, Team, TeamResult, TeamType};
 use chrono::NaiveDate;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
+use std::slice::Iter;
+use std::slice::IterMut;
 
 #[derive(Debug, Clone)]
 pub struct TeamCollection {
@@ -56,11 +58,11 @@ impl TeamCollection {
         self.teams.iter().any(|t| t.id == team_id)
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, Team> {
+    pub fn iter(&self) -> Iter<'_, Team> {
         self.teams.iter()
     }
 
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Team> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, Team> {
         self.teams.iter_mut()
     }
 

@@ -6,6 +6,7 @@ use crate::r#match::player::strategies::players::ops::goalkeeper_skill::Goalkeep
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
+use nalgebra::Rotation3;
 use nalgebra::Vector3;
 
 const MAX_DIVE_TIME: f32 = 1.8; // Maximum time to stay in diving state (in seconds)
@@ -104,7 +105,7 @@ impl GoalkeeperDivingState {
                 - prof.positioning * 0.10)
                 .clamp(0.0, 0.55);
         let random_angle = (rand::random::<f32>() - 0.5) * direction_error;
-        dive_direction = nalgebra::Rotation3::new(Vector3::z() * random_angle) * dive_direction;
+        dive_direction = Rotation3::new(Vector3::z() * random_angle) * dive_direction;
 
         dive_direction
     }

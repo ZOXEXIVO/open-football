@@ -12,6 +12,7 @@ use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
     StaffPosition, TeamType,
 };
+use chrono::Weekday;
 
 impl PipelineProcessor {
     pub(super) fn is_january_window(date: NaiveDate) -> bool {
@@ -38,7 +39,7 @@ impl PipelineProcessor {
         }
 
         // Rest of window: weekly on Monday
-        ((month >= 6 && month <= 8) || month == 1) && date.weekday() == chrono::Weekday::Mon
+        ((month >= 6 && month <= 8) || month == 1) && date.weekday() == Weekday::Mon
     }
 
     pub fn transfer_need_reason_text(reason: &TransferNeedReason) -> &'static str {

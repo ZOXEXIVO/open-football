@@ -4,6 +4,7 @@ use crate::HappinessEventType;
 use crate::league::awards::{TeamOfTheWeekAward, TeamOfTheWeekSelector, TeamOfTheWeekSlot};
 use crate::simulator::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind};
+use chrono::NaiveDate;
 use rayon::prelude::*;
 
 /// Monday-only Team of the Week selection. Builds an XI per league with
@@ -25,7 +26,7 @@ impl TeamOfTheWeekTick {
 
     fn collect(
         data: &SimulatorData,
-        week_end: chrono::NaiveDate,
+        week_end: NaiveDate,
         cache: &MondayAwardCache,
     ) -> Vec<PendingTeamOfWeek> {
         data.continents

@@ -129,7 +129,10 @@ pub struct PlayerViewModel {
     pub player_attributes: PlayerAttributesDto,
     pub statistics: PlayerStatistics,
     pub friendly_statistics: Option<PlayerStatistics>,
-    pub cup_statistics: Option<PlayerStatistics>,
+    /// One row per cup competition the player has appeared in this spell,
+    /// each labelled with the real competition. Built from the player's
+    /// per-competition cup breakdown recorded at match time.
+    pub cup_statistics: Vec<CupCompetitionStatistics>,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
     pub position_map: PositionMapDto,
@@ -185,6 +188,13 @@ pub struct PlayerStatistics {
     pub average_rating: String,
     pub conceded: u16,
     pub clean_sheets: u16,
+}
+
+/// A single cup-competition row on the player overview: the resolved,
+/// localized competition name plus that competition's stats.
+pub struct CupCompetitionStatistics {
+    pub competition_name: String,
+    pub stats: PlayerStatistics,
 }
 
 pub struct PlayerContractDto {
@@ -393,7 +403,7 @@ pub async fn player_get_action(
             player_attributes: get_attributes(player),
             statistics: get_statistics(player),
             friendly_statistics: get_friendly_statistics(player),
-            cup_statistics: get_cup_statistics(player),
+            cup_statistics: get_cup_statistics(player, simulator_data, &i18n),
             status: PlayerStatusDto::new(player.statuses.get()),
             position_map: get_position_map(player),
             loan_status,
@@ -445,7 +455,7 @@ pub async fn player_get_action(
                     country_name: cn,
                     country_slug: cs,
                 };
-                views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, false)
+                views::team_menu(&mp, &neighbor_refs, &league_refs)
             },
             i18n,
             lang: route_params.lang.clone(),
@@ -511,7 +521,7 @@ pub async fn player_get_action(
         player_attributes: get_attributes(player),
         statistics: get_statistics(player),
         friendly_statistics: get_friendly_statistics(player),
-        cup_statistics: get_cup_statistics(player),
+        cup_statistics: get_cup_statistics(player, simulator_data, &i18n),
         status: PlayerStatusDto::new(player.statuses.get()),
         position_map: get_position_map(player),
         loan_status: None,
@@ -824,27 +834,98 @@ fn get_friendly_statistics(player: &Player) -> Option<PlayerStatistics> {
     })
 }
 
-fn get_cup_statistics(player: &Player) -> Option<PlayerStatistics> {
-    let cs = &player.cup_statistics;
-    if cs.played == 0 && cs.played_subs == 0 {
-        return None;
+/// Build one overview row per cup competition the player has actually
+/// appeared in this spell, labelled with the real competition recorded
+/// at match time. Competitions with no appearances yet are skipped.
+fn get_cup_statistics(
+    player: &Player,
+    data: &SimulatorData,
+    i18n: &I18n,
+) -> Vec<CupCompetitionStatistics> {
+    // The player's current country's domestic cup, read straight from its
+    // stored match records — the same source the cup pages use — so the
+    // row is present and consistent with the cup's top-scorer list even
+    // when the live per-spell counter was drained by a mid-season move.
+    let domestic_cup = data
+        .player_with_team(player.id)
+        .map(|(_, team)| team.club_id)
+        .and_then(|club_id| data.country_by_club(club_id))
+        .and_then(|country| country.domestic_cup.as_ref());
+    let domestic_slug = domestic_cup.map(|cup| cup.slug().to_string());
+
+    let mut rows: Vec<CupCompetitionStatistics> = Vec::new();
+
+    if let Some(cup) = domestic_cup {
+        if let Some(stats) = cup.league.aggregate_player_statistics(player.id) {
+            rows.push(CupCompetitionStatistics {
+                competition_name: cup.league.name.clone(),
+                stats: to_statistics_dto(&stats),
+            });
+        }
     }
-    Some(PlayerStatistics {
-        played: cs.played,
-        played_subs: cs.played_subs,
-        goals: cs.goals,
-        assists: cs.assists,
-        penalties: cs.penalties,
-        player_of_the_match: cs.player_of_the_match,
-        yellow_cards: cs.yellow_cards,
-        red_cards: cs.red_cards,
-        shots_on_target: cs.shots_on_target,
-        tackling: cs.tackling,
-        passes: cs.passes,
-        average_rating: cs.average_rating_str(),
-        conceded: cs.conceded,
-        clean_sheets: cs.clean_sheets,
-    })
+
+    // Remaining cups (continental) come from the per-spell breakdown; the
+    // domestic cup is skipped here, already added from records above.
+    for c in &player.cup_statistics_by_competition {
+        if domestic_slug.as_deref() == Some(c.competition_slug.as_str()) {
+            continue;
+        }
+        if c.statistics.played > 0 || c.statistics.played_subs > 0 {
+            rows.push(CupCompetitionStatistics {
+                competition_name: resolve_competition_name(&c.competition_slug, data, i18n),
+                stats: to_statistics_dto(&c.statistics),
+            });
+        }
+    }
+
+    rows
+}
+
+/// Resolve a cup-statistics row's display name from its stored competition
+/// slug. Domestic cups are real `League`s, so prefer the cup's own name
+/// (e.g. "FA Cup", or a generated "{Country} Cup"). Continental cups have
+/// no `League` row, so fall back to the slug-keyed translation
+/// (e.g. "Champions League"); a slug with neither resolves to a plain "Cup".
+fn resolve_competition_name(slug: &str, data: &SimulatorData, i18n: &I18n) -> String {
+    if let Some(name) = data
+        .indexes
+        .as_ref()
+        .and_then(|idx| idx.slug_indexes.get_league_by_slug(slug))
+        .and_then(|id| data.league(id))
+        .map(|l| l.name.clone())
+    {
+        return name;
+    }
+
+    // Slugs are hyphenated (`"copa-libertadores"`) while i18n keys use
+    // underscores (`"copa_libertadores"`); `I18n::t` returns the key
+    // unchanged when there is no translation.
+    let key = slug.replace('-', "_");
+    let translated = i18n.t(&key);
+    if translated == key.as_str() {
+        i18n.t("cup").to_string()
+    } else {
+        translated.to_string()
+    }
+}
+
+fn to_statistics_dto(s: &core::PlayerStatistics) -> PlayerStatistics {
+    PlayerStatistics {
+        played: s.played,
+        played_subs: s.played_subs,
+        goals: s.goals,
+        assists: s.assists,
+        penalties: s.penalties,
+        player_of_the_match: s.player_of_the_match,
+        yellow_cards: s.yellow_cards,
+        red_cards: s.red_cards,
+        shots_on_target: s.shots_on_target,
+        tackling: s.tackling,
+        passes: s.passes,
+        average_rating: s.average_rating_str(),
+        conceded: s.conceded,
+        clean_sheets: s.clean_sheets,
+    }
 }
 
 pub fn get_conditions(player: &Player) -> u8 {

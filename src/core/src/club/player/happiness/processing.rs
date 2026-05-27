@@ -1,6 +1,8 @@
+use crate::PlayerPositionType;
 use crate::club::player::calculators::{
     ContractValuation, ValuationContext, expected_annual_value, package_inputs_from_contract,
 };
+use crate::club::player::interaction::InteractionTopic;
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
@@ -402,15 +404,13 @@ impl Player {
             .happiness
             .recent_events
             .iter()
-            .filter(|e| e.event_type == crate::HappinessEventType::PromiseKept && e.days_ago <= 60)
+            .filter(|e| e.event_type == HappinessEventType::PromiseKept && e.days_ago <= 60)
             .count() as f32;
         let promise_broken: f32 = self
             .happiness
             .recent_events
             .iter()
-            .filter(|e| {
-                e.event_type == crate::HappinessEventType::PromiseBroken && e.days_ago <= 60
-            })
+            .filter(|e| e.event_type == HappinessEventType::PromiseBroken && e.days_ago <= 60)
             .count() as f32;
         // Cap so a flurry of promise events doesn't dominate.
         let promise_contribution = (promise_kept * 4.0 - promise_broken * 8.0).clamp(-12.0, 8.0);
@@ -423,17 +423,13 @@ impl Player {
             .happiness
             .recent_events
             .iter()
-            .filter(|e| {
-                e.event_type == crate::HappinessEventType::ManagerPraise && e.days_ago <= 30
-            })
+            .filter(|e| e.event_type == HappinessEventType::ManagerPraise && e.days_ago <= 30)
             .count() as f32;
         let discipline_count: f32 = self
             .happiness
             .recent_events
             .iter()
-            .filter(|e| {
-                e.event_type == crate::HappinessEventType::ManagerDiscipline && e.days_ago <= 30
-            })
+            .filter(|e| e.event_type == HappinessEventType::ManagerDiscipline && e.days_ago <= 30)
             .count() as f32;
         let praise_contribution = (praise_count * 2.0 - discipline_count * 3.0).clamp(-6.0, 5.0);
 
@@ -599,12 +595,7 @@ impl Player {
             .interactions
             .entries
             .iter()
-            .filter(|e| {
-                matches!(
-                    e.topic,
-                    crate::club::player::interaction::InteractionTopic::TacticalRole
-                )
-            })
+            .filter(|e| matches!(e.topic, InteractionTopic::TacticalRole))
             .count() as f32;
         if tactical_asks >= 3.0 {
             score -= (tactical_asks - 2.0) * 1.5;
@@ -624,7 +615,7 @@ impl Player {
             return 0.0;
         }
 
-        let is_gk = matches!(self.position(), crate::PlayerPositionType::Goalkeeper);
+        let is_gk = matches!(self.position(), PlayerPositionType::Goalkeeper);
         let coach_score = if is_gk {
             ctx.coach_best_goalkeeping as f32
         } else {

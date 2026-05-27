@@ -60,6 +60,7 @@ pub use player::{
     CareerDesireEventContext,
     CareerDesireEvidence,
     CareerDesireKind,
+    CompetitionStatistics,
     ConflictLocation,
     ContractBonus,
     ContractBonusType,

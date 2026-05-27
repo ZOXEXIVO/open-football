@@ -238,7 +238,7 @@ impl ContractValuation {
 
         let status_premium = squad_status_wage_factor(&ctx.squad_status);
 
-        let agent = crate::club::player::agent::PlayerAgent::for_player(player);
+        let agent = PlayerAgent::for_player(player);
         // Greedy agents push the band up by ~10% at the high end; loyal
         // agents accept ~5% lower at the low end.
         let agent_premium = 1.0 + (agent.greed - 0.5) * 0.15 - (agent.loyalty - 0.5) * 0.05;

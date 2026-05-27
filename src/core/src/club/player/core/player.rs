@@ -1,3 +1,4 @@
+use crate::PlayerSquadStatus;
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::builder::PlayerBuilder;
@@ -22,16 +23,17 @@ use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
 use crate::{
+    CompetitionStatistics, Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness,
+    PlayerPositionType, PlayerPositions, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
+    PlayerTrainingHistory, PlayerValueCalculator, Relations,
+};
+use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, ManagerInteractionEventContext, ManagerInteractionTone,
     ManagerInteractionTopic, PersonalAdaptationEventContext, PersonalAdaptationKind,
     PlayerAcceptance, PlayerAwardsCount, PromiseKind,
 };
-use crate::{
-    Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerPositionType,
-    PlayerPositions, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
-    PlayerTrainingHistory, PlayerValueCalculator, Relations,
-};
+use chrono::Duration;
 use chrono::NaiveDate;
 use std::fmt::{Display, Formatter, Result};
 
@@ -98,7 +100,17 @@ pub struct Player {
 
     pub statistics: PlayerStatistics,
     pub friendly_statistics: PlayerStatistics,
+    /// Rolled-up cup tally across every competition the player has
+    /// featured in this spell — recomputed from
+    /// `cup_statistics_by_competition` after each cup appearance. Kept as
+    /// a flat field so the many aggregate readers (milestones, awards,
+    /// development, squad selection, team totals) stay unchanged.
     pub cup_statistics: PlayerStatistics,
+    /// Per-competition cup breakdown, the source of truth behind
+    /// `cup_statistics`. One entry per cup the player has appeared in,
+    /// tagged with the competition slug so the player overview can label
+    /// each line with the real competition instead of a single fixed row.
+    pub cup_statistics_by_competition: Vec<CompetitionStatistics>,
     pub statistics_history: PlayerStatisticsHistory,
     pub decision_history: PlayerDecisionHistory,
 
@@ -378,6 +390,42 @@ impl Player {
     pub fn cup_statistics(&self) -> &PlayerStatistics {
         &self.cup_statistics
     }
+
+    /// Mutable handle on this competition's cup-stats bucket, creating an
+    /// empty one the first time the player appears in it. Match recording
+    /// books cup appearances here (keyed by the match's `league_slug`)
+    /// rather than into a single shared bucket.
+    pub fn cup_competition_statistics_mut(&mut self, slug: &str) -> &mut PlayerStatistics {
+        if let Some(idx) = self
+            .cup_statistics_by_competition
+            .iter()
+            .position(|c| c.competition_slug == slug)
+        {
+            return &mut self.cup_statistics_by_competition[idx].statistics;
+        }
+        self.cup_statistics_by_competition
+            .push(CompetitionStatistics {
+                competition_slug: slug.to_string(),
+                statistics: PlayerStatistics::default(),
+            });
+        &mut self
+            .cup_statistics_by_competition
+            .last_mut()
+            .expect("entry just pushed")
+            .statistics
+    }
+
+    /// Rebuild the rolled-up `cup_statistics` aggregate from the
+    /// per-competition breakdown. Called after a cup appearance is booked
+    /// so every reader of the aggregate keeps seeing the full cup tally
+    /// while the per-competition lines remain the source of truth.
+    pub fn recompute_cup_statistics(&mut self) {
+        let mut agg = PlayerStatistics::default();
+        for comp in &self.cup_statistics_by_competition {
+            agg.merge_from(&comp.statistics);
+        }
+        self.cup_statistics = agg;
+    }
     pub fn friendly_statistics(&self) -> &PlayerStatistics {
         &self.friendly_statistics
     }
@@ -509,7 +557,7 @@ impl Player {
         target_value: Option<u16>,
         is_public: bool,
     ) {
-        let deadline = made_on + chrono::Duration::days(horizon_days);
+        let deadline = made_on + Duration::days(horizon_days);
         let baseline_apps = self.statistics.played + self.statistics.played_subs;
         let baseline_starts = self.statistics.played;
         let credibility = self.promise_credibility(kind, made_by_staff_id);
@@ -564,13 +612,13 @@ impl Player {
         // squad filler is barely credible.
         if let Some(c) = self.contract.as_ref() {
             score += match c.squad_status {
-                crate::PlayerSquadStatus::KeyPlayer => 15,
-                crate::PlayerSquadStatus::FirstTeamRegular => 8,
-                crate::PlayerSquadStatus::FirstTeamSquadRotation => 0,
-                crate::PlayerSquadStatus::MainBackupPlayer => -5,
-                crate::PlayerSquadStatus::HotProspectForTheFuture => -2,
-                crate::PlayerSquadStatus::DecentYoungster => -8,
-                crate::PlayerSquadStatus::NotNeeded => -20,
+                PlayerSquadStatus::KeyPlayer => 15,
+                PlayerSquadStatus::FirstTeamRegular => 8,
+                PlayerSquadStatus::FirstTeamSquadRotation => 0,
+                PlayerSquadStatus::MainBackupPlayer => -5,
+                PlayerSquadStatus::HotProspectForTheFuture => -2,
+                PlayerSquadStatus::DecentYoungster => -8,
+                PlayerSquadStatus::NotNeeded => -20,
                 _ => -3,
             };
         }
@@ -662,8 +710,7 @@ impl Player {
         // holds — drives TacticalRole verification.
         let high_status = matches!(
             self.contract.as_ref().map(|c| &c.squad_status),
-            Some(crate::PlayerSquadStatus::KeyPlayer)
-                | Some(crate::PlayerSquadStatus::FirstTeamRegular)
+            Some(PlayerSquadStatus::KeyPlayer) | Some(PlayerSquadStatus::FirstTeamRegular)
         );
 
         // Loan-min-apps target lives on the contract; pull once.

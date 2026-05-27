@@ -29,6 +29,15 @@ use crate::{
 };
 
 use super::lookups::{country_lookup, country_lookup_mut};
+use crate::CallUpReason;
+use crate::ClubFacilities;
+use crate::CountryGeneratorData;
+use crate::NationalSelectionPolicy;
+use crate::NationalTeam;
+use crate::NationalTeamLevel;
+use crate::Player;
+use crate::Team;
+use std::collections::HashSet;
 
 // ============================================================
 // Test fixtures
@@ -38,7 +47,7 @@ fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).unwrap()
 }
 
-fn make_player(id: u32, country_id: u32, position: PlayerPositionType) -> crate::Player {
+fn make_player(id: u32, country_id: u32, position: PlayerPositionType) -> Player {
     let mut p = PlayerBuilder::new()
         .id(id)
         .full_name(FullName::new("Test".to_string(), format!("Player{}", id)))
@@ -76,7 +85,7 @@ fn make_training_schedule() -> TrainingSchedule {
     )
 }
 
-fn make_team(team_id: u32, club_id: u32, players: Vec<crate::Player>) -> crate::Team {
+fn make_team(team_id: u32, club_id: u32, players: Vec<Player>) -> Team {
     TeamBuilder::new()
         .id(team_id)
         .league_id(Some(1))
@@ -92,14 +101,14 @@ fn make_team(team_id: u32, club_id: u32, players: Vec<crate::Player>) -> crate::
         .unwrap()
 }
 
-fn make_club(id: u32, players: Vec<crate::Player>) -> Club {
+fn make_club(id: u32, players: Vec<Player>) -> Club {
     let team = make_team(id * 10, id, players);
     make_club_from_teams(id, vec![team])
 }
 
 /// Build a club from a pre-built set of teams (used to mix Main/youth
 /// team types in one club for U21 candidate-collection tests).
-fn make_club_from_teams(id: u32, teams: Vec<crate::Team>) -> Club {
+fn make_club_from_teams(id: u32, teams: Vec<Team>) -> Club {
     Club::new(
         id,
         format!("Club{}", id),
@@ -109,17 +118,12 @@ fn make_club_from_teams(id: u32, teams: Vec<crate::Team>) -> Club {
         ClubStatus::Professional,
         ClubColors::default(),
         TeamCollection::new(teams),
-        crate::ClubFacilities::default(),
+        ClubFacilities::default(),
     )
 }
 
 /// A team of a specific `TeamType` (the default `make_team` is always Main).
-fn make_team_typed(
-    team_id: u32,
-    club_id: u32,
-    players: Vec<crate::Player>,
-    team_type: TeamType,
-) -> crate::Team {
+fn make_team_typed(team_id: u32, club_id: u32, players: Vec<Player>, team_type: TeamType) -> Team {
     TeamBuilder::new()
         .id(team_id)
         .league_id(Some(1))
@@ -143,7 +147,7 @@ fn make_player_aged(
     position: PlayerPositionType,
     birth_year: i32,
     potential: u8,
-) -> crate::Player {
+) -> Player {
     let mut p = PlayerBuilder::new()
         .id(id)
         .full_name(FullName::new("Test".to_string(), format!("Player{}", id)))
@@ -267,7 +271,7 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
         additional_time_ms: 0,
         player_stats,
         substitutions: Vec::new(),
-        physical_snapshots: std::collections::HashMap::new(),
+        physical_snapshots: HashMap::new(),
         penalty_shootout: Vec::new(),
         player_of_the_match_id: None,
         starting_home_tactic: None,
@@ -305,7 +309,7 @@ fn build_world_squad_includes_foreign_based_player() {
             player_id: 101,
             club_id: 200,
             team_id: 2000,
-            primary_reason: crate::CallUpReason::KeyPlayer,
+            primary_reason: CallUpReason::KeyPlayer,
             secondary_reasons: Vec::new(),
         });
     }
@@ -341,14 +345,14 @@ fn world_stats_update_reaches_foreign_based_player() {
             player_id: 101,
             club_id: 200,
             team_id: 2000,
-            primary_reason: crate::CallUpReason::KeyPlayer,
+            primary_reason: CallUpReason::KeyPlayer,
             secondary_reasons: Vec::new(),
         });
     }
 
     let mut goals = HashMap::new();
     goals.insert(101_u32, 2_u16);
-    let mut appearances = std::collections::HashSet::new();
+    let mut appearances = HashSet::new();
     appearances.insert(101_u32);
     apply_world_international_stats(&mut continents, 1, 99, &goals, &appearances);
 
@@ -391,7 +395,7 @@ fn global_tournament_result_updates_caps_schedule_and_match_result() {
             player_id: 101,
             club_id: 1,
             team_id: 10,
-            primary_reason: crate::CallUpReason::KeyPlayer,
+            primary_reason: CallUpReason::KeyPlayer,
             secondary_reasons: Vec::new(),
         });
     }
@@ -400,7 +404,7 @@ fn global_tournament_result_updates_caps_schedule_and_match_result() {
             player_id: 202,
             club_id: 2,
             team_id: 20,
-            primary_reason: crate::CallUpReason::KeyPlayer,
+            primary_reason: CallUpReason::KeyPlayer,
             secondary_reasons: Vec::new(),
         });
     }
@@ -513,7 +517,7 @@ fn global_tournament_result_updates_caps_schedule_and_match_result() {
 }
 
 /// Emergency call-up must use the world-wide candidate pool and bump
-/// the EMERGENCY_CALLUPS counter so operators can detect when the
+/// the EmergencyCallupMetrics counter so operators can detect when the
 /// regular break-start path was missed.
 #[test]
 fn emergency_callup_uses_world_candidates_and_bumps_metric() {
@@ -527,7 +531,7 @@ fn emergency_callup_uses_world_candidates_and_bumps_metric() {
         make_continent(2, vec![country_b]),
     ];
 
-    let before = emergency_callups_total();
+    let before = EmergencyCallupMetrics::total();
     let date = d(2026, 9, 6);
     let squad = build_world_match_squad(&mut continents, 1, date)
         .expect("squad should build via emergency");
@@ -537,8 +541,8 @@ fn emergency_callup_uses_world_candidates_and_bumps_metric() {
         "emergency squad must be populated, not empty"
     );
     assert!(
-        emergency_callups_total() > before,
-        "EMERGENCY_CALLUPS counter must increment for visibility"
+        EmergencyCallupMetrics::total() > before,
+        "EmergencyCallupMetrics::total must increment for visibility"
     );
 
     let brazil = country_lookup(&continents, 1).unwrap();
@@ -575,7 +579,7 @@ fn emergency_callup_uses_world_candidates_and_bumps_metric() {
 /// leave forever-`result: None` rows in each country's schedule.
 #[test]
 fn call_up_squad_does_not_add_pending_friendlies() {
-    let mut nt = crate::NationalTeam::new(1, &crate::CountryGeneratorData::empty().people_names);
+    let mut nt = NationalTeam::new(1, &CountryGeneratorData::empty().people_names);
     nt.country_name = "TestLand".to_string();
     nt.reputation = 9000;
     nt.country_id = 1;
@@ -641,8 +645,8 @@ fn u21_candidate_collection_includes_youth_teams_and_excludes_overage() {
     let country = make_country(1, 1, "Brazil", vec![club], 8000);
     let continents = vec![make_continent(1, vec![country])];
 
-    let policy = crate::NationalSelectionPolicy::under21();
-    let map = crate::NationalTeam::collect_all_candidates_by_country_with_policy(
+    let policy = NationalSelectionPolicy::under21();
+    let map = NationalTeam::collect_all_candidates_by_country_with_policy(
         continents.iter().flat_map(|c| c.countries.iter()),
         d(2026, 9, 6),
         &policy,
@@ -681,7 +685,7 @@ fn u21_squad_excludes_senior_selected_player() {
             player_id: 301,
             club_id: 1,
             team_id: 10,
-            primary_reason: crate::CallUpReason::KeyPlayer,
+            primary_reason: CallUpReason::KeyPlayer,
             secondary_reasons: Vec::new(),
         });
     }
@@ -690,7 +694,7 @@ fn u21_squad_excludes_senior_selected_player() {
         &mut continents,
         1,
         d(2026, 9, 6),
-        crate::NationalTeamLevel::Under21,
+        NationalTeamLevel::Under21,
     );
 
     let brazil = country_lookup(&continents, 1).unwrap();
@@ -715,7 +719,7 @@ fn u21_match_stats_increment_only_u21_caps() {
 
     let mut goals = HashMap::new();
     goals.insert(301u32, 2u16);
-    let mut appearances = std::collections::HashSet::new();
+    let mut appearances = HashSet::new();
     appearances.insert(301u32);
 
     apply_world_international_stats_for_level(
@@ -724,7 +728,7 @@ fn u21_match_stats_increment_only_u21_caps() {
         99,
         &goals,
         &appearances,
-        crate::NationalTeamLevel::Under21,
+        NationalTeamLevel::Under21,
     );
 
     let attrs = continents[0].countries[0].clubs[0].teams.teams[0]
@@ -763,12 +767,12 @@ fn u21_release_clears_only_u21_status() {
             player_id: 301,
             club_id: 1,
             team_id: 10,
-            primary_reason: crate::CallUpReason::U21DevelopmentPick,
+            primary_reason: CallUpReason::U21DevelopmentPick,
             secondary_reasons: Vec::new(),
         });
     }
 
-    crate::NationalTeam::release_u21_callup_statuses_across_world(&mut continents);
+    NationalTeam::release_u21_callup_statuses_across_world(&mut continents);
 
     let statuses = continents[0].countries[0].clubs[0].teams.teams[0]
         .players

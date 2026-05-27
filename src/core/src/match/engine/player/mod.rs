@@ -1,4 +1,4 @@
-﻿use crate::r#match::{MatchObjectsPositions, StateProcessingContext};
+use crate::r#match::{MatchObjectsPositions, StateProcessingContext};
 
 pub mod behaviours;
 pub mod context;

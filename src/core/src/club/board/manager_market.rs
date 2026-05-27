@@ -18,6 +18,7 @@
 //!   * `ManagerCandidateScorer`  — pure scoring / acceptance predicates
 //!   * inherent impl on `ManagerApproach` — poaching state machine
 
+use crate::Relations;
 use crate::club::Club;
 use crate::club::Team;
 use crate::club::board::ClubBoard;
@@ -25,6 +26,7 @@ use crate::club::staff::free_pool;
 use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
 use crate::utils::DateUtils;
 use crate::{SimulatorData, Staff, TeamType};
+use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use rayon::prelude::*;
@@ -160,7 +162,7 @@ impl ManagerSeat {
         let current_salary = staff.contract.as_ref().map(|c| c.salary).unwrap_or(0);
         let salary = current_salary.max(prior_salary / 2);
         let expires = today
-            .checked_add_signed(chrono::Duration::days(60))
+            .checked_add_signed(Duration::days(60))
             .unwrap_or_else(|| {
                 NaiveDate::from_ymd_opt(today.year() + 1, today.month(), 1).unwrap()
             });
@@ -1198,7 +1200,7 @@ impl ManagerApproach {
             self.offered_salary,
             today,
         ));
-        staff.relations = crate::Relations::new();
+        staff.relations = Relations::new();
         staff.fatigue = 0.0;
         staff.job_satisfaction = 75.0; // Fresh job: optimistic.
 

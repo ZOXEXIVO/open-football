@@ -448,7 +448,7 @@ impl ClubResult {
             let movement = format!(
                 "{}y · ${}/y",
                 years,
-                crate::utils::FormattingUtils::format_money(final_salary as f64)
+                FormattingUtils::format_money(final_salary as f64)
             );
             let offer_date = data.date().date();
             if let Some(player_mut) = data.player_mut(result.player_id) {

@@ -1,14 +1,14 @@
+use axum::response::IntoResponse;
 use core::club::player::Player;
 use core::club::player::PlayerPositionType;
 use core::club::team::tactics::{MatchTacticType, Tactics};
-use core::r#match::player::MatchPlayer;
 use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
+use core::r#match::player::MatchPlayer;
 use core::staff_contract_mod::NaiveDate;
-use core::{PeopleNameGeneratorData, PlayerGenerator};
-use axum::response::IntoResponse;
-use flate2::write::GzEncoder;
+use core::{MatchRuntime, PeopleNameGeneratorData, PlayerGenerator};
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use rand::RngExt;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -46,11 +46,28 @@ const POSITIONS_442: [PlayerPositionType; 11] = [
 ];
 
 const LAST_NAMES: &[&str] = &[
-    "Silva", "Martinez", "Müller", "Rossi", "Dupont",
-    "Smith", "Johnson", "Garcia", "Fernandez", "Novak",
-    "Petrov", "Andersson", "Tanaka", "Kim", "Santos",
-    "Costa", "Richter", "Bernard", "Moretti", "Kowalski",
-    "Ivanov", "Schmidt",
+    "Silva",
+    "Martinez",
+    "Müller",
+    "Rossi",
+    "Dupont",
+    "Smith",
+    "Johnson",
+    "Garcia",
+    "Fernandez",
+    "Novak",
+    "Petrov",
+    "Andersson",
+    "Tanaka",
+    "Kim",
+    "Santos",
+    "Costa",
+    "Richter",
+    "Bernard",
+    "Moretti",
+    "Kowalski",
+    "Ivanov",
+    "Schmidt",
 ];
 
 #[derive(Serialize)]
@@ -109,7 +126,9 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
     //   PLAYMAKER=2 → deep regista (elite passing/vision/composure but
     //     low off-the-ball/finishing): should stay ~2-5/season — proving
     //     the model rewards the ATTACKING profile, not midfielders blanket.
-    let playmaker = std::env::var("PLAYMAKER").ok().and_then(|v| v.parse::<u8>().ok());
+    let playmaker = std::env::var("PLAYMAKER")
+        .ok()
+        .and_then(|v| v.parse::<u8>().ok());
     let main_squad: Vec<MatchPlayer> = POSITIONS_442
         .iter()
         .enumerate()
@@ -314,10 +333,23 @@ fn team_stats(result: &core::r#match::MatchResultRaw, team_id: u32) -> TeamStats
     } else {
         &result.right_team_players
     };
-    let ids: Vec<u32> = squad.main.iter().chain(&squad.substitutes).copied().collect();
+    let ids: Vec<u32> = squad
+        .main
+        .iter()
+        .chain(&squad.substitutes)
+        .copied()
+        .collect();
     let mut ts = TeamStats {
-        shots: 0, on_target: 0, goals: 0, saves: 0, tackles: 0, fouls: 0,
-        passes_attempted: 0, passes_completed: 0, interceptions: 0, xg: 0.0,
+        shots: 0,
+        on_target: 0,
+        goals: 0,
+        saves: 0,
+        tackles: 0,
+        fouls: 0,
+        passes_attempted: 0,
+        passes_completed: 0,
+        interceptions: 0,
+        xg: 0.0,
     };
     for id in ids {
         if let Some(s) = result.player_stats.get(&id) {
@@ -357,10 +389,30 @@ fn save_gzip_json(path: &PathBuf, data: &[u8]) {
 
 /// Club names for league output flavour (indexed by team slot).
 const CLUB_NAMES: &[&str] = &[
-    "Inter", "Milan", "Juventus", "Napoli", "Roma", "Lazio", "Atalanta",
-    "Fiorentina", "Bologna", "Torino", "Como", "Genoa", "Udinese", "Cagliari",
-    "Empoli", "Lecce", "Verona", "Parma", "Cremonese", "Monza", "Sassuolo",
-    "Salernitana", "Frosinone", "Spezia",
+    "Inter",
+    "Milan",
+    "Juventus",
+    "Napoli",
+    "Roma",
+    "Lazio",
+    "Atalanta",
+    "Fiorentina",
+    "Bologna",
+    "Torino",
+    "Como",
+    "Genoa",
+    "Udinese",
+    "Cagliari",
+    "Empoli",
+    "Lecce",
+    "Verona",
+    "Parma",
+    "Cremonese",
+    "Monza",
+    "Sassuolo",
+    "Salernitana",
+    "Frosinone",
+    "Spezia",
 ];
 
 /// One league club, built ONCE so every player keeps fixed skills across the
@@ -449,8 +501,7 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
             let level = if n_teams <= 1 {
                 max_lvl
             } else {
-                (min_lvl as f32
-                    + (max_lvl - min_lvl) as f32 * (i as f32 / (n_teams - 1) as f32))
+                (min_lvl as f32 + (max_lvl - min_lvl) as f32 * (i as f32 / (n_teams - 1) as f32))
                     .round() as u8
             };
             build_league_team((i + 1) as u32, CLUB_NAMES[i], level)
@@ -618,12 +669,19 @@ fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  dev_match                       open browser viewer (random squad levels)");
     eprintln!("  dev_match viewer [lvlA] [lvlB]  open browser viewer — levels random unless given");
-    eprintln!("  dev_match stats [N] [lvlA] [lvlB]  run N matches headless; per-match random levels");
+    eprintln!(
+        "  dev_match stats [N] [lvlA] [lvlB]  run N matches headless; per-match random levels"
+    );
     eprintln!("                                      unless BOTH lvlA and lvlB are passed");
     eprintln!("  dev_match league [teams] [rounds] [minLvl] [maxLvl]  full round-robin season");
-    eprintln!("                                      defaults: 20 teams, 2 rounds (38 games), levels 8–18");
+    eprintln!(
+        "                                      defaults: 20 teams, 2 rounds (38 games), levels 8–18"
+    );
     eprintln!();
-    eprintln!("Random level range: {}–{} inclusive.", RANDOM_LEVEL_MIN, RANDOM_LEVEL_MAX);
+    eprintln!(
+        "Random level range: {}–{} inclusive.",
+        RANDOM_LEVEL_MIN, RANDOM_LEVEL_MAX
+    );
     eprintln!("Viewer serves at http://localhost:18001");
 }
 
@@ -670,8 +728,7 @@ fn main() {
 }
 
 fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error"))
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
 
     let n_threads = rayon::current_num_threads();
     match (level_a, level_b) {
@@ -685,9 +742,30 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         ),
     }
     println!();
-    println!("{:>3} {:>3}v{:>3} {:>3}-{:>3} | {:>3}/{:>3} sh {:>3}/{:>3} ot {:>4}/{:>4} xG {:>3}/{:>3} sv {:>3}/{:>3} tk {:>3}/{:>3} int {:>4}/{:>4} pa {:>2}/{:>2}% acc",
-             "#", "lA", "lB", "H", "A",
-             "H", "A", "H", "A", "H", "A", "H", "A", "H", "A", "H", "A", "H", "A", "H", "A");
+    println!(
+        "{:>3} {:>3}v{:>3} {:>3}-{:>3} | {:>3}/{:>3} sh {:>3}/{:>3} ot {:>4}/{:>4} xG {:>3}/{:>3} sv {:>3}/{:>3} tk {:>3}/{:>3} int {:>4}/{:>4} pa {:>2}/{:>2}% acc",
+        "#",
+        "lA",
+        "lB",
+        "H",
+        "A",
+        "H",
+        "A",
+        "H",
+        "A",
+        "H",
+        "A",
+        "H",
+        "A",
+        "H",
+        "A",
+        "H",
+        "A",
+        "H",
+        "A",
+        "H",
+        "A"
+    );
 
     // Reset the shot-gate waterfall counters once at run start. They
     // accumulate across all matches (including across threads — the
@@ -826,32 +904,76 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         total_passes_completed += h.passes_completed + a.passes_completed;
         total_fouls += h.fouls as u32 + a.fouls as u32;
         total_xg += h.xg + a.xg;
-        *score_histogram.entry(o.home_goals + o.away_goals).or_default() += 1;
+        *score_histogram
+            .entry(o.home_goals + o.away_goals)
+            .or_default() += 1;
     }
 
     let n = n_matches as f32;
     println!();
-    println!("--- AGGREGATE over {} matches ({} real-world seconds) ---", n_matches, total_ms / 1000);
-    println!("goals per match     : {:.2}  (real ~2.5)", total_goals as f32 / n);
-    println!("xG per team/match   : {:.2}  (real ~1.3)", total_xg / (2.0 * n));
-    println!("goals vs xG delta   : {:+.2}  (real ~0.0)", total_goals as f32 / n - total_xg / n);
-    println!("shots per team/match: {:.1}  (real ~13)", total_shots as f32 / (2.0 * n));
-    let shots_per_xg = if total_xg > 0.1 { total_shots as f32 / total_xg } else { 0.0 };
-    println!("shots per xG        : {:.1}   (real ~10; high = low-quality shots)", shots_per_xg);
-    println!("on-target rate      : {:.1}%  (real ~33%)",
-             total_on_target as f32 / total_shots.max(1) as f32 * 100.0);
+    println!(
+        "--- AGGREGATE over {} matches ({} real-world seconds) ---",
+        n_matches,
+        total_ms / 1000
+    );
+    println!(
+        "goals per match     : {:.2}  (real ~2.5)",
+        total_goals as f32 / n
+    );
+    println!(
+        "xG per team/match   : {:.2}  (real ~1.3)",
+        total_xg / (2.0 * n)
+    );
+    println!(
+        "goals vs xG delta   : {:+.2}  (real ~0.0)",
+        total_goals as f32 / n - total_xg / n
+    );
+    println!(
+        "shots per team/match: {:.1}  (real ~13)",
+        total_shots as f32 / (2.0 * n)
+    );
+    let shots_per_xg = if total_xg > 0.1 {
+        total_shots as f32 / total_xg
+    } else {
+        0.0
+    };
+    println!(
+        "shots per xG        : {:.1}   (real ~10; high = low-quality shots)",
+        shots_per_xg
+    );
+    println!(
+        "on-target rate      : {:.1}%  (real ~33%)",
+        total_on_target as f32 / total_shots.max(1) as f32 * 100.0
+    );
     let conversion = total_goals as f32 / total_on_target.max(1) as f32 * 100.0;
     println!("on-target→goal rate : {:.1}%  (real ~30%)", conversion);
     let saves_vs_ontarget = total_saves as f32 / total_on_target.max(1) as f32 * 100.0;
-    println!("saves/on-target     : {:.1}%  (real ~67%)", saves_vs_ontarget);
-    println!("passes per team     : {:.0}  (real ~500)", total_passes_attempted as f32 / (2.0 * n));
+    println!(
+        "saves/on-target     : {:.1}%  (real ~67%)",
+        saves_vs_ontarget
+    );
+    println!(
+        "passes per team     : {:.0}  (real ~500)",
+        total_passes_attempted as f32 / (2.0 * n)
+    );
     let pass_acc = if total_passes_attempted > 0 {
         total_passes_completed as f32 / total_passes_attempted as f32 * 100.0
-    } else { 0.0 };
+    } else {
+        0.0
+    };
     println!("pass accuracy       : {:.1}%  (real ~85%)", pass_acc);
-    println!("tackles per team    : {:.1}  (real ~18)", total_tackles as f32 / (2.0 * n));
-    println!("interceptions/team  : {:.1}  (real ~10)", total_interceptions as f32 / (2.0 * n));
-    println!("fouls per team      : {:.1}  (real ~12)", total_fouls as f32 / (2.0 * n));
+    println!(
+        "tackles per team    : {:.1}  (real ~18)",
+        total_tackles as f32 / (2.0 * n)
+    );
+    println!(
+        "interceptions/team  : {:.1}  (real ~10)",
+        total_interceptions as f32 / (2.0 * n)
+    );
+    println!(
+        "fouls per team      : {:.1}  (real ~12)",
+        total_fouls as f32 / (2.0 * n)
+    );
     println!();
     println!("score total distribution (home+away goals per match):");
     for (total, count) in &score_histogram {
@@ -894,7 +1016,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // Real football outfield goal share ≈ FWD 58% / MID 32% / DEF 10%.
     // A reading of ~FWD 100% / MID 0% / DEF 0% is the concentration bug.
     println!();
-    println!("--- GOALS BY LINE (aggregated across {} matches) ---", n_matches);
+    println!(
+        "--- GOALS BY LINE (aggregated across {} matches) ---",
+        n_matches
+    );
     let line_labels = ["GK", "DEF", "MID", "FWD"];
     let line_total_goals: u32 = group_agg.iter().map(|g| g.0).sum::<u32>().max(1);
     let line_total_shots: u32 = group_agg.iter().map(|g| g.1).sum::<u32>().max(1);
@@ -908,7 +1033,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             sh,
             sh as f32 / line_total_shots as f32 * 100.0,
             xg,
-            if sh > 0 { g as f32 / sh as f32 * 100.0 } else { 0.0 },
+            if sh > 0 {
+                g as f32 / sh as f32 * 100.0
+            } else {
+                0.0
+            },
         );
     }
     println!("  target outfield goal share ≈ FWD 58% / MID 32% / DEF 10%");
@@ -919,7 +1048,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         .collect();
     rows.sort_by(|a, b| b.1.cmp(&a.1));
     println!();
-    println!("--- PER-PLAYER GOALS (aggregated across {} matches) ---", n_matches);
+    println!(
+        "--- PER-PLAYER GOALS (aggregated across {} matches) ---",
+        n_matches
+    );
     println!(
         "  {:>5}  {:>4} {:>4} {:>5} {:>4}  {:>7} {:>7}  {:>5}   {:>9}",
         "id", "G", "Sh", "xG", "Aps", "G/app", "xG/app", "conv%", "proj/42g"
@@ -928,7 +1060,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let apps_f = (*apps).max(1) as f32;
         let g_per = *g as f32 / apps_f;
         let xg_per = *xg / apps_f;
-        let conv = if *sh > 0 { *g as f32 / *sh as f32 * 100.0 } else { 0.0 };
+        let conv = if *sh > 0 {
+            *g as f32 / *sh as f32 * 100.0
+        } else {
+            0.0
+        };
         let tag = match grp {
             1 => "  DEF",
             2 => "  MID",
@@ -937,11 +1073,23 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         };
         println!(
             "  {:>5}  {:>4} {:>4} {:>5.1} {:>4}  {:>7.3} {:>7.3}  {:>4.0}%   {:>7.1}{}",
-            id, g, sh, xg, apps, g_per, xg_per, conv, g_per * SEASON_GAMES, tag
+            id,
+            g,
+            sh,
+            xg,
+            apps,
+            g_per,
+            xg_per,
+            conv,
+            g_per * SEASON_GAMES,
+            tag
         );
     }
-    let avg_match_top =
-        per_match_top_scorer_goals.iter().map(|&x| x as f32).sum::<f32>() / n as f32;
+    let avg_match_top = per_match_top_scorer_goals
+        .iter()
+        .map(|&x| x as f32)
+        .sum::<f32>()
+        / n as f32;
     println!(
         "  per-match top scorer avg: {:.3} goals  → if one player got every such match: {:.1}/season",
         avg_match_top,
@@ -1012,10 +1160,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // the floor / willingness-curve coefficients in isolation.
     println!();
     println!("--- HELPER (evaluate_forward_shot_decision) ---");
-    println!(
-        "  outcomes: shoot={}  pass={}  hold={}",
-        s[9], s[10], s[11]
-    );
+    println!("  outcomes: shoot={}  pass={}  hold={}", s[9], s[10], s[11]);
     {
         use std::sync::atomic::Ordering;
         let calls = core::helper_diag::CALLS.load(Ordering::Relaxed);
@@ -1036,10 +1181,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         if reach > 0 {
             let avg_xg = sum_xg as f64 / reach as f64 / 1000.0;
             let avg_w = sum_w as f64 / reach as f64 / 1000.0;
-            println!(
-                "  avg-at-roll: xG≈{:.3}  willingness≈{:.4}",
-                avg_xg, avg_w
-            );
+            println!("  avg-at-roll: xG≈{:.3}  willingness≈{:.4}", avg_xg, avg_w);
         }
     }
 
@@ -1062,7 +1204,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             0.0
         } else {
             let prior = s[chain_order[row_idx - 1]] as f64;
-            if prior > 0.0 { (1.0 - s[i] as f64 / prior) * 100.0 } else { 0.0 }
+            if prior > 0.0 {
+                (1.0 - s[i] as f64 / prior) * 100.0
+            } else {
+                0.0
+            }
         };
         let share_of_base = s[i] as f64 / base as f64 * 100.0;
         println!(
@@ -1095,15 +1241,17 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     for (i, role) in roles.iter().enumerate() {
         println!(
             "  {:<4}  {:>10}  {:>10}  {:>10}",
-            role, t[i], t[i + 4], t[i + 8]
+            role,
+            t[i],
+            t[i + 4],
+            t[i + 8]
         );
     }
     println!(
         "  {:<4}  {:>10}  {:>10}  {:>10}",
         "ALL", total_entries, total_attempts, total_successes
     );
-    let success_per_match_per_team =
-        total_successes as f64 / (n_matches as f64 * 2.0);
+    let success_per_match_per_team = total_successes as f64 / (n_matches as f64 * 2.0);
     println!(
         "  per-match per-team successes: {:.1}  (real football ~18)",
         success_per_match_per_team
@@ -1142,10 +1290,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         sa.shooter_missing.iter().sum::<u64>(),
         sa.prev_owner_none.iter().sum::<u64>(),
     );
-    println!(
-        "  on_target from goal-credit path: {}",
-        sa.on_target_goal
-    );
+    println!("  on_target from goal-credit path: {}", sa.on_target_goal);
     let expected_on_target = total_paired + sa.on_target_goal;
     println!(
         "  expected memory on_target total: saves_paired ({}) + goals_paired ({}) = {}",
@@ -1166,16 +1311,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // engage at all. Helps localize whether low save% comes from few
     // attempts or low success-per-attempt.
     use std::sync::atomic::Ordering;
-    let reached =
-        core::save_accounting_stats::SAVE_TICKS_REACHED.load(Ordering::Relaxed);
-    let oor =
-        core::save_accounting_stats::SAVE_TICKS_OUT_OF_REACH.load(Ordering::Relaxed);
-    let past =
-        core::save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE.load(Ordering::Relaxed);
-    let phys_fired =
-        core::save_accounting_stats::SAVE_PHYSICS_FIRED.load(Ordering::Relaxed);
-    let phys_passed =
-        core::save_accounting_stats::SAVE_PHYSICS_PASSED.load(Ordering::Relaxed);
+    let reached = core::save_accounting_stats::SAVE_TICKS_REACHED.load(Ordering::Relaxed);
+    let oor = core::save_accounting_stats::SAVE_TICKS_OUT_OF_REACH.load(Ordering::Relaxed);
+    let past = core::save_accounting_stats::SAVE_TICKS_PAST_GOAL_LINE.load(Ordering::Relaxed);
+    let phys_fired = core::save_accounting_stats::SAVE_PHYSICS_FIRED.load(Ordering::Relaxed);
+    let phys_passed = core::save_accounting_stats::SAVE_PHYSICS_PASSED.load(Ordering::Relaxed);
     println!();
     println!("--- SAVE PIPELINE ---");
     println!(
@@ -1203,7 +1343,7 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
 
     // Enable event+state tracking for dev viewer — required so the
     // position data the HTML viewer consumes gets collected.
-    core::set_match_events_mode(true);
+    MatchRuntime::set_events_mode(true);
 
     let level_a = level_a.unwrap_or_else(random_level);
     let level_b = level_b.unwrap_or_else(random_level);
@@ -1223,9 +1363,16 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
     let home_goals = score.home_team.get();
     let away_goals = score.away_team.get();
 
-    println!("Completed: {}:{}, {}ms", home_goals, away_goals, elapsed.as_millis());
+    println!(
+        "Completed: {}:{}, {}ms",
+        home_goals,
+        away_goals,
+        elapsed.as_millis()
+    );
 
-    let goals_json: Vec<GoalJson> = score.detail().iter()
+    let goals_json: Vec<GoalJson> = score
+        .detail()
+        .iter()
         .filter(|g| g.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal)
         .map(|g| GoalJson {
             player_id: g.player_id,
@@ -1249,7 +1396,9 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
         let raw_size = chunk_data.len();
         let chunk_path = out_dir.join(format!("{}_chunk_{}.json.gz", MATCH_ID, idx));
         save_gzip_json(&chunk_path, &chunk_data);
-        let gz_size = std::fs::metadata(&chunk_path).map(|m| m.len() as usize).unwrap_or(0);
+        let gz_size = std::fs::metadata(&chunk_path)
+            .map(|m| m.len() as usize)
+            .unwrap_or(0);
 
         total_raw.fetch_add(raw_size, Ordering::Relaxed);
         total_gz.fetch_add(gz_size, Ordering::Relaxed);
@@ -1273,8 +1422,11 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
         total_duration_ms: result.position_data.max_timestamp(),
     };
     let metadata_path = out_dir.join(format!("{}_metadata.json", MATCH_ID));
-    std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap())
-        .expect("failed to write metadata");
+    std::fs::write(
+        &metadata_path,
+        serde_json::to_string_pretty(&metadata).unwrap(),
+    )
+    .expect("failed to write metadata");
 
     let page_data = format!(
         "const MATCH_ID=\"{}\";const MATCH_TIME_MS={};const GOALS_DATA={};const PLAYERS_DATA={};const HOME_BG=\"#00307d\";const HOME_FG=\"#ffffff\";const AWAY_BG=\"#b33f00\";const AWAY_FG=\"#ffffff\";const HOME_GOALS={};const AWAY_GOALS={};",
@@ -1290,11 +1442,23 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
     println!("\nStarting viewer at http://localhost:18001");
 
     #[cfg(target_os = "windows")]
-    { let _ = std::process::Command::new("cmd").args(["/C", "start", "http://localhost:18001"]).spawn(); }
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "http://localhost:18001"])
+            .spawn();
+    }
     #[cfg(target_os = "macos")]
-    { let _ = std::process::Command::new("open").arg("http://localhost:18001").spawn(); }
+    {
+        let _ = std::process::Command::new("open")
+            .arg("http://localhost:18001")
+            .spawn();
+    }
     #[cfg(target_os = "linux")]
-    { let _ = std::process::Command::new("xdg-open").arg("http://localhost:18001").spawn(); }
+    {
+        let _ = std::process::Command::new("xdg-open")
+            .arg("http://localhost:18001")
+            .spawn();
+    }
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(serve());
@@ -1306,12 +1470,17 @@ async fn serve() {
     let app = axum::Router::new()
         .route("/", get(page_handler))
         .route("/api/match/{match_id}/metadata", get(metadata_handler))
-        .route("/api/match/{match_id}/chunk/{chunk_num}", get(chunk_handler))
+        .route(
+            "/api/match/{match_id}/chunk/{chunk_num}",
+            get(chunk_handler),
+        )
         .route("/static/images/match/field.svg", get(field_svg_handler))
         .route("/js/pixi.min.js", get(pixi_handler))
         .route("/match_data.js", get(data_handler));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:18001").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:18001")
+        .await
+        .unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -1320,17 +1489,29 @@ async fn page_handler() -> axum::response::Html<String> {
 }
 
 async fn data_handler() -> impl axum::response::IntoResponse {
-    let path = PathBuf::from("match_results").join(LEAGUE_SLUG).join("page_data.js");
+    let path = PathBuf::from("match_results")
+        .join(LEAGUE_SLUG)
+        .join("page_data.js");
     let data = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-    ([(axum::http::header::CONTENT_TYPE, "application/javascript")], data)
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        data,
+    )
 }
 
 async fn metadata_handler(
     axum::extract::Path(match_id): axum::extract::Path<String>,
 ) -> impl axum::response::IntoResponse {
-    let path = PathBuf::from("match_results").join(LEAGUE_SLUG).join(format!("{}_metadata.json", match_id));
+    let path = PathBuf::from("match_results")
+        .join(LEAGUE_SLUG)
+        .join(format!("{}_metadata.json", match_id));
     match tokio::fs::read_to_string(&path).await {
-        Ok(data) => (axum::http::StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "application/json")], data).into_response(),
+        Ok(data) => (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            data,
+        )
+            .into_response(),
         Err(_) => (axum::http::StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }
@@ -1338,7 +1519,9 @@ async fn metadata_handler(
 async fn chunk_handler(
     axum::extract::Path((match_id, chunk_num)): axum::extract::Path<(String, usize)>,
 ) -> impl axum::response::IntoResponse {
-    let path = PathBuf::from("match_results").join(LEAGUE_SLUG).join(format!("{}_chunk_{}.json.gz", match_id, chunk_num));
+    let path = PathBuf::from("match_results")
+        .join(LEAGUE_SLUG)
+        .join(format!("{}_chunk_{}.json.gz", match_id, chunk_num));
     match tokio::fs::read(&path).await {
         Ok(data) => (
             axum::http::StatusCode::OK,
@@ -1347,7 +1530,8 @@ async fn chunk_handler(
                 (axum::http::header::CONTENT_ENCODING, "gzip"),
             ],
             data,
-        ).into_response(),
+        )
+            .into_response(),
         Err(_) => (axum::http::StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }
@@ -1359,5 +1543,8 @@ async fn field_svg_handler() -> impl axum::response::IntoResponse {
 
 async fn pixi_handler() -> impl axum::response::IntoResponse {
     let js = include_bytes!("../../../src/web/assets/static/js/pixi.min.js");
-    ([(axum::http::header::CONTENT_TYPE, "application/javascript")], js.as_slice())
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        js.as_slice(),
+    )
 }

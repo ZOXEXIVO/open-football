@@ -10,6 +10,7 @@ use crate::club::player::events::transfer_social::{
     TransferContinentalPath, TransferInterestSignal,
 };
 use crate::country::result::CountryResult;
+use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::TransferListingOrigin;
@@ -1144,8 +1145,8 @@ impl CountryResult {
     pub(crate) fn reopen_listing_for_player(country: &mut Country, player_id: u32) {
         let still_has_active_bid = country.transfer_market.negotiations.values().any(|n| {
             n.player_id == player_id
-                && (n.status == crate::transfers::NegotiationStatus::Pending
-                    || n.status == crate::transfers::NegotiationStatus::Countered)
+                && (n.status == NegotiationStatus::Pending
+                    || n.status == NegotiationStatus::Countered)
         });
         if still_has_active_bid {
             return;

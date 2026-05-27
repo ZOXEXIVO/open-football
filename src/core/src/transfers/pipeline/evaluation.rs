@@ -69,7 +69,7 @@ pub(in crate::transfers::pipeline) fn group_depth_requirement(
 /// Each group emits at most one entry, eliminating the slot-level
 /// triple-count that distorted budget allocation in the old layout.
 pub(in crate::transfers::pipeline) fn compute_group_needs(
-    squad: &[crate::transfers::pipeline::processor::SquadPlayerInfo],
+    squad: &[SquadPlayerInfo],
     position_coverage: &[(PlayerPositionType, Option<u32>, u8)],
     formation_positions: &[PlayerPositionType; 11],
     rep_score: f32,

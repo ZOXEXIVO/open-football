@@ -1,15 +1,25 @@
+use crate::PlayerStatistics;
 use crate::TeamInfo;
 use crate::club::player::player::Player;
 use crate::league::Season;
 use chrono::{Datelike, NaiveDate};
 
 impl Player {
+    /// Clear the cup tally as a unit: the rolled-up aggregate *and* the
+    /// per-competition breakdown it's rebuilt from. They must always
+    /// reset together, otherwise the aggregate would keep summing buckets
+    /// that have been wiped (or vice-versa).
+    fn reset_cup_statistics(&mut self) {
+        self.cup_statistics = PlayerStatistics::default();
+        self.cup_statistics_by_competition.clear();
+    }
+
     /// Record a permanent transfer (called by transfer execution).
     /// Resets stats, saves history for both clubs, sets transfer date.
     pub fn on_transfer(&mut self, from: &TeamInfo, to: &TeamInfo, fee: f64, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
         self.statistics_history
             .record_transfer(stats, from, to, fee, date);
         self.last_transfer_date = Some(date);
@@ -59,7 +69,7 @@ impl Player {
         let stats = if from_senior {
             std::mem::take(&mut self.statistics)
         } else {
-            crate::PlayerStatistics::default()
+            PlayerStatistics::default()
         };
         self.statistics_history.record_intra_club_move(
             stats,
@@ -78,7 +88,7 @@ impl Player {
     pub fn reset_match_stats(&mut self) {
         self.statistics = Default::default();
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
     }
 
     /// Season-end snapshot for a player sitting on a non-senior squad
@@ -108,7 +118,7 @@ impl Player {
         let stats = std::mem::take(&mut self.statistics);
         // Youth-league + cup buckets get cleared like the senior path.
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
 
         // Drain through the regular season-end path. Any callup games
         // land on the seeded Main entry; the merge step collapses any
@@ -131,7 +141,7 @@ impl Player {
     pub fn on_loan(&mut self, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
         self.statistics_history
             .record_loan(stats, from, to, loan_fee, date);
         self.last_transfer_date = Some(date);
@@ -152,7 +162,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
         self.statistics_history.record_season_end(
             season,
             stats,
@@ -196,7 +206,7 @@ impl Player {
         let mut total_apps: u16 = 0;
         let mut total_goals: u16 = 0;
         let mut total_pom: u16 = 0;
-        let mut combined_stats = crate::PlayerStatistics::default();
+        let mut combined_stats = PlayerStatistics::default();
         let mut seasons_at_club: u16 = 0;
         let mut first_season_year: Option<u16> = None;
 
@@ -266,7 +276,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
         self.statistics_history
             .record_cancel_loan(stats, borrowing, parent, is_loan, date);
         self.last_transfer_date = Some(date);
@@ -284,7 +294,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
         self.statistics_history
             .record_departure_transfer(stats, from, to, fee, is_loan, date);
         self.last_transfer_date = Some(date);
@@ -302,7 +312,7 @@ impl Player {
     pub fn on_release(&mut self, from: &TeamInfo, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
         self.statistics_history.record_release(stats, from, date);
         self.last_transfer_date = Some(date);
         self.is_force_match_selection = false;
@@ -315,7 +325,7 @@ impl Player {
     pub fn on_free_agent_signing(&mut self, to: &TeamInfo, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
         self.statistics_history
             .record_free_agent_signing(stats, to, date);
         self.last_transfer_date = Some(date);
@@ -334,7 +344,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
-        self.cup_statistics = Default::default();
+        self.reset_cup_statistics();
         self.statistics_history
             .record_departure_loan(stats, from, parent, to, is_loan, date);
         self.last_transfer_date = Some(date);

@@ -1,4 +1,7 @@
 use super::*;
+use nalgebra::Vector3;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
@@ -102,7 +105,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if let Some(idx) = field.player_index(player_id) {
                 let p = &mut field.players[idx];
                 p.position = ball_pos;
-                p.velocity = nalgebra::Vector3::zeros();
+                p.velocity = Vector3::zeros();
                 p.in_state_time = 0;
             }
         }
@@ -120,7 +123,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 if let Some(idx) = field.player_index(player_id) {
                     let p = &mut field.players[idx];
                     p.position = pos;
-                    p.velocity = nalgebra::Vector3::zeros();
+                    p.velocity = Vector3::zeros();
                     p.in_state_time = 0;
                     // Force the AttackingCorner state directly — the CB may
                     // have been in any defensive state when the corner was
@@ -157,7 +160,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
         // [diag] reached with an armed Corner origin.
         #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::CORNER_CONTEST_SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::mid_run_diag::CORNER_CONTEST_SEEN.fetch_add(1, Ordering::Relaxed);
         // Only once the cross has actually left the taker and is airborne
         // (not the dead-ball set-up while the taker still holds it, and not
         // a short ground corner played along the floor).
@@ -166,8 +169,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
         // [diag] cross has left the taker (loose / in flight).
         #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::CORNER_CONTEST_FIRED
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::mid_run_diag::CORNER_CONTEST_FIRED.fetch_add(1, Ordering::Relaxed);
         if ball.position.z < 2.0 {
             return;
         }
@@ -240,8 +242,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         if rand::random::<f32>() < att_win {
             #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::CORNER_CONTEST_WON
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::mid_run_diag::CORNER_CONTEST_WON.fetch_add(1, Ordering::Relaxed);
             // Attacker wins: drop the ball just behind them at head height,
             // moving goalward, so it reads as an incoming header to their
             // state (the CB's AttackingCorner, or a forward's run→heading).

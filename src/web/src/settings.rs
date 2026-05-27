@@ -1,3 +1,4 @@
+use core::MatchRuntime;
 use log::info;
 use std::env;
 
@@ -49,10 +50,10 @@ impl Settings {
     }
 
     pub fn apply(&self) {
-        core::set_match_events_mode(self.match_events);
-        core::set_match_recordings_mode(self.match_recordings);
-        core::init_match_engine_pool(self.match_threads);
-        core::set_match_store_max_threads(self.match_store_threads);
+        MatchRuntime::set_events_mode(self.match_events);
+        MatchRuntime::set_recordings_mode(self.match_recordings);
+        MatchRuntime::init_engine_pool(self.match_threads);
+        MatchRuntime::set_store_max_threads(self.match_store_threads);
     }
 
     pub fn log(&self) {

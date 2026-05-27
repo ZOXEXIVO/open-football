@@ -37,6 +37,7 @@ use crate::{
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, warn};
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 /// Tactical role grouping used by the role-coverage pass. A national
@@ -397,9 +398,7 @@ impl NationalTeam {
         candidates.sort_by(|a, b| {
             let score_a = Self::scouting_score(a);
             let score_b = Self::scouting_score(b);
-            score_b
-                .partial_cmp(&score_a)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            score_b.partial_cmp(&score_a).unwrap_or(Ordering::Equal)
         });
 
         candidates.truncate(Self::MAX_CANDIDATE_POOL);
@@ -1174,9 +1173,8 @@ impl NationalTeam {
         let [gk_quota, def_quota, mid_quota, fwd_quota] =
             Self::positional_quotas(tactics, ctx.target_squad_size);
 
-        let desc = |a: &(usize, f32), b: &(usize, f32)| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        };
+        let desc =
+            |a: &(usize, f32), b: &(usize, f32)| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal);
 
         let by_group = |group: PlayerFieldPositionGroup| {
             let mut v: Vec<(usize, f32)> = scored
@@ -1302,7 +1300,7 @@ impl NationalTeam {
                             None
                         }
                     })
-                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
                 let (in_idx, in_score, _in_lvl) = match incoming {
                     Some(v) => v,

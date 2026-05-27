@@ -211,8 +211,17 @@ impl TransferPlausibilityInputs {
         false
     }
 
+    /// Largest fee the buyer can plausibly cover. Normally `1.40 ×` the
+    /// declared transfer budget, but floored at a fraction of the wage
+    /// bill so a club whose transfer budget reads zero (negative balance,
+    /// budget not yet allocated) can still scrape together a modest fee
+    /// via installments / a board top-up. Without the floor a zero budget
+    /// reads as *unlimited* fee tolerance — which let broke lower-league
+    /// clubs pursue expensive players from far bigger clubs.
     fn affordability_max_fee(&self) -> f64 {
-        (self.buyer_transfer_budget * 1.40).max(0.0)
+        (self.buyer_transfer_budget * 1.40)
+            .max(self.buyer_wage_budget as f64 * thresholds::EMERGENCY_FEE_WAGE_FRACTION)
+            .max(0.0)
     }
 }
 
@@ -229,6 +238,11 @@ mod thresholds {
     pub const DOMESTIC_STEP_DOWN_DROP: f32 = 0.12;
     pub const LOAN_IMPORTANCE_BLOCK: f32 = 0.65;
     pub const LOAN_REP_GAP_BLOCK: f32 = 0.10;
+    /// Emergency one-off fee a club can cover when its declared transfer
+    /// budget is ~zero, expressed as a fraction of its annual wage bill.
+    /// Scales with club size and the country's price level, so it floors
+    /// the affordable fee without a currency-dependent magic number.
+    pub const EMERGENCY_FEE_WAGE_FRACTION: f64 = 0.25;
 }
 
 fn status_score(status: &PlayerSquadStatus) -> f32 {
@@ -366,12 +380,14 @@ impl TransferPlausibilityEvaluator {
             );
         }
 
-        // Affordability — fee. Release clauses bypass.
-        let max_fee = inputs.buyer_transfer_budget * 1.40;
+        // Affordability — fee. Release clauses and loans bypass. The cap
+        // is wage-floored (see `affordability_max_fee`) so a zero declared
+        // budget no longer reads as unlimited — a listed/unhappy player is
+        // *available*, but a far smaller club still can't fund the fee.
+        let max_fee = inputs.affordability_max_fee();
         if !inputs.release_clause_triggered
             && !inputs.is_loan
             && inputs.estimated_value > max_fee
-            && max_fee > 0.0
         {
             return TransferPlausibilityVerdict::HardReject(
                 TransferPlausibilityReason::UnaffordableFee,
@@ -443,6 +459,7 @@ impl TransferPlausibilityEvaluator {
 // the wage policy / importance heuristics never silently drift between
 // callers.
 
+use crate::Player;
 use crate::club::player::calculators::WageCalculator;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::{Club, Country, Person, PlayerStatusType, TeamType};
@@ -558,7 +575,7 @@ impl TransferPlausibilityBuilder {
         let player = PipelineProcessor::find_player_in_country(country, target.player_id);
         let squad_status = player
             .and_then(|p| p.contract.as_ref().map(|c| c.squad_status.clone()))
-            .unwrap_or(crate::PlayerSquadStatus::NotYetSet);
+            .unwrap_or(PlayerSquadStatus::NotYetSet);
 
         // Real availability signals from the player's own status — never
         // from a market listing (which may be synthetic).
@@ -639,7 +656,7 @@ impl TransferPlausibilityBuilder {
         country: &Country,
         buyer_club: &Club,
         selling_club: &Club,
-        player: &crate::Player,
+        player: &Player,
         estimated_value: f64,
         is_loan: bool,
         is_unsolicited: bool,
@@ -683,7 +700,7 @@ impl TransferPlausibilityBuilder {
                     ((c.expiration - date).num_days().max(0) / 30).min(i16::MAX as i64) as i16;
                 (c.squad_status.clone(), months, c.salary)
             })
-            .unwrap_or((crate::PlayerSquadStatus::NotYetSet, 0, 0));
+            .unwrap_or((PlayerSquadStatus::NotYetSet, 0, 0));
 
         let release_clause_triggered = player
             .contract
@@ -984,6 +1001,70 @@ mod tests {
         } else {
             panic!("expected Allow, got {:?}", v);
         }
+    }
+
+    #[test]
+    fn listed_player_still_blocked_when_buyer_cannot_fund_fee() {
+        // The Raffaele Huli case: a valuable young keeper at a giant club,
+        // transfer-listed + unhappy (so the importance / step-down gates
+        // are waived), approached for a *permanent* move by a tiny lower-
+        // league club with no transfer budget. Availability does not make
+        // a 9M player affordable — the fee gate must still reject, even
+        // though a zero declared budget used to read as unlimited.
+        let mut inputs = base_inputs();
+        inputs.is_listed = true;
+        inputs.is_unhappy = true;
+        inputs.estimated_value = 9_200_000.0;
+        inputs.buyer_transfer_budget = 0.0;
+        inputs.buyer_wage_budget = 1_000_000; // wage floor = 250k
+        inputs.buyer_total_wages = 900_000;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::UnaffordableFee
+                )
+            ),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn broke_buyer_can_still_fund_a_small_fee_via_wage_floor() {
+        // Same broke buyer, but a cheap target within the wage-scaled
+        // floor. The floor must not block genuinely small permanent deals
+        // — broke clubs still shop at the bottom of the market.
+        let mut inputs = base_inputs();
+        inputs.is_listed = true;
+        inputs.estimated_value = 150_000.0;
+        inputs.buyer_transfer_budget = 0.0;
+        inputs.buyer_wage_budget = 1_000_000; // wage floor = 250k > 150k
+        inputs.buyer_total_wages = 900_000;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn big_budget_buyer_can_fund_expensive_listed_player() {
+        // Arsenal / AC Milan side of the same case: ample budget → the fee
+        // clears, so the gate doesn't over-prune legitimate top-club
+        // interest in the listed prospect.
+        let mut inputs = base_inputs();
+        inputs.is_listed = true;
+        inputs.estimated_value = 9_200_000.0;
+        inputs.buyer_transfer_budget = 40_000_000.0;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
     }
 
     #[test]

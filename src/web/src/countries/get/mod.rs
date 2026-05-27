@@ -41,6 +41,9 @@ pub struct CountryGetTemplate {
 pub struct LeagueDto {
     pub slug: String,
     pub name: String,
+    /// Domestic cups link to the dedicated `/cups/{slug}` page; leagues to
+    /// `/leagues/{slug}`.
+    pub is_cup: bool,
 }
 
 pub async fn country_get_action(
@@ -87,7 +90,7 @@ pub async fn country_get_action(
             ))
         })?;
 
-    let leagues: Vec<LeagueDto> = country
+    let mut leagues: Vec<LeagueDto> = country
         .leagues
         .leagues
         .iter()
@@ -95,8 +98,18 @@ pub async fn country_get_action(
         .map(|l| LeagueDto {
             slug: l.slug.clone(),
             name: l.name.clone(),
+            is_cup: false,
         })
         .collect();
+    // The domestic cup lives outside `leagues`; surface it on the country
+    // page alongside the divisions so it's reachable (links to /cups/).
+    if let Some(cup) = &country.domestic_cup {
+        leagues.push(LeagueDto {
+            slug: cup.league.slug.clone(),
+            name: cup.league.name.clone(),
+            is_cup: true,
+        });
+    }
 
     let current_path = format!(
         "/{}/countries/{}/leagues",
@@ -131,7 +144,15 @@ pub async fn country_get_action(
                 country_name: &country.name,
                 country_slug: &route_params.country_slug,
             };
-            views::country_menu(&mp, &cl, country.continent_id)
+            views::country_menu(
+                &mp,
+                &cl,
+                country
+                    .domestic_cup
+                    .as_ref()
+                    .map(|c| (c.league.name.as_str(), c.league.slug.as_str())),
+                country.continent_id,
+            )
         },
         lang: route_params.lang,
         i18n,
