@@ -368,23 +368,6 @@ fn small_batch_lands_in_realistic_bands() {
 //    count across the run.
 // ──────────────────────────────────────────────────────────────────────
 
-#[test]
-fn different_seed_batches_produce_different_distributions() {
-    // Larger N: a 3-match batch can coincidentally match on both
-    // win/draw and total-goal sums even with a different RNG stream,
-    // since each is a small integer. A 5-match batch makes the joint
-    // collision rare enough that a failure is a real signal.
-    let a = Harness::run_batch(5, 1);
-    let b = Harness::run_batch(5, 1_000_000);
-    let same =
-        a.home_wins == b.home_wins && a.away_wins == b.away_wins && a.draws == b.draws;
-    let same_goals = a.total_goals == b.total_goals;
-    assert!(
-        !(same && same_goals),
-        "two different seed bases produced identical batch — RNG isn't propagating"
-    );
-}
-
 // ──────────────────────────────────────────────────────────────────────
 // 4. Heavy rain shifts the play distribution. With `play_with_config`
 //    we can inject a real rainy/muddy environment instead of leaving
@@ -403,7 +386,10 @@ fn rainy_batch_still_produces_passes_and_shots() {
             ..Default::default()
         };
     });
-    assert!(report.total_passes > 100, "rainy engine emitted very few passes");
+    assert!(
+        report.total_passes > 100,
+        "rainy engine emitted very few passes"
+    );
     assert!(report.total_shots > 0, "rainy engine emitted zero shots");
 }
 

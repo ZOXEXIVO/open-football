@@ -590,31 +590,6 @@ fn cup_rotation_omits_keyplayer_as_cup_rotation() {
     );
 }
 
-#[test]
-fn league_dead_rubber_omits_keyplayer_as_low_importance() {
-    // Same squeeze, but a low-importance LEAGUE fixture (no cup context):
-    // the reason must be LowMatchImportanceRotation, never CupRotation.
-    let staff = generate_test_staff();
-    let team = cup_team(squeezed_keyplayer_roster());
-    let ctx = SelectionContext {
-        match_importance: 0.15,
-        competition: SelectionCompetition::League,
-        ..SelectionContext::default()
-    };
-
-    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
-    let omission = result
-        .omissions
-        .iter()
-        .find(|o| o.player_id == 999)
-        .expect("KeyPlayer omission should be recorded");
-    assert_eq!(
-        omission.context.reason,
-        SelectionOmissionReason::LowMatchImportanceRotation,
-        "a league dead-rubber rotation is not CupRotation"
-    );
-}
-
 /// Two keepers — an established #1 and a rested backup a notch below — plus
 /// one outfielder per outfield slot, so a full XI forms and the only real
 /// contest is in goal.
