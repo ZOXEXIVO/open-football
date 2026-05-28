@@ -9,7 +9,6 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use rand::RngExt;
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 12.0; // ~1.5m — forwards close ball at press range.
 const CLOSE_TACKLE_DISTANCE: f32 = 7.0; // Immediate-attempt range when right on top of the ball carrier.
@@ -63,7 +62,7 @@ impl StateProcessingHandler for ForwardTacklingState {
         // for the hard cliff that flattened the 1-8 range.
         let tackling_p =
             SkillCurve::new(ctx.player.skills.technical.tackling, 8.0, 0.6).probability();
-        if rand::random::<f32>() >= tackling_p {
+        if ctx.context.rng.unit_f32() >= tackling_p {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Pressing,
             ));
@@ -276,7 +275,7 @@ impl ForwardTacklingState {
 
         // More likely to tackle if opponent is stationary or moving slowly
         if opponent_is_stationary {
-            return rand::random::<f32>() < tackle_eagerness * 1.2;
+            return ctx.context.rng.unit_f32() < tackle_eagerness * 1.2;
         }
 
         // Check if opponent is moving toward our goal (more urgent to tackle)
@@ -286,11 +285,11 @@ impl ForwardTacklingState {
 
         if threat_level > 0.5 {
             // Opponent moving toward our goal - tackle more eagerly
-            return rand::random::<f32>() < tackle_eagerness * 1.4;
+            return ctx.context.rng.unit_f32() < tackle_eagerness * 1.4;
         }
 
         // Standard tackle decision
-        rand::random::<f32>() < tackle_eagerness * 0.8
+        ctx.context.rng.unit_f32() < tackle_eagerness * 0.8
     }
 
     /// Attempt a tackle with improved physics and skill-based calculation
@@ -299,7 +298,7 @@ impl ForwardTacklingState {
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
     ) -> (bool, bool, FoulSeverity) {
-        let mut rng = rand::rng();
+        let rng = &ctx.context.rng;
 
         // Aggression and composure still feed the foul-risk path
         // (they should — composure protects, aggression escalates),

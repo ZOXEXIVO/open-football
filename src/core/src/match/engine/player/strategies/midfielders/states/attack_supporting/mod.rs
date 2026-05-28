@@ -899,7 +899,7 @@ impl MidfielderAttackSupportingState {
             return false;
         }
         let p = SkillCurve::new(ctx.player.skills.mental.off_the_ball, 12.0, 0.6).probability();
-        rand::random::<f32>() < p
+        ctx.context.rng.unit_f32() < p
     }
 
     /// Create a passing triangle position

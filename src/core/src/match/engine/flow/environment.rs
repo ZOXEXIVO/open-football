@@ -59,6 +59,28 @@ impl Default for MatchEnvironment {
 /// match-engine quantities. All deltas are *added* to a baseline that
 /// callers normally clamp to [0,1] for probabilities or to skill-bounded
 /// values for accuracy. Callers are responsible for clamping after combining.
+///
+/// **Live consumers** (read by hot-path code):
+///   * `pass_accuracy` / `long_pass_accuracy` — `PassEvaluator`
+///   * `goalkeeper_handling` — physics save resolution in
+///     `ball/interactions.rs`
+///   * `injury_risk` — in-match injury rolls in
+///     `substitution/substitutions.rs`
+///
+/// **Deferred** (computed by weather / pitch tables, no live consumer
+/// yet — kept on the struct so they don't need re-derivation when the
+/// downstream wiring lands):
+///   * `first_touch`, `cross_accuracy`, `shot_accuracy_long`,
+///     `goalkeeper_claim_cross`, `sliding_tackle_success`,
+///     `long_shot_rebound_chance`, `fatigue_rate`, `recovery_rate`,
+///     `high_press_intensity_cap`, `dribble_control`,
+///     `dribble_success`, `ball_roll_speed`, `pass_speed`,
+///     `acceleration`, `slide_tackle_range_units`,
+///     `early_touch_penalty_first_15min`.
+///
+/// When wiring a deferred field, add the consumer site below this
+/// docstring and move the field into the "live consumers" list so the
+/// audit stays trustworthy.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EnvModifiers {
     pub pass_accuracy: f32,

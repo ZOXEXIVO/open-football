@@ -743,7 +743,14 @@ impl ScoringEngine {
         let rotation_factor = (0.5 - match_importance) * 2.0; // 0.0 at 0.5, 1.0 at 0.0
 
         let days_idle = player.player_attributes.days_since_last_match as f32;
-        let total_games = (player.statistics.played + player.statistics.played_subs) as f32;
+        // Cup minutes count toward "has played this season" — otherwise a
+        // player who's been getting cup starts but no league minutes still
+        // reads as totally unused and gets the underplayed boost stacked on
+        // top of his cup-rotation bonus.
+        let total_games = (player.statistics.played
+            + player.statistics.played_subs
+            + player.cup_statistics.played
+            + player.cup_statistics.played_subs) as f32;
 
         // Players who haven't played recently need minutes
         let rest_bonus = (days_idle / 21.0).min(1.0) * 2.0;
@@ -775,23 +782,32 @@ impl ScoringEngine {
         for_starting: bool,
     ) -> f32 {
         let stage = cup.stage();
-        let mut bonus = 0.0f32;
+
+        // Rotation-tilt bucket. Everything that pushes the manager toward
+        // rotation (favouring a fringe player, pulling a star out for rest)
+        // accumulates here and is then scaled by the opponent-strength
+        // multiplier. Safety penalties (recovery, deep-tiredness) bypass
+        // the scaling and apply at full magnitude regardless of opponent.
+        let mut rotation_tilt = 0.0f32;
+        let mut safety_penalty = 0.0f32;
 
         // Base by squad status — the further from the final, the harder the
         // manager rotates away from the established XI toward the fringe.
+        // Negative bases (KeyPlayer/FirstTeamRegular) are star-rest penalties
+        // and scale with opponent strength too — both push rotation harder.
         if let Some(contract) = player.contract.as_ref() {
-            bonus += stage.status_base(&contract.squad_status);
+            rotation_tilt += stage.status_base(&contract.squad_status);
         }
 
         // Youth get extra rope to play their way in during early rounds.
         let age = DateUtils::age(player.birth_date, cup.date);
-        bonus += stage.youth_bonus(age);
+        rotation_tilt += stage.youth_bonus(age);
 
         // Underplayed players need minutes — strongest signal in the early
         // rounds, gone by the final.
         let idle = player.player_attributes.days_since_last_match;
         let idle_factor = (idle as f32 / CupRotation::IDLE_FULL_DAYS).min(1.0);
-        bonus += idle_factor * stage.idle_weight();
+        rotation_tilt += idle_factor * stage.idle_weight();
 
         let appearances = (player.statistics.played
             + player.statistics.played_subs
@@ -800,37 +816,113 @@ impl ScoringEngine {
             let factor = ((CupRotation::APPEARANCE_TARGET - appearances)
                 / CupRotation::APPEARANCE_TARGET)
                 .clamp(0.0, 1.0);
-            bonus += factor * stage.appearance_weight();
+            rotation_tilt += factor * stage.appearance_weight();
         }
 
+        // Match-practice signal — gives backups, prospects and underused
+        // squad members an explicit "needs minutes" push on top of the
+        // squad-status base. Scales with squad role so the same idle days
+        // pull a Rotation/MainBackup harder than a KeyPlayer.
+        rotation_tilt += self.domestic_cup_match_practice_bonus(player, cup, for_starting);
+
         // Fitness protection: pull overloaded stars even harder out of the
-        // early-round XI, and keep a recovering player off the pitch unless
-        // it's the final.
+        // early-round XI. This is a rotation push (the manager rests a tired
+        // star, regardless of opponent strength it should still apply), so
+        // it goes into the rotation bucket.
         if CupRotation::is_established(player)
             && (player.load.physical_load_7 >= CupRotation::OVERLOAD_PHYSICAL_LOAD
                 || player.load.minutes_last_7 >= CupRotation::OVERLOAD_MINUTES)
         {
-            bonus += stage.overload_protection();
+            rotation_tilt += stage.overload_protection();
         }
+
+        // Deep tiredness and post-injury recovery are safety calls — never
+        // dampened by opponent strength. A flogged player or a fragile
+        // returnee should sit even in a winnable cup tie against a minnow.
         if player.load.recovery_debt >= CupRotation::RECOVERY_DEBT_THRESHOLD {
-            bonus += stage.recovery_debt_penalty();
+            safety_penalty += stage.recovery_debt_penalty();
         }
         if player.player_attributes.is_in_recovery() {
             if for_starting {
                 // Don't risk a recovering player in the early/mid rounds; the
                 // final is left to the injury-risk penalty + squad depth.
                 if stage != CupStage::Final {
-                    bonus += CupRotation::RECOVERY_STARTING_PENALTY;
+                    safety_penalty += CupRotation::RECOVERY_STARTING_PENALTY;
                 }
             } else if player.player_attributes.condition_percentage() as f32
                 >= CupRotation::CAMEO_MIN_CONDITION
                 && idle >= CupRotation::CAMEO_MIN_IDLE_DAYS
             {
-                bonus += CupRotation::RECOVERING_BENCH_CAMEO;
+                safety_penalty += CupRotation::RECOVERING_BENCH_CAMEO;
             }
         }
 
-        bonus
+        let multiplier = CupRotation::rotation_multiplier(stage, cup.opponent_ratio);
+        rotation_tilt * multiplier + safety_penalty
+    }
+
+    /// Explicit "needs minutes" signal stacked on top of the squad-status
+    /// base. Three components — days idle, season appearances, this-cup
+    /// appearances — scaled per stage and gated by squad role so the same
+    /// underuse pulls a Rotation/MainBackup hard but barely nudges a
+    /// KeyPlayer.
+    ///
+    /// `for_starting` is reserved for the starting-XI vs bench split: bench
+    /// scoring already has its own integration bonus, so the signal is
+    /// gentler for the bench. Today the lever lives in role_multiplier and
+    /// for_starting is only used by the caller's gating, but the parameter
+    /// is kept on the signature so future tuning can split bench from XI
+    /// without another plumbing change.
+    pub fn domestic_cup_match_practice_bonus(
+        &self,
+        player: &Player,
+        cup: &DomesticCupContext,
+        for_starting: bool,
+    ) -> f32 {
+        use crate::club::PlayerSquadStatus;
+        let stage = cup.stage();
+        // Stage-scaled weights for the three components.
+        let (idle_w, underused_w, cup_unseen_w) = match stage {
+            CupStage::Early => (1.8, 2.2, 1.4),
+            CupStage::Quarter => (1.0, 1.2, 0.7),
+            CupStage::Semi => (0.3, 0.2, 0.0),
+            CupStage::Final => (0.0, 0.0, 0.0),
+        };
+
+        let days_idle = player.player_attributes.days_since_last_match as f32;
+        let idle_bonus = (days_idle / 28.0).clamp(0.0, 1.0) * idle_w;
+
+        let total_season_apps = (player.statistics.played
+            + player.statistics.played_subs
+            + player.cup_statistics.played
+            + player.cup_statistics.played_subs) as f32;
+        let underused_bonus = if total_season_apps < 8.0 {
+            ((8.0 - total_season_apps) / 8.0) * underused_w
+        } else {
+            0.0
+        };
+
+        let cup_apps = player.cup_statistics.played + player.cup_statistics.played_subs;
+        let cup_unseen_bonus = if cup_apps == 0 { cup_unseen_w } else { 0.0 };
+
+        // Role multiplier: rotation/backup/prospect get the strongest pull,
+        // KeyPlayer/FirstTeamRegular barely move.
+        let role_mult = player
+            .contract
+            .as_ref()
+            .map(|c| match c.squad_status {
+                PlayerSquadStatus::FirstTeamSquadRotation
+                | PlayerSquadStatus::MainBackupPlayer
+                | PlayerSquadStatus::HotProspectForTheFuture => 1.25,
+                PlayerSquadStatus::DecentYoungster => 1.10,
+                PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular => 0.35,
+                PlayerSquadStatus::NotNeeded => 0.20,
+                _ => 1.00,
+            })
+            .unwrap_or(1.00);
+
+        let _ = for_starting;
+        (idle_bonus + underused_bonus + cup_unseen_bonus) * role_mult
     }
 
     /// Domestic-cup goalkeeper adjustment. Early rounds are when a backup

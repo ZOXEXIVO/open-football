@@ -71,7 +71,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
                 + shot_profile.selection_skill * 0.30
                 + mid_profile.mid_shot_selection * 0.20)
                 .clamp(0.12, 0.65);
-            if rand::random::<f32>() < point_blank_willingness {
+            if ctx.context.rng.unit_f32() < point_blank_willingness {
                 return Some(
                     StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                         .with_shot_reason("MID_DRIB_POINT_BLANK"),

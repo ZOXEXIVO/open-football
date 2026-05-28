@@ -71,7 +71,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
     pub(super) fn play_ball(
         field: &mut MatchField,
-        context: &MatchContext,
+        context: &mut MatchContext,
         tick_context: &GameTickContext,
         events: &mut EventCollection,
     ) {

@@ -41,7 +41,7 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
         // ~0.92 (elite in space).
         let punch_success_prob =
             (claim_quality * 0.85 - claim_difficulty * 0.30 + prof.elite_lift).clamp(0.20, 0.95);
-        let punch_success = rand::random::<f32>() < punch_success_prob;
+        let punch_success = ctx.context.rng.unit_f32() < punch_success_prob;
 
         if punch_success {
             // Punch is successful

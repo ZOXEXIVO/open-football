@@ -1,4 +1,9 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::flow::context::PendingAdvantage;
+use crate::r#match::engine::flow::rng::MatchRng;
+use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext};
+use crate::r#match::engine::psychology::{NegativeEvent, PositiveEvent};
+use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
@@ -18,7 +23,6 @@ use crate::r#match::{
 use crate::match_log_info;
 use log::debug;
 use nalgebra::Vector3;
-use rand::{Rng, RngExt};
 
 // ───────────────────────────────────────────────────────────────────────────
 // Save-accounting diagnostic counters. Trace each save event's credit pair
@@ -277,6 +281,237 @@ pub enum PlayerEvent {
     TakeBall(u32),
 }
 
+/// Foul / advantage / direct free-kick wall logic. Groups the
+/// behaviours that the dispatcher used to host as scattered statics:
+/// card-probability computation, advantage window resolution, deferred
+/// card application, and direct free-kick wall checks. All methods are
+/// associated functions on the unit struct — no instance state — but
+/// living here keeps the foul lifecycle in one cohesive place rather
+/// than mixed into the broader `PlayerEventDispatcher`.
+pub struct FoulResolver;
+
+impl FoulResolver {
+    /// Resolve any pending advantage: if the fouled team has lost
+    /// possession inside the referee's window, whistle the foul back
+    /// and award the restart. If the window expires (or the advantage
+    /// materialised into a shot / deep entry), settle the card without
+    /// stopping play. Called once per tick from the engine loop.
+    pub fn tick_advantage(field: &mut MatchField, context: &mut MatchContext) {
+        let adv = match context.pending_advantage {
+            Some(a) => a,
+            None => return,
+        };
+        let now = context.current_tick();
+        let owner_team = field
+            .ball
+            .current_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+            .map(|p| p.team_id);
+        let possession_with_fouled = owner_team == Some(adv.fouled_team_id);
+
+        // Possession lost inside the window → pull play back.
+        if now < adv.expire_tick && !possession_with_fouled && owner_team.is_some() {
+            context.pending_advantage = None;
+            // Free-kick protection.
+            if field.ball.current_owner.is_some() {
+                field.ball.claim_cooldown = 150;
+                field.ball.flags.in_flight_state = 150;
+                field.ball.contested_claim_count = 0;
+            }
+            PlayerEventDispatcher::award_restart_for_foul(
+                adv.fouler_id,
+                adv.severity,
+                field,
+                context,
+            );
+            PlayerEventDispatcher::apply_card_decision(
+                adv.fouler_id,
+                adv.severity,
+                adv.yellow_prob,
+                adv.red_prob,
+                field,
+                context,
+            );
+            return;
+        }
+
+        // Window expired (advantage played) → just settle the card,
+        // play continues without restart.
+        if now >= adv.expire_tick {
+            context.pending_advantage = None;
+            PlayerEventDispatcher::apply_card_decision(
+                adv.fouler_id,
+                adv.severity,
+                adv.yellow_prob,
+                adv.red_prob,
+                field,
+                context,
+            );
+        }
+    }
+
+    /// Build the marginal-call context for the referee gate in
+    /// `handle_commit_foul_event`. Folds severity into a contact
+    /// magnitude, determines the contact location (penalty box vs
+    /// clear vs normal contact), figures out which side is fouled for
+    /// the home-bias check, and computes a match temperature from
+    /// derby intensity plus the cumulative foul count.
+    pub fn build_call_context(
+        fouler_id: u32,
+        severity: FoulSeverity,
+        field: &MatchField,
+        context: &MatchContext,
+    ) -> FoulCallContext {
+        let location = if Self::contact_in_a_penalty_box(field) {
+            ContactLocation::PenaltyBox
+        } else {
+            match severity {
+                FoulSeverity::Normal => ContactLocation::Normal,
+                FoulSeverity::Reckless | FoulSeverity::Violent => ContactLocation::ClearFoul,
+            }
+        };
+        let contact_severity = match severity {
+            FoulSeverity::Normal => 0.25,
+            FoulSeverity::Reckless => 0.65,
+            FoulSeverity::Violent => 0.92,
+        };
+        let fouled_team_is_home = Self::fouled_side_is_home(fouler_id, field);
+        // The deeper into a heated match, the more marginal contacts the
+        // referee whistles. Caps at 0.7 from foul history so derby
+        // intensity can still nudge it the rest of the way.
+        let temp_from_fouls = (field
+            .players
+            .iter()
+            .map(|p| p.fouls_committed as f32)
+            .sum::<f32>()
+            / 30.0)
+            .clamp(0.0, 0.7);
+        let match_temperature =
+            (temp_from_fouls + context.environment.derby_intensity * 0.3).clamp(0.0, 1.0);
+        FoulCallContext {
+            contact_severity,
+            match_temperature,
+            fouled_team_is_home,
+            location,
+        }
+    }
+
+    /// True if the ball is inside either team's penalty area at the
+    /// moment of the foul — used by the marginal-call gate to bump
+    /// strictness through `ContactLocation::PenaltyBox`.
+    fn contact_in_a_penalty_box(field: &MatchField) -> bool {
+        let field_w = field.size.width as f32;
+        let field_h = field.size.height as f32;
+        let scale = field_w / 105.0;
+        let area_w = 40.32 * scale;
+        let area_depth = 16.5 * scale;
+        let y = field.ball.position.y;
+        let x = field.ball.position.x;
+        let in_y = y >= (field_h - area_w) * 0.5 && y <= (field_h + area_w) * 0.5;
+        if !in_y {
+            return false;
+        }
+        x <= area_depth || x >= field_w - area_depth
+    }
+
+    /// True if the side being fouled is the home team. Reads ball
+    /// ownership; falls back to the fouler's opponent when the ball is
+    /// loose at the moment of the contact.
+    fn fouled_side_is_home(fouler_id: u32, field: &MatchField) -> bool {
+        let owner_team = field
+            .ball
+            .current_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+            .map(|p| p.team_id);
+        if let Some(team) = owner_team {
+            return team == field.home_team_id;
+        }
+        let fouler_team = field
+            .players
+            .iter()
+            .find(|p| p.id == fouler_id)
+            .map(|p| p.team_id);
+        fouler_team != Some(field.home_team_id)
+    }
+
+    /// Roll a wall-block check for a direct free-kick shot. Returns
+    /// true if the wall blocked the ball — caller then deflects /
+    /// loses the shot. The wall lives only within close/mid bands;
+    /// long-range FKs go around it.
+    pub fn wall_blocks_direct_fk(
+        shooter_id: u32,
+        field: &MatchField,
+        context: &MatchContext,
+        pre_distance: f32,
+    ) -> bool {
+        let band = FreeKickBand::from_distance(pre_distance);
+        if matches!(band, FreeKickBand::Far) {
+            return false;
+        }
+        // Wide angle: the goal's narrow visible-width drops as the
+        // shooter drifts laterally. Approximate via the y-deviation
+        // from goal centre vs. field height.
+        let field_h = context.field_size.height as f32;
+        let center_y = field_h * 0.5;
+        let shooter_side = field
+            .players
+            .iter()
+            .find(|p| p.id == shooter_id)
+            .and_then(|p| p.side);
+        let shooter_y = field
+            .players
+            .iter()
+            .find(|p| p.id == shooter_id)
+            .map(|p| p.position.y)
+            .unwrap_or(center_y);
+        let is_wide_angle = (shooter_y - center_y).abs() > field_h * 0.18;
+
+        let wall_size = wall_size_for(band, is_wide_angle).clamp(2, 8);
+        // Wall composition: average bravery + positioning of the n
+        // closest defenders to the ball, excluding the keeper.
+        let mut wall: Vec<&MatchPlayer> = field
+            .players
+            .iter()
+            .filter(|p| {
+                p.id != shooter_id
+                    && !p.is_sent_off
+                    && p.tactical_position.current_position.position_group()
+                        != PlayerFieldPositionGroup::Goalkeeper
+                    && p.side != shooter_side
+            })
+            .collect();
+        wall.sort_by(|a, b| {
+            let da = (a.position - field.ball.position).magnitude();
+            let db = (b.position - field.ball.position).magnitude();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let wall_n = (wall_size as usize).min(wall.len());
+        if wall_n == 0 {
+            return false;
+        }
+        let mut bravery_sum = 0.0;
+        let mut positioning_sum = 0.0;
+        for d in wall.iter().take(wall_n) {
+            bravery_sum += d.skills.mental.bravery;
+            positioning_sum += d.skills.mental.positioning;
+        }
+        let avg_bravery = bravery_sum / wall_n as f32;
+        let avg_positioning = (positioning_sum / wall_n as f32 / 20.0).clamp(0.0, 1.0);
+
+        // Taker error: 1.0 - finishing skill (proxy — the lower the
+        // taker's finishing, the more often they hit the wall).
+        let taker_error = field
+            .players
+            .iter()
+            .find(|p| p.id == shooter_id)
+            .map(|p| 1.0 - (p.skills.technical.finishing / 20.0).clamp(0.0, 1.0))
+            .unwrap_or(0.5);
+
+        let p = wall_block_prob(avg_positioning, avg_bravery, taker_error, band);
+        context.rng.bernoulli(p)
+    }
+}
+
 pub struct PlayerEventDispatcher;
 
 impl PlayerEventDispatcher {
@@ -380,7 +615,7 @@ impl PlayerEventDispatcher {
                 Self::handle_pass_to_event(
                     pass_event_model,
                     field,
-                    context.total_match_time,
+                    context,
                     was_cross,
                 );
                 // Tag the ball with the passer for pass-accuracy
@@ -545,7 +780,7 @@ impl PlayerEventDispatcher {
                 } else {
                     field.ball.pending_error_to_shot_player_id = None;
                 }
-                Self::handle_shoot_event(shoot_event_model, field, direct_assister_id);
+                Self::handle_shoot_event(shoot_event_model, field, context, direct_assister_id);
             }
             PlayerEvent::CaughtBall(player_id) => {
                 Self::handle_caught_ball_event(player_id, field);
@@ -584,7 +819,12 @@ impl PlayerEventDispatcher {
         context: &mut MatchContext,
     ) {
         let scorer_team_id = field.get_player(player_id).map(|p| p.team_id);
-        let player = field.get_player_mut(player_id).unwrap();
+        // Stale scorer id (sent off / subbed between shot and goal
+        // resolution) — no goal recorded for the player, but the score
+        // line and ball-state cleanup downstream still need to run.
+        let Some(player) = field.get_player_mut(player_id) else {
+            return;
+        };
 
         player
             .statistics
@@ -654,6 +894,49 @@ impl PlayerEventDispatcher {
             time: context.total_match_time,
         });
         context.record_stoppage_time(30_000);
+
+        // Psychology nudges: scorer gains confidence; conceding GK takes
+        // a hit. Own goals route the confidence penalty to the auto-
+        // scorer instead of any reward path. Team momentum swings to
+        // the scoring side. Cheap — single hashmap lookups.
+        let tick = context.current_tick();
+        if !is_auto_goal {
+            context
+                .psychology
+                .record_positive(player_id, PositiveEvent::Goal, tick);
+        } else {
+            context
+                .psychology
+                .record_negative(player_id, NegativeEvent::Mistake, tick);
+        }
+        if let Some(scoring_team) = scorer_team_id {
+            let is_home_scoring = scoring_team == field.home_team_id;
+            // Goal momentum delta for the scoring side. Auto-goals also
+            // shift momentum toward the side that profited.
+            let scoring_side_is_home = if is_auto_goal {
+                !is_home_scoring
+            } else {
+                is_home_scoring
+            };
+            context
+                .psychology
+                .record_team_event(scoring_side_is_home, 0.35, tick);
+            // Conceding side's keeper takes a confidence hit.
+            let conceding_gk_id = field
+                .players
+                .iter()
+                .find(|p| {
+                    p.team_id != scoring_team
+                        && p.tactical_position.current_position.position_group()
+                            == PlayerFieldPositionGroup::Goalkeeper
+                })
+                .map(|p| p.id);
+            if let Some(gk_id) = conceding_gk_id {
+                context
+                    .psychology
+                    .record_negative(gk_id, NegativeEvent::GoalConceded, tick);
+            }
+        }
 
         field.ball.previous_owner = None;
         field.ball.current_owner = None;
@@ -1158,10 +1441,11 @@ impl PlayerEventDispatcher {
     fn handle_pass_to_event(
         event_model: PassingEventContext,
         field: &mut MatchField,
-        total_match_time_ms: u64,
+        context: &MatchContext,
         was_cross: bool,
     ) {
-        let mut rng = rand::rng();
+        let total_match_time_ms = context.total_match_time;
+        let rng = &context.rng;
         let minute = sc::minute_from_ms(total_match_time_ms);
 
         // Only increment attempts here. `passes_completed` is bumped when
@@ -1370,7 +1654,7 @@ impl PlayerEventDispatcher {
         let trajectory_type = Self::select_trajectory_type_contextual(
             actual_horizontal_distance,
             &skills,
-            &mut rng,
+            rng,
             &passer_position,
             &actual_target,
             passer_team_id,
@@ -1390,7 +1674,7 @@ impl PlayerEventDispatcher {
             &horizontal_velocity,
             trajectory_type,
             &skills,
-            &mut rng,
+            rng,
         );
 
         let base_max_z = Self::calculate_max_z_velocity(actual_horizontal_distance, &skills);
@@ -1512,7 +1796,7 @@ impl PlayerEventDispatcher {
     fn select_trajectory_type_contextual(
         horizontal_distance: f32,
         skills: &PassSkills,
-        rng: &mut impl Rng,
+        rng: &MatchRng,
         from_position: &Vector3<f32>,
         to_position: &Vector3<f32>,
         passer_team_id: u32,
@@ -1697,7 +1981,7 @@ impl PlayerEventDispatcher {
         horizontal_velocity: &Vector3<f32>,
         trajectory_type: TrajectoryType,
         skills: &PassSkills,
-        rng: &mut impl Rng,
+        rng: &MatchRng,
     ) -> f32 {
         const GRAVITY: f32 = 9.81;
 
@@ -1976,6 +2260,7 @@ impl PlayerEventDispatcher {
     fn handle_shoot_event(
         shoot_event_model: ShootingEventContext,
         field: &mut MatchField,
+        context: &MatchContext,
         direct_assister_id: Option<u32>,
     ) {
         const GOAL_WIDTH: f32 = 29.0; // Half-width of goal in game units (matches engine GOAL_WIDTH)
@@ -1993,7 +2278,7 @@ impl PlayerEventDispatcher {
         const MAX_SHOT_VELOCITY: f32 = 3.2;
         const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
-        let mut rng = rand::rng();
+        let rng = &context.rng;
 
         // Build the unified shot profile from the same inputs the
         // pre-shot decision saw — the post-hoc xG, the trajectory error
@@ -2003,6 +2288,35 @@ impl PlayerEventDispatcher {
         // inherit elite conversion through linear blends.
         let minute = sc::minute_from_ticks(shoot_event_model.tick);
         let pre_distance = (shoot_event_model.target - field.ball.position).magnitude();
+
+        // Direct free-kick wall block. If the ball came from a
+        // DirectFreeKick origin AND the band is shootable, roll the
+        // wall-block probability. A blocked shot has its trajectory
+        // overwritten with a low-velocity deflection past the wall;
+        // the ball stays live so the loose-ball state machine resumes.
+        if field.ball.pass_origin_restart == PassOriginRestart::DirectFreeKick
+            && FoulResolver::wall_blocks_direct_fk(
+                shoot_event_model.from_player_id,
+                field,
+                context,
+                pre_distance,
+            )
+        {
+            let dir = (shoot_event_model.target - field.ball.position).normalize();
+            // Deflect upward and slightly away — the ball clears
+            // the wall but loses most of its goalward energy.
+            field.ball.velocity = Vector3::new(dir.x * 0.6, dir.y * 0.6, 1.4);
+            field.ball.flags.in_flight_state = 30;
+            field.ball.previous_owner = Some(shoot_event_model.from_player_id);
+            field.ball.current_owner = None;
+            field.ball.cached_shot_target = None;
+            field.ball.last_shot_xg = 0.0;
+            field.ball.last_shot_shooter_id = None;
+            // Restart origin is consumed by the wall — return to
+            // open play so the next tick doesn't repeat the block.
+            field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
+            return;
+        }
 
         // Snapshot the bits of state we need from `field` so we can
         // build the profile without juggling overlapping borrows.
@@ -2632,13 +2946,17 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_move_player_event(player_id: u32, position: Vector3<f32>, field: &mut MatchField) {
-        let player = field.get_player_mut(player_id).unwrap();
-        player.position = position;
+        // Stale event ids (sent-off player, halftime swap mid-tick)
+        // are no-ops rather than crashes.
+        if let Some(player) = field.get_player_mut(player_id) {
+            player.position = position;
+        }
     }
 
     fn handle_take_ball_event(player_id: u32, field: &mut MatchField) {
-        let player = field.get_player_mut(player_id).unwrap();
-        player.run_for_ball();
+        if let Some(player) = field.get_player_mut(player_id) {
+            player.run_for_ball();
+        }
     }
 
     fn handle_request_ball_receive(player_id: u32, field: &mut MatchField) {
@@ -2678,84 +2996,214 @@ impl PlayerEventDispatcher {
         field: &mut MatchField,
         context: &mut MatchContext,
     ) {
+        // Referee marginal-call gate. The tackling code emits a foul
+        // whenever a contact passes its `committed_foul` roll; the
+        // referee then decides whether to actually blow the whistle.
+        // Clear / violent fouls are near-certain to be called; normal
+        // contact is genuinely referee-dependent (a strict referee
+        // calls more, a lenient one waves play on). The card decision
+        // is computed only when the whistle goes — a missed call costs
+        // nobody a yellow.
+        let call_ctx = FoulResolver::build_call_context(fouler_id, severity, field, context);
+        let call_prob = context.referee.foul_call_prob(&context.environment, call_ctx);
+        if context.rng.unit_f32() >= call_prob {
+            // Missed / waved-on contact. Nothing is recorded: no foul
+            // stat, no card, no restart. Play continues. This is the
+            // marginal-call behaviour that lets a lenient referee
+            // produce a low-foul match without changing the underlying
+            // tackle / press model.
+            return;
+        }
+
+        // Compute card probabilities up front — used either to record
+        // the card immediately or to stash on a pending advantage.
+        let match_second = context.total_match_time;
+        let card_modifier = context.referee.card_modifier(&context.environment);
+        let (card_yellow_prob, card_red_prob) =
+            match Self::compute_card_probs(fouler_id, severity, field, match_second, card_modifier)
+            {
+                Some(p) => p,
+                None => return,
+            };
+
+        // Advantage: if the fouled team kept possession, the ball is in
+        // a good attacking position, and the foul wasn't violent, the
+        // referee waves play on. The pending advantage is stashed on
+        // context; the per-tick advantage check resolves it later.
+        // Violent fouls always stop play — `should_play_advantage`
+        // hard-blocks them on severity >= 0.85.
+        let severity_score = match severity {
+            FoulSeverity::Normal => 0.20,
+            FoulSeverity::Reckless => 0.60,
+            FoulSeverity::Violent => 0.90,
+        };
+        let (fouled_team_id, attack_value, possession_retained) =
+            Self::estimate_advantage_inputs(fouler_id, field);
+        if let Some(fouled_team_id) = fouled_team_id {
+            if context.referee.should_play_advantage(
+                attack_value,
+                possession_retained,
+                severity_score,
+            ) {
+                let start_tick = context.current_tick();
+                let window = context.referee.advantage_window_ticks() as u64;
+                context.pending_advantage = Some(PendingAdvantage {
+                    fouler_id,
+                    start_tick,
+                    expire_tick: start_tick + window,
+                    fouled_team_id,
+                    severity,
+                    yellow_prob: card_yellow_prob,
+                    red_prob: card_red_prob,
+                });
+                // Foul still counts for the player's fouls_committed
+                // tally even though play continues.
+                if let Some(p) = field.get_player_mut(fouler_id) {
+                    p.fouls_committed = p.fouls_committed.saturating_add(1);
+                    p.statistics.add_foul(match_second);
+                }
+                return;
+            }
+        }
+
+        // No advantage — proceed to the immediate restart / card path.
         // Free-kick protection: the victim gets time without being challenged.
         if field.ball.current_owner.is_some() {
             field.ball.claim_cooldown = 150; // ~2.5 seconds of protection
             field.ball.flags.in_flight_state = 150;
             field.ball.contested_claim_count = 0;
         }
-
-        // Award the restart to the victim's team. Penalty if foul occurred
-        // inside the fouler's penalty area, otherwise direct free kick at
-        // ball position. Runs whether or not a card is given — most fouls
-        // produce a free kick without a booking.
         Self::award_restart_for_foul(fouler_id, severity, field, context);
 
-        let match_second = context.total_match_time;
+        // Count the foul for the player (advantage path counted it above).
+        if let Some(p) = field.get_player_mut(fouler_id) {
+            p.fouls_committed = p.fouls_committed.saturating_add(1);
+            p.statistics.add_foul(match_second);
+        }
 
-        // Card decision — probability scales with severity and the fouler's
-        // aggression/dirtiness. Composure reduces the chance a little
-        // (cool-headed players get the benefit of the doubt).
-        let (card_yellow_prob, card_red_prob) = {
-            let player = match field.get_player_mut(fouler_id) {
-                Some(p) => p,
-                None => return,
-            };
+        Self::apply_card_decision(
+            fouler_id,
+            severity,
+            card_yellow_prob,
+            card_red_prob,
+            field,
+            context,
+        );
+    }
 
-            // Count the foul itself whether or not it draws a card.
-            player.fouls_committed = player.fouls_committed.saturating_add(1);
-            player.statistics.add_foul(match_second);
+    /// Compute the (yellow_prob, red_prob) pair for the foul. Reads
+    /// the fouler's skills/personality/foul history. Returns None if
+    /// the fouler can't be found (red-card race condition).
+    fn compute_card_probs(
+        fouler_id: u32,
+        severity: FoulSeverity,
+        field: &MatchField,
+        _match_second: u64,
+        card_modifier: f32,
+    ) -> Option<(f32, f32)> {
+        let player = field.players.iter().find(|p| p.id == fouler_id)?;
 
-            let aggression = player.skills.mental.aggression / 20.0;
-            let composure = player.skills.mental.composure / 20.0;
-            let teamwork = player.skills.mental.teamwork / 20.0;
-            // Personality contributions — these used to be generated-only.
-            // Dirtiness = how hard/cynical the challenges are; temperament
-            // = how likely the player is to snap under provocation;
-            // sportsmanship is a damper pulling the other way.
-            let dirtiness = player.attributes.dirtiness / 20.0;
-            let temperament = player.attributes.temperament / 20.0;
-            let sportsmanship = player.attributes.sportsmanship / 20.0;
+        let aggression = player.skills.mental.aggression / 20.0;
+        let composure = player.skills.mental.composure / 20.0;
+        let teamwork = player.skills.mental.teamwork / 20.0;
+        let dirtiness = player.attributes.dirtiness / 20.0;
+        let temperament = player.attributes.temperament / 20.0;
+        let sportsmanship = player.attributes.sportsmanship / 20.0;
 
-            // Persistent fouler escalation — 3+ fouls = next one much more likely booked.
-            let persistent = if player.fouls_committed >= 3 {
-                0.15
-            } else {
-                0.0
-            };
-
-            // High-aggression, low-composure, low-teamwork = "dirty" player.
-            // Layer personality on top: dirtiness pushes cards up, sportsmanship
-            // pulls them down, low temperament punishes you under pressure.
-            let aggressor_factor = (aggression * 0.40 - composure * 0.12 - teamwork * 0.08
-                + dirtiness * 0.18
-                + (1.0 - temperament) * 0.10
-                - sportsmanship * 0.10)
-                .clamp(-0.25, 0.70);
-
-            // Card probabilities calibrated to spec ranges:
-            //   normal foul yellow  4-16%
-            //   reckless yellow    45-80%
-            //   reckless red       2-12%
-            //   violent red       70-100%
-            match severity {
-                FoulSeverity::Normal => (
-                    (0.04 + aggressor_factor * 0.18 + persistent * 0.6).clamp(0.02, 0.18),
-                    0.0_f32,
-                ),
-                FoulSeverity::Reckless => (
-                    (0.45 + aggressor_factor * 0.30 + persistent * 0.8).clamp(0.30, 0.85),
-                    (0.04 + aggressor_factor * 0.12 + persistent).clamp(0.01, 0.18),
-                ),
-                FoulSeverity::Violent => {
-                    (0.10_f32, (0.70 + aggressor_factor * 0.30).clamp(0.60, 1.0))
-                }
-            }
+        let persistent = if player.fouls_committed >= 3 {
+            0.15
+        } else {
+            0.0
         };
 
-        let mut rng = rand::rng();
-        let roll_red = rng.random::<f32>();
-        let roll_yellow = rng.random::<f32>();
+        let aggressor_factor = (aggression * 0.40 - composure * 0.12 - teamwork * 0.08
+            + dirtiness * 0.18
+            + (1.0 - temperament) * 0.10
+            - sportsmanship * 0.10)
+            .clamp(-0.25, 0.70);
+
+        let (y, r) = match severity {
+            FoulSeverity::Normal => (
+                (0.04 + aggressor_factor * 0.18 + persistent * 0.6).clamp(0.02, 0.18),
+                0.0_f32,
+            ),
+            FoulSeverity::Reckless => (
+                (0.45 + aggressor_factor * 0.30 + persistent * 0.8).clamp(0.30, 0.85),
+                (0.04 + aggressor_factor * 0.12 + persistent).clamp(0.01, 0.18),
+            ),
+            FoulSeverity::Violent => (0.10_f32, (0.70 + aggressor_factor * 0.30).clamp(0.60, 1.0)),
+        };
+        let (lo_y, hi_y, lo_r, hi_r) = match severity {
+            FoulSeverity::Normal => (0.02, 0.18, 0.0, 0.0),
+            FoulSeverity::Reckless => (0.30, 0.85, 0.01, 0.18),
+            FoulSeverity::Violent => (0.0, 0.20, 0.60, 1.0),
+        };
+        Some((
+            (y * card_modifier).clamp(lo_y, hi_y),
+            (r * card_modifier).clamp(lo_r, hi_r),
+        ))
+    }
+
+    /// Estimate the post-foul attack value for the referee's advantage
+    /// check. Returns the fouled team's id (None if it can't be
+    /// inferred), an attack_value in 0..1, and whether the fouled team
+    /// currently retains possession.
+    fn estimate_advantage_inputs(
+        fouler_id: u32,
+        field: &MatchField,
+    ) -> (Option<u32>, f32, bool) {
+        let fouler = match field.players.iter().find(|p| p.id == fouler_id) {
+            Some(p) => p,
+            None => return (None, 0.0, false),
+        };
+        let fouler_team = fouler.team_id;
+        let owner_team = field
+            .ball
+            .current_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+            .map(|p| p.team_id);
+        let fouled_team_id = if let Some(t) = owner_team {
+            if t == fouler_team { None } else { Some(t) }
+        } else if fouler_team == field.home_team_id {
+            Some(field.away_team_id)
+        } else {
+            Some(field.home_team_id)
+        };
+        let possession_retained = owner_team == fouled_team_id;
+        let attack_value = if let Some(team) = fouled_team_id {
+            let bx = field.ball.position.x;
+            let target_right = team == field.home_team_id;
+            let progress = if target_right {
+                (bx / (field.size.width as f32)).clamp(0.0, 1.0)
+            } else {
+                (1.0 - bx / (field.size.width as f32)).clamp(0.0, 1.0)
+            };
+            let base = 0.30 + progress * 0.40;
+            let center_y = field.size.height as f32 / 2.0;
+            let centrality =
+                1.0 - ((field.ball.position.y - center_y).abs() / center_y).clamp(0.0, 1.0);
+            let nudge = 0.05 * centrality;
+            (base + nudge).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (fouled_team_id, attack_value, possession_retained)
+    }
+
+    /// Apply the rolled card decision (yellow / red / second-yellow)
+    /// to the fouler. Shared between the immediate-whistle path and
+    /// the advantage-resolution path.
+    pub(crate) fn apply_card_decision(
+        fouler_id: u32,
+        severity: FoulSeverity,
+        card_yellow_prob: f32,
+        card_red_prob: f32,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        let match_second = context.total_match_time;
+        let roll_red = context.rng.unit_f32();
+        let roll_yellow = context.rng.unit_f32();
 
         let direct_red = roll_red < card_red_prob;
         let got_yellow = !direct_red && roll_yellow < card_yellow_prob;
@@ -2768,16 +3216,17 @@ impl PlayerEventDispatcher {
         // recalibration brought foul frequency into the spec band, so
         // sending players off no longer cascades into half-empty teams.
         // Direct reds and second yellows both fully send the fouler off.
-        let (second_yellow, ends_with_red) = {
+        let (second_yellow, ends_with_red, temperament_for_psych) = {
             let player = match field.get_player_mut(fouler_id) {
                 Some(p) => p,
                 None => return,
             };
+            let temperament = player.attributes.temperament;
             if direct_red {
                 player.statistics.add_red_card(match_second);
                 player.is_sent_off = true;
                 context.record_stoppage_time(45_000);
-                (false, true)
+                (false, true, temperament)
             } else {
                 player.yellow_cards = player.yellow_cards.saturating_add(1);
                 player.statistics.add_yellow_card(match_second);
@@ -2788,9 +3237,19 @@ impl PlayerEventDispatcher {
                     player.is_sent_off = true;
                     context.record_stoppage_time(45_000);
                 }
-                (promoted, promoted)
+                (promoted, promoted, temperament)
             }
         };
+
+        // Psychology: a yellow raises nervousness (low-temperament
+        // players take a bigger hit); both yellow and red drop
+        // confidence via `record_negative`. Tick taken from the
+        // outer event so the per-event ordering is preserved.
+        let psych_tick = context.current_tick();
+        context.psychology.apply_yellow_card(fouler_id, temperament_for_psych);
+        context
+            .psychology
+            .record_negative(fouler_id, NegativeEvent::YellowCard, psych_tick);
 
         if ends_with_red {
             // Transfer ball ownership back to a neutral state so the
@@ -3237,7 +3696,7 @@ impl PlayerEventDispatcher {
     /// Picks the taker dynamically by skill score (penalty: penalty_taking
     /// composite; FK: free_kicks composite). Idempotent on missing data:
     /// returns silently if fouler/victim team can't be resolved.
-    fn award_restart_for_foul(
+    pub(crate) fn award_restart_for_foul(
         fouler_id: u32,
         _severity: FoulSeverity,
         field: &mut MatchField,

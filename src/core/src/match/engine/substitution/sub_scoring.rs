@@ -114,9 +114,14 @@ impl SubScoring {
     /// * Live rating ≥ 8.0: +0.35 (replaces the 7.3 tier)
     /// * Decisive scorer when leading by exactly one: +0.15 stacked on top
     ///
-    /// Critical injury / red-card aftermath / extreme exhaustion are NOT
-    /// gated by this function — callers handle those branches before
-    /// reaching the scoring pass.
+    /// Below 30% condition the bonus tapers linearly to zero at the
+    /// in-match condition floor (15%). A scorer who is physically
+    /// finished is still a worse asset on the pitch than a fresh sub —
+    /// keeping the protection at full strength means the engine refuses
+    /// to rest top players even when their legs are completely gone.
+    /// Critical injury / red-card aftermath are NOT gated by this
+    /// function — callers handle those branches before reaching the
+    /// scoring pass.
     pub fn star_protection(live: &LiveSubstitutionStats) -> f32 {
         let major = live.major_contributions();
         let contrib_protection = if major >= 2 {
@@ -143,7 +148,25 @@ impl SubScoring {
             0.0
         };
 
-        contrib_protection + rating_protection + decisive_protection
+        let raw = contrib_protection + rating_protection + decisive_protection;
+        raw * Self::extreme_fatigue_dampening(live.condition)
+    }
+
+    /// Condition-based dampener applied to `star_protection`. Above 30%
+    /// condition the protection stands at full strength; from 30% down
+    /// to the in-match floor it fades linearly to zero so the
+    /// substitution loop can hook a scorer whose legs are visibly gone
+    /// without overriding tactical fatigue with star halo.
+    #[inline]
+    fn extreme_fatigue_dampening(condition: i16) -> f32 {
+        let cond_pct = (condition as f32 / 10_000.0).clamp(0.0, 1.0);
+        if cond_pct >= 0.30 {
+            1.0
+        } else if cond_pct <= 0.15 {
+            0.0
+        } else {
+            ((cond_pct - 0.15) / 0.15).clamp(0.0, 1.0)
+        }
     }
 
     /// Score a player as a sub-off candidate. Higher = more urgent to
@@ -476,5 +499,45 @@ mod tests {
         let s = live(2, 1, 8.2, 1, 8000, 80);
         // 0.35 (G/A) + 0.35 (rating 8.0+) + 0.15 (decisive) = 0.85
         assert!((SubScoring::star_protection(&s) - 0.85).abs() < 1e-4);
+    }
+
+    #[test]
+    fn star_protection_tapers_to_zero_at_extreme_fatigue() {
+        // Same star, three condition rungs: fresh / fatigued boundary /
+        // exhausted floor. Above 30% the protection stands; at 15% it
+        // is gone so the substitution loop can hook a finished scorer.
+        let fresh = live(1, 0, 7.0, 0, 8000, 80);
+        let on_boundary = live(1, 0, 7.0, 0, 3000, 80);
+        let broken = live(1, 0, 7.0, 0, 1500, 80);
+        let fresh_prot = SubScoring::star_protection(&fresh);
+        let boundary_prot = SubScoring::star_protection(&on_boundary);
+        let broken_prot = SubScoring::star_protection(&broken);
+        assert!((fresh_prot - 0.20).abs() < 1e-4);
+        assert!((boundary_prot - 0.20).abs() < 1e-4);
+        assert!(broken_prot < 1e-4);
+        // Half-way through the taper window (~22%) the bonus should be
+        // roughly half — the linear shape lets callers reason about it.
+        let mid_taper = live(1, 0, 7.0, 0, 2250, 80);
+        let mid_prot = SubScoring::star_protection(&mid_taper);
+        assert!((mid_prot - 0.10).abs() < 0.02, "mid_prot {mid_prot}");
+    }
+
+    #[test]
+    fn star_protection_taper_applies_to_full_stack() {
+        // Top-tier stacked protection (0.85 at 80% condition) must
+        // fade with the same condition curve — otherwise a 2-goal
+        // scorer at 18% condition still gets a 0.8+ shield, defeating
+        // the whole purpose of the taper.
+        let fresh = live(2, 1, 8.2, 1, 8000, 80);
+        let broken = live(2, 1, 8.2, 1, 1800, 80);
+        let fresh_prot = SubScoring::star_protection(&fresh);
+        let broken_prot = SubScoring::star_protection(&broken);
+        assert!((fresh_prot - 0.85).abs() < 1e-4);
+        // Condition 18% → dampening (0.18 - 0.15) / 0.15 = 0.20.
+        // 0.85 * 0.20 = 0.17 — well below the fresh value.
+        assert!(
+            broken_prot < 0.25,
+            "broken-star protection {broken_prot} should have tapered"
+        );
     }
 }

@@ -190,7 +190,7 @@ impl ForwardStandingState {
         // (sigmoid pivot 10/20) — sub-5 dribblers very rarely attempt
         // a take-on; elite 17/20 almost always do.
         let p = SkillCurve::new(ctx.player.skills.technical.dribbling, 10.0, 0.6).probability();
-        rand::random::<f32>() < p
+        ctx.context.rng.unit_f32() < p
     }
 
     /// Decides whether the forward should press the opponent.

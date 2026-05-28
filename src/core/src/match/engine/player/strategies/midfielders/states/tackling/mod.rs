@@ -8,7 +8,6 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use rand::RngExt;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
@@ -160,7 +159,7 @@ impl MidfielderTacklingState {
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
     ) -> (bool, bool, FoulSeverity) {
-        let mut rng = rand::rng();
+        let rng = &ctx.context.rng;
 
         let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
         let aggression01 = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);

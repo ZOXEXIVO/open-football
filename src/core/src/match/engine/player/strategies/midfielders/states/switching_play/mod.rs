@@ -86,7 +86,7 @@ impl MidfielderSwitchingPlayState {
             .max_by(|a, b| {
                 let space_a = self.calculate_space_around_player(ctx, a);
                 let space_b = self.calculate_space_around_player(ctx, b);
-                space_a.partial_cmp(&space_b).unwrap()
+                space_a.total_cmp(&space_b)
             })
             .map(|teammate| (teammate.id, teammate.position))
     }

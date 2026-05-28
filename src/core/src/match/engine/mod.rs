@@ -37,7 +37,8 @@ pub use flow::environment::{EnvModifiers, MatchEnvironment, Pitch, Weather};
 pub use flow::field::*;
 pub use flow::goal::*;
 pub use flow::result::*;
-pub use flow::{context, environment, field, goal, result};
+pub use flow::rng::MatchRng;
+pub use flow::{context, environment, field, goal, result, rng};
 
 // officiating/
 pub use officiating::management::{

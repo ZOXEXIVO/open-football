@@ -10,14 +10,12 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
-use core::Person;
-use core::Player;
-use core::PlayerPositionType;
-use core::PlayerSquadStatus;
-use core::PlayerStatusType;
-use core::SimulatorData;
-use core::Team;
 use core::utils::FormattingUtils;
+use core::{
+    DomesticCupOverride, LiveCupSlice, Person, Player, PlayerLiveStatsInput, PlayerPositionType,
+    PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatisticsProjection, PlayerStatusType,
+    SimulatorData, Team,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -375,6 +373,9 @@ pub async fn player_get_action(
             .map(|t| (t.name.clone(), t.slug.clone()))
             .unwrap_or_else(|| (team.name.clone(), team.slug.clone()));
 
+        let (overview_league, overview_friendly, overview_cups) =
+            PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player);
+
         let player_vm = PlayerViewModel {
             id: player.id,
             contract,
@@ -401,9 +402,9 @@ pub async fn player_get_action(
             ),
             preferred_foot: player.preferred_foot_str().to_string(),
             player_attributes: get_attributes(player),
-            statistics: get_statistics(player),
-            friendly_statistics: get_friendly_statistics(player),
-            cup_statistics: get_cup_statistics(player, simulator_data, &i18n),
+            statistics: overview_league,
+            friendly_statistics: overview_friendly,
+            cup_statistics: overview_cups,
             status: PlayerStatusDto::new(player.statuses.get()),
             position_map: get_position_map(player),
             loan_status,
@@ -502,6 +503,9 @@ pub async fn player_get_action(
         player.full_name.display_last_name()
     );
 
+    let (overview_league, overview_friendly, overview_cups) =
+        PlayerOverviewStatsBuilder::new(simulator_data, &i18n).build(player);
+
     let player_vm = PlayerViewModel {
         id: player.id,
         contract: None,
@@ -519,9 +523,9 @@ pub async fn player_get_action(
         value: String::from("-"),
         preferred_foot: player.preferred_foot_str().to_string(),
         player_attributes: get_attributes(player),
-        statistics: get_statistics(player),
-        friendly_statistics: get_friendly_statistics(player),
-        cup_statistics: get_cup_statistics(player, simulator_data, &i18n),
+        statistics: overview_league,
+        friendly_statistics: overview_friendly,
+        cup_statistics: overview_cups,
         status: PlayerStatusDto::new(player.statuses.get()),
         position_map: get_position_map(player),
         loan_status: None,
@@ -781,150 +785,160 @@ fn get_neighbor_teams(
     ))
 }
 
-fn get_statistics(player: &Player) -> PlayerStatistics {
-    // Aggregate across every current-season spell. `player.statistics` is
-    // a per-spell live counter that gets drained on each Main ↔ B ↔ Second
-    // move; the drained spells survive in `statistics_history.current`.
-    // Reading the live field alone shows zero apps right after a move.
-    //
-    // The per-player Overview shows the *raw* minutes-weighted average:
-    // we're looking at one specific player so the displayed number
-    // should track what they actually did match-by-match. Sample-size
-    // regression is applied on aggregate ranking surfaces (squad list,
-    // league top-rated, scouting, awards) where small-sample inflation
-    // skews comparisons — not here.
-    let s = player
-        .statistics_history
-        .current_season_stats(&player.statistics);
-    PlayerStatistics {
-        played: s.played,
-        played_subs: s.played_subs,
-        goals: s.goals,
-        assists: s.assists,
-        penalties: s.penalties,
-        player_of_the_match: s.player_of_the_match,
-        yellow_cards: s.yellow_cards,
-        red_cards: s.red_cards,
-        shots_on_target: s.shots_on_target,
-        tackling: s.tackling,
-        passes: s.passes,
-        average_rating: s.average_rating_str(),
-        conceded: s.conceded,
-        clean_sheets: s.clean_sheets,
+/// One-shot Overview-stats builder. Wraps the projection call plus the
+/// SimulatorData / i18n lookups needed to resolve cup-row display names
+/// so the three view-model fields (league, friendly, cup list) come out
+/// of a single source. Lives here rather than in `core` so the i18n /
+/// `find_*` plumbing stays out of the projection layer.
+struct PlayerOverviewStatsBuilder<'a> {
+    data: &'a SimulatorData,
+    i18n: &'a I18n,
+}
+
+impl<'a> PlayerOverviewStatsBuilder<'a> {
+    fn new(data: &'a SimulatorData, i18n: &'a I18n) -> Self {
+        Self { data, i18n }
     }
-}
 
-fn get_friendly_statistics(player: &Player) -> Option<PlayerStatistics> {
-    let fs = &player.friendly_statistics;
-    Some(PlayerStatistics {
-        played: fs.played,
-        played_subs: fs.played_subs,
-        goals: fs.goals,
-        assists: fs.assists,
-        penalties: fs.penalties,
-        player_of_the_match: fs.player_of_the_match,
-        yellow_cards: fs.yellow_cards,
-        red_cards: fs.red_cards,
-        shots_on_target: fs.shots_on_target,
-        tackling: fs.tackling,
-        passes: fs.passes,
-        average_rating: fs.average_rating_str(),
-        conceded: fs.conceded,
-        clean_sheets: fs.clean_sheets,
-    })
-}
+    /// Project the active spell's per-competition Overview rows from
+    /// the central [`PlayerStatisticsProjection`] and split them into
+    /// the three slots the view model exposes:
+    ///
+    ///   - `statistics`         — the League aggregate row,
+    ///   - `friendly_statistics` — the Friendly row (None when empty),
+    ///   - `cup_statistics`     — Domestic + Continental cup rows.
+    ///
+    /// The per-player Overview shows the *raw* minutes-weighted average
+    /// (see [`PlayerStatistics::average_rating_str`]). Sample-size
+    /// regression is reserved for aggregate ranking surfaces (squad
+    /// list, top-rated, scouting, awards) where small-sample inflation
+    /// distorts comparisons.
+    fn build(
+        &self,
+        player: &Player,
+    ) -> (
+        PlayerStatistics,
+        Option<PlayerStatistics>,
+        Vec<CupCompetitionStatistics>,
+    ) {
+        let domestic_override = self.domestic_cup_override(player);
+        let live_cups: Vec<LiveCupSlice<'_>> = player
+            .cup_statistics_by_competition
+            .iter()
+            .map(|c| LiveCupSlice {
+                competition_slug: c.competition_slug.as_str(),
+                competition_name: self.resolve_competition_name(&c.competition_slug),
+                statistics: &c.statistics,
+            })
+            .collect();
+        let live_input = PlayerLiveStatsInput {
+            league: &player.statistics,
+            friendly: &player.friendly_statistics,
+            cups: &live_cups,
+        };
+        let rows = PlayerStatisticsProjection::player_overview_statistics(
+            &player.statistics_history,
+            &live_input,
+            domestic_override.as_ref(),
+            self.data.date.date(),
+        );
 
-/// Build one overview row per cup competition the player has actually
-/// appeared in this spell, labelled with the real competition recorded
-/// at match time. Competitions with no appearances yet are skipped.
-fn get_cup_statistics(
-    player: &Player,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Vec<CupCompetitionStatistics> {
-    // The player's current country's domestic cup, read straight from its
-    // stored match records — the same source the cup pages use — so the
-    // row is present and consistent with the cup's top-scorer list even
-    // when the live per-spell counter was drained by a mid-season move.
-    let domestic_cup = data
-        .player_with_team(player.id)
-        .map(|(_, team)| team.club_id)
-        .and_then(|club_id| data.country_by_club(club_id))
-        .and_then(|country| country.domestic_cup.as_ref());
-    let domestic_slug = domestic_cup.map(|cup| cup.slug().to_string());
+        let mut league: PlayerStatistics = self.empty_dto();
+        let mut friendly: Option<PlayerStatistics> = None;
+        let mut cups: Vec<CupCompetitionStatistics> = Vec::new();
 
-    let mut rows: Vec<CupCompetitionStatistics> = Vec::new();
+        for row in rows {
+            match row.competition_kind {
+                PlayerStatCompetitionKind::League => {
+                    league = Self::to_dto(&row.statistics);
+                }
+                PlayerStatCompetitionKind::Friendly => {
+                    friendly = Some(Self::to_dto(&row.statistics));
+                }
+                PlayerStatCompetitionKind::DomesticCup
+                | PlayerStatCompetitionKind::ContinentalCup => {
+                    cups.push(CupCompetitionStatistics {
+                        competition_name: row.competition_name,
+                        stats: Self::to_dto(&row.statistics),
+                    });
+                }
+            }
+        }
 
-    if let Some(cup) = domestic_cup {
-        if let Some(stats) = cup.league.aggregate_player_statistics(player.id) {
-            rows.push(CupCompetitionStatistics {
-                competition_name: cup.league.name.clone(),
-                stats: to_statistics_dto(&stats),
-            });
+        // Friendly bucket is shown even when the projection rejected it
+        // for being all zeros — the template uses `if let Some(fs)` and
+        // legacy callers always passed Some(empty). Surface it as
+        // Some(default) for an active spell so existing renders are
+        // bit-identical.
+        if friendly.is_none() {
+            friendly = Some(Self::to_dto(&player.friendly_statistics));
+        }
+
+        (league, friendly, cups)
+    }
+
+    /// Records-sourced domestic-cup row, used by the projection as the
+    /// authoritative cup tally. Returning `None` lets the projection
+    /// fall back to the live per-spell slice — fine for players whose
+    /// current country has no modelled domestic cup.
+    fn domestic_cup_override(&self, player: &Player) -> Option<DomesticCupOverride> {
+        let cup = self
+            .data
+            .player_with_team(player.id)
+            .map(|(_, team)| team.club_id)
+            .and_then(|club_id| self.data.country_by_club(club_id))
+            .and_then(|country| country.domestic_cup.as_ref())?;
+        let stats = cup.league.aggregate_player_statistics(player.id)?;
+        Some(DomesticCupOverride {
+            competition_slug: cup.slug().to_string(),
+            competition_name: cup.league.name.clone(),
+            statistics: stats,
+        })
+    }
+
+    fn resolve_competition_name(&self, slug: &str) -> String {
+        if let Some(name) = self
+            .data
+            .indexes
+            .as_ref()
+            .and_then(|idx| idx.slug_indexes.get_league_by_slug(slug))
+            .and_then(|id| self.data.league(id))
+            .map(|l| l.name.clone())
+        {
+            return name;
+        }
+        // Slugs are hyphenated (`"copa-libertadores"`) while i18n keys
+        // use underscores; `I18n::t` returns the key unchanged on miss.
+        let key = slug.replace('-', "_");
+        let translated = self.i18n.t(&key);
+        if translated == key.as_str() {
+            self.i18n.t("cup").to_string()
+        } else {
+            translated.to_string()
         }
     }
 
-    // Remaining cups (continental) come from the per-spell breakdown; the
-    // domestic cup is skipped here, already added from records above.
-    for c in &player.cup_statistics_by_competition {
-        if domestic_slug.as_deref() == Some(c.competition_slug.as_str()) {
-            continue;
+    fn to_dto(s: &core::PlayerStatistics) -> PlayerStatistics {
+        PlayerStatistics {
+            played: s.played,
+            played_subs: s.played_subs,
+            goals: s.goals,
+            assists: s.assists,
+            penalties: s.penalties,
+            player_of_the_match: s.player_of_the_match,
+            yellow_cards: s.yellow_cards,
+            red_cards: s.red_cards,
+            shots_on_target: s.shots_on_target,
+            tackling: s.tackling,
+            passes: s.passes,
+            average_rating: s.average_rating_str(),
+            conceded: s.conceded,
+            clean_sheets: s.clean_sheets,
         }
-        if c.statistics.played > 0 || c.statistics.played_subs > 0 {
-            rows.push(CupCompetitionStatistics {
-                competition_name: resolve_competition_name(&c.competition_slug, data, i18n),
-                stats: to_statistics_dto(&c.statistics),
-            });
-        }
     }
 
-    rows
-}
-
-/// Resolve a cup-statistics row's display name from its stored competition
-/// slug. Domestic cups are real `League`s, so prefer the cup's own name
-/// (e.g. "FA Cup", or a generated "{Country} Cup"). Continental cups have
-/// no `League` row, so fall back to the slug-keyed translation
-/// (e.g. "Champions League"); a slug with neither resolves to a plain "Cup".
-fn resolve_competition_name(slug: &str, data: &SimulatorData, i18n: &I18n) -> String {
-    if let Some(name) = data
-        .indexes
-        .as_ref()
-        .and_then(|idx| idx.slug_indexes.get_league_by_slug(slug))
-        .and_then(|id| data.league(id))
-        .map(|l| l.name.clone())
-    {
-        return name;
-    }
-
-    // Slugs are hyphenated (`"copa-libertadores"`) while i18n keys use
-    // underscores (`"copa_libertadores"`); `I18n::t` returns the key
-    // unchanged when there is no translation.
-    let key = slug.replace('-', "_");
-    let translated = i18n.t(&key);
-    if translated == key.as_str() {
-        i18n.t("cup").to_string()
-    } else {
-        translated.to_string()
-    }
-}
-
-fn to_statistics_dto(s: &core::PlayerStatistics) -> PlayerStatistics {
-    PlayerStatistics {
-        played: s.played,
-        played_subs: s.played_subs,
-        goals: s.goals,
-        assists: s.assists,
-        penalties: s.penalties,
-        player_of_the_match: s.player_of_the_match,
-        yellow_cards: s.yellow_cards,
-        red_cards: s.red_cards,
-        shots_on_target: s.shots_on_target,
-        tackling: s.tackling,
-        passes: s.passes,
-        average_rating: s.average_rating_str(),
-        conceded: s.conceded,
-        clean_sheets: s.clean_sheets,
+    fn empty_dto(&self) -> PlayerStatistics {
+        Self::to_dto(&core::PlayerStatistics::default())
     }
 }
 

@@ -336,6 +336,11 @@ pub struct MoraleEventCatalog {
     pub derby_defeat: f32,
     // Team season events
     pub trophy_won: f32,
+    /// Squad medal for winning the country's main knockout cup. Distinct
+    /// from `trophy_won` so the cooldown key separates league-title and
+    /// cup-win emits — a player on a double-winning team gets both
+    /// events rather than the second one being swallowed.
+    pub domestic_cup_won: f32,
     pub cup_final_defeat: f32,
     pub promotion_celebration: f32,
     pub relegation_fear: f32,
@@ -512,6 +517,11 @@ impl Default for MoraleEventCatalog {
             // Team season events — major positives are once-a-season
             // career memories; relegation is a year-defining wound.
             trophy_won: 10.0,
+            // Domestic cup is real silverware but a step below a league
+            // title — most squads rate it just under a championship
+            // medal. Emit-side prestige + involvement multipliers refine
+            // it further per player.
+            domestic_cup_won: 7.5,
             cup_final_defeat: -5.0,
             promotion_celebration: 8.0,
             relegation_fear: -2.5,
@@ -689,6 +699,7 @@ impl MoraleEventCatalog {
             DerbyWin => self.derby_win,
             DerbyDefeat => self.derby_defeat,
             TrophyWon => self.trophy_won,
+            DomesticCupWon => self.domestic_cup_won,
             CupFinalDefeat => self.cup_final_defeat,
             PromotionCelebration => self.promotion_celebration,
             RelegationFear => self.relegation_fear,

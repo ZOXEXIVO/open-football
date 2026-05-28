@@ -108,7 +108,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .min_by(|a, b| {
                 let dist_a = a.distance(self.ctx);
                 let dist_b = b.distance(self.ctx);
-                dist_a.partial_cmp(&dist_b).unwrap()
+                dist_a.total_cmp(&dist_b)
             })
     }
 
@@ -233,7 +233,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .min_by(|a, b| {
                 let dist_a = a.distance(self.ctx);
                 let dist_b = b.distance(self.ctx);
-                dist_a.partial_cmp(&dist_b).unwrap()
+                dist_a.total_cmp(&dist_b)
             })
     }
 
@@ -487,7 +487,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .max_by(|a, b| {
                 let score_a = self.calculate_opponent_danger_score(a, own_goal);
                 let score_b = self.calculate_opponent_danger_score(b, own_goal);
-                score_a.partial_cmp(&score_b).unwrap()
+                score_a.total_cmp(&score_b)
             })
     }
 
@@ -504,7 +504,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .max_by(|a, b| {
                 let score_a = self.calculate_opponent_danger_score(a, own_goal);
                 let score_b = self.calculate_opponent_danger_score(b, own_goal);
-                score_a.partial_cmp(&score_b).unwrap()
+                score_a.total_cmp(&score_b)
             })
     }
 

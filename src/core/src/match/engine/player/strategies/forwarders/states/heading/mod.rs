@@ -56,7 +56,7 @@ impl StateProcessingHandler for ForwardHeadingState {
 
         let minute = (ctx.context.total_match_time / 60_000) as u32;
         let won_duel = match attacker_full {
-            Some(att) => resolve_aerial_duel(att, defender_full, minute),
+            Some(att) => resolve_aerial_duel(ctx, att, defender_full, minute),
             None => self.attempt_heading(ctx),
         };
 
@@ -110,7 +110,7 @@ impl ForwardHeadingState {
         let jumping_skill = ctx.player.skills.physical.jumping / 20.0;
         let overall_skill = (heading_skill + jumping_skill) / 2.0;
 
-        let random_value: f32 = rand::random();
+        let random_value: f32 = ctx.context.rng.unit_f32();
         random_value < overall_skill
     }
 }

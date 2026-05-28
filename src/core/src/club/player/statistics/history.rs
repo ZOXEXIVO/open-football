@@ -1,3 +1,4 @@
+use super::ledger::{PlayerStatCompetitionKind, PlayerStatLedgerEntry};
 use super::types::{PlayerStatistics, TeamInfo};
 use crate::league::Season;
 use chrono::NaiveDate;
@@ -17,6 +18,15 @@ pub struct PlayerStatisticsHistory {
     /// rely on (career-apps wage clauses, favourite-club evaluation) must not
     /// pick up cup games.
     pub continental: Vec<ContinentalSeasonStats>,
+    /// Canonical append-only ledger. Every season-end / transfer / loan
+    /// event writes a row here in addition to the legacy `items` /
+    /// `current` / `continental` fields, with an idempotent merge on
+    /// the `(season, team, kind, is_loan)` key. The projection reads
+    /// from this ledger when populated and ignores the legacy fields,
+    /// so storage drop filters can no longer hide a row from the
+    /// renderer. Empty for save files written before this field
+    /// existed — those still fall back to the legacy adapter.
+    pub season_ledger: Vec<PlayerStatLedgerEntry>,
     next_seq: u32,
 }
 
@@ -75,6 +85,7 @@ impl PlayerStatisticsHistory {
             items: Vec::new(),
             current: Vec::new(),
             continental: Vec::new(),
+            season_ledger: Vec::new(),
             next_seq: 0,
         }
     }
@@ -83,14 +94,100 @@ impl PlayerStatisticsHistory {
     /// (e.g. the database loader). Caller is responsible for assigning
     /// `seq_id` in chronological order; `next_seq` is seeded past the max
     /// so future runtime events continue from a unique value.
+    ///
+    /// The canonical ledger is also seeded so legacy database-loaded
+    /// history surfaces under the same projection path as new runtime
+    /// events — without it, a player loaded from the DB would briefly
+    /// render through the fallback adapter until their first runtime
+    /// event populated `season_ledger`.
     pub fn from_items(items: Vec<PlayerStatisticsHistoryItem>) -> Self {
         let next_seq = items.iter().map(|i| i.seq_id + 1).max().unwrap_or(0);
+        let season_ledger: Vec<PlayerStatLedgerEntry> = items
+            .iter()
+            .map(|i| PlayerStatLedgerEntry {
+                seq_id: i.seq_id,
+                season_start_year: i.season.start_year,
+                team_slug: i.team_slug.clone(),
+                team_name: i.team_name.clone(),
+                team_reputation: i.team_reputation,
+                league_slug: i.league_slug.clone(),
+                league_name: i.league_name.clone(),
+                competition_kind: PlayerStatCompetitionKind::League,
+                competition_slug: i.league_slug.clone(),
+                is_loan: i.is_loan,
+                transfer_fee: i.transfer_fee,
+                statistics: i.statistics.clone(),
+            })
+            .collect();
         PlayerStatisticsHistory {
             items,
             current: Vec::new(),
             continental: Vec::new(),
+            season_ledger,
             next_seq,
         }
+    }
+
+    /// Append a league/continental stat slice to the canonical ledger,
+    /// merging into an existing entry when `(season, team_slug, kind,
+    /// is_loan)` already matches. Storage call sites invoke this for
+    /// every stat slice that flows through them — independent of the
+    /// legacy `items` drop filters, so the projection sees the row even
+    /// when `items` doesn't.
+    ///
+    /// The seq_id is preserved from the first append; ties (e.g. a
+    /// later transfer fee for a previously zero-fee row) merge in place.
+    pub fn append_to_ledger(
+        &mut self,
+        season_start_year: u16,
+        team: &TeamInfo,
+        competition_kind: PlayerStatCompetitionKind,
+        is_loan: bool,
+        transfer_fee: Option<f64>,
+        statistics: PlayerStatistics,
+    ) {
+        // The competition slug pins continental cups to a specific
+        // tournament; for league entries we reuse the team's league
+        // slug so a same-team-different-league transfer (cross-country
+        // loan) still keeps stats grouped correctly.
+        let competition_slug = team.league_slug.clone();
+        if let Some(existing) = self.season_ledger.iter_mut().find(|e| {
+            e.season_start_year == season_start_year
+                && e.team_slug == team.slug
+                && e.competition_kind == competition_kind
+                && e.is_loan == is_loan
+        }) {
+            existing.statistics.merge_from(&statistics);
+            if existing.transfer_fee.is_none() {
+                existing.transfer_fee = transfer_fee;
+            }
+            if existing.team_reputation == 0 && team.reputation > 0 {
+                existing.team_reputation = team.reputation;
+            }
+            if existing.team_name.is_empty() && !team.name.is_empty() {
+                existing.team_name = team.name.clone();
+            }
+            if existing.league_name.is_empty() && !team.league_name.is_empty() {
+                existing.league_name = team.league_name.clone();
+                existing.league_slug = team.league_slug.clone();
+            }
+            return;
+        }
+        let seq = self.next_seq();
+        self.season_ledger.push(PlayerStatLedgerEntry {
+            seq_id: seq,
+            season_start_year,
+            team_slug: team.slug.clone(),
+            team_name: team.name.clone(),
+            team_reputation: team.reputation,
+            league_slug: team.league_slug.clone(),
+            league_name: team.league_name.clone(),
+            competition_kind,
+            competition_slug,
+            is_loan,
+            transfer_fee,
+            statistics,
+        });
     }
 
     pub fn is_empty(&self) -> bool {
@@ -734,6 +831,63 @@ impl PlayerStatisticsHistory {
         is_loan: bool,
         last_transfer_date: Option<NaiveDate>,
     ) {
+        // Canonical ledger write — happens before the legacy filters
+        // see the data so a drop in `items` cannot hide the row from
+        // the projection. Every current-season spell is recorded with
+        // its full stats (snapshot + the drained live `current_stats`
+        // for the closing team). The closing team itself ALWAYS gets a
+        // ledger row, even with zero apps, so a quiet season at the
+        // career-home club always has at least one row per the spec.
+        //
+        // Snapshot the entries first so the mutable `append_to_ledger`
+        // calls below don't conflict with the iteration borrow.
+        let entries_snapshot: Vec<(TeamInfo, bool, Option<f64>, PlayerStatistics)> = self
+            .current
+            .iter()
+            .map(|entry| {
+                (
+                    TeamInfo {
+                        name: entry.team_name.clone(),
+                        slug: entry.team_slug.clone(),
+                        reputation: entry.team_reputation,
+                        league_name: entry.league_name.clone(),
+                        league_slug: entry.league_slug.clone(),
+                    },
+                    entry.is_loan,
+                    entry.transfer_fee,
+                    entry.statistics.clone(),
+                )
+            })
+            .collect();
+        let mut closing_team_recorded = false;
+        for (entry_team, entry_loan, entry_fee, entry_stats) in entries_snapshot {
+            let mut stats = entry_stats;
+            if entry_team.slug == team.slug && entry_loan == is_loan {
+                stats.merge_from(&current_stats);
+                closing_team_recorded = true;
+            }
+            self.append_to_ledger(
+                season.start_year,
+                &entry_team,
+                PlayerStatCompetitionKind::League,
+                entry_loan,
+                entry_fee,
+                stats,
+            );
+        }
+        if !closing_team_recorded {
+            // No matching current entry (e.g. mid-season loan return at
+            // a club we never created a current row for) — record the
+            // closing team's contribution directly so the row exists.
+            self.append_to_ledger(
+                season.start_year,
+                team,
+                PlayerStatCompetitionKind::League,
+                is_loan,
+                None,
+                current_stats.clone(),
+            );
+        }
         // Robustness: drain any *stale* seed entries — entries whose
         // `joined_date` falls in a season earlier than the one we're
         // closing now. They appear when a previous season-end snapshot
@@ -1120,6 +1274,19 @@ impl PlayerStatisticsHistory {
         if stats.total_games() == 0 {
             return;
         }
+        // Canonical ledger write. ContinentalCup is treated as non-loan
+        // because the loan flag for the league spell already carries
+        // the relevant context; the projection folds continental into
+        // the season's League row regardless of loan flag.
+        self.append_to_ledger(
+            season_year,
+            team,
+            PlayerStatCompetitionKind::ContinentalCup,
+            false,
+            None,
+            stats.clone(),
+        );
+
         if let Some(existing) = self
             .continental
             .iter_mut()

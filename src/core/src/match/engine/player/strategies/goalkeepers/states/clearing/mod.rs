@@ -6,7 +6,6 @@ use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use rand::RngExt;
 
 /// Goalkeeper clearing state - emergency clearance of the ball away from danger
 #[derive(Default, Clone)]
@@ -67,7 +66,7 @@ impl GoalkeeperClearingState {
         // Target the halfway line, slightly off-centre (random to avoid
         // predictability). Clearances aim central-ish so they land where
         // the midfielders can contest them rather than near a sideline.
-        let mut rng = rand::rng();
+        let rng = &ctx.context.rng;
         let y_jitter: f32 = rng.random_range(-field_height * 0.15..field_height * 0.15);
         let target_y = mid_y + y_jitter;
 

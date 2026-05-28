@@ -165,10 +165,13 @@ impl<'b> BallOperationsImpl<'b> {
     }
 
     pub fn direction_to_own_goal(&self) -> Vector3<f32> {
+        // Stale side (transient mid-tick state for sent-off / swapping
+        // player) returns the left-goal position rather than crashing.
+        // The player is filtered out by ownership cleanup one tick
+        // later, so the wrong-but-stable read is a non-issue.
         match self.ctx.player.side {
-            Some(PlayerSide::Left) => self.ctx.context.goal_positions.left,
             Some(PlayerSide::Right) => self.ctx.context.goal_positions.right,
-            _ => panic!("no player side"),
+            Some(PlayerSide::Left) | None => self.ctx.context.goal_positions.left,
         }
     }
 

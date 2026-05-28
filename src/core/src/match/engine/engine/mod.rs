@@ -25,7 +25,6 @@ use crate::performance::PerfCounters;
 use crate::{MatchRuntime, PlayerFieldPositionGroup};
 #[cfg(feature = "match-logs")]
 use crate::{match_log_debug, match_log_info};
-use rand::RngExt;
 use std::time::Instant;
 
 // ───────────────────────────────────────────────────────────────────────────────

@@ -2,6 +2,8 @@ use crate::PlayerFieldPositionGroup;
 use crate::club::player::behaviour_config::PassEvaluatorConfig;
 use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
+use crate::r#match::engine::chemistry::chemistry_modifiers;
+use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -70,7 +72,51 @@ impl PassEvaluator {
         };
 
         // Calculate success probability using weighted factors
-        let success_probability = Self::calculate_success_probability(&factors);
+        let raw_success_probability = Self::calculate_success_probability(&factors);
+
+        // Apply environment modifiers — short passes get `pass_accuracy`;
+        // anything beyond the short/medium boundary also picks up
+        // `long_pass_accuracy`. Pre-calibrated bands (rain ≈ -0.04, heavy
+        // rain ≈ -0.09, wind on long pass ≈ -0.08) so a 50% pass under
+        // heavy rain becomes ~41% rather than the dry-weather value.
+        // Floor matches the post-clamp 0.1 floor in
+        // `calculate_success_probability`.
+        let env_mod = ctx.context.environment.modifiers();
+        const LONG_PASS_DISTANCE: f32 = 60.0;
+        let env_delta = env_mod.pass_accuracy
+            + if pass_distance >= LONG_PASS_DISTANCE {
+                env_mod.long_pass_accuracy
+            } else {
+                0.0
+            };
+        // Psychology nudge: a passer running low on composure /
+        // first-touch (heavy nervousness, repeated mistakes) sees
+        // their pass success drop ~3-5%; a confident passer gets a
+        // small tail-wind. Marginal — psychology should tilt
+        // outcomes, not dominate them.
+        let psych_delta = if let Some(state) = ctx.context.psychology.get(passer.id) {
+            let m = Psychology::skill_modifiers(state);
+            // Composure × first-touch composite ranges roughly 0.92..1.08.
+            let composite = (m.composure_mul + m.first_touch_mul) * 0.5 - 1.0;
+            // Map into a ±0.04 success delta.
+            composite * 0.5
+        } else {
+            0.0
+        };
+        // Chemistry: if the passer/receiver pair has been seeded, apply
+        // the one-touch-pass bonus on top of the raw probability. The
+        // bonus only fires on high-chemistry pairs (>0.65 in
+        // `chemistry_modifiers`); newly assembled or low-chemistry
+        // pairs contribute 0. The lookup is read-only, so it's safe
+        // inside the immutable evaluator.
+        let chemistry_delta = ctx
+            .context
+            .chemistry
+            .get(passer.id, receiver.id)
+            .map(|chem| chemistry_modifiers(chem).one_touch_pass_bonus)
+            .unwrap_or(0.0);
+        let success_probability =
+            (raw_success_probability + env_delta + psych_delta + chemistry_delta).clamp(0.1, 0.99);
 
         // Calculate risk level (inverse of some success factors)
         let risk_level = Self::calculate_risk_level(&factors);
@@ -872,7 +918,7 @@ impl PassEvaluator {
         let dec_raw = ctx.player.skills.mental.decisions;
         let comp_raw = ctx.player.skills.mental.composure;
         let team_raw = ctx.player.skills.mental.teamwork;
-        let roll = || rand::random::<f32>();
+        let roll = || ctx.context.rng.unit_f32();
         let is_playmaker = roll()
             < SkillCurve::new(vision_raw, 15.0, 0.6).probability()
                 * SkillCurve::new(flair_raw, 13.0, 0.6).probability();
@@ -1231,7 +1277,7 @@ impl PassEvaluator {
             let interception_blocked = if interception_risk >= 0.85 {
                 // 2+ opponents in the lane — almost always reject
                 if is_playmaker
-                    && rand::random::<f32>() < SkillCurve::new(vision_raw, 16.0, 0.6).probability()
+                    && ctx.context.rng.unit_f32() < SkillCurve::new(vision_raw, 16.0, 0.6).probability()
                 {
                     false // Elite playmakers can attempt
                 } else {

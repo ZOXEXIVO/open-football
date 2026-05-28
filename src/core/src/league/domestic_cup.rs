@@ -34,6 +34,20 @@ pub struct DomesticCup {
     /// season-window maths so later rounds (which may be generated after a
     /// New Year roll-over) still place against the correct start year.
     pub season_start_year: i32,
+    /// Season-start year of the last edition whose winner-trophy event was
+    /// emitted. Combined with `award_emitted_winner_team_id`, prevents the
+    /// post-final daily tick from awarding silverware on every subsequent
+    /// simulation day.
+    pub award_emitted_season_start_year: Option<i32>,
+    /// Team id that received the winner-trophy emit for the recorded
+    /// season. Paired with `award_emitted_season_start_year`: a new
+    /// edition (different season year) re-arms the emit, and a different
+    /// champion within the same year would also re-arm — though that
+    /// shouldn't happen in practice.
+    pub award_emitted_winner_team_id: Option<u32>,
+    /// Calendar date the winner award fan-out actually ran. Captured for
+    /// debugging and for the unit tests that probe duplicate prevention.
+    pub award_emitted_on: Option<NaiveDate>,
 }
 
 impl DomesticCup {
@@ -41,6 +55,9 @@ impl DomesticCup {
         DomesticCup {
             league,
             season_start_year: 0,
+            award_emitted_season_start_year: None,
+            award_emitted_winner_team_id: None,
+            award_emitted_on: None,
         }
     }
 
@@ -158,6 +175,13 @@ impl DomesticCup {
         self.league.schedule = Schedule::new();
         self.league.matches = MatchStorage::new();
         self.season_start_year = ctx.simulation.date.year();
+        // A fresh edition re-arms the winner emit. Without this, a club
+        // that won last season and entered the new draw on the same team id
+        // would silently keep the previous edition's marker and never get
+        // its new trophy event.
+        self.award_emitted_season_start_year = None;
+        self.award_emitted_winner_team_id = None;
+        self.award_emitted_on = None;
 
         let field = Self::seeded_participants(clubs);
         if field.len() < 2 {
@@ -287,6 +311,61 @@ impl DomesticCup {
         self.maybe_generate_next_round(clubs, current_date);
 
         LeagueResult::with_match_result(self.league.id, LeagueTableResult {}, match_results)
+    }
+
+    /// The current edition's champion, if the bracket has resolved to a
+    /// single surviving team. Rebuilds the seeded field from `clubs` so the
+    /// bye-aware `advancing_teams` logic can reconcile any round-one
+    /// participant who never played (top seeds with a bye in round one,
+    /// then a bye in later rounds too, are still alive).
+    pub fn champion(&self, clubs: &[Club]) -> Option<u32> {
+        let field = Self::seeded_participants(clubs);
+        cup::cup_champion(&self.league.schedule.tours, &field)
+    }
+
+    /// Champion team id only if a fresh winner-trophy fan-out is owed for
+    /// this edition. Returns `None` once the marker for this season has
+    /// been set, so the caller (which runs every simulation tick) can fire
+    /// exactly once per edition without bookkeeping at the call site.
+    pub fn should_emit_winner_award(&self, clubs: &[Club]) -> Option<u32> {
+        let team_id = self.champion(clubs)?;
+        if self.award_emitted_season_start_year == Some(self.season_start_year)
+            && self.award_emitted_winner_team_id == Some(team_id)
+        {
+            return None;
+        }
+        Some(team_id)
+    }
+
+    /// Record that the winner fan-out has run for `team_id` on `date`.
+    /// Must be called from the caller after at least one eligible player
+    /// has been processed — see `Country::process_domestic_cup_winner_awards`.
+    pub fn mark_winner_award_emitted(&mut self, team_id: u32, date: NaiveDate) {
+        self.award_emitted_season_start_year = Some(self.season_start_year);
+        self.award_emitted_winner_team_id = Some(team_id);
+        self.award_emitted_on = Some(date);
+    }
+
+    /// The final's pairing `(home_team_id, away_team_id)` when the
+    /// edition has resolved to a champion. The final is the last tour
+    /// that contains exactly one tie — knockout rounds collapse the
+    /// field by half, so a non-empty last tour with one match is the
+    /// final by construction.
+    ///
+    /// Returns `None` when the bracket isn't resolved (no champion yet),
+    /// when the last tour has zero played fixtures, or when the schedule
+    /// shape is unexpected (multi-tie "final" — defensive guard).
+    pub fn champion_final_pairing(&self, clubs: &[Club]) -> Option<(u32, u32)> {
+        self.champion(clubs)?;
+        let last = self.league.schedule.tours.last()?;
+        if last.items.len() != 1 {
+            return None;
+        }
+        let item = &last.items[0];
+        if item.result.is_none() {
+            return None;
+        }
+        Some((item.home_team_id, item.away_team_id))
     }
 }
 

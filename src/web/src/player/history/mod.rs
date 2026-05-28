@@ -10,7 +10,10 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use core::utils::FormattingUtils;
-use core::{PlayerStatusType, SimulatorData};
+use core::{
+    LiveCupSlice, PlayerLiveStatsInput, PlayerStatistics, PlayerStatisticsProjection,
+    PlayerStatusType, SimulatorData,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -172,26 +175,43 @@ pub async fn player_history_action(
         player.full_name.display_last_name()
     );
 
-    // Pass live stats so the active entry gets current player.statistics
-    let live_stats = if team_opt.is_some() {
-        Some(&player.statistics)
+    // History rows come from the central projection. The projection
+    // reads `player.statistics` (live league counter) for the active
+    // spell's current-season row and the per-competition live cup
+    // slices for continental-cup folding; both sources are passed
+    // through the same `PlayerLiveStatsInput` shape so the renderer
+    // never reaches into history internals.
+    //
+    // Retired players don't have an active spell, but the projection
+    // still tolerates empty live inputs and renders only the frozen
+    // history rows.
+    let empty_live = PlayerStatistics::default();
+    let live_league = if team_opt.is_some() {
+        &player.statistics
     } else {
-        None
+        &empty_live
     };
-    let mut view = player
-        .statistics_history
-        .view_items(live_stats, simulator_data.date.date());
-    // Fold continental-cup appearances (Champions League, Europa League,
-    // Conference League, Copa Libertadores) into each season's league line so
-    // they accumulate in career history. The active current-season row reads
-    // the live per-spell cup tally; past seasons read the persisted per-season
-    // ledger frozen at each transfer / loan / season boundary.
-    player.statistics_history.fold_continental(
-        &mut view,
-        &player.continental_cup_statistics(),
+    let live_friendly = &player.friendly_statistics;
+    let live_cups: Vec<LiveCupSlice<'_>> = player
+        .cup_statistics_by_competition
+        .iter()
+        .map(|c| LiveCupSlice {
+            competition_slug: c.competition_slug.as_str(),
+            competition_name: String::new(),
+            statistics: &c.statistics,
+        })
+        .collect();
+    let live_input = PlayerLiveStatsInput {
+        league: live_league,
+        friendly: live_friendly,
+        cups: &live_cups,
+    };
+    let view = PlayerStatisticsProjection::player_history_rows(
+        &player.statistics_history,
+        &live_input,
         simulator_data.date.date(),
     );
-    let career_totals = core::PlayerStatisticsHistory::career_totals(&view);
+    let career_totals = PlayerStatisticsProjection::player_history_totals(&view);
 
     let mut location_cache: std::collections::HashMap<String, TeamLocationInfo> =
         std::collections::HashMap::new();

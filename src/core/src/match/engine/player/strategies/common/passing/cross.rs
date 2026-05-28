@@ -139,6 +139,7 @@ pub fn pick_cross<'a>(ctx: &StateProcessingContext<'a>) -> Option<CrossDecision>
             - gk_claim_risk * 0.18;
 
         let cross_type = pick_cross_type(
+            ctx,
             crosser_pos,
             crosser_dist_to_goal,
             teammate.position,
@@ -174,6 +175,7 @@ fn score_decision(d: &CrossDecision, _ctx: &StateProcessingContext) -> f32 {
 }
 
 fn pick_cross_type(
+    ctx: &StateProcessingContext,
     crosser_pos: Vector3<f32>,
     crosser_dist_to_goal: f32,
     target_pos: Vector3<f32>,
@@ -193,7 +195,7 @@ fn pick_cross_type(
 
     if near_byline && target_inside_box {
         // Pulled-back option for a runner trailing the play.
-        if target_pos.x.abs() > crosser_pos.x.abs() && rand::random::<f32>() < p_poor_header_byline
+        if target_pos.x.abs() > crosser_pos.x.abs() && ctx.context.rng.unit_f32() < p_poor_header_byline
         {
             return CrossType::Cutback;
         }
@@ -206,7 +208,7 @@ fn pick_cross_type(
         return CrossType::FloatedFarPost;
     }
 
-    if separation > 25.0 && rand::random::<f32>() < p_poor_header_wide {
+    if separation > 25.0 && ctx.context.rng.unit_f32() < p_poor_header_wide {
         // Foot-runner profile — a low driven ball is the better choice.
         return CrossType::DrivenLowCross;
     }
@@ -228,6 +230,7 @@ fn pick_cross_type(
 /// `aerial_outfield_defender` weights `positioning`) so the duel
 /// reads consistent with every other aerial composite read.
 pub fn resolve_aerial_duel(
+    ctx: &StateProcessingContext,
     attacker: &MatchPlayer,
     defender: Option<&MatchPlayer>,
     minute: u32,
@@ -239,7 +242,7 @@ pub fn resolve_aerial_duel(
 
     let diff = attacker_score - defender_score;
     let win_prob = sigmoid(diff * 2.2).clamp(0.18, 0.82);
-    rand::random::<f32>() < win_prob
+    ctx.context.rng.unit_f32() < win_prob
 }
 
 fn sigmoid(x: f32) -> f32 {

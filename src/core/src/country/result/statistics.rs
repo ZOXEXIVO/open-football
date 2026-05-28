@@ -45,7 +45,24 @@ impl CountryResult {
         }
 
         for year in first_year..=target_ended_year {
-            Self::snapshot_one_season(data, country_id, Season::new(year), date);
+            // Only the most recent catch-up iteration drains the live
+            // stat buckets. Earlier missed years freeze a 0-app
+            // placeholder via `on_missed_season_end`: the live buckets
+            // have been accumulating across the entire gap, so draining
+            // them on the first missed year would attribute the whole
+            // span (e.g. two loan seasons of 40 apps each) to one early
+            // row and leave the actual target year empty — exactly the
+            // user-reported "2027/28 shows 80 apps and 2028/29 is
+            // missing" pattern for multi-season loans whose Italian
+            // 2027/28 gate dropped.
+            let drain_live_stats = year == target_ended_year;
+            Self::snapshot_one_season(
+                data,
+                country_id,
+                Season::new(year),
+                date,
+                drain_live_stats,
+            );
             if let Some(country) = data.country_mut(country_id) {
                 country.last_snapshotted_season_year = Some(year);
             }
@@ -56,11 +73,17 @@ impl CountryResult {
     /// Used by the catch-up loop above so one tick can advance the
     /// watermark across multiple years when the league gate failed for
     /// a previous year.
+    ///
+    /// `drain_live_stats` is `true` for the target year (the most recent
+    /// season in the catch-up window) and `false` for any older missed
+    /// year — see the comment at the loop site for why splitting the
+    /// drain matters.
     fn snapshot_one_season(
         data: &mut SimulatorData,
         country_id: u32,
         ended_season: Season,
         date: NaiveDate,
+        drain_live_stats: bool,
     ) {
         info!(
             "📋 Season snapshot: saving player statistics for season {} (country {})",
@@ -118,7 +141,11 @@ impl CountryResult {
                         None => continue,
                     };
                     for player in &mut team.players.players {
-                        player.on_non_senior_season_end(ended_season.clone(), &alias, date);
+                        if drain_live_stats {
+                            player.on_non_senior_season_end(ended_season.clone(), &alias, date);
+                        } else {
+                            player.on_missed_season_end(ended_season.clone(), &alias, date);
+                        }
                         player.evaluate_favorite_club(club.id, &alias.slug, date);
                     }
                     continue;
@@ -139,7 +166,11 @@ impl CountryResult {
                 };
 
                 for player in &mut team.players.players {
-                    player.on_season_end(ended_season.clone(), &team_info, date);
+                    if drain_live_stats {
+                        player.on_season_end(ended_season.clone(), &team_info, date);
+                    } else {
+                        player.on_missed_season_end(ended_season.clone(), &team_info, date);
+                    }
                     player.evaluate_favorite_club(club.id, &team_info.slug, date);
                 }
             }
@@ -772,5 +803,140 @@ mod tests {
             "current ended-season row missing: {:?}",
             years
         );
+
+        // Live stats were drained for the most recent ended season
+        // (2033/34) — not the older missed year. The buckets had been
+        // accumulating across both years so the catch-up has no per-
+        // season split, but attributing the lot to the target year
+        // keeps the row a user sees most prominently honest.
+        let items = &country.clubs[0].teams.teams[0].players.players[0]
+            .statistics_history
+            .items;
+        let item_2032 = items
+            .iter()
+            .find(|i| i.season.start_year == 2032)
+            .expect("missed-year 2032 row missing");
+        assert_eq!(
+            item_2032.statistics.played, 0,
+            "missed-year row must be an empty placeholder — live stats belong to target year"
+        );
+        let item_2033 = items
+            .iter()
+            .find(|i| i.season.start_year == 2033)
+            .expect("target-year 2033 row missing");
+        assert_eq!(
+            item_2033.statistics.played, 8,
+            "target-year row must carry the drained live stats"
+        );
+        assert_eq!(item_2033.statistics.goals, 2);
+    }
+
+    // Multi-season loan whose middle-year snapshot gate dropped: the
+    // catch-up that re-engages the next year must not collapse the two
+    // seasons' worth of live stats into the older missed row (which
+    // then leaves the target-year row empty enough for the
+    // `stale_loan_seed` filter in `record_season_end` to drop it
+    // entirely — the user-reported "2027/28 shows 80 apps, 2028/29 is
+    // missing" pattern).
+    #[test]
+    fn snapshot_loan_player_catchup_attributes_stats_to_target_year() {
+        let mut player = make_player(1, 0, 0);
+        // Mark the player as on loan BEFORE constructing the simulator
+        // so the auto-seed pass in `SimulatorData::new` seeds the spell
+        // with `is_loan=true` — otherwise the construct-time seed
+        // writes a non-loan entry that later coexists with the loan
+        // row and muddies the test signal.
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            999,
+            make_date(2029, 7, 31),
+            100,
+            0,
+            100,
+        ));
+        let main_team = make_team(
+            10,
+            100,
+            "Juventus",
+            "juventus",
+            TeamType::Main,
+            Some(1),
+            vec![player],
+        );
+        let club = make_club(100, "Juventus", vec![main_team]);
+        let league = make_league(1, "Serie A", "serie-a", false);
+        let country = make_country(vec![club], vec![league]);
+
+        let mut data = make_simulator_data(make_date(2026, 8, 1), country);
+        {
+            let player = &mut data.continents[0].countries[0].clubs[0].teams.teams[0]
+                .players
+                .players[0];
+            player.statistics.played = 30;
+        }
+        data.date = make_date(2027, 8, 15).and_hms_opt(12, 0, 0).unwrap();
+
+        // First snapshot: 2026/27 ends normally — drains 30 apps as the
+        // 2026/27 Juventus loan row.
+        CountryResult::snapshot_player_season_statistics(&mut data, 1);
+        assert_eq!(
+            data.country(1).unwrap().last_snapshotted_season_year,
+            Some(2026)
+        );
+
+        // 2027/28 snapshot gate drops (no call here). During 2027/28 and
+        // 2028/29 the player keeps playing on loan — the buckets carry
+        // 40 + 40 = 80 cumulative apps by the time the next snapshot
+        // fires in Aug 2029.
+        {
+            let player = &mut data.continents[0].countries[0].clubs[0].teams.teams[0]
+                .players
+                .players[0];
+            player.statistics.played = 80;
+            player.statistics.goals = 4;
+        }
+        data.date = make_date(2029, 8, 15).and_hms_opt(12, 0, 0).unwrap();
+
+        // Second snapshot: watermark=2026, target=2028. Catch-up should
+        // iterate [2027, 2028] but only attribute the 80 apps to 2028.
+        CountryResult::snapshot_player_season_statistics(&mut data, 1);
+
+        let items = &data.continents[0].countries[0].clubs[0].teams.teams[0]
+            .players
+            .players[0]
+            .statistics_history
+            .items;
+
+        // 2026/27: original 30-app loan row preserved.
+        let item_2026 = items
+            .iter()
+            .find(|i| i.season.start_year == 2026 && i.team_slug == "juventus")
+            .expect("2026 Juventus loan row missing");
+        assert_eq!(item_2026.statistics.played, 30);
+        assert!(item_2026.is_loan);
+
+        // 2028/29: target-year row carries the full 80 apps.
+        let item_2028 = items
+            .iter()
+            .find(|i| i.season.start_year == 2028 && i.team_slug == "juventus")
+            .expect("target-year 2028 Juventus row missing");
+        assert_eq!(
+            item_2028.statistics.played, 80,
+            "drained live stats must land on the target year, not the older missed year"
+        );
+        assert_eq!(item_2028.statistics.goals, 4);
+        assert!(item_2028.is_loan);
+
+        // 2027/28: no inflated row. A 0-app loan placeholder is filtered
+        // out by `stale_loan_seed`, which is fine — the missed-year row
+        // for a loaned player has no faithful representation anyway.
+        let item_2027 = items
+            .iter()
+            .find(|i| i.season.start_year == 2027 && i.team_slug == "juventus");
+        if let Some(item) = item_2027 {
+            assert_eq!(
+                item.statistics.played, 0,
+                "missed-year placeholder must not absorb target-year stats"
+            );
+        }
     }
 }

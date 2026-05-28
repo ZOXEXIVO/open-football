@@ -37,7 +37,7 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
         }
 
         // 2. Attempt to pick up the ball
-        let pickup_success = rand::random::<f32>() < PICKUP_SUCCESS_PROBABILITY;
+        let pickup_success = ctx.context.rng.unit_f32() < PICKUP_SUCCESS_PROBABILITY;
         if pickup_success {
             // Pickup is successful
             let mut state_change =

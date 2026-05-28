@@ -9,7 +9,6 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use rand::RngExt;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
@@ -231,7 +230,7 @@ impl DefenderTacklingState {
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
     ) -> (bool, bool, FoulSeverity) {
-        let mut rng = rand::rng();
+        let rng = &ctx.context.rng;
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
 
         // Unified defender profile drives both the success and the foul

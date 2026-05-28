@@ -9,7 +9,6 @@ use crate::r#match::{
     SteeringBehavior,
 };
 use nalgebra::Vector3;
-use rand::RngExt;
 
 #[derive(Default, Clone)]
 pub struct DefenderClearingState {}
@@ -48,7 +47,7 @@ impl StateProcessingHandler for DefenderClearingState {
         // miscued / sliced clearance. Replaces a fully deterministic
         // halfway-line target.
         let def_profile = DefenderSkillProfile::from_ctx(ctx);
-        let mut rng = rand::rng();
+        let rng = &ctx.context.rng;
         let poor_clearance = rng.random::<f32>() < def_profile.poor_clearance_chance.min(0.95);
 
         let halfway_x = field_width * 0.5;

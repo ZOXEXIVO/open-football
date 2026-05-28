@@ -707,6 +707,183 @@ fn cup_final_starts_first_choice_goalkeeper() {
     );
 }
 
+// ========== Cup rotation strength tests ==========
+//
+// All use `paired_cup_roster` (one established star + one idle fringe per
+// slot) and count non-established starters via id parity — odd = star,
+// even = fringe.
+
+fn non_established_starter_count(result: &PlayerSelectionResult) -> usize {
+    result.main_squad.iter().filter(|p| p.id % 2 == 0).count()
+}
+
+#[test]
+fn early_cup_vs_weak_opponent_rotates_heavily() {
+    // Round 1 of 5, own 3000 vs opp 900 (ratio ~0.3). Strong rotation
+    // multiplier + post-assignment swap pass target >=7 non-established
+    // starters. With like-for-like fringe at every slot, the rotation
+    // should hit that target.
+    let staff = generate_test_staff();
+    let team = cup_team(paired_cup_roster());
+    let ctx = domestic_cup_ctx(1, 5, 3000, 900, 0.30);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+    assert_eq!(result.main_squad.len(), 11);
+
+    let fringe = non_established_starter_count(&result);
+    assert!(
+        fringe >= 7,
+        "early cup vs weak opponent should start >=7 non-established players, got {fringe}"
+    );
+}
+
+#[test]
+fn early_cup_vs_equal_rotates_significantly() {
+    // Equal opponents in round 1 of 5: rotation_multiplier 1.0, target 6
+    // non-established starters from the post-assignment pass.
+    let staff = generate_test_staff();
+    let team = cup_team(paired_cup_roster());
+    let ctx = domestic_cup_ctx(1, 5, 3000, 3000, 0.30);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+
+    let fringe = non_established_starter_count(&result);
+    assert!(
+        fringe >= 6,
+        "early cup vs equal opponent should start >=6 non-established players, got {fringe}"
+    );
+}
+
+#[test]
+fn early_cup_vs_much_stronger_opponent_still_rotates_some() {
+    // Heavy underdog (own 1000 vs opp 2500, ratio 2.5). Multiplier 0.55,
+    // target only 4 non-established starters — the manager doesn't field
+    // his reserves wholesale against the favourite. But still some
+    // rotation, and not a full reserve XI.
+    let staff = generate_test_staff();
+    let team = cup_team(paired_cup_roster());
+    let ctx = domestic_cup_ctx(1, 5, 1000, 2500, 0.35);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+
+    let fringe = non_established_starter_count(&result);
+    assert!(
+        fringe >= 3,
+        "even vs stronger opponent, early cup should rotate >=3, got {fringe}"
+    );
+}
+
+#[test]
+fn quarterfinal_weak_opponent_keeps_rotation() {
+    // Quarterfinal (round 3 of 5) vs weak opponent: post-assignment target
+    // 4 non-established starters. Coefficients are halved vs Early so
+    // assignment alone may not hit the target — the swap pass does.
+    let staff = generate_test_staff();
+    let team = cup_team(paired_cup_roster());
+    let ctx = domestic_cup_ctx(3, 5, 3000, 900, 0.55);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+
+    let fringe = non_established_starter_count(&result);
+    assert!(
+        fringe >= 4,
+        "quarterfinal vs weak opponent should start >=4 non-established, got {fringe}"
+    );
+}
+
+#[test]
+fn semifinal_returns_toward_strength() {
+    // Semi: no swap pass, status base barely tilts. The XI should be
+    // notably more established than at the quarter stage on the same
+    // roster.
+    let staff = generate_test_staff();
+    let team = cup_team(paired_cup_roster());
+    let quarter_ctx = domestic_cup_ctx(3, 5, 3000, 3000, 0.55);
+    let semi_ctx = domestic_cup_ctx(4, 5, 3000, 3000, 0.78);
+
+    let quarter = SquadSelector::select_with_context(&team, &staff, &[], &quarter_ctx);
+    let semi = SquadSelector::select_with_context(&team, &staff, &[], &semi_ctx);
+
+    let q_fringe = non_established_starter_count(&quarter);
+    let s_fringe = non_established_starter_count(&semi);
+    assert!(
+        s_fringe <= q_fringe,
+        "semifinal should not rotate harder than quarterfinal: semi={s_fringe} quarter={q_fringe}"
+    );
+}
+
+#[test]
+fn final_starts_strongest_outfield_xi() {
+    // The final reverts to the established XI: opportunity bias is zero,
+    // no swap pass runs. Most outfield slots should belong to the
+    // established (odd-id) starter rather than the idle fringe player.
+    let staff = generate_test_staff();
+    let team = cup_team(paired_cup_roster());
+    let ctx = domestic_cup_ctx(5, 5, 3000, 3000, 0.95);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+
+    let established = result.main_squad.iter().filter(|p| p.id % 2 == 1).count();
+    assert!(
+        established >= 8,
+        "final should field the established XI, got only {established} established starters"
+    );
+}
+
+#[test]
+fn force_selected_established_not_swapped_in_cup_rotation() {
+    // Stronger version of the existing force-selection test: even after
+    // the swap pass runs in early/weak conditions, a force-selected
+    // established player still starts.
+    let staff = generate_test_staff();
+    let mut players = paired_cup_roster();
+    let forced_id = 3u32; // an established outfielder
+    for p in players.iter_mut() {
+        if p.id == forced_id {
+            p.is_force_match_selection = true;
+        }
+    }
+    let team = cup_team(players);
+    // Heavy-rotation context: weak opponent, early round.
+    let ctx = domestic_cup_ctx(1, 5, 3000, 900, 0.30);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+    assert!(
+        result.main_squad.iter().any(|p| p.id == forced_id),
+        "force-selected player must survive the swap pass and remain in XI"
+    );
+}
+
+#[test]
+fn cup_rotation_preserves_team_shape() {
+    // The rotation pass must not corrupt the XI: no duplicate ids across
+    // XI and bench, exactly one goalkeeper, all 11 tactical slots filled.
+    let staff = generate_test_staff();
+    let team = cup_team(paired_cup_roster());
+    let ctx = domestic_cup_ctx(1, 5, 3000, 900, 0.30);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+
+    assert_eq!(result.main_squad.len(), 11, "XI must always be 11");
+
+    let mut all_ids: Vec<u32> = result.main_squad.iter().map(|p| p.id).collect();
+    all_ids.extend(result.substitutes.iter().map(|p| p.id));
+    let unique = {
+        let mut s = all_ids.clone();
+        s.sort_unstable();
+        s.dedup();
+        s.len()
+    };
+    assert_eq!(all_ids.len(), unique, "no player may appear twice");
+
+    let gk_count = result
+        .main_squad
+        .iter()
+        .filter(|p| p.tactical_position.current_position == PlayerPositionType::Goalkeeper)
+        .count();
+    assert_eq!(gk_count, 1, "exactly one starting goalkeeper");
+}
+
 #[test]
 fn domestic_cup_context_carries_bracket_position() {
     // The per-side context keeps the raw bracket position and derives the

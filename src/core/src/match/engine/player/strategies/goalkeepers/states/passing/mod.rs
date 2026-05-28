@@ -9,7 +9,6 @@ use crate::r#match::{
     StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use rand::RngExt;
 
 /// Types of goalkeeper distribution
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -171,7 +170,7 @@ impl GoalkeeperPassingState {
             }
         }
 
-        let mut rng = rand::rng();
+        let rng = &ctx.context.rng;
         let decision_random: f32 = rng.random();
 
         // Long kicks gated by overall distribution profile, not just

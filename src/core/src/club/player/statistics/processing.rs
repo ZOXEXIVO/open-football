@@ -225,6 +225,33 @@ impl Player {
         self.sold_from = None;
     }
 
+    /// Catch-up snapshot for a season whose `new_season_started` league
+    /// gate never fired — the watermark loop is closing the gap N years
+    /// later. Live `statistics` / `cup_statistics` / `friendly_statistics`
+    /// have been carrying stats across every missed year and the *real*
+    /// target year, so we cannot split them per season. Attribute the
+    /// drained totals to the target-year `on_season_end` call that fires
+    /// alongside this one; here we only freeze a 0-app placeholder row so
+    /// the player's career thread still shows a row for the gap year
+    /// (when the row survives the trivial-stint / stale-loan-seed
+    /// filters in `record_season_end`).
+    pub fn on_missed_season_end(
+        &mut self,
+        season: Season,
+        team: &TeamInfo,
+        _date: NaiveDate,
+    ) {
+        let is_loan = self.is_on_loan();
+        self.statistics_history.record_season_end(
+            season,
+            PlayerStatistics::default(),
+            team,
+            is_loan,
+            self.last_transfer_date,
+        );
+        self.sold_from = None;
+    }
+
     /// Evaluate whether a club should become a favourite based on career history.
     /// Called at season end. Mirrors FM logic:
     /// - Youth club: first club where player was aged 16-21, after 2+ seasons

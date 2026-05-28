@@ -106,7 +106,7 @@ impl ForwardAssistingState {
         // and never fired). Product of two curves so both skills matter.
         let pass_p = SkillCurve::new(ctx.player.skills.technical.passing, 13.0, 0.6).probability();
         let dec_p = SkillCurve::new(ctx.player.skills.mental.decisions, 12.0, 0.6).probability();
-        rand::random::<f32>() < pass_p * dec_p
+        ctx.context.rng.unit_f32() < pass_p * dec_p
     }
 
     fn find_best_teammate_to_assist(&self, ctx: &StateProcessingContext) -> Option<u32> {
@@ -155,6 +155,6 @@ impl ForwardAssistingState {
         // elite movers (15+) almost always do it; ordinary 10s do it
         // sometimes; very poor (sub-5) almost never.
         let p = SkillCurve::new(ctx.player.skills.mental.off_the_ball, 15.0, 0.6).probability();
-        rand::random::<f32>() < p
+        ctx.context.rng.unit_f32() < p
     }
 }

@@ -28,15 +28,15 @@ impl CupStage {
     /// Everything converges on 0.0 at the final.
     pub(crate) fn status_base(self, status: &PlayerSquadStatus) -> f32 {
         // Each table is [Early, Quarter, Semi, Final].
-        const KEY_PLAYER: [f32; 4] = [-1.8, -0.9, -0.3, 0.0];
-        const FIRST_TEAM_REGULAR: [f32; 4] = [-1.2, -0.5, -0.2, 0.0];
-        const FIRST_TEAM_SQUAD_ROTATION: [f32; 4] = [1.7, 1.1, 0.5, 0.0];
-        const MAIN_BACKUP: [f32; 4] = [2.3, 1.6, 0.6, 0.0];
-        const HOT_PROSPECT: [f32; 4] = [1.8, 1.2, 0.4, 0.0];
-        const DECENT_YOUNGSTER: [f32; 4] = [1.2, 0.7, 0.2, 0.0];
+        const KEY_PLAYER: [f32; 4] = [-3.2, -1.4, -0.3, 0.0];
+        const FIRST_TEAM_REGULAR: [f32; 4] = [-2.3, -0.9, -0.1, 0.0];
+        const FIRST_TEAM_SQUAD_ROTATION: [f32; 4] = [3.0, 1.7, 0.6, 0.0];
+        const MAIN_BACKUP: [f32; 4] = [3.6, 2.2, 0.7, 0.0];
+        const HOT_PROSPECT: [f32; 4] = [3.2, 1.6, 0.3, 0.0];
+        const DECENT_YOUNGSTER: [f32; 4] = [2.2, 0.9, 0.1, 0.0];
         // NotNeeded stays a touch negative at every stage — the cup isn't a
         // reason to start a player the club has frozen out.
-        const NOT_NEEDED: f32 = -0.6;
+        const NOT_NEEDED: f32 = -0.8;
 
         let i = self.index();
         match status {
@@ -154,5 +154,44 @@ impl CupRotation {
                 )
             })
             .unwrap_or(false)
+    }
+
+    /// Opponent-strength scaling for cup rotation. A heavy underdog cup tie
+    /// is exactly the moment a manager goes deepest into rotation — a
+    /// drawn-out final is the moment they don't.
+    ///
+    /// The multiplier is applied to *positive* opportunity bonuses and to
+    /// star-rest penalties (i.e. magnitudes that push rotation harder).
+    /// Final reverts to 1.0 (no scaling) — the manager picks the best XI
+    /// regardless of opponent. Semi only mildly dampens.
+    pub(crate) fn rotation_multiplier(stage: super::CupStage, opponent_ratio: f32) -> f32 {
+        use super::CupStage;
+        match stage {
+            CupStage::Final => 1.0,
+            CupStage::Semi => {
+                // Semi: only mild dampening when opponent is stronger; never
+                // amplifies rotation above baseline.
+                if opponent_ratio > 1.50 {
+                    0.85
+                } else if opponent_ratio > 1.15 {
+                    0.92
+                } else {
+                    1.0
+                }
+            }
+            _ => {
+                if opponent_ratio <= 0.45 {
+                    1.35
+                } else if opponent_ratio <= 0.70 {
+                    1.20
+                } else if opponent_ratio <= 1.15 {
+                    1.00
+                } else if opponent_ratio <= 1.50 {
+                    0.75
+                } else {
+                    0.55
+                }
+            }
+        }
     }
 }

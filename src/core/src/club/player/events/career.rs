@@ -13,7 +13,7 @@ use crate::club::player::player::Player;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, Person, RecognitionEventContext, RecognitionEventKind,
-    RegulationEventContext, SeasonOutcomeContext,
+    RegulationEventContext, SeasonOutcomeContext, TrophyEventContext,
 };
 
 /// Centralised, FM-style classification of award recognitions for the
@@ -44,6 +44,13 @@ pub enum AwardReputationKind {
     LeagueGoldenGlove,
     ContinentalPlayerOfYear,
     WorldPlayerOfYear,
+    /// Squad recognition for winning the country's main knockout cup. Only
+    /// emitted to players who actually appeared on the field in the winning
+    /// edition (any round) — unused substitutes and bench-only squad members
+    /// don't qualify. Smaller than individual season awards but larger than
+    /// monthly recognitions: a real silverware medal, shared by the XI that
+    /// made it happen.
+    DomesticCupWinner,
 }
 
 impl AwardReputationKind {
@@ -70,6 +77,7 @@ impl AwardReputationKind {
             Self::LeagueGoldenGlove => (260, 220, 80),
             Self::ContinentalPlayerOfYear => (500, 500, 250),
             Self::WorldPlayerOfYear => (900, 900, 500),
+            Self::DomesticCupWinner => (180, 150, 45),
         }
     }
 
@@ -193,6 +201,9 @@ pub struct PlayerAwardsCount {
     pub league_golden_glove: u16,
     pub continental_player_of_year: u16,
     pub world_player_of_year: u16,
+    /// Lifetime count of domestic cup winner medals (FA Cup, Copa del Rey,
+    /// …). Bumped once per cup edition by the cup-winner award pipeline.
+    pub domestic_cup_winner: u16,
     /// Chronological log of every award, capped at [`TIMELINE_MAX`].
     /// Read by the web layer to chart awards by year / month.
     pub timeline: Vec<AwardTimelineEntry>,
@@ -222,6 +233,7 @@ impl PlayerAwardsCount {
             + self.league_golden_glove as u32
             + self.continental_player_of_year as u32
             + self.world_player_of_year as u32
+            + self.domestic_cup_winner as u32
     }
 
     fn bump(&mut self, kind: AwardReputationKind, date: NaiveDate, league_id: Option<u32>) {
@@ -243,6 +255,7 @@ impl PlayerAwardsCount {
             AwardReputationKind::LeagueGoldenGlove => &mut self.league_golden_glove,
             AwardReputationKind::ContinentalPlayerOfYear => &mut self.continental_player_of_year,
             AwardReputationKind::WorldPlayerOfYear => &mut self.world_player_of_year,
+            AwardReputationKind::DomesticCupWinner => &mut self.domestic_cup_winner,
         };
         *slot = slot.saturating_add(1);
 
@@ -618,5 +631,55 @@ impl Player {
         let mag = base * participation * personality * role * prestige.max(0.0);
         self.happiness
             .add_event_with_cooldown(event, mag, cooldown_days)
+    }
+
+    /// Trophy emit path that carries a [`TrophyEventContext`] describing
+    /// the competition the player just won. The cooldown is keyed by the
+    /// event type alone (so `DomesticCupWon` and `TrophyWon` are
+    /// independent buckets — a double-winning team has a separate
+    /// cooldown for each silverware), but a same-season repeat of the
+    /// same trophy type is still suppressed.
+    ///
+    /// Magnitude scaling mirrors `on_team_season_event_with_prestige` —
+    /// catalog base × participation × personality × role × prestige.
+    /// Skips the generic `season_participation_factor` when the emit
+    /// site has already folded a competition-specific involvement
+    /// multiplier into `prestige` (the domestic-cup emit path does
+    /// this, since league-season participation is the wrong axis for
+    /// cup eligibility).
+    pub fn on_trophy_won_with_context(
+        &mut self,
+        event: HappinessEventType,
+        context: TrophyEventContext,
+        cooldown_days: u16,
+        prestige: f32,
+        skip_participation_factor: bool,
+        now: NaiveDate,
+    ) -> bool {
+        let cfg = HappinessConfig::default();
+        let base = cfg.catalog.magnitude(event.clone());
+        let participation = if skip_participation_factor {
+            1.0
+        } else {
+            self.season_participation_factor()
+        };
+        let age = self.age(now);
+        let personality = self.team_event_personality_factor(&event, age);
+        let role = self.season_event_role_factor(&event, age);
+        let mag = base * participation * personality * role * prestige.max(0.0);
+        let severity = HappinessEventSeverity::from_magnitude(mag);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            severity,
+            HappinessEventScope::MatchDay,
+        )
+        .with_trophy_context(context);
+        self.happiness.add_event_with_context_and_cooldown(
+            event,
+            mag,
+            None,
+            happiness_ctx,
+            cooldown_days,
+        )
     }
 }

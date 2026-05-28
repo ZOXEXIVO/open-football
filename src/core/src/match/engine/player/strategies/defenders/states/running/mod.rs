@@ -787,7 +787,7 @@ impl DefenderRunningState {
             .min_by(|a, b| {
                 let dist_a = (a.position - player_position).norm_squared();
                 let dist_b = (b.position - player_position).norm_squared();
-                dist_a.partial_cmp(&dist_b).unwrap()
+                dist_a.total_cmp(&dist_b)
             })
     }
 

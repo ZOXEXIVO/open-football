@@ -416,6 +416,7 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::DerbyWin => "event_derby_win",
         HappinessEventType::DerbyDefeat => "event_derby_defeat",
         HappinessEventType::TrophyWon => "event_trophy_won",
+        HappinessEventType::DomesticCupWon => "event_domestic_cup_won",
         HappinessEventType::CupFinalDefeat => "event_cup_final_defeat",
         HappinessEventType::PromotionCelebration => "event_promotion_celebration",
         HappinessEventType::RelegationFear => "event_relegation_fear",

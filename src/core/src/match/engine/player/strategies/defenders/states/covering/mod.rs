@@ -416,7 +416,7 @@ impl DefenderCoveringState {
             .min_by(|a, b| {
                 let dist_a = (a.position - own_goal_position).norm_squared();
                 let dist_b = (b.position - own_goal_position).norm_squared();
-                dist_a.partial_cmp(&dist_b).unwrap()
+                dist_a.total_cmp(&dist_b)
             })?;
 
         let direction_to_goal = (own_goal_position - most_dangerous.position).normalize();

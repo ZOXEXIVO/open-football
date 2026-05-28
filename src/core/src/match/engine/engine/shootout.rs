@@ -7,9 +7,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
 
     pub(super) fn run_penalty_shootout(field: &mut MatchField, context: &mut MatchContext) {
-        use rand::RngExt;
-
-        let mut rng = rand::rng();
         let home_id = context.field_home_team_id;
         let away_id = context.field_away_team_id;
 
@@ -149,14 +146,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         };
 
-        // Single kick: returns true if goal.
-        let mut take_kick =
-            |taker_id: u32, gk_id: Option<u32>, round_idx: u8, sudden_death: bool| -> bool {
+        // Per-kick scoring probability. The roll itself happens at the
+        // call site via `context.rng` so the closure can borrow `field`
+        // immutably without also needing `&mut context`.
+        let kick_prob =
+            |taker_id: u32, gk_id: Option<u32>, round_idx: u8, sudden_death: bool| -> f32 {
                 let taker = taker_score_of(field, taker_id);
                 let keeper = keeper_score_of(field, gk_id);
                 let pressure = (0.35 + round_pressure(round_idx, sudden_death)).clamp(0.0, 1.0);
-                let goal_prob = penalty_conversion_prob(taker, keeper, pressure, true);
-                rng.random::<f32>() < goal_prob
+                penalty_conversion_prob(taker, keeper, pressure, true)
             };
 
         // Takers in rotation; sudden-death wraps the order.
@@ -189,7 +187,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             // Home kick.
             if let Some(id) = next_home_taker(&mut home_idx) {
-                let scored = take_kick(id, away_keeper, round + 1, false);
+                let p = kick_prob(id, away_keeper, round + 1, false);
+                let scored = context.rng.bernoulli(p);
                 context.penalty_shootout_kicks.push(PenaltyShootoutKick {
                     team_id: home_id,
                     taker_id: id,
@@ -211,7 +210,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             // Away kick.
             if let Some(id) = next_away_taker(&mut away_idx) {
-                let scored = take_kick(id, home_keeper, round + 1, false);
+                let p = kick_prob(id, home_keeper, round + 1, false);
+                let scored = context.rng.bernoulli(p);
                 context.penalty_shootout_kicks.push(PenaltyShootoutKick {
                     team_id: away_id,
                     taker_id: id,
@@ -245,7 +245,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let home_taker = h.unwrap();
             let away_taker = a.unwrap();
             let round = 5 + sudden_rounds;
-            let home_scored = take_kick(home_taker, away_keeper, round, true);
+            let p_home = kick_prob(home_taker, away_keeper, round, true);
+            let home_scored = context.rng.bernoulli(p_home);
             context.penalty_shootout_kicks.push(PenaltyShootoutKick {
                 team_id: home_id,
                 taker_id: home_taker,
@@ -257,7 +258,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if home_scored {
                 home_score += 1;
             }
-            let away_scored = take_kick(away_taker, home_keeper, round, true);
+            let p_away = kick_prob(away_taker, home_keeper, round, true);
+            let away_scored = context.rng.bernoulli(p_away);
             context.penalty_shootout_kicks.push(PenaltyShootoutKick {
                 team_id: away_id,
                 taker_id: away_taker,

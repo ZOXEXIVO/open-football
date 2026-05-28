@@ -298,7 +298,7 @@ impl DefenderHoldingLineState {
             .min_by(|a, b| {
                 let dist_a = (a.position - current_position).magnitude();
                 let dist_b = (b.position - current_position).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap()
+                dist_a.total_cmp(&dist_b)
             });
 
         // DEPTH (X) CALCULATION
@@ -418,7 +418,7 @@ impl DefenderHoldingLineState {
             .min_by(|a, b| {
                 let dist_a = a.distance(ctx);
                 let dist_b = b.distance(ctx);
-                dist_a.partial_cmp(&dist_b).unwrap()
+                dist_a.total_cmp(&dist_b)
             })
     }
 }

@@ -7,3 +7,4 @@ pub mod environment;
 pub mod field;
 pub mod goal;
 pub mod result;
+pub mod rng;

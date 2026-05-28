@@ -19,6 +19,7 @@ mod restart;
 mod stall;
 
 use crate::r#match::engine::ball::events::BallEvent;
+use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
@@ -178,6 +179,12 @@ pub struct Ball {
     /// on goal. False = armed (a corner has been awarded, not yet resolved);
     /// true = nothing to resolve.
     pub corner_contest_resolved: bool,
+    /// Corner routine picked by `pick_corner_routine` at corner setup.
+    /// Lets the corner aerial-contest in `resolve_corner_contest` and
+    /// downstream xG accounting know whether the delivery is targeting
+    /// the near post, far post, penalty spot, or short. Cleared after
+    /// the corner resolves. `None` whenever a corner isn't pending.
+    pub pending_corner_routine: Option<CornerRoutine>,
     /// Counter for "ball is owned but nothing is happening" stalls.
     /// The unowned-stall warning can't see these because ownership is
     /// set, but visually the ball sits with a player who isn't moving,
@@ -377,6 +384,7 @@ impl Ball {
             pending_set_piece_teleport: None,
             pending_corner_teleports: Vec::new(),
             corner_contest_resolved: true,
+            pending_corner_routine: None,
             owned_stuck_ticks: 0,
             owned_stuck_logged: false,
             stall_anchor_pos: Vector3::new(x, y, 0.0),
@@ -423,6 +431,123 @@ impl Ball {
     /// or pass expiry.
     pub fn clear_offside_snapshot(&mut self) {
         self.offside_snapshot = None;
+    }
+
+    /// Force the ball into a clean dead-ball restart state. Centralises
+    /// the flag clearing that every set-piece restart (corner / goal
+    /// kick / throw-in / kickoff after goal) used to do by hand,
+    /// dropping stale open-play metadata so a shot/pass that was in
+    /// flight when the ball went dead cannot leak across the restart.
+    ///
+    /// This is the canonical "ball just went dead — reset everything
+    /// open-play touched" helper. New restart paths should call this
+    /// rather than zeroing individual fields, so a future field added
+    /// to the open-play set is reset automatically.
+    pub fn clear_open_play_metadata(&mut self) {
+        self.cached_shot_target = None;
+        self.pass_target_player_id = None;
+        self.pending_pass_passer = None;
+        self.pending_pass_origin = None;
+        self.pending_pass_target = None;
+        self.pending_pass_was_cross = false;
+        self.offside_snapshot = None;
+        self.pending_save_credit = None;
+        self.pending_error_to_shot_player_id = None;
+        self.last_shot_xg = 0.0;
+        self.last_shot_shooter_id = None;
+    }
+
+    /// Soft invariant check on the ball's lifecycle flags. Returns the
+    /// first violation as `Err(msg)` so debug builds and tests can
+    /// assert the ball never enters a contradictory state. Production
+    /// callers ignore the result — the cost is a handful of field
+    /// reads.
+    ///
+    /// Invariants checked:
+    ///   * Open-play shot metadata implies a previous owner (someone
+    ///     fired the shot).
+    ///   * Pending save credit references a real shooter id (so the
+    ///     stat dispatch can fold the on-target back to a shot taker).
+    ///   * A pass target id implies a passer id was set when the pass
+    ///     was launched (else the receive-classifier has nothing to
+    ///     pair the completion to).
+    ///   * Ball/owner position coordinates are finite — non-finite x/y/z
+    ///     leak into distance comparisons and trigger
+    ///     `partial_cmp().unwrap()` panics in sort paths.
+    ///   * On a dead-ball restart (corner / goal kick / throw-in /
+    ///     free kick / penalty), open-play metadata (cached shot,
+    ///     pending pass envelope, save credit, offside snapshot) must
+    ///     be cleared — otherwise a shot that was in flight when the
+    ///     ball went dead can leak across the restart and credit
+    ///     phantom stats.
+    ///   * Pending shot xG implies a shooter id (paired metadata,
+    ///     consumed together).
+    ///   * Pending pass envelope is coherent: a passer implies an
+    ///     origin and target position.
+    ///   * Carry tracking is consistent: a carrying owner means the
+    ///     current owner matches the carrier.
+    pub fn check_invariants(&self) -> Result<(), &'static str> {
+        if self.cached_shot_target.is_some() && self.previous_owner.is_none() {
+            return Err("cached_shot_target without previous_owner");
+        }
+        if let Some((_keeper, shooter)) = self.pending_save_credit {
+            if shooter == 0 {
+                return Err("pending_save_credit shooter id is sentinel zero");
+            }
+        }
+        if self.pass_target_player_id.is_some() && self.pending_pass_passer.is_none() {
+            return Err("pass_target without pending_pass_passer");
+        }
+        // Non-finite coordinates leak into distance comparisons and
+        // trigger `partial_cmp().unwrap()` panics in nearby/sort paths.
+        if !self.position.x.is_finite()
+            || !self.position.y.is_finite()
+            || !self.position.z.is_finite()
+        {
+            return Err("ball position has non-finite coordinate");
+        }
+        if !self.velocity.x.is_finite()
+            || !self.velocity.y.is_finite()
+            || !self.velocity.z.is_finite()
+        {
+            return Err("ball velocity has non-finite coordinate");
+        }
+        // Dead-ball restart cleanliness — any restart origin must drop
+        // open-play metadata.
+        if matches!(
+            self.pass_origin_restart,
+            PassOriginRestart::Corner
+                | PassOriginRestart::GoalKick
+                | PassOriginRestart::ThrowIn
+                | PassOriginRestart::Penalty
+        ) {
+            if self.cached_shot_target.is_some() {
+                return Err("dead-ball restart with leftover cached_shot_target");
+            }
+            if self.pending_save_credit.is_some() {
+                return Err("dead-ball restart with leftover pending_save_credit");
+            }
+            if self.offside_snapshot.is_some() {
+                return Err("dead-ball restart with leftover offside_snapshot");
+            }
+        }
+        // Pending shot xG and shooter id are kept in lock-step.
+        if self.last_shot_xg > 0.0 && self.last_shot_shooter_id.is_none() {
+            return Err("last_shot_xg without last_shot_shooter_id");
+        }
+        // Pending pass envelope: any leg must imply the rest.
+        if self.pending_pass_passer.is_some()
+            && (self.pending_pass_origin.is_none() || self.pending_pass_target.is_none())
+        {
+            return Err("pending_pass_passer without origin/target metadata");
+        }
+        // Carry tracking — a current carrier must match the ball owner.
+        if let (Some(carrier), Some(owner)) = (self.carry_owner, self.current_owner) {
+            if carrier != owner {
+                return Err("carry_owner disagrees with current_owner");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -484,7 +609,7 @@ impl Ball {
 
     pub fn update(
         &mut self,
-        context: &MatchContext,
+        context: &mut MatchContext,
         players: &[MatchPlayer],
         tick_context: &GameTickContext,
         events: &mut EventCollection,
@@ -498,8 +623,8 @@ impl Ball {
 
         self.update_velocity();
 
-        self.try_intercept(players, events);
-        self.try_block_shot(players, events);
+        self.try_intercept(context, players, events);
+        self.try_block_shot(context, players, events);
         self.try_save_shot(context, players, events);
         self.try_notify_standing_ball(players, events);
 
@@ -532,7 +657,7 @@ impl Ball {
     /// Light update: full ball logic but reads owner position from players slice directly.
     pub fn update_light(
         &mut self,
-        context: &MatchContext,
+        context: &mut MatchContext,
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
@@ -543,8 +668,8 @@ impl Ball {
         }
 
         self.update_velocity();
-        self.try_intercept(players, events);
-        self.try_block_shot(players, events);
+        self.try_intercept(context, players, events);
+        self.try_block_shot(context, players, events);
         self.try_save_shot(context, players, events);
         self.process_ownership(context, players, events);
         self.tick_carry_tracker(events);

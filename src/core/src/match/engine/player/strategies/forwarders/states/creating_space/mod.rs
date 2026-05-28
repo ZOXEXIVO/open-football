@@ -1289,7 +1289,7 @@ impl ForwardCreatingSpaceState {
             // occasionally still tries; a quick one (pace=17) almost
             // always commits.
             let p = SkillCurve::new(ctx.player.skills.physical.pace, 12.0, 0.6).probability();
-            if rand::random::<f32>() >= p {
+            if ctx.context.rng.unit_f32() >= p {
                 return false;
             }
         }

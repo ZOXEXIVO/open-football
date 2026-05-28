@@ -9,7 +9,6 @@ use crate::r#match::{
 };
 use crate::{PlayerAttributes, PlayerPositionType, PlayerSkills};
 use nalgebra::Vector3;
-use rand::RngExt;
 use std::sync::OnceLock;
 
 /// Zero-valued fallback returned by [`PlayerOperationsImpl::skills`] /
@@ -123,7 +122,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let heading_skill = (self.ctx.player.skills.technical.heading - 1.0) / 19.0;
         let randomness = (1.0 - heading_skill) * 0.4; // 0.0-0.4 based on skill
 
-        let mut rng = rand::rng();
+        let rng = &self.ctx.context.rng;
         let lateral_offset = rng.random_range(-randomness..randomness);
 
         // Perpendicular direction for lateral spread
@@ -191,7 +190,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let inaccuracy = (base_inaccuracy + distance_inaccuracy).min(1.0);
 
         let goal_width = 58.0; // matches GOAL_WIDTH * 2 (29 half-width)
-        let mut rng = rand::rng();
+        let rng = &self.ctx.context.rng;
 
         // Placement shot: skilled finishers pick corners from close range
         let is_placement_shot = distance_to_goal < 150.0 && finishing_f > 0.55;

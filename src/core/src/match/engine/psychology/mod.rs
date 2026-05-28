@@ -181,6 +181,8 @@ impl Psychology {
             NegativeEvent::ErrorLeadingToShot => -0.10,
             NegativeEvent::ErrorLeadingToGoal => -0.20,
             NegativeEvent::YellowCard => -0.04,
+            NegativeEvent::GoalConceded => -0.08,
+            NegativeEvent::Mistake => -0.06,
         }
     }
 
@@ -259,6 +261,10 @@ pub enum NegativeEvent {
     ErrorLeadingToGoal,
     /// Yellow card (penalised more for low-temperament players elsewhere).
     YellowCard,
+    /// Goal conceded by a goalkeeper — confidence drop.
+    GoalConceded,
+    /// Generic personal mistake (own goal, big miscontrol, etc.).
+    Mistake,
 }
 
 /// Per-team momentum. Set positive after a goal scored; set negative

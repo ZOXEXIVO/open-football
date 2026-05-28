@@ -5,6 +5,7 @@ use super::{
     MediaFanEventContext, NationalTeamEventContext, PersonalAdaptationEventContext,
     RecognitionEventContext, RegulationEventContext, RoleStatusEventContext, SeasonOutcomeContext,
     SupportEventContext, TeammateConflictContext, TrainingEventContext, TransferInterestContext,
+    TrophyEventContext,
 };
 use crate::ChangeType;
 
@@ -598,6 +599,12 @@ pub struct HappinessEventContext {
     /// role / pressure preferences, NT visibility, loyalty refusals.
     /// Renderer keys off `kind` to pick the right narrative.
     pub life_simulation_desire_context: Option<LifeSimulationDesireContext>,
+    /// Trophy-win explanation payload — competition slug + cup edition
+    /// stats (apps / starts / sub apps / goals / assists / clean sheets
+    /// / avg rating / final appearance). Populated by the trophy emit
+    /// sites (`TrophyWon`, `DomesticCupWon`) so the renderer can name
+    /// the silverware and the player's role in winning it.
+    pub trophy_context: Option<TrophyEventContext>,
 }
 
 impl HappinessEventContext {
@@ -638,6 +645,7 @@ impl HappinessEventContext {
             season_outcome_context: None,
             regulation_context: None,
             life_simulation_desire_context: None,
+            trophy_context: None,
         }
     }
 
@@ -800,6 +808,11 @@ impl HappinessEventContext {
         self
     }
 
+    pub fn with_trophy_context(mut self, ctx: TrophyEventContext) -> Self {
+        self.trophy_context = Some(ctx);
+        self
+    }
+
     /// Returns the number of specialized payload contexts attached to
     /// this event. Specialized payloads are mutually exclusive at the
     /// modelling level — an event is *either* a selection event, *or*
@@ -862,6 +875,9 @@ impl HappinessEventContext {
             n += 1;
         }
         if self.regulation_context.is_some() {
+            n += 1;
+        }
+        if self.trophy_context.is_some() {
             n += 1;
         }
         n

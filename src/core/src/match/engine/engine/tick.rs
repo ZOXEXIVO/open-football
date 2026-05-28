@@ -1,4 +1,5 @@
 use super::*;
+use crate::r#match::engine::player::events::players::FoulResolver;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
@@ -80,6 +81,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::apply_pending_set_piece_teleport(field);
         Self::apply_pending_save_credit(field);
         Self::resolve_corner_contest(field, context);
+        // Resolve any deferred-foul / advantage state. Cheap (one
+        // Option read in the dominant no-advantage case) so we run it
+        // every full tick rather than waiting for the next event.
+        FoulResolver::tick_advantage(field, context);
         // Ownership may have changed inside play_ball (new claim, pass
         // target receive, etc.). Refresh the ball view so player state
         // dispatch sees the current owner — without this, the
@@ -150,7 +155,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// carried by a corner header's ~0.10-0.14 xG in the shot pipeline —
     /// only ~3-4% of corners end in a goal (real ≈ 3%), giving defenders
     /// their realistic set-piece share without inflating totals.
-    pub(super) fn resolve_corner_contest(field: &mut MatchField, context: &MatchContext) {
+    pub(super) fn resolve_corner_contest(field: &mut MatchField, context: &mut MatchContext) {
         use crate::r#match::PassOriginRestart;
         use nalgebra::Vector3;
 
@@ -240,7 +245,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let att_win =
             (0.36 + (att_score - best_def_score) * 0.50 - gk_command * 0.18).clamp(0.10, 0.62);
 
-        if rand::random::<f32>() < att_win {
+        if context.rng.bernoulli(att_win) {
             #[cfg(feature = "match-logs")]
             crate::mid_run_diag::CORNER_CONTEST_WON.fetch_add(1, Ordering::Relaxed);
             // Attacker wins: drop the ball just behind them at head height,
@@ -264,6 +269,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
         // Otherwise the cross plays out — the keeper claims or a defender
         // clears (the realistic majority outcome).
+
+        // Persist this corner's routine + estimated xG into the team's
+        // history so `pick_corner_routine` can vary future deliveries.
+        // The xG used here is a rough estimate (att_win × generic
+        // header xG); the precise xG is computed downstream when the
+        // header actually fires through the shot pipeline. The history
+        // only needs the *flavour* of "did this routine produce a
+        // chance" to gate repeats, so an approximate value is fine.
+        if let Some(routine) = field.ball.pending_corner_routine.take() {
+            let estimated_xg = att_win * 0.12; // ~0.12 header xG ceiling × win prob
+            let is_home_attacking = att_team == context.field_home_team_id;
+            context
+                .set_piece_history
+                .record_corner(is_home_attacking, routine, estimated_xg);
+        }
 
         field.ball.corner_contest_resolved = true;
     }

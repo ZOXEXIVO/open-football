@@ -1,5 +1,5 @@
 use super::*;
-use chrono::Utc;
+use crate::r#match::engine::context::MatchEngineConfig;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub fn new() -> Self {
@@ -14,13 +14,56 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         is_friendly: bool,
         is_knockout: bool,
     ) -> MatchResultRaw {
+        let mut config = MatchEngineConfig::default();
+        config.match_recordings = match_recordings;
+        config.is_friendly = is_friendly;
+        config.is_knockout = is_knockout;
+        Self::play_with_config(left_squad, right_squad, config)
+    }
+
+    /// Seeded entry point. Compatibility wrapper around
+    /// `play_with_config`. `seed = Some(_)` pins the engine's owned
+    /// RNG (substitution timing, penalty shootout, foul card rolls,
+    /// corner aerial contest, every converted player decision).
+    /// `None` falls back to OS entropy, matching legacy behaviour.
+    #[allow(unreachable_code)]
+    pub fn play_seeded(
+        left_squad: MatchSquad,
+        right_squad: MatchSquad,
+        match_recordings: bool,
+        is_friendly: bool,
+        is_knockout: bool,
+        seed: Option<u64>,
+    ) -> MatchResultRaw {
+        let mut config = MatchEngineConfig::default();
+        config.seed = seed;
+        config.match_recordings = match_recordings;
+        config.is_friendly = is_friendly;
+        config.is_knockout = is_knockout;
+        Self::play_with_config(left_squad, right_squad, config)
+    }
+
+    /// Full-config entry point. Lets the caller inject seed, fixture
+    /// date, environment (weather/pitch/crowd/importance/derby),
+    /// referee profile, friendly/knockout flags, and the
+    /// match_recordings switch in one place — instead of patching the
+    /// context after construction. Required by the calibration harness
+    /// to run a real rainy match or a strict-referee fixture, and by
+    /// any replay test that needs exact-seed control over today's
+    /// date.
+    #[allow(unreachable_code)]
+    pub fn play_with_config(
+        left_squad: MatchSquad,
+        right_squad: MatchSquad,
+        config: MatchEngineConfig,
+    ) -> MatchResultRaw {
         // Profiling shortcut — see the `match-stub` feature in
         // `core/Cargo.toml`. Skips the simulation entirely and returns
         // a 0-0 result with just enough metadata (team IDs, player
         // IDs) for the surrounding pipeline to run.
         #[cfg(feature = "match-stub")]
         {
-            let _ = (match_recordings, is_friendly, is_knockout);
+            let _ = &config;
             return Self::play_stub(left_squad, right_squad);
         }
 
@@ -36,7 +79,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
 
-        let mut match_position_data = if !match_recordings {
+        let mut match_position_data = if !config.match_recordings {
             ResultMatchPositionData::empty()
         } else if MatchRuntime::events_mode() {
             ResultMatchPositionData::new_with_tracking()
@@ -46,12 +89,32 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut field = MatchField::new(W, H, left_squad, right_squad);
 
-        let mut context = MatchContext::new(&field, players, score, is_friendly, is_knockout);
+        let mut context = MatchContext::new_with_config(&field, players, score, &config);
         // Stash the starting tactics inside the context's match plan so
         // `build_result` can read them — no extra parameters threaded
         // through the state machine.
         context.starting_home_tactic = starting_home_tactic;
         context.starting_away_tactic = starting_away_tactic;
+
+        // Seed the chemistry map from the kickoff XI of each side.
+        // Pair scores stay constant for the match — live events could
+        // adjust them, but the initial baseline is what feeds the pass
+        // evaluator's one-touch bonus from the first whistle.
+        let chemistry_roster: Vec<(u32, u32, PlayerFieldPositionGroup, f32, f32)> = field
+            .players
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    p.team_id,
+                    p.tactical_position.current_position.position_group(),
+                    p.position.y,
+                    p.skills.mental.teamwork,
+                )
+            })
+            .collect();
+        let field_h = field.size.height as f32;
+        context.chemistry.seed_from_roster(&chemistry_roster, field_h);
 
         if MatchRuntime::events_mode() {
             context.enable_logging();
@@ -747,21 +810,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 }
 
                 if !sub_times_initialized {
-                    let mut rng = rand::rng();
-                    next_sub_time_ms = rng.random_range(10..20) * 60 * 1000;
+                    next_sub_time_ms = context.rng.range_u64(10, 20) * 60 * 1000;
                     sub_times_initialized = true;
                 }
 
                 let period_time = context.time.time;
                 if period_time >= next_sub_time_ms {
-                    // Wall-clock today — the engine doesn't track sim
-                    // date directly. Used only for the youth-protection
+                    // Deterministic "today" — captured at context
+                    // construction. Used only for the youth-protection
                     // sub branch, where the comparison is age <= 17.
-                    let today = Utc::now().naive_utc().date();
+                    let today = context.today;
                     let per_pass_cap = context.max_substitutions_per_pass;
                     process_substitutions(field, context, per_pass_cap, today);
-                    let mut rng = rand::rng();
-                    next_sub_time_ms = period_time + rng.random_range(5..15) * 60 * 1000;
+                    next_sub_time_ms = period_time + context.rng.range_u64(5, 15) * 60 * 1000;
                 }
             }
         }

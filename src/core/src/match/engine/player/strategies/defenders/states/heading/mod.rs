@@ -126,7 +126,7 @@ impl DefenderHeadingState {
         let overall_skill = (heading_skill + jumping_skill) / 2.0;
 
         // Simulate chance of success
-        let random_value: f32 = rand::random(); // Generates a random float between 0.0 and 1.0
+        let random_value: f32 = ctx.context.rng.unit_f32(); // Generates a random float between 0.0 and 1.0
 
         random_value < overall_skill
     }

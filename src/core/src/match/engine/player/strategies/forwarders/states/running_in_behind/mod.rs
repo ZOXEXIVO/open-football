@@ -181,7 +181,7 @@ impl ForwardRunningInBehindState {
             // a run-in-behind. Sigmoid pivot at 12/20 so the full
             // 1-20 range matters instead of a hard cliff.
             let p = SkillCurve::new(ctx.player.skills.physical.pace, 12.0, 0.6).probability();
-            return rand::random::<f32>() < p;
+            return ctx.context.rng.unit_f32() < p;
         }
 
         false

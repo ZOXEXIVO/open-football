@@ -530,7 +530,7 @@ pub fn evaluate_forward_shot_decision(
             .fetch_add((willingness * 1000.0) as u64, Ordering::Relaxed);
     }
 
-    if rand::random::<f32>() < willingness {
+    if ctx.context.rng.unit_f32() < willingness {
         #[cfg(feature = "match-logs")]
         helper_diag::ROLL_PASSED.fetch_add(1, Ordering::Relaxed);
         ShotDecision::Shoot { reason: tag }

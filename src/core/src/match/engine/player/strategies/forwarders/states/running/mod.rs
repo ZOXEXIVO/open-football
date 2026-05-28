@@ -475,7 +475,7 @@ impl StateProcessingHandler for ForwardRunningState {
                         // GM suppression veto — protect-a-result teams
                         // recycle even with a clear shot. Scale tail
                         // beyond gm > 0.40; under that, no suppression.
-                        if gm_suppression < 1.0 && rand::random::<f32>() >= gm_suppression {
+                        if gm_suppression < 1.0 && ctx.context.rng.unit_f32() >= gm_suppression {
                             // Suppressed by game-management — under
                             // pressure, lay off; otherwise keep running.
                             let under_pressure =
@@ -1661,7 +1661,7 @@ impl ForwardRunningState {
         // 1. MUST PASS: Heavy pressure or exhaustion
         if under_pressure {
             let pass_p = SkillCurve::new(passing_raw, 10.0, 0.6).probability();
-            if rand::random::<f32>() < pass_p || stamina < 0.4 {
+            if ctx.context.rng.unit_f32() < pass_p || stamina < 0.4 {
                 return self.has_safe_passing_option(ctx, &teammates);
             }
         }
@@ -1680,7 +1680,7 @@ impl ForwardRunningState {
         let quality_p = SkillCurve::new(vision_raw, 14.0, 0.6)
             .probability()
             .max(SkillCurve::new(passing_raw, 14.0, 0.6).probability());
-        if rand::random::<f32>() < quality_p
+        if ctx.context.rng.unit_f32() < quality_p
             && self.has_teammate_in_dangerous_position(ctx, &teammates, distance_to_goal)
         {
             return true;
@@ -1689,7 +1689,7 @@ impl ForwardRunningState {
         // 4. TEAM PLAY: teamwork and decisions blend smoothly
         let team_p = SkillCurve::new(teamwork_raw, 14.0, 0.6).probability()
             * SkillCurve::new(decisions_raw, 12.0, 0.6).probability();
-        if rand::random::<f32>() < team_p {
+        if ctx.context.rng.unit_f32() < team_p {
             return self.has_good_passing_option(ctx, &teammates);
         }
 
@@ -1925,7 +1925,7 @@ impl ForwardRunningState {
         let elite_take_on = SkillCurve::new(dribbling_raw, 14.0, 0.6).probability()
             * SkillCurve::new(pace_raw, 12.0, 0.6).probability();
         let modest_take_on = SkillCurve::new(dribbling_raw, 10.0, 0.6).probability();
-        let roll = rand::random::<f32>();
+        let roll = ctx.context.rng.unit_f32();
         if roll < elite_take_on {
             opponents_blocking <= 2
         } else if roll < modest_take_on {

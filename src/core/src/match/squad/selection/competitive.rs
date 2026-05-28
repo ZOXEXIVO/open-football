@@ -5,9 +5,10 @@ use crate::{Player, PlayerSquadStatus, Tactics};
 use chrono::NaiveDate;
 use log::debug;
 
+use super::cup_rotation::CupRotation;
 use super::helpers;
 use super::scoring::ScoringEngine;
-use super::{DomesticCupContext, SelectionPolicy};
+use super::{CupStage, DomesticCupContext, SelectionPolicy};
 use chrono::Utc;
 use std::cmp::Ordering;
 
@@ -180,7 +181,159 @@ impl SelectionScoringContext<'_> {
             debug!("Could only select {} of 11 starting players", squad.len());
         }
 
+        // STEP 5: Domestic cup rotation target. The DP optimizer pushes back
+        // toward the strongest XI when the cup opportunity bias isn't a wide
+        // enough margin to flip an individual slot. In real football, a manager
+        // who wants to rotate against weak opposition does so deliberately —
+        // they pick a deeper rotation than the per-slot score would justify.
+        // Walk the XI once and swap a handful of established starters for
+        // same-group fringe replacements, under safety constraints.
+        if let Some(cup) = self.cup {
+            self.apply_cup_rotation_target(team_id, &mut squad, &mut used_ids, available, cup);
+        }
+
         squad
+    }
+
+    /// Post-assignment safe-swap pass for early/quarter cup ties. Counts
+    /// non-established starters in the XI built by the DP, and if below the
+    /// stage/opponent target, swaps established starters out one-by-one for
+    /// available non-established replacements under tight safety constraints.
+    /// Force-selected players, the goalkeeper slot, and players whose only
+    /// realistic replacement is far below them on quality all stay put.
+    fn apply_cup_rotation_target(
+        &self,
+        team_id: u32,
+        squad: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+        available: &[&Player],
+        cup: &DomesticCupContext,
+    ) {
+        let stage = cup.stage();
+        let opp = cup.opponent_ratio;
+
+        // Stage / opponent → (target non-established starters, max quality
+        // gap a swap may concede). Semi and Final fall through with no pass.
+        let (target, max_gap) = match stage {
+            CupStage::Early => {
+                if opp <= 0.70 {
+                    (7usize, 5.0f32)
+                } else if opp <= 1.15 {
+                    (6, 3.5)
+                } else {
+                    (4, 2.0)
+                }
+            }
+            CupStage::Quarter => {
+                if opp <= 1.15 {
+                    (4, 2.0)
+                } else {
+                    (2, 2.0)
+                }
+            }
+            CupStage::Semi | CupStage::Final => return,
+        };
+
+        // Player lookup by id — both for re-scoring starters and for the
+        // established / force / position checks the swap loop runs.
+        let player_by_id: std::collections::HashMap<u32, &Player> = available
+            .iter()
+            .map(|p| (p.id, *p))
+            .collect();
+
+        let is_non_established = |p: &Player| !CupRotation::is_established(p);
+        let count_non_established = |sq: &[MatchPlayer]| -> usize {
+            sq.iter()
+                .filter(|mp| {
+                    mp.tactical_position.current_position != PlayerPositionType::Goalkeeper
+                })
+                .filter_map(|mp| player_by_id.get(&mp.id))
+                .filter(|p| is_non_established(p))
+                .count()
+        };
+
+        if count_non_established(squad) >= target {
+            return;
+        }
+
+        // Bench pool changes after each swap (the displaced starter joins the
+        // available bench but isn't a swap *candidate* — we don't want to put
+        // him back in). Limit to the size of the XI to guarantee termination.
+        for _ in 0..helpers::DEFAULT_SQUAD_SIZE {
+            if count_non_established(squad) >= target {
+                break;
+            }
+
+            // Eligible replacements: non-established, not GK, not recovering,
+            // condition >=70, currently on the bench (not in the XI).
+            let used_set: std::collections::HashSet<u32> = used_ids.iter().copied().collect();
+            let bench_pool: Vec<&Player> = available
+                .iter()
+                .copied()
+                .filter(|p| !used_set.contains(&p.id))
+                .filter(|p| !p.positions.is_goalkeeper())
+                .filter(|p| is_non_established(p))
+                .filter(|p| !p.player_attributes.is_in_recovery())
+                .filter(|p| p.player_attributes.condition_percentage() >= 70)
+                .collect();
+
+            if bench_pool.is_empty() {
+                break;
+            }
+
+            // Best swap = the one that costs the least quality (smallest gap)
+            // while passing every safety/fit constraint. Iterate every
+            // (established starter, non-established candidate) pair.
+            let mut best: Option<(usize, &Player, f32)> = None;
+            for (idx, mp) in squad.iter().enumerate() {
+                let slot = mp.tactical_position.current_position;
+                if slot == PlayerPositionType::Goalkeeper {
+                    continue;
+                }
+                let Some(starter) = player_by_id.get(&mp.id).copied() else {
+                    continue;
+                };
+                if !CupRotation::is_established(starter) {
+                    continue;
+                }
+                // Honor the manager pin: a force-selected player is never
+                // swapped out by this pass.
+                if self.engine.honor_force_selection && starter.is_force_match_selection {
+                    continue;
+                }
+
+                let starter_score = self.starting_slot_score(starter, slot);
+                let slot_group = slot.position_group();
+
+                for &cand in bench_pool.iter() {
+                    let fit = helpers::position_fit_score(cand, slot, slot_group);
+                    // "0.70 fit" on a 0..20 level scale: a level-14 specialist
+                    // at the slot, or a same-group player whose proximity
+                    // multiplier × primary level lands at or above 14.
+                    if fit < 14.0 {
+                        continue;
+                    }
+                    let cand_score = self.starting_slot_score(cand, slot);
+                    let gap = starter_score - cand_score;
+                    if gap > max_gap {
+                        continue;
+                    }
+                    // Smallest gap wins (least quality conceded).
+                    if best.map(|(_, _, g)| gap < g).unwrap_or(true) {
+                        best = Some((idx, cand, gap));
+                    }
+                }
+            }
+
+            let Some((idx, new_player, _)) = best else {
+                break;
+            };
+            let old_id = squad[idx].id;
+            let slot = squad[idx].tactical_position.current_position;
+            used_ids.retain(|id| *id != old_id);
+            used_ids.push(new_player.id);
+            squad[idx] = MatchPlayer::from_player(team_id, new_player, slot, false);
+        }
     }
 
     /// Select substitutes for competitive matches.
@@ -254,7 +407,94 @@ impl SelectionScoringContext<'_> {
             }
         }
 
+        // 4. Early-round cup bench guarantee. The bench should carry at least
+        // two non-established outfielders into early ties — players who can
+        // realistically come on for cameo minutes. If the bench-role scoring
+        // overweighted established Impact subs, swap the lowest-impact
+        // established outfielder for the best available non-established one.
+        if let Some(cup) = self.cup {
+            if cup.stage() == CupStage::Early {
+                self.ensure_non_established_bench_outfielders(team_id, &mut subs, &mut used_ids, remaining, 2);
+            }
+        }
+
         subs
+    }
+
+    /// Push the bench toward `min_count` non-established outfielders. Skips
+    /// the goalkeeper slot, force-selected players, and stops once no
+    /// improvement is possible. Runs only for early-round cup ties — bench
+    /// composition for league/managed-minutes matches stays purely
+    /// score-driven.
+    fn ensure_non_established_bench_outfielders(
+        &self,
+        team_id: u32,
+        subs: &mut [MatchPlayer],
+        used_ids: &mut Vec<u32>,
+        remaining: &[&Player],
+        min_count: usize,
+    ) {
+        let player_by_id: std::collections::HashMap<u32, &Player> = remaining
+            .iter()
+            .map(|p| (p.id, *p))
+            .collect();
+        let is_non_est_outfield = |p: &Player| -> bool {
+            !p.positions.is_goalkeeper() && !CupRotation::is_established(p)
+        };
+
+        for _ in 0..subs.len() {
+            let current = subs
+                .iter()
+                .filter(|mp| mp.tactical_position.current_position != PlayerPositionType::Goalkeeper)
+                .filter_map(|mp| player_by_id.get(&mp.id))
+                .filter(|p| is_non_est_outfield(p))
+                .count();
+            if current >= min_count {
+                return;
+            }
+
+            let used_set: std::collections::HashSet<u32> = used_ids.iter().copied().collect();
+            let candidate = remaining
+                .iter()
+                .copied()
+                .filter(|p| !used_set.contains(&p.id))
+                .filter(|p| is_non_est_outfield(p))
+                .filter(|p| !p.player_attributes.is_in_recovery())
+                .max_by(|a, b| {
+                    self.bench_role_score(a, BenchRole::Impact)
+                        .partial_cmp(&self.bench_role_score(b, BenchRole::Impact))
+                        .unwrap_or(Ordering::Equal)
+                });
+            let Some(new_player) = candidate else { return };
+
+            // Drop the bench's lowest-impact established outfielder.
+            let mut drop_idx: Option<usize> = None;
+            let mut drop_score = f32::INFINITY;
+            for (i, mp) in subs.iter().enumerate() {
+                if mp.tactical_position.current_position == PlayerPositionType::Goalkeeper {
+                    continue;
+                }
+                let Some(p) = player_by_id.get(&mp.id) else { continue };
+                if !CupRotation::is_established(p) {
+                    continue;
+                }
+                if self.engine.honor_force_selection && p.is_force_match_selection {
+                    continue;
+                }
+                let s = self.bench_role_score(p, BenchRole::Impact);
+                if s < drop_score {
+                    drop_score = s;
+                    drop_idx = Some(i);
+                }
+            }
+            let Some(idx) = drop_idx else { return };
+
+            let old_id = subs[idx].id;
+            used_ids.retain(|id| *id != old_id);
+            used_ids.push(new_player.id);
+            let pos = helpers::best_tactical_position(new_player, self.tactics);
+            subs[idx] = MatchPlayer::from_player(team_id, new_player, pos, false);
+        }
     }
 
     fn assign_outfield_slots<'p>(
@@ -479,6 +719,29 @@ impl SelectionScoringContext<'_> {
             + self.bench_role_fit(player, role) * 4.0
             + self.bench_policy_adjustment(player)
             + self.cup_opportunity(player, false)
+            + self.cup_bench_unseen_bonus(player)
+    }
+
+    /// Extra bench pull for a non-established player who hasn't featured in
+    /// this cup competition yet. Stacks on top of the regular cup opportunity
+    /// bonus so a fringe player is more likely to actually make the matchday
+    /// 18 (and thus get a cameo) on a rotation night.
+    fn cup_bench_unseen_bonus(&self, player: &Player) -> f32 {
+        let Some(cup) = self.cup else {
+            return 0.0;
+        };
+        let stage = cup.stage();
+        let weight = match stage {
+            CupStage::Early => 1.2,
+            CupStage::Quarter => 0.6,
+            _ => return 0.0,
+        };
+        if CupRotation::is_established(player) {
+            return 0.0;
+        }
+        let cup_apps =
+            player.cup_statistics.played + player.cup_statistics.played_subs;
+        if cup_apps == 0 { weight } else { 0.0 }
     }
 
     fn bench_role_fit(&self, player: &Player, role: BenchRole) -> f32 {

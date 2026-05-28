@@ -79,7 +79,7 @@ impl StateProcessingHandler for MidfielderPressingState {
             .min_by(|a, b| {
                 let dist_a = (a.position - ball_position).magnitude();
                 let dist_b = (b.position - ball_position).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap()
+                dist_a.total_cmp(&dist_b)
             })
         {
             let teammate_distance = (closest_teammate.position - ball_position).magnitude();

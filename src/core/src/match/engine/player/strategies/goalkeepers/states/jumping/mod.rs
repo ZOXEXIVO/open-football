@@ -112,7 +112,7 @@ impl GoalkeeperJumpingState {
             .clamp(0.0, 1.0);
 
         let catch_prob = prof.catch_probability(catch_difficulty);
-        rand::random::<f32>() < catch_prob
+        ctx.context.rng.unit_f32() < catch_prob
     }
 
     /// Calculate the base jump vector towards the ball

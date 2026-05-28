@@ -6,9 +6,10 @@ use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::simulator::SimulatorData;
 use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
 use crate::{
-    ClubResult, Country, HappinessEventType, Person, Player, PlayerHappiness, PlayerMessage,
-    PlayerMessageType, PlayerStatusType, SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition,
-    TeamInfo, TeamType,
+    AwardReputationInput, AwardReputationKind, ClubResult, Country, HappinessEventType, Person,
+    Player, PlayerHappiness, PlayerMessage, PlayerMessageType, PlayerStatusType,
+    SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, TeamInfo, TeamType, TrophyEventContext,
+    TrophyKind,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
@@ -395,6 +396,263 @@ impl CountryResult {
                     }
                 }
             }
+        }
+    }
+
+    /// Emit the domestic cup winner-trophy fan-out for the country's cup.
+    ///
+    /// Unlike league-title silverware (which lands on every player in the
+    /// champion roster), cup medals are tied to *appearance*: a player
+    /// only gets the event + award if they actually featured in the
+    /// winning campaign. Eligibility is read from
+    /// `cup_statistics_by_competition[cup_slug]` — which `process_local`
+    /// has already populated by the time this runs in the parallel tick,
+    /// including final-day starters and used substitutes. Unused
+    /// substitutes, January signings who never made the bench, and
+    /// youth players merely registered won't have an entry and so get
+    /// nothing — matching how real-football medals are awarded.
+    ///
+    /// Must be invoked AFTER the day's `LeagueResult::process_local` pass
+    /// — otherwise the final's appearances aren't on the player yet and
+    /// the entire winning XI silently fails the eligibility check.
+    ///
+    /// Idempotent across ticks via the `DomesticCup::award_emitted_*`
+    /// markers — the post-final daily tick re-enters this helper but
+    /// `should_emit_winner_award` returns `None` on the second visit.
+    pub(crate) fn process_domestic_cup_winner_awards(country: &mut Country, date: NaiveDate) {
+        // Snapshot every cup-side fact the awards path needs in one
+        // pass so the later mutation of `country.clubs` doesn't have to
+        // overlap with a borrow of `country.domestic_cup`. The set of
+        // players who appeared in the final is read from the cup's own
+        // match storage (which holds `MatchResultRaw.left/right_team_players`
+        // squads written by the engine), so the final-bonus flag stays
+        // self-contained.
+        struct CupSnapshot {
+            winner_team_id: u32,
+            cup_slug: String,
+            cup_name: String,
+            cup_league_id: u32,
+            cup_reputation: u16,
+            final_appearance_ids: std::collections::HashSet<u32>,
+        }
+        let snapshot = {
+            let cup = match country.domestic_cup.as_ref() {
+                Some(c) => c,
+                None => return,
+            };
+            let Some(winner_team_id) = cup.should_emit_winner_award(&country.clubs) else {
+                return;
+            };
+            // Build a roster snapshot of who took to the pitch in the
+            // final (starter or used substitute) on the winning side.
+            // If the final's `MatchResult.details` aren't available
+            // (e.g. an in-progress save, or details trimmed by storage
+            // retention), the set is empty — the bonus is just skipped,
+            // not a hard error.
+            let mut final_ids = std::collections::HashSet::new();
+            if let Some((home_id, away_id)) = cup.champion_final_pairing(&country.clubs) {
+                if let Some(last_tour) = cup.league.schedule.tours.last() {
+                    if let Some(item) = last_tour.items.first() {
+                        if let Some(mr) = cup.league.matches.get(&item.id) {
+                            if let Some(details) = mr.details.as_ref() {
+                                let winning_squad = if winner_team_id == home_id {
+                                    Some(&details.left_team_players)
+                                } else if winner_team_id == away_id {
+                                    Some(&details.right_team_players)
+                                } else {
+                                    None
+                                };
+                                if let Some(squad) = winning_squad {
+                                    for id in &squad.main {
+                                        final_ids.insert(*id);
+                                    }
+                                    for id in &squad.substitutes_used {
+                                        final_ids.insert(*id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            CupSnapshot {
+                winner_team_id,
+                cup_slug: cup.league.slug.clone(),
+                cup_name: cup.league.name.clone(),
+                cup_league_id: cup.league.id,
+                cup_reputation: cup.league.reputation,
+                final_appearance_ids: final_ids,
+            }
+        };
+
+        // Pre-check: collect the eligible player ids on the winning
+        // roster BEFORE firing any team / board / player side effects.
+        // Without this an "all unused subs" champion (zero eligible
+        // players, e.g. a save loaded mid-final) would still hand the
+        // team a trophy achievement and the board a long-term-goal tick,
+        // and — because the cup's `award_emitted_*` marker only fires on
+        // success — those side effects would repeat every tick until
+        // somebody picked up a cup app. The fix is to read eligibility
+        // first and bail out entirely when nobody qualifies.
+        struct EligiblePlayer {
+            player_id: u32,
+            apps: u16,
+            starts: u16,
+            sub_apps: u16,
+            goals: u16,
+            assists: u16,
+            clean_sheets: u16,
+            avg_rating: f32,
+            final_appearance: bool,
+        }
+        let mut eligible: Vec<EligiblePlayer> = Vec::new();
+        for club in country.clubs.iter() {
+            for team in club.teams.iter() {
+                if team.id != snapshot.winner_team_id {
+                    continue;
+                }
+                for player in team.players.iter() {
+                    let Some(idx) = player
+                        .cup_statistics_by_competition
+                        .iter()
+                        .position(|c| c.competition_slug == snapshot.cup_slug)
+                    else {
+                        continue;
+                    };
+                    let stats = &player.cup_statistics_by_competition[idx].statistics;
+                    if stats.total_games() == 0 {
+                        continue;
+                    }
+                    let pos_group = player.position().position_group();
+                    let realistic = stats.average_rating_realistic(pos_group);
+                    let avg_rating = if realistic > 0.0 {
+                        realistic
+                    } else {
+                        stats.weighted_average_rating()
+                    };
+                    eligible.push(EligiblePlayer {
+                        player_id: player.id,
+                        apps: stats.total_games(),
+                        starts: stats.played,
+                        sub_apps: stats.played_subs,
+                        goals: stats.goals,
+                        assists: stats.assists,
+                        clean_sheets: stats.clean_sheets,
+                        avg_rating,
+                        final_appearance: snapshot.final_appearance_ids.contains(&player.id),
+                    });
+                }
+            }
+        }
+
+        if eligible.is_empty() {
+            // No one to award. Leave the cup marker unset so the next
+            // tick (once `process_local` has caught up) can fire the
+            // achievement + awards once instead of duplicating them.
+            debug!(
+                "Domestic cup {} resolved (winner team {}) but no eligible players this tick — \
+                 deferring achievement + awards",
+                snapshot.cup_name, snapshot.winner_team_id
+            );
+            return;
+        }
+
+        // Base prestige rises with the cup's reputation — a small-country
+        // cup lands near 0.70, an elite domestic cup (FA Cup / Copa del
+        // Rey) lands near 1.05–1.15. Players' involvement multiplier (see
+        // below) further scales this per player.
+        let rep_norm = (snapshot.cup_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
+        let base_prestige = (0.70 + 0.45 * rep_norm).clamp(0.70, 1.15);
+
+        // Mutating pass: fire team + board achievement once, then walk
+        // the precomputed eligible set and emit per-player events +
+        // award impact. The eligibility map (player_id → EligiblePlayer)
+        // lets the player loop avoid re-deriving the cup stats.
+        let eligibility: std::collections::HashMap<u32, EligiblePlayer> =
+            eligible.into_iter().map(|e| (e.player_id, e)).collect();
+
+        for club in country.clubs.iter_mut() {
+            let mut club_owns_winner = false;
+            for team in club.teams.iter_mut() {
+                if team.id != snapshot.winner_team_id {
+                    continue;
+                }
+                club_owns_winner = true;
+                team.on_season_trophy(Achievement::new(AchievementType::CupWin, date, 8));
+
+                for player in team.players.iter_mut() {
+                    let Some(e) = eligibility.get(&player.id) else {
+                        continue;
+                    };
+                    // Cup-specific involvement multiplier — replaces
+                    // the generic `season_participation_factor` for
+                    // this event so a player whose only football this
+                    // year was three cup ties still feels the medal,
+                    // while a single-cameo player gets a softer emit.
+                    // A final appearance lifts the involvement floor
+                    // by 0.10 (capped at 1.10) so a 1-app sub who came
+                    // off the bench in the final isn't lumped in with
+                    // a 1-app early-round cameo.
+                    let base_involvement: f32 = match e.apps {
+                        1 => 0.65,
+                        2 => 0.80,
+                        _ => 0.95,
+                    };
+                    let final_bonus: f32 = if e.final_appearance { 0.10 } else { 0.0 };
+                    let involvement = (base_involvement + final_bonus).min(1.10_f32);
+                    let effective_prestige = (base_prestige * involvement).min(1.10);
+
+                    let trophy_ctx = TrophyEventContext::new(TrophyKind::DomesticCup)
+                        .with_competition_id(snapshot.cup_league_id)
+                        .with_competition_slug(snapshot.cup_slug.clone())
+                        .with_competition_name(snapshot.cup_name.clone())
+                        .with_winner_team_id(snapshot.winner_team_id)
+                        .with_apps(e.apps)
+                        .with_starts(e.starts)
+                        .with_used_sub_apps(e.sub_apps)
+                        .with_goals(e.goals)
+                        .with_assists(e.assists)
+                        .with_clean_sheets(e.clean_sheets)
+                        .with_final_appearance(e.final_appearance);
+                    let trophy_ctx = if e.avg_rating > 0.0 {
+                        trophy_ctx.with_avg_rating(e.avg_rating)
+                    } else {
+                        trophy_ctx
+                    };
+
+                    // Distinct happiness event from the league title's
+                    // `TrophyWon` so a double-winning side's cooldown
+                    // doesn't collapse the two emits into one.
+                    player.on_trophy_won_with_context(
+                        HappinessEventType::DomesticCupWon,
+                        trophy_ctx,
+                        365,
+                        effective_prestige,
+                        true, // skip season-participation — folded into involvement
+                        date,
+                    );
+
+                    let mut input = AwardReputationInput::new()
+                        .with_league_id(snapshot.cup_league_id)
+                        .with_league_reputation(snapshot.cup_reputation)
+                        .with_matches_played(e.apps);
+                    if e.avg_rating > 0.0 {
+                        input = input.with_avg_rating(e.avg_rating);
+                    }
+                    player.apply_award_reputation_impact(
+                        AwardReputationKind::DomesticCupWinner,
+                        input,
+                        date,
+                    );
+                }
+            }
+            if club_owns_winner {
+                club.board.on_achievement(AchievementType::CupWin);
+            }
+        }
+
+        if let Some(cup) = country.domestic_cup.as_mut() {
+            cup.mark_winner_award_emitted(snapshot.winner_team_id, date);
         }
     }
 
@@ -1328,7 +1586,11 @@ mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings, LeagueTableRow};
+    use crate::league::{
+        DayMonthPeriod, DomesticCup, League, LeagueCollection, LeagueSettings, LeagueTableRow,
+        ScheduleItem, ScheduleTour,
+    };
+    use crate::r#match::{Score, TeamScore};
     use crate::shared::Location;
     use crate::{
         Club, ClubColors, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
@@ -2057,5 +2319,548 @@ mod tests {
             original_expiration,
             "long parent contract must not be shortened"
         );
+    }
+
+    // ── Domestic cup winner awards ────────────────────────────────
+
+    /// Build a domestic cup whose bracket has already resolved to
+    /// `winner_id` (regulation 2-0) over `loser_id`. Two-team field —
+    /// the seeded participants come from the country's clubs, so the
+    /// caller must ensure their Main team ids match `winner_id` /
+    /// `loser_id`.
+    fn make_resolved_cup_2team(
+        cup_id: u32,
+        slug: &str,
+        reputation: u16,
+        winner_id: u32,
+        loser_id: u32,
+        season_year: i32,
+    ) -> DomesticCup {
+        let settings = LeagueSettings {
+            season_starting_half: DayMonthPeriod::new(1, 8, 30, 12),
+            season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+            tier: 0,
+            promotion_spots: 0,
+            relegation_spots: 0,
+            league_group: None,
+        };
+        let mut league = League::new(
+            cup_id,
+            "Test Cup".into(),
+            slug.into(),
+            1,
+            reputation,
+            settings,
+            false,
+        );
+        league.is_cup = true;
+        let mut cup = DomesticCup::new(league);
+        cup.season_start_year = season_year;
+
+        let dt = chrono::NaiveDateTime::new(
+            d(season_year + 1, 5, 20),
+            chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+        );
+        let mut item =
+            ScheduleItem::new(cup_id, slug.into(), winner_id, loser_id, dt, None);
+        item.result = Some(Score {
+            home_team: TeamScore::new_with_score(winner_id, 2),
+            away_team: TeamScore::new_with_score(loser_id, 0),
+            details: Vec::new(),
+            home_shootout: 0,
+            away_shootout: 0,
+        });
+        cup.league.schedule.tours.push(ScheduleTour {
+            num: 1,
+            items: vec![item],
+        });
+        cup
+    }
+
+    /// Append a cup appearance row to `player.cup_statistics_by_competition`.
+    /// Mirrors what `LeagueResult::process_local` records when a player
+    /// is named to the matchday squad (`played` for starters, `played_subs`
+    /// for used substitutes). The award eligibility check reads
+    /// `total_games()`, so any non-zero starts or sub-apps qualifies.
+    fn add_cup_stats(player: &mut Player, slug: &str, played: u16, played_subs: u16, rating: f32) {
+        let stats = player.cup_competition_statistics_mut(slug);
+        stats.played = played;
+        stats.played_subs = played_subs;
+        stats.average_rating = rating;
+    }
+
+    fn build_country_with_cup(
+        clubs: Vec<Club>,
+        leagues: Vec<League>,
+        cup: DomesticCup,
+    ) -> Country {
+        Country::builder()
+            .id(1)
+            .code("EN".to_string())
+            .slug("england".to_string())
+            .name("England".to_string())
+            .continent_id(1)
+            .leagues(LeagueCollection::new(leagues))
+            .clubs(clubs)
+            .domestic_cup(Some(cup))
+            .build()
+            .unwrap()
+    }
+
+    /// Make a player that has at least one position, so the helper's
+    /// position-group lookup doesn't fall back to the Midfielder
+    /// default. Used for tests that want a deterministic positional
+    /// rating bucket.
+    fn make_player_with_position(id: u32) -> Player {
+        let mut p = make_player(id);
+        p.positions = crate::PlayerPositions {
+            positions: vec![crate::PlayerPosition {
+                position: crate::PlayerPositionType::MidfielderCenter,
+                level: 20,
+            }],
+        };
+        p
+    }
+
+    #[test]
+    fn cup_winner_award_only_emits_to_players_with_cup_appearances() {
+        // Champion roster has two players. Only `appeared` has an entry
+        // in `cup_statistics_by_competition` — the other was an unused
+        // squad member. After the award helper runs, only `appeared`
+        // has the trophy event and a domestic_cup_winner count.
+        let mut appeared = make_player_with_position(1);
+        add_cup_stats(&mut appeared, "test-cup", 3, 0, 7.4);
+        let benched = make_player_with_position(2);
+        let winner_team = make_team(10, 100, 1, vec![appeared, benched]);
+        let winner_club = make_club(100, vec![winner_team]);
+
+        let loser_team = make_team(20, 200, 1, vec![]);
+        let loser_club = make_club(200, vec![loser_team]);
+
+        let league = make_league_with_table(1, 5000, vec![]);
+        let cup = make_resolved_cup_2team(800_000_001, "test-cup", 6500, 10, 20, 2026);
+        let mut country =
+            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+
+        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+
+        let winner = country.clubs.iter().find(|c| c.id == 100).unwrap();
+        let appeared = &winner.teams.teams[0].players.players[0];
+        let benched = &winner.teams.teams[0].players.players[1];
+        assert_eq!(
+            happiness_event_count(appeared, &HappinessEventType::DomesticCupWon),
+            1,
+            "appeared player must receive the cup winner trophy event"
+        );
+        assert_eq!(
+            happiness_event_count(appeared, &HappinessEventType::TrophyWon),
+            0,
+            "league-title TrophyWon must NOT be emitted by the cup helper"
+        );
+        assert_eq!(
+            appeared.awards_count.domestic_cup_winner, 1,
+            "appeared player gets one DomesticCupWinner in the lifetime tally"
+        );
+        assert_eq!(
+            happiness_event_count(benched, &HappinessEventType::DomesticCupWon),
+            0,
+            "benched player without cup apps must not receive the trophy event"
+        );
+        assert_eq!(
+            benched.awards_count.domestic_cup_winner, 0,
+            "benched player must not bump the DomesticCupWinner counter"
+        );
+        // The cup's emit marker reflects the season + champion so the
+        // next tick can short-circuit.
+        let cup = country.domestic_cup.as_ref().unwrap();
+        assert_eq!(cup.award_emitted_season_start_year, Some(2026));
+        assert_eq!(cup.award_emitted_winner_team_id, Some(10));
+    }
+
+    #[test]
+    fn cup_winner_award_credits_final_day_substitutes() {
+        // The helper is meant to run AFTER process_local, so a player
+        // who came on only in the final has their appearance row in
+        // place. Modelled here by recording one substitute appearance
+        // for `sub_only` — the award should still land.
+        let mut sub_only = make_player_with_position(1);
+        add_cup_stats(&mut sub_only, "test-cup", 0, 1, 7.0);
+        let winner_team = make_team(10, 100, 1, vec![sub_only]);
+        let winner_club = make_club(100, vec![winner_team]);
+        let loser_team = make_team(20, 200, 1, vec![]);
+        let loser_club = make_club(200, vec![loser_team]);
+
+        let league = make_league_with_table(1, 5000, vec![]);
+        let cup = make_resolved_cup_2team(800_000_002, "test-cup", 7000, 10, 20, 2026);
+        let mut country =
+            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+
+        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+
+        let winner = country.clubs.iter().find(|c| c.id == 100).unwrap();
+        let sub_only = &winner.teams.teams[0].players.players[0];
+        assert_eq!(
+            happiness_event_count(sub_only, &HappinessEventType::DomesticCupWon),
+            1,
+            "final-day used substitute must receive the trophy"
+        );
+        assert_eq!(sub_only.awards_count.domestic_cup_winner, 1);
+    }
+
+    #[test]
+    fn cup_winner_award_does_not_double_emit_on_subsequent_ticks() {
+        // Helper is invoked from `Country::simulate` every tick. Once
+        // the marker is set, repeat calls must short-circuit so the
+        // happiness event and award counter only bump once per edition.
+        let mut starter = make_player_with_position(1);
+        add_cup_stats(&mut starter, "test-cup", 2, 0, 7.2);
+        let winner_team = make_team(10, 100, 1, vec![starter]);
+        let winner_club = make_club(100, vec![winner_team]);
+        let loser_team = make_team(20, 200, 1, vec![]);
+        let loser_club = make_club(200, vec![loser_team]);
+
+        let league = make_league_with_table(1, 5000, vec![]);
+        let cup = make_resolved_cup_2team(800_000_003, "test-cup", 6500, 10, 20, 2026);
+        let mut country =
+            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+
+        // Two ticks: the day of the final + the day after.
+        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 21));
+
+        let winner = country.clubs.iter().find(|c| c.id == 100).unwrap();
+        let starter = &winner.teams.teams[0].players.players[0];
+        assert_eq!(
+            happiness_event_count(starter, &HappinessEventType::DomesticCupWon),
+            1,
+            "second tick must not re-emit the trophy"
+        );
+        assert_eq!(
+            starter.awards_count.domestic_cup_winner, 1,
+            "DomesticCupWinner counter must stay at 1 across repeated ticks"
+        );
+    }
+
+    #[test]
+    fn cup_winner_award_skips_champion_roster_player_with_zero_cup_apps() {
+        // 3-team field: top seed (id 10) takes a round-one bye, then
+        // wins the final. A roster player on the winning team who
+        // never made an appearance — no row in
+        // `cup_statistics_by_competition` — must not collect the medal.
+        let mut starter = make_player_with_position(1);
+        add_cup_stats(&mut starter, "test-cup", 1, 0, 7.0);
+        let unused = make_player_with_position(2);
+        let winner_team = make_team(10, 100, 1, vec![starter, unused]);
+        let winner_club = make_club(100, vec![winner_team]);
+
+        let runner_up_team = make_team(20, 200, 1, vec![]);
+        let runner_up_club = make_club(200, vec![runner_up_team]);
+        let bye_loser_team = make_team(30, 300, 1, vec![]);
+        let bye_loser_club = make_club(300, vec![bye_loser_team]);
+
+        let league = make_league_with_table(1, 5000, vec![]);
+
+        // Hand-roll a 3-team cup: round 1 (20 vs 30, 30 bye for top
+        // seed 10), round 2 final (10 vs 20). 10 wins the final.
+        let settings = LeagueSettings {
+            season_starting_half: DayMonthPeriod::new(1, 8, 30, 12),
+            season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+            tier: 0,
+            promotion_spots: 0,
+            relegation_spots: 0,
+            league_group: None,
+        };
+        let mut league_cup =
+            League::new(800_000_004, "Cup".into(), "test-cup".into(), 1, 7000, settings, false);
+        league_cup.is_cup = true;
+        let mut cup = DomesticCup::new(league_cup);
+        cup.season_start_year = 2026;
+        let dt = chrono::NaiveDateTime::new(
+            d(2027, 4, 1),
+            chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+        );
+        // Round 1: 20 beats 30 (30 was the away side), 10 has a bye.
+        let mut r1_item =
+            ScheduleItem::new(800_000_004, "test-cup".into(), 20, 30, dt, None);
+        r1_item.result = Some(Score {
+            home_team: TeamScore::new_with_score(20, 1),
+            away_team: TeamScore::new_with_score(30, 0),
+            details: Vec::new(),
+            home_shootout: 0,
+            away_shootout: 0,
+        });
+        cup.league.schedule.tours.push(ScheduleTour {
+            num: 1,
+            items: vec![r1_item],
+        });
+        // Final: 10 beats 20.
+        let dt2 = chrono::NaiveDateTime::new(
+            d(2027, 5, 20),
+            chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+        );
+        let mut r2_item =
+            ScheduleItem::new(800_000_004, "test-cup".into(), 10, 20, dt2, None);
+        r2_item.result = Some(Score {
+            home_team: TeamScore::new_with_score(10, 2),
+            away_team: TeamScore::new_with_score(20, 0),
+            details: Vec::new(),
+            home_shootout: 0,
+            away_shootout: 0,
+        });
+        cup.league.schedule.tours.push(ScheduleTour {
+            num: 2,
+            items: vec![r2_item],
+        });
+
+        let mut country = build_country_with_cup(
+            vec![winner_club, runner_up_club, bye_loser_club],
+            vec![league],
+            cup,
+        );
+
+        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+
+        let winner = country.clubs.iter().find(|c| c.id == 100).unwrap();
+        let starter = &winner.teams.teams[0].players.players[0];
+        let unused = &winner.teams.teams[0].players.players[1];
+        assert_eq!(
+            happiness_event_count(starter, &HappinessEventType::DomesticCupWon),
+            1,
+            "the starter who actually played still gets the medal"
+        );
+        assert_eq!(starter.awards_count.domestic_cup_winner, 1);
+        assert_eq!(
+            happiness_event_count(unused, &HappinessEventType::DomesticCupWon),
+            0,
+            "the unused squad player on the champion side does not"
+        );
+        assert_eq!(unused.awards_count.domestic_cup_winner, 0);
+    }
+
+    #[test]
+    fn cup_winner_award_coexists_with_league_title_trophy() {
+        // A double-winning side: the league title `TrophyWon` fires
+        // earlier in the same end-of-season tick, the cup helper runs
+        // on the final day. The cup helper must NOT collide on the
+        // generic `TrophyWon` cooldown — both medals should land on
+        // the player's happiness ledger, recorded as distinct events.
+        let mut starter = make_player_with_position(1);
+        add_cup_stats(&mut starter, "test-cup", 3, 0, 7.4);
+        // Simulate the league-title trophy that the season-awards path
+        // would have emitted earlier in the season. Magnitude doesn't
+        // matter — what matters is that the cooldown bucket for
+        // `TrophyWon` is now full.
+        starter.on_team_season_event_with_prestige(
+            HappinessEventType::TrophyWon,
+            365,
+            1.0,
+            d(2027, 5, 18),
+        );
+
+        let winner_team = make_team(10, 100, 1, vec![starter]);
+        let winner_club = make_club(100, vec![winner_team]);
+        let loser_team = make_team(20, 200, 1, vec![]);
+        let loser_club = make_club(200, vec![loser_team]);
+
+        let league = make_league_with_table(1, 5000, vec![]);
+        let cup = make_resolved_cup_2team(800_000_005, "test-cup", 7500, 10, 20, 2026);
+        let mut country =
+            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+
+        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+
+        let starter = &country.clubs.iter().find(|c| c.id == 100).unwrap().teams.teams[0]
+            .players
+            .players[0];
+        assert_eq!(
+            happiness_event_count(starter, &HappinessEventType::TrophyWon),
+            1,
+            "league-title TrophyWon must remain — cup helper does not suppress it"
+        );
+        assert_eq!(
+            happiness_event_count(starter, &HappinessEventType::DomesticCupWon),
+            1,
+            "domestic cup emit must land on its own cooldown bucket"
+        );
+        assert_eq!(starter.awards_count.domestic_cup_winner, 1);
+    }
+
+    #[test]
+    fn cup_winner_award_skips_achievements_when_no_eligible_players() {
+        // Pre-check guard: a champion whose roster has zero recorded
+        // cup apps (data glitch — e.g. stats not yet caught up after a
+        // save restore) must NOT fire `team.on_season_trophy` or the
+        // board achievement. Otherwise repeat ticks would inflate
+        // reputation + the board long-term-goal counter every day
+        // until somebody picks up a cup app.
+        let no_stats_player = make_player_with_position(1);
+        let winner_team = make_team(10, 100, 1, vec![no_stats_player]);
+        let winner_club = make_club(100, vec![winner_team]);
+        let loser_team = make_team(20, 200, 1, vec![]);
+        let loser_club = make_club(200, vec![loser_team]);
+
+        let league = make_league_with_table(1, 5000, vec![]);
+        let cup = make_resolved_cup_2team(800_000_006, "test-cup", 6500, 10, 20, 2026);
+        let mut country =
+            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+
+        // Snapshot pre-call reputation so we can detect achievement bumps.
+        let rep_before = country
+            .clubs
+            .iter()
+            .find(|c| c.id == 100)
+            .unwrap()
+            .teams
+            .teams[0]
+            .reputation
+            .home;
+
+        // Two ticks, neither of which has any eligible player.
+        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 21));
+
+        let team = &country.clubs.iter().find(|c| c.id == 100).unwrap().teams.teams[0];
+        assert_eq!(
+            team.reputation.home, rep_before,
+            "team reputation must not move when no player qualifies"
+        );
+
+        // The cup marker must remain unset so the next tick can
+        // recover once `process_local` catches up.
+        let cup = country.domestic_cup.as_ref().unwrap();
+        assert!(
+            cup.award_emitted_winner_team_id.is_none(),
+            "emit marker must stay unset when nobody was awarded"
+        );
+        assert!(cup.award_emitted_on.is_none());
+    }
+
+    #[test]
+    fn cup_winner_award_final_appearance_lifts_magnitude() {
+        // Two players, both 1-app cup contributors. One played in the
+        // final (FieldSquad.main), one didn't. The final-appearance
+        // bonus (+0.10 involvement) must produce a larger trophy
+        // magnitude on the player who was on the pitch for the final.
+        let mut in_final = make_player_with_position(1);
+        add_cup_stats(&mut in_final, "test-cup", 1, 0, 7.4);
+        let mut only_earlier = make_player_with_position(2);
+        add_cup_stats(&mut only_earlier, "test-cup", 1, 0, 7.4);
+
+        let winner_team = make_team(10, 100, 1, vec![in_final, only_earlier]);
+        let winner_club = make_club(100, vec![winner_team]);
+        let loser_team = make_team(20, 200, 1, vec![]);
+        let loser_club = make_club(200, vec![loser_team]);
+
+        let league = make_league_with_table(1, 5000, vec![]);
+        let mut cup = make_resolved_cup_2team(800_000_007, "test-cup", 7500, 10, 20, 2026);
+        // Inject a `MatchResult` with FieldSquad details under the
+        // same id format the schedule item uses — that's what the
+        // helper looks up via `cup.league.matches.get(item.id)`.
+        let final_item = &cup.league.schedule.tours.last().unwrap().items[0];
+        let final_date = final_item.date.date();
+        let final_id = final_item.id.clone();
+        let mut details = crate::r#match::MatchResultRaw::with_match_time(0);
+        let mut home_squad = crate::r#match::FieldSquad::new();
+        home_squad.team_id = 10;
+        home_squad.main = vec![1]; // only player 1 started the final
+        let away_squad = crate::r#match::FieldSquad::new();
+        details.write_team_players(&home_squad, &away_squad);
+        let mr = crate::r#match::MatchResult {
+            id: final_id,
+            league_id: cup.league.id,
+            league_slug: cup.league.slug.clone(),
+            home_team_id: 10,
+            away_team_id: 20,
+            details: Some(details),
+            score: Score {
+                home_team: TeamScore::new_with_score(10, 2),
+                away_team: TeamScore::new_with_score(20, 0),
+                details: Vec::new(),
+                home_shootout: 0,
+                away_shootout: 0,
+            },
+            friendly: false,
+        };
+        cup.league.matches.push(mr, final_date);
+
+        let mut country =
+            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+
+        CountryResult::process_domestic_cup_winner_awards(&mut country, final_date);
+
+        let players = &country.clubs.iter().find(|c| c.id == 100).unwrap().teams.teams[0]
+            .players
+            .players;
+        let mag_in_final = players
+            .iter()
+            .find(|p| p.id == 1)
+            .and_then(|p| {
+                p.happiness
+                    .recent_events
+                    .iter()
+                    .find(|e| e.event_type == HappinessEventType::DomesticCupWon)
+                    .map(|e| e.magnitude)
+            })
+            .expect("in_final player has DomesticCupWon event");
+        let mag_only_earlier = players
+            .iter()
+            .find(|p| p.id == 2)
+            .and_then(|p| {
+                p.happiness
+                    .recent_events
+                    .iter()
+                    .find(|e| e.event_type == HappinessEventType::DomesticCupWon)
+                    .map(|e| e.magnitude)
+            })
+            .expect("only_earlier player has DomesticCupWon event");
+        assert!(
+            mag_in_final > mag_only_earlier,
+            "final appearance must lift the trophy magnitude: {} (final) vs {} (earlier-only)",
+            mag_in_final,
+            mag_only_earlier
+        );
+    }
+
+    #[test]
+    fn cup_winner_award_attaches_trophy_context() {
+        // The emitted DomesticCupWon event must carry a
+        // TrophyEventContext describing the competition + the player's
+        // role in winning it. Renderer relies on the context being
+        // populated to produce specific copy.
+        let mut starter = make_player_with_position(1);
+        add_cup_stats(&mut starter, "test-cup", 4, 1, 7.6);
+        let winner_team = make_team(10, 100, 1, vec![starter]);
+        let winner_club = make_club(100, vec![winner_team]);
+        let loser_team = make_team(20, 200, 1, vec![]);
+        let loser_club = make_club(200, vec![loser_team]);
+
+        let league = make_league_with_table(1, 5000, vec![]);
+        let cup = make_resolved_cup_2team(800_000_008, "test-cup", 7000, 10, 20, 2026);
+        let mut country =
+            build_country_with_cup(vec![winner_club, loser_club], vec![league], cup);
+
+        CountryResult::process_domestic_cup_winner_awards(&mut country, d(2027, 5, 20));
+
+        let starter = &country.clubs.iter().find(|c| c.id == 100).unwrap().teams.teams[0]
+            .players
+            .players[0];
+        let event = starter
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::DomesticCupWon)
+            .expect("DomesticCupWon event must be present");
+        let trophy = event
+            .context
+            .as_ref()
+            .and_then(|c| c.trophy_context.as_ref())
+            .expect("TrophyEventContext must be attached");
+        assert_eq!(trophy.trophy_kind, TrophyKind::DomesticCup);
+        assert_eq!(trophy.competition_slug.as_deref(), Some("test-cup"));
+        assert_eq!(trophy.winner_team_id, Some(10));
+        // Player has 4 starts + 1 sub apps = 5 apps.
+        assert_eq!(trophy.apps, Some(5));
+        assert_eq!(trophy.starts, Some(4));
+        assert_eq!(trophy.used_sub_apps, Some(1));
     }
 }

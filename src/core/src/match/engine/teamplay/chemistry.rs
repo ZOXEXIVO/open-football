@@ -151,6 +151,32 @@ fn pair_key(a: u32, b: u32) -> (u32, u32) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
+/// Map a player's tactical position into a chemistry `Role`.
+/// Conservative bucketing — anything mid/forward leaning collapses
+/// into the broader Striker/Winger families to keep the role pair
+/// inputs stable.
+pub fn role_from_position(pos: crate::PlayerFieldPositionGroup) -> Role {
+    match pos {
+        crate::PlayerFieldPositionGroup::Goalkeeper => Role::Goalkeeper,
+        crate::PlayerFieldPositionGroup::Defender => Role::CenterBack,
+        crate::PlayerFieldPositionGroup::Midfielder => Role::CentralMid,
+        crate::PlayerFieldPositionGroup::Forward => Role::Striker,
+    }
+}
+
+/// Pick the lane from an in-game x/y position. We look at lateral
+/// y-coordinate against the pitch height: left third, centre third,
+/// right third.
+pub fn lane_from_y(y: f32, field_height: f32) -> Lane {
+    if y < field_height * 0.33 {
+        Lane::Left
+    } else if y > field_height * 0.67 {
+        Lane::Right
+    } else {
+        Lane::Center
+    }
+}
+
 impl ChemistryMap {
     pub fn set(&mut self, a: u32, b: u32, score: f32) {
         if a == b {
@@ -179,6 +205,43 @@ impl ChemistryMap {
         let v = compute().clamp(0.0, 1.0);
         self.pairs.insert(key, v);
         v
+    }
+
+    /// Seed every same-team pair from a player roster. Roles and lanes
+    /// are derived from each player's tactical position group + spawn
+    /// y-coordinate. Teamwork inputs come from the player's mental
+    /// attribute. Called once at kickoff — subsequent live events can
+    /// adjust pair scores, but the initial baseline matches the squad
+    /// as it took the pitch.
+    pub fn seed_from_roster(
+        &mut self,
+        players: &[(u32, u32, crate::PlayerFieldPositionGroup, f32, f32)],
+        field_height: f32,
+    ) {
+        // Tuple layout: (player_id, team_id, position_group, y, teamwork_0_20).
+        for i in 0..players.len() {
+            for j in (i + 1)..players.len() {
+                let (id_a, team_a, pos_a, y_a, tw_a) = players[i];
+                let (id_b, team_b, pos_b, y_b, tw_b) = players[j];
+                if team_a != team_b {
+                    continue;
+                }
+                let role_a = role_from_position(pos_a);
+                let role_b = role_from_position(pos_b);
+                let lane_a = lane_from_y(y_a, field_height);
+                let lane_b = lane_from_y(y_b, field_height);
+                let score = initial_chemistry(ChemistryInputs {
+                    role_a,
+                    lane_a,
+                    role_b,
+                    lane_b,
+                    teamwork_a_0_20: tw_a,
+                    teamwork_b_0_20: tw_b,
+                    either_is_new: false,
+                });
+                self.set(id_a, id_b, score);
+            }
+        }
     }
 }
 

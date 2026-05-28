@@ -23,7 +23,17 @@ impl Ball {
     /// Opposing players near the ball's flight path can intercept passes.
     /// Interception chance depends on tackling, anticipation, positioning skills
     /// and proximity to the ball's trajectory.
-    pub fn try_intercept(&mut self, players: &[MatchPlayer], events: &mut EventCollection) {
+    pub fn try_intercept(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        // `context` is held even when this site does not currently
+        // draw from `context.rng` so future calibration / env-modifier
+        // wiring (slide tackle range, sliding_tackle_success) lands
+        // without changing the signature again.
+        let _ = context;
         // Only intercept unowned balls that are in flight (active pass)
         if self.current_owner.is_some() || self.flags.in_flight_state == 0 {
             return;
@@ -181,7 +191,12 @@ impl Ball {
     /// - Intercept: ≤ 2.5u radius, pass-targeted; tiny per-tick chance
     /// - Block:     ≤ 4u radius, shot-targeted; higher per-event chance
     /// Both are scoped to unowned balls with `in_flight_state > 0`.
-    pub fn try_block_shot(&mut self, players: &[MatchPlayer], events: &mut EventCollection) {
+    pub fn try_block_shot(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
         // Only live shots — no cache means no shot in flight, no block.
         let _shot_target = match self.cached_shot_target {
             Some(t) => t,
@@ -314,7 +329,7 @@ impl Ball {
         // chance still allows the shot through 70% of the time, which
         // is what we want — defenders block but don't always block.
         let blocker_id = match best_blocker {
-            Some(id) if rand::random::<f32>() < best_chance.clamp(0.03, 0.38) => id,
+            Some(id) if context.rng.unit_f32() < best_chance.clamp(0.03, 0.38) => id,
             _ => return,
         };
 
@@ -337,12 +352,12 @@ impl Ball {
             (0.06 + composure * 0.05 + technique * 0.04 + ball_speed_low_bonus).clamp(0.06, 0.30);
 
         // Deflection direction: away from the shot line, with a random ±45° spread.
-        let angle: f32 = (rand::random::<f32>() - 0.5) * 1.56;
+        let angle: f32 = (context.rng.unit_f32() - 0.5) * 1.56;
         let rev_x = -shot_dir_x * angle.cos() - (-shot_dir_y) * angle.sin();
         let rev_y = -shot_dir_x * angle.sin() + (-shot_dir_y) * angle.cos();
         let tick = self.current_tick_cached;
 
-        let roll = rand::random::<f32>();
+        let roll = context.rng.unit_f32();
         let p_controlled = controlled_block_prob;
         let p_corner = p_controlled + 0.23;
         let p_safe = p_corner + 0.23;
@@ -438,7 +453,7 @@ impl Ball {
             // both goals. Loose ball; either team can recover.
             let safe_speed = (ball_velocity_2d * 0.35).clamp(1.5, 3.5);
             // Rotate shot direction 90° (sign chosen by random) to skip sideways.
-            let sign = if rand::random::<f32>() < 0.5 {
+            let sign = if context.rng.unit_f32() < 0.5 {
                 -1.0
             } else {
                 1.0
@@ -645,12 +660,20 @@ impl Ball {
         // stop the centred power shots they're paid to stop. Skill
         // gap stays 10pt → ~30% save-rate gap.
         let skill_mult = 0.55 + skill * 0.40;
-        let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.05, 0.68);
+        // Environment shifts keeper handling — heavy rain spills more,
+        // wind on cross-claims has a subtler effect (the keeper still
+        // sets feet under a regular shot). Magnitude tied to the
+        // pre-calibrated env modifier so heavy rain caps a routine save
+        // at ~60% instead of ~68%.
+        let env_mod = context.environment.modifiers();
+        let env_handling_delta = env_mod.goalkeeper_handling;
+        let save_prob =
+            ((base - speed_penalty) * skill_mult + env_handling_delta).clamp(0.05, 0.68);
 
         #[cfg(feature = "match-logs")]
         save_accounting_stats::SAVE_PHYSICS_FIRED.fetch_add(1, Ordering::Relaxed);
 
-        if rand::random::<f32>() >= save_prob {
+        if context.rng.unit_f32() >= save_prob {
             return; // Keeper beaten — shot goes on.
         }
         #[cfg(feature = "match-logs")]
@@ -688,7 +711,7 @@ impl Ball {
         let keeper_team = keeper.team_id;
         let keeper_side = keeper.side;
 
-        let outcome_roll = rand::random::<f32>();
+        let outcome_roll = context.rng.unit_f32();
         let p_catch = catch_prob;
         let p_safe = (catch_prob + safe_parry_prob).min(0.92);
 
@@ -773,7 +796,7 @@ impl Ball {
         // where the attacking team gets a free tap-in. The previous
         // ±15u y-spread around the ball position landed ~50% of parries
         // in the six-yard tap-in lane.
-        let drop_distance = 12.0 + rand::random::<f32>() * 18.0;
+        let drop_distance = 12.0 + context.rng.unit_f32() * 18.0;
         let drop_x = match keeper_side {
             Some(PlayerSide::Left) => keeper_pos.x + drop_distance,
             Some(PlayerSide::Right) => keeper_pos.x - drop_distance,
@@ -788,7 +811,7 @@ impl Ball {
             None => self.field_height * 0.5,
         };
         let outward_sign = if (self.position.y - goal_center_y).abs() < 1.0 {
-            if rand::random::<f32>() < 0.5 {
+            if context.rng.unit_f32() < 0.5 {
                 -1.0
             } else {
                 1.0
@@ -796,8 +819,8 @@ impl Ball {
         } else {
             (self.position.y - goal_center_y).signum()
         };
-        let outward_offset = (14.0 + rand::random::<f32>() * 16.0) * outward_sign;
-        let drop_y = self.position.y + outward_offset + (rand::random::<f32>() - 0.5) * 10.0;
+        let outward_offset = (14.0 + context.rng.unit_f32() * 16.0) * outward_sign;
+        let drop_y = self.position.y + outward_offset + (context.rng.unit_f32() - 0.5) * 10.0;
         let drop_y = drop_y.clamp(0.0, self.field_height);
         let drop_x = drop_x.clamp(0.0, self.field_width);
         let dx = drop_x - self.position.x;

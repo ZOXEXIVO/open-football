@@ -179,7 +179,7 @@ impl DefenderAttackingCornerState {
         // won headers). The resulting header's xG / accuracy is still graded
         // by the shooting pipeline, so a poor header mostly misses anyway.
         let p = (0.62 + (heading + jumping) * 0.5 * 0.30).clamp(0.55, 0.95);
-        rand::random::<f32>() < p
+        ctx.context.rng.unit_f32() < p
     }
 
     /// Central box target. The two centre-backs split near / far post by

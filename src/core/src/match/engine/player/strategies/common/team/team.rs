@@ -17,12 +17,14 @@ impl<'b> TeamOperationsImpl<'b> {
 
 impl<'b> TeamOperationsImpl<'b> {
     pub fn tactics(&self) -> &Tactics {
+        // A sent-off / mid-swap player can transiently have no side
+        // before they're removed from the field. Fall back to the left
+        // tactics rather than crashing the live engine — the caller
+        // gets stable reads and the player is filtered out one tick
+        // later when ownership cleanup runs.
         match self.ctx.player.side {
-            Some(PlayerSide::Left) => &self.ctx.context.tactics.left,
+            Some(PlayerSide::Left) | None => &self.ctx.context.tactics.left,
             Some(PlayerSide::Right) => &self.ctx.context.tactics.right,
-            None => {
-                panic!("unknown player side")
-            }
         }
     }
 

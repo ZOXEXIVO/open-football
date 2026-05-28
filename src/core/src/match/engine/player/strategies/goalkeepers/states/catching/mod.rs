@@ -177,7 +177,7 @@ impl GoalkeeperCatchingState {
             // Calibrated for ~3 ticks of approach during a save.
             let save_prob = prof.save_probability(shot_difficulty);
             let per_tick = prof.per_tick_save(save_prob, 3.0);
-            return rand::random::<f32>() < per_tick;
+            return ctx.context.rng.unit_f32() < per_tick;
         }
 
         let distance_to_ball = ctx.ball().distance();
@@ -221,6 +221,6 @@ impl GoalkeeperCatchingState {
             .clamp(0.0, 1.0);
 
         let catch_prob = prof.catch_probability(catch_difficulty);
-        rand::random::<f32>() < catch_prob
+        ctx.context.rng.unit_f32() < catch_prob
     }
 }

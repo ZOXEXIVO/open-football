@@ -140,7 +140,7 @@ pub struct FirstTouchResolution {
 /// Resolve a first touch given the receiver, the arriving pass, and the
 /// pressure context. The resolver is deterministic in its score; outcome
 /// roll uses an externally-supplied random in [0.0, 1.0) so callers can
-/// drive it with whatever RNG they already use (`rand::random::<f32>()`
+/// drive it with whatever RNG they already use (`ctx.context.rng.unit_f32()`
 /// is the project idiom).
 pub fn resolve_first_touch(
     receiver: &MatchPlayer,

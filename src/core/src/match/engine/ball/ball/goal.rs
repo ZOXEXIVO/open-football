@@ -7,6 +7,7 @@ use super::Ball;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::engine::goal::GOAL_WIDTH;
+use crate::r#match::engine::set_pieces::{CornerScores, pick_corner_routine};
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
@@ -62,6 +63,25 @@ impl Ball {
                     if !recent_shot && !shot_in_flight {
                         // Not a shot — treat as ball out of play, not a goal.
                         return;
+                    }
+
+                    // Indirect free-kick rule: the kick itself can't
+                    // produce a goal. If the ball came from an
+                    // IndirectFreeKick origin and only the taker has
+                    // touched it since (no second player), the goal
+                    // must not stand. We approximate "no second touch"
+                    // by checking that the taker is the SOLE recent
+                    // passer. If anyone else is in `recent_passers`,
+                    // somebody has taken a touch and a goal is legal.
+                    if self.pass_origin_restart == PassOriginRestart::IndirectFreeKick {
+                        let any_second_touch = self
+                            .recent_passers
+                            .iter()
+                            .any(|&id| id != goalscorer);
+                        if !any_second_touch {
+                            // Reject: ball stays live, but no goal.
+                            return;
+                        }
                     }
                 }
 
@@ -145,7 +165,7 @@ impl Ball {
     /// Place ball near the 6-yard box and give it to the defending goalkeeper.
     pub(super) fn check_over_goal(
         &mut self,
-        context: &MatchContext,
+        context: &mut MatchContext,
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
@@ -322,6 +342,26 @@ impl Ball {
                 // explanation).
                 self.cached_shot_target = None;
                 self.pass_origin_restart = PassOriginRestart::Corner;
+                // Pick the corner routine via the SetPieceHistory-aware
+                // helper so repeated identical routines (with no chance
+                // produced) get blocked, varying the delivery flavour
+                // across the match. The choice is stamped on the ball
+                // so the aerial-contest resolver / xG accounting can
+                // bias toward the targeted area.
+                let scores = CornerScores {
+                    near_post: 0.42,
+                    penalty_spot: 0.48,
+                    far_post: 0.46,
+                    short: 0.20,
+                    edge_cutback: 0.22,
+                };
+                let is_home_attacking = taker_team == context.field_home_team_id;
+                let chosen_routine = pick_corner_routine(
+                    &scores,
+                    &context.set_piece_history,
+                    is_home_attacking,
+                );
+                self.pending_corner_routine = Some(chosen_routine);
                 #[cfg(feature = "match-logs")]
                 {
                     use std::sync::atomic::Ordering;

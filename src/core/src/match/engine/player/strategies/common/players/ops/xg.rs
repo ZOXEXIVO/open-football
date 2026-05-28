@@ -1,4 +1,7 @@
 use crate::r#match::StateProcessingContext;
+use crate::r#match::player::strategies::players::ops::effective_skill::{
+    ActionContext as EffActionContext, effective_skill,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
 pub const MIN_XG_THRESHOLD: f32 = 0.08;
@@ -103,10 +106,20 @@ impl ShotQualityEvaluator {
             xg = xg.min(0.06);
         }
 
-        // Direct free kick: 0.03-0.12 based on distance + skill.
+        // Direct free kick: 0.03-0.12 based on distance + skill. The
+        // free-kick read is fatigue-aware via `effective_skill` so a
+        // tired specialist's late-game free kicks degrade — composite
+        // routing isn't used here because free_kicks is a single raw
+        // attribute, not a multi-skill blend.
         if shot_type == ShotType::DirectFreeKick {
             let dist_score = (1.0 - (distance.clamp(60.0, 200.0) - 60.0) / 140.0).clamp(0.0, 1.0);
-            let skill = (ctx.player.skills.technical.free_kicks / 20.0).clamp(0.0, 1.0);
+            let minute = sc::minute_from_ms(ctx.context.total_match_time);
+            let fk_skill = effective_skill(
+                ctx.player,
+                ctx.player.skills.technical.free_kicks,
+                EffActionContext::technical(minute),
+            );
+            let skill = (fk_skill / 20.0).clamp(0.0, 1.0);
             xg = (0.03 + dist_score * 0.05 + skill * 0.04).clamp(0.03, 0.12);
         }
 
@@ -178,11 +191,26 @@ impl ShotQualityEvaluator {
             // 1v1 situation (very close to GK). Real football: 1v1
             // conversion is famously skill-sensitive — top finishers
             // bury 50%+ of them, replacement-level strikers under 25%.
-            // Bonus is graded by composure, first touch, and decisions.
+            // Bonus is graded by composure, first touch, and decisions,
+            // each read through `effective_skill` so a tired forward's
+            // late-game 1v1s lose their cool edge.
             if gk_distance < 25.0 && distance < 80.0 {
-                let composure = ctx.player.skills.mental.composure / 20.0;
-                let first_touch = ctx.player.skills.technical.first_touch / 20.0;
-                let decisions = ctx.player.skills.mental.decisions / 20.0;
+                let minute = sc::minute_from_ms(ctx.context.total_match_time);
+                let composure = effective_skill(
+                    ctx.player,
+                    ctx.player.skills.mental.composure,
+                    EffActionContext::mental(minute),
+                ) / 20.0;
+                let first_touch = effective_skill(
+                    ctx.player,
+                    ctx.player.skills.technical.first_touch,
+                    EffActionContext::technical(minute),
+                ) / 20.0;
+                let decisions = effective_skill(
+                    ctx.player,
+                    ctx.player.skills.mental.decisions,
+                    EffActionContext::mental(minute),
+                ) / 20.0;
                 let cool = (composure + first_touch + decisions) / 3.0;
                 // 0.85 (panicked Composure-6) … 1.40 (composed Composure-18).
                 return (0.85 + cool * 0.55).clamp(0.85, 1.40);

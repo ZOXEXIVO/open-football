@@ -60,8 +60,22 @@ pub struct SummaryBlock {
 /// Career Summary hero) and is no longer tied to a single league.
 pub struct LeagueBlock {
     pub league_name: String,
+    /// Raw slug — preserved for callers / tests that need the
+    /// underlying identifier. Templates link via the precomputed
+    /// `awards_url` instead so /cups vs /leagues routing is owned by
+    /// the server (and not duplicated across each card).
+    #[allow(dead_code)]
     pub league_slug: String,
     pub league_id: Option<u32>,
+    /// True when this block is a domestic cup (FA Cup, Copa del Rey,
+    /// …). Cups don't have an awards page under `/leagues/<slug>/awards`
+    /// — they route through `/cups/<slug>`. Templates use this to pick
+    /// the right link target and to apply silverware-tinted styling.
+    pub is_cup: bool,
+    /// Precomputed link target for the league/cup header + per-card
+    /// chip. Empty when the block points at the global Continental /
+    /// World POY bucket (no per-league destination).
+    pub awards_url: String,
     /// Country card shown to the left of the league name when the
     /// block is a real league (not the global / Continental bucket).
     /// `code` is the lowercased ISO code used by the flag sprite.
@@ -71,10 +85,12 @@ pub struct LeagueBlock {
     pub weekly_cards: Vec<AwardCard>,
     pub monthly_cards: Vec<AwardCard>,
     pub season_cards: Vec<AwardCard>,
+    pub silverware_cards: Vec<AwardCard>,
     pub global_cards: Vec<AwardCard>,
     pub has_weekly: bool,
     pub has_monthly: bool,
     pub has_season: bool,
+    pub has_silverware: bool,
     pub has_global: bool,
     pub total: u32,
 }
@@ -244,11 +260,14 @@ pub async fn player_awards_action(
 
 fn build_summary(counts: &PlayerAwardsCount, i18n: &I18n) -> SummaryBlock {
     let totals = LeagueAwardTotals::from_lifetime(counts);
-    let (weekly, monthly, season, global) = build_cards(&totals, i18n);
+    let (weekly, monthly, season, silverware, global) = build_cards(&totals, i18n);
     let sum = |cards: &[AwardCard]| -> u32 { cards.iter().map(|c| c.count as u32).sum() };
     let weekly_total = sum(&weekly);
     let monthly_total = sum(&monthly);
-    let season_total = sum(&season);
+    // Silverware totals fold into the season tile on the summary hero —
+    // a trophy medal is a season-scoped honour. The per-league block
+    // below still renders silverware in its own group.
+    let season_total = sum(&season) + sum(&silverware);
     let global_total = sum(&global);
     SummaryBlock {
         has_weekly: weekly_total > 0,
@@ -285,6 +304,7 @@ struct LeagueAwardTotals {
     league_golden_glove: u16,
     continental_player_of_year: u16,
     world_player_of_year: u16,
+    domestic_cup_winner: u16,
 }
 
 impl LeagueAwardTotals {
@@ -310,6 +330,7 @@ impl LeagueAwardTotals {
             league_golden_glove: counts.league_golden_glove,
             continental_player_of_year: counts.continental_player_of_year,
             world_player_of_year: counts.world_player_of_year,
+            domestic_cup_winner: counts.domestic_cup_winner,
         }
     }
 
@@ -333,6 +354,7 @@ impl LeagueAwardTotals {
             K::LeagueGoldenGlove => &mut self.league_golden_glove,
             K::ContinentalPlayerOfYear => &mut self.continental_player_of_year,
             K::WorldPlayerOfYear => &mut self.world_player_of_year,
+            K::DomesticCupWinner => &mut self.domestic_cup_winner,
         };
         *slot = slot.saturating_add(1);
     }
@@ -355,6 +377,7 @@ impl LeagueAwardTotals {
             + self.league_golden_glove as u32
             + self.continental_player_of_year as u32
             + self.world_player_of_year as u32
+            + self.domestic_cup_winner as u32
     }
 }
 
@@ -362,6 +385,7 @@ fn build_cards(
     totals: &LeagueAwardTotals,
     i18n: &I18n,
 ) -> (
+    Vec<AwardCard>,
     Vec<AwardCard>,
     Vec<AwardCard>,
     Vec<AwardCard>,
@@ -476,6 +500,16 @@ fn build_cards(
         ),
     ];
 
+    // Silverware — team-level trophy medals. Distinct from individual
+    // season awards (top scorer / POS / etc.) so the page can render
+    // them under their own header with a trophy tint.
+    let silverware = vec![card(
+        "domestic_cup_winner",
+        totals.domestic_cup_winner,
+        "silverware",
+        "fa-trophy",
+    )];
+
     let global = vec![
         card(
             "continental_player_of_the_year",
@@ -491,7 +525,7 @@ fn build_cards(
         ),
     ];
 
-    (weekly, monthly, season, global)
+    (weekly, monthly, season, silverware, global)
 }
 
 /// Group the lifetime timeline into per-league blocks, sorted by
@@ -532,53 +566,76 @@ fn build_league_blocks(
     let mut blocks: Vec<LeagueBlock> = Vec::with_capacity(keys.len());
     for league_id in keys.iter() {
         let totals = totals_by_league.get(league_id).expect("populated above");
-        let (weekly, monthly, season, global) = build_cards(totals, i18n);
+        let (weekly, monthly, season, silverware, global) = build_cards(totals, i18n);
         let has_weekly = weekly.iter().any(|c| c.count > 0);
         let has_monthly = monthly.iter().any(|c| c.count > 0);
         let has_season = season.iter().any(|c| c.count > 0);
+        let has_silverware = silverware.iter().any(|c| c.count > 0);
         let has_global = global.iter().any(|c| c.count > 0);
 
-        let (league_name, league_slug, country_code, country_name, country_slug) = match league_id {
-            Some(id) => {
-                let league = data.league(*id);
-                let (name, slug, country_id) = league
-                    .map(|l| (l.name.clone(), l.slug.clone(), Some(l.country_id)))
-                    .unwrap_or_else(|| {
-                        (
-                            i18n.t("awards_unknown_league").to_string(),
-                            String::new(),
-                            None,
-                        )
-                    });
-                let country = country_id.and_then(|cid| data.country(cid));
-                let (code, cname, cslug) = country
-                    .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
-                    .unwrap_or_default();
-                (name, slug, code, cname, cslug)
-            }
-            None => (
-                i18n.t("awards_section_global").to_string(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
+        // Resolve league + cup flag + country card. `data.league(id)`
+        // already covers both standings leagues and the country's
+        // domestic cup (which lives outside the league collection), so
+        // `is_cup` reflects whichever side resolved the id.
+        let (league_name, league_slug, is_cup, country_code, country_name, country_slug) =
+            match league_id {
+                Some(id) => {
+                    let league = data.league(*id);
+                    let (name, slug, is_cup_flag, country_id) = league
+                        .map(|l| (l.name.clone(), l.slug.clone(), l.is_cup, Some(l.country_id)))
+                        .unwrap_or_else(|| {
+                            (
+                                i18n.t("awards_unknown_league").to_string(),
+                                String::new(),
+                                false,
+                                None,
+                            )
+                        });
+                    let country = country_id.and_then(|cid| data.country(cid));
+                    let (code, cname, cslug) = country
+                        .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
+                        .unwrap_or_default();
+                    (name, slug, is_cup_flag, code, cname, cslug)
+                }
+                None => (
+                    i18n.t("awards_section_global").to_string(),
+                    String::new(),
+                    false,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
+            };
+
+        // Domestic cups don't have an awards subpage — link to the
+        // bracket route instead. Leagues keep their existing awards
+        // tab. Global bucket (empty slug) renders without a link.
+        let awards_url = if league_slug.is_empty() {
+            String::new()
+        } else if is_cup {
+            format!("/cups/{}", league_slug)
+        } else {
+            format!("/leagues/{}/awards", league_slug)
         };
 
         blocks.push(LeagueBlock {
             league_name,
             league_slug,
             league_id: *league_id,
+            is_cup,
+            awards_url,
             country_code,
             country_name,
             country_slug,
             weekly_cards: weekly,
             monthly_cards: monthly,
             season_cards: season,
+            silverware_cards: silverware,
             global_cards: global,
             has_weekly,
             has_monthly,
             has_season,
+            has_silverware,
             has_global,
             total: totals.total(),
         });
@@ -704,4 +761,44 @@ fn get_neighbor_teams(
             .map(|(_, name, slug)| (name, slug))
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every locale shipped under `assets/i18n` must carry the
+    /// `domestic_cup_winner` translation key. Without this, the player
+    /// awards page would surface the raw key as a fallback for any
+    /// non-English locale — visibly broken UI for cup-winning squads.
+    #[test]
+    fn every_locale_has_domestic_cup_winner_key() {
+        // Each locale's body is included at compile time so the check
+        // travels with the binary. Loading via the runtime I18nManager
+        // would tie the test to filesystem layout under CI; a static
+        // include is both faster and more deterministic.
+        let locales: &[(&str, &str)] = &[
+            ("en", include_str!("../../../assets/i18n/en.json")),
+            ("de", include_str!("../../../assets/i18n/de.json")),
+            ("es", include_str!("../../../assets/i18n/es.json")),
+            ("fr", include_str!("../../../assets/i18n/fr.json")),
+            ("ja", include_str!("../../../assets/i18n/ja.json")),
+            ("pt", include_str!("../../../assets/i18n/pt.json")),
+            ("ru", include_str!("../../../assets/i18n/ru.json")),
+            ("tr", include_str!("../../../assets/i18n/tr.json")),
+            ("zh", include_str!("../../../assets/i18n/zh.json")),
+        ];
+        for (lang, body) in locales {
+            // Match the key with its JSON quoting so we don't false-
+            // positive on a substring like `domestic_cup_winner_medal`.
+            assert!(
+                body.contains("\"domestic_cup_winner\""),
+                "locale {} is missing the `domestic_cup_winner` key",
+                lang
+            );
+            assert!(
+                body.contains("\"awards_section_silverware\""),
+                "locale {} is missing the `awards_section_silverware` key",
+                lang
+            );
+        }
+    }
 }

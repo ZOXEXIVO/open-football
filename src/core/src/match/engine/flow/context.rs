@@ -1,6 +1,8 @@
 use crate::MatchTacticType;
 use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
 use crate::r#match::engine::environment::MatchEnvironment;
+use crate::r#match::engine::flow::rng::MatchRng;
+use crate::r#match::engine::player::events::players::FoulSeverity;
 use crate::r#match::engine::psychology::PsychologyState;
 use crate::r#match::engine::referee::RefereeProfile;
 use crate::r#match::engine::result::{
@@ -8,6 +10,51 @@ use crate::r#match::engine::result::{
 };
 use crate::r#match::engine::set_pieces::SetPieceHistory;
 use crate::r#match::rules::MatchRules;
+use chrono::{NaiveDate, Utc};
+
+/// Full match-construction inputs. Replaces the loose
+/// `play_seeded(.., seed)` signature for callers that need to inject
+/// weather, referee profile, or fixture date alongside the seed —
+/// notably the calibration harness and any replay/test path that wants
+/// a real rainy / strict-ref / cup-final match instead of the
+/// engine's neutral defaults.
+///
+/// `play` and `play_seeded` are kept as compatibility wrappers around
+/// `play_with_config` so existing call sites don't move.
+#[derive(Debug, Clone)]
+pub struct MatchEngineConfig {
+    pub seed: Option<u64>,
+    pub today: NaiveDate,
+    pub environment: MatchEnvironment,
+    pub referee: RefereeProfile,
+    pub is_friendly: bool,
+    pub is_knockout: bool,
+    pub match_recordings: bool,
+}
+
+impl Default for MatchEngineConfig {
+    fn default() -> Self {
+        MatchEngineConfig {
+            seed: None,
+            today: Utc::now().naive_utc().date(),
+            environment: MatchEnvironment::default(),
+            referee: RefereeProfile::default(),
+            is_friendly: false,
+            is_knockout: false,
+            match_recordings: false,
+        }
+    }
+}
+
+impl MatchEngineConfig {
+    /// Convenience: build a seeded config with everything else default.
+    pub fn seeded(seed: u64) -> Self {
+        MatchEngineConfig {
+            seed: Some(seed),
+            ..Default::default()
+        }
+    }
+}
 use crate::r#match::{
     GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach,
     MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score,
@@ -146,6 +193,62 @@ pub struct MatchContext {
     /// True until the first compute. Marked true again whenever the
     /// active roster changes (sub / red card / formation swap).
     pub skill_aggregates_dirty: bool,
+
+    /// Match-owned seedable RNG. Engine decision paths draw from this
+    /// (substitution timing, shootout, foul cards, corner contest,
+    /// passing / shooting / save / first-touch / tackle rolls, every
+    /// player state) so a fixed seed produces a fixed sequence of
+    /// rolls. `from_entropy` remains the production default; only the
+    /// `MatchEngineConfig::seed = Some(_)` path pins the stream.
+    /// Match-critical code should prefer `context.rng.unit_f32()` over
+    /// `rand::random::<f32>()`.
+    pub rng: MatchRng,
+
+    /// Deterministic "today" used by substitution-eligibility checks
+    /// (youth-protection branch in `process_substitutions`). Replaces
+    /// the previous `Utc::now().naive_utc().date()` call inside the
+    /// engine's hot loop. Sourced from `MatchEngineConfig::today`;
+    /// defaults to the current wall-clock day for paths that don't
+    /// pass a config.
+    pub today: NaiveDate,
+
+    /// Active "advantage" — the referee has spotted a foul but elected
+    /// to let play continue because the fouled team is in a good
+    /// position. Foul stats / card decisions are deferred until either:
+    ///   * the advantage materialises (a shot, deep entry, sustained
+    ///     possession past the window) → card recorded with no whistle,
+    ///   * possession is lost inside the window → whistle goes back,
+    ///     restart awarded, card decision applies at the moment of
+    ///     the original foul,
+    ///   * the window expires without either → play continues, card
+    ///     decision still applies (delayed booking).
+    /// `None` whenever no advantage is in play.
+    pub pending_advantage: Option<PendingAdvantage>,
+}
+
+/// Snapshot of a foul that the referee elected to let play continue
+/// on. The card decision is locked in at the time the foul occurred
+/// so a tail-of-window booking matches what the ref saw, not the
+/// state at expiry.
+#[derive(Debug, Clone, Copy)]
+pub struct PendingAdvantage {
+    pub fouler_id: u32,
+    /// Tick at which the foul happened — `expire_tick - this` gives
+    /// elapsed window length.
+    pub start_tick: u64,
+    /// Tick at which the advantage window closes. If possession is
+    /// lost before this, the foul is whistled retroactively. After
+    /// this, play continues even on possession loss.
+    pub expire_tick: u64,
+    /// The fouled team (team that should KEEP possession for the
+    /// advantage to materialise).
+    pub fouled_team_id: u32,
+    /// Severity of the original foul — drives the card decision.
+    pub severity: FoulSeverity,
+    /// Card decision pre-computed at foul time so referee bias /
+    /// match temperature at the moment of the foul govern the booking.
+    pub yellow_prob: f32,
+    pub red_prob: f32,
 }
 
 impl MatchContext {
@@ -164,6 +267,29 @@ impl MatchContext {
             is_knockout,
             MatchRules::resolve_default(is_friendly, is_knockout),
         )
+    }
+
+    /// Build a context with an explicit RNG seed. Two matches built
+    /// with the same seed will emit identical sequences from
+    /// `context.rng` — the foundation for deterministic replay.
+    pub fn new_with_seed(
+        field: &MatchField,
+        players: MatchPlayerCollection,
+        score: Score,
+        is_friendly: bool,
+        is_knockout: bool,
+        seed: u64,
+    ) -> Self {
+        let mut ctx = Self::new_with_rules(
+            field,
+            players,
+            score,
+            is_friendly,
+            is_knockout,
+            MatchRules::resolve_default(is_friendly, is_knockout),
+        );
+        ctx.rng = MatchRng::from_seed(seed);
+        ctx
     }
 
     pub fn new_with_rules(
@@ -220,7 +346,42 @@ impl MatchContext {
             away_skill_aggregates: TeamSkillAggregates::neutral(),
             last_skill_aggregate_tick: 0,
             skill_aggregates_dirty: true,
+            rng: MatchRng::from_entropy(),
+            today: Utc::now().naive_utc().date(),
+            pending_advantage: None,
         }
+    }
+
+    /// Build a context from a `MatchEngineConfig`. Seed, fixture date,
+    /// environment, referee profile, is_friendly, and is_knockout are
+    /// all sourced from the config rather than patched on after
+    /// construction — so a rainy / strict-ref / replayable test no
+    /// longer has to construct a context, mutate fields, and hope
+    /// nothing read them in between.
+    pub fn new_with_config(
+        field: &MatchField,
+        players: MatchPlayerCollection,
+        score: Score,
+        config: &MatchEngineConfig,
+    ) -> Self {
+        let mut ctx = Self::new_with_rules(
+            field,
+            players,
+            score,
+            config.is_friendly,
+            config.is_knockout,
+            MatchRules::resolve_default(config.is_friendly, config.is_knockout),
+        );
+        ctx.rng = match config.seed {
+            Some(s) => MatchRng::from_seed(s),
+            None => MatchRng::from_entropy(),
+        };
+        ctx.today = config.today;
+        ctx.environment = config.environment;
+        ctx.environment.clamp_inputs();
+        ctx.referee = config.referee;
+        ctx.referee.clamp_inputs();
+        ctx
     }
 
     /// Mark the per-team skill composite cache as stale so the next

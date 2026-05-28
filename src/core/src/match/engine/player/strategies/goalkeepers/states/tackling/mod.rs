@@ -6,7 +6,6 @@ use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use rand::RngExt;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
@@ -103,7 +102,7 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
 impl GoalkeeperTacklingState {
     /// Attempts a tackle and returns whether it was successful and if a foul was committed.
     fn attempt_tackle(&self, ctx: &StateProcessingContext) -> (bool, bool, FoulSeverity) {
-        let mut rng = rand::rng();
+        let rng = &ctx.context.rng;
 
         let tackling_skill = ctx.player.skills.technical.tackling as f32 / 20.0;
         let aggression = ctx.player.skills.mental.aggression as f32 / 20.0;

@@ -104,7 +104,7 @@ impl GoalkeeperDivingState {
             (0.05 + prof.poor_skill_penalty * 0.34 + (1.0 - prof.condition_mult) * 0.16
                 - prof.positioning * 0.10)
                 .clamp(0.0, 0.55);
-        let random_angle = (rand::random::<f32>() - 0.5) * direction_error;
+        let random_angle = (ctx.context.rng.unit_f32() - 0.5) * direction_error;
         dive_direction = Rotation3::new(Vector3::z() * random_angle) * dive_direction;
 
         dive_direction
@@ -165,7 +165,7 @@ impl GoalkeeperDivingState {
             .clamp(0.0, 1.0);
 
         let catch_prob = prof.catch_probability(catch_difficulty);
-        rand::random::<f32>() < catch_prob
+        ctx.context.rng.unit_f32() < catch_prob
     }
 
     fn is_ball_nearby(&self, ctx: &StateProcessingContext) -> bool {

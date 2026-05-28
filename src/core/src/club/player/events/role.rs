@@ -243,7 +243,12 @@ impl Player {
         let pr = self.attributes.pressure;
         match event {
             // Career silverware — ambition + age (veterans treasure it).
-            TrophyWon => scaling::ambition_amplifier(a) * scaling::veteran_amplifier(age),
+            // Domestic cups share the silverware shape so a double-winning
+            // veteran feels both the league title AND the cup medal,
+            // each scaled by the same ambition + age curve.
+            TrophyWon | DomesticCupWon => {
+                scaling::ambition_amplifier(a) * scaling::veteran_amplifier(age)
+            }
             // Final-day defeat — pressure / big-match sensitivity.
             CupFinalDefeat => scaling::pressure_amplifier(im, pr),
             // Promotion is a club moment — loyalty plus mild ambition lift.

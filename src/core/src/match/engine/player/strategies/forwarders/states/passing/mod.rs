@@ -525,7 +525,7 @@ impl ForwardPassingState {
         let agi_p = SkillCurve::new(ctx.player.skills.physical.agility, 10.0, 0.6).probability();
         // Weighted blend matches old `drib*0.7 + agi*0.3`.
         let combined = drib_p * 0.7 + agi_p * 0.3;
-        rand::random::<f32>() < combined
+        ctx.context.rng.unit_f32() < combined
     }
 
     /// Determine if player should adjust position to find better passing angles

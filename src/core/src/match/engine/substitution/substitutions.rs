@@ -353,13 +353,21 @@ impl Substitutions {
             // 0.01 for a jaded, tired 35-year-old late in the match. This
             // delivers an injury roughly every 15-20 matches at the team
             // level, which matches real-world "one injury per match" noise.
-            let base = 0.0005
+            let mut base = 0.0005
                 + jaded * 0.004
                 + (1.0 - cond) * 0.003
                 + (1.0 - nat_fit) * 0.002
                 + minutes_factor * 0.001;
+            // Environment shifts injury baseline — heavy rain, muddy pitch,
+            // cold pitch all raise risk. The env modifier is clamped 0..0.1
+            // and acts as an additive bump on top of the per-player rate.
+            base += context
+                .environment
+                .modifiers()
+                .injury_risk
+                .clamp(0.0, 0.1);
 
-            if rand::random::<f32>() < base {
+            if context.rng.unit_f32() < base {
                 victims.push(player.id);
             }
         }

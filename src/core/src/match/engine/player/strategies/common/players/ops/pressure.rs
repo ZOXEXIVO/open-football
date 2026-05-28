@@ -71,7 +71,7 @@ impl<'p> PressureOperationsImpl<'p> {
             .min_by(|a, b| {
                 let dist_a = a.distance(self.ctx);
                 let dist_b = b.distance(self.ctx);
-                dist_a.partial_cmp(&dist_b).unwrap()
+                dist_a.total_cmp(&dist_b)
             })
     }
 

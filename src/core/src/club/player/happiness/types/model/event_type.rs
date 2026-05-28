@@ -111,8 +111,18 @@ pub enum HappinessEventType {
     DerbyDefeat,
 
     // ── Team season events ──────────────────────────────────────
-    /// Team won a trophy (league, cup, continental). Major career moment.
+    /// Team won a trophy (league, continental). Major career moment.
+    /// Note: a domestic cup win fires the dedicated [`DomesticCupWon`]
+    /// variant so its cooldown is independent — a double-winning side
+    /// must produce both events on the same player, not collapse one
+    /// into the other.
     TrophyWon,
+    /// Team won the country's main knockout cup (FA Cup, Copa del Rey,
+    /// Coppa Italia, …). Distinct from `TrophyWon` so league + cup in
+    /// the same season can both register on a player — the league
+    /// title doesn't suppress the cup medal via shared cooldown.
+    /// Magnitude lives in [`MoraleEventCatalog::domestic_cup_won`].
+    DomesticCupWon,
     /// Team lost a cup final. The flip side of TrophyWon — tournament
     /// runs that ended in heartbreak weigh on a squad.
     CupFinalDefeat,

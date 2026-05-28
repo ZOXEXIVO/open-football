@@ -357,6 +357,15 @@ impl Country {
                 league_results_after.push(lr);
             }
         }
+
+        // Phase 1b.1: domestic cup winner fan-out. Runs strictly AFTER
+        // every LeagueResult has been through `process_local` for the
+        // day — that's what writes the final-day cup appearance rows on
+        // each player's `cup_statistics_by_competition`, and eligibility
+        // hinges on those. Idempotent across ticks via the cup's own
+        // `award_emitted_*` markers, so a no-op on every non-final day.
+        CountryResult::process_domestic_cup_winner_awards(self, current_date);
+
         // Phase 1c (NEW PARALLEL PATH): drive each ClubResult's
         // sub-processors (finance, board, teams' players/staffs/training/
         // behaviour, academy) here, inside the parallel
