@@ -9827,6 +9827,113 @@ a.fm-award-card:hover {
     text-transform: uppercase;
 }
 
+/* ── Domestic cup — History tab ─────────────────────────────────────
+   Roll of honour of past champions. Shares the awards hero (gold rail,
+   trophy mark, stat tiles) but only carries two tiles, so the stat grid
+   is constrained to two columns rather than the awards page's four. */
+.fm-cup-history-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: 360px;
+}
+
+.fm-cup-roll {
+    display: flex;
+    flex-direction: column;
+}
+
+.fm-cup-roll-row {
+    display: grid;
+    grid-template-columns: 92px 1fr 1fr;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 14px;
+}
+
+.fm-cup-roll-row + .fm-cup-roll-row {
+    border-top: 1px solid #1f2a36;
+}
+
+.fm-cup-roll-row:hover {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+.fm-cup-roll-season {
+    font-size: 13px;
+    font-weight: 700;
+    color: #8a7a52;
+    letter-spacing: 0.4px;
+}
+
+.fm-cup-roll-champion {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #f1e4c4;
+    min-width: 0;
+}
+
+.fm-cup-roll-crown {
+    color: #e6b95a;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.fm-cup-roll-champion a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(241, 228, 196, 0.3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fm-cup-roll-champion a:hover {
+    color: #ffffff;
+}
+
+.fm-cup-roll-runner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #a8b5be;
+    min-width: 0;
+}
+
+.fm-cup-roll-runner-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #5a6f80;
+    flex-shrink: 0;
+}
+
+.fm-cup-roll-runner a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(168, 181, 190, 0.25);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fm-cup-roll-runner a:hover {
+    color: #d8dde2;
+}
+
+@media (max-width: 640px) {
+    .fm-cup-roll-row {
+        grid-template-columns: 64px 1fr;
+        row-gap: 4px;
+    }
+    .fm-cup-roll-runner {
+        grid-column: 2;
+    }
+}
+
 /* ── Awards past-12-months chart ────────────────────────────────────
    CSS-only bar chart: each column is a percentage-height fill inside
    a fixed-height track. No JS — the server precomputes `height_pct`

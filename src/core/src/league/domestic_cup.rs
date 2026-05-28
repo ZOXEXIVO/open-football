@@ -24,6 +24,22 @@ use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use log::debug;
 use std::collections::HashSet;
 
+/// One completed edition's result, captured at the instant the next
+/// season's bracket is drawn (while the just-finished bracket is still
+/// intact). Powers the cup's History tab — a roll of honour of past
+/// champions. We store team ids, not names, so a club that is later
+/// renamed still resolves correctly when the page is rendered.
+#[derive(Debug, Clone)]
+pub struct CupHistoryEntry {
+    /// Calendar year the winning edition's round one was drawn in —
+    /// the same anchor as [`DomesticCup::season_start_year`].
+    pub season_start_year: i32,
+    pub champion_team_id: u32,
+    /// The beaten finalist. `None` when the final's pairing couldn't be
+    /// resolved (e.g. the edition was decided without a one-tie final).
+    pub runner_up_team_id: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct DomesticCup {
     /// The cup is run through a `League` flagged `is_cup = true`. Reusing
@@ -48,6 +64,11 @@ pub struct DomesticCup {
     /// Calendar date the winner award fan-out actually ran. Captured for
     /// debugging and for the unit tests that probe duplicate prevention.
     pub award_emitted_on: Option<NaiveDate>,
+    /// Completed editions, oldest first. Appended at each season's
+    /// regeneration when the outgoing bracket produced a champion. Empty
+    /// for a fresh world until the first edition is decided; powers the
+    /// cup History tab.
+    pub past_champions: Vec<CupHistoryEntry>,
 }
 
 impl DomesticCup {
@@ -58,6 +79,7 @@ impl DomesticCup {
             award_emitted_season_start_year: None,
             award_emitted_winner_team_id: None,
             award_emitted_on: None,
+            past_champions: Vec::new(),
         }
     }
 
@@ -168,10 +190,32 @@ impl DomesticCup {
             .collect()
     }
 
+    /// Append the outgoing edition to `past_champions` if its bracket
+    /// resolved to a champion. The runner-up is the loser of the final
+    /// pairing. Called from `regenerate_bracket` while the finished
+    /// bracket (and its `season_start_year`) still describes that edition.
+    fn record_history(&mut self, clubs: &[Club]) {
+        let Some(champion) = self.champion(clubs) else {
+            return;
+        };
+        let runner_up = self
+            .champion_final_pairing(clubs)
+            .map(|(home, away)| if home == champion { away } else { home });
+        self.past_champions.push(CupHistoryEntry {
+            season_start_year: self.season_start_year,
+            champion_team_id: champion,
+            runner_up_team_id: runner_up,
+        });
+    }
+
     /// Wipe the old bracket and draw round one from the current senior
     /// field. Called at season start (and on the very first tick). With
     /// fewer than two participants the cup exists but stages no fixtures.
     fn regenerate_bracket(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {
+        // Archive the outgoing edition's winner before the bracket that
+        // proves it is discarded. No-op on the very first draw — there is
+        // no prior bracket, so `champion` resolves to `None`.
+        self.record_history(clubs);
         self.league.schedule = Schedule::new();
         self.league.matches = MatchStorage::new();
         self.season_start_year = ctx.simulation.date.year();
@@ -375,7 +419,9 @@ mod tests {
     use crate::academy::ClubAcademy;
     use crate::context::{GlobalContext, SimulationContext};
     use crate::league::schedule::cup;
-    use crate::league::{DayMonthPeriod, League, LeagueSettings};
+    use crate::league::{
+        DayMonthPeriod, League, LeagueSettings, Schedule, ScheduleItem, ScheduleTour,
+    };
     use crate::shared::Location;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PlayerCollection,
@@ -560,5 +606,60 @@ mod tests {
                 "fixtures keyed to the cup league"
             );
         }
+    }
+
+    #[test]
+    fn record_history_appends_champion_and_runner_up() {
+        use crate::r#match::Score;
+
+        // Two clubs, one Main team each. A resolved single-tie final is
+        // the simplest decided bracket: the home side wins, so it is the
+        // champion and the away side the runner-up.
+        let clubs: Vec<Club> = vec![
+            club(1, vec![team(10, 1, TeamType::Main, 6000)]),
+            club(2, vec![team(20, 2, TeamType::Main, 5000)]),
+        ];
+
+        let mut cup = make_cup();
+        cup.season_start_year = 2026;
+
+        let date = NaiveDate::from_ymd_opt(2027, 5, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let mut tour = ScheduleTour::new(1, 1);
+        let item = ScheduleItem::new(cup.league.id, cup.league.slug.clone(), 10, 20, date, None);
+        let item_id = item.id.clone();
+        tour.items.push(item);
+        cup.league.schedule.tours.push(tour);
+
+        // Team 10 beats team 20 2–1.
+        let score = Score::new(10, 20);
+        score.increment_home_goals();
+        score.increment_home_goals();
+        score.increment_away_goals();
+        cup.league.schedule.update_match_result(&item_id, &score);
+
+        cup.record_history(&clubs);
+
+        assert_eq!(cup.past_champions.len(), 1, "the decided final is recorded");
+        let entry = &cup.past_champions[0];
+        assert_eq!(entry.champion_team_id, 10, "home winner is the champion");
+        assert_eq!(entry.runner_up_team_id, Some(20), "away side is runner-up");
+        assert_eq!(
+            entry.season_start_year, 2026,
+            "edition keyed to its anchored start year"
+        );
+
+        // An unresolved (here: emptied) bracket has no champion, so a
+        // second pass records nothing — guards against double-counting a
+        // season that never reached a final.
+        cup.league.schedule = Schedule::new();
+        cup.record_history(&clubs);
+        assert_eq!(
+            cup.past_champions.len(),
+            1,
+            "no champion resolved → no new history entry"
+        );
     }
 }

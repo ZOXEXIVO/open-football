@@ -1,0 +1,71 @@
+{% extends "layout.html" %}
+
+{% block html_title %}{{ title }} - {{ i18n.t("history") }} | {{ i18n.t("site_name") }}{% endblock %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab{% if active_tab == "bracket" %} active{% endif %}" href="/{{ lang }}/cups/{{ cup_slug }}">{{ i18n.t("cup_bracket") }}</a>
+    <a class="fm-tab{% if active_tab == "history" %} active{% endif %}" href="/{{ lang }}/cups/{{ cup_slug }}/history">{{ i18n.t("history") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    {% if rows.is_empty() %}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("history") }}</h3>
+        </div>
+        <div class="fm-awards-empty">
+            <div class="fm-awards-empty-mark"><i class="fa fa-trophy"></i></div>
+            <div class="fm-awards-empty-text">{{ i18n.t("cup_history_empty") }}</div>
+        </div>
+    </section>
+    {% else %}
+    <section class="fm-awards-hero">
+        <div class="fm-awards-hero-banner">
+            <div class="fm-awards-hero-mark"><i class="fa fa-trophy"></i></div>
+            <div class="fm-awards-hero-text">
+                <div class="fm-awards-hero-total">{{ editions }}</div>
+                <div class="fm-awards-hero-label">{{ i18n.t("cup_history_title") }}</div>
+            </div>
+        </div>
+        <div class="fm-awards-hero-stats fm-cup-history-stats">
+            <div class="fm-awards-hero-stat fm-awards-hero-stat-season">
+                <div class="fm-awards-hero-stat-icon"><i class="fa fa-trophy"></i></div>
+                <div class="fm-awards-hero-stat-val">{{ editions }}</div>
+                <div class="fm-awards-hero-stat-label">{{ i18n.t("cup_history_editions") }}</div>
+            </div>
+            <div class="fm-awards-hero-stat fm-awards-hero-stat-global">
+                <div class="fm-awards-hero-stat-icon"><i class="fa fa-shield-halved"></i></div>
+                <div class="fm-awards-hero-stat-val">{{ distinct_winners }}</div>
+                <div class="fm-awards-hero-stat-label">{{ i18n.t("cup_history_winners") }}</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="fm-panel fm-awards-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("cup_history_roll_of_honour") }}</h3>
+        </div>
+        <div class="fm-cup-roll">
+            {% for row in rows %}
+            <div class="fm-cup-roll-row">
+                <div class="fm-cup-roll-season">{{ row.season_label }}</div>
+                <div class="fm-cup-roll-champion">
+                    <span class="fm-cup-roll-crown"><i class="fa fa-crown"></i></span>
+                    <a href="/{{ lang }}/teams/{{ row.champion_slug }}">{{ row.champion_name }}</a>
+                </div>
+                <div class="fm-cup-roll-runner">
+                    {% if row.has_runner_up %}
+                    <span class="fm-cup-roll-runner-label">{{ i18n.t("runner_up") }}</span>
+                    <a href="/{{ lang }}/teams/{{ row.runner_up_slug }}">{{ row.runner_up_name }}</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

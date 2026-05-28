@@ -2522,4 +2522,192 @@ mod tests {
             "2026/27 row missing after a second quiet season."
         );
     }
+
+    // ---------------------------------------------------------------
+    // RENDER-LEVEL repro of the user report: Spartak → Zenit loan that
+    // spans into the next season. The rendered history (player_history_rows)
+    // shows the active Spartak season and the first loan season, but the
+    // MIDDLE season vanishes entirely — no row of any kind. Every season
+    // the player existed at a club must surface a row.
+    // ---------------------------------------------------------------
+    #[test]
+    fn loan_spanning_two_seasons_keeps_middle_season_row() {
+        use crate::club::player::statistics::projection::PlayerStatisticsProjection;
+
+        let spartak = TeamInfo {
+            name: "Spartak Moscow".to_string(),
+            slug: "spartak".to_string(),
+            reputation: 5_000,
+            league_name: "Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+        let zenit = TeamInfo {
+            name: "Zenit".to_string(),
+            slug: "zenit".to_string(),
+            reputation: 5_000,
+            league_name: "Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+
+        let mut player = make_player();
+        player
+            .statistics_history
+            .seed_initial_team(&spartak, make_date(2025, 8, 1), false);
+
+        // Loan to Zenit early in 2025/26 (0 Spartak apps before the move).
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&spartak, &spartak, &zenit, make_date(2025, 8, 10));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            make_date(2027, 5, 31),
+            99,
+            0,
+            100,
+        ));
+
+        // 18 apps at Zenit in 2025/26; season ends while still on loan.
+        player.statistics = make_stats(18, 7);
+        player.on_season_end(Season::new(2025), &zenit, make_date(2026, 8, 1));
+
+        // 2026/27: still on loan at Zenit, 0 further apps; season ends on loan.
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &zenit, make_date(2027, 8, 1));
+
+        // Loan returns to Spartak for 2027/28.
+        player.statistics = make_stats(0, 0);
+        player.on_loan_return(&zenit, &spartak, make_date(2027, 6, 1));
+        player.contract_loan = None;
+
+        // 2027/28 in progress: the active Spartak spell (1 sub app live).
+        let mut live = make_stats(0, 0);
+        live.played_subs = 1;
+        let empty = PlayerStatistics::default();
+        let live_input = crate::PlayerLiveStatsInput {
+            league: &live,
+            friendly: &empty,
+            cups: &[],
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(
+            &player.statistics_history,
+            &live_input,
+            make_date(2027, 10, 1),
+        );
+
+        let years: Vec<u16> = rows.iter().map(|r| r.season.start_year).collect();
+        let desc: Vec<String> = rows
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}:{}{}",
+                    r.season.start_year,
+                    r.team_slug,
+                    if r.is_loan { "(loan)" } else { "" }
+                )
+            })
+            .collect();
+        assert!(
+            years.contains(&2026),
+            "2026/27 must surface at least one row — got {:?}",
+            desc
+        );
+        // The 2026/27 row is the truthful Zenit loan spell (the player
+        // was on loan there all season, 0 apps), not a fabricated
+        // parent-club placeholder.
+        let middle = rows
+            .iter()
+            .find(|r| r.season.start_year == 2026)
+            .expect("2026/27 row");
+        assert_eq!(middle.team_slug, "zenit", "got rows {:?}", desc);
+        assert!(middle.is_loan, "2026/27 must be the Zenit loan, got {:?}", desc);
+        assert_eq!(middle.statistics.played, 0);
+        // And every season in the career span is now present.
+        assert!(years.contains(&2025) && years.contains(&2027), "got {:?}", desc);
+    }
+
+    #[test]
+    fn active_loan_with_games_visible_before_season_end_snapshot() {
+        // Regression for the "where's the Rostov row on 31 Jul?" report:
+        // an in-progress loan that has produced games must render on the
+        // last day of the season (before the season-end snapshot fires on
+        // 1 Aug), whether the loan is still active or has just returned.
+        // `Season::from_date(31 Jul 2028)` is 2027, so the row sits under
+        // 2027/28 in both cases.
+        use crate::club::player::statistics::projection::PlayerStatisticsProjection;
+        let spartak = TeamInfo { name: "Spartak Moscow".to_string(), slug: "spartak".to_string(), reputation: 5000, league_name: "Premier League".to_string(), league_slug: "russian-premier-league".to_string() };
+        let rostov = TeamInfo { name: "Rostov".to_string(), slug: "rostov".to_string(), reputation: 5000, league_name: "Premier League".to_string(), league_slug: "russian-premier-league".to_string() };
+
+        for returned in [false, true] {
+            let mut player = make_player();
+            player
+                .statistics_history
+                .seed_initial_team(&spartak, make_date(2027, 8, 1), false);
+            player.statistics = make_stats(0, 0);
+            player.on_manual_loan(&spartak, &spartak, &rostov, make_date(2027, 9, 9));
+            player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+                500,
+                make_date(2028, 5, 31),
+                99,
+                0,
+                100,
+            ));
+            player.statistics = make_stats(19, 3);
+            if returned {
+                player.on_loan_return(&rostov, &spartak, make_date(2028, 6, 1));
+                player.contract_loan = None;
+            }
+
+            let live = player.statistics.clone();
+            let empty = PlayerStatistics::default();
+            let live_input = crate::PlayerLiveStatsInput {
+                league: &live,
+                friendly: &empty,
+                cups: &[],
+            };
+            let rows = PlayerStatisticsProjection::player_history_rows(
+                &player.statistics_history,
+                &live_input,
+                make_date(2028, 7, 31),
+            );
+            let rostov_row = rows
+                .iter()
+                .find(|r| r.team_slug == "rostov")
+                .unwrap_or_else(|| panic!("Rostov loan must be visible on 31 Jul (returned={returned})"));
+            assert_eq!(rostov_row.season.start_year, 2027);
+            assert!(rostov_row.is_loan);
+            assert_eq!(rostov_row.statistics.played, 19);
+        }
+    }
+
+    #[test]
+    fn zero_game_loan_row_survives_into_next_season() {
+        // User rule: a loan the player went on but never featured in must
+        // still show after the season freezes — it doesn't vanish just
+        // because apps are 0. Loan to Zenit in 2026/27 with 0 games, then
+        // 2027/28 at Spartak: the 2026/27 Zenit loan row must remain.
+        use crate::club::player::statistics::projection::PlayerStatisticsProjection;
+        let spartak = TeamInfo { name: "Spartak Moscow".to_string(), slug: "spartak".to_string(), reputation: 5000, league_name: "Premier League".to_string(), league_slug: "rpl".to_string() };
+        let zenit = TeamInfo { name: "Zenit".to_string(), slug: "zenit".to_string(), reputation: 5000, league_name: "Premier League".to_string(), league_slug: "rpl".to_string() };
+
+        let mut player = make_player();
+        player.statistics_history.seed_initial_team(&spartak, make_date(2026, 8, 1), false);
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&spartak, &spartak, &zenit, make_date(2026, 9, 1));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(500, make_date(2027, 5, 31), 99, 0, 100));
+        // 0 games at Zenit; season ends while on loan.
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &zenit, make_date(2027, 8, 1));
+        // Back at Spartak for 2027/28.
+        player.on_loan_return(&zenit, &spartak, make_date(2027, 8, 2));
+        player.contract_loan = None;
+
+        let empty = PlayerStatistics::default();
+        let live_input = crate::PlayerLiveStatsInput { league: &empty, friendly: &empty, cups: &[] };
+        let rows = PlayerStatisticsProjection::player_history_rows(&player.statistics_history, &live_input, make_date(2027, 10, 1));
+        let desc: Vec<String> = rows.iter().map(|r| format!("{}:{}{}", r.season.start_year, r.team_slug, if r.is_loan {"(loan)"} else {""})).collect();
+        assert!(
+            rows.iter().any(|r| r.season.start_year == 2026 && r.team_slug == "zenit" && r.is_loan),
+            "0-game Zenit loan must remain visible after the season ends; got {:?}", desc
+        );
+    }
 }

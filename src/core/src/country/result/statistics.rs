@@ -2,7 +2,7 @@ use super::CountryResult;
 use crate::TeamInfo;
 use crate::league::Season;
 use crate::simulator::SimulatorData;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use log::info;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -22,8 +22,25 @@ impl CountryResult {
     /// already-frozen years.
     pub(super) fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
         let date = data.date.date();
-        let current_season = Season::from_date(date);
-        let target_ended_year = current_season.start_year.saturating_sub(1);
+        // The just-ended season is identified by CALENDAR year, matching
+        // how the schedule defines a season: it regenerates on the
+        // league's configured season-start day with `Season::new(date.year())`
+        // (see `Schedule::simulate`), and this snapshot fires on that same
+        // tick via the `new_season_started` gate. So the season that just
+        // ended started in `date.year() - 1`.
+        //
+        // Deriving the year from `Season::from_date` instead would bake in
+        // a fixed Aug–Jul boundary and mislabel by one full year for any
+        // league whose season does not start in August: when the start day
+        // falls in Jan–Jul (e.g. a spring/summer-start league), the regen
+        // tick's `from_date` still resolves to the season that just ended,
+        // so `target_ended_year` would point one season too early and the
+        // freshly-finished campaign would be frozen under the prior season's
+        // label — the user-reported "loan moved to the previous season"
+        // bug. For August-start leagues the regen tick is in August, where
+        // `date.year()` and `from_date(date).start_year` agree, so this is
+        // a no-op for them.
+        let target_ended_year = (date.year() as u16).saturating_sub(1);
 
         // Decide the inclusive range of season-years to catch up on.
         // The very first call (no watermark) snapshots only
@@ -473,6 +490,45 @@ mod tests {
         let country = make_country(vec![club], vec![]);
         let mut data = make_simulator_data(make_date(2032, 8, 15), country);
         CountryResult::snapshot_player_season_statistics(&mut data, 999);
+    }
+
+    #[test]
+    fn snapshot_ended_season_uses_calendar_year_for_sub_august_start() {
+        // A league whose season starts before August regenerates its
+        // schedule (and flips `new_season_started`) on a Jan–Jul date.
+        // The just-ended season is `date.year() - 1` by the calendar-year
+        // model the schedule uses. Deriving it from `Season::from_date`
+        // would hardcode an Aug–Jul split and freeze the finished season
+        // one year too early — the user-reported "loan moved to the
+        // previous season" bug. Here the snapshot fires on 1 July 2027,
+        // so the ended season must be 2026/27, not 2025/26.
+        let player = make_player(1, 5, 0);
+        let main_team = make_team(
+            10,
+            100,
+            "Zenit",
+            "zenit",
+            TeamType::Main,
+            Some(1),
+            vec![player],
+        );
+        let club = make_club(100, "Zenit", vec![main_team]);
+        let league = make_league(1, "Premier League", "rpl", false);
+        let country = make_country(vec![club], vec![league]);
+
+        let mut data = make_simulator_data(make_date(2027, 7, 1), country);
+        CountryResult::snapshot_player_season_statistics(&mut data, 1);
+
+        let country = data.country(1).unwrap();
+        assert_eq!(country.last_snapshotted_season_year, Some(2026));
+        let entry = &country.clubs[0].teams.teams[0].players.players[0]
+            .statistics_history
+            .items[0];
+        assert_eq!(
+            entry.season.start_year, 2026,
+            "season starting before August must be frozen under its calendar \
+             start year, not one season earlier"
+        );
     }
 
     #[test]

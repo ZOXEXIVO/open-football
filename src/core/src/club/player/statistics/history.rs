@@ -387,11 +387,16 @@ impl PlayerStatisticsHistory {
     /// nothing.
     ///
     /// When the destination is a senior team the player has already had a
-    /// spell at this season (e.g. Main → U21 → Main bouncing), we
-    /// reactivate the existing departed entry instead of creating a fresh
-    /// row. Without this, the same team accumulates one entry per
-    /// promotion cycle and the player history shows duplicate rows for
-    /// the same season.
+    /// spell at this season (e.g. Main → U21 → Main bouncing), we open a
+    /// FRESH active spell rather than reactivating the earlier departed
+    /// entry. Reactivation used to fold the earlier spell's stored stats
+    /// back onto the now-active entry, which forced the projection to
+    /// merge a snapshot with the live counter (double-count risk).
+    /// Keeping each spell as its own entry lets the projection use the
+    /// live counter as the authoritative tally for the active spell and
+    /// group the departed spells back in by (season, team, league,
+    /// is_loan) — so the season still shows a single, correctly-summed
+    /// row without any snapshot/live merge.
     ///
     /// Pass-through suppression: if the player never actually played for a
     /// senior `from` team (0 games) before moving on to another senior
@@ -434,22 +439,19 @@ impl PlayerStatisticsHistory {
             }
         }
         if to_senior {
-            // Reactivate an existing senior entry for this team if one is
-            // already present (departed or active) — otherwise push a fresh
-            // row. Reactivation prevents the duplicate-row pattern when a
-            // player bounces between Main and a non-senior squad inside the
-            // same season.
-            if let Some(existing) = self
+            // Open a fresh active spell for the destination instead of
+            // reactivating an earlier departed spell at the same club.
+            // Each spell stays its own entry so the projection never has
+            // to merge a stored snapshot with the live counter; the
+            // (season, team, league, is_loan) grouping collapses them
+            // back into one row at render and at season-end drain. Only
+            // skip the push when an active entry for this team already
+            // exists (defensive — the normal flow has none).
+            let has_active = self
                 .current
-                .iter_mut()
-                .rev()
-                .find(|e| e.team_slug == to.slug && !e.is_loan)
-            {
-                existing.departed_date = None;
-                if existing.transfer_fee.is_none() {
-                    existing.transfer_fee = carried_fee;
-                }
-            } else {
+                .iter()
+                .any(|e| e.team_slug == to.slug && !e.is_loan && e.departed_date.is_none());
+            if !has_active {
                 self.push_new_entry(to, PlayerStatistics::default(), false, carried_fee, date);
             }
         }
@@ -1869,30 +1871,41 @@ mod club_career_apps_tests {
             d(2026, 2, 1),
         );
 
-        // Exactly one ACTIVE Main entry survives in `current` — the
-        // earlier one was reactivated, no duplicate was pushed.
+        // The bounce no longer reactivates the old entry: the first
+        // Main spell stays a DEPARTED entry holding its 10 apps, and a
+        // FRESH active Main entry (snapshot 0) is opened on return. The
+        // projection groups them back into one row and the season-end
+        // drain merges them — so each spell's stats stay attributable
+        // and the active spell can read the live counter authoritatively
+        // without merging a snapshot.
         let main_entries: Vec<&CurrentSeasonEntry> = hist
             .current
             .iter()
             .filter(|e| e.team_slug == "napoli" && !e.is_loan)
             .collect();
+        // Exactly one ACTIVE Main entry (the reopened spell).
+        let active: Vec<_> = main_entries
+            .iter()
+            .filter(|e| e.departed_date.is_none())
+            .collect();
         assert_eq!(
-            main_entries.len(),
+            active.len(),
             1,
-            "expected a single reactivated Main entry, got {}: {:?}",
-            main_entries.len(),
+            "expected exactly one active Main entry, got: {:?}",
             main_entries
                 .iter()
                 .map(|e| (e.joined_date, e.departed_date, e.statistics.played))
                 .collect::<Vec<_>>()
         );
-        assert!(
-            main_entries[0].departed_date.is_none(),
-            "the reactivated entry should be active (no departed_date)"
-        );
         assert_eq!(
-            main_entries[0].statistics.played, 10,
-            "first-spell stats must survive the bounce"
+            active[0].statistics.played, 0,
+            "the reopened active spell starts empty so live is authoritative"
+        );
+        // The first spell's 10 apps survive as a departed entry.
+        let total_main_apps: u16 = main_entries.iter().map(|e| e.statistics.played).sum();
+        assert_eq!(
+            total_main_apps, 10,
+            "first-spell stats must survive the bounce as a departed entry"
         );
     }
 

@@ -38,6 +38,7 @@ pub struct CupGetTemplate {
     pub i18n: I18n,
     pub lang: String,
     pub cup_slug: String,
+    pub active_tab: &'static str,
     /// True once the bracket has resolved to a single winner.
     pub is_decided: bool,
     pub champion_name: String,
@@ -375,6 +376,7 @@ pub async fn cup_get_action(
         foreground_color: country.foreground_color.clone(),
         menu_sections,
         cup_slug: league.slug.clone(),
+        active_tab: "bracket",
         is_decided,
         champion_name,
         champion_slug,
