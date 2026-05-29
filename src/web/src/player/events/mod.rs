@@ -364,6 +364,13 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             | HappinessEventType::StepDownEmbarrassment
             | HappinessEventType::RolePathBlockedAtEliteClub
             | HappinessEventType::AdaptationBreakthrough
+            // ── Career-stage milestones ──────────────────────
+            // Retirement is the headline end-of-career moment; a
+            // veteran turning to coaching is a lasting status change.
+            // RetirementConsidering stays below the bar — it's the
+            // ambient lead-up, not the announcement itself.
+            | HappinessEventType::RetirementAnnounced
+            | HappinessEventType::CoachingCareerInterest
     )
 }
 
@@ -512,6 +519,15 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::FanExpectationBurden => "event_fan_expectation_burden",
         HappinessEventType::StepDownEmbarrassment => "event_step_down_embarrassment",
         HappinessEventType::LoanLevelMismatch => "event_loan_level_mismatch",
+        HappinessEventType::RetirementConsidering => "event_retirement_considering",
+        HappinessEventType::RetirementAnnounced => "event_retirement_announced",
+        HappinessEventType::CoachingCareerInterest => "event_coaching_career_interest",
+        HappinessEventType::WantsStrongerSquad => "event_wants_stronger_squad",
+        HappinessEventType::WantsTitleChallenge => "event_wants_title_challenge",
+        HappinessEventType::LoanDevelopmentConcern => "event_loan_development_concern",
+        HappinessEventType::LoanRecallRequested => "event_loan_recall_requested",
+        HappinessEventType::ReleaseClauseDemanded => "event_release_clause_demanded",
+        HappinessEventType::ContractTalksStalled => "event_contract_talks_stalled",
     }
 }
 
@@ -737,6 +753,9 @@ impl EventContextRenderer {
         }
         if let Some(cd) = ctx.career_desire_context.as_ref() {
             return CareerDesireRender::reason_sentence(cd, i18n);
+        }
+        if let Some(cs) = ctx.career_stage_context.as_ref() {
+            return CareerStageRender::reason_sentence(cs, i18n);
         }
         if let Some(ls) = ctx.life_simulation_desire_context.as_ref() {
             return LifeSimulationRender::reason_sentence(ls, i18n);
@@ -1781,6 +1800,8 @@ impl ContractRender {
                 | HappinessEventType::SalaryShock
                 | HappinessEventType::SalaryBoost
                 | HappinessEventType::SalaryGapNoticed
+                | HappinessEventType::ReleaseClauseDemanded
+                | HappinessEventType::ContractTalksStalled
         )
     }
 
@@ -1818,6 +1839,7 @@ impl ContractRender {
             K::WagePromiseFrustration => "wage_promise_frustration",
             K::AcceptedReducedRoleContract => "accepted_reduced_role",
             K::RejectedLowStatusOffer => "rejected_low_status",
+            K::ReleaseClauseDemanded => "release_clause_demanded",
         }
     }
 }
@@ -2191,6 +2213,8 @@ impl CareerDesireRender {
                 | HappinessEventType::WantsCopaLibertadores
                 | HappinessEventType::HomeReturnOpportunity
                 | HappinessEventType::ContinentalAmbitionSatisfied
+                | HappinessEventType::WantsStrongerSquad
+                | HappinessEventType::WantsTitleChallenge
         )
     }
 
@@ -2249,6 +2273,67 @@ impl CareerDesireRender {
             K::ReturnHomeAfterPoorAdaptation => "return_home",
             K::EuropeanCompetitionAmbition => "european_competition",
             K::CopaLibertadoresAmbition => "copa_libertadores",
+            K::StrongerSquadAmbition => "stronger_squad",
+            K::TitleChallengeAmbition => "title_challenge",
+        }
+    }
+}
+
+/// Renderer for the late-career arc — retirement considering / announced
+/// and coaching-career interest. Reads the [`CareerStageEventContext`] so
+/// the feed can explain *why* (age, reduced role, injuries, leadership)
+/// rather than the bare event name.
+struct CareerStageRender;
+
+impl CareerStageRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::RetirementConsidering
+                | HappinessEventType::RetirementAnnounced
+                | HappinessEventType::CoachingCareerInterest
+        )
+    }
+
+    pub fn headline(ctx: &core::CareerStageEventContext, i18n: &I18n) -> String {
+        let key = format!("career_stage_headline_{}", Self::kind_token(ctx));
+        let raw = i18n.t(&key);
+        if raw == key {
+            i18n.t(ctx.kind.as_i18n_key()).to_string()
+        } else {
+            raw.to_string()
+        }
+    }
+
+    pub fn reason_sentence(ctx: &core::CareerStageEventContext, i18n: &I18n) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        // A concrete retirement reason leads the explanation.
+        if let Some(reason) = ctx.retirement_reason {
+            let key = reason.as_i18n_key();
+            let raw = i18n.t(key);
+            if raw != key {
+                parts.push(raw.to_string());
+            }
+        }
+        for ev in ctx.evidence.iter().take(2) {
+            let key = ev.as_i18n_key();
+            let raw = i18n.t(key);
+            if raw != key {
+                parts.push(raw.to_string());
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(parts.join("; "))
+    }
+
+    fn kind_token(ctx: &core::CareerStageEventContext) -> &'static str {
+        use core::CareerStageEventKind as K;
+        match ctx.kind {
+            K::RetirementConsidering => "retirement_considering",
+            K::RetirementAnnounced => "retirement_announced",
+            K::CoachingCareerInterest => "coaching_interest",
         }
     }
 }
@@ -2302,7 +2387,12 @@ struct LoanRender;
 
 impl LoanRender {
     pub fn handles(event_type: &HappinessEventType) -> bool {
-        matches!(event_type, HappinessEventType::LoanListingAccepted)
+        matches!(
+            event_type,
+            HappinessEventType::LoanListingAccepted
+                | HappinessEventType::LoanRecallRequested
+                | HappinessEventType::LoanDevelopmentConcern
+        )
     }
 
     pub fn headline(ctx: &LoanEventContext, i18n: &I18n) -> String {
@@ -2336,6 +2426,8 @@ impl LoanRender {
             K::LoanRoleBroken => "role_broken",
             K::ParentClubSatisfied => "parent_satisfied",
             K::ParentClubConcerned => "parent_concerned",
+            K::LoanRecallRequested => "recall_requested",
+            K::LoanDevelopmentConcern => "development_concern",
         }
     }
 }
@@ -2574,6 +2666,11 @@ impl<'a> HeadlineDispatcher<'a> {
         if CareerDesireRender::handles(ev) {
             if let Some(cd) = ctx.career_desire_context.as_ref() {
                 return Some((CareerDesireRender::headline(cd, self.i18n), false));
+            }
+        }
+        if CareerStageRender::handles(ev) {
+            if let Some(cs) = ctx.career_stage_context.as_ref() {
+                return Some((CareerStageRender::headline(cs, self.i18n), false));
             }
         }
         if LifeSimulationRender::handles(ev) {

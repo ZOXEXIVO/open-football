@@ -1,11 +1,11 @@
 use super::{
-    CareerDesireEventContext, ContractEventContext, InjuryRecoveryEventContext,
-    LeadershipEventContext, LifeSimulationDesireContext, LoanEventContext,
-    ManagerInteractionEventContext, MatchPerformanceEventContext, MatchSelectionContext,
-    MediaFanEventContext, NationalTeamEventContext, PersonalAdaptationEventContext,
-    RecognitionEventContext, RegulationEventContext, RoleStatusEventContext, SeasonOutcomeContext,
-    SupportEventContext, TeammateConflictContext, TrainingEventContext, TransferInterestContext,
-    TrophyEventContext,
+    CareerDesireEventContext, CareerStageEventContext, ContractEventContext,
+    InjuryRecoveryEventContext, LeadershipEventContext, LifeSimulationDesireContext,
+    LoanEventContext, ManagerInteractionEventContext, MatchPerformanceEventContext,
+    MatchSelectionContext, MediaFanEventContext, NationalTeamEventContext,
+    PersonalAdaptationEventContext, RecognitionEventContext, RegulationEventContext,
+    RoleStatusEventContext, SeasonOutcomeContext, SupportEventContext, TeammateConflictContext,
+    TrainingEventContext, TransferInterestContext, TrophyEventContext,
 };
 use crate::ChangeType;
 
@@ -576,8 +576,14 @@ pub struct HappinessEventContext {
     /// Copa-Libertadores ambition mood (and their positive
     /// counterparts). Drives the renderer for `WantsReturnHome` /
     /// `WantsEuropeanCompetition` / `WantsCopaLibertadores` /
-    /// `HomeReturnOpportunity` / `ContinentalAmbitionSatisfied`.
+    /// `HomeReturnOpportunity` / `ContinentalAmbitionSatisfied` /
+    /// `WantsStrongerSquad` / `WantsTitleChallenge`.
     pub career_desire_context: Option<CareerDesireEventContext>,
+    /// Career-stage payload — late-career arc: retirement considering /
+    /// announced and coaching-career interest. Drives the renderer for
+    /// `RetirementConsidering` / `RetirementAnnounced` /
+    /// `CoachingCareerInterest`.
+    pub career_stage_context: Option<CareerStageEventContext>,
     /// Loan-specific payload — parent-club view, minutes concern,
     /// recall discussion.
     pub loan_context: Option<LoanEventContext>,
@@ -640,6 +646,7 @@ impl HappinessEventContext {
             media_fan_context: None,
             personal_adaptation_context: None,
             career_desire_context: None,
+            career_stage_context: None,
             loan_context: None,
             recognition_context: None,
             season_outcome_context: None,
@@ -783,6 +790,11 @@ impl HappinessEventContext {
         self
     }
 
+    pub fn with_career_stage_context(mut self, ctx: CareerStageEventContext) -> Self {
+        self.career_stage_context = Some(ctx);
+        self
+    }
+
     pub fn with_loan_context(mut self, ctx: LoanEventContext) -> Self {
         self.loan_context = Some(ctx);
         self
@@ -863,6 +875,9 @@ impl HappinessEventContext {
             n += 1;
         }
         if self.career_desire_context.is_some() {
+            n += 1;
+        }
+        if self.career_stage_context.is_some() {
             n += 1;
         }
         if self.loan_context.is_some() {

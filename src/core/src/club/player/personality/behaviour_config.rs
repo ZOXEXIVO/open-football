@@ -446,6 +446,30 @@ pub struct MoraleEventCatalog {
     pub fan_expectation_burden: f32,
     pub step_down_embarrassment: f32,
     pub loan_level_mismatch: f32,
+
+    // ── Career-stage / late-career arc ───────────────────────────
+    /// Lead-up mood as a player starts weighing retirement. Mostly
+    /// informational — kept small so it colours the late-career arc
+    /// without itself driving morale off a cliff.
+    pub retirement_considering: f32,
+    /// Base for a retirement announcement. Positive base = a planned /
+    /// legend farewell; the emit site flips it negative for forced or
+    /// injury-driven early retirement.
+    pub retirement_announced: f32,
+    /// Positive note when a veteran signals interest in coaching.
+    pub coaching_career_interest: f32,
+
+    // ── Career-desire / squad-ambition pressure ──────────────────
+    pub wants_stronger_squad: f32,
+    pub wants_title_challenge: f32,
+
+    // ── Loan management pressure ─────────────────────────────────
+    pub loan_development_concern: f32,
+    pub loan_recall_requested: f32,
+
+    // ── Contract negotiation tension ─────────────────────────────
+    pub release_clause_demanded: f32,
+    pub contract_talks_stalled: f32,
 }
 
 impl Default for MoraleEventCatalog {
@@ -641,6 +665,24 @@ impl Default for MoraleEventCatalog {
             fan_expectation_burden: -3.5,
             step_down_embarrassment: -5.0,
             loan_level_mismatch: -3.0,
+            // Career-stage arc — see the field docs. Retirement
+            // announcement carries a *positive* base (planned farewell);
+            // the emit site flips it negative for forced / injury cases.
+            retirement_considering: -1.0,
+            retirement_announced: 1.0,
+            coaching_career_interest: 1.5,
+            // Squad-ambition / title pressure — chronic drags while the
+            // mismatch persists. Title challenge is the deepest (it drives
+            // top-player transfer realism); stronger-squad sits a notch up.
+            wants_stronger_squad: -3.0,
+            wants_title_challenge: -4.0,
+            // Loan pressure — development concern and recall request both
+            // sit above the routine minutes-concern note.
+            loan_development_concern: -2.5,
+            loan_recall_requested: -3.0,
+            // Contract tension.
+            release_clause_demanded: -2.0,
+            contract_talks_stalled: -3.0,
         }
     }
 }
@@ -789,6 +831,15 @@ impl MoraleEventCatalog {
             FanExpectationBurden => self.fan_expectation_burden,
             StepDownEmbarrassment => self.step_down_embarrassment,
             LoanLevelMismatch => self.loan_level_mismatch,
+            RetirementConsidering => self.retirement_considering,
+            RetirementAnnounced => self.retirement_announced,
+            CoachingCareerInterest => self.coaching_career_interest,
+            WantsStrongerSquad => self.wants_stronger_squad,
+            WantsTitleChallenge => self.wants_title_challenge,
+            LoanDevelopmentConcern => self.loan_development_concern,
+            LoanRecallRequested => self.loan_recall_requested,
+            ReleaseClauseDemanded => self.release_clause_demanded,
+            ContractTalksStalled => self.contract_talks_stalled,
         }
     }
 }

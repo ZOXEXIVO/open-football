@@ -339,6 +339,14 @@ impl ProcessContractHandler {
                             RejectionReason::LowSalary
                         };
                         record_counter_offer(player, &proposal, now, min_acceptable_years, reason);
+                        if reason == RejectionReason::NoReleaseClause {
+                            let demanded = player
+                                .pending_contract_ask
+                                .as_ref()
+                                .and_then(|a| a.demanded_release_clause)
+                                .map(|v| v as u64);
+                            Self::maybe_emit_release_clause_demanded(player, now, demanded);
+                        }
                         log_rejection(player, &proposal, now);
                     }
                 } else {
@@ -440,6 +448,93 @@ impl ProcessContractHandler {
         }
     }
 
+    /// Promote a private "no release clause" rejection into a visible,
+    /// first-class [`ReleaseClauseDemanded`] event when there is real
+    /// leverage behind the demand. Suppresses the loyal-and-uncourted
+    /// case and the ageing-low-rep case (unless the agent is greedy), and
+    /// is cooldown-gated so repeated rejected offers don't spam it.
+    ///
+    /// [`ReleaseClauseDemanded`]: HappinessEventType::ReleaseClauseDemanded
+    fn maybe_emit_release_clause_demanded(
+        player: &mut Player,
+        now: NaiveDate,
+        demanded_clause: Option<u64>,
+    ) {
+        if player
+            .happiness
+            .has_recent_event(&HappinessEventType::ReleaseClauseDemanded, 90)
+        {
+            return;
+        }
+
+        let has_other_interest = player.statuses.get().iter().any(|s| {
+            matches!(
+                s,
+                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
+            )
+        });
+        let loyalty = player.attributes.loyalty;
+        // A loyal, uncourted player asking for a clause is private noise,
+        // not a leverage event — keep it as the soft life-sim desire.
+        if loyalty >= 17.0 && !has_other_interest {
+            return;
+        }
+
+        let age = DateUtils::age(player.birth_date, now);
+        let world_rep = player.player_attributes.world_reputation;
+        let agent = PlayerAgent::for_player(player);
+        // Ageing, lower-profile players have no exit-path leverage unless
+        // a greedy agent is driving it.
+        if age >= 32 && world_rep < 3000 && agent.greed < 0.6 {
+            return;
+        }
+
+        // External interest in the recent window is the clearest leverage
+        // signal behind the demand.
+        let used_leverage = player.happiness.has_recent_event(
+            &HappinessEventType::InterestFromBiggerClub,
+            90,
+        ) || player
+            .happiness
+            .has_recent_event(&HappinessEventType::WantedByBiggerClub, 90)
+            || player
+                .happiness
+                .has_recent_event(&HappinessEventType::TransferBidRejected, 90);
+
+        let mut cctx = ContractEventContext::new(ContractEventKind::ReleaseClauseDemanded)
+            .with_evidence(ContractEventEvidence::ReleaseClauseDemanded)
+            .with_agent_pressure(agent.greed);
+        if let Some(value) = demanded_clause {
+            cctx = cctx.with_demanded_release_clause(value);
+        }
+        if player.attributes.ambition >= 14.0 {
+            cctx = cctx.with_evidence(ContractEventEvidence::HighAmbition);
+        }
+        if has_other_interest {
+            cctx = cctx.with_evidence(ContractEventEvidence::HasOtherInterest);
+        }
+        if used_leverage {
+            cctx = cctx.with_evidence(ContractEventEvidence::UsedExternalInterestAsLeverage);
+        }
+
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .magnitude(HappinessEventType::ReleaseClauseDemanded);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::Boardroom,
+        )
+        .with_contract_context(cctx);
+        player.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::ReleaseClauseDemanded,
+            magnitude,
+            None,
+            happiness_ctx,
+            90,
+        );
+    }
+
     /// Player/agent has a minimum acceptable contract length.
     /// High-reputation players with interest from other clubs won't accept short deals.
     /// Loyal or older players are more flexible.
@@ -511,5 +606,97 @@ fn status_rank(status: &PlayerSquadStatus) -> u8 {
         DecentYoungster => 2,
         NotNeeded => 1,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn build(ambition: f32, loyalty: f32, world_rep: i16) -> Player {
+        let attrs = PersonAttributes {
+            adaptability: 12.0,
+            ambition,
+            controversy: 5.0,
+            loyalty,
+            pressure: 12.0,
+            professionalism: 12.0,
+            sportsmanship: 12.0,
+            temperament: 12.0,
+            consistency: 12.0,
+            important_matches: 12.0,
+            dirtiness: 5.0,
+        };
+        let mut pa = PlayerAttributes::default();
+        pa.world_reputation = world_rep;
+        pa.current_reputation = world_rep;
+        pa.current_ability = 140;
+        PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Test".into(), "Player".into()))
+            .birth_date(d(1998, 1, 1))
+            .country_id(1)
+            .attributes(attrs)
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(pa)
+            .build()
+            .unwrap()
+    }
+
+    fn count_demanded(player: &Player) -> usize {
+        player
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::ReleaseClauseDemanded)
+            .count()
+    }
+
+    #[test]
+    fn ambitious_player_with_interest_demands_clause() {
+        let now = d(2026, 5, 30);
+        let mut p = build(15.0, 10.0, 5_000);
+        p.statuses.add(now, PlayerStatusType::Wnt);
+        ProcessContractHandler::maybe_emit_release_clause_demanded(&mut p, now, Some(20_000_000));
+        assert_eq!(count_demanded(&p), 1, "leverage + ambition emits the demand");
+    }
+
+    #[test]
+    fn loyal_uncourted_player_does_not_demand() {
+        let now = d(2026, 5, 30);
+        let mut p = build(15.0, 18.0, 5_000);
+        ProcessContractHandler::maybe_emit_release_clause_demanded(&mut p, now, Some(20_000_000));
+        assert_eq!(
+            count_demanded(&p),
+            0,
+            "a loyal player with no outside interest keeps the desire private"
+        );
+    }
+
+    #[test]
+    fn release_clause_demand_respects_cooldown() {
+        let now = d(2026, 5, 30);
+        let mut p = build(15.0, 10.0, 5_000);
+        p.statuses.add(now, PlayerStatusType::Wnt);
+        ProcessContractHandler::maybe_emit_release_clause_demanded(&mut p, now, Some(20_000_000));
+        ProcessContractHandler::maybe_emit_release_clause_demanded(&mut p, now, Some(20_000_000));
+        assert_eq!(count_demanded(&p), 1, "90-day cooldown blocks the repeat");
     }
 }

@@ -387,4 +387,59 @@ pub enum HappinessEventType {
     StepDownEmbarrassment,
     /// Loan level is either too easy or too hard for the player's tier.
     LoanLevelMismatch,
+
+    // ── Career-stage / late-career arc ───────────────────────────
+    /// Older player has started to weigh up retirement — reduced role,
+    /// recurring injuries, long free-agency, or physical decline. A
+    /// mostly-informational lead-up to [`RetirementAnnounced`]; it does
+    /// not itself retire the player. Carries a `CareerStageEventContext`.
+    RetirementConsidering,
+    /// Player has formally announced retirement. Career-visible event,
+    /// not a morale complaint — emitted on every retirement path before
+    /// the player is moved to retired storage. Magnitude is positive for
+    /// a planned / legend farewell, negative for forced (long
+    /// unemployment) or injury-forced early retirement.
+    RetirementAnnounced,
+    /// Veteran leader has signalled interest in coaching after hanging up
+    /// his boots — a bridge from playing career to future staff supply.
+    /// Positive / neutral career event; never advances retirement itself.
+    CoachingCareerInterest,
+
+    // ── Career-desire / squad-ambition pressure ──────────────────
+    /// Ambitious star wants the board to strengthen the squad before he
+    /// commits his future — sold key players unreplaced, a unit far below
+    /// his level, or board ambition concern. Pressure signal, not a
+    /// transfer request. Carries a `CareerDesireEventContext`.
+    WantsStrongerSquad,
+    /// Elite, ambitious player wants to play for a genuine title
+    /// challenger — more specific than `WantsEuropeanCompetition`. Driven
+    /// by league-table context (position, points off the leader). Rare,
+    /// mostly affects stars at mid-table clubs.
+    WantsTitleChallenge,
+
+    // ── Loan management pressure ─────────────────────────────────
+    /// A young player's loan is failing to develop him — benched, wrong
+    /// role, wrong level, weak training, or stalled progress. Aggregates
+    /// several weak signals into one monthly development warning. Distinct
+    /// from `LackOfPlayingTime` (player morale) and `LoanRecallRequested`
+    /// (action pressure).
+    LoanDevelopmentConcern,
+    /// Parent club / player is pushing to recall a loaned player because
+    /// the loan is failing on minutes / role / level. More serious than
+    /// the minutes-concern note, less severe than a permanent transfer
+    /// request — the request / pressure layer above the recall window.
+    LoanRecallRequested,
+
+    // ── Contract negotiation tension ─────────────────────────────
+    /// Player / agent explicitly demands a release clause in the next
+    /// contract — ambition, bigger-club interest, or mistrust after
+    /// rejected bids. A mild tension event that models leverage / exit
+    /// planning, not automatic conflict.
+    ReleaseClauseDemanded,
+    /// Contract negotiations have visibly stalled — club and player are
+    /// far apart on wage, release clause, role, length, or ambition. A
+    /// signal (raises unhappiness, makes listing likelier) rather than a
+    /// transfer request. Sits between `ContractOffer` and
+    /// `TransferBidRejected` in severity.
+    ContractTalksStalled,
 }

@@ -14,6 +14,10 @@ pub enum ContractEventKind {
     WagePromiseFrustration,
     AcceptedReducedRoleContract,
     RejectedLowStatusOffer,
+    /// Player / agent explicitly demanded a release clause in the next
+    /// contract. Distinct from the softer `AgentPushingForBetterTerms`
+    /// so the renderer can frame the exit-path demand specifically.
+    ReleaseClauseDemanded,
 }
 
 impl ContractEventKind {
@@ -31,6 +35,7 @@ impl ContractEventKind {
             ContractEventKind::WagePromiseFrustration => "contract_kind_wage_promise_frustration",
             ContractEventKind::AcceptedReducedRoleContract => "contract_kind_accepted_reduced_role",
             ContractEventKind::RejectedLowStatusOffer => "contract_kind_rejected_low_status",
+            ContractEventKind::ReleaseClauseDemanded => "contract_kind_release_clause_demanded",
         }
     }
 }
@@ -49,6 +54,12 @@ pub enum ContractEventEvidence {
     ContractExpiring,
     HasOtherInterest,
     ClubInFinancialDistress,
+    /// Player asked for a release clause in the next deal.
+    ReleaseClauseDemanded,
+    /// Dispute over the promised squad role / status in the renewal.
+    RoleExpectationGap,
+    /// Dispute over the length of the offered contract.
+    ContractLengthDispute,
 }
 
 impl ContractEventEvidence {
@@ -74,6 +85,13 @@ impl ContractEventEvidence {
             ContractEventEvidence::ClubInFinancialDistress => {
                 "contract_evidence_club_financial_distress"
             }
+            ContractEventEvidence::ReleaseClauseDemanded => {
+                "contract_evidence_release_clause_demanded"
+            }
+            ContractEventEvidence::RoleExpectationGap => "contract_evidence_role_expectation_gap",
+            ContractEventEvidence::ContractLengthDispute => {
+                "contract_evidence_contract_length_dispute"
+            }
         }
     }
 }
@@ -87,6 +105,8 @@ pub struct ContractEventContext {
     pub promised_status: Option<PlayerSquadStatus>,
     pub agent_pressure: Option<f32>,
     pub years_remaining: Option<u8>,
+    /// Release-clause value the player / agent demanded, when known.
+    pub demanded_release_clause: Option<u64>,
     pub evidence: Vec<ContractEventEvidence>,
 }
 
@@ -100,8 +120,14 @@ impl ContractEventContext {
             promised_status: None,
             agent_pressure: None,
             years_remaining: None,
+            demanded_release_clause: None,
             evidence: Vec::new(),
         }
+    }
+
+    pub fn with_demanded_release_clause(mut self, value: u64) -> Self {
+        self.demanded_release_clause = Some(value);
+        self
     }
 
     pub fn with_wage_vs_previous(mut self, ratio: f32) -> Self {

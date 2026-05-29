@@ -524,12 +524,16 @@ impl SimulatorData {
     /// `free_since` ≥ 12 months means a fresh database free agent
     /// (seeded `free_since = today - 30d`) is automatically skipped.
     pub fn process_free_agent_retirements(&mut self, date: NaiveDate) {
-        use crate::PlayerStatusType;
+        use crate::RetirementReason;
 
         // Decision phase is per-player independent — run the prob roll
-        // in parallel. Mutation (swap_remove + push into retired_players)
-        // stays serial below because it requires `&mut self`.
-        let mut to_retire: Vec<usize> = self
+        // in parallel. Mutation (the `RetirementConsidering` emit plus
+        // swap_remove + push into retired_players) stays serial below
+        // because it requires `&mut self`. Each outcome carries
+        // `(index, will_retire, months_without_club)` so the serial pass
+        // can both surface late-career considering moods and retire the
+        // ones whose roll came up.
+        let outcomes: Vec<(usize, bool, u16)> = self
             .free_agents
             .par_iter()
             .enumerate()
@@ -549,19 +553,43 @@ impl SimulatorData {
                 if prob <= 0.0 {
                     return None;
                 }
+                let months_without_club = (days_free / 30).max(0) as u16;
                 let roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
-                if roll < prob { Some(idx) } else { None }
+                Some((idx, roll < prob, months_without_club))
             })
             .collect();
 
-        // Reverse order so swap_remove against earlier indexes doesn't
-        // disturb later ones.
+        // Considering pass first — it only mutates happiness, never the
+        // pool's structure, so indices remain valid. Players who are
+        // about to retire this tick are skipped (they get the
+        // announcement, not the lead-up).
+        for &(idx, will_retire, months) in &outcomes {
+            if will_retire {
+                continue;
+            }
+            if let Some(player) = self.free_agents.get_mut(idx) {
+                player.consider_retirement_as_free_agent(date, months);
+            }
+        }
+
+        // Retirement pass. Reverse order so swap_remove against earlier
+        // indexes doesn't disturb later ones.
+        let mut to_retire: Vec<usize> = outcomes
+            .iter()
+            .filter(|(_, will_retire, _)| *will_retire)
+            .map(|(idx, _, _)| *idx)
+            .collect();
         to_retire.sort_unstable_by(|a, b| b.cmp(a));
         for idx in to_retire {
             let mut player = self.free_agents.swap_remove(idx);
-            player.statuses.add(date, PlayerStatusType::Ret);
-            player.contract = None;
-            player.retired = true;
+            // A still-renowned name bows out with a planned farewell;
+            // everyone else is retiring because the offers dried up.
+            let reason = if player.player_attributes.world_reputation >= 7000 {
+                RetirementReason::PlannedFarewell
+            } else {
+                RetirementReason::LongFreeAgency
+            };
+            player.announce_retirement(date, reason);
             let country_id = player.country_id;
             if let Some(country) = self.country_mut(country_id) {
                 country.retired_players.push(player);

@@ -181,6 +181,32 @@ impl TeamBehaviour {
         // window opens and the player feels the frustration.
         Self::process_loan_playing_time_audit(players, &ctx);
 
+        // Monthly loan-development audit: a separate concern from raw
+        // minutes — a young loanee can be benched, misused, at the wrong
+        // level, or in a weak training setup. Aggregates those signals
+        // into a development warning distinct from the minutes concern.
+        Self::process_loan_development_audit(players, &ctx);
+
+        // Monthly squad-ambition audit: ambitious stars far above their
+        // squad's level (or whose key teammates were sold) push the board
+        // to strengthen before committing their future.
+        Self::process_squad_ambition_audit(players, &ctx);
+
+        // Monthly title-ambition audit: elite stars at a club off the
+        // title pace want a genuine challenger. Reads league-table context
+        // from `ctx.club`.
+        Self::process_title_ambition_audit(players, &ctx);
+
+        // Monthly veteran career-stage audit: older players whose role has
+        // faded weigh up retirement; veteran leaders signal coaching
+        // interest. Informational late-career colour.
+        Self::process_veteran_career_stage_audit(players, &ctx);
+
+        // Monthly contract-stalemate audit: surface the player-facing
+        // "talks have stalled" signal once a renewal has genuinely broken
+        // down. Mirrors the listing pipeline's stalemate assessment.
+        Self::process_contract_stalemate_audit(players, &ctx);
+
         // Background manager-trust drift — runs before the talk
         // picker so per-talk modifiers (rapport, credibility) read the
         // post-drift values rather than last week's snapshot.

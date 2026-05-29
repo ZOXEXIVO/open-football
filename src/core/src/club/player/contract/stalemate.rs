@@ -1,5 +1,10 @@
+use crate::club::player::agent::PlayerAgent;
 use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
-use crate::{Player, PlayerSquadStatus, PlayerStatusType};
+use crate::{
+    ContractEventContext, ContractEventEvidence, ContractEventKind, HappinessEventCause,
+    HappinessEventContext, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, Player, PlayerSquadStatus, PlayerStatusType,
+};
 use chrono::Duration;
 use chrono::NaiveDate;
 
@@ -210,6 +215,120 @@ impl ContractStalemate {
         self.last_rejection_days_ago
             .map(|d| d <= RECENT_REJECTION_DAYS)
             .unwrap_or(false)
+    }
+}
+
+impl Player {
+    /// Surface a visible [`ContractTalksStalled`] event when a renewal
+    /// has genuinely broken down. Driven off the already-computed
+    /// [`ContractStalemate`] so the player event agrees with the listing
+    /// AI on the same numbers. Fires only at `Severe` / `Exhausted`,
+    /// requires a real recent rejection, never fires for free agents or
+    /// loaned-in players, and is cooldown-gated (45d Severe / 90d
+    /// Exhausted). A signal — it raises unhappiness but does not itself
+    /// set a transfer request.
+    ///
+    /// [`ContractTalksStalled`]: HappinessEventType::ContractTalksStalled
+    pub(crate) fn maybe_emit_contract_talks_stalled(
+        &mut self,
+        stalemate: &ContractStalemate,
+        _today: NaiveDate,
+    ) {
+        if self.retired || self.contract.is_none() || self.is_on_loan() {
+            return;
+        }
+        // A stalemate is meaningless without a real failed renewal behind
+        // it — bare expiry pressure doesn't count.
+        if stalemate.rejections_12m == 0 {
+            return;
+        }
+
+        let (mut magnitude, cooldown) = match stalemate.level {
+            StalemateLevel::Severe => (-3.0_f32, 45_u16),
+            StalemateLevel::Exhausted => (-4.5_f32, 90_u16),
+            StalemateLevel::None | StalemateLevel::Emerging => return,
+        };
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::ContractTalksStalled, cooldown)
+        {
+            return;
+        }
+
+        let near_expiry = stalemate
+            .days_to_expiry
+            .map(|d| d > 0 && d <= 180)
+            .unwrap_or(false);
+        if near_expiry {
+            magnitude -= 0.5;
+        }
+        if stalemate.has_market_interest {
+            magnitude -= 0.5;
+        }
+        let loyalty = self.attributes.loyalty;
+        if loyalty >= 16.0 {
+            magnitude *= 0.75;
+        }
+        let ambition = self.attributes.ambition;
+
+        let reason = self
+            .pending_contract_ask
+            .as_ref()
+            .and_then(|a| a.rejection_reason);
+        if ambition >= 16.0
+            && matches!(
+                reason,
+                Some(RejectionReason::AmbitionMismatch) | Some(RejectionReason::NoReleaseClause)
+            )
+        {
+            magnitude *= 1.20;
+        }
+
+        let mut cctx = ContractEventContext::new(ContractEventKind::TalksStalled)
+            .with_agent_pressure(PlayerAgent::for_player(self).greed);
+        if let Some(days) = stalemate.days_to_expiry {
+            let years = (days.max(0) / 365).clamp(0, u8::MAX as i64) as u8;
+            cctx = cctx.with_years_remaining(years);
+        }
+        match reason {
+            Some(RejectionReason::LowSalary) => {
+                cctx = cctx.with_evidence(ContractEventEvidence::UnderpaidVsPeers);
+            }
+            Some(RejectionReason::NoReleaseClause) => {
+                cctx = cctx.with_evidence(ContractEventEvidence::ReleaseClauseDemanded);
+            }
+            Some(RejectionReason::StatusBelowExpectation) => {
+                cctx = cctx.with_evidence(ContractEventEvidence::RoleExpectationGap);
+            }
+            Some(RejectionReason::AmbitionMismatch) => {
+                cctx = cctx.with_evidence(ContractEventEvidence::HighAmbition);
+            }
+            Some(RejectionReason::ShortContract) => {
+                cctx = cctx.with_evidence(ContractEventEvidence::ContractLengthDispute);
+            }
+            _ => {}
+        }
+        if stalemate.has_market_interest {
+            cctx = cctx.with_evidence(ContractEventEvidence::HasOtherInterest);
+        }
+        if near_expiry {
+            cctx = cctx.with_evidence(ContractEventEvidence::ContractExpiring);
+        }
+
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::Boardroom,
+        )
+        .with_contract_context(cctx)
+        .with_follow_up(HappinessEventFollowUp::ContractRequestRisk);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::ContractTalksStalled,
+            magnitude,
+            None,
+            happiness_ctx,
+            cooldown,
+        );
     }
 }
 
@@ -848,6 +967,139 @@ mod tests {
         ));
         assert!(s.permits_listing());
         assert!(!s.should_improve_offer());
+    }
+
+    // ─── ContractTalksStalled emission ──────────────────────────
+
+    fn stalled_magnitude(player: &Player) -> Option<f32> {
+        player
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::ContractTalksStalled)
+            .map(|e| e.magnitude)
+    }
+
+    #[test]
+    fn severe_stalemate_emits_talks_stalled() {
+        let today = d(2026, 5, 1);
+        let history = make_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+        ]);
+        let contract = make_contract(50_000, PlayerSquadStatus::MainBackupPlayer, d(2027, 7, 1));
+        let mut player = make_player_with(history, Some(contract), None);
+        let s = ContractStalemate::assess(&player, today, affordable());
+        assert_eq!(s.level, StalemateLevel::Severe);
+        player.maybe_emit_contract_talks_stalled(&s, today);
+        assert!(
+            stalled_magnitude(&player).is_some(),
+            "Severe stalemate must emit a stalled-talks event"
+        );
+    }
+
+    #[test]
+    fn emerging_stalemate_does_not_emit() {
+        let today = d(2026, 5, 1);
+        let history = make_history(&[
+            (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 4, 15), RENEWAL_REJECTED_LABEL),
+        ]);
+        let contract = make_contract(50_000, PlayerSquadStatus::FirstTeamRegular, d(2027, 7, 1));
+        let mut player = make_player_with(history, Some(contract), None);
+        let s = ContractStalemate::assess(&player, today, affordable());
+        assert_eq!(s.level, StalemateLevel::Emerging);
+        player.maybe_emit_contract_talks_stalled(&s, today);
+        assert!(
+            stalled_magnitude(&player).is_none(),
+            "one rejection (Emerging) must not emit a stalled-talks event"
+        );
+    }
+
+    #[test]
+    fn stalled_talks_respects_cooldown() {
+        let today = d(2026, 5, 1);
+        let history = make_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+        ]);
+        let contract = make_contract(50_000, PlayerSquadStatus::MainBackupPlayer, d(2027, 7, 1));
+        let mut player = make_player_with(history, Some(contract), None);
+        let s = ContractStalemate::assess(&player, today, affordable());
+        player.maybe_emit_contract_talks_stalled(&s, today);
+        player.maybe_emit_contract_talks_stalled(&s, today);
+        let count = player
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::ContractTalksStalled)
+            .count();
+        assert_eq!(count, 1, "cooldown must block the second emission");
+    }
+
+    #[test]
+    fn exhausted_is_stronger_than_severe() {
+        let today = d(2026, 5, 1);
+
+        let severe_history = make_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+        ]);
+        let severe_contract =
+            make_contract(50_000, PlayerSquadStatus::MainBackupPlayer, d(2027, 7, 1));
+        let mut severe = make_player_with(severe_history, Some(severe_contract), None);
+        let s_sev = ContractStalemate::assess(&severe, today, affordable());
+        severe.maybe_emit_contract_talks_stalled(&s_sev, today);
+
+        let exhausted_history = make_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+            (d(2026, 4, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 4, 25), RENEWAL_REJECTED_LABEL),
+        ]);
+        let exhausted_contract =
+            make_contract(50_000, PlayerSquadStatus::KeyPlayer, d(2027, 7, 1));
+        let mut exhausted = make_player_with(exhausted_history, Some(exhausted_contract), None);
+        let s_exh = ContractStalemate::assess(&exhausted, today, affordable());
+        assert_eq!(s_exh.level, StalemateLevel::Exhausted);
+        exhausted.maybe_emit_contract_talks_stalled(&s_exh, today);
+
+        let sev_mag = stalled_magnitude(&severe).expect("severe emits");
+        let exh_mag = stalled_magnitude(&exhausted).expect("exhausted emits");
+        assert!(
+            exh_mag < sev_mag,
+            "Exhausted ({}) must be a stronger (more negative) hit than Severe ({})",
+            exh_mag,
+            sev_mag
+        );
+    }
+
+    #[test]
+    fn free_agent_does_not_emit_stalled_talks() {
+        let today = d(2026, 5, 1);
+        let history = make_history(&[
+            (d(2026, 1, 10), RENEWAL_OFFERED_LABEL),
+            (d(2026, 1, 25), RENEWAL_REJECTED_LABEL),
+            (d(2026, 3, 1), RENEWAL_OFFERED_LABEL),
+            (d(2026, 3, 18), RENEWAL_REJECTED_LABEL),
+        ]);
+        // No contract = free agent. Assess uses a synthesised status, but
+        // the emit guard refuses to fire without a real parent contract.
+        let mut player = make_player_with(history, None, None);
+        let s = ContractStalemate::assess(&player, today, affordable());
+        player.maybe_emit_contract_talks_stalled(&s, today);
+        assert!(
+            stalled_magnitude(&player).is_none(),
+            "a free agent has no club renewal to stall"
+        );
     }
 
     #[test]

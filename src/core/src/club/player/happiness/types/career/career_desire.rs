@@ -1,9 +1,17 @@
+use crate::PlayerFieldPositionGroup;
+
 /// What flavour of career-desire mood the player is signalling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CareerDesireKind {
     ReturnHomeAfterPoorAdaptation,
     EuropeanCompetitionAmbition,
     CopaLibertadoresAmbition,
+    /// Ambitious star wants the board to strengthen the squad before
+    /// committing his future. Drives `WantsStrongerSquad`.
+    StrongerSquadAmbition,
+    /// Elite player wants to play for a genuine title challenger. Drives
+    /// `WantsTitleChallenge`.
+    TitleChallengeAmbition,
 }
 
 impl CareerDesireKind {
@@ -14,6 +22,8 @@ impl CareerDesireKind {
                 "career_desire_kind_european_competition"
             }
             CareerDesireKind::CopaLibertadoresAmbition => "career_desire_kind_copa_libertadores",
+            CareerDesireKind::StrongerSquadAmbition => "career_desire_kind_stronger_squad",
+            CareerDesireKind::TitleChallengeAmbition => "career_desire_kind_title_challenge",
         }
     }
 }
@@ -46,6 +56,24 @@ pub enum CareerDesireEvidence {
     RepeatedIsolation,
     /// `club_fit` morale axis is meaningfully negative.
     LowClubFit,
+    // ── Squad-ambition (WantsStrongerSquad) ─────────────────────
+    /// Squad's average ability sits below the player's own level.
+    SquadQualityBelowPlayerLevel,
+    /// A top squad player was sold recently and not replaced.
+    KeyPlayerSold,
+    /// The unit around the player (his position group) is thin / weak.
+    WeakDepthInPlayerUnit,
+    /// Concern that the board's ambition does not match the player's.
+    BoardAmbitionConcern,
+    // ── Title-challenge (WantsTitleChallenge) ───────────────────
+    /// Current club is not a realistic title contender this season.
+    CurrentClubNotTitleContender,
+    /// Repeated top-four finishes without ever challenging for the title.
+    RepeatedTopFourWithoutTitleChallenge,
+    /// Player is clearly above the club's overall level.
+    PlayerAboveClubLevel,
+    /// Player is in the prime of his career — the window to win matters.
+    PrimeCareerWindow,
 }
 
 impl CareerDesireEvidence {
@@ -71,6 +99,24 @@ impl CareerDesireEvidence {
             }
             CareerDesireEvidence::RepeatedIsolation => "career_desire_evidence_repeated_isolation",
             CareerDesireEvidence::LowClubFit => "career_desire_evidence_low_club_fit",
+            CareerDesireEvidence::SquadQualityBelowPlayerLevel => {
+                "career_desire_evidence_squad_quality_below_player_level"
+            }
+            CareerDesireEvidence::KeyPlayerSold => "career_desire_evidence_key_player_sold",
+            CareerDesireEvidence::WeakDepthInPlayerUnit => "career_desire_evidence_weak_depth",
+            CareerDesireEvidence::BoardAmbitionConcern => {
+                "career_desire_evidence_board_ambition_concern"
+            }
+            CareerDesireEvidence::CurrentClubNotTitleContender => {
+                "career_desire_evidence_current_club_not_title_contender"
+            }
+            CareerDesireEvidence::RepeatedTopFourWithoutTitleChallenge => {
+                "career_desire_evidence_repeated_top_four"
+            }
+            CareerDesireEvidence::PlayerAboveClubLevel => {
+                "career_desire_evidence_player_above_club_level"
+            }
+            CareerDesireEvidence::PrimeCareerWindow => "career_desire_evidence_prime_career_window",
         }
     }
 }
@@ -88,6 +134,20 @@ pub struct CareerDesireEventContext {
     pub adaptation_score: Option<f32>,
     /// Closed-set evidence atoms that justified the mood.
     pub evidence: Vec<CareerDesireEvidence>,
+    // ── Squad-ambition fields (WantsStrongerSquad) ──────────────
+    /// Squad's average current ability, if measured.
+    pub squad_average_ability: Option<u8>,
+    /// Player's own current ability, for the comparison.
+    pub player_ability: Option<u8>,
+    /// The weakest unit around the player, if identified.
+    pub weakest_unit: Option<PlayerFieldPositionGroup>,
+    // ── Title-challenge fields (WantsTitleChallenge) ────────────
+    /// League position at emit time.
+    pub league_position: Option<u8>,
+    /// Points behind the leader (negative = ahead).
+    pub points_off_leader: Option<i16>,
+    /// Club reputation at emit time.
+    pub club_reputation: Option<u16>,
 }
 
 impl CareerDesireEventContext {
@@ -97,6 +157,12 @@ impl CareerDesireEventContext {
             days_at_club: 0,
             adaptation_score: None,
             evidence: Vec::new(),
+            squad_average_ability: None,
+            player_ability: None,
+            weakest_unit: None,
+            league_position: None,
+            points_off_leader: None,
+            club_reputation: None,
         }
     }
 
@@ -114,6 +180,36 @@ impl CareerDesireEventContext {
         if !self.evidence.contains(&evidence) {
             self.evidence.push(evidence);
         }
+        self
+    }
+
+    pub fn with_squad_average_ability(mut self, ability: u8) -> Self {
+        self.squad_average_ability = Some(ability);
+        self
+    }
+
+    pub fn with_player_ability(mut self, ability: u8) -> Self {
+        self.player_ability = Some(ability);
+        self
+    }
+
+    pub fn with_weakest_unit(mut self, unit: PlayerFieldPositionGroup) -> Self {
+        self.weakest_unit = Some(unit);
+        self
+    }
+
+    pub fn with_league_position(mut self, position: u8) -> Self {
+        self.league_position = Some(position);
+        self
+    }
+
+    pub fn with_points_off_leader(mut self, points: i16) -> Self {
+        self.points_off_leader = Some(points);
+        self
+    }
+
+    pub fn with_club_reputation(mut self, reputation: u16) -> Self {
+        self.club_reputation = Some(reputation);
         self
     }
 }
