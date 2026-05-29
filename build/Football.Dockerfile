@@ -1,5 +1,5 @@
 # Define Rust version
-ARG RUST_VERSION=1.95
+ARG RUST_VERSION=1.96
 
 # BUILD BACKEND
 
