@@ -321,8 +321,10 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
     let skin_shadow = shade(skin, 0.60);
     let bg_color = "#34383A";
 
-    // Jersey colors (deterministic from player_id)
-    let jersey_hue = (player_id * 137) % 360;
+    // Jersey colors (deterministic from player_id). Wrapping_mul so
+    // large player ids (8-digit IDs from generated rosters) don't
+    // overflow u32 and crash the request.
+    let jersey_hue = player_id.wrapping_mul(137) % 360;
     let jersey_color = format!("hsl({}, 28%, 27%)", jersey_hue);
     let jersey_light = format!("hsl({}, 24%, 38%)", jersey_hue);
 

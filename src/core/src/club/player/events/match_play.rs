@@ -100,6 +100,16 @@ impl Player {
     }
 
     fn record_match_appearance(&mut self, o: &MatchOutcome<'_>) {
+        // Tag the spell with the league_slug of the friendly we just
+        // played, so a later `drain_match_stats` can stamp the canonical
+        // Friendly ledger entry with the real source — youth-league
+        // loanees keep their "U19 League" breakdown label after the
+        // loan ends. Empty slugs (senior pre-season friendlies) are
+        // ignored so the drain falls back to the team's league_slug
+        // and the row renders as the generic "Friendly".
+        if o.is_friendly && !o.competition_slug.is_empty() {
+            self.friendly_source_slug = Some(o.competition_slug.to_string());
+        }
         let s = stats_bucket_mut(self, o);
         match o.participation {
             MatchParticipation::Starter => s.played += 1,

@@ -128,12 +128,16 @@ impl PlayerStatisticsHistory {
         }
     }
 
-    /// Append a league/continental stat slice to the canonical ledger,
+    /// Append a league / cup / friendly stat slice to the canonical ledger,
     /// merging into an existing entry when `(season, team_slug, kind,
-    /// is_loan)` already matches. Storage call sites invoke this for
-    /// every stat slice that flows through them — independent of the
-    /// legacy `items` drop filters, so the projection sees the row even
-    /// when `items` doesn't.
+    /// competition_slug, is_loan)` already matches. The slug is part of
+    /// the merge key so different cup tournaments (Champions League vs
+    /// Europa League, FA Cup vs League Cup) stay as distinct entries
+    /// instead of collapsing into one row per kind.
+    ///
+    /// The default slug for league rows is `team.league_slug`; cup /
+    /// friendly callers should use [`Self::append_competition_to_ledger`]
+    /// which pins per-tournament entries by their own slug.
     ///
     /// The seq_id is preserved from the first append; ties (e.g. a
     /// later transfer fee for a previously zero-fee row) merge in place.
@@ -146,15 +150,65 @@ impl PlayerStatisticsHistory {
         transfer_fee: Option<f64>,
         statistics: PlayerStatistics,
     ) {
-        // The competition slug pins continental cups to a specific
-        // tournament; for league entries we reuse the team's league
-        // slug so a same-team-different-league transfer (cross-country
-        // loan) still keeps stats grouped correctly.
-        let competition_slug = team.league_slug.clone();
+        let slug = team.league_slug.clone();
+        self.push_or_merge_ledger(
+            season_start_year,
+            team,
+            competition_kind,
+            slug,
+            is_loan,
+            transfer_fee,
+            statistics,
+        );
+    }
+
+    /// Append a non-League (DomesticCup / ContinentalCup / Friendly)
+    /// stat slice with its own competition slug. One ledger row per
+    /// tournament — Champions League and Europa League (or FA Cup and
+    /// League Cup) stay distinct instead of folding into one aggregate.
+    /// Zero-game inputs are ignored.
+    ///
+    /// Non-League entries are always stored with `is_loan: false`. The
+    /// projection's grouping IGNORES the loan flag for non-League
+    /// entries — a match is a match regardless of contract structure,
+    /// and the row's "Loan" label is derived from the League entry.
+    pub fn append_competition_to_ledger(
+        &mut self,
+        season_start_year: u16,
+        team: &TeamInfo,
+        competition_kind: PlayerStatCompetitionKind,
+        competition_slug: String,
+        statistics: PlayerStatistics,
+    ) {
+        if statistics.total_games() == 0 {
+            return;
+        }
+        self.push_or_merge_ledger(
+            season_start_year,
+            team,
+            competition_kind,
+            competition_slug,
+            false,
+            None,
+            statistics,
+        );
+    }
+
+    fn push_or_merge_ledger(
+        &mut self,
+        season_start_year: u16,
+        team: &TeamInfo,
+        competition_kind: PlayerStatCompetitionKind,
+        competition_slug: String,
+        is_loan: bool,
+        transfer_fee: Option<f64>,
+        statistics: PlayerStatistics,
+    ) {
         if let Some(existing) = self.season_ledger.iter_mut().find(|e| {
             e.season_start_year == season_start_year
                 && e.team_slug == team.slug
                 && e.competition_kind == competition_kind
+                && e.competition_slug == competition_slug
                 && e.is_loan == is_loan
         }) {
             existing.statistics.merge_from(&statistics);
@@ -1263,32 +1317,33 @@ impl PlayerStatisticsHistory {
         totals
     }
 
-    /// Freeze a closed spell's continental-cup statistics into the per-season
-    /// ledger, keyed by `(season_year, team)`. Called when the live cup bucket
-    /// is about to be reset (transfer, loan, season end). Zero-appearance
-    /// inputs are ignored so the ledger never grows empty rows.
+    /// Freeze a single continental-cup tournament's statistics for a
+    /// closed spell into the per-season ledger. Champions League,
+    /// Europa League, Conference League and Copa Libertadores get
+    /// their own ledger row each so the History page tooltip can
+    /// label them individually. Zero-appearance inputs are ignored.
     pub fn record_continental(
         &mut self,
         season_year: u16,
         team: &TeamInfo,
+        competition_slug: String,
         stats: PlayerStatistics,
     ) {
         if stats.total_games() == 0 {
             return;
         }
-        // Canonical ledger write. ContinentalCup is treated as non-loan
-        // because the loan flag for the league spell already carries
-        // the relevant context; the projection folds continental into
-        // the season's League row regardless of loan flag.
-        self.append_to_ledger(
+        self.append_competition_to_ledger(
             season_year,
             team,
             PlayerStatCompetitionKind::ContinentalCup,
-            false,
-            None,
+            competition_slug,
             stats.clone(),
         );
 
+        // Legacy `continental` field still tracks an aggregate per
+        // (season, team) so the older view_items.fold_continental path
+        // (and any save-compat consumers) keep working. The canonical
+        // ledger is the source of truth for the new breakdown.
         if let Some(existing) = self
             .continental
             .iter_mut()
@@ -1302,6 +1357,54 @@ impl PlayerStatisticsHistory {
                 statistics: stats,
             });
         }
+    }
+
+    /// Freeze a single domestic-cup tournament's statistics for a
+    /// closed spell into the per-season ledger. FA Cup and League Cup
+    /// (or any other co-existing domestic cups) get one row each
+    /// instead of being aggregated. Zero-appearance inputs are skipped.
+    pub fn record_domestic_cup(
+        &mut self,
+        season_year: u16,
+        team: &TeamInfo,
+        competition_slug: String,
+        stats: PlayerStatistics,
+    ) {
+        self.append_competition_to_ledger(
+            season_year,
+            team,
+            PlayerStatCompetitionKind::DomesticCup,
+            competition_slug,
+            stats,
+        );
+    }
+
+    /// Freeze a closed spell's friendly-bucket statistics into the
+    /// per-season ledger.
+    ///
+    /// `team` controls which row the Friendly slice belongs under in
+    /// the breakdown (its `slug` and `league_slug` form part of the
+    /// grouping key with the season's main row). `source_slug` is the
+    /// competition slug stamped on the ledger entry — for a senior
+    /// player it's usually the same as `team.league_slug`, but for a
+    /// youth-aliased player (U18..U23) the caller passes the youth
+    /// team's league_slug (e.g. `"russian-premier-league-u19"`) so the
+    /// tooltip can label the row with the actual youth league rather
+    /// than the senior league. Zero-appearance inputs are skipped.
+    pub fn record_friendly(
+        &mut self,
+        season_year: u16,
+        team: &TeamInfo,
+        source_slug: String,
+        stats: PlayerStatistics,
+    ) {
+        self.append_competition_to_ledger(
+            season_year,
+            team,
+            PlayerStatCompetitionKind::Friendly,
+            source_slug,
+            stats,
+        );
     }
 
     /// Continental-cup statistics recorded for a given `(season, team)` spell,
@@ -2708,22 +2811,29 @@ mod continental_tests {
 
     #[test]
     fn record_continental_ignores_empty_and_merges_repeat_spells() {
+        use crate::continent::competitions::CHAMPIONS_LEAGUE_SLUG;
+        let cl_slug = CHAMPIONS_LEAGUE_SLUG.to_string();
         let mut hist = PlayerStatisticsHistory::new();
         // 0-game input is dropped — no empty rows.
-        hist.record_continental(2025, &team("juventus"), PlayerStatistics::default());
+        hist.record_continental(
+            2025,
+            &team("juventus"),
+            cl_slug.clone(),
+            PlayerStatistics::default(),
+        );
         assert!(hist.continental.is_empty());
 
         // First continental spell at the club this season.
-        hist.record_continental(2025, &team("juventus"), stats(6, 2));
+        hist.record_continental(2025, &team("juventus"), cl_slug.clone(), stats(6, 2));
         // A second stint (e.g. left and came back) merges into the same row.
-        hist.record_continental(2025, &team("juventus"), stats(2, 1));
+        hist.record_continental(2025, &team("juventus"), cl_slug.clone(), stats(2, 1));
         assert_eq!(hist.continental.len(), 1);
         let cl = hist.continental_for(2025, "juventus").unwrap();
         assert_eq!(cl.played, 8);
         assert_eq!(cl.goals, 3);
 
         // A different season/club keeps its own row.
-        hist.record_continental(2026, &team("juventus"), stats(10, 4));
+        hist.record_continental(2026, &team("juventus"), cl_slug.clone(), stats(10, 4));
         assert_eq!(hist.continental.len(), 2);
         assert!(hist.continental_for(2024, "juventus").is_none());
     }
@@ -2733,11 +2843,17 @@ mod continental_tests {
         // Two frozen league seasons; continental ledger has games for the
         // 2025 row only. After folding, that row's league line picks up the
         // continental apps/goals while 2026 is untouched.
+        use crate::continent::competitions::CHAMPIONS_LEAGUE_SLUG;
         let mut hist = PlayerStatisticsHistory::from_items(vec![
             frozen(2025, "juventus", 30, 8),
             frozen(2026, "juventus", 28, 6),
         ]);
-        hist.record_continental(2025, &team("juventus"), stats(10, 5));
+        hist.record_continental(
+            2025,
+            &team("juventus"),
+            CHAMPIONS_LEAGUE_SLUG.to_string(),
+            stats(10, 5),
+        );
 
         let mut view = hist.view_items(None, d(2027, 9, 1));
         hist.fold_continental(&mut view, &PlayerStatistics::default(), d(2027, 9, 1));

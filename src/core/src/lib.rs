@@ -190,6 +190,7 @@ pub use club::{
     PlayerGenerator,
     PlayerHappiness,
     PlayerHistoryRow,
+    PlayerHistoryRowBreakdown,
     PlayerLanguage,
     PlayerLiveStatsInput,
     PlayerMailbox,

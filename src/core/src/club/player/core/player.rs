@@ -100,6 +100,17 @@ pub struct Player {
 
     pub statistics: PlayerStatistics,
     pub friendly_statistics: PlayerStatistics,
+    /// Last league slug a friendly match was recorded under for this
+    /// player. Set by `record_match_appearance` whenever a friendly is
+    /// booked (youth leagues are flagged friendly, so a U21 player's
+    /// league games land here too). Read by `drain_match_stats` to
+    /// stamp the canonical Friendly ledger entry with the real source
+    /// league — so a player loaned to a senior team who plays youth
+    /// friendlies keeps the "U19 League" breakdown label after the
+    /// loan is cancelled or returned. `None` means no friendly has
+    /// been recorded this spell; the drain falls back to the team's
+    /// league_slug (generic pre-season friendly).
+    pub friendly_source_slug: Option<String>,
     /// Rolled-up cup tally across every competition the player has
     /// featured in this spell — recomputed from
     /// `cup_statistics_by_competition` after each cup appearance. Kept as

@@ -11,8 +11,8 @@ use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use core::utils::FormattingUtils;
 use core::{
-    LiveCupSlice, PlayerLiveStatsInput, PlayerStatistics, PlayerStatisticsProjection,
-    PlayerStatusType, SimulatorData,
+    LiveCupSlice, PlayerLiveStatsInput, PlayerStatCompetitionKind, PlayerStatistics,
+    PlayerStatisticsProjection, PlayerStatusType, SimulatorData,
 };
 use serde::Deserialize;
 
@@ -70,8 +70,10 @@ pub struct PlayerHistorySeasonItem {
     pub country_slug: String,
     pub league_name: String,
     pub league_slug: String,
+    pub breakdown: Vec<PlayerHistoryCompetitionStats>,
 }
 
+#[derive(Clone)]
 pub struct PlayerHistoryStats {
     pub played: u16,
     pub played_subs: u16,
@@ -81,6 +83,12 @@ pub struct PlayerHistoryStats {
     pub average_rating: String,
     pub conceded: u16,
     pub clean_sheets: u16,
+}
+
+#[derive(Clone)]
+pub struct PlayerHistoryCompetitionStats {
+    pub label: String,
+    pub stats: PlayerHistoryStats,
 }
 
 struct TeamLocationInfo {
@@ -201,10 +209,51 @@ pub async fn player_history_action(
             statistics: &c.statistics,
         })
         .collect();
+    // Source slug for the live Friendly entry. Priority:
+    //   1. `player.friendly_source_slug` — set at match-record time, so
+    //      it reflects the actual league the player played friendlies
+    //      in this spell (the only authoritative source for a senior
+    //      loanee playing youth friendlies).
+    //   2. Inference from the player's current team's club roster — used
+    //      for save-loaded players who haven't played a friendly yet, or
+    //      legacy saves that pre-date the field.
+    // Senior callers with no youth squad fall through to empty → the
+    // projection inherits the active spell's league_slug → web layer
+    // renders the generic "Friendly".
+    let friendly_source_slug: String = player
+        .friendly_source_slug
+        .clone()
+        .or_else(|| {
+            team_opt.and_then(|team| {
+                let direct = if !team.team_type.is_own_team() {
+                    team.league_id
+                        .and_then(|lid| simulator_data.league(lid))
+                        .map(|l| l.slug.clone())
+                } else {
+                    None
+                };
+                if direct.is_some() {
+                    return direct;
+                }
+                simulator_data
+                    .club(team.club_id)
+                    .and_then(|club| {
+                        club.teams
+                            .teams
+                            .iter()
+                            .find(|t| !t.team_type.is_own_team() && t.league_id.is_some())
+                    })
+                    .and_then(|youth| youth.league_id)
+                    .and_then(|lid| simulator_data.league(lid))
+                    .map(|l| l.slug.clone())
+            })
+        })
+        .unwrap_or_default();
     let live_input = PlayerLiveStatsInput {
         league: live_league,
         friendly: live_friendly,
         cups: &live_cups,
+        friendly_source_slug: &friendly_source_slug,
     };
     let view = PlayerStatisticsProjection::player_history_rows(
         &player.statistics_history,
@@ -212,9 +261,116 @@ pub async fn player_history_action(
         simulator_data.date.date(),
     );
     let career_totals = PlayerStatisticsProjection::player_history_totals(&view);
+    let breakdowns = PlayerStatisticsProjection::player_history_breakdowns(
+        &player.statistics_history,
+        &live_input,
+        simulator_data.date.date(),
+    );
 
     let mut location_cache: std::collections::HashMap<String, TeamLocationInfo> =
         std::collections::HashMap::new();
+
+    // Index the per-row breakdowns by the same key
+    // `player_history_rows` groups on so each main row can find its
+    // own per-competition lines. Pre-build the i18n labels here so the
+    // template only renders strings.
+    let to_history_stats = |stats: &PlayerStatistics| PlayerHistoryStats {
+        played: stats.played,
+        played_subs: stats.played_subs,
+        goals: stats.goals,
+        assists: stats.assists,
+        player_of_the_match: stats.player_of_the_match,
+        average_rating: core::PlayerStatistics::format_rating(stats.average_rating),
+        conceded: stats.conceded,
+        clean_sheets: stats.clean_sheets,
+    };
+    // Resolve a breakdown row's slug into the league / cup display name.
+    // For League and Friendly the slug is a league_slug (the senior
+    // league, or for youth-aliased Friendly the youth league), which the
+    // simulator's slug index can resolve. For Continental Cup the slug
+    // is one of the four well-known continental constants — those
+    // aren't in the slug index, so we fall back to an i18n key derived
+    // by replacing hyphens with underscores. Domestic cups land in the
+    // slug index too because cups register a league slug at startup.
+    // Legacy aggregated rows (slug == row's main league_slug for a
+    // Cup kind) are detected by the caller and fall through to the
+    // generic kind label.
+    let resolve_label = |slug: &str, kind: PlayerStatCompetitionKind| -> String {
+        let kind_key = match kind {
+            PlayerStatCompetitionKind::League => "league",
+            PlayerStatCompetitionKind::ContinentalCup => "continental_cup",
+            PlayerStatCompetitionKind::DomesticCup => "domestic_cup",
+            PlayerStatCompetitionKind::Friendly => "friendly",
+        };
+        if !slug.is_empty() {
+            if let Some(name) = simulator_data
+                .indexes
+                .as_ref()
+                .and_then(|idx| idx.slug_indexes.get_league_by_slug(slug))
+                .and_then(|id| simulator_data.league(id))
+                .map(|l| l.name.clone())
+            {
+                return name;
+            }
+            let key = slug.replace('-', "_");
+            let translated = i18n.t(&key);
+            if translated != key.as_str() {
+                return translated.to_string();
+            }
+        }
+        i18n.t(kind_key).to_string()
+    };
+
+    // Match records group by (year, team, league) — loan flag is row
+    // metadata, not part of the grouping. Keeping this in sync with the
+    // projection's grouping is what makes the breakdown lookup robust.
+    type BreakdownKey = (u16, String, String);
+    let breakdown_index: std::collections::HashMap<BreakdownKey, Vec<PlayerHistoryCompetitionStats>> =
+        breakdowns
+            .into_iter()
+            .map(|b| {
+                let key: BreakdownKey =
+                    (b.season_start_year, b.team_slug, b.league_slug.clone());
+                let row_league_slug = b.league_slug.clone();
+                let comps = b
+                    .competitions
+                    .into_iter()
+                    .map(|c| {
+                        // Slug-matches-row defaults to the generic kind
+                        // label for non-League kinds. Three patterns
+                        // land here and all want "Cup" / "Continental
+                        // Cup" / "Friendly" rather than the senior
+                        // league name:
+                        //   1. Legacy aggregated cup entries (written
+                        //      before per-cup recording) — slug was set
+                        //      to the team's league_slug.
+                        //   2. Senior pre-season Friendly — no
+                        //      specific source league; the recorder
+                        //      defaults to the team's league_slug.
+                        //   3. New cup entries that wound up with the
+                        //      team's league slug for any reason.
+                        // For a youth-aliased Friendly the slug is the
+                        // YOUTH team's league_slug, which differs from
+                        // the row's main league_slug; that path
+                        // resolves to the youth league name.
+                        let use_generic_label = !matches!(
+                            c.competition_kind,
+                            PlayerStatCompetitionKind::League
+                        ) && c.competition_slug == row_league_slug;
+                        let label = if use_generic_label {
+                            resolve_label("", c.competition_kind)
+                        } else {
+                            resolve_label(&c.competition_slug, c.competition_kind)
+                        };
+                        PlayerHistoryCompetitionStats {
+                            label,
+                            stats: to_history_stats(&c.statistics),
+                        }
+                    })
+                    .collect();
+                (key, comps)
+            })
+            .collect();
 
     let items: Vec<PlayerHistorySeasonItem> = view
         .into_iter()
@@ -229,6 +385,35 @@ pub async fn player_history_action(
             } else {
                 None
             };
+
+            // Look up the breakdown using the row's ORIGINAL league_slug
+            // — the breakdown index is keyed on the slug the projection
+            // grouped with, before any web-side fallback below.
+            let breakdown_key: BreakdownKey = (
+                item.season.start_year,
+                item.team_slug.clone(),
+                item.league_slug.clone(),
+            );
+            // Every season row gets a breakdown so the dropdown icon
+            // and accordion render consistently. When the projection
+            // doesn't have one (synthetic gap-fill rows from
+            // fill_career_gaps, or a key mismatch we haven't seen
+            // before), synthesise a single League line from the
+            // row's own stats so the expansion still shows the row's
+            // numbers under a labelled competition.
+            let fallback_league_slug = item.league_slug.clone();
+            let breakdown = breakdown_index
+                .get(&breakdown_key)
+                .cloned()
+                .unwrap_or_else(|| {
+                    vec![PlayerHistoryCompetitionStats {
+                        label: resolve_label(
+                            &fallback_league_slug,
+                            PlayerStatCompetitionKind::League,
+                        ),
+                        stats: to_history_stats(&item.statistics),
+                    }]
+                });
 
             // If league name is empty, fall back to team's current league
             let (league_name, league_slug) = if !item.league_name.is_empty() {
@@ -249,37 +434,18 @@ pub async fn player_history_action(
                     Some(_) => "Free".to_string(),
                     None => String::new(),
                 },
-                stats: PlayerHistoryStats {
-                    played: item.statistics.played,
-                    played_subs: item.statistics.played_subs,
-                    goals: item.statistics.goals,
-                    assists: item.statistics.assists,
-                    player_of_the_match: item.statistics.player_of_the_match,
-                    average_rating: core::PlayerStatistics::format_rating(
-                        item.statistics.average_rating,
-                    ),
-                    conceded: item.statistics.conceded,
-                    clean_sheets: item.statistics.clean_sheets,
-                },
+                stats: to_history_stats(&item.statistics),
                 country_code: location.map(|l| l.country_code.clone()).unwrap_or_default(),
                 country_name: location.map(|l| l.country_name.clone()).unwrap_or_default(),
                 country_slug: location.map(|l| l.country_slug.clone()).unwrap_or_default(),
                 league_name,
                 league_slug,
+                breakdown,
             }
         })
         .collect();
 
-    let totals = PlayerHistoryStats {
-        played: career_totals.played,
-        played_subs: career_totals.played_subs,
-        goals: career_totals.goals,
-        assists: career_totals.assists,
-        player_of_the_match: career_totals.player_of_the_match,
-        average_rating: core::PlayerStatistics::format_rating(career_totals.average_rating),
-        conceded: career_totals.conceded,
-        clean_sheets: career_totals.clean_sheets,
-    };
+    let totals = to_history_stats(&career_totals);
 
     if has_no_team {
         let sub_title = if player.is_retired() {

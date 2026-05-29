@@ -835,6 +835,10 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
             league: &player.statistics,
             friendly: &player.friendly_statistics,
             cups: &live_cups,
+            // Overview aggregates Friendly into one row regardless of
+            // source league, so the slug override the History page
+            // uses (youth-aliased players) doesn't apply here.
+            friendly_source_slug: "",
         };
         let rows = PlayerStatisticsProjection::player_overview_statistics(
             &player.statistics_history,

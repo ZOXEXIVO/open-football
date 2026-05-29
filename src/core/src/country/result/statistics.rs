@@ -157,9 +157,26 @@ impl CountryResult {
                         Some(info) => info.clone(),
                         None => continue,
                     };
+                    let (youth_league_name, youth_league_slug) = team
+                        .league_id
+                        .and_then(|lid| league_lookup.get(&lid))
+                        .cloned()
+                        .unwrap_or_default();
+                    let youth_team_info = TeamInfo {
+                        name: team.name.clone(),
+                        slug: team.slug.clone(),
+                        reputation: team.reputation.world,
+                        league_name: youth_league_name,
+                        league_slug: youth_league_slug,
+                    };
                     for player in &mut team.players.players {
                         if drain_live_stats {
-                            player.on_non_senior_season_end(ended_season.clone(), &alias, date);
+                            player.on_non_senior_season_end(
+                                ended_season.clone(),
+                                &alias,
+                                &youth_team_info,
+                                date,
+                            );
                         } else {
                             player.on_missed_season_end(ended_season.clone(), &alias, date);
                         }

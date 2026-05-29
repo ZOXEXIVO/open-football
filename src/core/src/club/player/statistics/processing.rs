@@ -46,22 +46,108 @@ impl Player {
 
     /// Freeze the current spell's continental-cup statistics into the
     /// per-season ledger for `team`, attributing them to the season that
-    /// contains `date`. Call this immediately before the live cup bucket is
-    /// reset so a transfer / loan / season boundary doesn't discard the
+    /// contains `date`. One ledger row per continental tournament — the
+    /// History page tooltip surfaces Champions League / Europa League /
+    /// Conference League / Copa Libertadores individually instead of as
+    /// one aggregated line. Called immediately before the live cup bucket
+    /// is reset so a transfer / loan / season boundary doesn't discard the
     /// player's continental appearances.
     fn record_continental_spell(&mut self, season_year: u16, team: &TeamInfo) {
-        let continental = self.continental_cup_statistics();
+        // Snapshot to avoid borrowing `self` immutably while calling a
+        // mutating helper.
+        let slices: Vec<(String, PlayerStatistics)> = self
+            .cup_statistics_by_competition
+            .iter()
+            .filter(|c| is_continental_slug(&c.competition_slug))
+            .map(|c| (c.competition_slug.clone(), c.statistics.clone()))
+            .collect();
+        for (slug, stats) in slices {
+            self.statistics_history
+                .record_continental(season_year, team, slug, stats);
+        }
+    }
+
+    /// Freeze the current spell's domestic-cup statistics into the
+    /// per-season ledger for `team`. One ledger row per domestic cup
+    /// (FA Cup, League Cup, etc.) instead of an aggregated line. Paired
+    /// with [`Self::record_continental_spell`] at every boundary that
+    /// resets the live cup buckets.
+    fn record_domestic_cup_spell(&mut self, season_year: u16, team: &TeamInfo) {
+        let slices: Vec<(String, PlayerStatistics)> = self
+            .cup_statistics_by_competition
+            .iter()
+            .filter(|c| !is_continental_slug(&c.competition_slug))
+            .map(|c| (c.competition_slug.clone(), c.statistics.clone()))
+            .collect();
+        for (slug, stats) in slices {
+            self.statistics_history
+                .record_domestic_cup(season_year, team, slug, stats);
+        }
+    }
+
+    /// Freeze the current spell's friendly-bucket statistics into the
+    /// per-season ledger under `team`. `source_slug` is the competition
+    /// slug stamped on the ledger entry — `team.league_slug` for the
+    /// senior path, the youth team's league slug for a U18..U23 aliased
+    /// spell so the breakdown labels the row with the youth league name.
+    fn record_friendly_spell_with_source(
+        &mut self,
+        season_year: u16,
+        team: &TeamInfo,
+        source_slug: String,
+    ) {
+        let friendly = self.friendly_statistics.clone();
         self.statistics_history
-            .record_continental(season_year, team, continental);
+            .record_friendly(season_year, team, source_slug, friendly);
+    }
+
+    /// The single chokepoint for "this spell is done — freeze its match
+    /// stats and reset the live buckets for the next spell." Every
+    /// inter-spell event (transfer, loan, loan-return, release,
+    /// cancel-loan, manual-*) and every season-end (senior + youth)
+    /// flows through here, so the rule that EVERY bucket must be
+    /// recorded before being cleared lives in one place — not eight.
+    ///
+    /// The duplicated per-handler ritual the old code used to keep was
+    /// a foot-gun: a previously-shipped `on_loan_return` cleared
+    /// nothing, leaking the loan period's friendlies into the parent
+    /// spell. Centralising the drain removes the failure mode entirely.
+    ///
+    /// Returns the drained League counter so the caller hands it off to
+    /// the matching `statistics_history.record_*` method without
+    /// re-reaching into `self.statistics`.
+    ///
+    /// Source resolution for the canonical Friendly ledger entry, in
+    /// priority order:
+    ///   1. explicit `friendly_source_slug` argument (the non-senior
+    ///      season-end path passes the youth team's league_slug),
+    ///   2. `player.friendly_source_slug` captured at match-record time
+    ///      (the only path that knows the actual youth league a senior
+    ///      loanee played friendlies in),
+    ///   3. `team.league_slug` (senior pre-season friendlies — the row
+    ///      then renders as the generic "Friendly").
+    fn drain_match_stats(
+        &mut self,
+        team: &TeamInfo,
+        season_year: u16,
+        friendly_source_slug: Option<String>,
+    ) -> PlayerStatistics {
+        self.record_continental_spell(season_year, team);
+        self.record_domestic_cup_spell(season_year, team);
+        let recorded_source = self.friendly_source_slug.take();
+        let friendly_slug = friendly_source_slug
+            .or(recorded_source)
+            .unwrap_or_else(|| team.league_slug.clone());
+        self.record_friendly_spell_with_source(season_year, team, friendly_slug);
+        let stats = std::mem::take(&mut self.statistics);
+        self.friendly_statistics = Default::default();
+        self.reset_cup_statistics();
+        stats
     }
 
     /// Record a permanent transfer (called by transfer execution).
-    /// Resets stats, saves history for both clubs, sets transfer date.
     pub fn on_transfer(&mut self, from: &TeamInfo, to: &TeamInfo, fee: f64, date: NaiveDate) {
-        let stats = std::mem::take(&mut self.statistics);
-        self.friendly_statistics = Default::default();
-        self.record_continental_spell(Season::from_date(date).start_year, from);
-        self.reset_cup_statistics();
+        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
         self.statistics_history
             .record_transfer(stats, from, to, fee, date);
         self.last_transfer_date = Some(date);
@@ -79,10 +165,9 @@ impl Player {
     /// player history table even though stats are still drained.
     ///
     /// `friendly_statistics` and `cup_statistics` are intentionally NOT
-    /// cleared: they're not tracked per-spell in `statistics_history`, so
-    /// resetting them on an intra-club move just discards data the player
-    /// page would otherwise show. Inter-club moves (transfer/loan) still
-    /// reset them via their own paths.
+    /// cleared: a soft same-club move shouldn't discard buckets the
+    /// player page would otherwise show. Inter-club moves (transfer /
+    /// loan) reset them via their own `drain_match_stats` calls.
     pub fn on_intra_club_move(
         &mut self,
         from: &TeamInfo,
@@ -91,23 +176,12 @@ impl Player {
         to_senior: bool,
         date: NaiveDate,
     ) {
-        // Only drain `player.statistics` when leaving a SENIOR team
-        // (Main / B / Second) — those games belong to the FROM spell
-        // and `record_intra_club_move`'s `from_senior` branch needs
-        // them to close the row.
-        //
-        // For non-senior moves (any move out of Reserve / U18..U23),
-        // `player.statistics` holds *senior callup* games the youth
-        // player earned while rostered on the non-senior squad. The
-        // history layer aliases those rows to Main, but
-        // `record_intra_club_move` would discard them today because
-        // its `from_senior=false` branch is a no-op. Leave them in
-        // place so the next season-end drain (`on_season_end` after
-        // a promotion, `on_non_senior_season_end` for lateral youth
-        // moves) routes them into the player's Main alias row
-        // correctly. Without this guard, a U21 player called up to
-        // play five Main games and then promoted mid-season loses
-        // all five from career history.
+        // Drain `player.statistics` only when leaving a SENIOR team —
+        // those games belong to the FROM spell and `record_intra_club_move`
+        // needs them to close the row. For non-senior moves the live
+        // counter holds senior-callup games earned while on the youth
+        // squad; leave them in place so the next senior or non-senior
+        // season-end drain routes them into the Main-alias row.
         let stats = if from_senior {
             std::mem::take(&mut self.statistics)
         } else {
@@ -121,16 +195,6 @@ impl Player {
             to_senior,
             date,
         );
-    }
-
-    /// Drain accumulated match stats without writing to history. Used at
-    /// season-end for non-senior squads (Reserve, U18..U23) so their
-    /// stats don't bleed into next season while keeping the player's
-    /// career history confined to senior football.
-    pub fn reset_match_stats(&mut self) {
-        self.statistics = Default::default();
-        self.friendly_statistics = Default::default();
-        self.reset_cup_statistics();
     }
 
     /// Season-end snapshot for a player sitting on a non-senior squad
@@ -152,20 +216,19 @@ impl Player {
         &mut self,
         season: Season,
         main_team_info: &TeamInfo,
+        youth_team_info: &TeamInfo,
         _date: NaiveDate,
     ) {
         let is_loan = self.is_on_loan();
-
-        // Senior callup games — preserve and feed into the Main row.
-        let stats = std::mem::take(&mut self.statistics);
-        // Youth-league + cup buckets get cleared like the senior path.
-        self.friendly_statistics = Default::default();
-        self.record_continental_spell(season.start_year, main_team_info);
-        self.reset_cup_statistics();
-
-        // Drain through the regular season-end path. Any callup games
-        // land on the seeded Main entry; the merge step collapses any
-        // duplicates and keeps the row even when callup count is zero.
+        // Drain under the Main-aliased team but stamp the Friendly
+        // entry with the YOUTH league slug so the History breakdown
+        // labels the row with the actual youth league name (e.g.
+        // "Russian Premier League U19") rather than the senior parent.
+        let stats = self.drain_match_stats(
+            main_team_info,
+            season.start_year,
+            Some(youth_team_info.league_slug.clone()),
+        );
         self.statistics_history.record_season_end(
             season,
             stats,
@@ -173,41 +236,35 @@ impl Player {
             is_loan,
             self.last_transfer_date,
         );
-
         // Buy-back protection only needs to last one season — same
         // contract as `on_season_end`.
         self.sold_from = None;
     }
 
     /// Record a loan move (called by loan execution).
-    /// Resets stats, saves history for parent + loan club, sets transfer date.
     pub fn on_loan(&mut self, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {
-        let stats = std::mem::take(&mut self.statistics);
-        self.friendly_statistics = Default::default();
-        self.record_continental_spell(Season::from_date(date).start_year, from);
-        self.reset_cup_statistics();
+        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
         self.statistics_history
             .record_loan(stats, from, to, loan_fee, date);
         self.last_transfer_date = Some(date);
     }
 
-    /// Record a loan return (called at end of loan period).
-    /// Merges remaining stats into the loan entry, sets transfer date.
+    /// Record a loan return (called at end of loan period). The
+    /// borrowing club is treated as the source spell — its friendlies /
+    /// cups are frozen under the BORROWING team before the live buckets
+    /// reset; otherwise the loan-period games leak into the parent
+    /// spell that starts fresh on return.
     pub fn on_loan_return(&mut self, borrowing: &TeamInfo, parent: &TeamInfo, date: NaiveDate) {
-        let stats = std::mem::take(&mut self.statistics);
+        let stats = self.drain_match_stats(borrowing, Season::from_date(date).start_year, None);
         self.statistics_history
             .record_loan_return(stats, borrowing, parent, date);
         self.last_transfer_date = Some(date);
     }
 
     /// Record season-end snapshot (called when new season starts).
-    /// Saves stats to history and resets for new season.
     pub fn on_season_end(&mut self, season: Season, team: &TeamInfo, _date: NaiveDate) {
         let is_loan = self.is_on_loan();
-        let stats = std::mem::take(&mut self.statistics);
-        self.friendly_statistics = Default::default();
-        self.record_continental_spell(season.start_year, team);
-        self.reset_cup_statistics();
+        let stats = self.drain_match_stats(team, season.start_year, None);
         self.statistics_history.record_season_end(
             season,
             stats,
@@ -343,20 +400,15 @@ impl Player {
     }
 
     /// Record a cancel-loan from the web UI.
-    /// Snapshots borrowing club stats, cleans stale entries, creates parent placeholder.
     pub fn on_cancel_loan(&mut self, borrowing: &TeamInfo, parent: &TeamInfo, date: NaiveDate) {
         let is_loan = self.is_on_loan();
-        let stats = std::mem::take(&mut self.statistics);
-        self.friendly_statistics = Default::default();
-        self.record_continental_spell(Season::from_date(date).start_year, borrowing);
-        self.reset_cup_statistics();
+        let stats = self.drain_match_stats(borrowing, Season::from_date(date).start_year, None);
         self.statistics_history
             .record_cancel_loan(stats, borrowing, parent, is_loan, date);
         self.last_transfer_date = Some(date);
     }
 
     /// Record a manual transfer from the web UI.
-    /// Snapshots source club stats, cleans stale entries, creates destination placeholder.
     pub fn on_manual_transfer(
         &mut self,
         from: &TeamInfo,
@@ -365,10 +417,7 @@ impl Player {
         date: NaiveDate,
     ) {
         let is_loan = self.is_on_loan();
-        let stats = std::mem::take(&mut self.statistics);
-        self.friendly_statistics = Default::default();
-        self.record_continental_spell(Season::from_date(date).start_year, from);
-        self.reset_cup_statistics();
+        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
         self.statistics_history
             .record_departure_transfer(stats, from, to, fee, is_loan, date);
         self.last_transfer_date = Some(date);
@@ -376,28 +425,35 @@ impl Player {
     }
 
     /// React to being released into the free-agent pool. Snapshots the
-    /// in-flight `player.statistics` onto the source club's career entry
-    /// and marks it as departed, so the games the player accumulated
-    /// before the release stay attributed to the club where they were
-    /// played — not to a synthetic "Free Agent" row at the next signing.
-    /// Caller is responsible for clearing contract / statuses / happiness;
-    /// this method only owns the history side, mirroring the existing
-    /// `on_manual_transfer` split.
+    /// in-flight match stats onto the source club's career entry and
+    /// marks it as departed, so games the player accumulated before
+    /// the release stay attributed to the club where they were played —
+    /// not to a synthetic "Free Agent" row at the next signing. Caller
+    /// is responsible for clearing contract / statuses / happiness;
+    /// this method only owns the history side.
     pub fn on_release(&mut self, from: &TeamInfo, date: NaiveDate) {
-        let stats = std::mem::take(&mut self.statistics);
-        self.friendly_statistics = Default::default();
-        self.record_continental_spell(Season::from_date(date).start_year, from);
-        self.reset_cup_statistics();
+        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
         self.statistics_history.record_release(stats, from, date);
         self.last_transfer_date = Some(date);
         self.is_force_match_selection = false;
     }
 
-    /// Record a manual signing of a free agent from the web UI.
-    /// No source club exists, so this records only the destination — the
-    /// generic `record_departure_transfer` path duplicates the row by
-    /// treating the destination as both source and target.
+    /// Record a manual signing of a free agent. There is no source club
+    /// to attribute stats to: the prior club's `on_release` already
+    /// drained the live buckets, and a player sitting in the free-agent
+    /// pool plays no matches. This invariant — live cup / friendly
+    /// buckets MUST be empty here — is checked in debug builds; release
+    /// builds clear defensively so a soft regression cannot silently
+    /// orphan a non-League slice.
     pub fn on_free_agent_signing(&mut self, to: &TeamInfo, date: NaiveDate) {
+        debug_assert!(
+            self.friendly_statistics.total_games() == 0
+                && self.cup_statistics_by_competition.is_empty(),
+            "on_free_agent_signing invariant violated: live non-League buckets must be \
+             empty (on_release should have drained them); friendly_games={}, cup_slices={}",
+            self.friendly_statistics.total_games(),
+            self.cup_statistics_by_competition.len(),
+        );
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.reset_cup_statistics();
@@ -408,7 +464,6 @@ impl Player {
     }
 
     /// Record a manual loan from the web UI.
-    /// Snapshots source stats, cleans stale entries, creates parent + destination placeholders.
     pub fn on_manual_loan(
         &mut self,
         from: &TeamInfo,
@@ -417,10 +472,7 @@ impl Player {
         date: NaiveDate,
     ) {
         let is_loan = self.is_on_loan();
-        let stats = std::mem::take(&mut self.statistics);
-        self.friendly_statistics = Default::default();
-        self.record_continental_spell(Season::from_date(date).start_year, from);
-        self.reset_cup_statistics();
+        let stats = self.drain_match_stats(from, Season::from_date(date).start_year, None);
         self.statistics_history
             .record_departure_loan(stats, from, parent, to, is_loan, date);
         self.last_transfer_date = Some(date);
@@ -565,6 +617,76 @@ mod tests {
             .unwrap();
         assert_eq!(torino.statistics.played, 15);
         assert_eq!(torino.transfer_fee, Some(50_000.0));
+    }
+
+    #[test]
+    fn on_loan_return_freezes_borrowing_club_friendly_and_cup_stats() {
+        // User-reported bug: a returning loanee lost their loan-period
+        // friendly / cup stats because on_loan_return didn't freeze
+        // them under the borrowing club before the live buckets reset
+        // (and now would, via drain_match_stats). Verifies the drain
+        // chokepoint runs on this path too.
+        let mut player = make_player();
+        player.statistics = make_stats(15, 4);
+        player.friendly_statistics = make_stats(3, 1);
+        player.cup_statistics_by_competition.push(
+            crate::CompetitionStatistics {
+                competition_slug: CHAMPIONS_LEAGUE_SLUG.to_string(),
+                statistics: make_stats(5, 2),
+            },
+        );
+
+        let borrowing = make_team("Torino", "torino");
+        let parent = make_team("Juventus", "juventus");
+        player.on_loan_return(&borrowing, &parent, make_date(2032, 5, 31));
+
+        // Live buckets cleared.
+        assert_eq!(player.friendly_statistics.played, 0);
+        assert!(player.cup_statistics_by_competition.is_empty());
+
+        // Borrowing club's friendly + continental survive in the
+        // canonical ledger under Torino — NOT under Juventus.
+        let friendly_under_torino = player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .any(|e| {
+                e.team_slug == "torino"
+                    && e.competition_kind
+                        == crate::PlayerStatCompetitionKind::Friendly
+                    && e.statistics.played == 3
+            });
+        assert!(
+            friendly_under_torino,
+            "loan-period Friendly must be frozen under the borrowing club"
+        );
+        let continental_under_torino = player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .any(|e| {
+                e.team_slug == "torino"
+                    && e.competition_kind
+                        == crate::PlayerStatCompetitionKind::ContinentalCup
+                    && e.statistics.played == 5
+            });
+        assert!(
+            continental_under_torino,
+            "loan-period Continental must be frozen under the borrowing club"
+        );
+        // Nothing got mis-attributed to the parent club.
+        let any_under_parent_non_league = player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .any(|e| {
+                e.team_slug == "juventus"
+                    && e.competition_kind != crate::PlayerStatCompetitionKind::League
+            });
+        assert!(
+            !any_under_parent_non_league,
+            "no loan-period non-League entry may land under the parent club"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -2586,6 +2708,7 @@ mod tests {
             league: &live,
             friendly: &empty,
             cups: &[],
+            friendly_source_slug: "",
         };
 
         let rows = PlayerStatisticsProjection::player_history_rows(
@@ -2663,6 +2786,7 @@ mod tests {
                 league: &live,
                 friendly: &empty,
                 cups: &[],
+                friendly_source_slug: "",
             };
             let rows = PlayerStatisticsProjection::player_history_rows(
                 &player.statistics_history,
@@ -2702,12 +2826,941 @@ mod tests {
         player.contract_loan = None;
 
         let empty = PlayerStatistics::default();
-        let live_input = crate::PlayerLiveStatsInput { league: &empty, friendly: &empty, cups: &[] };
+        let live_input = crate::PlayerLiveStatsInput { league: &empty, friendly: &empty, cups: &[], friendly_source_slug: "" };
         let rows = PlayerStatisticsProjection::player_history_rows(&player.statistics_history, &live_input, make_date(2027, 10, 1));
         let desc: Vec<String> = rows.iter().map(|r| format!("{}:{}{}", r.season.start_year, r.team_slug, if r.is_loan {"(loan)"} else {""})).collect();
         assert!(
             rows.iter().any(|r| r.season.start_year == 2026 && r.team_slug == "zenit" && r.is_loan),
             "0-game Zenit loan must remain visible after the season ends; got {:?}", desc
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spec-mandated drain contract:
+//
+//   Every lifecycle boundary must freeze the live Friendly + cup buckets
+//   into the canonical ledger BEFORE clearing them. The raw ledger
+//   records WHERE matches were earned (team + competition_slug); the
+//   projection decides HOW to display / fold / filter.
+//
+// These tests pin down the per-handler drain contract end-to-end so a
+// regression in any one handler surfaces as a focused failure rather
+// than a vague rendering bug down the line.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod drain_invariants_tests {
+    use super::*;
+    use crate::CompetitionStatistics;
+    use crate::LiveCupSlice;
+    use crate::PlayerLiveStatsInput;
+    use crate::PlayerStatCompetitionKind;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::statistics::projection::PlayerStatisticsProjection;
+    use crate::continent::competitions::CHAMPIONS_LEAGUE_SLUG;
+    use crate::shared::fullname::FullName;
+    use crate::{PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills, PlayerStatistics};
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn stats(played: u16, goals: u16) -> PlayerStatistics {
+        let mut s = PlayerStatistics::default();
+        s.played = played;
+        s.goals = goals;
+        s
+    }
+
+    fn player() -> crate::Player {
+        PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Test".to_string(), "Player".to_string()))
+            .birth_date(d(2000, 1, 1))
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions { positions: vec![] })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap()
+    }
+
+    fn team(name: &str, slug: &str, league_slug: &str) -> TeamInfo {
+        TeamInfo {
+            name: name.to_string(),
+            slug: slug.to_string(),
+            reputation: 100,
+            league_name: "League".to_string(),
+            league_slug: league_slug.to_string(),
+        }
+    }
+
+    fn has_ledger_entry(
+        player: &crate::Player,
+        team_slug: &str,
+        kind: PlayerStatCompetitionKind,
+        competition_slug: &str,
+        played: u16,
+    ) -> bool {
+        player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .any(|e| {
+                e.team_slug == team_slug
+                    && e.competition_kind == kind
+                    && e.competition_slug == competition_slug
+                    && e.statistics.played == played
+            })
+    }
+
+    // ── Per-handler drain contract ────────────────────────────────────
+
+    #[test]
+    fn on_manual_transfer_freezes_source_friendly_and_cup_under_source_team() {
+        let mut p = player();
+        let from = team("Juventus", "juventus", "serie-a");
+        let to = team("Lazio", "lazio", "serie-a");
+
+        p.statistics = stats(8, 2);
+        p.friendly_statistics = stats(2, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: CHAMPIONS_LEAGUE_SLUG.to_string(),
+            statistics: stats(3, 1),
+        });
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "coppa-italia".to_string(),
+            statistics: stats(1, 0),
+        });
+
+        p.on_manual_transfer(&from, &to, Some(5_000_000.0), d(2026, 11, 1));
+
+        // Live buckets cleared.
+        assert_eq!(p.statistics.played, 0);
+        assert_eq!(p.friendly_statistics.played, 0);
+        assert!(p.cup_statistics_by_competition.is_empty());
+        // Source spell's friendly + per-cup entries frozen under SOURCE team.
+        assert!(has_ledger_entry(&p, "juventus", PlayerStatCompetitionKind::Friendly, "serie-a", 2));
+        assert!(has_ledger_entry(
+            &p,
+            "juventus",
+            PlayerStatCompetitionKind::ContinentalCup,
+            CHAMPIONS_LEAGUE_SLUG,
+            3,
+        ));
+        assert!(has_ledger_entry(&p, "juventus", PlayerStatCompetitionKind::DomesticCup, "coppa-italia", 1));
+        // Nothing under destination.
+        assert!(!p
+            .statistics_history
+            .season_ledger
+            .iter()
+            .any(|e| e.team_slug == "lazio"
+                && e.competition_kind != PlayerStatCompetitionKind::League));
+    }
+
+    #[test]
+    fn on_manual_loan_freezes_source_friendly_and_cup_under_source_team() {
+        let mut p = player();
+        let from = team("Juventus", "juventus", "serie-a");
+        let to = team("Empoli", "empoli", "serie-a");
+
+        p.statistics = stats(6, 1);
+        p.friendly_statistics = stats(2, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "coppa-italia".to_string(),
+            statistics: stats(2, 0),
+        });
+
+        p.on_manual_loan(&from, &from, &to, d(2026, 11, 5));
+
+        assert!(p.cup_statistics_by_competition.is_empty());
+        assert!(has_ledger_entry(&p, "juventus", PlayerStatCompetitionKind::Friendly, "serie-a", 2));
+        assert!(has_ledger_entry(&p, "juventus", PlayerStatCompetitionKind::DomesticCup, "coppa-italia", 2));
+        assert!(!p
+            .statistics_history
+            .season_ledger
+            .iter()
+            .any(|e| e.team_slug == "empoli"
+                && e.competition_kind != PlayerStatCompetitionKind::League));
+    }
+
+    #[test]
+    fn on_cancel_loan_freezes_borrowing_friendly_and_cup_under_borrowing_team() {
+        let mut p = player();
+        let parent = team("Spartak", "spartak", "rpl");
+        let borrowing = team("Pari", "pari", "rpl");
+
+        // Player has the borrowing-club live buckets populated.
+        p.statistics = stats(9, 0);
+        p.friendly_statistics = stats(2, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "russia-cup".to_string(),
+            statistics: stats(1, 0),
+        });
+
+        // Existing borrowing-club current entry so the League snapshot lands somewhere.
+        p.statistics_history
+            .current
+            .push(crate::club::player::statistics::history::CurrentSeasonEntry {
+                team_name: borrowing.name.clone(),
+                team_slug: borrowing.slug.clone(),
+                team_reputation: borrowing.reputation,
+                league_name: borrowing.league_name.clone(),
+                league_slug: borrowing.league_slug.clone(),
+                is_loan: true,
+                transfer_fee: Some(0.0),
+                statistics: PlayerStatistics::default(),
+                joined_date: d(2026, 8, 1),
+                departed_date: None,
+                seq_id: 1,
+            });
+
+        p.on_cancel_loan(&borrowing, &parent, d(2026, 12, 1));
+
+        assert_eq!(p.friendly_statistics.played, 0);
+        assert!(p.cup_statistics_by_competition.is_empty());
+        assert!(has_ledger_entry(&p, "pari", PlayerStatCompetitionKind::Friendly, "rpl", 2));
+        assert!(has_ledger_entry(&p, "pari", PlayerStatCompetitionKind::DomesticCup, "russia-cup", 1));
+        // No parent-club non-League leakage.
+        assert!(!p
+            .statistics_history
+            .season_ledger
+            .iter()
+            .any(|e| e.team_slug == "spartak"
+                && e.competition_kind != PlayerStatCompetitionKind::League));
+    }
+
+    #[test]
+    fn on_release_freezes_source_friendly_and_cup_under_source_team() {
+        let mut p = player();
+        let from = team("Marseille", "marseille", "ligue-1");
+
+        p.statistics = stats(4, 1);
+        p.friendly_statistics = stats(2, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: crate::continent::competitions::EUROPA_LEAGUE_SLUG.to_string(),
+            statistics: stats(3, 0),
+        });
+
+        p.on_release(&from, d(2026, 12, 30));
+
+        assert!(p.cup_statistics_by_competition.is_empty());
+        assert!(has_ledger_entry(&p, "marseille", PlayerStatCompetitionKind::Friendly, "ligue-1", 2));
+        assert!(has_ledger_entry(
+            &p,
+            "marseille",
+            PlayerStatCompetitionKind::ContinentalCup,
+            crate::continent::competitions::EUROPA_LEAGUE_SLUG,
+            3,
+        ));
+    }
+
+    #[test]
+    fn on_season_end_freezes_friendly_under_team_league_slug() {
+        // For a senior season-end, source_slug defaults to the team's
+        // league_slug, so the breakdown labels Friendly with the senior
+        // league name (the web layer then renders the generic "Friendly").
+        let mut p = player();
+        let main = team("Inter", "inter", "serie-a");
+        p.statistics = stats(30, 8);
+        p.friendly_statistics = stats(4, 1);
+        p.on_season_end(Season::new(2026), &main, d(2027, 8, 1));
+
+        assert!(has_ledger_entry(&p, "inter", PlayerStatCompetitionKind::Friendly, "serie-a", 4));
+        assert_eq!(p.friendly_statistics.played, 0);
+    }
+
+    #[test]
+    fn on_non_senior_season_end_freezes_friendly_under_youth_league_slug() {
+        // The drain stamps the Friendly competition_slug with the YOUTH
+        // team's league_slug, while the row anchor stays under the Main
+        // alias. The History breakdown can then label the Friendly row
+        // "Russian Premier League U19" — not the senior parent.
+        let mut p = player();
+        let main = team("Krasnodar", "krasnodar", "russian-premier-league");
+        let youth = team(
+            "Krasnodar U19",
+            "krasnodar-u19",
+            "russian-premier-league-u19",
+        );
+        p.statistics_history
+            .seed_initial_team(&main, d(2026, 8, 1), false);
+        p.statistics = PlayerStatistics::default();
+        p.friendly_statistics = stats(5, 2);
+        p.on_non_senior_season_end(Season::new(2026), &main, &youth, d(2027, 8, 1));
+
+        // Friendly is anchored under MAIN team_slug but stamped with the
+        // YOUTH league_slug.
+        let frozen = p
+            .statistics_history
+            .season_ledger
+            .iter()
+            .find(|e| {
+                e.team_slug == "krasnodar"
+                    && e.competition_kind == PlayerStatCompetitionKind::Friendly
+            })
+            .expect("youth-aliased Friendly entry missing");
+        assert_eq!(frozen.competition_slug, "russian-premier-league-u19");
+        assert_eq!(frozen.statistics.played, 5);
+    }
+
+    // ── End-to-end: lifecycle scenarios from the spec ─────────────────
+
+    /// Spec scenario: loan out, play League + Friendly + Cup, then
+    /// cancel-loan mid-season. The History breakdown must still show
+    /// League + Friendly + Cup under the loan-team row.
+    #[test]
+    fn lifecycle_loan_play_all_buckets_then_cancel_keeps_breakdown_under_loan_team() {
+        let mut p = player();
+        let parent = team("Spartak", "spartak", "russian-premier-league");
+        let pari = team("Pari", "pari", "russian-premier-league");
+
+        // Initial state.
+        p.statistics_history
+            .seed_initial_team(&parent, d(2026, 8, 1), false);
+
+        // Loan to Pari.
+        p.statistics = PlayerStatistics::default();
+        p.on_loan(&parent, &pari, 50_000.0, d(2026, 9, 1));
+
+        // While at Pari: 9 League games, 2 Friendly games (youth bucket),
+        // 1 Russia Cup game.
+        p.statistics = stats(9, 0);
+        p.friendly_statistics = stats(2, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "russia-cup".to_string(),
+            statistics: stats(1, 0),
+        });
+
+        // Mid-season cancel.
+        p.on_cancel_loan(&pari, &parent, d(2026, 12, 1));
+
+        // Project the breakdowns (loan row at Pari).
+        let empty = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let breakdowns = PlayerStatisticsProjection::player_history_breakdowns(
+            &p.statistics_history,
+            &live,
+            d(2026, 12, 15),
+        );
+        let pari = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "pari")
+            .expect("Pari breakdown must exist after cancel-loan");
+        assert!(pari.is_loan, "Pari row should be labelled loan");
+        let kinds: Vec<PlayerStatCompetitionKind> =
+            pari.competitions.iter().map(|c| c.competition_kind).collect();
+        assert!(kinds.contains(&PlayerStatCompetitionKind::League));
+        assert!(kinds.contains(&PlayerStatCompetitionKind::Friendly));
+        assert!(kinds.contains(&PlayerStatCompetitionKind::DomesticCup));
+    }
+
+    /// Spec scenario: transfer after playing Friendly + Cup. The source
+    /// team's row keeps those stats; the destination starts clean.
+    #[test]
+    fn lifecycle_transfer_with_cup_and_friendly_keeps_source_breakdown() {
+        let mut p = player();
+        let a = team("Club A", "club-a", "premier-league");
+        let b = team("Club B", "club-b", "premier-league");
+
+        p.statistics_history
+            .seed_initial_team(&a, d(2026, 8, 1), false);
+        // At A: 8 League apps, 3 Friendly, 2 UCL, 1 FA-Cup.
+        p.statistics = stats(8, 1);
+        p.friendly_statistics = stats(3, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: CHAMPIONS_LEAGUE_SLUG.to_string(),
+            statistics: stats(2, 0),
+        });
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "fa-cup".to_string(),
+            statistics: stats(1, 0),
+        });
+
+        p.on_transfer(&a, &b, 1_000_000.0, d(2026, 11, 1));
+
+        // Destination starts clean.
+        assert_eq!(p.statistics.played, 0);
+        assert_eq!(p.friendly_statistics.played, 0);
+        assert!(p.cup_statistics_by_competition.is_empty());
+
+        // Project: A breakdown shows League + Friendly + Continental + Domestic.
+        let empty = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let breakdowns = PlayerStatisticsProjection::player_history_breakdowns(
+            &p.statistics_history,
+            &live,
+            d(2026, 12, 1),
+        );
+        let a_bd = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "club-a")
+            .expect("source-club A breakdown missing after transfer");
+        let kinds: Vec<PlayerStatCompetitionKind> =
+            a_bd.competitions.iter().map(|c| c.competition_kind).collect();
+        assert!(kinds.contains(&PlayerStatCompetitionKind::League));
+        assert!(kinds.contains(&PlayerStatCompetitionKind::Friendly));
+        assert!(kinds.contains(&PlayerStatCompetitionKind::ContinentalCup));
+        assert!(kinds.contains(&PlayerStatCompetitionKind::DomesticCup));
+
+        // Destination row exists but only carries a 0-app League stub.
+        let b_bd = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "club-b")
+            .expect("destination B breakdown must exist");
+        assert!(
+            !b_bd
+                .competitions
+                .iter()
+                .any(|c| c.competition_kind != PlayerStatCompetitionKind::League),
+            "destination must not inherit any source non-League slice"
+        );
+    }
+
+    /// Spec scenario: loan out, play Friendly + Cup, RETURN from loan.
+    /// The departed loan row keeps those stats. (Variant of the existing
+    /// `on_loan_return_freezes_borrowing_club_friendly_and_cup_stats`
+    /// test that additionally checks the breakdown projection.)
+    #[test]
+    fn lifecycle_loan_play_then_return_keeps_breakdown_under_loan_team() {
+        let mut p = player();
+        let parent = team("Juventus", "juventus", "serie-a");
+        let torino = team("Torino", "torino", "serie-a");
+
+        p.statistics_history
+            .seed_initial_team(&parent, d(2026, 8, 1), false);
+        p.on_loan(&parent, &torino, 30_000.0, d(2027, 1, 15));
+
+        // Loan-period stats.
+        p.statistics = stats(12, 2);
+        p.friendly_statistics = stats(1, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "coppa-italia".to_string(),
+            statistics: stats(2, 1),
+        });
+
+        p.on_loan_return(&torino, &parent, d(2027, 5, 31));
+
+        let empty = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let breakdowns = PlayerStatisticsProjection::player_history_breakdowns(
+            &p.statistics_history,
+            &live,
+            d(2027, 6, 5),
+        );
+        let torino = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "torino")
+            .expect("Torino loan breakdown missing after return");
+        assert!(torino.is_loan);
+        let kinds: Vec<PlayerStatCompetitionKind> = torino
+            .competitions
+            .iter()
+            .map(|c| c.competition_kind)
+            .collect();
+        assert!(kinds.contains(&PlayerStatCompetitionKind::League));
+        assert!(kinds.contains(&PlayerStatCompetitionKind::Friendly));
+        assert!(kinds.contains(&PlayerStatCompetitionKind::DomesticCup));
+        // And no Torino non-League stats leaked to parent.
+        assert!(!p
+            .statistics_history
+            .season_ledger
+            .iter()
+            .any(|e| e.team_slug == "juventus"
+                && e.competition_kind != PlayerStatCompetitionKind::League));
+    }
+
+    /// Spec edge case: same player, same season, same team, same league
+    /// but different loan state — Friendly/cup stats must NOT orphan.
+    /// (Loan→cancel→parent within one season; breakdown grouping ignores
+    /// is_loan, so all non-League slices for a given (year, team, league)
+    /// land under the row with the latest League seq's loan flag.)
+    #[test]
+    fn lifecycle_loan_then_cancel_same_team_same_league_no_orphan() {
+        let mut p = player();
+        // Pari has loaned the player in from his parent club; for this
+        // edge case the parent and loan team happen to share a league
+        // slug. The drain still attributes cups/friendlies to the team
+        // they were earned at via `team_slug`.
+        let parent = team("Spartak", "spartak", "rpl");
+        let pari = team("Pari", "pari", "rpl");
+
+        p.statistics_history
+            .seed_initial_team(&parent, d(2026, 8, 1), false);
+        p.on_loan(&parent, &pari, 0.0, d(2026, 9, 1));
+
+        // Loan-period: League + Friendly + DomesticCup.
+        p.statistics = stats(9, 0);
+        p.friendly_statistics = stats(2, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "russia-cup".to_string(),
+            statistics: stats(1, 0),
+        });
+
+        p.on_cancel_loan(&pari, &parent, d(2026, 12, 1));
+
+        // Pari row carries the cup + friendly under team_slug=pari.
+        assert!(has_ledger_entry(&p, "pari", PlayerStatCompetitionKind::Friendly, "rpl", 2));
+        assert!(has_ledger_entry(&p, "pari", PlayerStatCompetitionKind::DomesticCup, "russia-cup", 1));
+
+        // Render the breakdowns: pari row's is_loan flag is true (League
+        // entry says so) and the cup/friendly entries — written with
+        // is_loan=false on the ledger — still group under it because
+        // grouping ignores is_loan.
+        let empty = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let breakdowns = PlayerStatisticsProjection::player_history_breakdowns(
+            &p.statistics_history,
+            &live,
+            d(2026, 12, 15),
+        );
+        let pari = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "pari")
+            .expect("Pari breakdown missing");
+        assert!(pari.is_loan);
+        // No orphan non-loan Pari breakdown holding the cup/friendly.
+        assert_eq!(
+            breakdowns
+                .iter()
+                .filter(|b| b.season_start_year == 2026 && b.team_slug == "pari")
+                .count(),
+            1,
+        );
+    }
+
+    /// Spec edge case: chained intra-club move + loan. Intra-club move
+    /// deliberately does NOT drain friendly/cup (soft same-club move),
+    /// but the next inter-club boundary (loan) MUST freeze whatever has
+    /// accumulated.
+    #[test]
+    fn intra_club_then_loan_drains_carried_buckets_under_loan_source() {
+        let mut p = player();
+        let main = team("Spartak", "spartak", "rpl");
+        let second = team("Spartak 2", "spartak-2", "second-div");
+        let loan_to = team("Pari", "pari", "rpl");
+
+        // Player at Main, plays cups/friendlies + a League game, then is
+        // moved to Spartak-2 (intra-club, both senior). Buckets carry.
+        p.statistics_history
+            .seed_initial_team(&main, d(2026, 8, 1), false);
+        p.statistics = stats(1, 0);
+        p.friendly_statistics = stats(2, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "russia-cup".to_string(),
+            statistics: stats(1, 0),
+        });
+        p.on_intra_club_move(&main, &second, true, true, d(2026, 9, 1));
+
+        // Intra-club preserved the friendly + cup buckets (see comment
+        // on on_intra_club_move).
+        assert_eq!(p.friendly_statistics.played, 2);
+        assert_eq!(p.cup_statistics_by_competition.len(), 1);
+
+        // Player plays one more friendly at Spartak-2, then gets loaned.
+        p.friendly_statistics.played += 1;
+        p.on_loan(&second, &loan_to, 0.0, d(2026, 10, 1));
+
+        // After loan: live buckets drained, and the friendly+cup are
+        // attributed to the SECOND team (the team they were on at the
+        // time of the loan — the drain's team_info parameter).
+        assert_eq!(p.friendly_statistics.played, 0);
+        assert!(p.cup_statistics_by_competition.is_empty());
+        assert!(has_ledger_entry(
+            &p,
+            "spartak-2",
+            PlayerStatCompetitionKind::Friendly,
+            "second-div",
+            3,
+        ));
+        assert!(has_ledger_entry(
+            &p,
+            "spartak-2",
+            PlayerStatCompetitionKind::DomesticCup,
+            "russia-cup",
+            1,
+        ));
+    }
+
+    /// `on_free_agent_signing` does not drain because a free agent in
+    /// the pool plays no matches — the prior club's `on_release`
+    /// already drained their live buckets. This test pins down the
+    /// invariant: when the buckets are empty (the normal flow), the
+    /// signing runs cleanly without leaking stats.
+    #[test]
+    fn on_free_agent_signing_invariant_holds_when_buckets_clean() {
+        let mut p = player();
+        // Simulate the prior `on_release` having drained — buckets empty.
+        assert_eq!(p.friendly_statistics.total_games(), 0);
+        assert!(p.cup_statistics_by_competition.is_empty());
+
+        let to = team("Marseille", "marseille", "ligue-1");
+        p.on_free_agent_signing(&to, d(2027, 1, 1));
+
+        // Stays clean; no synthetic non-League ledger rows appeared.
+        assert_eq!(p.friendly_statistics.total_games(), 0);
+        assert!(p.cup_statistics_by_competition.is_empty());
+        assert!(!p
+            .statistics_history
+            .season_ledger
+            .iter()
+            .any(|e| e.competition_kind != PlayerStatCompetitionKind::League));
+    }
+
+    // ── No-double-count regressions ───────────────────────────────────
+
+    /// Loan out, return to same team in same season, play more games:
+    /// the departed loan row's frozen non-League stats AND the active
+    /// spell's live non-League stats must each be shown exactly once,
+    /// never twice.
+    #[test]
+    fn loan_then_return_same_team_no_double_count_in_same_season() {
+        let mut p = player();
+        let parent = team("Juventus", "juventus", "serie-a");
+        let torino = team("Torino", "torino", "serie-a");
+
+        p.statistics_history
+            .seed_initial_team(&parent, d(2026, 8, 1), false);
+
+        // Loan to Torino, play League + Coppa Italia + Friendly.
+        p.on_loan(&parent, &torino, 0.0, d(2026, 9, 1));
+        p.statistics = stats(10, 1);
+        p.friendly_statistics = stats(2, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "coppa-italia".to_string(),
+            statistics: stats(3, 1),
+        });
+
+        // Return to Juventus mid-season — drain freezes everything under
+        // Torino.
+        p.on_loan_return(&torino, &parent, d(2027, 1, 15));
+
+        // At Juventus, play more — both league and a new cup tie + friendly.
+        p.statistics = stats(8, 2);
+        p.friendly_statistics = stats(1, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "coppa-italia".to_string(),
+            statistics: stats(2, 1),
+        });
+
+        // Project the breakdowns mid-season.
+        let live = PlayerLiveStatsInput {
+            league: &p.statistics,
+            friendly: &p.friendly_statistics,
+            cups: &[LiveCupSlice {
+                competition_slug: "coppa-italia",
+                competition_name: "Coppa Italia".to_string(),
+                statistics: &p.cup_statistics_by_competition[0].statistics,
+            }],
+            friendly_source_slug: "",
+        };
+        let breakdowns = PlayerStatisticsProjection::player_history_breakdowns(
+            &p.statistics_history,
+            &live,
+            d(2027, 3, 1),
+        );
+
+        // Torino row: frozen loan stats — League 10, Friendly 2, Coppa Italia 3.
+        let torino_bd = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "torino")
+            .expect("Torino breakdown must exist");
+        let torino_league = torino_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::League)
+            .unwrap();
+        assert_eq!(torino_league.statistics.played, 10);
+        let torino_friendly = torino_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::Friendly)
+            .unwrap();
+        assert_eq!(torino_friendly.statistics.played, 2);
+        let torino_cup = torino_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::DomesticCup)
+            .unwrap();
+        assert_eq!(torino_cup.statistics.played, 3);
+
+        // Juventus row: live stats only — League 8, Friendly 1, Coppa Italia 2.
+        // Critically: Torino's frozen entries must NOT appear here.
+        let juve_bd = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "juventus")
+            .expect("Juventus breakdown must exist");
+        let juve_league = juve_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::League)
+            .unwrap();
+        assert_eq!(juve_league.statistics.played, 8);
+        let juve_friendly = juve_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::Friendly)
+            .unwrap();
+        assert_eq!(juve_friendly.statistics.played, 1);
+        let juve_cup = juve_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::DomesticCup)
+            .unwrap();
+        assert_eq!(juve_cup.statistics.played, 2);
+    }
+
+    /// Transfer away from a team, then back to the same team in the
+    /// same season. Each spell's non-League stats must surface exactly
+    /// once and stay attributed to the spell that earned them.
+    #[test]
+    fn transfer_away_then_back_same_team_same_season_no_double_count() {
+        let mut p = player();
+        let a = team("Club A", "club-a", "league-a");
+        let b = team("Club B", "club-b", "league-b");
+
+        p.statistics_history
+            .seed_initial_team(&a, d(2026, 8, 1), false);
+
+        // First A spell: League 5, Friendly 2.
+        p.statistics = stats(5, 1);
+        p.friendly_statistics = stats(2, 0);
+        p.on_transfer(&a, &b, 1_000_000.0, d(2026, 10, 1));
+
+        // At B: League 3, Friendly 1, UCL 2.
+        p.statistics = stats(3, 0);
+        p.friendly_statistics = stats(1, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: CHAMPIONS_LEAGUE_SLUG.to_string(),
+            statistics: stats(2, 0),
+        });
+        p.on_transfer(&b, &a, 2_000_000.0, d(2027, 1, 15));
+
+        // Back at A: live League 7 + live Friendly 3.
+        p.statistics = stats(7, 2);
+        p.friendly_statistics = stats(3, 0);
+
+        let live = PlayerLiveStatsInput {
+            league: &p.statistics,
+            friendly: &p.friendly_statistics,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let breakdowns = PlayerStatisticsProjection::player_history_breakdowns(
+            &p.statistics_history,
+            &live,
+            d(2027, 3, 1),
+        );
+
+        // A row groups both A spells (live + departed first spell).
+        let a_bd = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "club-a")
+            .expect("Club A breakdown");
+        let a_league = a_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::League)
+            .unwrap();
+        // 5 (first spell, frozen on current) + 7 (live active spell).
+        assert_eq!(a_league.statistics.played, 12);
+        let a_friendly = a_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::Friendly)
+            .unwrap();
+        // 2 (frozen first-spell drain) + 3 (live active spell). Must
+        // be 5, not 8 (no double counting).
+        assert_eq!(a_friendly.statistics.played, 5);
+
+        // B row: 3 League + 1 Friendly + 2 UCL — each exactly once.
+        let b_bd = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "club-b")
+            .expect("Club B breakdown");
+        let b_league = b_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::League)
+            .unwrap();
+        assert_eq!(b_league.statistics.played, 3);
+        let b_friendly = b_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::Friendly)
+            .unwrap();
+        assert_eq!(b_friendly.statistics.played, 1);
+        let b_cup = b_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::ContinentalCup)
+            .unwrap();
+        assert_eq!(b_cup.statistics.played, 2);
+    }
+
+    /// Cancel-loan then continue at parent in same season, with
+    /// friendly/cup played on both sides. Frozen borrowing-team stats
+    /// must not leak into the parent's row.
+    #[test]
+    fn cancel_loan_then_play_at_parent_no_cross_row_leakage() {
+        let mut p = player();
+        let parent = team("Spartak", "spartak", "rpl");
+        let pari = team("Pari", "pari", "rpl-second");
+
+        p.statistics_history
+            .seed_initial_team(&parent, d(2026, 8, 1), false);
+        p.on_loan(&parent, &pari, 0.0, d(2026, 9, 1));
+
+        // At Pari: League 6, Friendly 3, RussiaCup 1.
+        p.statistics = stats(6, 0);
+        p.friendly_statistics = stats(3, 0);
+        p.cup_statistics_by_competition.push(CompetitionStatistics {
+            competition_slug: "russia-cup".to_string(),
+            statistics: stats(1, 0),
+        });
+        p.on_cancel_loan(&pari, &parent, d(2026, 12, 1));
+
+        // Back at Spartak: live League 4 + live Friendly 1 (different youth slug).
+        p.statistics = stats(4, 1);
+        p.friendly_statistics = stats(1, 0);
+
+        let live = PlayerLiveStatsInput {
+            league: &p.statistics,
+            friendly: &p.friendly_statistics,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        let breakdowns = PlayerStatisticsProjection::player_history_breakdowns(
+            &p.statistics_history,
+            &live,
+            d(2027, 2, 1),
+        );
+
+        // Pari row: only the frozen loan-period stats. Pari's league
+        // slug is rpl-second so it groups separately from the parent's
+        // rpl row.
+        let pari_bd = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "pari")
+            .expect("Pari breakdown");
+        assert!(pari_bd.is_loan);
+        assert_eq!(
+            pari_bd
+                .competitions
+                .iter()
+                .find(|c| c.competition_kind == PlayerStatCompetitionKind::Friendly)
+                .unwrap()
+                .statistics
+                .played,
+            3,
+            "Pari friendly stays under Pari"
+        );
+        assert_eq!(
+            pari_bd
+                .competitions
+                .iter()
+                .find(|c| c.competition_kind == PlayerStatCompetitionKind::DomesticCup)
+                .unwrap()
+                .statistics
+                .played,
+            1,
+        );
+
+        // Spartak row: ONLY live stats — Pari frozen entries must not
+        // have leaked here.
+        let spartak_bd = breakdowns
+            .iter()
+            .find(|b| b.season_start_year == 2026 && b.team_slug == "spartak")
+            .expect("Spartak breakdown");
+        assert!(!spartak_bd.is_loan);
+        assert_eq!(
+            spartak_bd
+                .competitions
+                .iter()
+                .find(|c| c.competition_kind == PlayerStatCompetitionKind::League)
+                .unwrap()
+                .statistics
+                .played,
+            4,
+        );
+        let spartak_friendly = spartak_bd
+            .competitions
+            .iter()
+            .find(|c| c.competition_kind == PlayerStatCompetitionKind::Friendly)
+            .unwrap();
+        assert_eq!(spartak_friendly.statistics.played, 1);
+        // No DomesticCup leakage from Pari.
+        assert!(
+            !spartak_bd
+                .competitions
+                .iter()
+                .any(|c| c.competition_kind == PlayerStatCompetitionKind::DomesticCup),
+            "Pari domestic cup must not leak to Spartak"
+        );
+    }
+
+    /// User-reported repro: a young player on loan at a senior team
+    /// plays U19 friendlies. Live view shows "Premier League U19" in
+    /// the breakdown. After cancel-loan, that line collapses to the
+    /// generic "Friendly" because the drain stamps the canonical
+    /// ledger entry with the senior team's league_slug instead of the
+    /// U19 league slug. Match-record time captures the actual league
+    /// slug on `player.friendly_source_slug`; drain consumes it.
+    #[test]
+    fn cancel_loan_keeps_youth_friendly_source_slug() {
+        let mut p = player();
+        let parent = team("Spartak", "spartak", "russian-premier-league");
+        let cska = team("CSKA Moscow", "cska", "russian-premier-league");
+
+        p.statistics_history
+            .seed_initial_team(&parent, d(2026, 8, 1), false);
+        p.on_loan(&parent, &cska, 0.0, d(2026, 9, 1));
+
+        // Simulate match recording: 1 U19 friendly appearance for CSKA.
+        // This is what `record_match_appearance` would do on its own
+        // when the match-engine emits a MatchOutcome with is_friendly=true
+        // and competition_slug="russian-premier-league-u19".
+        p.friendly_statistics = stats(1, 0);
+        p.friendly_source_slug = Some("russian-premier-league-u19".to_string());
+
+        // Cancel-loan with no explicit override — the drain reads from
+        // the player's own `friendly_source_slug` field.
+        p.on_cancel_loan(&cska, &parent, d(2026, 12, 1));
+
+        // Ledger entry was stamped with the U19 league slug, NOT the
+        // senior "russian-premier-league" — so the breakdown won't
+        // collapse to the generic "Friendly".
+        assert!(has_ledger_entry(
+            &p,
+            "cska",
+            PlayerStatCompetitionKind::Friendly,
+            "russian-premier-league-u19",
+            1,
+        ));
+        // And the live recorded slug is consumed (so it doesn't leak
+        // into the next spell after the drain).
+        assert!(p.friendly_source_slug.is_none());
     }
 }

@@ -214,6 +214,7 @@ impl PlayerBuilder {
             relations: self.relations.unwrap_or_else(Relations::new),
             statistics: self.statistics.unwrap_or_default(),
             friendly_statistics: self.friendly_statistics.unwrap_or_default(),
+            friendly_source_slug: None,
             cup_statistics: self.cup_statistics.unwrap_or_default(),
             cup_statistics_by_competition: Vec::new(),
             statistics_history: self

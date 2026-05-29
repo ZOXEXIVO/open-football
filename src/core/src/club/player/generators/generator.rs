@@ -1136,6 +1136,7 @@ impl PlayerGenerator {
             relations: Relations::new(),
             statistics: PlayerStatistics::default(),
             friendly_statistics: PlayerStatistics::default(),
+            friendly_source_slug: None,
             cup_statistics: PlayerStatistics::default(),
             cup_statistics_by_competition: Vec::new(),
             statistics_history: PlayerStatisticsHistory::new(),

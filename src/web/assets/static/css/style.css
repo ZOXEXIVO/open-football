@@ -4104,6 +4104,97 @@ a:link, a:visited, a:hover, a:active {
     color: #c0ccd6;
 }
 
+/* --- Player history per-row breakdown accordion ---
+   Each season row is paired with one or more hidden breakdown rows
+   (`<tr hidden>`) that reuse the main table's column structure — one
+   row per competition (League / Cup / Continental Cup / Friendly).
+   The whole group toggles together when the season row is clicked.
+   Styling is intentionally minimal so the existing .fm-history-table
+   cell widths and alignment carry the layout. */
+
+.fm-history-row--has-breakdown {
+    cursor: pointer;
+}
+
+/* Keyboard focus marker — visible only when the row is reached via
+   Tab so mouse users don't see the ring. The rule has to be a touch
+   specific because the codebase has several `outline: none` resets. */
+.fm-history-row--has-breakdown:focus {
+    outline: none;
+}
+.fm-history-row--has-breakdown:focus-visible {
+    outline: 2px solid rgba(120, 170, 220, 0.7);
+    outline-offset: -2px;
+}
+
+.fm-history-row--has-breakdown:not(.fm-history-row--expanded):hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+/* Beat the generic `.fm-stats tbody tr:hover` rule (specificity 0,2,2)
+   so an expanded row's hover stays transparent — without this the tr
+   gets a white-tinted bg underneath the td's dark tint and the row
+   visibly grays out on hover. */
+.fm-history-row--has-breakdown.fm-history-row--expanded:hover {
+    background: transparent;
+}
+
+.fm-history-row-toggle {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    margin-right: 6px;
+    vertical-align: middle;
+    border-left: 4px solid #8a939b;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transition: transform 0.12s ease-out;
+}
+
+.fm-history-row--expanded .fm-history-row-toggle {
+    transform: rotate(90deg);
+}
+
+/* Specificity-bumped (`.fm-history-table` prefix) so the 11px override
+   wins over the generic `.fm-stats tbody td { font-size: 13px }`. The
+   dark tint is scoped to the data columns only (League/Fee/Apps/...);
+   the leading Season/Club/Nat cells stay on the table's default
+   background so the breakdown reads as a continuation of the row
+   rather than a fully-painted strip. */
+.fm-history-table .fm-history-breakdown-row > td {
+    color: #c0ccd6;
+    font-size: 11px;
+    border-top: 1px solid transparent;
+    border-bottom: 1px solid transparent;
+}
+
+.fm-history-table .fm-history-breakdown-row > td.sq-league,
+.fm-history-table .fm-history-breakdown-row > td.sq-fee,
+.fm-history-table .fm-history-breakdown-row > td.sq-stat,
+.fm-history-table .fm-history-row--expanded > td {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+.fm-history-table .fm-history-breakdown-row > td.sq-league {
+    color: #e1e7ec;
+    font-weight: 600;
+}
+
+/* Subtle 3px rounding on the bottom-left of the panel's last row.
+   No corners on the head row — that edge butts flush against the
+   main row above so the panel reads as growing out of it rather than
+   sitting beside it. The bottom-left round is the only "outer"
+   corner, marking the panel's natural end. */
+.fm-history-table .fm-history-breakdown-row--last > td.sq-league {
+    border-bottom-left-radius: 3px;
+}
+
+.fm-history-table .fm-history-breakdown-row--last > td.sq-league,
+.fm-history-table .fm-history-breakdown-row--last > td.sq-fee,
+.fm-history-table .fm-history-breakdown-row--last > td.sq-stat {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 /* --- Player Decisions Table --- */
 
 .fm-decisions-table .dec-when {

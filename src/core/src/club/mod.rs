@@ -133,6 +133,7 @@ pub use player::{
     PlayerGenerator,
     PlayerHappiness,
     PlayerHistoryRow,
+    PlayerHistoryRowBreakdown,
     PlayerLanguage,
     PlayerLiveStatsInput,
     PlayerMailbox,

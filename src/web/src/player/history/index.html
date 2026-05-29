@@ -30,8 +30,11 @@
             </thead>
             <tbody>
                 {% for item in items %}
-                <tr>
-                    <td>{{ item.season }}</td>
+                <tr class="fm-history-row{% if !item.breakdown.is_empty() %} fm-history-row--has-breakdown{% endif %}"{% if !item.breakdown.is_empty() %} tabindex="0" role="button" aria-expanded="false"{% endif %}>
+                    <td>
+                        {% if !item.breakdown.is_empty() %}<span class="fm-history-row-toggle" aria-hidden="true"></span>{% endif %}
+                        {{ item.season }}
+                    </td>
                     <td class="sq-club">{% if !item.team_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}</td>
                     <td class="sq-nat">{% if !item.country_code.is_empty() %}<a href="/{{ lang }}/countries/{{ item.country_slug }}"><span class="flag flag-{{ item.country_code }}" title="{{ item.country_name }}"></span> {{ item.country_name }}</a>{% endif %}</td>
                     <td class="sq-league">{% if !item.league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ item.league_slug }}">{{ item.league_name }}</a>{% endif %}</td>
@@ -47,6 +50,27 @@
                     <td class="sq-stat">{{ item.stats.player_of_the_match }}</td>
                     <td class="sq-stat">{{ item.stats.average_rating }}</td>
                 </tr>
+                {% if !item.breakdown.is_empty() %}
+                {% for comp in item.breakdown %}
+                <tr class="fm-history-breakdown-row{% if loop.last %} fm-history-breakdown-row--last{% endif %}" hidden>
+                    <td></td>
+                    <td class="sq-club"></td>
+                    <td class="sq-nat"></td>
+                    <td class="sq-league">{{ comp.label }}</td>
+                    <td class="sq-fee"></td>
+                    <td class="sq-stat">{{ comp.stats.played }}{% if comp.stats.played_subs > 0 %} ({{ comp.stats.played_subs }}){% endif %}</td>
+                    {% if is_goalkeeper %}
+                    <td class="sq-stat">{{ comp.stats.conceded }}</td>
+                    <td class="sq-stat">{{ comp.stats.clean_sheets }}</td>
+                    {% else %}
+                    <td class="sq-stat">{{ comp.stats.goals }}</td>
+                    <td class="sq-stat">{{ comp.stats.assists }}</td>
+                    {% endif %}
+                    <td class="sq-stat">{{ comp.stats.player_of_the_match }}</td>
+                    <td class="sq-stat">{{ comp.stats.average_rating }}</td>
+                </tr>
+                {% endfor %}
+                {% endif %}
                 {% endfor %}
                 <tr class="fm-totals-row">
                     <td></td>
@@ -69,4 +93,50 @@
         </table>
     </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    // Career Statistics accordion. Activating a season row toggles the
+    // hidden breakdown rows that follow it. Activation = mouse click,
+    // Enter, or Space. Clicks on inline links (club / country / league)
+    // navigate as normal — the toggle is skipped when the event target
+    // lives inside an <a> or <button>.
+    var rows = document.querySelectorAll('.fm-history-row--has-breakdown');
+    rows.forEach(function (row) {
+        var group = [];
+        var sib = row.nextElementSibling;
+        while (sib && sib.classList.contains('fm-history-breakdown-row')) {
+            group.push(sib);
+            sib = sib.nextElementSibling;
+        }
+        if (!group.length) return;
+
+        function setExpanded(expanded) {
+            row.classList.toggle('fm-history-row--expanded', expanded);
+            row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            group.forEach(function (r) {
+                if (expanded) {
+                    r.removeAttribute('hidden');
+                } else {
+                    r.setAttribute('hidden', '');
+                }
+            });
+        }
+
+        row.addEventListener('click', function (e) {
+            if (e.target.closest('a, button')) return;
+            setExpanded(!row.classList.contains('fm-history-row--expanded'));
+        });
+        row.addEventListener('keydown', function (e) {
+            if (e.target.closest('a, button')) return;
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                e.preventDefault();
+                setExpanded(!row.classList.contains('fm-history-row--expanded'));
+            }
+        });
+    });
+})();
+</script>
 {% endblock %}

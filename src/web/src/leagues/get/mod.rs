@@ -305,14 +305,12 @@ pub async fn league_get_action(
 
     // League-scoped tallies — read goals / assists / apps from this
     // league's own match records, not from `player.statistics`.
-    // `player.statistics` is the player's live competitive bucket and
-    // gets wiped on mid-season transfer, on the season-end country
-    // snapshot, and on `reset_match_stats` for non-senior squads
-    // (force-pinned youth) — while the league's match records keep
-    // the goal events and the lineups. Reading apps from
-    // `player.statistics.played` produced the "0 Apps – 22 Goals"
-    // top-scorer row when the stats bucket got reset under a player
-    // whose goal events still sat in this league's history.
+    // `player.statistics` is the live per-spell bucket and gets wiped
+    // on mid-season transfer / loan and at every season-end snapshot,
+    // while the league's match records keep goal events and lineups.
+    // Reading apps from `player.statistics.played` produced the
+    // "0 Apps – 22 Goals" top-scorer row when the bucket got reset
+    // under a player whose goal events still sat in the league.
     //
     // `league.matches` is reset at season start (see `League::simulate`)
     // and trimmed to a 3-season window globally, so every entry walked

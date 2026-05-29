@@ -134,6 +134,15 @@ pub struct PlayerLiveStatsInput<'a> {
     /// Per-competition cup slices the engine has booked this spell
     /// (`Player::cup_statistics_by_competition`).
     pub cups: &'a [LiveCupSlice<'a>],
+    /// Optional override for the live Friendly entry's competition
+    /// slug. Empty (`""`) means the projection falls back to the
+    /// active spell's league_slug. Set this to the player's actual
+    /// (non-aliased) team's league_slug — e.g. `"russian-premier-league-u19"`
+    /// for a U21 player — so the History tooltip can label the Friendly
+    /// row with the youth league name rather than the senior team's
+    /// league. Senior callers leave it empty; the row then renders as
+    /// the generic "Friendly" label.
+    pub friendly_source_slug: &'a str,
 }
 
 /// One cup-competition slice from the live per-spell breakdown, paired
@@ -145,6 +154,21 @@ pub struct LiveCupSlice<'a> {
     pub competition_slug: &'a str,
     pub competition_name: String,
     pub statistics: &'a PlayerStatistics,
+}
+
+/// Per-competition breakdown for a single History row, used by the
+/// hover-reveal tooltip on the player History page. One line per
+/// `(competition_kind, competition_slug)` — Champions League and
+/// Europa League stay distinct, FA Cup and League Cup stay distinct.
+/// Lines with zero appearances are omitted by the projection except
+/// for the row's own League line, which is always shown.
+#[derive(Debug, Clone)]
+pub struct PlayerHistoryRowBreakdown {
+    pub season_start_year: u16,
+    pub team_slug: String,
+    pub league_slug: String,
+    pub is_loan: bool,
+    pub competitions: Vec<PlayerCompetitionStatsRow>,
 }
 
 /// External-source row for the domestic cup. The web layer can pass
