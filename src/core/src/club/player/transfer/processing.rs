@@ -53,6 +53,12 @@ pub struct TransferDesireContext {
     /// European-ambition detector to avoid firing for clubs already in
     /// the path.
     pub has_continental_path_hint: bool,
+    /// Authoritative (not heuristic) evidence that the club cannot offer
+    /// continental football this season — a continental ban, or known
+    /// non-participation. When set, the European-ambition detector skips
+    /// its elite-reputation suppression so a banned elite club's stars can
+    /// still voice their frustration (the path hint already reads false).
+    pub continental_path_known_absent: bool,
     /// Compatriots / shared-language teammates currently in the squad.
     /// Drives `NoCompatriotSupport` and feeds the chronic-failure
     /// detector.
@@ -108,17 +114,29 @@ impl TransferDesireContext {
 
         let club_in_home_country = club_country_id != 0 && club_country_id == player.country_id;
 
-        // Continental-path heuristic — see `ContinentalPathHeuristic` for
-        // the realism rules. Position-based fallback only kicks in once
-        // the season has progressed enough for the table to be meaningful.
-        let has_continental_path_hint = ContinentalPathHeuristic {
-            main_league_tier,
+        // Continental-access picture — see
+        // [`ContinentalPathHeuristic::is_on_path`] for the realism rules.
+        // Live continental-cup state (current participant / qualified for
+        // next / ban) isn't surfaced through `GlobalContext` yet, so those
+        // default to "unknown"; the reputation-based elite floors carry the
+        // realism and keep elite European clubs (Real Madrid, Bayern, …)
+        // off the "wants Europe" path. The season-position fallback only
+        // kicks in once the table is meaningful.
+        let continental_access = ContinentalAccessContext {
+            current_continental_competition: None,
+            qualified_for_next_continental_competition: None,
+            club_reputation,
             league_reputation,
+            main_league_tier,
             league_position,
             league_size,
             season_progress,
-        }
-        .is_on_path();
+            club_continent_id,
+            continental_ban: false,
+        };
+        let has_continental_path_hint = ContinentalPathHeuristic::from_access(&continental_access)
+            .is_on_path(&continental_access);
+        let continental_path_known_absent = continental_access.path_known_absent();
 
         let destination_is_favourite = gc
             .club
@@ -147,6 +165,7 @@ impl TransferDesireContext {
             season_progress,
             main_league_tier,
             has_continental_path_hint,
+            continental_path_known_absent,
             same_language_or_nationality_teammates,
             destination_is_favourite,
             club_in_home_country,
@@ -154,9 +173,144 @@ impl TransferDesireContext {
     }
 }
 
+/// Coarse continental-competition buckets a club may participate in or
+/// qualify for. The desire logic only cares whether the club holds a
+/// *European* berth (UCL/UEL/UECL) — the South-American and `Other`
+/// variants round out the model so the same context can describe any
+/// club without lying about which tier it sits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinentalCompetitionTier {
+    ChampionsLeague,
+    EuropaLeague,
+    ConferenceLeague,
+    CopaLibertadores,
+    Other,
+}
+
+impl ContinentalCompetitionTier {
+    /// True for the three European tiers. A club playing (or qualified
+    /// for) any of these already offers the European football an
+    /// ambitious player is chasing.
+    fn is_european(self) -> bool {
+        matches!(
+            self,
+            ContinentalCompetitionTier::ChampionsLeague
+                | ContinentalCompetitionTier::EuropaLeague
+                | ContinentalCompetitionTier::ConferenceLeague
+        )
+    }
+}
+
+/// Full picture of the current club's access to continental football.
+/// Replaces the position-only signal the desire context used to read —
+/// see [`ContinentalPathHeuristic::is_on_path`] for the realism rules.
+/// Built once per weekly tick alongside [`TransferDesireContext`].
+///
+/// The simulator doesn't yet surface live continental-cup state into
+/// `GlobalContext`, so `current_continental_competition`,
+/// `qualified_for_next_continental_competition` and `continental_ban`
+/// default to "unknown" when built from the world. The reputation-based
+/// elite floors carry the realism until that state is plumbed through,
+/// and the live fields take precedence the moment they are.
+#[derive(Debug, Clone, Default)]
+pub struct ContinentalAccessContext {
+    /// Continental competition the club is playing in this season, if any.
+    pub current_continental_competition: Option<ContinentalCompetitionTier>,
+    /// Continental competition already secured for next season, if known.
+    pub qualified_for_next_continental_competition: Option<ContinentalCompetitionTier>,
+    /// Club reputation, 0.0..1.0 normalised.
+    pub club_reputation: f32,
+    /// League reputation, 0..10000.
+    pub league_reputation: u16,
+    /// Tier of the main league (1 = top flight). 0 if unknown.
+    pub main_league_tier: u8,
+    /// Current league position (1-based). 0 if unknown.
+    pub league_position: u8,
+    /// Number of teams in the league. 0 if unknown.
+    pub league_size: u8,
+    /// Season progress 0.0..1.0.
+    pub season_progress: f32,
+    /// Continent id of the club's country (1 = Europe, 3 = South America).
+    pub club_continent_id: u32,
+    /// True when the club is barred from continental competition this
+    /// season (FFP / disciplinary). A banned elite club can still
+    /// generate ambition frustration, so this does NOT auto-suppress.
+    pub continental_ban: bool,
+}
+
+impl ContinentalAccessContext {
+    /// True when authoritative evidence — not a cheap reputation/position
+    /// heuristic — shows the club cannot offer continental football this
+    /// season. A continental ban is the clearest case; both berth slots
+    /// resolved to non-European also counts. When this holds, the
+    /// European-ambition detector must NOT let its elite-reputation
+    /// shortcut re-suppress the mood — a banned elite club's stars are
+    /// legitimately frustrated. Unknown berth state falls through to the
+    /// reputation-based suppression instead.
+    pub fn path_known_absent(&self) -> bool {
+        if self.continental_ban {
+            return true;
+        }
+        let current_known_non_european = self
+            .current_continental_competition
+            .is_some_and(|c| !c.is_european());
+        let next_known_non_european = self
+            .qualified_for_next_continental_competition
+            .is_some_and(|c| !c.is_european());
+        current_known_non_european && next_known_non_european
+    }
+}
+
+/// Tunables for the European-ambition desire detector and the elite-club
+/// suppression floors. Centralised so the thresholds can't drift between
+/// [`ContinentalPathHeuristic::is_on_path`] and
+/// [`Player::detect_continental_competition_desire`] — both read the same
+/// numbers from here.
+#[derive(Debug, Clone, Copy)]
+pub struct EuropeanAmbitionConfig {
+    /// Minimum `ambition` personality before the mood can fire.
+    pub min_ambition: f32,
+    /// Inclusive age band — outside it the move-for-Europe story doesn't fit.
+    pub min_age: u8,
+    pub max_age: u8,
+    /// Minimum current ability to plausibly play European football.
+    pub min_ca: f32,
+    /// Minimum world reputation to plausibly attract a European move.
+    pub min_world_rep: f32,
+    /// Club reputation at/above which an elite European, top-flight,
+    /// top-league club is presumed to offer continental football.
+    pub elite_club_rep_suppress: f32,
+    /// Club reputation at/above which a super-elite European club is
+    /// presumed to offer the Champions League ladder regardless of the
+    /// league table (Real Madrid, Bayern, Man City, …).
+    pub super_elite_rep_suppress: f32,
+    /// League reputation floor for the elite-club suppression.
+    pub elite_league_rep_floor: u16,
+    /// Days between repeat `WantsEuropeanCompetition` emissions.
+    pub cooldown_days: u16,
+}
+
+impl Default for EuropeanAmbitionConfig {
+    fn default() -> Self {
+        EuropeanAmbitionConfig {
+            min_ambition: 15.0,
+            min_age: 22,
+            max_age: 31,
+            min_ca: 130.0,
+            min_world_rep: 4500.0,
+            elite_club_rep_suppress: 0.78,
+            super_elite_rep_suppress: 0.88,
+            elite_league_rep_floor: 8000,
+            cooldown_days: 60,
+        }
+    }
+}
+
 /// Heuristic for "is this club on a credible continental qualification
-/// path?" Replaces the naive top-35% league-position rule with a
-/// reputation-aware band that respects season progress.
+/// path?" Reputation-aware, season-progress-respecting, and aware of
+/// elite European institutions and live continental-cup participation —
+/// so an elite European club (or any current participant) is never
+/// treated as unable to offer continental football.
 ///
 /// The signal stays conservative — better to underfire (and let the
 /// player accept their lot) than to misfire on a low-rep top-flight
@@ -170,8 +324,80 @@ pub struct ContinentalPathHeuristic {
 }
 
 impl ContinentalPathHeuristic {
-    /// True if the current club is plausibly on a continental
-    /// qualification path this season.
+    /// Build the season-position heuristic from a [`ContinentalAccessContext`]
+    /// so callers don't carry the league-table fields in two places.
+    pub fn from_access(access: &ContinentalAccessContext) -> Self {
+        ContinentalPathHeuristic {
+            main_league_tier: access.main_league_tier,
+            league_reputation: access.league_reputation,
+            league_position: access.league_position,
+            league_size: access.league_size,
+            season_progress: access.season_progress,
+        }
+    }
+
+    /// True if the current club realistically offers continental football.
+    ///
+    /// Rules (in order — the first to match wins):
+    ///   1. A continental ban does NOT prove the club is on the path. A
+    ///      banned elite side still can't offer Europe this season, so
+    ///      its players' ambition frustration is legitimate — fail closed
+    ///      here before any elite shortcut can paper over the ban.
+    ///   2. Currently playing European football (UCL/UEL/UECL) → on the
+    ///      path, full stop.
+    ///   3. Already qualified for next season's European football → same.
+    ///   4. Super-elite European institution (reputation ≥
+    ///      `super_elite_rep_suppress`): in the Champions League ladder as
+    ///      a baseline. Reputation alone clears it, so missing league-table
+    ///      data can't create a false "no Europe". This is the Real Madrid
+    ///      / Bayern / Man City floor.
+    ///   5. Elite European club in a top-flight, top-reputation league
+    ///      (tier 1, league rep ≥ `elite_league_rep_floor`, club rep ≥
+    ///      `elite_club_rep_suppress`): a perennial participant even when
+    ///      this season's table isn't surfaced.
+    ///   6. Otherwise fall back to the season-position heuristic. Missing
+    ///      table data fails closed *here only* — the elite shortcuts above
+    ///      already protect top clubs from a false negative.
+    pub fn is_on_path(&self, access: &ContinentalAccessContext) -> bool {
+        let cfg = EuropeanAmbitionConfig::default();
+
+        if access.continental_ban {
+            return false;
+        }
+
+        if access
+            .current_continental_competition
+            .is_some_and(ContinentalCompetitionTier::is_european)
+        {
+            return true;
+        }
+
+        if access
+            .qualified_for_next_continental_competition
+            .is_some_and(ContinentalCompetitionTier::is_european)
+        {
+            return true;
+        }
+
+        let is_european_club = access.club_continent_id == CONTINENT_EUROPE;
+
+        if is_european_club && access.club_reputation >= cfg.super_elite_rep_suppress {
+            return true;
+        }
+
+        if is_european_club
+            && access.main_league_tier == 1
+            && access.league_reputation >= cfg.elite_league_rep_floor
+            && access.club_reputation >= cfg.elite_club_rep_suppress
+        {
+            return true;
+        }
+
+        self.position_on_path()
+    }
+
+    /// Season-position fallback. Tracks whether the club is sitting in a
+    /// continental-berth slot on current league standing.
     ///
     /// Rules:
     ///   1. Below tier-1 → not on a path.
@@ -187,7 +413,7 @@ impl ContinentalPathHeuristic {
     ///      to be load-bearing. Fall back to a reputation-only signal:
     ///      a top-tier club in a high-rep league is presumed to be on
     ///      the path until the season tells us otherwise.
-    pub fn is_on_path(&self) -> bool {
+    fn position_on_path(&self) -> bool {
         if self.main_league_tier > 1 {
             return false;
         }
@@ -480,14 +706,36 @@ impl Player {
         now: NaiveDate,
         ctx: &TransferDesireContext,
     ) -> bool {
-        // Already on a credible continental path → don't fire.
+        let cfg = EuropeanAmbitionConfig::default();
+
+        // Already on a credible continental path — a current/qualified
+        // participant, or an elite European institution (the hint folds
+        // in the ban / current-comp / elite-floor rules). Don't fire.
         if ctx.has_continental_path_hint {
             return false;
         }
+
+        // Strengthened suppression: even where the cheap path hint missed
+        // it, a club whose own reputation is at/above the elite floor can
+        // offer continental football — a top-reputation side wanting
+        // Europe is unrealistic. Real Madrid is caught by the hint's
+        // super-elite floor; this guards the band sitting just under the
+        // league-rep elite floor. The hint already encodes "not a current
+        // continental participant", so the two together satisfy the
+        // realism bar before any emission.
+        //
+        // Exception: when there's authoritative no-path evidence (a
+        // continental ban, or known non-participation), the false hint is
+        // trustworthy and this reputation heuristic must not override it —
+        // a banned elite club's star is legitimately frustrated.
+        if !ctx.continental_path_known_absent && ctx.club_reputation >= cfg.elite_club_rep_suppress {
+            return false;
+        }
+
         // Cooldown.
         if self
             .happiness
-            .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, 60)
+            .has_recent_event(&HappinessEventType::WantsEuropeanCompetition, cfg.cooldown_days)
         {
             return false;
         }
@@ -497,11 +745,11 @@ impl Player {
         // Champions League regular at a club mid-table — the higher
         // the realistic European ceiling, the more the gap matters.
         let ambition = self.attributes.ambition;
-        if ambition < 15.0 {
+        if ambition < cfg.min_ambition {
             return false;
         }
         let age = DateUtils::age(self.birth_date, now);
-        if !(22..=31).contains(&age) {
+        if !(cfg.min_age..=cfg.max_age).contains(&age) {
             return false;
         }
         let ca = self.player_attributes.current_ability as f32;
@@ -509,7 +757,7 @@ impl Player {
         // Realistic European market: only players who could plausibly
         // play at that level. Floor at CA 130 / world_rep 4500 — a
         // Tier-3 squad player won't get a Champions League move.
-        if ca < 130.0 || world_rep < 4500.0 {
+        if ca < cfg.min_ca || world_rep < cfg.min_world_rep {
             return false;
         }
         // Player is at a credible top-tier league but the club isn't
@@ -1466,46 +1714,234 @@ mod career_desire_tests {
 
     // ── Item 6: Continental path heuristic ──────────────────────
 
+    /// Access context that isolates the season-position fallback:
+    /// `club_continent_id == 0` keeps the elite-European floors inert and
+    /// the live continental-cup fields default to unknown.
+    fn position_access(
+        main_league_tier: u8,
+        league_reputation: u16,
+        league_position: u8,
+        league_size: u8,
+        season_progress: f32,
+    ) -> ContinentalAccessContext {
+        ContinentalAccessContext {
+            main_league_tier,
+            league_reputation,
+            league_position,
+            league_size,
+            season_progress,
+            club_continent_id: 0,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn continental_path_heuristic_pre_quarter_season_uses_rep() {
-        let h = ContinentalPathHeuristic {
-            main_league_tier: 1,
-            league_reputation: 8000,
-            league_position: 12,
-            league_size: 20,
-            season_progress: 0.10,
-        };
+        let access = position_access(1, 8000, 12, 20, 0.10);
         assert!(
-            h.is_on_path(),
+            ContinentalPathHeuristic::from_access(&access).is_on_path(&access),
             "high-rep tier-1 club is presumed on path before 25% season"
         );
     }
 
     #[test]
     fn continental_path_heuristic_position_load_bearing_post_quarter() {
-        let h = ContinentalPathHeuristic {
-            main_league_tier: 1,
-            league_reputation: 9000,
-            league_position: 12,
-            league_size: 20,
-            season_progress: 0.50,
-        };
+        let access = position_access(1, 9000, 12, 20, 0.50);
         assert!(
-            !h.is_on_path(),
+            !ContinentalPathHeuristic::from_access(&access).is_on_path(&access),
             "12th-place team is no longer on the path past quarter season"
         );
     }
 
     #[test]
     fn continental_path_heuristic_low_rep_league_never_on_path() {
-        let h = ContinentalPathHeuristic {
+        let access = position_access(1, 3500, 1, 20, 0.80);
+        assert!(!ContinentalPathHeuristic::from_access(&access).is_on_path(&access));
+    }
+
+    // ── Elite-club continental-access floors (Mbappe-at-Real-Madrid) ──
+
+    /// Mirror of `from_global`'s wiring for tests: compute the path hint
+    /// from a [`ContinentalAccessContext`] and project it onto a
+    /// [`TransferDesireContext`] the desire detector reads.
+    fn desire_ctx_from_access(
+        access: &ContinentalAccessContext,
+        player_continent: u32,
+    ) -> TransferDesireContext {
+        let hint = ContinentalPathHeuristic::from_access(access).is_on_path(access);
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "gb".to_string();
+        ctx.club_continent_id = access.club_continent_id;
+        ctx.player_nationality_continent_id = player_continent;
+        ctx.league_reputation = access.league_reputation;
+        ctx.club_reputation = access.club_reputation;
+        ctx.league_position = access.league_position;
+        ctx.league_size = access.league_size;
+        ctx.season_progress = access.season_progress;
+        ctx.main_league_tier = access.main_league_tier;
+        ctx.has_continental_path_hint = hint;
+        ctx.continental_path_known_absent = access.path_known_absent();
+        ctx
+    }
+
+    #[test]
+    fn mbappe_at_real_madrid_never_wants_european_football() {
+        // Super-elite European club. Reputation alone clears the path —
+        // even with no league-table data (position 0) or a poor table
+        // position (6th), the mood must stay silent.
+        let today = d(2026, 5, 1);
+        for position in [0u8, 6u8] {
+            let mut p = build(27, 18.0, 12.0, 10.0, 12.0, 1, 190, 9500, 200, today);
+            let access = ContinentalAccessContext {
+                club_reputation: 0.95,
+                league_reputation: 9000,
+                main_league_tier: 1,
+                league_position: position,
+                league_size: 20,
+                season_progress: 0.5,
+                club_continent_id: 1, // Europe
+                ..Default::default()
+            };
+            let ctx = desire_ctx_from_access(&access, 1);
+            assert!(
+                ctx.has_continental_path_hint,
+                "super-elite European club must register as on-path (pos {position})"
+            );
+            let fired = p.detect_continental_competition_desire(today, &ctx);
+            assert!(
+                !fired,
+                "Mbappe at Real Madrid must not want European football (pos {position})"
+            );
+            assert_eq!(
+                count_event(&p, HappinessEventType::WantsEuropeanCompetition),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn elite_club_currently_in_champions_league_suppresses_desire() {
+        let today = d(2026, 5, 1);
+        let mut p = build(27, 18.0, 12.0, 10.0, 12.0, 1, 175, 8500, 200, today);
+        let access = ContinentalAccessContext {
+            current_continental_competition: Some(ContinentalCompetitionTier::ChampionsLeague),
+            // Modest reputation so only the current-participant rule can
+            // suppress — proves rule 2 is doing the work.
+            club_reputation: 0.6,
+            league_reputation: 9000,
             main_league_tier: 1,
-            league_reputation: 3500,
-            league_position: 1,
+            league_position: 8,
             league_size: 20,
-            season_progress: 0.80,
+            season_progress: 0.5,
+            club_continent_id: 1,
+            ..Default::default()
         };
-        assert!(!h.is_on_path());
+        let ctx = desire_ctx_from_access(&access, 1);
+        assert!(ctx.has_continental_path_hint);
+        assert!(!p.detect_continental_competition_desire(today, &ctx));
+    }
+
+    #[test]
+    fn top_player_at_mid_table_premier_league_club_can_emit() {
+        let today = d(2026, 5, 1);
+        let mut p = build(27, 17.0, 12.0, 10.0, 12.0, 1, 160, 7000, 200, today);
+        let access = ContinentalAccessContext {
+            club_reputation: 0.55,
+            league_reputation: 9000,
+            main_league_tier: 1,
+            league_position: 12,
+            league_size: 20,
+            season_progress: 0.5,
+            club_continent_id: 1,
+            ..Default::default()
+        };
+        let ctx = desire_ctx_from_access(&access, 1);
+        assert!(
+            !ctx.has_continental_path_hint,
+            "12th of a high-rep league mid-season is not on the path"
+        );
+        assert!(
+            p.detect_continental_competition_desire(today, &ctx),
+            "ambitious top player at a mid-table club should be able to want Europe"
+        );
+    }
+
+    #[test]
+    fn elite_club_with_continental_ban_may_emit() {
+        // A banned elite club genuinely can't offer Europe this season,
+        // so its star's ambition frustration is legitimate. The ban must
+        // override the elite-reputation shortcut in the path hint, and the
+        // detector's own elite-rep suppression must not re-block it.
+        let today = d(2026, 5, 1);
+        let mut p = build(27, 18.0, 12.0, 10.0, 12.0, 1, 185, 9000, 200, today);
+        let access = ContinentalAccessContext {
+            club_reputation: 0.90,
+            league_reputation: 9000,
+            main_league_tier: 1,
+            league_position: 9, // outside qualification
+            league_size: 20,
+            season_progress: 0.5,
+            club_continent_id: 1,
+            continental_ban: true,
+            ..Default::default()
+        };
+        let ctx = desire_ctx_from_access(&access, 1);
+        assert!(
+            !ctx.has_continental_path_hint,
+            "a continental ban must keep the club off the path"
+        );
+        assert!(
+            p.detect_continental_competition_desire(today, &ctx),
+            "a banned elite club's star may still want European football"
+        );
+    }
+
+    #[test]
+    fn unknown_league_table_does_not_emit_for_elite_club() {
+        // No league-table data (position 0). An elite club must not be
+        // judged "no Europe" on missing data — the reputation floor holds.
+        let today = d(2026, 5, 1);
+        let mut p = build(27, 18.0, 12.0, 10.0, 12.0, 1, 185, 9000, 200, today);
+        let access = ContinentalAccessContext {
+            club_reputation: 0.90,
+            league_reputation: 9000,
+            main_league_tier: 1,
+            league_position: 0,
+            league_size: 0,
+            season_progress: 0.5,
+            club_continent_id: 1,
+            ..Default::default()
+        };
+        let ctx = desire_ctx_from_access(&access, 1);
+        assert!(
+            ctx.has_continental_path_hint,
+            "missing table data must not strip an elite club off the path"
+        );
+        assert!(!p.detect_continental_competition_desire(today, &ctx));
+    }
+
+    #[test]
+    fn low_reputation_top_flight_club_may_emit() {
+        // Top division but a small club not in any continental cup. An
+        // ambitious high-level player there can legitimately want Europe.
+        let today = d(2026, 5, 1);
+        let mut p = build(27, 17.0, 12.0, 10.0, 12.0, 1, 150, 6000, 200, today);
+        let access = ContinentalAccessContext {
+            club_reputation: 0.35,
+            league_reputation: 6500,
+            main_league_tier: 1,
+            league_position: 9,
+            league_size: 20,
+            season_progress: 0.5,
+            club_continent_id: 1,
+            ..Default::default()
+        };
+        let ctx = desire_ctx_from_access(&access, 1);
+        assert!(!ctx.has_continental_path_hint);
+        assert!(
+            p.detect_continental_competition_desire(today, &ctx),
+            "ambitious player at a low-rep top-flight club may want Europe"
+        );
     }
 
     // ── Item 7: Self-amplifying isolation loop fixed ────────────
