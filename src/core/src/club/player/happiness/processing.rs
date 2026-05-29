@@ -50,7 +50,225 @@ pub struct TeamSeasonState {
     pub league_reputation: u16,
 }
 
+/// Post-transfer playing-time opportunity snapshot. Built from the
+/// `since_join` counters on [`PlayerHappiness`] plus the days elapsed
+/// since the move. The whole point of this type is that playing-time
+/// frustration is judged on **real eligible fixtures**, not calendar
+/// days: a player who joined a club that hasn't kicked a ball yet has
+/// `eligible_official_matches_since_join == 0` and can never be unhappy
+/// about minutes he was never denied.
+#[derive(Debug, Clone, Copy)]
+pub struct PlayingTimeOpportunityContext {
+    pub days_since_join: i64,
+    /// Official (non-friendly) matches the club played since the player
+    /// joined. Tracked at the player level, so it equals the
+    /// `eligible_*` count (matches the player missed through injury /
+    /// suspension are not observable here and are excluded by design).
+    pub official_team_matches_since_join: u16,
+    /// Of those, the ones the player was registered and fit for.
+    pub eligible_official_matches_since_join: u16,
+    pub player_starts_since_join: u16,
+    pub player_sub_apps_since_join: u16,
+    pub player_unused_bench_since_join: u16,
+    pub player_left_out_since_join: u16,
+    /// True when the player has been registered and available (not
+    /// currently injured). Mirrors the per-match eligibility filter.
+    pub was_registered_and_fit: bool,
+    pub is_loan: bool,
+}
+
+impl PlayingTimeOpportunityContext {
+    /// Weighted involvement score — starts count fully, cameos partly, an
+    /// unused-bench spot a token amount (the player at least travelled and
+    /// warmed up). Left-out matches contribute nothing.
+    pub fn actual_involvement_score(&self, cfg: &PlayingTimeFrustrationConfig) -> f32 {
+        self.player_starts_since_join as f32 * cfg.start_weight
+            + self.player_sub_apps_since_join as f32 * cfg.sub_app_weight
+            + self.player_unused_bench_since_join as f32 * 0.10
+    }
+
+    /// Grace ramp applied to negative (frustration) magnitudes. 0.0 inside
+    /// the hard grace window, linearly up to 1.0 across the soft window,
+    /// then full weight. Never overrides the zero-match hard block — that
+    /// lives in [`Self::can_judge`].
+    pub fn frustration_multiplier(&self, cfg: &PlayingTimeFrustrationConfig) -> f32 {
+        if self.days_since_join < cfg.hard_grace_days_after_transfer {
+            0.0
+        } else if self.days_since_join < cfg.soft_grace_days_after_transfer {
+            let span =
+                (cfg.soft_grace_days_after_transfer - cfg.hard_grace_days_after_transfer).max(1);
+            ((self.days_since_join - cfg.hard_grace_days_after_transfer) as f32 / span as f32)
+                .clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// The full match-opportunity gate. Returns `Some(frustration_multiplier)`
+    /// when a playing-time complaint / `LackOfPlayingTime` event /
+    /// loan-minutes concern / broken playing-time promise may fire, and
+    /// `None` when every such signal must be suppressed.
+    ///
+    /// `None` is returned — the zero-match invariant — whenever:
+    ///   * there are no eligible official matches since the player joined;
+    ///   * the player is `NotNeeded` (accepts their fate);
+    ///   * we're still inside the hard grace window;
+    ///   * the club hasn't played the minimum number of matches yet;
+    ///   * the status-specific eligible-match sample isn't met.
+    pub fn can_judge(
+        &self,
+        status: Option<&PlayerSquadStatus>,
+        cfg: &PlayingTimeFrustrationConfig,
+        loan_min_appearances: Option<u16>,
+    ) -> Option<f32> {
+        // ── Zero-match hard block — never overridden by grace ──
+        if self.eligible_official_matches_since_join == 0 {
+            return None;
+        }
+        if matches!(status, Some(PlayerSquadStatus::NotNeeded)) {
+            return None;
+        }
+        if self.days_since_join < cfg.hard_grace_days_after_transfer {
+            return None;
+        }
+        if self.eligible_official_matches_since_join < cfg.min_team_matches_after_transfer {
+            return None;
+        }
+        let min_eligible = cfg.min_eligible_matches_for_status(status, loan_min_appearances);
+        if self.eligible_official_matches_since_join < min_eligible {
+            return None;
+        }
+        Some(self.frustration_multiplier(cfg))
+    }
+}
+
+/// Tunable coefficients for the match-opportunity playing-time model.
+/// All defaults follow the design spec; kept as a struct so a future
+/// per-save override can be threaded through without touching call sites.
+#[derive(Debug, Clone, Copy)]
+pub struct PlayingTimeFrustrationConfig {
+    pub hard_grace_days_after_transfer: i64,
+    pub soft_grace_days_after_transfer: i64,
+    pub min_team_matches_after_transfer: u16,
+    pub min_player_apps_sample: u16,
+    pub friendlies_weight: f32,
+    pub unused_sub_weight: f32,
+    pub left_out_weight: f32,
+    pub start_weight: f32,
+    pub sub_app_weight: f32,
+    pub complaint_threshold: f32,
+    pub promise_breach_threshold: f32,
+    pub max_negative_playing_time_factor: f32,
+    pub max_positive_playing_time_factor: f32,
+}
+
+impl Default for PlayingTimeFrustrationConfig {
+    fn default() -> Self {
+        PlayingTimeFrustrationConfig {
+            hard_grace_days_after_transfer: 14,
+            soft_grace_days_after_transfer: 45,
+            min_team_matches_after_transfer: 2,
+            min_player_apps_sample: 5,
+            friendlies_weight: 0.25,
+            unused_sub_weight: 0.35,
+            left_out_weight: 1.0,
+            start_weight: 1.0,
+            sub_app_weight: 0.45,
+            complaint_threshold: -10.0,
+            promise_breach_threshold: -12.0,
+            max_negative_playing_time_factor: -20.0,
+            max_positive_playing_time_factor: 20.0,
+        }
+    }
+}
+
+impl PlayingTimeFrustrationConfig {
+    /// Expected share of the club's eligible matches a player of this
+    /// squad status counts on starting. Drives the deficit model — the
+    /// gap between expectation and actual involvement is what frustrates.
+    pub fn expected_start_share(status: Option<&PlayerSquadStatus>) -> f32 {
+        match status {
+            Some(PlayerSquadStatus::KeyPlayer) => 0.70,
+            Some(PlayerSquadStatus::FirstTeamRegular) => 0.50,
+            Some(PlayerSquadStatus::FirstTeamSquadRotation) => 0.25,
+            Some(PlayerSquadStatus::MainBackupPlayer) => 0.15,
+            Some(PlayerSquadStatus::HotProspectForTheFuture) => 0.10,
+            Some(PlayerSquadStatus::DecentYoungster) => 0.08,
+            _ => 0.30,
+        }
+    }
+
+    /// Minimum eligible official matches before a playing-time judgement
+    /// is allowed, per squad status. A loan with an explicit
+    /// minimum-appearance clause uses `max(3, ceil(loan_min * 0.15))`.
+    pub fn min_eligible_matches_for_status(
+        &self,
+        status: Option<&PlayerSquadStatus>,
+        loan_min_appearances: Option<u16>,
+    ) -> u16 {
+        if let Some(min_apps) = loan_min_appearances {
+            let scaled = ((min_apps as f32 * 0.15).ceil()) as u16;
+            return scaled.max(3);
+        }
+        match status {
+            Some(PlayerSquadStatus::KeyPlayer) => 2,
+            Some(PlayerSquadStatus::FirstTeamRegular) => 3,
+            Some(PlayerSquadStatus::FirstTeamSquadRotation) => 5,
+            Some(PlayerSquadStatus::MainBackupPlayer) => 6,
+            Some(PlayerSquadStatus::HotProspectForTheFuture) => 6,
+            Some(PlayerSquadStatus::DecentYoungster) => 6,
+            Some(PlayerSquadStatus::NotNeeded) => u16::MAX, // never complains
+            _ => 5,
+        }
+    }
+}
+
 impl Player {
+    /// Build the post-transfer playing-time opportunity snapshot for this
+    /// player. The `since_join` counters live on `happiness` and reset on
+    /// every club change. For a long-settled player whose counters are
+    /// cold (they are not persisted across save reloads), fall back to
+    /// lifetime competitive stats so an established regular is never
+    /// wrongly reported as having "zero opportunities".
+    pub fn playing_time_opportunity(&self, now: NaiveDate) -> PlayingTimeOpportunityContext {
+        let h = &self.happiness;
+        let days_since_join = self.days_since_transfer(now).unwrap_or(i64::MAX);
+        // Settled = never transferred, or transferred long ago. Inside the
+        // post-transfer window the counters are authoritative (a genuine
+        // zero means the club really hasn't played).
+        let settled = self
+            .days_since_transfer(now)
+            .map(|d| d > 60)
+            .unwrap_or(true);
+        let use_lifetime_fallback = settled && h.eligible_official_matches_since_join == 0;
+
+        let (eligible, starts, subs, unused, left_out) = if use_lifetime_fallback {
+            let starts = self.statistics.played;
+            let subs = self.statistics.played_subs;
+            (starts.saturating_add(subs), starts, subs, 0, 0)
+        } else {
+            (
+                h.eligible_official_matches_since_join,
+                h.starts_since_join,
+                h.sub_apps_since_join,
+                h.unused_bench_since_join,
+                h.left_out_since_join,
+            )
+        };
+
+        PlayingTimeOpportunityContext {
+            days_since_join,
+            official_team_matches_since_join: eligible,
+            eligible_official_matches_since_join: eligible,
+            player_starts_since_join: starts,
+            player_sub_apps_since_join: subs,
+            player_unused_bench_since_join: unused,
+            player_left_out_since_join: left_out,
+            was_registered_and_fit: !self.player_attributes.is_injured,
+            is_loan: self.contract_loan.is_some(),
+        }
+    }
+
     /// Weekly happiness evaluation. Computes the seven legacy factors
     /// plus six derived "life in the team" factors (role clarity,
     /// coach credibility, dressing-room status, club fit, pressure
@@ -77,7 +295,7 @@ impl Player {
         self.on_unresolved_speculation_pressure(recent_interest_count);
 
         // 1. Playing time vs squad status
-        let playing_time_factor = self.calculate_playing_time_factor(age_sensitivity);
+        let playing_time_factor = self.calculate_playing_time_factor(age_sensitivity, now);
         self.happiness.factors.playing_time = playing_time_factor;
 
         // 2. Salary vs ability
@@ -138,7 +356,7 @@ impl Player {
         // per-player morale signals (out-of-position, too-good, young
         // enjoying responsibility, veteran humiliation).
         if self.contract_loan.is_some() {
-            self.process_loan_morale(team_reputation, season_state.league_reputation);
+            self.process_loan_morale(now, team_reputation, season_state.league_reputation);
         }
 
         // ── Derived factors ───────────────────────────────────
@@ -193,55 +411,62 @@ impl Player {
         }
     }
 
-    fn calculate_playing_time_factor(&self, age_sensitivity: f32) -> f32 {
-        let total = self.statistics.played + self.statistics.played_subs;
-        if total < 5 {
+    /// Playing-time morale factor, built on the match-opportunity model
+    /// rather than calendar time or the raw start/appearance ratio. The
+    /// denominator is the eligible official matches the club has actually
+    /// played since the player joined — so a player at a club that hasn't
+    /// kicked a ball can't be frustrated about minutes he was never
+    /// denied, and a player who is repeatedly overlooked accrues a real
+    /// deficit even though the few games he *did* play were all starts.
+    fn calculate_playing_time_factor(&self, age_sensitivity: f32, now: NaiveDate) -> f32 {
+        let cfg = PlayingTimeFrustrationConfig::default();
+        let opp = self.playing_time_opportunity(now);
+
+        // ── Zero-match hard block — never overridden ──
+        if opp.eligible_official_matches_since_join == 0 {
+            return 0.0;
+        }
+        // Sample-size guard — don't judge on a handful of fixtures.
+        if opp.eligible_official_matches_since_join < cfg.min_player_apps_sample {
             return 0.0;
         }
 
-        // Only skilled players care strongly about playing time.
-        // Low-ability players (bench warmers) accept their role more easily.
+        // Only skilled players care strongly about playing time; sub-40 CA
+        // bench warmers accept their role without fretting.
         let ability = self.player_attributes.current_ability as f32;
-        // ability_factor: 0.0 at ability 40, 1.0 at ability 120+
-        // Players below 40 CA don't get upset about playing time at all
         if ability < 40.0 {
             return 0.0;
         }
         let ability_factor = ((ability - 40.0) / 80.0).clamp(0.0, 1.0);
 
-        let play_ratio = self.statistics.played as f32 / total as f32;
+        let status = self.contract.as_ref().map(|c| &c.squad_status);
+        let expected_share = PlayingTimeFrustrationConfig::expected_start_share(status);
+        let eligible = opp.eligible_official_matches_since_join as f32;
+        let expected_raw = eligible * expected_share;
+        let expected = expected_raw.max(1.0);
+        let actual = opp.actual_involvement_score(&cfg);
 
-        let (expected_ratio, unhappy_threshold) = if let Some(ref contract) = self.contract {
-            match contract.squad_status {
-                PlayerSquadStatus::KeyPlayer => (0.70, 0.50),
-                PlayerSquadStatus::FirstTeamRegular => (0.50, 0.30),
-                PlayerSquadStatus::FirstTeamSquadRotation => (0.25, 0.15),
-                PlayerSquadStatus::MainBackupPlayer => (0.20, 0.10),
-                PlayerSquadStatus::HotProspectForTheFuture => (0.10, 0.05),
-                PlayerSquadStatus::DecentYoungster => (0.10, 0.05),
-                PlayerSquadStatus::NotNeeded => (0.05, 0.0),
-                _ => (0.30, 0.15),
-            }
+        if actual >= expected_raw {
+            // Meeting / exceeding expectations — positive contribution
+            // scaled across the headroom above expectation (so a full
+            // starter still earns the top of the band, matching the
+            // historical calibration).
+            let headroom = (eligible - expected_raw).max(1.0);
+            let surplus = ((actual - expected_raw) / headroom).clamp(0.0, 1.0);
+            (surplus * cfg.max_positive_playing_time_factor * ability_factor)
+                .clamp(0.0, cfg.max_positive_playing_time_factor)
         } else {
-            (0.30, 0.15)
-        };
-
-        let factor = if play_ratio >= expected_ratio {
-            // Meeting or exceeding expectations
-            let excess = (play_ratio - expected_ratio) / (1.0 - expected_ratio).max(0.01);
-            excess * 20.0
-        } else if play_ratio < unhappy_threshold {
-            // Below unhappy threshold — scaled by ability
-            let deficit = (unhappy_threshold - play_ratio) / unhappy_threshold.max(0.01);
-            -deficit * 20.0 * age_sensitivity * ability_factor
-        } else {
-            // Between unhappy and expected - mild dissatisfaction, scaled by ability
-            let range = expected_ratio - unhappy_threshold;
-            let position = (play_ratio - unhappy_threshold) / range.max(0.01);
-            (position - 0.5) * 10.0 * ability_factor
-        };
-
-        factor.clamp(-20.0, 20.0)
+            // Below expectation — frustration scaled by ability, age
+            // sensitivity, and the post-transfer grace ramp.
+            let deficit_ratio = ((expected_raw - actual) / expected).clamp(0.0, 1.0);
+            let frustration_multiplier = opp.frustration_multiplier(&cfg);
+            (cfg.max_negative_playing_time_factor
+                * deficit_ratio
+                * ability_factor
+                * age_sensitivity
+                * frustration_multiplier)
+                .clamp(cfg.max_negative_playing_time_factor, 0.0)
+        }
     }
 
     /// Salary factor uses the same `ContractValuation` as the renewal AI
@@ -830,9 +1055,14 @@ impl Player {
     /// loanees, an "out of position" hit when role mismatch lingers,
     /// and an underperformance signal when the player's form is poor
     /// at a smaller club (the loan isn't working out).
-    fn process_loan_morale(&mut self, team_reputation: f32, league_reputation: u16) {
+    fn process_loan_morale(&mut self, now: NaiveDate, team_reputation: f32, league_reputation: u16) {
         use crate::club::player::adaptation::ReputationGap;
         let gap = ReputationGap::compute(self, team_reputation, league_reputation);
+        // Match-opportunity gate: a loanee at a club that hasn't given him
+        // a competitive fixture yet has no playing-time grievance to voice,
+        // however long he's been on the books.
+        let has_match_opportunity =
+            self.playing_time_opportunity(now).eligible_official_matches_since_join > 0;
         let age = DateUtils::age(
             self.birth_date,
             self.last_transfer_date.unwrap_or_else(|| {
@@ -864,14 +1094,19 @@ impl Player {
                 .add_event_with_cooldown(HappinessEventType::SettledIntoSquad, 2.5, 60);
         }
 
-        // Used out of position — RoleMismatch event still active and
-        // the player hasn't been moved back. Recurring small hit.
+        // Used out of position — RoleMismatch event still active and the
+        // player hasn't been moved back. This is a *role* grievance, and
+        // it only becomes a *playing-time* one once the club has actually
+        // played official matches the loanee was overlooked for. Without
+        // any eligible fixtures the RoleMismatch event already on the log
+        // stands on its own — we must not escalate it to LackOfPlayingTime
+        // and trip the zero-match invariant.
         let recent_mismatch = self
             .happiness
             .recent_events
             .iter()
             .any(|e| e.event_type == HappinessEventType::RoleMismatch && e.days_ago <= 28);
-        if recent_mismatch {
+        if recent_mismatch && has_match_opportunity {
             self.happiness
                 .add_event_with_cooldown(HappinessEventType::LackOfPlayingTime, -2.0, 21);
         }
@@ -973,7 +1208,7 @@ mod loan_morale_tests {
         let mut p = build_loan_player_with_form(8, 5.4);
         // Hit the actual loan-morale branch. Reputations passed in are
         // arbitrary - the underperformance check only reads stats.
-        p.process_loan_morale(2_500.0, 3_000);
+        p.process_loan_morale(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), 2_500.0, 3_000);
 
         assert!(
             p.happiness
@@ -1000,7 +1235,7 @@ mod loan_morale_tests {
     #[test]
     fn loan_branch_silent_for_decent_form() {
         let mut p = build_loan_player_with_form(8, 6.7);
-        p.process_loan_morale(2_500.0, 3_000);
+        p.process_loan_morale(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), 2_500.0, 3_000);
         assert!(
             p.happiness
                 .recent_events
@@ -1009,5 +1244,182 @@ mod loan_morale_tests {
                     && e.event_type != HappinessEventType::PoorTraining),
             "decent form on loan must not fire the underperformance event"
         );
+    }
+}
+
+#[cfg(test)]
+mod playing_time_opportunity_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+
+    fn now() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 5, 1).unwrap()
+    }
+
+    /// Outfield player, age ~27, with a permanent contract at the given
+    /// squad status and a transfer `days_ago` in the past.
+    fn build_player(ca: u8, status: PlayerSquadStatus, days_ago: i64) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.current_ability = ca;
+        attrs.world_reputation = 5_000;
+        attrs.current_reputation = 5_000;
+        let mut player = PlayerBuilder::new()
+            .id(201)
+            .full_name(FullName::new("PT".into(), "Tester".into()))
+            .birth_date(NaiveDate::from_ymd_opt(1999, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 18,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        let mut contract = PlayerClubContract::new(
+            50_000,
+            NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
+        );
+        contract.squad_status = status;
+        player.contract = Some(contract);
+        player.last_transfer_date = Some(now() - chrono::Duration::days(days_ago));
+        player
+    }
+
+    fn cfg() -> PlayingTimeFrustrationConfig {
+        PlayingTimeFrustrationConfig::default()
+    }
+
+    // ── Scenario 1: permanent transfer, 7 days, club played 0 matches ──
+    #[test]
+    fn zero_eligible_matches_blocks_factor_and_gate() {
+        let p = build_player(130, PlayerSquadStatus::KeyPlayer, 7);
+        let opp = p.playing_time_opportunity(now());
+        assert_eq!(opp.eligible_official_matches_since_join, 0);
+        assert!(
+            opp.can_judge(Some(&PlayerSquadStatus::KeyPlayer), &cfg(), None)
+                .is_none(),
+            "no eligible matches → gate must be closed"
+        );
+        // The morale factor must read neutral — the player was never
+        // denied minutes he had a chance at.
+        assert_eq!(p.calculate_playing_time_factor(1.3, now()), 0.0);
+    }
+
+    // ── Scenario 2: club plays matches, KeyPlayer gets 0 minutes ──
+    #[test]
+    fn keyplayer_left_out_after_grace_can_complain() {
+        let mut p = build_player(130, PlayerSquadStatus::KeyPlayer, 60);
+        // Club played 10 official matches; player left out of all of them.
+        p.happiness.eligible_official_matches_since_join = 10;
+        p.happiness.left_out_since_join = 10;
+
+        let opp = p.playing_time_opportunity(now());
+        let mult = opp
+            .can_judge(Some(&PlayerSquadStatus::KeyPlayer), &cfg(), None)
+            .expect("gate should be open past grace with a full sample");
+        assert!((mult - 1.0).abs() < f32::EPSILON, "past soft grace → full weight");
+
+        // Morale factor strongly negative (10 eligible ≥ 5 sample).
+        let factor = p.calculate_playing_time_factor(1.0, now());
+        assert!(factor < -10.0, "benched KeyPlayer factor was {factor}");
+    }
+
+    // ── Scenario 5: prospect moved, 14 days, 0 matches → no request ──
+    #[test]
+    fn prospect_no_matches_gate_closed() {
+        let p = build_player(70, PlayerSquadStatus::HotProspectForTheFuture, 14);
+        let opp = p.playing_time_opportunity(now());
+        assert_eq!(opp.eligible_official_matches_since_join, 0);
+        assert!(
+            opp.can_judge(
+                Some(&PlayerSquadStatus::HotProspectForTheFuture),
+                &cfg(),
+                None
+            )
+            .is_none(),
+            "prospect with no fixtures must not request a loan"
+        );
+    }
+
+    // ── Scenario 6: 5+ apps with a poor start/sub ratio still complains ──
+    #[test]
+    fn established_under_involved_regular_is_unhappy() {
+        let mut p = build_player(130, PlayerSquadStatus::FirstTeamRegular, 200);
+        // 20 eligible matches: 2 starts, 3 sub apps, 15 left out.
+        p.happiness.eligible_official_matches_since_join = 20;
+        p.happiness.starts_since_join = 2;
+        p.happiness.sub_apps_since_join = 3;
+        p.happiness.left_out_since_join = 15;
+
+        let factor = p.calculate_playing_time_factor(1.0, now());
+        assert!(factor < -8.0, "under-involved regular factor was {factor}");
+    }
+
+    // A settled regular getting his minutes reads positive.
+    #[test]
+    fn established_regular_meeting_expectations_is_content() {
+        let mut p = build_player(130, PlayerSquadStatus::FirstTeamRegular, 200);
+        // 20 eligible matches, 18 of them starts.
+        p.happiness.eligible_official_matches_since_join = 20;
+        p.happiness.starts_since_join = 18;
+        p.happiness.sub_apps_since_join = 2;
+
+        let factor = p.calculate_playing_time_factor(1.0, now());
+        assert!(factor > 0.0, "ever-present regular factor was {factor}");
+    }
+
+    // ── Scenario 3 & 4: loan audit gate keys off matches, not days ──
+    #[test]
+    fn loan_no_matches_gate_closed_but_matches_open_it() {
+        // Loan with a minimum-appearance clause of 20 over the season.
+        let mut p = build_player(120, PlayerSquadStatus::NotYetSet, 15);
+        p.contract_loan = Some(
+            PlayerClubContract::new_loan(
+                40_000,
+                NaiveDate::from_ymd_opt(2027, 6, 30).unwrap(),
+                1,
+                1,
+                2,
+            )
+            .with_loan_min_appearances(20),
+        );
+
+        // Day 15, club played nothing → audit must skip.
+        let opp = p.playing_time_opportunity(now());
+        assert_eq!(opp.eligible_official_matches_since_join, 0);
+        assert!(opp.can_judge(None, &cfg(), Some(20)).is_none());
+
+        // Now 5 eligible matches with zero appearances, 40 days in.
+        p.last_transfer_date = Some(now() - chrono::Duration::days(40));
+        p.happiness.eligible_official_matches_since_join = 5;
+        p.happiness.left_out_since_join = 5;
+        let opp = p.playing_time_opportunity(now());
+        // min_eligible for loan = max(3, ceil(20*0.15)=3) = 3 ≤ 5.
+        assert!(
+            opp.can_judge(None, &cfg(), Some(20)).is_some(),
+            "5 eligible matches with a min-apps clause should open the audit"
+        );
+    }
+
+    // The grace ramp never overrides the zero-match hard block.
+    #[test]
+    fn grace_never_overrides_zero_match_block() {
+        // Player transferred a year ago but counters are genuinely zero
+        // *within* the post-transfer window would be a contradiction, so
+        // simulate a fresh move (5 days) — grace would otherwise be 0 too,
+        // but the point is the zero block returns None irrespective.
+        let p = build_player(150, PlayerSquadStatus::KeyPlayer, 5);
+        let opp = p.playing_time_opportunity(now());
+        assert!(opp.frustration_multiplier(&cfg()) == 0.0);
+        assert!(opp.can_judge(Some(&PlayerSquadStatus::KeyPlayer), &cfg(), None).is_none());
     }
 }

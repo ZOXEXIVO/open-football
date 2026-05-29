@@ -75,6 +75,23 @@ impl Player {
     /// also feeds the same EMA: the player wasn't in the matchday squad
     /// at all, so it's a 0-share appearance just like an unused sub.
     pub fn on_match_dropped_with_context(&mut self, ctx: MatchSelectionContext) {
+        // Post-transfer match-opportunity tracking — a match the club
+        // actually played that this player was available for but didn't
+        // feature in. Friendlies never count. Neither do matches the
+        // player missed through injury / suspension / not-yet-eligible
+        // status: those aren't a manager snub and the spec's zero-match
+        // invariant must not be tripped by them. Captured before `ctx`
+        // is moved into the event payload below.
+        let counts_as_opportunity = !ctx.is_friendly
+            && !self.player_attributes.is_injured
+            && !matches!(ctx.scope, SelectionDecisionScope::UnavailableButNotInjured)
+            && !matches!(
+                ctx.reason,
+                SelectionOmissionReason::ReturningFromInjury
+                    | SelectionOmissionReason::FitnessProtection
+            );
+        let left_out = matches!(ctx.scope, SelectionDecisionScope::LeftOutOfMatchdaySquad);
+
         let magnitude = compute_drop_magnitude(self, &ctx);
         let severity = HappinessEventSeverity::from_magnitude(magnitude);
         let cause = drop_cause(&ctx);
@@ -96,6 +113,11 @@ impl Player {
         const ALPHA: f32 = 0.25;
         self.happiness.starter_ratio = self.happiness.starter_ratio * (1.0 - ALPHA);
         self.happiness.appearances_tracked = self.happiness.appearances_tracked.saturating_add(1);
+
+        if counts_as_opportunity {
+            self.happiness.note_official_non_appearance(left_out);
+        }
+
         self.evaluate_role_transition();
     }
 
@@ -114,6 +136,16 @@ impl Player {
         match o.participation {
             MatchParticipation::Starter => s.played += 1,
             MatchParticipation::Substitute => s.played_subs += 1,
+        }
+
+        // Post-transfer match-opportunity tracking. Only official
+        // (competitive) matches count toward the eligible-match
+        // denominator behind the playing-time frustration gate — a
+        // pre-season friendly run-out tells us nothing about the
+        // manager's competitive trust.
+        if !o.is_friendly {
+            self.happiness
+                .note_official_appearance(matches!(o.participation, MatchParticipation::Starter));
         }
     }
 

@@ -4,6 +4,7 @@
 
 use super::TeamBehaviour;
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::happiness::PlayingTimeFrustrationConfig;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
 use crate::{
@@ -135,34 +136,51 @@ impl TeamBehaviour {
         }
 
         for player in players.players.iter_mut() {
-            let Some(loan) = player.contract_loan.as_mut() else {
-                continue;
+            let (min_apps, loan_start) = match player.contract_loan.as_ref() {
+                Some(l) => match (l.loan_min_appearances, l.started) {
+                    (Some(m), Some(s)) => (m, s),
+                    _ => continue,
+                },
+                None => continue,
             };
-            let Some(min_apps) = loan.loan_min_appearances else {
+            // Too early to judge pace at all.
+            if (today - loan_start).num_days() < 30 {
                 continue;
-            };
-            let Some(loan_start) = loan.started else {
-                continue;
-            };
-            let loan_end = loan.expiration;
-
-            let total_days = (loan_end - loan_start).num_days().max(1) as f32;
-            let elapsed_days = (today - loan_start).num_days().max(0) as f32;
-            if elapsed_days < 30.0 {
-                continue; // Too early to judge pace
             }
-            let progress = (elapsed_days / total_days).clamp(0.0, 1.0);
-            let expected_by_now = (min_apps as f32 * progress).floor() as u16;
-            let actual = player.statistics.played + player.statistics.played_subs;
 
-            if actual >= expected_by_now {
+            // Match-opportunity model: judge the loan against the official
+            // fixtures the borrowing club has actually played since the
+            // player arrived — never elapsed calendar time. A loan window
+            // crossing an international break / winter gap with no matches
+            // leaves the audit silent (zero-match invariant), and the gate
+            // also enforces the grace window + status-specific sample.
+            let opp = player.playing_time_opportunity(today);
+            let cfg = PlayingTimeFrustrationConfig::default();
+            let status = player.contract.as_ref().map(|c| &c.squad_status);
+            if opp
+                .can_judge(status, &cfg, Some(min_apps))
+                .is_none()
+            {
+                continue;
+            }
+
+            let eligible = opp.eligible_official_matches_since_join;
+            let actual = player.statistics.played + player.statistics.played_subs;
+            // Expected apps so far scale with matches actually played
+            // (capped at the contractual season minimum): a loanee sent
+            // out for minutes is expected to feature in the bulk of the
+            // games the club plays.
+            let expected_by_now = (((eligible as f32) * 0.6).floor() as u16).min(min_apps);
+            if expected_by_now == 0 || actual >= expected_by_now {
                 continue;
             }
 
             let deficit = expected_by_now.saturating_sub(actual);
             // Open the recall window for any meaningful shortfall.
-            if loan.loan_recall_available_after.is_none() {
-                loan.loan_recall_available_after = Some(today);
+            if let Some(loan) = player.contract_loan.as_mut() {
+                if loan.loan_recall_available_after.is_none() {
+                    loan.loan_recall_available_after = Some(today);
+                }
             }
             // Morale hit scales with how badly we're trailing.
             let magnitude = -((deficit as f32 * 0.8).min(6.0) + 1.0);

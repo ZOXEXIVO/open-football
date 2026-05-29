@@ -3,7 +3,9 @@ use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::development::CoachingEffect;
-use crate::club::player::happiness::{ClubMoraleContext, TeamSeasonState};
+use crate::club::player::happiness::{
+    ClubMoraleContext, PlayingTimeFrustrationConfig, TeamSeasonState,
+};
 use crate::club::player::injury::processing::MedicalStaffQuality;
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::language::PlayerLanguage;
@@ -730,6 +732,19 @@ impl Player {
             .as_ref()
             .and_then(|c| c.loan_min_appearances);
 
+        // Match-opportunity gate for playing-time promises. A "you'll
+        // play" / loan-development promise must not be judged broken until
+        // the club has actually played eligible official matches the
+        // player was overlooked for AND the grace / sample rules are met.
+        // Until then the promise stays pending rather than firing a
+        // PromiseBroken on calendar time alone.
+        let pt_cfg = PlayingTimeFrustrationConfig::default();
+        let pt_opp = self.playing_time_opportunity(now);
+        let pt_status = self.contract.as_ref().map(|c| c.squad_status.clone());
+        let playing_time_judgeable = pt_opp
+            .can_judge(pt_status.as_ref(), &pt_cfg, loan_min_apps)
+            .is_some();
+
         self.promises.retain(|p| {
             if now < p.deadline {
                 return true;
@@ -798,6 +813,21 @@ impl Player {
                     captaincy_awarded_recently((now - p.made_on).num_days())
                 }
             };
+
+            // Zero-match invariant: a playing-time / loan-development
+            // promise can't be "broken" before the club has given the
+            // player real eligible match opportunities and the grace /
+            // sample rules are satisfied. Keep it pending instead of
+            // firing a PromiseBroken on elapsed days alone.
+            if !kept
+                && matches!(
+                    p.kind,
+                    ManagerPromiseKind::PlayingTime | ManagerPromiseKind::LoanDevelopment
+                )
+                && !playing_time_judgeable
+            {
+                return true;
+            }
 
             // Importance × credibility weighting. Kept lifts ~half as
             // hard as a broken promise hurts ("hard to build, easy to lose")

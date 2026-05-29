@@ -37,6 +37,31 @@ pub struct PlayerHappiness {
     /// player who has just made his second poor appearance after one good
     /// one doesn't fire on a 1-of-2 ratio.
     pub recent_low_rating_len: u8,
+
+    // ── Post-transfer playing-time opportunity tracking ──────────
+    //
+    // These counters power the match-opportunity gate: playing-time
+    // frustration (complaints, LackOfPlayingTime, loan-minutes concern,
+    // broken playing-time promises) is judged against the real official
+    // fixtures the club has played since this player joined — never on
+    // calendar days alone. Because `PlayerHappiness` is rebuilt on every
+    // club change (`new()` / `clear()`), all five counters reset to 0 at
+    // the moment of a transfer / loan / manual move, so they always count
+    // "since join". Friendlies, and matches where the player was injured /
+    // suspended / not yet eligible, are excluded. Saturate at `u16::MAX`.
+    /// Official (non-friendly) matches the club played while this player
+    /// was registered and fit since joining — the denominator for every
+    /// playing-time judgement.
+    pub eligible_official_matches_since_join: u16,
+    /// Of those eligible matches, the ones the player started.
+    pub starts_since_join: u16,
+    /// …the ones the player came on as a substitute.
+    pub sub_apps_since_join: u16,
+    /// …the ones the player was named to the bench but never used.
+    pub unused_bench_since_join: u16,
+    /// …the ones the player was left out of the matchday squad entirely
+    /// (still available — not injured / suspended).
+    pub left_out_since_join: u16,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -106,6 +131,39 @@ impl PlayerHappiness {
             apps_since_last_competitive_goal: 0,
             recent_low_rating_mask: 0,
             recent_low_rating_len: 0,
+            eligible_official_matches_since_join: 0,
+            starts_since_join: 0,
+            sub_apps_since_join: 0,
+            unused_bench_since_join: 0,
+            left_out_since_join: 0,
+        }
+    }
+
+    /// Record one official (non-friendly) match the player started or came
+    /// on in. Bumps the eligible-match denominator alongside the relevant
+    /// involvement counter. No-op bookkeeping helper — call sites stay thin.
+    pub fn note_official_appearance(&mut self, started: bool) {
+        self.eligible_official_matches_since_join =
+            self.eligible_official_matches_since_join.saturating_add(1);
+        if started {
+            self.starts_since_join = self.starts_since_join.saturating_add(1);
+        } else {
+            self.sub_apps_since_join = self.sub_apps_since_join.saturating_add(1);
+        }
+    }
+
+    /// Record one official (non-friendly) match the club played in which
+    /// the player was available but did not feature — an unused-bench or
+    /// left-out opportunity. Counts toward the eligible-match denominator
+    /// so a player who is repeatedly overlooked accrues a real deficit,
+    /// while a club that simply hasn't played leaves the counters at zero.
+    pub fn note_official_non_appearance(&mut self, left_out: bool) {
+        self.eligible_official_matches_since_join =
+            self.eligible_official_matches_since_join.saturating_add(1);
+        if left_out {
+            self.left_out_since_join = self.left_out_since_join.saturating_add(1);
+        } else {
+            self.unused_bench_since_join = self.unused_bench_since_join.saturating_add(1);
         }
     }
 
@@ -397,6 +455,11 @@ impl PlayerHappiness {
         self.apps_since_last_competitive_goal = 0;
         self.recent_low_rating_mask = 0;
         self.recent_low_rating_len = 0;
+        self.eligible_official_matches_since_join = 0;
+        self.starts_since_join = 0;
+        self.sub_apps_since_join = 0;
+        self.unused_bench_since_join = 0;
+        self.left_out_since_join = 0;
     }
 
     /// Backward compatible: morale >= happy_threshold means happy.

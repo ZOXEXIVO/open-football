@@ -8,6 +8,7 @@
 use super::TeamBehaviour;
 use crate::club::player::ManagerPromiseKind;
 use crate::club::player::interaction::{InteractionTone, InteractionTopic};
+use crate::club::player::happiness::{PlayingTimeFrustrationConfig, PlayingTimeOpportunityContext};
 use crate::club::team::behaviour::topic_for_talk;
 use crate::club::team::behaviour::{
     ContractTermination, ManagerTalkResult, ManagerTalkType, TeamBehaviourResult,
@@ -375,13 +376,25 @@ impl TeamBehaviour {
             let ability = player.player_attributes.current_ability;
             let ambition = player.attributes.ambition;
             let determination = player.skills.mental.determination;
-            let days = player.player_attributes.days_since_last_match;
 
             // Skip players marked as NotNeeded (they accept their fate)
             let squad_status = player.contract.as_ref().map(|c| &c.squad_status);
             if matches!(squad_status, Some(PlayerSquadStatus::NotNeeded)) {
                 continue;
             }
+
+            // Match-opportunity gate — every playing-time grievance is
+            // judged on the official fixtures the club has actually played
+            // since the player joined, never on calendar days. The gate is
+            // `None` while there are zero eligible matches, during the hard
+            // grace window, or below the status-specific sample.
+            let cfg = PlayingTimeFrustrationConfig::default();
+            let opp = player.playing_time_opportunity(current_date);
+            let loan_min = player
+                .contract_loan
+                .as_ref()
+                .and_then(|c| c.loan_min_appearances);
+            let gate = opp.can_judge(squad_status, &cfg, loan_min);
 
             // ── Check 1: Youth prospect wants real football (loan request) ──
             // Young players with prospect status who aren't getting meaningful
@@ -410,28 +423,46 @@ impl TeamBehaviour {
                     0.55 // Higher bar — 19-20 year olds need more drive
                 };
 
-                if desire > threshold || (age >= 21 && days > 14) {
+                // A prospect only pushes for a loan once he has had real
+                // first-team match opportunities at the parent club — or
+                // has sat through a long idle stretch (60+ days) while the
+                // season is clearly under way. Calendar days alone, with
+                // the club having played nothing, never trigger it.
+                let had_opportunity = opp.eligible_official_matches_since_join > 0;
+                let season_active = ctx
+                    .club
+                    .as_ref()
+                    .map(|c| c.league_matches_played > 0)
+                    .unwrap_or(false);
+                let long_idle =
+                    opp.days_since_join >= 60 && season_active && had_opportunity;
+
+                if (desire > threshold && had_opportunity)
+                    || (age >= 21 && had_opportunity && gate.is_some())
+                    || long_idle
+                {
                     let priority = (desire * 100.0) as u32 + age as u32 * 10;
                     candidates.push((player.id, ManagerTalkType::LoanRequest, priority));
                     continue;
                 }
             }
 
-            // ── Check 2: Playing time complaints (existing logic, enhanced) ──
-            // Only skilled players complain
+            // ── Check 2: Playing time complaints ──
+            // Only skilled players complain.
             if ability < 60 {
                 continue;
             }
 
-            let ability_modifier = (ability as f32 - 60.0) / 140.0;
-            let ambition_modifier = 1.0 - ambition / 30.0;
-            let combined_modifier =
-                (ambition_modifier * 0.5 + (1.0 - ability_modifier) * 0.5).max(0.4);
-            let threshold = (21.0 * combined_modifier) as u16;
+            // No eligible matches / still in grace / below sample → the
+            // player has no playing-time grievance to raise yet.
+            let Some(frustration_mult) = gate else {
+                continue;
+            };
 
-            let playing_time_factor = calculate_playing_time_factor_for_complaint(player);
+            let playing_time_factor =
+                calculate_playing_time_factor_for_complaint(player, &opp, &cfg) * frustration_mult;
 
-            if days > threshold || playing_time_factor < -10.0 {
+            if playing_time_factor <= cfg.complaint_threshold {
                 let talk_type = if age < 23 {
                     // Young players request loans, not just playing time
                     ManagerTalkType::LoanRequest
@@ -439,7 +470,7 @@ impl TeamBehaviour {
                     ManagerTalkType::PlayingTimeRequest
                 };
 
-                let priority = days as u32 + if playing_time_factor < -10.0 { 50 } else { 0 };
+                let priority = opp.eligible_official_matches_since_join as u32 + 50;
                 candidates.push((player.id, talk_type, priority));
             }
         }
@@ -651,35 +682,32 @@ fn evaluate_termination(
     }
 }
 
-fn calculate_playing_time_factor_for_complaint(player: &Player) -> f32 {
-    let total = player.statistics.played + player.statistics.played_subs;
-    if total < 5 {
+/// Playing-time deficit for a complaint, on the match-opportunity model.
+/// Compares the player's weighted involvement against what his squad
+/// status leads him to expect across the eligible official matches the
+/// club has actually played since he joined. Returns a value in
+/// `[max_negative, 0]`; `0` when he's meeting or beating expectations.
+/// The caller scales this by the grace `frustration_multiplier`.
+fn calculate_playing_time_factor_for_complaint(
+    player: &Player,
+    opp: &PlayingTimeOpportunityContext,
+    cfg: &PlayingTimeFrustrationConfig,
+) -> f32 {
+    let eligible = opp.eligible_official_matches_since_join as f32;
+    if eligible <= 0.0 {
         return 0.0;
     }
-
-    let play_ratio = player.statistics.played as f32 / total as f32;
-
-    let expected_ratio = if let Some(ref contract) = player.contract {
-        match contract.squad_status {
-            PlayerSquadStatus::KeyPlayer => 0.70,
-            PlayerSquadStatus::FirstTeamRegular => 0.50,
-            PlayerSquadStatus::FirstTeamSquadRotation => 0.25,
-            PlayerSquadStatus::MainBackupPlayer => 0.20,
-            PlayerSquadStatus::HotProspectForTheFuture => 0.10,
-            PlayerSquadStatus::DecentYoungster => 0.10,
-            PlayerSquadStatus::NotNeeded => 0.05,
-            _ => 0.30,
-        }
-    } else {
-        0.30
-    };
-
-    if play_ratio >= expected_ratio {
-        0.0
-    } else {
-        let deficit = (expected_ratio - play_ratio) / expected_ratio.max(0.01);
-        -deficit * 20.0
+    let status = player.contract.as_ref().map(|c| &c.squad_status);
+    let expected_share = PlayingTimeFrustrationConfig::expected_start_share(status);
+    let expected_raw = eligible * expected_share;
+    let expected = expected_raw.max(1.0);
+    let actual = opp.actual_involvement_score(cfg);
+    if actual >= expected_raw {
+        return 0.0;
     }
+    let deficit_ratio = ((expected_raw - actual) / expected).clamp(0.0, 1.0);
+    (cfg.max_negative_playing_time_factor * deficit_ratio)
+        .clamp(cfg.max_negative_playing_time_factor, 0.0)
 }
 
 /// Choose a tone for a manager-player talk based on the talk type and
