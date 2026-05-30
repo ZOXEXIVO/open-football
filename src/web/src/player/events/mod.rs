@@ -2958,6 +2958,49 @@ mod tests {
     }
 
     #[test]
+    fn captaincy_events_render_on_player_events_page() {
+        // A stored CaptaincyAwarded / CaptaincyRemoved must reach the
+        // events page: each maps to a real (translated) headline, is
+        // classified as a big career moment, and is never filtered out of
+        // the visible list.
+        let i18n = load_en_i18n();
+
+        for (ev, key) in [
+            (
+                HappinessEventType::CaptaincyAwarded,
+                "event_captaincy_awarded",
+            ),
+            (
+                HappinessEventType::CaptaincyRemoved,
+                "event_captaincy_removed",
+            ),
+        ] {
+            // Legacy headline mapping resolves to real copy, not the raw key.
+            assert_eq!(event_type_to_i18n_key(&ev), key);
+            assert_ne!(i18n.t(key), key, "{key} must resolve to real copy");
+            // Big career moment → highlighted in the list.
+            assert!(is_big_event(&ev), "{ev:?} should be a big event");
+            // Not partner-required → never dropped by the partner filter.
+            assert!(!is_partner_required(&ev));
+        }
+
+        // The context-aware leadership renderer (used when the event carries
+        // a LeadershipEventContext) produces the specialised headline.
+        let awarded_ctx = LeadershipEventContext::new(core::LeadershipEventKind::CaptaincyAwarded);
+        assert_eq!(
+            LeadershipRender::headline(&awarded_ctx, &i18n),
+            i18n.t("leadership_headline_captaincy_awarded").to_string()
+        );
+        let removed_ctx = LeadershipEventContext::new(core::LeadershipEventKind::CaptaincyRemoved);
+        let removed_headline = LeadershipRender::headline(&removed_ctx, &i18n);
+        assert_ne!(
+            removed_headline, "leadership_headline_captaincy_removed",
+            "removed headline must resolve to real copy"
+        );
+        assert!(!removed_headline.is_empty());
+    }
+
+    #[test]
     fn evidence_token_covers_every_variant() {
         // Spot every evidence variant has a token. If a new variant is
         // added to the core enum but not wired here, the renderer would

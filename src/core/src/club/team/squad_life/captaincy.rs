@@ -5,10 +5,19 @@
 //! changes carry morale consequences: a stripped former captain takes a hit,
 //! a new appointee gets a lift.
 //!
+//! Every official captaincy write goes through the single chokepoint
+//! [`CaptaincyAssigner::set_official_captain`] — never assign
+//! `Team::captain_id` directly outside bootstrap construction. The matchday
+//! armband (`matchday_leadership`) is a separate, event-free concern and
+//! does not call into this module.
+//!
 //! Three guards keep the events realistic:
 //! 1. The very first captain pick on a freshly-loaded team is silent
 //!    (`captaincy_initialized` flag) — it's save-file setup, not a
-//!    decision the player remembers.
+//!    decision the player remembers. The same silent path normalises a
+//!    legacy team that already carries a `captain_id` but never had the
+//!    flag set: the flag is flipped without fabricating a retroactive
+//!    appointment event.
 //! 2. A 120-day cooldown on each emit type prevents recalculation
 //!    oscillation from spamming armband-handover events.
 //! 3. If the previous captain has left the squad (transfer / loan out /
@@ -35,25 +44,76 @@ const CAPTAINCY_EVENT_COOLDOWN_DAYS: u16 = 120;
 /// for the captaincy ranking at all.
 const MIN_LEADERSHIP_FOR_CAPTAINCY: f32 = 8.0;
 
+/// Whether an official captaincy write should narrate its morale events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptaincyChange {
+    /// Active-simulation decision — emit `CaptaincyAwarded` /
+    /// `CaptaincyRemoved` for any genuine change (subject to the per-type
+    /// cooldown and the departed-captain guard).
+    Narrated,
+    /// Save-file bootstrap, or normalisation of a legacy team whose
+    /// `captaincy_initialized` flag was never set — pin the armband and
+    /// flip the flag with no player events.
+    Silent,
+}
+
 pub struct CaptaincyAssigner;
 
 impl CaptaincyAssigner {
-    /// Rank the squad, pin the new captain/vice-captain, and emit the
-    /// morale events for any handover.
+    /// Monthly reappointment entry point. Rank the squad, then route the
+    /// resulting captain / vice through the [`set_official_captain`]
+    /// chokepoint so any genuine handover narrates its morale events.
+    ///
+    /// An empty ranking (no eligible leaders) resolves to `None` and still
+    /// flows through the chokepoint, so a captain who drops below the
+    /// eligibility threshold — or whose squad loses every qualifying
+    /// leader — is properly stripped rather than silently cleared.
+    ///
+    /// [`set_official_captain`]: CaptaincyAssigner::set_official_captain
     pub fn assign(team: &mut Team, date: NaiveDate) {
         let ranked = Self::rank_candidates(team, date);
-
-        if ranked.is_empty() {
-            team.captain_id = None;
-            team.vice_captain_id = None;
-            return;
-        }
-
         let new_captain = ranked.first().map(|(id, _)| *id);
         let new_vice = ranked.get(1).map(|(id, _)| *id);
-        let was_initialized = team.captaincy_initialized;
 
-        if team.captain_id != new_captain && was_initialized {
+        // The first pick on a freshly-loaded team — and normalisation of a
+        // legacy team whose `captaincy_initialized` flag was never set — is
+        // silent save-file setup. Every later monthly recalculation on an
+        // already-initialised team narrates genuine handovers.
+        let change = if team.captaincy_initialized {
+            CaptaincyChange::Narrated
+        } else {
+            CaptaincyChange::Silent
+        };
+
+        Self::set_official_captain(team, new_captain, new_vice, change);
+    }
+
+    /// The single safe chokepoint for writing the official club captaincy.
+    /// Every official captain write must go through here — never assign
+    /// `Team::captain_id` directly outside bootstrap construction.
+    ///
+    /// In [`CaptaincyChange::Narrated`] mode a genuine change emits
+    /// `CaptaincyRemoved` for the displaced captain (only if still in the
+    /// squad — see [`emit_handover_events`]) and `CaptaincyAwarded` for the
+    /// incoming one, both subject to the per-type cooldown. An unchanged
+    /// captain emits nothing, so repeated monthly reviews never duplicate.
+    /// [`CaptaincyChange::Silent`] pins the armband and flips the
+    /// `captaincy_initialized` flag with no events — used for save-file
+    /// bootstrap and for normalising a legacy team that already carries a
+    /// `captain_id` but never had the flag set.
+    ///
+    /// Vice-captaincy deliberately carries no events (there is no vice
+    /// award/strip event type), and matchday armband resolution
+    /// (`matchday_leadership`) is a separate concern that never calls here.
+    ///
+    /// [`emit_handover_events`]: CaptaincyAssigner::emit_handover_events
+    pub fn set_official_captain(
+        team: &mut Team,
+        new_captain: Option<u32>,
+        new_vice: Option<u32>,
+        change: CaptaincyChange,
+    ) {
+        if change == CaptaincyChange::Narrated && team.captain_id != new_captain {
             Self::emit_handover_events(team, team.captain_id, new_captain);
         }
 
