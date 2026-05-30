@@ -168,7 +168,6 @@ pub fn ai_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> 
             url: ai_url,
             icon: "fa-robot".to_string(),
         }]),
-        source_code_section(),
     ]
 }
 
@@ -177,7 +176,6 @@ pub fn watchlist_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSe
         home_section(i18n, lang),
         search_section(i18n, lang, current_path),
         watchlist_section(i18n, lang, current_path),
-        source_code_section(),
     ]
 }
 
@@ -185,17 +183,7 @@ pub fn search_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSecti
     vec![
         home_section(i18n, lang),
         search_section(i18n, lang, current_path),
-        source_code_section(),
     ]
-}
-
-fn source_code_section() -> MenuSection {
-    MenuSection::plain(vec![MenuItem {
-        active: false,
-        title: "Source code".to_string(),
-        url: "https://github.com/ZOXEXIVO/open-football".to_string(),
-        icon: "fa-brands fa-github".to_string(),
-    }])
 }
 
 /// Continent ids (matching the embedded database).
@@ -315,7 +303,6 @@ pub fn league_menu(
     }
 
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
-    sections.push(source_code_section());
     sections
 }
 
@@ -340,7 +327,6 @@ pub fn cup_menu(
     }
     sections.push(national_section(p.i18n, p.lang, p.current_path));
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
-    sections.push(source_code_section());
     sections
 }
 
@@ -388,7 +374,6 @@ pub fn team_menu(
     }
 
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
-    sections.push(source_code_section());
 
     sections
 }
@@ -413,7 +398,6 @@ pub fn country_menu(
     }
     sections.push(national_section(p.i18n, p.lang, p.current_path));
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
-    sections.push(source_code_section());
 
     sections
 }
@@ -423,7 +407,6 @@ pub fn match_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSectio
     let mut sections = vec![home_section(i18n, lang)];
     sections.push(search_section(i18n, lang, current_path));
     sections.push(watchlist_section(i18n, lang, current_path));
-    sections.push(source_code_section());
     sections
 }
 
@@ -469,7 +452,6 @@ fn continental_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) ->
             icon: "fa-flag".to_string(),
         }]),
         watchlist_section(i18n, lang, current_path),
-        source_code_section(),
     ]
 }
 

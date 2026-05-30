@@ -19,7 +19,6 @@
             <div class="col-2 fm-sidebar">
                 <nav class="fm-sidebar-scroll">
                     {% for section in menu_sections %}
-                    {% if !loop.last %}
                     {% let is_collapsible = section.collapsible && section.items.len() > 2 %}
                     <ul class="fm-nav-section{% if is_collapsible %} fm-nav-collapsible{% if section.expanded %} fm-nav-expanded{% endif %}{% endif %}">
                         {% for item in section.items %}
@@ -44,10 +43,9 @@
                         {% endif %}
                         {% endfor %}
                     </ul>
-                    {% endif %}
                     {% endfor %}
                 </nav>
-                {% if let Some(last) = menu_sections.last() %}
+                {% if !menu_sections.is_empty() %}
                 <ul class="fm-nav-section fm-nav-section-bottom">
                     <li class="fm-sidebar-lang">
                         <div class="fm-sidebar-lang-toggle">
@@ -63,17 +61,6 @@
                             {% endfor %}
                         </div>
                     </li>
-                    <li class="fm-nav-divider"></li>
-                    {% for item in last.items %}
-                    <li>
-                        <a href="{{ item.url }}" {% if item.url.starts_with("http") %} target="_blank" rel="noopener"{%
-                        endif %}>
-                        <i class="{% if item.icon.starts_with(" fa-brands") %}{{ item.icon }}{% else %}fa {{ item.icon
-                        }}{% endif %}"></i>
-                        <span>{{ item.title }}</span>
-                        </a>
-                    </li>
-                    {% endfor %}
                     <li class="fm-nav-divider"></li>
                     <li class="fm-nav-local-only">
                         <a href="/{{ lang }}/performance">
@@ -121,8 +108,8 @@
                                     <a class="fm-ai-icon fm-header-search" href="/{{ lang }}/search" title="{{ i18n.t("search") }}">
                                         <i class="fa fa-search"></i>
                                     </a>
-                                    <a class="fm-ai-icon fm-ai-icon-robot" href="/{{ lang }}/ai" title="{{ i18n.t("ai") }}">
-                                        <i class="fa fa-robot"></i>
+                                    <a class="fm-ai-icon fm-ai-icon-robot" href="https://github.com/ZOXEXIVO/open-football" title="GitHub" target="_blank" rel="noopener">
+                                        <i class="fa-brands fa-github"></i>
                                     </a>
                                     <div class="fm-date">
                                         <div class="fm-date-main">{{ i18n.date_main }}</div>
