@@ -296,6 +296,38 @@ a:link, a:visited, a:hover, a:active {
     font-size: 13px;
 }
 
+/* Environment-specific sidebar items — toggled by the env-local / env-shared
+   class set on <html> from the hostname (mirrors the isLocal check in layout.html).
+   Locally the Performance item shows; on the hosted build it becomes a
+   "Download local version" call-to-action. */
+.fm-nav-shared-only {
+    display: none;
+}
+
+.env-shared .fm-nav-local-only {
+    display: none;
+}
+
+.env-shared .fm-nav-shared-only {
+    display: block;
+}
+
+.fm-nav-section li a.fm-nav-download {
+    margin: 4px 10px;
+    padding: 8px 14px;
+    color: #fff;
+    font-weight: 600;
+    background: linear-gradient(57deg, #233e40 0%, #0a2224 100%);
+    border: 1px solid #193a3c;
+    border-radius: 3px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.fm-nav-section li a.fm-nav-download i,
+.fm-nav-section li a.fm-nav-download span {
+    color: #fff;
+}
+
 /* Collapsible league list — show first 2, hide the rest behind a toggle */
 .fm-nav-collapsible .fm-nav-overflow {
     display: none;
