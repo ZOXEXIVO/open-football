@@ -152,6 +152,13 @@
    OPEN FOOTBALL - FM2017 STYLE
    ============================================ */
 
+/* Always reserve the vertical scrollbar gutter so toggling content height
+   (e.g. expanding the player history accordion) can't make the scrollbar
+   appear/disappear and shift the whole layout sideways. */
+html {
+    scrollbar-gutter: stable;
+}
+
 body {
     background-color: #1a2228;
     color: #d0d6dc;
@@ -4057,6 +4064,9 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-history-table thead th.sq-league {
     text-align: left;
+    width: 140px;
+    min-width: 140px;
+    max-width: 140px;
 }
 
 .fm-history-table thead th.sq-fee {
@@ -4078,11 +4088,19 @@ a:link, a:visited, a:hover, a:active {
     margin-right: 0.55em;
 }
 
+/* Pin the league column to a fixed width. The hidden breakdown rows
+   feed their competition label (`comp.label`) into this column, so under
+   the table's auto layout its width would otherwise be recomputed every
+   time a season's breakdown is expanded/collapsed — visibly shifting all
+   the other columns. A fixed width (with the existing nowrap + ellipsis)
+   keeps the column — and therefore the whole table — rock-steady on toggle. */
 .fm-history-table td.sq-league {
     text-align: left;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    width: 140px;
+    min-width: 140px;
     max-width: 140px;
 }
 
@@ -6695,8 +6713,14 @@ a:link, a:visited, a:hover, a:active {
         margin-right: 0;
     }
 
-    .fm-history-table td.sq-league {
+    .fm-history-table td.sq-league,
+    .fm-history-table thead th.sq-league {
+        width: 80px;
+        min-width: 80px;
         max-width: 80px;
+    }
+
+    .fm-history-table td.sq-league {
         font-size: 11px;
         overflow: hidden;
         text-overflow: ellipsis;
