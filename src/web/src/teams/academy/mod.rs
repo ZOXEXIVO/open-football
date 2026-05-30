@@ -180,19 +180,20 @@ pub async fn team_academy_action(
     });
 
     let readiness_threshold = club.academy.pathway_policy.readiness_threshold;
+    // "Ready for youth" counts players *eligible to enter the youth-team
+    // pathway* this season (old enough, fit, not exhausted) — not just
+    // high-CA prospects. Quality only ranks them; it doesn't gate the
+    // count. Sourced from the academy's canonical eligibility method.
+    let ready_for_youth_count = club.academy.graduation_candidates(now).len();
     let mut foundation_count = 0usize;
     let mut development_count = 0usize;
     let mut professional_count = 0usize;
-    let mut ready_for_youth_count = 0usize;
     let mut at_risk_count = 0usize;
     for p in &players {
         match p.phase_sort {
             0 => foundation_count += 1,
             1 => development_count += 1,
             _ => professional_count += 1,
-        }
-        if p.readiness >= readiness_threshold {
-            ready_for_youth_count += 1;
         }
         if p.risk_low_condition || p.risk_jaded || p.risk_injury_prone {
             at_risk_count += 1;

@@ -51,21 +51,31 @@ impl Club {
         let mut transfers = Vec::new();
         let mut released_players: Vec<Player> = Vec::new();
 
+        // Clean the youth squads FIRST: promote overage youth up the
+        // progression (and into the main team) so room frees up before we
+        // graduate. Without this, a nominally-full youth team would stall
+        // academy throughput even when plenty of academy players are ready.
+        self.rebalance_squads(date);
+
         // Find the lowest youth team to graduate into (U18 → U19 → U20 → U21 → U23)
         let youth_idx = TeamType::YOUTH_PROGRESSION
             .iter()
             .find_map(|tt| self.teams.index_of_type(*tt));
 
-        // Graduate best academy players BEFORE releasing aged-out ones,
-        // so 16+ year olds get a chance to graduate instead of being deleted.
+        // Graduate academy players BEFORE releasing aged-out ones, so 16+
+        // year olds get a chance to graduate instead of being deleted.
         //
-        // Target a 24-player youth squad and never push past the
-        // soft-max of 30. The academy's `recommended_graduates` /
-        // `elite_overshoot_count` helpers decide the actual count so
-        // there's a single place to tune the pathway throughput.
+        // Throughput target (not just "top the squad up"): a healthy
+        // academy ships 5-8 graduates a season, up to 12, plus 0-2 elite
+        // overshoot, always bounded by the youth soft-max of 30. The
+        // academy's `recommended_graduates` / `elite_overshoot_count`
+        // helpers own the actual count so there's one place to tune it.
         if let Some(idx) = youth_idx {
             let youth_count = self.teams.teams[idx].players.len();
-            let normal = self.academy.recommended_graduates(youth_count);
+            let eligible_count = self.academy.graduation_candidates(date).len();
+            let normal = self
+                .academy
+                .recommended_graduates(youth_count, eligible_count);
             let elite_overshoot = self.academy.elite_overshoot_count(date);
             let to_graduate = self
                 .academy

@@ -61,6 +61,12 @@ pub struct AcademyPathwayPolicy {
     pub readiness_threshold: i16,
     pub protect_late_developers: bool,
     pub max_group_imbalance: usize,
+    /// 1..10 pathway tier. Drives the *age-relative* CA expectation in
+    /// the readiness scorer: a strong academy generates higher-CA youth,
+    /// so its "ready for youth football" CA bar sits higher than a small
+    /// academy's. Paired with `readiness_threshold` it keeps the bar both
+    /// reachable for each tier's realistic output and harder at the top.
+    pub tier: u8,
 }
 
 impl AcademyPathwayPolicy {
@@ -74,6 +80,7 @@ impl AcademyPathwayPolicy {
             readiness_threshold: tier.readiness_threshold(),
             protect_late_developers: tier.value() >= 4,
             max_group_imbalance: if tier.value() >= 8 { 2 } else { 3 },
+            tier: tier.value(),
         }
     }
 }
@@ -221,10 +228,14 @@ impl ClubAcademy {
             let group = player.position().position_group();
             health.group_counts[group_index(group)] += 1;
 
-            let readiness = self.pathway_readiness_score(player, date);
-            if readiness >= self.pathway_policy.readiness_threshold {
+            // "Ready for youth" is *eligibility for the youth pathway*, not a
+            // quality bar: an old-enough, healthy, non-exhausted prospect
+            // counts even at low CA (see `is_graduation_eligible`). Readiness
+            // only ranks who graduates first when capacity is limited.
+            if self.is_graduation_eligible(player, date) {
                 health.ready_for_youth += 1;
             }
+            let readiness = self.pathway_readiness_score(player, date);
             if player.player_attributes.potential_ability >= elite_pa && readiness >= 60 {
                 health.elite_prospects += 1;
             }
@@ -403,6 +414,34 @@ impl ClubAcademy {
             .score(player, date)
     }
 
+    /// Whether an academy player is *eligible to enter the youth-team
+    /// pathway* this season. This is a welfare/age gate, deliberately
+    /// independent of ability: old enough, under the academy age-out, fit,
+    /// and not exhausted. Quality (CA/PA/personality) only *ranks*
+    /// eligible players via [`pathway_readiness_score`] — it never blocks
+    /// graduation. A low-CA but fit 16-year-old is a valid graduate.
+    pub fn is_graduation_eligible(&self, player: &Player, date: NaiveDate) -> bool {
+        let age = player.age(date);
+        age >= self.pathway_policy.min_graduation_age
+            && age < 18
+            && !player.player_attributes.is_injured
+            && player.player_attributes.condition >= 5000
+            && player.player_attributes.jadedness <= 7500
+    }
+
+    /// Academy players eligible for youth-team graduation this season,
+    /// each paired with their readiness score for ranking and UI display.
+    /// The count of this list is the headline "ready for youth" figure —
+    /// it reflects pathway eligibility, not a high-CA quality threshold.
+    pub fn graduation_candidates(&self, date: NaiveDate) -> Vec<(u32, i16)> {
+        self.players
+            .players
+            .iter()
+            .filter(|p| self.is_graduation_eligible(p, date))
+            .map(|p| (p.id, self.pathway_readiness_score(p, date)))
+            .collect()
+    }
+
     pub(super) fn recruitment_priority_position(
         &self,
         intake_index: usize,
@@ -433,7 +472,21 @@ impl<'a> AcademyReadinessScorer<'a> {
     }
 
     /// 0..100 readiness score. Below the policy minimum-age this is a
-    /// hard zero — graduation paths short-circuit on it.
+    /// hard zero; otherwise it is a *ranking* signal, not a pass/fail gate.
+    ///
+    /// Readiness means "ready to enter the youth-team pathway", which in
+    /// real football a fit, old-enough teenager is — regardless of how
+    /// high their current ability is. So the axes are dominated by age,
+    /// welfare and attitude, with CA folded in only as an age-relative
+    /// rank tiebreak (not an absolute quality bar). The split is:
+    ///
+    ///   age / proximity to graduation  25
+    ///   fitness / welfare              20
+    ///   personality / attitude         15
+    ///   PA runway                      15
+    ///   CA relative to age             15
+    ///   pathway reputation             10
+    ///   − injury/condition/jadedness penalties
     pub fn score(&self, player: &Player, date: NaiveDate) -> i16 {
         let age = player.age(date);
         if age < self.policy.min_graduation_age {
@@ -443,58 +496,77 @@ impl<'a> AcademyReadinessScorer<'a> {
         let ca = player.player_attributes.current_ability as f32;
         let pa = player.player_attributes.potential_ability as f32;
 
-        // CA axis: 38 points capped. CA 140 caps it; below that scales
-        // linearly so a CA-90 prospect still earns ~24 points.
-        let ca_score = (ca / 140.0 * 38.0).clamp(0.0, 38.0);
+        // Age / time-in-pathway (25). The dominant axis: an older prospect
+        // has had more development and is closer to youth-team football. A
+        // 17-year-old maxes it; a freshly-eligible 15-year-old still earns
+        // a solid base so "fit and old enough" carries real weight.
+        let age_score = match age {
+            a if a >= 17 => 1.00,
+            16 => 0.80,
+            15 => 0.62,
+            14 => 0.46,
+            _ => 0.46,
+        } * 25.0;
 
-        // Runway / late-developer credit. CA-90 PA-170 16-year-old
-        // (80 PA headroom) maxes this axis — "not ready by CA but
-        // headroom compensates".
-        let potential_score = (((pa - ca).max(0.0)) / 80.0 * 14.0).clamp(0.0, 14.0);
+        // Fitness / welfare (20). Condition dominates; jadedness trims it.
+        let condition = (player.player_attributes.condition as f32 / 10000.0).clamp(0.0, 1.0);
+        let jaded = (player.player_attributes.jadedness as f32 / 10000.0).clamp(0.0, 1.0);
+        let fitness_score = (0.65 * condition + 0.35 * (1.0 - jaded)) * 20.0;
 
-        // Personality. Professionalism dominates because it actually
-        // predicts academy → senior translation.
+        // Personality / training attitude (15). Professionalism dominates
+        // because it best predicts academy → senior translation.
         let personality_raw = 0.40 * player.attributes.professionalism
             + 0.25 * player.skills.mental.determination
             + 0.20 * player.skills.mental.work_rate
             + 0.15 * player.attributes.ambition;
-        let personality_score = (personality_raw / 20.0 * 14.0).clamp(0.0, 14.0);
+        let personality_score = (personality_raw / 20.0 * 15.0).clamp(0.0, 15.0);
 
-        let age_score = {
-            let gap = age.saturating_sub(self.policy.min_graduation_age) as f32;
-            (gap / 4.0).clamp(0.0, 1.0) * 10.0
+        // PA runway (15). Headroom between current and potential ability —
+        // separates the high-ceiling prospects from the finished article.
+        let pa_runway_score = (((pa - ca).max(0.0)) / 70.0 * 15.0).clamp(0.0, 15.0);
+
+        // CA relative to age (15). NOT an absolute quality bar: scored
+        // against the CA a strong-for-their-age prospect of this tier
+        // actually reaches, so a low-CA-but-on-track teenager still ranks
+        // respectably while a genuinely advanced one edges ahead. Academy
+        // youth top out far below the ~140 senior scale.
+        let expected_ca = {
+            let base = match age {
+                0..=14 => 58.0,
+                15 => 66.0,
+                16 => 74.0,
+                17 => 82.0,
+                _ => 88.0,
+            };
+            (base + (self.policy.tier as f32 - 4.0) * 2.0).max(45.0)
         };
+        let ca_rel_score = (ca / expected_ca * 15.0).clamp(0.0, 15.0);
 
-        let condition = (player.player_attributes.condition as f32 / 10000.0).clamp(0.0, 1.0);
-        let jaded = (player.player_attributes.jadedness as f32 / 10000.0).clamp(0.0, 1.0);
-        let fitness_score = (0.70 * condition + 0.30 * (1.0 - jaded)) * 10.0;
+        // Pathway prestige (10). Driven by *reputation*, not facility tier:
+        // a well-respected pathway translates prospects to senior careers.
+        let pathway_score = self.pathway_reputation as f32 / 100.0 * 10.0;
 
-        // Pathway prestige — worth up to 7. Driven by *reputation*
-        // not facility tier: an academy with great facilities but a
-        // weak track record of promotions should not get the same
-        // graduation tail-wind as one whose alumni walk into the
-        // senior team.
-        let pathway_score = self.pathway_reputation as f32 / 100.0 * 7.0;
-
+        // Penalties keep at-risk prospects (injury-prone, under-conditioned,
+        // exhausted) lower in the ranking even when age-eligible.
         let mut penalty = 0.0_f32;
         if player.player_attributes.injury_proneness >= 17 {
             penalty += 6.0;
         }
         if player.player_attributes.condition < 6000 {
-            penalty += 5.0;
+            penalty += 6.0;
         }
         if player.player_attributes.jadedness > 6000 {
-            penalty += 5.0;
+            penalty += 6.0;
         }
         if age <= 14 && self.policy.protect_late_developers && (pa - ca) < 35.0 {
             penalty += 3.0;
         }
 
-        let score = ca_score
-            + potential_score
-            + personality_score
-            + age_score
+        let score = age_score
             + fitness_score
+            + personality_score
+            + pa_runway_score
+            + ca_rel_score
             + pathway_score
             - penalty;
         score.clamp(0.0, 100.0) as i16
@@ -644,17 +716,102 @@ mod tests {
         player
     }
 
+    /// Readiness-test prospect with deterministic personality and
+    /// condition. `personality` (0..20) is applied to the four traits the
+    /// scorer reads so the band assertions don't depend on the generator's
+    /// random attitude rolls.
+    fn academy_prospect(
+        age: u8,
+        ca: u8,
+        pa: u8,
+        personality: f32,
+        condition: i16,
+        today: NaiveDate,
+    ) -> Player {
+        let mut player = synthetic_academy_player(age, ca, pa, today);
+        player.attributes.professionalism = personality;
+        player.attributes.ambition = personality;
+        player.skills.mental.determination = personality;
+        player.skills.mental.work_rate = personality;
+        player.player_attributes.condition = condition;
+        player.player_attributes.jadedness = 0;
+        player.player_attributes.injury_proneness = 5;
+        player
+    }
+
+    #[test]
+    fn readiness_under_min_age_is_zero() {
+        let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        let policy = AcademyPathwayPolicy::for_level(8); // min_grad 15
+        let scorer = AcademyReadinessScorer::new(55, &policy);
+        assert!(14 < policy.min_graduation_age, "test premise");
+        // Even an outstanding 14-year-old scores a hard zero on age alone —
+        // the only absolute gate left in the readiness model.
+        let prospect = academy_prospect(14, 95, 160, 18.0, 9000, date);
+        assert_eq!(scorer.score(&prospect, date), 0);
+    }
+
+    #[test]
+    fn readiness_ranks_elite_above_low_ca_but_both_are_substantial() {
+        // Readiness is a *ranking* signal now, not a quality gate: a fit,
+        // age-eligible low-CA teenager is genuinely ready (non-zero, solid
+        // score), while a high-PA peer simply ranks above them.
+        let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        let policy = AcademyPathwayPolicy::for_level(8);
+        let scorer = AcademyReadinessScorer::new(55, &policy);
+        let low_ca = academy_prospect(16, 50, 60, 10.0, 8500, date);
+        let elite = academy_prospect(16, 80, 165, 16.0, 8500, date);
+        let low = scorer.score(&low_ca, date);
+        let top = scorer.score(&elite, date);
+        assert!(low > 0, "low-CA fit teen must not score zero: {}", low);
+        assert!(top > low, "elite prospect must rank above low-CA: {top} <= {low}");
+    }
+
+    #[test]
+    fn readiness_blocks_no_one_for_low_ca_only() {
+        // The same fit 17-year-old at CA 50 and at CA 90 should both be
+        // clearly "ready" prospects; CA shifts the rank, never the floor.
+        let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        let policy = AcademyPathwayPolicy::for_level(8);
+        let scorer = AcademyReadinessScorer::new(55, &policy);
+        let weak_ca = scorer.score(&academy_prospect(17, 50, 55, 9.0, 8500, date), date);
+        let strong_ca = scorer.score(&academy_prospect(17, 90, 140, 9.0, 8500, date), date);
+        assert!(weak_ca >= 50, "fit, old-enough teen must rank well: {weak_ca}");
+        assert!(strong_ca > weak_ca);
+    }
+
+    #[test]
+    fn pipeline_health_counts_low_ca_eligible_players_as_ready() {
+        let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        let mut academy = ClubAcademy::new(8); // tier 4, min_grad 15
+        // Low-CA but fit, age-eligible teenagers — all "ready for youth".
+        academy.players.add(academy_prospect(15, 48, 60, 9.0, 8000, date));
+        academy.players.add(academy_prospect(16, 55, 70, 8.0, 8200, date));
+        academy.players.add(academy_prospect(17, 52, 58, 7.0, 8500, date));
+        // NOT ready: underage (even with huge CA)...
+        academy.players.add(academy_prospect(14, 95, 160, 16.0, 9000, date));
+        // ...and an exhausted teenager over the jadedness eligibility cap.
+        let mut exhausted = academy_prospect(16, 70, 110, 12.0, 9000, date);
+        exhausted.player_attributes.jadedness = 8000; // > 7500 cap
+        academy.players.add(exhausted);
+
+        let health = academy.pipeline_health(date);
+        assert_eq!(
+            health.ready_for_youth, 3,
+            "the three fit, age-eligible low-CA teens are ready; underage and exhausted are not"
+        );
+    }
+
     #[test]
     fn graduation_does_not_overfill_youth() {
-        // Recommended graduate count must respect the soft target of 24
-        // and never push the youth roster past the soft-max of 30.
+        // Even with a full eligible pool, the recommended count never
+        // pushes the youth roster past the soft-max of 30.
         let academy = ClubAcademy::new(10);
-        // Youth already at the soft-max → no graduates.
+        // Youth already at the soft-max → no graduates regardless of pool.
         let cap = academy.graduation_ceiling(30, 10, 2);
         assert_eq!(cap, 0, "ceiling violated soft-max");
-        // Youth at target → 0 normal graduates.
-        let rec = academy.recommended_graduates(24);
-        assert_eq!(rec, 0);
+        // Youth at 24 with 10 eligible → only 6 slots of room are usable.
+        assert_eq!(academy.recommended_graduates(24, 10), 6);
     }
 
     #[test]

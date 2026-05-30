@@ -4,49 +4,47 @@ use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 impl ClubAcademy {
-    /// Graduate the best academy players that exceed the pathway
-    /// readiness threshold. Up to `count` players will be returned, but
-    /// the function refuses to graduate prospects below the bar — the
-    /// resident U18 team is better off with fewer well-prepared players
-    /// than a roster stuffed with raw teenagers.
+    /// Graduate up to `count` academy players into the youth-team
+    /// pathway. Selection is over the *eligible* pool only — old enough,
+    /// healthy, not exhausted (see [`ClubAcademy::is_graduation_eligible`])
+    /// — and readiness merely ranks who goes first when capacity is
+    /// limited. There is deliberately no quality cut-off: a fit, age-eligible
+    /// prospect graduates even at low current ability, because "ready for
+    /// youth football" is about the pathway, not first-team quality.
     pub fn graduate_to_youth(&mut self, date: NaiveDate, count: usize) -> Vec<Player> {
         if count == 0 {
             return Vec::new();
         }
 
-        let threshold = self.pathway_policy.readiness_threshold;
-        let elite_pa = self.tuning.elite_pa_threshold;
-
-        let mut candidates: Vec<(u32, i16, u8, u8)> = self
+        let mut candidates: Vec<(u32, i16, u8, u8, u8)> = self
             .players
             .players
             .iter()
-            .filter_map(|p| {
-                let readiness = self.pathway_readiness_score(p, date);
-                if readiness < threshold {
-                    return None;
-                }
-                Some((
+            .filter(|p| self.is_graduation_eligible(p, date))
+            .map(|p| {
+                (
                     p.id,
-                    readiness,
-                    p.player_attributes.current_ability,
+                    self.pathway_readiness_score(p, date),
+                    p.age(date),
                     p.player_attributes.potential_ability,
-                ))
+                    p.player_attributes.current_ability,
+                )
             })
             .collect();
 
-        // Best pathway fit first.
-        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
+        // Rank: readiness desc, then age desc, then PA desc, then CA desc.
+        // Elite prospects naturally sort to the top (high readiness + PA)
+        // without excluding ordinary, ready teenagers below them.
+        candidates.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then(b.2.cmp(&a.2))
+                .then(b.3.cmp(&a.3))
+                .then(b.4.cmp(&a.4))
+        });
         candidates.truncate(count);
 
-        let elite_overshoot_threshold = threshold + 8;
-        let _elite_eligible = candidates
-            .iter()
-            .filter(|(_, r, _, pa)| *r >= elite_overshoot_threshold && *pa >= elite_pa)
-            .count();
-
         let mut graduated = Vec::new();
-        for (player_id, _, _, _) in candidates {
+        for (player_id, _, _, _, _) in candidates {
             if let Some(mut player) = self.players.take_player(&player_id) {
                 let expiration =
                     NaiveDate::from_ymd_opt(date.year() + 3, date.month(), date.day().min(28))
@@ -81,20 +79,35 @@ impl ClubAcademy {
             .players
             .iter()
             .filter(|p| {
-                let readiness = self.pathway_readiness_score(p, date);
-                readiness >= threshold && p.player_attributes.potential_ability >= elite_pa
+                self.is_graduation_eligible(p, date)
+                    && p.player_attributes.potential_ability >= elite_pa
+                    && self.pathway_readiness_score(p, date) >= threshold
             })
             .count()
             .min(2)
     }
 
-    /// Recommended normal graduation count for the resident U18. Takes
-    /// the youth-team head-count and applies the soft-target rules:
-    ///   target_youth_size = 24, soft_max_youth_size = 30, max 10.
-    pub fn recommended_graduates(&self, youth_count: usize) -> usize {
-        let target = 24usize;
-        let space = target.saturating_sub(youth_count);
-        space.min(10)
+    /// Recommended normal graduation count for the resident youth team.
+    ///
+    /// Tuned for *annual throughput*, not just topping the squad up: a
+    /// healthy academy should ship a steady stream of graduates each
+    /// season rather than stalling once the youth team is nominally full.
+    ///   * minimum   5  (graduate all eligible if fewer than 5 exist)
+    ///   * preferred 8
+    ///   * maximum  12
+    /// always capped by the room left under the youth soft-max of 30.
+    pub fn recommended_graduates(&self, youth_count: usize, eligible_count: usize) -> usize {
+        const MIN: usize = 5;
+        const PREFERRED: usize = 8;
+        const MAX: usize = 12;
+        const SOFT_MAX_YOUTH_SIZE: usize = 30;
+
+        let room = SOFT_MAX_YOUTH_SIZE.saturating_sub(youth_count);
+        eligible_count
+            .min(PREFERRED)
+            .max(eligible_count.min(MIN))
+            .min(MAX)
+            .min(room)
     }
 
     /// Hard ceiling on graduates this round when there are elite
@@ -174,15 +187,134 @@ impl GraduationSalary {
 mod tests {
     use super::*;
 
+    /// Build a graduation-test prospect with explicit CA/PA, attitude and
+    /// condition so the readiness outcome is deterministic. Mirrors the
+    /// `academy_prospect` helper in `academy.rs`'s tests.
+    fn prospect(
+        age: u8,
+        ca: u8,
+        pa: u8,
+        personality: f32,
+        condition: i16,
+        today: NaiveDate,
+    ) -> Player {
+        use crate::{PeopleNameGeneratorData, PlayerGenerator, PlayerPositionType};
+        let names = PeopleNameGeneratorData {
+            first_names: vec!["Test".into()],
+            last_names: vec!["Prospect".into()],
+            nicknames: vec![],
+        };
+        let mut player =
+            PlayerGenerator::generate(1, today, PlayerPositionType::MidfielderCenter, 10, &names);
+        player.player_attributes.current_ability = ca;
+        player.player_attributes.potential_ability = pa;
+        player.attributes.professionalism = personality;
+        player.attributes.ambition = personality;
+        player.skills.mental.determination = personality;
+        player.skills.mental.work_rate = personality;
+        player.player_attributes.condition = condition;
+        player.player_attributes.jadedness = 0;
+        player.player_attributes.injury_proneness = 5;
+        player.birth_date = NaiveDate::from_ymd_opt(today.year() - age as i32, 6, 15).unwrap();
+        player
+    }
+
     #[test]
-    fn recommended_graduates_does_not_overfill_youth() {
+    fn graduation_produces_minimum_five_when_candidates_exist() {
+        let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        let mut academy = ClubAcademy::new(8);
+        // Seven fit, age-eligible teenagers of mostly modest ability.
+        for (age, ca, pa) in [
+            (15u8, 48u8, 60u8),
+            (15, 52, 70),
+            (16, 55, 75),
+            (16, 60, 90),
+            (17, 50, 58),
+            (17, 64, 110),
+            (16, 47, 62),
+        ] {
+            academy.players.add(prospect(age, ca, pa, 9.0, 8200, date));
+        }
+        let eligible = academy.graduation_candidates(date).len();
+        assert_eq!(eligible, 7, "all seven teens are eligible");
+        // Youth team nearly empty → ample room; throughput floor is 5.
+        let count = academy.recommended_graduates(10, eligible);
+        assert!(count >= 5, "seasonal floor is 5, got {count}");
+        let graduated = academy.graduate_to_youth(date, count);
+        assert!(
+            graduated.len() >= 5,
+            "at least five academy players graduate: {}",
+            graduated.len()
+        );
+    }
+
+    #[test]
+    fn graduation_does_not_require_high_ca() {
+        let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        let mut academy = ClubAcademy::new(8);
+        // Deliberately low CA, but fit and old enough.
+        academy.players.add(prospect(16, 45, 55, 8.0, 8000, date));
+        academy.players.add(prospect(17, 48, 52, 7.0, 8200, date));
+        academy.players.add(prospect(15, 50, 60, 9.0, 8100, date));
+
+        let graduated = academy.graduate_to_youth(date, 5);
+        assert_eq!(graduated.len(), 3, "low-CA but eligible teens all graduate");
+        assert!(
+            graduated
+                .iter()
+                .all(|p| p.player_attributes.current_ability < 60),
+            "graduates are genuinely low-CA"
+        );
+    }
+
+    #[test]
+    fn graduation_respects_youth_soft_max() {
         let academy = ClubAcademy::new(8);
-        // Already full → 0 graduates.
-        assert_eq!(academy.recommended_graduates(24), 0);
-        // Half-empty → up to 10.
-        assert_eq!(academy.recommended_graduates(12), 10);
-        // One slot open → 1.
-        assert_eq!(academy.recommended_graduates(23), 1);
+        // 8 eligible candidates but the youth team is nearly full (28/30):
+        // only 2 slots of room, so recommended + ceiling both cap at 2.
+        let normal = academy.recommended_graduates(28, 8);
+        assert_eq!(normal, 2, "room under the soft-max caps the normal count");
+        let capped = academy.graduation_ceiling(28, normal, 2);
+        assert_eq!(capped, 2, "ceiling never exceeds the youth soft-max room");
+        // A full youth team → zero graduates regardless of the pool.
+        assert_eq!(academy.recommended_graduates(30, 8), 0);
+    }
+
+    #[test]
+    fn graduate_to_youth_prioritizes_elite_but_includes_normal_players() {
+        let date = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        let mut academy = ClubAcademy::new(8);
+        let elite = prospect(17, 88, 170, 17.0, 9000, date);
+        let elite_id = elite.id;
+        academy.players.add(elite);
+        // A handful of ordinary, fit, age-eligible teens.
+        let mut normal_ids = Vec::new();
+        for (age, ca, pa) in [(16u8, 52u8, 64u8), (15, 48, 58), (16, 55, 72)] {
+            let p = prospect(age, ca, pa, 8.0, 8200, date);
+            normal_ids.push(p.id);
+            academy.players.add(p);
+        }
+
+        let graduated = academy.graduate_to_youth(date, 3);
+        assert_eq!(graduated.len(), 3);
+        assert_eq!(graduated[0].id, elite_id, "elite prospect ranks first");
+        assert!(
+            graduated.iter().any(|p| normal_ids.contains(&p.id)),
+            "ordinary teens are still included, not excluded by the elite"
+        );
+    }
+
+    #[test]
+    fn recommended_graduates_targets_seasonal_throughput() {
+        let academy = ClubAcademy::new(8);
+        // Plenty eligible, empty youth → preferred 8.
+        assert_eq!(academy.recommended_graduates(0, 20), 8);
+        // Fewer than the floor eligible → graduate all of them.
+        assert_eq!(academy.recommended_graduates(0, 3), 3);
+        // Enough to clear the floor → at least the minimum.
+        assert_eq!(academy.recommended_graduates(0, 6), 6);
+        // Room under the soft-max caps the count.
+        assert_eq!(academy.recommended_graduates(27, 20), 3);
     }
 
     #[test]
