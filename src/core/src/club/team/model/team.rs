@@ -42,9 +42,10 @@ pub struct Team {
     pub fixture_window: TeamFixtureWindow,
 
     /// Appointed captain — wears the armband. Selected monthly by
-    /// `CaptaincyAssigner::assign` based on leadership, loyalty, and
-    /// tenure. Distinct from the emergent "influence leader" used
-    /// elsewhere.
+    /// `CaptaincyAssigner`'s realistic model (core leadership, club
+    /// authority, reliability and seniority/fit, under hysteresis) and
+    /// written only through `set_official_captain`. Distinct from the
+    /// emergent "influence leader" used elsewhere.
     pub captain_id: Option<u32>,
     /// Stand-in captain when the captain is unavailable (injured / benched).
     pub vice_captain_id: Option<u32>,
@@ -549,31 +550,28 @@ mod captaincy_tests {
 
     #[test]
     fn high_reputation_removed_captain_takes_bigger_hit() {
-        // Two parallel teams: one star captain (reputation 9000), one
-        // anonymous captain (reputation 500). Both get displaced; star's
-        // hit should be more negative due to reputation amplification.
-        fn run(rep: i16) -> f32 {
-            let mut p1 = build_leader(1, 14.0, rep);
-            p1.attributes.controversy = 10.0;
-            p1.attributes.temperament = 10.0;
-            p1.attributes.professionalism = 10.0;
-            let p2 = build_leader(2, 10.0, 1_000);
-            let mut team = build_team_with(vec![p1, p2]);
-            team.assign_captaincy(d(2026, 7, 1));
-            let captain = team.captain_id.unwrap();
-            for p in team.players.players.iter_mut() {
-                if p.id == captain {
-                    p.skills.mental.leadership = 9.0;
-                } else {
-                    p.skills.mental.leadership = 20.0;
-                    p.player_attributes.current_reputation = 9_000;
-                }
-            }
-            team.assign_captaincy(d(2026, 8, 1));
+        // Removal-magnitude check, NOT a selection check — under hysteresis
+        // the model can legitimately retain an incumbent, so we force the
+        // handover through the official chokepoint and read the displaced
+        // captain's `CaptaincyRemoved` magnitude. A high-reputation captain
+        // should feel a more negative sting than an anonymous one.
+        fn removal_magnitude(rep: i16) -> f32 {
+            let mut old_captain = build_leader(1, 16.0, rep);
+            old_captain.attributes.controversy = 10.0;
+            old_captain.attributes.temperament = 10.0;
+            old_captain.attributes.professionalism = 10.0;
+            let successor = build_leader(2, 14.0, 1_000);
+            let mut team = build_team_with(vec![old_captain, successor]);
+
+            // Appoint the old captain, then force the handover to the
+            // successor — both writes go through the single chokepoint.
+            CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2));
+            CaptaincyAssigner::set_official_captain(&mut team, Some(2), Some(1));
+
             team.players
                 .players
                 .iter()
-                .find(|p| p.id == captain)
+                .find(|p| p.id == 1)
                 .unwrap()
                 .happiness
                 .recent_events
@@ -582,11 +580,11 @@ mod captaincy_tests {
                 .unwrap()
                 .magnitude
         }
-        let star = run(9_000);
-        let anon = run(500);
+        let star = removal_magnitude(9_000);
+        let anon = removal_magnitude(500);
         assert!(
             star < anon,
-            "star {} should be more negative than anon {}",
+            "high-reputation removal magnitude {} must be more negative than low-reputation {}",
             star,
             anon
         );

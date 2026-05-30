@@ -1078,26 +1078,6 @@ a:link, a:visited, a:hover, a:active {
     width: 28px;
 }
 
-.sq-dec-dot {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 13px;
-    height: 13px;
-    border-radius: 50%;
-    background: #fff;
-    font-size: 8.5px;
-    font-weight: 600;
-    font-style: normal;
-    line-height: 1;
-    color: #000;
-    text-decoration: none;
-}
-
-.sq-dec-dot::after {
-    content: "i";
-}
-
 .sq-cap-dot {
     display: inline-flex;
     align-items: center;
@@ -2081,15 +2061,6 @@ a:link, a:visited, a:hover, a:active {
 .fm-squad a:hover {
     color: #fff;
     text-decoration: underline !important;
-}
-
-.fm-squad a.sq-dec-dot {
-    color: #000;
-}
-
-.fm-squad a.sq-dec-dot:hover {
-    color: #000;
-    text-decoration: none !important;
 }
 
 .fm-squad .sq-name {

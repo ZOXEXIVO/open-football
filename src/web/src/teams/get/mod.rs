@@ -8,7 +8,6 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use chrono::NaiveDate;
 use core::ContractType;
 use core::Player;
 use core::PlayerPositionType;
@@ -77,7 +76,6 @@ pub struct TeamPlayer {
     pub played_subs: u16,
     pub goals: u16,
     pub average_rating: String,
-    pub has_recent_decision: bool,
     pub is_captain: bool,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
@@ -146,8 +144,6 @@ pub async fn team_get_action(
                 .map(|c| c.contract_type == ContractType::Youth)
                 .unwrap_or(false);
 
-            let has_recent_decision = has_decision_within_days(p, now, 30);
-
             TeamPlayer {
                 id: p.id,
                 slug: p.slug(),
@@ -184,7 +180,6 @@ pub async fn team_get_action(
                     .statistics_history
                     .current_season_stats(&p.statistics)
                     .average_rating_str(),
-                has_recent_decision,
                 is_captain: captain_id == Some(p.id),
                 status: PlayerStatusDto::new(p.statuses.get()),
             }
@@ -263,7 +258,6 @@ pub async fn team_get_action(
                                 .statistics_history
                                 .current_season_stats(&player.statistics)
                                 .average_rating_str(),
-                            has_recent_decision: has_decision_within_days(player, now, 7),
                             is_captain: false,
                             status: PlayerStatusDto::new(player.statuses.get()),
                         });
@@ -375,12 +369,4 @@ fn get_neighbor_teams(
 
 pub fn get_conditions(player: &Player) -> u8 {
     (100f32 * ((player.player_attributes.condition as f32) / 10000.0)) as u8
-}
-
-fn has_decision_within_days(player: &Player, now: NaiveDate, days: i64) -> bool {
-    player
-        .decision_history
-        .items
-        .iter()
-        .any(|d| (now - d.date).num_days() <= days)
 }
