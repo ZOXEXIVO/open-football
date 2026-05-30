@@ -9,7 +9,10 @@ use crate::club::player::events::{MatchOutcome, MatchParticipation};
 use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
 };
-use crate::club::team::{MatchPhase, TeamTalkContext, TeamTalkTone, apply_team_talk_dated};
+use crate::club::team::{
+    LeadershipCandidate, MatchPhase, MatchdayLeadership, TeamTalkContext, TeamTalkTone,
+    apply_team_talk_dated,
+};
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
@@ -746,12 +749,25 @@ impl LeagueResult {
                 .chain(side.substitutes_used.iter().copied())
                 .collect();
 
-            // Resolve captain id — read team metadata via player location.
-            let team_captain_id: Option<u32> = data
-                .indexes()
-                .and_then(|i| i.get_player_location(*appeared.first()?))
-                .and_then(|(_, _, _, team_id)| data.team(team_id))
-                .and_then(|t| t.captain_id);
+            // Matchday armband — the captain who actually started, not the
+            // persistent club captain who may have been rotated out. Honour
+            // the club hierarchy where it overlaps the kickoff XI
+            // (`side.main`), otherwise the best on-pitch leader. This keeps the
+            // leadership events below attached to a player who appeared, and
+            // never fires a captain event for a benched club captain.
+            let (persistent_captain, persistent_vice) = data
+                .team(side.team_id)
+                .map(|t| (t.captain_id, t.vice_captain_id))
+                .unwrap_or((None, None));
+            let xi_candidates: Vec<LeadershipCandidate> = side
+                .main
+                .iter()
+                .filter_map(|id| data.player(*id))
+                .map(LeadershipCandidate::from_player)
+                .collect();
+            let team_captain_id =
+                MatchdayLeadership::resolve(persistent_captain, persistent_vice, &xi_candidates)
+                    .captain_id;
 
             let mut players: Vec<SidePlayer> = Vec::new();
             for pid in &appeared {

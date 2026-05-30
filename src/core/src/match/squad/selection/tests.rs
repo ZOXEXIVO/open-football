@@ -1629,3 +1629,474 @@ fn not_needed_player_does_not_gain_pathway_priority() {
         "a prospect with the same numbers does"
     );
 }
+
+// ========== Backup-goalkeeper coverage ==========
+//
+// Every matchday bench should name a substitute keeper whenever one is
+// available anywhere — on the team, in the reserve pool the matchday builder
+// supplies (which may itself have borrowed a youth keeper), or, on a full
+// bench, by displacing the most expendable outfield substitute. These tests
+// drive the selector side of that guarantee through the public API and through
+// `ensure_backup_goalkeeper` directly; the matchday-pool side (borrowing a
+// youth keeper into the reserve list) is covered in `league::simulation::matchday`.
+
+/// Ten established senior outfielders, one at each T442 outfield slot, plus
+/// `extra_bench` rotation-grade midfield options so a realistic bench forms.
+/// Keepers are supplied by each test. Outfield ids start at 300, extras at 400.
+fn gk_outfield(extra_bench: usize) -> Vec<Player> {
+    let slots = [
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardRight,
+    ];
+    let mut players = Vec::new();
+    let mut id = 300u32;
+    for &pos in slots.iter() {
+        players.push(make_cup_player(
+            id,
+            pos,
+            15,
+            PlayerSquadStatus::FirstTeamRegular,
+            26,
+            5,
+            12,
+            100.0,
+        ));
+        id += 1;
+    }
+    let mut extra_id = 400u32;
+    for _ in 0..extra_bench {
+        players.push(make_cup_player(
+            extra_id,
+            PlayerPositionType::MidfielderCenter,
+            13,
+            PlayerSquadStatus::FirstTeamSquadRotation,
+            24,
+            8,
+            5,
+            60.0,
+        ));
+        extra_id += 1;
+    }
+    players
+}
+
+fn league_ctx(importance: f32) -> SelectionContext {
+    SelectionContext {
+        match_importance: importance,
+        ..SelectionContext::default()
+    }
+}
+
+fn benched_as_goalkeeper(result: &PlayerSelectionResult, id: u32) -> bool {
+    result.substitutes.iter().any(|p| {
+        p.id == id && p.tactical_position.current_position == PlayerPositionType::Goalkeeper
+    })
+}
+
+fn bench_goalkeeper_count(result: &PlayerSelectionResult) -> usize {
+    result
+        .substitutes
+        .iter()
+        .filter(|p| p.tactical_position.current_position == PlayerPositionType::Goalkeeper)
+        .count()
+}
+
+#[test]
+fn bench_includes_same_team_backup_goalkeeper_when_available() {
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(6);
+    players.push(make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        3,
+        25,
+        0.0,
+    ));
+    players.push(make_cup_player(
+        2,
+        PlayerPositionType::Goalkeeper,
+        15,
+        PlayerSquadStatus::MainBackupPlayer,
+        24,
+        10,
+        4,
+        0.0,
+    ));
+    let team = cup_team(players);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+
+    assert_eq!(starting_goalkeeper_id(&result), Some(1), "the #1 keeper starts");
+    assert!(
+        benched_as_goalkeeper(&result, 2),
+        "the second keeper is named on the bench"
+    );
+}
+
+#[test]
+fn bench_borrows_u21_goalkeeper_when_first_team_has_only_one_gk() {
+    // The first team carries a single keeper; the matchday builder offers a
+    // U21 keeper through the reserve pool. The selector must bench it.
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(6);
+    players.push(make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        3,
+        25,
+        0.0,
+    ));
+    let team = cup_team(players);
+    let u21_keeper = make_cup_player(
+        50,
+        PlayerPositionType::Goalkeeper,
+        12,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        20,
+        14,
+        0,
+        0.0,
+    );
+    let reserves: Vec<&Player> = vec![&u21_keeper];
+
+    let result = SquadSelector::select_with_context(&team, &staff, &reserves, &league_ctx(0.7));
+
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(1),
+        "the senior keeper still starts ahead of the youngster"
+    );
+    assert!(
+        benched_as_goalkeeper(&result, 50),
+        "the borrowed U21 keeper is benched as the backup"
+    );
+}
+
+#[test]
+fn bench_borrows_u19_goalkeeper_when_no_senior_reserve_gk_available() {
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(6);
+    players.push(make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        3,
+        25,
+        0.0,
+    ));
+    let team = cup_team(players);
+    let u19_keeper = make_cup_player(
+        60,
+        PlayerPositionType::Goalkeeper,
+        10,
+        PlayerSquadStatus::DecentYoungster,
+        18,
+        21,
+        0,
+        0.0,
+    );
+    let reserves: Vec<&Player> = vec![&u19_keeper];
+
+    let result = SquadSelector::select_with_context(&team, &staff, &reserves, &league_ctx(0.7));
+
+    assert_eq!(starting_goalkeeper_id(&result), Some(1));
+    assert!(
+        benched_as_goalkeeper(&result, 60),
+        "the borrowed U19 keeper is benched when no senior reserve keeper exists"
+    );
+}
+
+#[test]
+fn bench_does_not_borrow_injured_or_banned_youth_goalkeeper() {
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(6);
+    players.push(make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        3,
+        25,
+        0.0,
+    ));
+    let team = cup_team(players);
+    let mut injured = make_cup_player(
+        70,
+        PlayerPositionType::Goalkeeper,
+        12,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        14,
+        0,
+        0.0,
+    );
+    injured.player_attributes.is_injured = true;
+    let mut banned = make_cup_player(
+        71,
+        PlayerPositionType::Goalkeeper,
+        12,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        14,
+        0,
+        0.0,
+    );
+    banned.player_attributes.is_banned = true;
+    let reserves: Vec<&Player> = vec![&injured, &banned];
+
+    let result = SquadSelector::select_with_context(&team, &staff, &reserves, &league_ctx(0.7));
+
+    assert_eq!(starting_goalkeeper_id(&result), Some(1));
+    assert_eq!(
+        bench_goalkeeper_count(&result),
+        0,
+        "an injured or banned youth keeper must not be benched"
+    );
+    let all_ids: Vec<u32> = result
+        .main_squad
+        .iter()
+        .chain(result.substitutes.iter())
+        .map(|p| p.id)
+        .collect();
+    assert!(
+        !all_ids.contains(&70) && !all_ids.contains(&71),
+        "unavailable keepers are not selected anywhere"
+    );
+}
+
+#[test]
+fn bench_backup_gk_does_not_duplicate_starting_gk() {
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(6);
+    players.push(make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        3,
+        25,
+        0.0,
+    ));
+    players.push(make_cup_player(
+        2,
+        PlayerPositionType::Goalkeeper,
+        15,
+        PlayerSquadStatus::MainBackupPlayer,
+        24,
+        10,
+        4,
+        0.0,
+    ));
+    let team = cup_team(players);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+
+    let starter = starting_goalkeeper_id(&result).expect("a keeper starts");
+    assert!(
+        !result.substitutes.iter().any(|p| p.id == starter),
+        "the starting keeper must not also appear on the bench"
+    );
+    assert_eq!(
+        bench_goalkeeper_count(&result),
+        1,
+        "exactly one backup keeper is benched"
+    );
+}
+
+/// Build a competitive scoring context for the unit-level keeper-guarantee
+/// tests — a normal league fixture, no cup bias.
+fn gk_unit_ctx<'a>(
+    staff: &'a Staff,
+    tactics: &'a Tactics,
+    engine: &'a ScoringEngine,
+) -> super::competitive::SelectionScoringContext<'a> {
+    super::competitive::SelectionScoringContext {
+        staff,
+        tactics,
+        engine,
+        date: Utc::now().date_naive(),
+        is_friendly: false,
+        match_importance: 0.7,
+        policy: SelectionPolicy::StrongWithRotation,
+        cup: None,
+    }
+}
+
+#[test]
+fn full_bench_replaces_lowest_outfield_sub_with_backup_gk() {
+    let staff = generate_test_staff();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let engine = ScoringEngine::from_staff(&staff);
+    let scx = gk_unit_ctx(&staff, &tactics, &engine);
+
+    // A full bench of seven outfielders, no keeper, with a keeper available in
+    // the remaining pool.
+    let outfield: Vec<Player> = (0..helpers::DEFAULT_BENCH_SIZE as u32)
+        .map(|i| {
+            make_cup_player(
+                100 + i,
+                PlayerPositionType::MidfielderCenter,
+                13,
+                PlayerSquadStatus::FirstTeamSquadRotation,
+                24,
+                6,
+                6,
+                70.0,
+            )
+        })
+        .collect();
+    let keeper = make_cup_player(
+        9,
+        PlayerPositionType::Goalkeeper,
+        14,
+        PlayerSquadStatus::MainBackupPlayer,
+        23,
+        12,
+        0,
+        0.0,
+    );
+    let mut remaining: Vec<&Player> = outfield.iter().collect();
+    remaining.push(&keeper);
+
+    let mut subs: Vec<MatchPlayer> = outfield
+        .iter()
+        .map(|p| MatchPlayer::from_player(1, p, PlayerPositionType::MidfielderCenter, false))
+        .collect();
+    let mut used_ids: Vec<u32> = subs.iter().map(|s| s.id).collect();
+    assert_eq!(subs.len(), helpers::DEFAULT_BENCH_SIZE);
+
+    scx.ensure_backup_goalkeeper(1, &mut subs, &mut used_ids, &remaining);
+
+    assert_eq!(
+        subs.len(),
+        helpers::DEFAULT_BENCH_SIZE,
+        "bench size stays at the cap"
+    );
+    assert!(
+        subs.iter().any(|s| s.id == 9
+            && s.tactical_position.current_position == PlayerPositionType::Goalkeeper),
+        "the keeper replaced an outfield substitute on the full bench"
+    );
+    let outfield_left = subs.iter().filter(|s| s.id >= 100).count();
+    assert_eq!(
+        outfield_left,
+        helpers::DEFAULT_BENCH_SIZE - 1,
+        "exactly one outfield sub was dropped for the keeper"
+    );
+}
+
+#[test]
+fn force_selected_outfield_sub_is_not_dropped_for_backup_gk() {
+    let staff = generate_test_staff();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let engine = ScoringEngine::from_staff(&staff);
+    let scx = gk_unit_ctx(&staff, &tactics, &engine);
+
+    let mut outfield: Vec<Player> = (0..helpers::DEFAULT_BENCH_SIZE as u32)
+        .map(|i| {
+            make_cup_player(
+                100 + i,
+                PlayerPositionType::MidfielderCenter,
+                13,
+                PlayerSquadStatus::FirstTeamSquadRotation,
+                24,
+                6,
+                6,
+                70.0,
+            )
+        })
+        .collect();
+    // Pin every outfield sub except the last to the matchday squad — the lone
+    // non-pinned sub (id 106) is the only one the keeper may displace.
+    let last = 100 + helpers::DEFAULT_BENCH_SIZE as u32 - 1;
+    for p in outfield.iter_mut() {
+        if p.id != last {
+            p.is_force_match_selection = true;
+        }
+    }
+    let keeper = make_cup_player(
+        9,
+        PlayerPositionType::Goalkeeper,
+        14,
+        PlayerSquadStatus::MainBackupPlayer,
+        23,
+        12,
+        0,
+        0.0,
+    );
+    let mut remaining: Vec<&Player> = outfield.iter().collect();
+    remaining.push(&keeper);
+
+    let mut subs: Vec<MatchPlayer> = outfield
+        .iter()
+        .map(|p| MatchPlayer::from_player(1, p, PlayerPositionType::MidfielderCenter, false))
+        .collect();
+    let mut used_ids: Vec<u32> = subs.iter().map(|s| s.id).collect();
+
+    scx.ensure_backup_goalkeeper(1, &mut subs, &mut used_ids, &remaining);
+
+    assert!(
+        subs.iter().any(|s| s.id == 9
+            && s.tactical_position.current_position == PlayerPositionType::Goalkeeper),
+        "the keeper is benched on the full bench"
+    );
+    for id in 100..last {
+        assert!(
+            subs.iter().any(|s| s.id == id),
+            "force-selected sub {id} must not be dropped for the keeper"
+        );
+    }
+    assert!(
+        !subs.iter().any(|s| s.id == last),
+        "the only non-pinned outfield sub is the one displaced"
+    );
+}
+
+#[test]
+fn no_backup_gk_available_keeps_existing_emergency_behavior() {
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(8);
+    players.push(make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        3,
+        25,
+        0.0,
+    ));
+    let team = cup_team(players);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+
+    assert_eq!(starting_goalkeeper_id(&result), Some(1));
+    assert_eq!(
+        result.substitutes.len(),
+        helpers::DEFAULT_BENCH_SIZE,
+        "the bench still fills with outfielders"
+    );
+    assert_eq!(
+        bench_goalkeeper_count(&result),
+        0,
+        "no keeper is invented when none is available"
+    );
+}

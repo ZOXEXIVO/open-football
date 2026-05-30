@@ -1098,6 +1098,27 @@ a:link, a:visited, a:hover, a:active {
     content: "i";
 }
 
+.sq-cap-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: #000;
+    font-size: 8.5px;
+    font-weight: 700;
+    font-style: normal;
+    line-height: 1;
+    color: #fff;
+    text-decoration: none;
+    vertical-align: middle;
+}
+
+.sq-cap-dot::after {
+    content: "C";
+}
+
 /* Morale direction arrows */
 .fm-morale {
     display: inline-block;

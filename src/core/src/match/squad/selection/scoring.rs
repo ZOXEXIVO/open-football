@@ -1247,7 +1247,7 @@ impl ScoringEngine {
         available_same_role: &[&Player],
     ) -> f32 {
         let group = slot.position_group();
-        let player_q = self.perceived_quality(player);
+        let player_q = self.role_quality(player, group);
         let mut best_senior_q = player_q;
         for other in available_same_role {
             if other.id == player.id {
@@ -1260,12 +1260,29 @@ impl ScoringEngine {
             if DateUtils::age(other.birth_date, date) <= 23 {
                 continue;
             }
-            let q = self.perceived_quality(other);
+            let q = self.role_quality(other, group);
             if q > best_senior_q {
                 best_senior_q = q;
             }
         }
         best_senior_q - player_q
+    }
+
+    /// Perceived quality of `player` judged in `group`'s terms. Goalkeepers are
+    /// read through the keeper-specific composite (`gk_perceived_quality`) —
+    /// the outfield `perceived_quality` never touches the goalkeeping block, so
+    /// comparing two keepers through it would weigh finishing/dribbling instead
+    /// of handling/reflexes. Every other unit keeps the standard perceived
+    /// quality. This keeps the same-role gap and successor checks meaningful for
+    /// keepers as well as outfielders, even though GK starting selection itself
+    /// deliberately stays outside the future-aware pathway (see
+    /// `competitive::pick_best_goalkeeper`).
+    fn role_quality(&self, player: &Player, group: PlayerFieldPositionGroup) -> f32 {
+        if group == PlayerFieldPositionGroup::Goalkeeper {
+            self.gk_perceived_quality(player)
+        } else {
+            self.perceived_quality(player)
+        }
     }
 
     /// Gentle succession pressure on an aging incumbent — a non-negative

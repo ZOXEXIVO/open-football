@@ -19,6 +19,7 @@ mod world_status;
 pub use types::*;
 
 use crate::HappinessEventType;
+use crate::club::team::MatchdayLeadership;
 use crate::country::PeopleNameGeneratorData;
 use crate::r#match::{MatchPlayer, MatchResultRaw, MatchSquad};
 use crate::utils::IntegerUtils;
@@ -391,14 +392,19 @@ impl NationalTeam {
             substitutes.push(MatchPlayer::from_player(team_id, player, pos, false));
         }
 
+        // National teams carry no persistent captaincy hierarchy, so the
+        // armband goes to the best leader in the selected XI.
+        let (captain_id, vice_captain_id) =
+            MatchdayLeadership::from_match_squad(None, None, &main_squad);
+
         MatchSquad {
             team_id,
             team_name,
             tactics: self.tactics.clone(),
             main_squad,
             substitutes,
-            captain_id: None,
-            vice_captain_id: None,
+            captain_id,
+            vice_captain_id,
             penalty_taker_id: None,
             free_kick_taker_id: None,
             selection_omissions: Vec::new(),
@@ -485,14 +491,19 @@ impl NationalTeam {
             })
             .collect();
 
+        // Synthetic opponents have no persistent hierarchy either; pick the
+        // best leader from the generated XI for the armband.
+        let (captain_id, vice_captain_id) =
+            MatchdayLeadership::from_match_squad(None, None, &main_squad);
+
         MatchSquad {
             team_id,
             team_name: opponent_name.to_string(),
             tactics,
             main_squad,
             substitutes,
-            captain_id: None,
-            vice_captain_id: None,
+            captain_id,
+            vice_captain_id,
             penalty_taker_id: None,
             free_kick_taker_id: None,
             selection_omissions: Vec::new(),

@@ -11,6 +11,7 @@ use super::scoring::ScoringEngine;
 use super::{CupStage, DomesticCupContext, SelectionPolicy};
 use chrono::Utc;
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 
 /// Read-only scoring inputs every selector step needs, bundled so the call
 /// chain isn't a wall of positional arguments. All fields are borrows or small
@@ -274,10 +275,7 @@ impl SelectionScoringContext<'_> {
 
         // Player lookup by id — both for re-scoring starters and for the
         // established / force / position checks the swap loop runs.
-        let player_by_id: std::collections::HashMap<u32, &Player> = available
-            .iter()
-            .map(|p| (p.id, *p))
-            .collect();
+        let player_by_id: HashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
 
         let is_non_established = |p: &Player| !CupRotation::is_established(p);
         let count_non_established = |sq: &[MatchPlayer]| -> usize {
@@ -304,7 +302,7 @@ impl SelectionScoringContext<'_> {
 
             // Eligible replacements: non-established, not GK, not recovering,
             // condition >=70, currently on the bench (not in the XI).
-            let used_set: std::collections::HashSet<u32> = used_ids.iter().copied().collect();
+            let used_set: HashSet<u32> = used_ids.iter().copied().collect();
             let bench_pool: Vec<&Player> = available
                 .iter()
                 .copied()
@@ -456,7 +454,116 @@ impl SelectionScoringContext<'_> {
             }
         }
 
+        // 5. Backup-goalkeeper guarantee. The keeper step (1) already benches
+        // the best available backup first, so in the normal flow this is a
+        // no-op. It backstops odd pools — and any future reordering of the
+        // steps above — so a matchday bench never goes out keeper-less while a
+        // keeper is available anywhere in the pool.
+        self.ensure_backup_goalkeeper(team_id, &mut subs, &mut used_ids, remaining);
+
         subs
+    }
+
+    /// Final backup-goalkeeper guarantee for the bench. No-op when the bench
+    /// already names a keeper, or when no keeper is available in `remaining`.
+    /// Otherwise the best available backup keeper is added: appended when the
+    /// bench has a free slot, or — when the bench is full — swapped in for the
+    /// lowest-value outfield substitute. A force-selected player is never
+    /// dropped, and a key player is only displaced when no cheaper outfield sub
+    /// exists. Mirrors real football: a manager names a substitute keeper, even
+    /// at the cost of an outfield option, whenever one is available.
+    pub(crate) fn ensure_backup_goalkeeper(
+        &self,
+        team_id: u32,
+        subs: &mut Vec<MatchPlayer>,
+        used_ids: &mut Vec<u32>,
+        remaining: &[&Player],
+    ) {
+        let has_keeper = subs
+            .iter()
+            .any(|mp| mp.tactical_position.current_position == PlayerPositionType::Goalkeeper);
+        if has_keeper {
+            return;
+        }
+
+        let Some(gk) = self.pick_best_goalkeeper(remaining, used_ids.as_slice()) else {
+            return;
+        };
+
+        if subs.len() < helpers::DEFAULT_BENCH_SIZE {
+            subs.push(MatchPlayer::from_player(
+                team_id,
+                gk,
+                PlayerPositionType::Goalkeeper,
+                false,
+            ));
+            used_ids.push(gk.id);
+            return;
+        }
+
+        // Bench full — swap the most expendable outfield substitute for the
+        // keeper so a structural keeper slot is never lost to an outfield
+        // luxury option.
+        let player_by_id: HashMap<u32, &Player> = remaining.iter().map(|p| (p.id, *p)).collect();
+        let Some(idx) = self.lowest_value_outfield_sub(subs, &player_by_id) else {
+            return;
+        };
+        let old_id = subs[idx].id;
+        used_ids.retain(|id| *id != old_id);
+        used_ids.push(gk.id);
+        subs[idx] = MatchPlayer::from_player(team_id, gk, PlayerPositionType::Goalkeeper, false);
+    }
+
+    /// Index of the outfield substitute most expendable for a structural need
+    /// (here: naming a backup keeper on a full bench). Force-selected players
+    /// are never eligible. Among the rest the lowest `Impact` bench score wins,
+    /// but a key player (KeyPlayer / FirstTeamRegular) is only considered once
+    /// no non-key outfield substitute remains — so a fringe option is always
+    /// dropped before a senior one. Returns `None` when every bench player is
+    /// the keeper slot or force-selected.
+    fn lowest_value_outfield_sub(
+        &self,
+        subs: &[MatchPlayer],
+        player_by_id: &HashMap<u32, &Player>,
+    ) -> Option<usize> {
+        let is_key = |p: &Player| {
+            p.contract
+                .as_ref()
+                .map(|c| {
+                    matches!(
+                        c.squad_status,
+                        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                    )
+                })
+                .unwrap_or(false)
+        };
+
+        let pick = |allow_key: bool| -> Option<usize> {
+            let mut best_idx: Option<usize> = None;
+            let mut best_score = f32::INFINITY;
+            for (i, mp) in subs.iter().enumerate() {
+                if mp.tactical_position.current_position == PlayerPositionType::Goalkeeper {
+                    continue;
+                }
+                let Some(p) = player_by_id.get(&mp.id).copied() else {
+                    continue;
+                };
+                if self.engine.honor_force_selection && p.is_force_match_selection {
+                    continue;
+                }
+                if !allow_key && is_key(p) {
+                    continue;
+                }
+                let score = self.bench_role_score(p, BenchRole::Impact);
+                if score < best_score {
+                    best_score = score;
+                    best_idx = Some(i);
+                }
+            }
+            best_idx
+        };
+
+        pick(false).or_else(|| pick(true))
     }
 
     /// Push the bench toward `min_count` non-established outfielders. Skips
@@ -472,10 +579,7 @@ impl SelectionScoringContext<'_> {
         remaining: &[&Player],
         min_count: usize,
     ) {
-        let player_by_id: std::collections::HashMap<u32, &Player> = remaining
-            .iter()
-            .map(|p| (p.id, *p))
-            .collect();
+        let player_by_id: HashMap<u32, &Player> = remaining.iter().map(|p| (p.id, *p)).collect();
         let is_non_est_outfield = |p: &Player| -> bool {
             !p.positions.is_goalkeeper() && !CupRotation::is_established(p)
         };
@@ -491,7 +595,7 @@ impl SelectionScoringContext<'_> {
                 return;
             }
 
-            let used_set: std::collections::HashSet<u32> = used_ids.iter().copied().collect();
+            let used_set: HashSet<u32> = used_ids.iter().copied().collect();
             let candidate = remaining
                 .iter()
                 .copied()
@@ -958,6 +1062,17 @@ impl SelectionScoringContext<'_> {
         // fires when match_importance < 0.5, giving an underplayed backup a
         // boost on cup nights but vanishing for league games, so the #1 GK
         // isn't displaced by a workload signal that doesn't apply to keepers.
+        //
+        // The future-aware pathway layer is deliberately NOT mixed in here.
+        // Keeper minutes are a single-slot, high-variance call: a green young
+        // keeper handed a start on a development nudge concedes goals an
+        // outfield prospect's positional cameo never would. Rotating a rested
+        // backup into an early/dead cup tie is already handled by
+        // `domestic_cup_goalkeeper_adjustment`, which is opponent- and
+        // stage-gated; the pathway pull would add no realistic signal a #1
+        // keeper's CA edge doesn't already encode, only risk. Youth keeper
+        // development is served instead by reliably naming them on the bench
+        // (see `ensure_backup_goalkeeper`) so they travel with the squad.
         available
             .iter()
             .filter(|p| !used_ids.contains(&p.id))

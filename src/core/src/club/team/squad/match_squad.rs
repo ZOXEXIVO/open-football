@@ -1,3 +1,4 @@
+use crate::club::team::MatchdayLeadership;
 use crate::r#match::squad::PlayerSelectionResult;
 use crate::r#match::{MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
 use crate::{Player, Tactics, TacticsSelector, Team};
@@ -20,14 +21,20 @@ impl Team {
 
         self.validate_squad_selection(&squad_result, &final_tactics);
 
+        let (captain_id, vice_captain_id) = MatchdayLeadership::from_match_squad(
+            self.captain_id,
+            self.vice_captain_id,
+            &squad_result.main_squad,
+        );
+
         MatchSquad {
             team_id: self.id,
             team_name: self.name.clone(),
             tactics: final_tactics,
             main_squad: squad_result.main_squad,
             substitutes: squad_result.substitutes,
-            captain_id: self.select_captain(),
-            vice_captain_id: self.select_vice_captain(),
+            captain_id,
+            vice_captain_id,
             penalty_taker_id: self.select_penalty_taker(),
             free_kick_taker_id: self.select_free_kick_taker(),
             selection_omissions: squad_result.omissions,
@@ -54,14 +61,20 @@ impl Team {
 
         self.validate_squad_selection(&squad_result, &final_tactics);
 
+        let (captain_id, vice_captain_id) = MatchdayLeadership::from_match_squad(
+            self.captain_id,
+            self.vice_captain_id,
+            &squad_result.main_squad,
+        );
+
         MatchSquad {
             team_id: self.id,
             team_name: self.name.clone(),
             tactics: final_tactics,
             main_squad: squad_result.main_squad,
             substitutes: squad_result.substitutes,
-            captain_id: self.select_captain(),
-            vice_captain_id: self.select_vice_captain(),
+            captain_id,
+            vice_captain_id,
             penalty_taker_id: self.select_penalty_taker(),
             free_kick_taker_id: self.select_free_kick_taker(),
             selection_omissions: squad_result.omissions,
@@ -103,14 +116,20 @@ impl Team {
         // Step 5: Validate squad selection
         self.validate_squad_selection(&squad_result, &final_tactics);
 
+        let (captain_id, vice_captain_id) = MatchdayLeadership::from_match_squad(
+            self.captain_id,
+            self.vice_captain_id,
+            &squad_result.main_squad,
+        );
+
         MatchSquad {
             team_id: self.id,
             team_name: self.name.clone(),
             tactics: final_tactics,
             main_squad: squad_result.main_squad,
             substitutes: squad_result.substitutes,
-            captain_id: self.select_captain(),
-            vice_captain_id: self.select_vice_captain(),
+            captain_id,
+            vice_captain_id,
             penalty_taker_id: self.select_penalty_taker(),
             free_kick_taker_id: self.select_free_kick_taker(),
             selection_omissions: squad_result.omissions,
@@ -144,46 +163,10 @@ impl Team {
         }
     }
 
-    /// Select team captain based on leadership and experience
-    fn select_captain(&self) -> Option<MatchPlayer> {
-        self.players
-            .players()
-            .iter()
-            .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
-            .max_by(|a, b| {
-                let leadership_a = a.skills.mental.leadership;
-                let leadership_b = b.skills.mental.leadership;
-                let experience_a = a.player_attributes.international_apps;
-                let experience_b = b.player_attributes.international_apps;
-
-                (leadership_a + experience_a as f32 / 10.0)
-                    .partial_cmp(&(leadership_b + experience_b as f32 / 10.0))
-                    .unwrap_or(Ordering::Equal)
-            })
-            .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
-    }
-
-    /// Select vice captain — second-highest leadership after the captain.
-    /// Steps in when the captain is off the pitch (injured, subbed, sent off).
-    fn select_vice_captain(&self) -> Option<MatchPlayer> {
-        let captain_id = self.select_captain().map(|c| c.id);
-        self.players
-            .players()
-            .iter()
-            .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
-            .filter(|p| Some(p.id) != captain_id)
-            .max_by(|a, b| {
-                let leadership_a = a.skills.mental.leadership;
-                let leadership_b = b.skills.mental.leadership;
-                let experience_a = a.player_attributes.international_apps;
-                let experience_b = b.player_attributes.international_apps;
-
-                (leadership_a + experience_a as f32 / 10.0)
-                    .partial_cmp(&(leadership_b + experience_b as f32 / 10.0))
-                    .unwrap_or(Ordering::Equal)
-            })
-            .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
-    }
+    // Matchday captaincy now lives in `MatchdayLeadership::from_match_squad`,
+    // which resolves the armband over the *selected* XI (honouring the
+    // persistent club hierarchy on `Team.captain_id` / `vice_captain_id`)
+    // rather than scanning the whole roster. See `squad_life/matchday_leadership.rs`.
 
     /// Select penalty taker based on penalty taking skill and composure
     fn select_penalty_taker(&self) -> Option<MatchPlayer> {

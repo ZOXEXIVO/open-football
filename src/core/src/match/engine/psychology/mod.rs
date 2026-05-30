@@ -130,6 +130,12 @@ impl Psychology {
     /// + crowd*0.10 + recent_mistake*0.12 - leadership_support*0.10`
     ///
     /// All inputs in 0..1.
+    ///
+    /// TODO(matchday-leadership): pure + unit-tested, not yet wired into the
+    /// live match loop. To use it, feed `leadership_support` from the on-pitch
+    /// captain's leadership (resolved via `MatchdayLeadership`) and consume the
+    /// load in the in-match psychology / decision path. Deferred to avoid
+    /// shifting match outcomes until that change can be calibrated.
     pub fn pressure_load(
         env: &MatchEnvironment,
         late_close_score: f32,
@@ -191,6 +197,12 @@ impl Psychology {
     /// captain_leadership*0.35 + captain_teamwork*0.15 + captain_determination*0.18
     /// + captain_pressure*0.18 + vice_leadership*0.08 + gk_communication*0.06.
     /// All 0..20 inputs.
+    ///
+    /// TODO(matchday-leadership): pure + unit-tested, not yet wired into the
+    /// live match loop. Intended to be fed the actual matchday captain / vice
+    /// (from `MatchdayLeadership`) plus the keeper, then drive
+    /// `leadership_damped_momentum`. Deferred until the match-engine wiring can
+    /// be calibrated.
     pub fn team_leadership_score(
         captain_leadership: f32,
         captain_teamwork: f32,
@@ -232,6 +244,11 @@ impl Psychology {
     /// Damping applied by a captain/vice with high leadership. The higher
     /// the team leadership score, the more the negative momentum is
     /// absorbed (up to 35% per spec).
+    ///
+    /// TODO(matchday-leadership): pure + unit-tested, not yet wired into the
+    /// live match loop. Consumes `team_leadership_score` once that is fed the
+    /// real matchday captain; deferred until the momentum path can be
+    /// recalibrated.
     pub fn leadership_damped_momentum(raw_momentum: f32, team_leadership_0_1: f32) -> f32 {
         if raw_momentum >= 0.0 {
             return raw_momentum;

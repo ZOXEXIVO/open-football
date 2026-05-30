@@ -78,6 +78,7 @@ pub struct TeamPlayer {
     pub goals: u16,
     pub average_rating: String,
     pub has_recent_decision: bool,
+    pub is_captain: bool,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
 }
@@ -115,6 +116,8 @@ pub async fn team_get_action(
     let club_rep = team.reputation.market_value_score();
 
     let now = simulator_data.date.date();
+
+    let captain_id = team.captain_id;
 
     let head_coach = team.staffs.head_coach();
 
@@ -182,6 +185,7 @@ pub async fn team_get_action(
                     .current_season_stats(&p.statistics)
                     .average_rating_str(),
                 has_recent_decision,
+                is_captain: captain_id == Some(p.id),
                 status: PlayerStatusDto::new(p.statuses.get()),
             }
         })
@@ -260,6 +264,7 @@ pub async fn team_get_action(
                                 .current_season_stats(&player.statistics)
                                 .average_rating_str(),
                             has_recent_decision: has_decision_within_days(player, now, 7),
+                            is_captain: false,
                             status: PlayerStatusDto::new(player.statuses.get()),
                         });
                     }

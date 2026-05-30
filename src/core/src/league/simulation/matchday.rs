@@ -374,11 +374,21 @@ impl League {
     }
 
     /// Collect available reserve players from the same club.
-    /// Only pulls from B/U21/U23 teams — not from youth academies (U18/U19/U20).
-    /// Force-selected players from anywhere in the club are added only when
-    /// the assembling team is the Main team — the pin is a senior-XI override,
-    /// so a U18 starlet flagged for the first team must not also be pulled
-    /// into the B-team's reserve pool.
+    ///
+    /// Sweeps the senior reserves and older youth sides (B / Second / Reserve /
+    /// U21 / U23) in full — the pool a manager raids for matchday cover.
+    /// Force-selected players from anywhere in the club are added only when the
+    /// assembling team is the Main team — the pin is a senior-XI override, so a
+    /// U18 starlet flagged for the first team must not also be pulled into the
+    /// B-team's reserve pool.
+    ///
+    /// Outfield borrowing stops there, but a final step guarantees a realistic
+    /// backup-goalkeeper candidate: if the assembling team plus the swept
+    /// reserves can't field a second available keeper, the deeper academy sides
+    /// (U20 → U19 → U18, in that borrowing order) are tapped so the selector can
+    /// always name a substitute keeper. Only the keeper gets this deep-squad
+    /// rescue — clubs reliably promote a youth keeper for the bench rather than
+    /// play an outfielder in goal.
     fn collect_reserve_players<'a>(
         clubs: &'a [Club],
         club_id: u32,
@@ -423,7 +433,81 @@ impl League {
             reserves.push(p);
         }
 
+        Self::ensure_backup_goalkeeper_candidate(club, team_id, is_friendly, &mut reserves);
+
         reserves
+    }
+
+    /// Ensure the reserve pool offers a backup goalkeeper when the assembling
+    /// team can't cover the bench from its own roster plus the senior/older
+    /// reserves already swept in. Counts available keepers on the team and in
+    /// `reserves`; if short of a starter-plus-sub pair, borrows the best
+    /// available academy keepers from the deeper youth tiers, preferring the
+    /// oldest tier first so a U18 is only pulled up as a last resort.
+    /// Availability rules (injury, ban, international duty) are respected — an
+    /// unavailable keeper is never borrowed.
+    fn ensure_backup_goalkeeper_candidate<'a>(
+        club: &'a Club,
+        team_id: u32,
+        is_friendly: bool,
+        reserves: &mut Vec<&'a Player>,
+    ) {
+        // A starter plus one substitute keeper. Borrowing is capped at this so
+        // a single missing backup never strips a youth side of its whole keeper
+        // corps.
+        const GK_BENCH_TARGET: usize = 2;
+
+        let team_keepers = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.id == team_id)
+            .map(|t| {
+                t.players
+                    .iter()
+                    .filter(|p| {
+                        p.positions.is_goalkeeper() && Self::is_player_available(p, is_friendly)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        let reserve_keepers = reserves.iter().filter(|p| p.positions.is_goalkeeper()).count();
+
+        let mut have = team_keepers + reserve_keepers;
+        if have >= GK_BENCH_TARGET {
+            return;
+        }
+
+        // Realistic borrowing order: oldest academy tier first, U18 last.
+        for tier in [TeamType::U20, TeamType::U19, TeamType::U18] {
+            let mut tier_keepers: Vec<&'a Player> = club
+                .teams
+                .teams
+                .iter()
+                .filter(|t| t.id != team_id && t.team_type == tier)
+                .flat_map(|t| t.players.iter())
+                .filter(|p| {
+                    p.positions.is_goalkeeper() && Self::is_player_available(p, is_friendly)
+                })
+                .filter(|p| !reserves.iter().any(|r| r.id == p.id))
+                .collect();
+            // Best keeper in the tier first.
+            tier_keepers.sort_by(|a, b| {
+                b.player_attributes
+                    .current_ability
+                    .cmp(&a.player_attributes.current_ability)
+            });
+            for gk in tier_keepers {
+                if have >= GK_BENCH_TARGET {
+                    return;
+                }
+                reserves.push(gk);
+                have += 1;
+            }
+            if have >= GK_BENCH_TARGET {
+                return;
+            }
+        }
     }
 
     /// Collect supplementary players from other teams in the same club.
@@ -850,6 +934,199 @@ mod tests {
         assert_eq!(
             SelectionPolicy::from_context(&cup_ctx(4, 4, 1000, 1000, dampened)),
             SelectionPolicy::BestEleven
+        );
+    }
+
+    // ========== Backup-goalkeeper borrowing ==========
+    //
+    // `collect_reserve_players` already sweeps senior reserves and the older
+    // youth sides (B/Second/Reserve/U21/U23). These tests cover the deep-squad
+    // keeper rescue layered on top: when the assembling team plus those swept
+    // reserves still can't field a substitute keeper, the deeper academy tiers
+    // (U20 → U19 → U18) are tapped, oldest first and respecting availability.
+
+    use crate::academy::ClubAcademy;
+    use crate::shared::Location;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PeopleNameGeneratorData, Player,
+        PlayerCollection, PlayerGenerator, PlayerPositionType, StaffCollection, Team, TeamBuilder,
+        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::{NaiveTime, Utc};
+
+    fn gk_names() -> PeopleNameGeneratorData {
+        PeopleNameGeneratorData {
+            first_names: vec!["Test".to_string()],
+            last_names: vec!["Keeper".to_string()],
+            nicknames: Vec::new(),
+        }
+    }
+
+    fn md_player(id: u32, position: PlayerPositionType, ability: u8) -> Player {
+        let mut p = PlayerGenerator::generate(1, Utc::now().date_naive(), position, 15, &gk_names());
+        p.id = id;
+        p.player_attributes.current_ability = ability;
+        p
+    }
+
+    fn md_training() -> TrainingSchedule {
+        TrainingSchedule::new(
+            NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+            NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+        )
+    }
+
+    fn md_team(id: u32, club_id: u32, team_type: TeamType, players: Vec<Player>) -> Team {
+        TeamBuilder::new()
+            .id(id)
+            .league_id(Some(1))
+            .club_id(club_id)
+            .name(format!("team-{id}"))
+            .slug(format!("team-{id}"))
+            .team_type(team_type)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 100))
+            .training_schedule(md_training())
+            .build()
+            .unwrap()
+    }
+
+    fn md_club(id: u32, teams: Vec<Team>) -> Club {
+        Club::new(
+            id,
+            "Club".to_string(),
+            Location::new(1),
+            ClubFinances::new(10_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(teams),
+            ClubFacilities::default(),
+        )
+    }
+
+    fn reserve_has(reserves: &[&Player], id: u32) -> bool {
+        reserves.iter().any(|p| p.id == id)
+    }
+
+    #[test]
+    fn collect_reserve_players_borrows_youth_keeper_when_team_lacks_backup() {
+        // First team carries a lone keeper, no senior reserve keeper exists, but
+        // the U19 side has one — it should be borrowed into the reserve pool.
+        let main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![
+                md_player(10, PlayerPositionType::Goalkeeper, 150),
+                md_player(11, PlayerPositionType::DefenderCenter, 140),
+            ],
+        );
+        let u19 = md_team(
+            2,
+            100,
+            TeamType::U19,
+            vec![md_player(20, PlayerPositionType::Goalkeeper, 90)],
+        );
+        let clubs = vec![md_club(100, vec![main, u19])];
+
+        let reserves = League::collect_reserve_players(&clubs, 100, 1, false, true);
+        assert!(
+            reserve_has(&reserves, 20),
+            "the U19 keeper is borrowed when the first team lacks a backup"
+        );
+    }
+
+    #[test]
+    fn collect_reserve_players_prefers_older_youth_keeper_tier() {
+        // Both a U20 and a (higher-CA) U18 keeper are available. The older tier
+        // is borrowed first, so the U18 is left untouched — tier beats ability.
+        let main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![md_player(10, PlayerPositionType::Goalkeeper, 150)],
+        );
+        let u20 = md_team(
+            2,
+            100,
+            TeamType::U20,
+            vec![md_player(20, PlayerPositionType::Goalkeeper, 90)],
+        );
+        let u18 = md_team(
+            3,
+            100,
+            TeamType::U18,
+            vec![md_player(30, PlayerPositionType::Goalkeeper, 95)],
+        );
+        let clubs = vec![md_club(100, vec![main, u20, u18])];
+
+        let reserves = League::collect_reserve_players(&clubs, 100, 1, false, true);
+        assert!(reserve_has(&reserves, 20), "the U20 keeper is preferred");
+        assert!(
+            !reserve_has(&reserves, 30),
+            "the U18 keeper is not borrowed once the U20 covers the bench"
+        );
+    }
+
+    #[test]
+    fn collect_reserve_players_skips_youth_keeper_when_reserve_keeper_present() {
+        // A B-team keeper is already swept into the reserves, so the bench is
+        // covered and no academy keeper is borrowed.
+        let main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![md_player(10, PlayerPositionType::Goalkeeper, 150)],
+        );
+        let b = md_team(
+            2,
+            100,
+            TeamType::B,
+            vec![
+                md_player(20, PlayerPositionType::Goalkeeper, 120),
+                md_player(21, PlayerPositionType::DefenderCenter, 130),
+            ],
+        );
+        let u19 = md_team(
+            3,
+            100,
+            TeamType::U19,
+            vec![md_player(30, PlayerPositionType::Goalkeeper, 90)],
+        );
+        let clubs = vec![md_club(100, vec![main, b, u19])];
+
+        let reserves = League::collect_reserve_players(&clubs, 100, 1, false, true);
+        assert!(
+            reserve_has(&reserves, 20),
+            "the B-team keeper is swept into the reserves"
+        );
+        assert!(
+            !reserve_has(&reserves, 30),
+            "no academy keeper is borrowed once a reserve keeper covers the bench"
+        );
+    }
+
+    #[test]
+    fn collect_reserve_players_does_not_borrow_unavailable_youth_keeper() {
+        // The only academy keeper is injured — it must not be borrowed, leaving
+        // the reserve pool keeper-less rather than naming an unavailable player.
+        let main = md_team(
+            1,
+            100,
+            TeamType::Main,
+            vec![md_player(10, PlayerPositionType::Goalkeeper, 150)],
+        );
+        let mut injured = md_player(20, PlayerPositionType::Goalkeeper, 90);
+        injured.player_attributes.is_injured = true;
+        let u19 = md_team(2, 100, TeamType::U19, vec![injured]);
+        let clubs = vec![md_club(100, vec![main, u19])];
+
+        let reserves = League::collect_reserve_players(&clubs, 100, 1, false, true);
+        assert!(
+            !reserves.iter().any(|p| p.positions.is_goalkeeper()),
+            "an injured academy keeper is never borrowed"
         );
     }
 }
