@@ -1,15 +1,16 @@
 use super::*;
+use super::scoring::ScoringEngine;
 use crate::PlayerPositions;
 use crate::StaffStub;
 use crate::Team;
-use crate::club::PlayerFieldPositionGroup;
+use crate::club::{ClubPhilosophy, PlayerFieldPositionGroup};
 use crate::{
     IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerClubContract, PlayerCollection,
     PlayerGenerator, PlayerPosition, PlayerSquadStatus, PlayerStatusType, SelectionOmissionReason,
     StaffCollection, TeamBuilder, TeamReputation, TeamType, TrainingSchedule,
 };
 use chrono::NaiveDate;
-use chrono::{Datelike, NaiveTime, Utc};
+use chrono::{Datelike, Duration, NaiveTime, Utc};
 
 fn test_names() -> PeopleNameGeneratorData {
     PeopleNameGeneratorData {
@@ -887,5 +888,744 @@ fn domestic_cup_context_carries_bracket_position() {
         SelectionCompetition::ContinentalCup
             .domestic_cup_context(date)
             .is_none()
+    );
+}
+
+// ========== Future-aware squad management ==========
+//
+// Fixtures for the future-aware pathway layer. Grouped into namespace
+// structs (a coach factory, a development-player factory, and a single-slot
+// contest builder) so the tests read as squad-management scenarios rather
+// than a wall of loose helpers.
+
+/// Coach factory: turns staff attribute dials into a `Staff` so a test can
+/// pin exactly the youth-development / judgement traits it cares about.
+struct TestCoach;
+
+impl TestCoach {
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        working_with_youngsters: u8,
+        judging_potential: u8,
+        judging_ability: u8,
+        adaptability: u8,
+        man_management: u8,
+        motivating: u8,
+        determination: u8,
+        discipline: u8,
+    ) -> Staff {
+        let mut staff = StaffStub::default();
+        let coaching = &mut staff.staff_attributes.coaching;
+        coaching.working_with_youngsters = working_with_youngsters;
+        // Give a credible fitness/mental read so match-readiness noise stays
+        // small and the scenarios are stable.
+        coaching.fitness = 16;
+        coaching.mental = 16;
+        coaching.tactical = 12;
+        let knowledge = &mut staff.staff_attributes.knowledge;
+        knowledge.judging_player_potential = judging_potential;
+        knowledge.judging_player_ability = judging_ability;
+        knowledge.tactical_knowledge = 12;
+        let mental = &mut staff.staff_attributes.mental;
+        mental.adaptability = adaptability;
+        mental.man_management = man_management;
+        mental.motivating = motivating;
+        mental.determination = determination;
+        mental.discipline = discipline;
+        staff
+    }
+
+    /// Strong with youngsters: reads potential well, adaptable, man-manages,
+    /// low conservatism.
+    fn good_youth() -> Staff {
+        Self::build(18, 17, 15, 16, 16, 15, 8, 6)
+    }
+
+    /// Weak with youngsters: distrusts kids, poor potential judge, rigid and
+    /// disciplinarian (high conservatism).
+    fn poor_youth() -> Staff {
+        Self::build(3, 4, 12, 5, 8, 8, 16, 16)
+    }
+}
+
+/// Development-player factory: a fit player at a chosen slot with explicit
+/// current/potential ability and a controlled training/readiness profile, so
+/// credibility maths is deterministic.
+struct DevPlayer;
+
+impl DevPlayer {
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        id: u32,
+        position: PlayerPositionType,
+        level: u8,
+        status: PlayerSquadStatus,
+        age: i32,
+        current_ability: u8,
+        potential_ability: u8,
+        days_idle: u16,
+        played: u16,
+    ) -> Player {
+        let mut player = make_cup_player(id, position, level, status, age, days_idle, played, 60.0);
+        player.player_attributes.current_ability = current_ability;
+        player.player_attributes.potential_ability = potential_ability;
+        player.player_attributes.condition = 9500;
+        player.player_attributes.fitness = 9000;
+        // Neutral form for everyone: without it, a player with appearances
+        // takes the season-average path (default rating 0 → a −1.5 form
+        // penalty) while a player with none is spared it — an asymmetry that
+        // would quietly tilt senior-vs-youth contests.
+        player.load.form_rating = 6.5;
+        player.skills.physical.match_readiness = 15.0;
+        player.skills.mental.work_rate = 12.0;
+        player.skills.mental.determination = 12.0;
+        player.skills.mental.teamwork = 12.0;
+        player.training.training_performance = 12.0;
+        player
+    }
+
+    /// An aging incumbent being phased out: backup role, idle, an expiring
+    /// deal and reduced condition so the fragility signal reads. Still skilled
+    /// enough to be a real selection — succession only bites once a credible
+    /// younger option exists.
+    fn aging_incumbent(id: u32, position: PlayerPositionType, age: i32) -> Player {
+        let mut player = Self::build(
+            id,
+            position,
+            15,
+            PlayerSquadStatus::MainBackupPlayer,
+            age,
+            150,
+            150,
+            25,
+            3,
+        );
+        let date = Utc::now().date_naive();
+        if let Some(contract) = player.contract.as_mut() {
+            contract.expiration = date + Duration::days(120);
+        }
+        player.player_attributes.condition = 6000;
+        player
+    }
+
+    /// Flatten every outfield skill to `value` so perceived quality is
+    /// deterministic. The generator scatters skills regardless of the
+    /// position level, so quality contrasts have to be set explicitly here
+    /// rather than inferred from the `level` argument.
+    fn with_skill(mut player: Player, value: f32) -> Player {
+        let technical = &mut player.skills.technical;
+        technical.corners = value;
+        technical.crossing = value;
+        technical.dribbling = value;
+        technical.finishing = value;
+        technical.first_touch = value;
+        technical.free_kicks = value;
+        technical.heading = value;
+        technical.long_shots = value;
+        technical.long_throws = value;
+        technical.marking = value;
+        technical.passing = value;
+        technical.penalty_taking = value;
+        technical.tackling = value;
+        technical.technique = value;
+        let mental = &mut player.skills.mental;
+        mental.aggression = value;
+        mental.anticipation = value;
+        mental.bravery = value;
+        mental.composure = value;
+        mental.concentration = value;
+        mental.decisions = value;
+        mental.determination = value;
+        mental.flair = value;
+        mental.leadership = value;
+        mental.off_the_ball = value;
+        mental.positioning = value;
+        mental.teamwork = value;
+        mental.vision = value;
+        mental.work_rate = value;
+        let physical = &mut player.skills.physical;
+        physical.acceleration = value;
+        physical.agility = value;
+        physical.balance = value;
+        physical.jumping = value;
+        physical.natural_fitness = value;
+        physical.pace = value;
+        physical.stamina = value;
+        physical.strength = value;
+        player
+    }
+}
+
+/// Single-slot contest builder: a senior and a young player able to fill the
+/// same one formation slot, plus a filler for every other slot, so exactly
+/// one of the two starts and the loser drops to the bench.
+struct Contest;
+
+impl Contest {
+    const SLOT: PlayerPositionType = PlayerPositionType::ForwardLeft;
+
+    /// A senior incumbent (id 1) with a modest *skill* edge and an underused
+    /// young prospect (id 2). The edge lives in skills — not status or
+    /// reputation — so the senior can't carry it into a cross-fill at the
+    /// other forward slot; the contest stays at `SLOT`, and the loser benches.
+    /// Both carry neutral form so appearances don't skew perceived quality.
+    fn contest_pair() -> (Player, Player) {
+        let senior = DevPlayer::with_skill(
+            DevPlayer::build(
+                1,
+                Self::SLOT,
+                17,
+                PlayerSquadStatus::FirstTeamRegular,
+                28,
+                165,
+                168,
+                5,
+                20,
+            ),
+            14.0,
+        );
+        let youth = DevPlayer::with_skill(
+            DevPlayer::build(
+                2,
+                Self::SLOT,
+                17,
+                PlayerSquadStatus::HotProspectForTheFuture,
+                19,
+                140,
+                185,
+                14,
+                0,
+            ),
+            11.0,
+        );
+        (senior, youth)
+    }
+
+    /// Full T442 roster around the contested pair. Every filler is an
+    /// established, neutral-form player skilled to match the senior, so no
+    /// filler is displaced by a cross-fill — the loser of `SLOT` has nowhere
+    /// to go but the bench.
+    fn roster(senior: Player, youth: Player) -> Vec<Player> {
+        let slots = [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::MidfielderLeft,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::MidfielderRight,
+            PlayerPositionType::ForwardLeft,
+            PlayerPositionType::ForwardRight,
+        ];
+        let mut players = Vec::new();
+        let mut id = 200u32;
+        for &pos in slots.iter() {
+            if pos == Self::SLOT {
+                continue;
+            }
+            players.push(DevPlayer::with_skill(
+                DevPlayer::build(id, pos, 16, PlayerSquadStatus::FirstTeamRegular, 26, 160, 162, 5, 12),
+                14.0,
+            ));
+            id += 1;
+        }
+        players.push(senior);
+        players.push(youth);
+        players
+    }
+
+    fn ctx(
+        importance: f32,
+        philosophy: ClubPhilosophy,
+        competition: SelectionCompetition,
+    ) -> SelectionContext {
+        SelectionContext {
+            match_importance: importance,
+            philosophy: Some(philosophy),
+            competition,
+            ..SelectionContext::default()
+        }
+    }
+
+    fn cup(round: u8, total: u8, own: u16, opp: u16) -> DomesticCupContext {
+        SelectionCompetition::DomesticCup {
+            round,
+            total_rounds: total,
+            own_reputation: own,
+            opponent_reputation: opp,
+        }
+        .domestic_cup_context(Utc::now().date_naive())
+        .unwrap()
+    }
+
+    fn started(result: &PlayerSelectionResult, id: u32) -> bool {
+        result.main_squad.iter().any(|p| p.id == id)
+    }
+}
+
+#[test]
+fn important_match_keeps_strongest_xi_over_youth_pathway() {
+    let staff = TestCoach::good_youth();
+    let engine =
+        ScoringEngine::from_staff_for_team(&staff, Some(ClubPhilosophy::DevelopAndSell), true);
+    let date = Utc::now().date_naive();
+    let slot = Contest::SLOT;
+    let youth = DevPlayer::build(
+        1,
+        slot,
+        15,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        140,
+        190,
+        7,
+        0,
+    );
+    // Title decider / final stakes: the pathway layer is fully switched off.
+    assert_eq!(
+        engine.future_pathway_adjustment(&youth, slot, 0.9, date, None, &[], true),
+        0.0,
+        "future pathway must be off in a high-importance match"
+    );
+    assert_eq!(engine.pathway_context_multiplier(0.9, None, true), 0.0);
+}
+
+#[test]
+fn develop_and_sell_early_cup_starts_credible_young_player() {
+    let staff = StaffStub::default();
+    let (senior, youth) = Contest::contest_pair();
+    let team = cup_team(Contest::roster(senior, youth));
+    let ctx = Contest::ctx(
+        0.30,
+        ClubPhilosophy::DevelopAndSell,
+        SelectionCompetition::DomesticCup {
+            round: 1,
+            total_rounds: 5,
+            own_reputation: 1000,
+            opponent_reputation: 600,
+        },
+    );
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+    assert!(
+        Contest::started(&result, 2),
+        "a DevelopAndSell side should start the credible young player in an early cup tie"
+    );
+}
+
+#[test]
+fn weak_young_player_does_not_displace_senior_player() {
+    let staff = TestCoach::good_youth();
+    let engine =
+        ScoringEngine::from_staff_for_team(&staff, Some(ClubPhilosophy::DevelopAndSell), true);
+    let date = Utc::now().date_naive();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let slot = Contest::SLOT;
+    let group = slot.position_group();
+    // Clearly better senior (strong skills) vs a weak youngster (low CA & PA,
+    // weak raw skills) who can still nominally fill the slot.
+    let senior = DevPlayer::with_skill(
+        DevPlayer::build(1, slot, 16, PlayerSquadStatus::FirstTeamRegular, 27, 168, 170, 5, 20),
+        16.0,
+    );
+    let weak_youth = DevPlayer::with_skill(
+        DevPlayer::build(2, slot, 14, PlayerSquadStatus::DecentYoungster, 18, 75, 88, 7, 0),
+        6.0,
+    );
+    let pool: Vec<&Player> = vec![&senior, &weak_youth];
+    let total = |p: &Player| {
+        engine.score_player_for_slot(p, slot, group, &staff, &tactics, date, false, &[])
+            + engine.future_pathway_adjustment(p, slot, 0.2, date, None, &pool, true)
+    };
+    assert!(
+        total(&senior) > total(&weak_youth),
+        "a clearly better senior keeps his place over a weak youngster in a low-risk match: \
+         senior {} vs youth {}",
+        total(&senior),
+        total(&weak_youth)
+    );
+}
+
+#[test]
+fn sign_to_compete_reduces_youth_pathway_bonus() {
+    let staff = TestCoach::good_youth();
+    let date = Utc::now().date_naive();
+    let slot = Contest::SLOT;
+    let youth = DevPlayer::build(
+        1,
+        slot,
+        15,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        140,
+        190,
+        7,
+        0,
+    );
+    let pathway = |philosophy: ClubPhilosophy| {
+        ScoringEngine::from_staff_for_team(&staff, Some(philosophy), true)
+            .future_pathway_adjustment(&youth, slot, 0.2, date, None, &[], true)
+    };
+    let develop = pathway(ClubPhilosophy::DevelopAndSell);
+    let balanced = pathway(ClubPhilosophy::Balanced);
+    let compete = pathway(ClubPhilosophy::SignToCompete);
+    assert!(
+        develop > balanced && balanced > compete,
+        "DevelopAndSell {develop} > Balanced {balanced} > SignToCompete {compete}"
+    );
+    assert!(compete >= 0.0);
+}
+
+#[test]
+fn coach_good_with_youngsters_gives_prospect_low_risk_start() {
+    let date = Utc::now().date_naive();
+    let slot = Contest::SLOT;
+    let youth = DevPlayer::build(
+        1,
+        slot,
+        15,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        140,
+        190,
+        7,
+        0,
+    );
+    let good = TestCoach::good_youth();
+    let poor = TestCoach::poor_youth();
+    let pathway = |staff: &Staff| {
+        ScoringEngine::from_staff_for_team(staff, Some(ClubPhilosophy::Balanced), true)
+            .future_pathway_adjustment(&youth, slot, 0.2, date, None, &[], true)
+    };
+    let good_pull = pathway(&good);
+    let poor_pull = pathway(&poor);
+    assert!(
+        good_pull > poor_pull,
+        "a coach good with youngsters gives a bigger pathway pull: good {good_pull} vs poor {poor_pull}"
+    );
+    assert!(good_pull > 0.0);
+}
+
+#[test]
+fn coach_poor_with_youngsters_prefers_senior_in_same_context() {
+    let ctx = Contest::ctx(0.48, ClubPhilosophy::Balanced, SelectionCompetition::League);
+    let good = TestCoach::good_youth();
+    let poor = TestCoach::poor_youth();
+
+    let (senior_g, youth_g) = Contest::contest_pair();
+    let team_good = cup_team(Contest::roster(senior_g, youth_g));
+    let result_good = SquadSelector::select_with_context(&team_good, &good, &[], &ctx);
+
+    let (senior_p, youth_p) = Contest::contest_pair();
+    let team_poor = cup_team(Contest::roster(senior_p, youth_p));
+    let result_poor = SquadSelector::select_with_context(&team_poor, &poor, &[], &ctx);
+
+    assert!(
+        Contest::started(&result_good, 2),
+        "a coach good with youngsters starts the prospect in a low-risk league game"
+    );
+    assert!(
+        Contest::started(&result_poor, 1) && !Contest::started(&result_poor, 2),
+        "a coach poor with youngsters keeps the senior and benches the prospect"
+    );
+}
+
+#[test]
+fn high_judging_potential_identifies_high_potential_player() {
+    let date = Utc::now().date_naive();
+    let slot = Contest::SLOT;
+    // High potential, only modest current ability — invisible to a poor judge.
+    let prospect = DevPlayer::build(
+        1,
+        slot,
+        14,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        18,
+        110,
+        200,
+        7,
+        0,
+    );
+    let high_potential = TestCoach::build(14, 18, 12, 12, 12, 12, 10, 10);
+    let low_potential = TestCoach::build(14, 2, 12, 12, 12, 12, 10, 10);
+    let credible_high = ScoringEngine::from_staff_for_team(&high_potential, None, true)
+        .player_development_credibility(&prospect, slot, date);
+    let credible_low = ScoringEngine::from_staff_for_team(&low_potential, None, true)
+        .player_development_credibility(&prospect, slot, date);
+    assert!(
+        credible_high > credible_low,
+        "a better potential judge values the high-PA prospect more: {credible_high} vs {credible_low}"
+    );
+}
+
+#[test]
+fn low_judging_potential_requires_more_current_ability() {
+    let date = Utc::now().date_naive();
+    let slot = Contest::SLOT;
+    let low_potential = TestCoach::build(14, 2, 12, 12, 12, 12, 10, 10);
+    let engine = ScoringEngine::from_staff_for_team(&low_potential, None, true);
+    // Same role and age — one is high current ability, the other all upside.
+    let high_ca = DevPlayer::build(
+        1,
+        slot,
+        15,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        185,
+        190,
+        7,
+        0,
+    );
+    let high_pa = DevPlayer::build(
+        2,
+        slot,
+        15,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        80,
+        200,
+        7,
+        0,
+    );
+    let credible_ca = engine.player_development_credibility(&high_ca, slot, date);
+    let credible_pa = engine.player_development_credibility(&high_pa, slot, date);
+    assert!(
+        credible_ca > credible_pa,
+        "a poor potential judge leans on current ability: high-CA {credible_ca} vs high-PA {credible_pa}"
+    );
+}
+
+#[test]
+fn dead_rubber_league_gives_underused_prospect_minutes() {
+    let staff = StaffStub::default();
+
+    let (senior_a, youth_a) = Contest::contest_pair();
+    let dead_rubber = cup_team(Contest::roster(senior_a, youth_a));
+    let dead_result = SquadSelector::select_with_context(
+        &dead_rubber,
+        &staff,
+        &[],
+        &Contest::ctx(0.15, ClubPhilosophy::Balanced, SelectionCompetition::League),
+    );
+
+    let (senior_b, youth_b) = Contest::contest_pair();
+    let must_win = cup_team(Contest::roster(senior_b, youth_b));
+    let must_win_result = SquadSelector::select_with_context(
+        &must_win,
+        &staff,
+        &[],
+        &Contest::ctx(0.90, ClubPhilosophy::Balanced, SelectionCompetition::League),
+    );
+
+    assert!(
+        Contest::started(&dead_result, 2),
+        "a dead rubber should hand the underused prospect a start"
+    );
+    assert!(
+        !Contest::started(&must_win_result, 2),
+        "a must-win match keeps the senior — no pathway minutes for the prospect"
+    );
+}
+
+#[test]
+fn aging_incumbent_managed_only_when_successor_is_credible() {
+    let date = Utc::now().date_naive();
+    let slot = PlayerPositionType::DefenderCenter;
+    let engine = ScoringEngine::from_staff_for_team(
+        &TestCoach::good_youth(),
+        Some(ClubPhilosophy::DevelopAndSell),
+        true,
+    );
+    let aging = DevPlayer::aging_incumbent(1, slot, 35);
+
+    assert_eq!(
+        engine.late_career_succession_pressure(&aging, slot, date, &[]),
+        0.0,
+        "no successor -> no succession pressure"
+    );
+
+    let old_alternative = DevPlayer::build(
+        2,
+        slot,
+        15,
+        PlayerSquadStatus::FirstTeamRegular,
+        33,
+        150,
+        150,
+        7,
+        5,
+    );
+    assert_eq!(
+        engine.late_career_succession_pressure(&aging, slot, date, &[&old_alternative]),
+        0.0,
+        "an equally-old alternative is not a credible successor"
+    );
+
+    let young = DevPlayer::build(
+        3,
+        slot,
+        15,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        145,
+        190,
+        7,
+        0,
+    );
+    assert!(
+        engine.late_career_succession_pressure(&aging, slot, date, &[&young]) > 0.0,
+        "a credible young successor opens the succession question"
+    );
+}
+
+#[test]
+fn cup_final_ignores_future_pathway_adjustment() {
+    let date = Utc::now().date_naive();
+    let engine = ScoringEngine::from_staff_for_team(
+        &TestCoach::good_youth(),
+        Some(ClubPhilosophy::DevelopAndSell),
+        true,
+    );
+    let cup = Contest::cup(5, 5, 1000, 1000);
+    let slot = Contest::SLOT;
+    let youth = DevPlayer::build(
+        1,
+        slot,
+        15,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        140,
+        190,
+        7,
+        0,
+    );
+    let cb_slot = PlayerPositionType::DefenderCenter;
+    let aging = DevPlayer::aging_incumbent(2, cb_slot, 35);
+    assert_eq!(
+        engine.future_pathway_adjustment(&youth, slot, 0.95, date, Some(&cup), &[], true),
+        0.0,
+        "the final ignores the youth pathway pull"
+    );
+    assert_eq!(
+        engine.future_pathway_adjustment(&aging, cb_slot, 0.95, date, Some(&cup), &[], true),
+        0.0,
+        "the final ignores succession pressure too"
+    );
+}
+
+#[test]
+fn future_pathway_bonus_is_position_group_aware() {
+    let date = Utc::now().date_naive();
+    let engine = ScoringEngine::from_staff_for_team(&TestCoach::good_youth(), None, true);
+    let slot = Contest::SLOT;
+    let youth_forward = DevPlayer::with_skill(
+        DevPlayer::build(1, slot, 14, PlayerSquadStatus::HotProspectForTheFuture, 19, 130, 185, 7, 0),
+        10.0,
+    );
+    let strong_centre_back = DevPlayer::with_skill(
+        DevPlayer::build(
+            2,
+            PlayerPositionType::DefenderCenter,
+            15,
+            PlayerSquadStatus::KeyPlayer,
+            27,
+            175,
+            175,
+            5,
+            20,
+        ),
+        16.0,
+    );
+    let strong_forward = DevPlayer::with_skill(
+        DevPlayer::build(3, slot, 15, PlayerSquadStatus::KeyPlayer, 27, 175, 175, 5, 20),
+        16.0,
+    );
+    // A strong senior in another unit must not gate the forward prospect.
+    let gap_other_group = engine.same_role_quality_gap(&youth_forward, slot, date, &[&strong_centre_back]);
+    assert!(
+        gap_other_group <= 0.0001,
+        "a defender must not gate a forward prospect: {gap_other_group}"
+    );
+    // A strong senior in the SAME unit does.
+    let gap_same_group = engine.same_role_quality_gap(&youth_forward, slot, date, &[&strong_forward]);
+    assert!(
+        gap_same_group > 0.5,
+        "a strong same-role senior gates the prospect: {gap_same_group}"
+    );
+}
+
+#[test]
+fn bench_includes_development_player_when_starting_gap_is_too_large() {
+    let date = Utc::now().date_naive();
+    let engine = ScoringEngine::from_staff_for_team(
+        &TestCoach::good_youth(),
+        Some(ClubPhilosophy::DevelopAndSell),
+        true,
+    );
+    let slot = Contest::SLOT;
+    let youth = DevPlayer::build(
+        1,
+        slot,
+        13,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        18,
+        120,
+        195,
+        7,
+        0,
+    );
+    let strong_senior = DevPlayer::build(
+        2,
+        slot,
+        19,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        185,
+        185,
+        5,
+        20,
+    );
+    let pool: Vec<&Player> = vec![&strong_senior];
+    // Starting is gated by the big same-role gap; the bench is not.
+    let pull_start = engine.future_pathway_adjustment(&youth, slot, 0.25, date, None, &pool, true);
+    let pull_bench = engine.future_pathway_adjustment(&youth, slot, 0.25, date, None, &[], false);
+    assert!(
+        pull_bench > pull_start,
+        "ungated bench pull should exceed the gated starting pull: bench {pull_bench} vs start {pull_start}"
+    );
+    assert!(pull_bench > 0.0, "the prospect still earns a bench place");
+}
+
+#[test]
+fn not_needed_player_does_not_gain_pathway_priority() {
+    let date = Utc::now().date_naive();
+    let slot = Contest::SLOT;
+    let engine = ScoringEngine::from_staff_for_team(
+        &TestCoach::good_youth(),
+        Some(ClubPhilosophy::DevelopAndSell),
+        true,
+    );
+    let not_needed = DevPlayer::build(1, slot, 15, PlayerSquadStatus::NotNeeded, 19, 150, 195, 7, 0);
+    let prospect = DevPlayer::build(
+        2,
+        slot,
+        15,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        19,
+        150,
+        195,
+        7,
+        0,
+    );
+    assert_eq!(
+        engine.future_pathway_adjustment(&not_needed, slot, 0.2, date, None, &[], true),
+        0.0,
+        "a frozen-out player gets no pathway pull"
+    );
+    assert!(
+        engine.future_pathway_adjustment(&prospect, slot, 0.2, date, None, &[], true) > 0.0,
+        "a prospect with the same numbers does"
     );
 }

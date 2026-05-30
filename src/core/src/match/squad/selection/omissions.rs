@@ -280,6 +280,18 @@ impl<'a> OmissionBuilder<'a> {
                 .engine
                 .domestic_cup_opportunity_bonus(player, cup, true);
         }
+        // Future-aware pathway nudge, so a prospect winning a slot on a
+        // development / succession call is explained rather than reading as a
+        // raw-quality upset. Same-role checks compare against the full pool.
+        b.future_pathway = self.engine.future_pathway_adjustment(
+            player,
+            slot,
+            self.match_importance,
+            self.date,
+            self.cup,
+            self.available,
+            true,
+        );
         b
     }
 

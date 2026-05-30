@@ -47,6 +47,42 @@ impl SelectionScoringContext<'_> {
             .unwrap_or(0.0)
     }
 
+    /// Future-aware pathway adjustment for a starting-XI slot. `available` is
+    /// the full pool, used for the same-role quality / successor checks.
+    fn future_pathway_start(
+        &self,
+        player: &Player,
+        slot: PlayerPositionType,
+        available: &[&Player],
+    ) -> f32 {
+        self.engine.future_pathway_adjustment(
+            player,
+            slot,
+            self.match_importance,
+            self.date,
+            self.cup,
+            available,
+            true,
+        )
+    }
+
+    /// Future-aware pathway adjustment for the bench. Deliberately passes an
+    /// empty same-role pool: the bench skips the starting gap gate so a
+    /// not-quite-ready prospect (who would lose the same-role contest for a
+    /// start) still earns a place on the matchday bench.
+    fn future_pathway_bench(&self, player: &Player) -> f32 {
+        let slot = helpers::best_tactical_position(player, self.tactics);
+        self.engine.future_pathway_adjustment(
+            player,
+            slot,
+            self.match_importance,
+            self.date,
+            self.cup,
+            &[],
+            false,
+        )
+    }
+
     /// Select the best starting 11 for competitive matches.
     pub(crate) fn select_starting_eleven(
         &self,
@@ -125,6 +161,7 @@ impl SelectionScoringContext<'_> {
                 .filter(|p| !p.positions.is_goalkeeper())
                 .max_by(|a, b| {
                     let score = |p: &Player| {
+                        let slot = helpers::best_tactical_position(p, self.tactics);
                         self.engine.overall_quality(
                             p,
                             self.staff,
@@ -136,6 +173,7 @@ impl SelectionScoringContext<'_> {
                             .development_minutes_bonus(p, self.match_importance)
                             + self.engine.fatigue_penalty(p, self.is_friendly)
                             + self.cup_opportunity(p, true)
+                            + self.future_pathway_start(p, slot, available)
                     };
                     score(a).partial_cmp(&score(b)).unwrap_or(Ordering::Equal)
                 })
@@ -302,7 +340,7 @@ impl SelectionScoringContext<'_> {
                     continue;
                 }
 
-                let starter_score = self.starting_slot_score(starter, slot);
+                let starter_score = self.starting_slot_score(starter, slot, available);
                 let slot_group = slot.position_group();
 
                 for &cand in bench_pool.iter() {
@@ -313,7 +351,7 @@ impl SelectionScoringContext<'_> {
                     if fit < 14.0 {
                         continue;
                     }
-                    let cand_score = self.starting_slot_score(cand, slot);
+                    let cand_score = self.starting_slot_score(cand, slot, available);
                     let gap = starter_score - cand_score;
                     if gap > max_gap {
                         continue;
@@ -518,6 +556,20 @@ impl SelectionScoringContext<'_> {
             return Vec::new();
         }
 
+        // Precompute every (player, slot) score once. The DP revisits each
+        // (player, slot) pair across many bitmask states, and `starting_slot_score`
+        // — now including the future-aware pathway pass — isn't free, so caching
+        // it keeps the assignment cost flat instead of multiplying by 2^slots.
+        let score_matrix: Vec<Vec<f32>> = players
+            .iter()
+            .map(|p| {
+                slots
+                    .iter()
+                    .map(|&slot| self.starting_slot_score(p, slot, available))
+                    .collect()
+            })
+            .collect();
+
         let slot_count = slots.len();
         let full_mask = (1usize << slot_count) - 1;
         let neg_inf = f32::NEG_INFINITY;
@@ -525,7 +577,7 @@ impl SelectionScoringContext<'_> {
         let mut prev = vec![vec![None; full_mask + 1]; players.len() + 1];
         dp[0][0] = 0.0;
 
-        for (i, player) in players.iter().enumerate() {
+        for (i, _player) in players.iter().enumerate() {
             for mask in 0..=full_mask {
                 let current = dp[i][mask];
                 if !current.is_finite() {
@@ -537,12 +589,12 @@ impl SelectionScoringContext<'_> {
                     prev[i + 1][mask] = Some((mask, None));
                 }
 
-                for (slot_idx, &slot) in slots.iter().enumerate() {
+                for (slot_idx, _slot) in slots.iter().enumerate() {
                     let bit = 1usize << slot_idx;
                     if mask & bit != 0 {
                         continue;
                     }
-                    let score = self.starting_slot_score(player, slot);
+                    let score = score_matrix[i][slot_idx];
                     let new_mask = mask | bit;
                     let candidate = current + score;
                     if candidate > dp[i + 1][new_mask] {
@@ -576,7 +628,12 @@ impl SelectionScoringContext<'_> {
             .collect()
     }
 
-    fn starting_slot_score(&self, player: &Player, slot: PlayerPositionType) -> f32 {
+    fn starting_slot_score(
+        &self,
+        player: &Player,
+        slot: PlayerPositionType,
+        available: &[&Player],
+    ) -> f32 {
         let target_group = slot.position_group();
         self.engine.score_player_for_slot(
             player,
@@ -596,6 +653,7 @@ impl SelectionScoringContext<'_> {
                 .injury_risk_penalty(player, self.match_importance, self.is_friendly)
             + self.policy_starting_adjustment(player)
             + self.cup_opportunity(player, true)
+            + self.future_pathway_start(player, slot, available)
     }
 
     fn policy_starting_adjustment(&self, player: &Player) -> f32 {
@@ -720,6 +778,7 @@ impl SelectionScoringContext<'_> {
             + self.bench_policy_adjustment(player)
             + self.cup_opportunity(player, false)
             + self.cup_bench_unseen_bonus(player)
+            + self.future_pathway_bench(player)
     }
 
     /// Extra bench pull for a non-established player who hasn't featured in

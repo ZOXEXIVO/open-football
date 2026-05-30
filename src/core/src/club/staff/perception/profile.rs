@@ -55,6 +55,12 @@ pub struct CoachProfile {
     pub trust_in_decisions: f32,
     pub youth_preference: f32,
     pub conservatism: f32,
+    /// Man-management / motivation, normalised 0..1. A blend of the staff's
+    /// `man_management` and `motivating` attributes. A high value coach
+    /// integrates fringe / young players more readily — they trust him to
+    /// keep the dressing room settled while a kid finds his feet. Feeds the
+    /// future-aware youth-pathway factor.
+    pub man_management: f32,
     pub coach_seed: u32,
     pub perception_lens: PerceptionLens,
     pub confirmation_bias: f32,
@@ -187,6 +193,9 @@ impl CoachProfile {
             youth_preference: (coaching.working_with_youngsters as f32 / 20.0 + style_youth_bonus)
                 .clamp(0.0, 1.0),
             conservatism: ((1.0 - adaptability_norm) * 0.6 + discipline_norm * 0.4).clamp(0.0, 1.0),
+            man_management: (man_management_norm * 0.6
+                + mental.motivating as f32 / 20.0 * 0.4)
+                .clamp(0.0, 1.0),
             coach_seed: staff.id,
             perception_lens,
             confirmation_bias,

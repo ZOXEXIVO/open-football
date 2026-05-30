@@ -3,7 +3,9 @@ use crate::club::player::load::{
     RECOVERY_DEBT_HEAVY,
 };
 use crate::club::staff::perception::CoachProfile;
-use crate::club::{ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, Staff};
+use crate::club::{
+    ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, Staff,
+};
 use crate::utils::DateUtils;
 use crate::{Player, SelectionScoreFactor, Tactics};
 use chrono::NaiveDate;
@@ -47,6 +49,13 @@ pub struct SlotScoreBreakdown {
     pub development_minutes: f32,
     pub domestic_cup_opportunity: f32,
     pub injury_risk: f32,
+    /// Future-aware pathway adjustment (`future_pathway_adjustment`): the
+    /// signed nudge that gives a credible young player low-risk minutes and
+    /// applies succession pressure to an aging incumbent with a ready
+    /// replacement. Another external adjustment — zero in the pure slot
+    /// score, populated by the omissions builder. Surfaced through the same
+    /// `DevelopmentMinutes` factor as the development-minutes nudge.
+    pub future_pathway: f32,
 }
 
 impl SlotScoreBreakdown {
@@ -70,6 +79,7 @@ impl SlotScoreBreakdown {
             + self.development_minutes
             + self.domestic_cup_opportunity
             + self.injury_risk
+            + self.future_pathway
     }
 
     /// Pairwise comparison: rank scoring factors where `selected`
@@ -151,14 +161,17 @@ impl SlotScoreBreakdown {
                 SelectionScoreFactor::PositionFit,
                 self.group_mismatch - omitted.group_mismatch,
             ),
-            // External adjustments. development_minutes surfaces as the
-            // generic DevelopmentMinutes factor; the domestic-cup opportunity
-            // bias has its own CupOpportunity factor. injury_risk is stored as
-            // a non-positive penalty — a smaller (less negative) value for the
-            // selected player means he was the safer pick.
+            // External adjustments. development_minutes and the future-aware
+            // pathway nudge both surface as the generic DevelopmentMinutes
+            // factor (a prospect winning the slot on a development/succession
+            // call); the domestic-cup opportunity bias has its own
+            // CupOpportunity factor. injury_risk is stored as a non-positive
+            // penalty — a smaller (less negative) value for the selected
+            // player means he was the safer pick.
             (
                 SelectionScoreFactor::DevelopmentMinutes,
-                self.development_minutes - omitted.development_minutes,
+                (self.development_minutes + self.future_pathway)
+                    - (omitted.development_minutes + omitted.future_pathway),
             ),
             (
                 SelectionScoreFactor::CupOpportunity,
@@ -712,7 +725,6 @@ impl ScoringEngine {
     /// preferential nod in rotation calls. Conservative coaches lean into
     /// the plan; risk-takers override it on form.
     pub fn squad_status_bonus(&self, player: &Player) -> f32 {
-        use crate::club::PlayerSquadStatus;
         let Some(contract) = player.contract.as_ref() else {
             return 0.0;
         };
@@ -879,7 +891,6 @@ impl ScoringEngine {
         cup: &DomesticCupContext,
         for_starting: bool,
     ) -> f32 {
-        use crate::club::PlayerSquadStatus;
         let stage = cup.stage();
         // Stage-scaled weights for the three components.
         let (idle_w, underused_w, cup_unseen_w) = match stage {
@@ -1008,6 +1019,327 @@ impl ScoringEngine {
 
         let importance_dampener = (1.15 - match_importance).clamp(0.25, 1.10);
         raw * importance_dampener * (1.0 - self.profile.risk_tolerance * 0.35)
+    }
+
+    // ===================== Future-aware squad management =====================
+    //
+    // A small, heavily-gated layer on top of the pure slot score. It lets a
+    // coach make realistic long-term selection calls — give a credible young
+    // player low-risk minutes, ease an aging incumbent toward a ready
+    // successor — without ever knowing the future. Everything is inferred from
+    // visible football signals (age, current/potential ability, role, fitness,
+    // contract, recent minutes, match stakes) and the coach's own staff
+    // profile + the club's philosophy. The adjustment fades to zero as the
+    // match matters more, so finals and title deciders keep the strongest XI.
+
+    /// Future-aware selection adjustment, layered on top of the pure slot
+    /// score. Two effects, both small and gated so they only flip close calls
+    /// in low-risk contexts:
+    ///
+    ///   * a credible young player gets a pathway pull toward minutes — bigger
+    ///     when the coach is good with youngsters, the club develops, and the
+    ///     stakes are low;
+    ///   * an aging incumbent with a credible younger same-role replacement
+    ///     gets gentle succession pressure (a small penalty) — but only when
+    ///     the visible planning signals back it up, never on age alone.
+    ///
+    /// Returns ~0 in high-importance matches, so the strongest realistic XI is
+    /// untouched. `available_same_role` is the pool the gap / successor checks
+    /// compare against; pass `&[]` for bench scoring, which deliberately skips
+    /// the same-role gate so a not-quite-ready prospect still makes the bench.
+    pub fn future_pathway_adjustment(
+        &self,
+        player: &Player,
+        slot: PlayerPositionType,
+        match_importance: f32,
+        date: NaiveDate,
+        cup: Option<&DomesticCupContext>,
+        available_same_role: &[&Player],
+        for_starting: bool,
+    ) -> f32 {
+        let context = self.pathway_context_multiplier(match_importance, cup, for_starting);
+        if context <= 0.0 {
+            return 0.0;
+        }
+        // How strongly coach + club back youth development right now.
+        let plan = (self.coach_youth_pathway_factor() * self.philosophy_pathway_multiplier())
+            .clamp(0.3, 2.0);
+
+        // --- Young-player pathway pull ---
+        let credibility = self.player_development_credibility(player, slot, date);
+        let young_pull = if credibility > 0.0 {
+            // Gate by the quality gap to the best established same-role option.
+            // A coach who reads potential well backs the kid across a wider
+            // gap; a poor judge needs him near-ready now.
+            let gap = self.same_role_quality_gap(player, slot, date, available_same_role);
+            let tolerated = 1.5 + self.profile.potential_accuracy * 2.5;
+            let gate = (1.0 - gap / tolerated).clamp(0.0, 1.0);
+            credibility * gate
+        } else {
+            0.0
+        };
+
+        // --- Aging-incumbent succession pressure (a penalty) ---
+        let succession =
+            self.late_career_succession_pressure(player, slot, date, available_same_role);
+
+        ((young_pull - succession) * plan * context).clamp(-2.5, 2.5)
+    }
+
+    /// Coach's appetite and skill for developing youngsters, centred on 1.0
+    /// for an average coach and clamped to a sane 0.5..1.5 band. Built from the
+    /// perception profile: working-with-youngsters and judging-potential
+    /// dominate, man-management and adaptability/risk help, conservatism drags
+    /// it down.
+    pub fn coach_youth_pathway_factor(&self) -> f32 {
+        let p = &self.profile;
+        let raw = p.youth_preference * 0.35
+            + p.potential_accuracy * 0.25
+            + p.man_management * 0.15
+            + p.risk_tolerance * 0.20
+            - p.conservatism * 0.20;
+        // An average coach (~0.5 on each normalised input) lands at raw≈0.375;
+        // recentre that to 1.0 so the factor scales sensibly either side.
+        (1.0 + raw - 0.375).clamp(0.5, 1.5)
+    }
+
+    /// How much the coach trusts a player's *potential* signal, 0..1. A poor
+    /// judge of potential reads the upside noisily and per-player, so he leans
+    /// on visible current ability instead of projected growth.
+    pub fn coach_potential_confidence(&self, player: &Player) -> f32 {
+        let p = &self.profile;
+        let noise = p.perception_noise(player.id, 0xC0AC);
+        (p.potential_accuracy + noise * (1.0 - p.potential_accuracy) * 0.3).clamp(0.0, 1.0)
+    }
+
+    /// Club-philosophy multiplier on the youth pathway. DevelopAndSell sides
+    /// push kids through; SignToCompete sides protect the proven XI; loan-heavy
+    /// sides lean in a touch (loan kids in for development).
+    pub fn philosophy_pathway_multiplier(&self) -> f32 {
+        match self.philosophy.as_ref() {
+            Some(ClubPhilosophy::DevelopAndSell) => 1.5,
+            Some(ClubPhilosophy::LoanFocused) => 1.1,
+            Some(ClubPhilosophy::SignToCompete) => 0.5,
+            _ => 1.0,
+        }
+    }
+
+    /// Context gate for the pathway adjustment: 0 in high-stakes matches,
+    /// largest in dead rubbers / friendlies / early cup rounds against weak
+    /// opposition. Fades sharply with match importance, and pulls a little
+    /// harder for bench inclusion than for a start (a not-quite-ready kid
+    /// belongs on the bench before the XI).
+    pub fn pathway_context_multiplier(
+        &self,
+        match_importance: f32,
+        cup: Option<&DomesticCupContext>,
+        for_starting: bool,
+    ) -> f32 {
+        // Finals, title deciders, key continental nights: never bias.
+        if match_importance >= 0.82 {
+            return 0.0;
+        }
+        // Sharp quadratic fade — meaningful below ~0.5, gone by ~0.7.
+        let base = (1.0 - match_importance / 0.7).clamp(0.0, 1.0);
+        let mut mult = base * base;
+
+        // Early cup rounds are explicit development windows: give a floor that
+        // scales with how winnable the tie is (weaker opponent → more room).
+        if let Some(cup) = cup {
+            let floor = match cup.stage() {
+                CupStage::Early => 0.6,
+                CupStage::Quarter => 0.3,
+                _ => 0.0,
+            };
+            if floor > 0.0 {
+                let opp_scale = (1.0 / cup.opponent_ratio.max(0.5)).clamp(0.4, 1.4);
+                mult = mult.max(floor * opp_scale);
+            }
+        }
+
+        if !for_starting {
+            mult *= 1.4;
+        }
+        mult.clamp(0.0, 1.5)
+    }
+
+    /// Credibility of `player` as a development pick at `slot`, 0..~1.8. Reads
+    /// only visible football signals — age window, the perceived potential gap
+    /// (discounted by the coach's potential judgement), a current-ability
+    /// floor, position fit, match readiness and training impression, minus a
+    /// physical-unreadiness penalty. A frozen-out (NotNeeded) player scores
+    /// zero — the club isn't developing him. No hidden future knowledge.
+    pub fn player_development_credibility(
+        &self,
+        player: &Player,
+        slot: PlayerPositionType,
+        date: NaiveDate,
+    ) -> f32 {
+        // A player the club has frozen out is not on a development pathway,
+        // regardless of age or potential.
+        if let Some(c) = player.contract.as_ref() {
+            if matches!(
+                c.squad_status,
+                PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid
+            ) {
+                return 0.0;
+            }
+        }
+
+        let age = DateUtils::age(player.birth_date, date);
+        // Age windows: 16-and-under almost never; 17-21 the core window;
+        // 22-23 the tail; 24+ no generic youth pathway.
+        let age_window = match age {
+            0..=15 => 0.15,
+            16 => 0.5,
+            17..=18 => 1.0,
+            19..=21 => 1.0,
+            22..=23 => 0.55,
+            _ => return 0.0,
+        };
+
+        let ca = player.player_attributes.current_ability as f32;
+        let pa = player.player_attributes.potential_ability as f32;
+
+        // Perceived potential gap, discounted by how well the coach reads
+        // potential. A poor judge barely sees the upside.
+        let confidence = self.coach_potential_confidence(player);
+        let potential_gap = ((pa - ca).max(0.0) / 50.0).clamp(0.0, 1.2) * confidence;
+
+        // Current-ability floor: the prospect needs a baseline to belong.
+        let current_floor = ((ca - 70.0) / 90.0).clamp(0.0, 1.0);
+
+        let group = slot.position_group();
+        let position_fit =
+            (helpers::position_fit_score(player, slot, group) / 20.0).clamp(0.0, 1.0);
+
+        let readiness = (self.match_readiness(player) / 20.0).clamp(0.0, 1.0);
+        let training = ((self.training_impression(player) - 10.0) / 12.0).clamp(-0.4, 0.6);
+
+        let phys_ready = (player.skills.physical.match_readiness / 20.0).clamp(0.0, 1.0);
+        let phys_penalty = if phys_ready < 0.5 {
+            (0.5 - phys_ready) * 1.5
+        } else {
+            0.0
+        };
+
+        let raw = potential_gap * 0.9
+            + current_floor * 0.7
+            + position_fit * 0.6
+            + readiness * 0.35
+            + training * 0.3
+            - phys_penalty;
+
+        (raw * age_window).clamp(0.0, 1.8)
+    }
+
+    /// Perceived-quality gap from `player` to the best *established*
+    /// (24-or-older) same-position-group option available. Positive means the
+    /// prospect is worse than the senior alternative. Gates the youth pathway
+    /// pull so a kid far below the senior option isn't pushed into the XI even
+    /// in a low-risk match. Position-group aware — a strong senior in another
+    /// unit is irrelevant.
+    pub fn same_role_quality_gap(
+        &self,
+        player: &Player,
+        slot: PlayerPositionType,
+        date: NaiveDate,
+        available_same_role: &[&Player],
+    ) -> f32 {
+        let group = slot.position_group();
+        let player_q = self.perceived_quality(player);
+        let mut best_senior_q = player_q;
+        for other in available_same_role {
+            if other.id == player.id {
+                continue;
+            }
+            if other.position().position_group() != group {
+                continue;
+            }
+            // Compare against established alternatives, not other prospects.
+            if DateUtils::age(other.birth_date, date) <= 23 {
+                continue;
+            }
+            let q = self.perceived_quality(other);
+            if q > best_senior_q {
+                best_senior_q = q;
+            }
+        }
+        best_senior_q - player_q
+    }
+
+    /// Gentle succession pressure on an aging incumbent — a non-negative
+    /// magnitude the caller subtracts. Only fires when (a) the player is past
+    /// the position's late-career age, (b) a credible younger same-role
+    /// replacement is actually available, and (c) visible planning signals
+    /// back it up (declining role, idle spell, expiring contract, injury /
+    /// fatigue risk, years past the threshold). Never triggers on age alone —
+    /// a 34-year-old still clearly the best option keeps his place because the
+    /// signals stay low and the base quality gap dominates.
+    pub fn late_career_succession_pressure(
+        &self,
+        player: &Player,
+        slot: PlayerPositionType,
+        date: NaiveDate,
+        available_same_role: &[&Player],
+    ) -> f32 {
+        let age = DateUtils::age(player.birth_date, date);
+        let group = slot.position_group();
+        let threshold = Self::late_career_age_threshold(group);
+        if (age as i32) < threshold {
+            return 0.0;
+        }
+
+        // A credible successor must exist — meaningfully younger, same role,
+        // and a genuine development prospect in his own right.
+        let has_successor = available_same_role.iter().any(|other| {
+            if other.id == player.id {
+                return false;
+            }
+            let oage = DateUtils::age(other.birth_date, date) as i32;
+            (age as i32) - oage >= 5
+                && self.player_development_credibility(other, slot, date) >= 0.6
+        });
+        if !has_successor {
+            return 0.0;
+        }
+
+        // Accumulate visible planning evidence.
+        let mut signals = 0.0;
+        if let Some(c) = player.contract.as_ref() {
+            signals += match c.squad_status {
+                PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular => 0.0,
+                PlayerSquadStatus::FirstTeamSquadRotation => 0.3,
+                PlayerSquadStatus::MainBackupPlayer => 0.5,
+                PlayerSquadStatus::NotNeeded => 0.8,
+                _ => 0.2,
+            };
+            let days_left = (c.expiration - date).num_days();
+            if days_left < 220 {
+                signals += 0.3;
+            }
+        }
+        let idle = player.player_attributes.days_since_last_match as f32;
+        signals += (idle / 30.0).clamp(0.0, 0.5);
+        // Reuse the injury-risk read as a fragility signal (importance held low
+        // so it reads the player's intrinsic risk, not the match stakes).
+        signals += (self.injury_risk_penalty(player, 0.3, false) / 12.0).clamp(0.0, 0.4);
+        let years_past = ((age as i32) - threshold).max(0) as f32;
+        signals += (years_past * 0.12).clamp(0.0, 0.5);
+
+        (signals * 0.5).clamp(0.0, 2.0)
+    }
+
+    /// Position-group late-career age threshold. Goalkeepers age slowest;
+    /// forwards and wingers fastest. Only used to *open* a succession question
+    /// when a credible younger option exists — never to penalise age directly.
+    fn late_career_age_threshold(group: PlayerFieldPositionGroup) -> i32 {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 37,
+            PlayerFieldPositionGroup::Defender => 34,
+            PlayerFieldPositionGroup::Midfielder => 33,
+            PlayerFieldPositionGroup::Forward => 32,
+        }
     }
 
     /// Overall quality score (bench selection)
