@@ -64,6 +64,17 @@
                         </div>
                     </li>
                     <li class="fm-nav-divider"></li>
+                    {% for item in last.items %}
+                    <li>
+                        <a href="{{ item.url }}" {% if item.url.starts_with("http") %} target="_blank" rel="noopener"{%
+                        endif %}>
+                        <i class="{% if item.icon.starts_with(" fa-brands") %}{{ item.icon }}{% else %}fa {{ item.icon
+                        }}{% endif %}"></i>
+                        <span>{{ item.title }}</span>
+                        </a>
+                    </li>
+                    {% endfor %}
+                    <li class="fm-nav-divider"></li>
                     <li class="fm-nav-local-only">
                         <a href="/{{ lang }}/performance">
                             <i class="fa fa-microchip"></i>
@@ -77,17 +88,6 @@
                             <span>{{ i18n.t("download") }}</span>
                         </a>
                     </li>
-                    <li class="fm-nav-divider"></li>
-                    {% for item in last.items %}
-                    <li>
-                        <a href="{{ item.url }}" {% if item.url.starts_with("http") %} target="_blank" rel="noopener"{%
-                        endif %}>
-                        <i class="{% if item.icon.starts_with(" fa-brands") %}{{ item.icon }}{% else %}fa {{ item.icon
-                        }}{% endif %}"></i>
-                        <span>{{ item.title }}</span>
-                        </a>
-                    </li>
-                    {% endfor %}
                 </ul>
                 {% endif %}
             </div>
