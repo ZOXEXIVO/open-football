@@ -48,12 +48,6 @@ pub struct Team {
     pub captain_id: Option<u32>,
     /// Stand-in captain when the captain is unavailable (injured / benched).
     pub vice_captain_id: Option<u32>,
-    /// Sticky flag flipped to true the first time `CaptaincyAssigner::assign`
-    /// successfully picks a captain on this team. Used to suppress the
-    /// false `CaptaincyAwarded` event that would otherwise fire on the
-    /// game's very first monthly tick — that's just save-file setup, not
-    /// a managerial decision the player made or experienced.
-    pub captaincy_initialized: bool,
 }
 
 impl Team {
@@ -340,7 +334,7 @@ mod payroll_tests {
 mod captaincy_tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::club::team::{CaptaincyChange, LeadershipCandidate, MatchdayLeadership};
+    use crate::club::team::{LeadershipCandidate, MatchdayLeadership};
     use crate::shared::fullname::FullName;
     use crate::{
         HappinessEventType, PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition,
@@ -407,20 +401,37 @@ mod captaincy_tests {
     }
 
     #[test]
-    fn bootstrap_assignment_can_be_silent() {
+    fn bootstrap_assignment_creates_award_event() {
+        // A fresh team starts with no captain; the first monthly appointment
+        // is narrated like any other, so the new captain gets a visible,
+        // positive award on his events page (no silent bootstrap).
         let p1 = build_leader(1, 18.0, 5_000);
         let p2 = build_leader(2, 14.0, 3_000);
         let mut team = build_team_with(vec![p1, p2]);
 
-        assert!(!team.captaincy_initialized);
+        assert_eq!(team.captain_id, None);
         team.assign_captaincy(d(2026, 7, 1));
-        assert!(team.captaincy_initialized);
-        assert!(team.captain_id.is_some());
+
+        let captain = team.captain_id.expect("a captain should be appointed");
+        let cap = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == captain)
+            .unwrap();
+        assert_eq!(
+            captaincy_event_count(cap, &HappinessEventType::CaptaincyAwarded),
+            1
+        );
+        let award = cap
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::CaptaincyAwarded)
+            .unwrap();
+        assert!(award.magnitude > 0.0, "appointment must be a positive event");
+        // Nobody is stripped on a first appointment.
         for player in team.players.players.iter() {
-            assert_eq!(
-                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded),
-                0
-            );
             assert_eq!(
                 captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
                 0
@@ -502,7 +513,7 @@ mod captaincy_tests {
         let p2 = build_leader(2, 10.0, 2_000);
         let mut team = build_team_with(vec![p1, p2]);
 
-        team.assign_captaincy(d(2026, 7, 1)); // silent init
+        team.assign_captaincy(d(2026, 7, 1)); // first appointment (awards p1)
         let first_captain = team.captain_id.unwrap();
 
         for p in team.players.players.iter_mut() {
@@ -583,32 +594,39 @@ mod captaincy_tests {
 
     #[test]
     fn first_active_captain_appointment_creates_event() {
-        // Active simulation: the team has already been initialised (the
-        // flag is set) but currently has no captain. The first genuine
-        // appointment must narrate `CaptaincyAwarded` for the new captain.
-        let p1 = build_leader(1, 16.0, 4_000);
-        let p2 = build_leader(2, 12.0, 2_000);
+        // No eligible leader at first (everyone below the leadership floor),
+        // so the team runs with no captain and no event. When a player later
+        // grows into leadership, his appointment fires a `CaptaincyAwarded`.
+        let p1 = build_leader(1, 5.0, 4_000); // below MIN_LEADERSHIP_FOR_CAPTAINCY
+        let p2 = build_leader(2, 6.0, 2_000);
         let mut team = build_team_with(vec![p1, p2]);
 
-        // Simulate "bootstrap already happened, no captain yet".
-        team.captaincy_initialized = true;
-        team.captain_id = None;
-        team.vice_captain_id = None;
-
         team.assign_captaincy(d(2026, 7, 1));
+        assert_eq!(team.captain_id, None, "no eligible leader yet");
+        for player in team.players.players.iter() {
+            assert_eq!(
+                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded),
+                0
+            );
+        }
 
-        let captain = team.captain_id.expect("a captain should be appointed");
-        let appointee = team
+        // p1 grows into a leader and is appointed during active play.
+        team.players
             .players
-            .players
-            .iter()
-            .find(|p| p.id == captain)
-            .unwrap();
+            .iter_mut()
+            .find(|p| p.id == 1)
+            .unwrap()
+            .skills
+            .mental
+            .leadership = 16.0;
+        team.assign_captaincy(d(2026, 8, 1));
+
+        assert_eq!(team.captain_id, Some(1));
+        let appointee = team.players.players.iter().find(|p| p.id == 1).unwrap();
         assert_eq!(
             captaincy_event_count(appointee, &HappinessEventType::CaptaincyAwarded),
             1
         );
-        // No one is stripped — there was no prior captain.
         for player in team.players.players.iter() {
             assert_eq!(
                 captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
@@ -619,56 +637,30 @@ mod captaincy_tests {
 
     #[test]
     fn unchanged_captain_does_not_duplicate_event() {
-        // A silent bootstrap install followed by two active monthly reviews
-        // that keep the same captain must never produce a duplicate award.
+        // The first appointment fires one award; subsequent monthly reviews
+        // that keep the same captain must NOT add further awards.
         let p1 = build_leader(1, 16.0, 4_000);
         let p2 = build_leader(2, 11.0, 2_000);
         let mut team = build_team_with(vec![p1, p2]);
 
-        team.assign_captaincy(d(2026, 7, 1)); // silent bootstrap
+        team.assign_captaincy(d(2026, 7, 1)); // first appointment → 1 award
         let captain = team.captain_id.unwrap();
         team.assign_captaincy(d(2026, 8, 1));
         team.assign_captaincy(d(2026, 9, 1));
 
         assert_eq!(team.captain_id, Some(captain));
+        let cap = team
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == captain)
+            .unwrap();
+        assert_eq!(
+            captaincy_event_count(cap, &HappinessEventType::CaptaincyAwarded),
+            1,
+            "kept captain keeps the single original award, no duplicates"
+        );
         for player in team.players.players.iter() {
-            assert_eq!(
-                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded),
-                0,
-                "kept captain must not be re-awarded"
-            );
-            assert_eq!(
-                captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
-                0
-            );
-        }
-    }
-
-    #[test]
-    fn existing_captain_with_uninitialized_flag_is_normalized() {
-        // A legacy / freshly-loaded team already carries a captain_id but
-        // the initialised flag was never set. The next review must flip the
-        // flag and — because the same player remains the best candidate —
-        // emit no event (no fake retroactive appointment).
-        let p1 = build_leader(1, 16.0, 4_000);
-        let p2 = build_leader(2, 11.0, 2_000);
-        let mut team = build_team_with(vec![p1, p2]);
-
-        // Pre-seed the stale state the bug describes.
-        team.captain_id = Some(1);
-        team.vice_captain_id = Some(2);
-        team.captaincy_initialized = false;
-
-        team.assign_captaincy(d(2026, 7, 1));
-
-        assert!(team.captaincy_initialized);
-        assert_eq!(team.captain_id, Some(1));
-        for player in team.players.players.iter() {
-            assert_eq!(
-                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded),
-                0,
-                "normalisation must not fabricate an award"
-            );
             assert_eq!(
                 captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
                 0
@@ -685,7 +677,7 @@ mod captaincy_tests {
         let p1 = build_leader(1, 14.0, 3_000);
         let mut team = build_team_with(vec![p1]);
 
-        team.assign_captaincy(d(2026, 7, 1)); // silent bootstrap
+        team.assign_captaincy(d(2026, 7, 1)); // first appointment (awards p1)
         assert_eq!(team.captain_id, Some(1));
 
         // Drop below MIN_LEADERSHIP_FOR_CAPTAINCY (8.0) while staying in squad.
@@ -699,42 +691,51 @@ mod captaincy_tests {
             captaincy_event_count(stripped, &HappinessEventType::CaptaincyRemoved),
             1
         );
+        // He still carries the award from his original appointment.
         assert_eq!(
             captaincy_event_count(stripped, &HappinessEventType::CaptaincyAwarded),
-            0
+            1
         );
     }
 
     #[test]
-    fn set_official_captain_narrates_explicit_change() {
-        // Direct exercise of the chokepoint: a silent write installs A with
-        // no events; a narrated change A -> B strips A and awards B.
+    fn set_official_captain_emits_on_change_only() {
+        // Direct exercise of the chokepoint. Installing a captain on a team
+        // with none fires a single award; a redundant write with the same
+        // captain emits nothing; a genuine change strips the old and awards
+        // the new.
         let p1 = build_leader(1, 14.0, 3_000);
         let p2 = build_leader(2, 14.0, 3_000);
         let mut team = build_team_with(vec![p1, p2]);
 
-        CaptaincyAssigner::set_official_captain(
-            &mut team,
-            Some(1),
-            Some(2),
-            CaptaincyChange::Silent,
-        );
-        assert!(team.captaincy_initialized);
+        // None -> A: award A only.
+        CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2));
         assert_eq!(team.captain_id, Some(1));
-        for player in team.players.players.iter() {
+        {
+            let a = team.players.players.iter().find(|p| p.id == 1).unwrap();
             assert_eq!(
-                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded),
-                0,
-                "silent install must not award"
+                captaincy_event_count(a, &HappinessEventType::CaptaincyAwarded),
+                1
+            );
+            assert_eq!(
+                captaincy_event_count(a, &HappinessEventType::CaptaincyRemoved),
+                0
             );
         }
 
-        CaptaincyAssigner::set_official_captain(
-            &mut team,
-            Some(2),
-            Some(1),
-            CaptaincyChange::Narrated,
-        );
+        // A -> A (redundant): no new events.
+        CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2));
+        {
+            let a = team.players.players.iter().find(|p| p.id == 1).unwrap();
+            assert_eq!(
+                captaincy_event_count(a, &HappinessEventType::CaptaincyAwarded),
+                1,
+                "redundant write must not re-award"
+            );
+        }
+
+        // A -> B: strip A, award B.
+        CaptaincyAssigner::set_official_captain(&mut team, Some(2), Some(1));
         assert_eq!(team.captain_id, Some(2));
         let a = team.players.players.iter().find(|p| p.id == 1).unwrap();
         let b = team.players.players.iter().find(|p| p.id == 2).unwrap();
@@ -762,6 +763,18 @@ mod captaincy_tests {
         let official = team.captain_id.unwrap();
         assert_eq!(official, 1);
 
+        // Snapshot official-captaincy event totals before matchday resolution
+        // (the bootstrap appointment already awarded the official captain).
+        let count_all = |team: &Team, kind: &HappinessEventType| -> usize {
+            team.players
+                .players
+                .iter()
+                .map(|p| captaincy_event_count(p, kind))
+                .sum()
+        };
+        let awards_before = count_all(&team, &HappinessEventType::CaptaincyAwarded);
+        let removed_before = count_all(&team, &HappinessEventType::CaptaincyRemoved);
+
         // On-field pool EXCLUDING the official captain (he was benched).
         let xi: Vec<LeadershipCandidate> = team
             .players
@@ -775,17 +788,16 @@ mod captaincy_tests {
         // A stand-in wears the armband...
         assert!(armband.captain_id.is_some());
         assert_ne!(armband.captain_id, Some(official));
-        // ...but the official captaincy is untouched and no events fired.
+        // ...but the official captaincy is untouched and no NEW events fired.
         assert_eq!(team.captain_id, Some(official));
-        for player in team.players.players.iter() {
-            assert_eq!(
-                captaincy_event_count(player, &HappinessEventType::CaptaincyAwarded),
-                0
-            );
-            assert_eq!(
-                captaincy_event_count(player, &HappinessEventType::CaptaincyRemoved),
-                0
-            );
-        }
+        assert_eq!(
+            count_all(&team, &HappinessEventType::CaptaincyAwarded),
+            awards_before,
+            "matchday resolution must not add official captaincy awards"
+        );
+        assert_eq!(
+            count_all(&team, &HappinessEventType::CaptaincyRemoved),
+            removed_before
+        );
     }
 }

@@ -119,7 +119,6 @@ impl TeamBuilder {
             fixture_window: TeamFixtureWindow::default(),
             captain_id: None,
             vice_captain_id: None,
-            captaincy_initialized: false,
         })
     }
 }
