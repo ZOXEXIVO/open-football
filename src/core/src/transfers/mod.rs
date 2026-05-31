@@ -4,6 +4,7 @@ pub mod offer;
 pub mod pipeline;
 pub mod pool;
 pub mod scouting_region;
+pub mod squad_needs;
 pub mod transfer;
 pub mod window;
 
@@ -13,5 +14,6 @@ pub use offer::*;
 pub use pipeline::*;
 pub use pool::*;
 pub use scouting_region::*;
+pub use squad_needs::*;
 pub use transfer::*;
 pub use window::*;

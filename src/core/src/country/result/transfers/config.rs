@@ -54,6 +54,38 @@ pub struct TransferConfig {
     /// agent slightly below their nominal target because the price (zero
     /// fee, possibly lower wage) compensates.
     pub free_agent_ability_slack: u8,
+
+    // ── Emergency squad fill — runs BEFORE the normal request-driven
+    //    matcher. Keeps a club below `MIN_FIRST_TEAM_SQUAD` from
+    //    waiting weeks for the standard scouting / shortlist pipeline.
+    /// Per-country hard cap on emergency signings completed per tick.
+    /// Sits on top of `max_free_agent_signings_per_day` rather than
+    /// consuming it — emergency clubs aren't competing for the same
+    /// slot count as normal day-to-day activity.
+    pub emergency_max_signings_per_country_per_day: usize,
+    /// Per-club hard cap. A single underfilled club shouldn't be
+    /// allowed to sign 25 players in one day; spreading the catch-up
+    /// across a few ticks keeps the pool from being drained and
+    /// matches how real markets fill emergency gaps.
+    pub emergency_max_signings_per_club_per_day: usize,
+    /// Above this main-team headcount the emergency pass stops
+    /// running — slightly below `MIN_FIRST_TEAM_SQUAD` so the normal
+    /// pipeline takes the last few slots through proper scouting.
+    pub emergency_squad_size_threshold: usize,
+
+    /// Minimum playable squad size — emergency fill keeps signing
+    /// until a club reaches this regardless of the regular per-club
+    /// cap. Mirrors the formation requirement: anything below 11 is
+    /// "can't field a side" and warrants unconditional catch-up
+    /// within the available pool.
+    pub emergency_min_playable_size: usize,
+
+    /// When the projected squad is below
+    /// [`Self::emergency_min_playable_size`], the per-club cap is
+    /// lifted to *at least* this many signings so a 0-player club can
+    /// reach 11 in a single tick when candidates exist. Country cap
+    /// still applies on top.
+    pub emergency_urgent_per_club_cap_floor: usize,
 }
 
 impl Default for TransferConfig {
@@ -105,6 +137,23 @@ impl Default for TransferConfig {
             daily_chance_max_pct: 30.0,
             max_free_agent_signings_per_day: 2,
             free_agent_ability_slack: 5,
+            emergency_max_signings_per_country_per_day: 20,
+            emergency_max_signings_per_club_per_day: 5,
+            // 18 keeps a small buffer below the 25 minimum so the
+            // normal scouting pipeline can take over once the squad
+            // is at least playable. Picking 25 here would have the
+            // emergency pass aggressively churn through low-quality
+            // free agents right up to the cap and starve the proper
+            // recruitment flow of work.
+            emergency_squad_size_threshold: 18,
+            // The minimum body count to field a side. Below this the
+            // urgent path lifts caps so the club can become playable
+            // within a single tick when the pool allows it.
+            emergency_min_playable_size: 11,
+            // Raises per-club cap from the regular 5 to 11 when below
+            // 11 players — enough to bridge a 0-player roster to a
+            // playable side in one tick. Country cap still applies.
+            emergency_urgent_per_club_cap_floor: 11,
         }
     }
 }

@@ -3,12 +3,14 @@ use log::debug;
 use std::collections::HashMap;
 
 use crate::club::staff::perception::{EstimationContext, PotentialEstimator};
+use crate::club::team::squad::MIN_FIRST_TEAM_SQUAD;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
 use crate::transfers::pipeline::{
     ClubTransferPlan, LoanOutCandidate, LoanOutReason, LoanOutStatus, TransferNeedPriority,
     TransferNeedReason, TransferRequest, TransferRequestStatus,
 };
+use crate::transfers::squad_needs::{EmergencyGroupSlot, FirstTeamSquadNeeds};
 use crate::{
     Club, ClubPhilosophy, Country, MatchTacticType, Person, Player, PlayerFieldPositionGroup,
     PlayerPlanRole, PlayerPositionType, PlayerStatusType, ReputationLevel, TACTICS_POSITIONS,
@@ -301,6 +303,32 @@ impl PipelineProcessor {
         let players = &team.players.players;
 
         if players.is_empty() {
+            // Empty main team: emit group-aware FormationGap requests
+            // for every position group so the emergency free-agent pass
+            // (in `country::result::transfers::free_agents`) has a
+            // signal to react to, and the request-driven matcher has
+            // open requests once the squad gets a few bodies. Without
+            // these, the pipeline used to return zero requests for a
+            // fresh / wiped club and would never bootstrap.
+            let needs = FirstTeamSquadNeeds::for_club(club);
+            for slot in needs.signing_plan() {
+                let representative_pos = EmergencyGroupSlot::representative_position(slot.group);
+                requests.push(TransferRequest::new(
+                    next_id,
+                    representative_pos,
+                    TransferNeedPriority::Critical,
+                    TransferNeedReason::FormationGap,
+                    30, // floor: anything plausibly registerable
+                    60, // ideal: journeyman quality
+                    // Free-agent fee is zero so a 0 budget allocation
+                    // is fine — the matcher uses wage affordability
+                    // separately. Non-FA requests would need a real
+                    // allocation, but an empty squad implies an
+                    // emergency-first signing strategy.
+                    0.0,
+                ));
+                next_id += 1;
+            }
             return SquadEvaluation {
                 club_id: club.id,
                 requests,
@@ -716,30 +744,48 @@ impl PipelineProcessor {
         );
 
         if is_small {
-            // Squad too small? Request padding
-            if squad.len() < 20 {
-                let padding_needed = (20 - squad.len()).min(3);
-                for _ in 0..padding_needed {
-                    if budget_used >= available_budget {
+            // Squad below the published first-team minimum? Request
+            // group-aware padding rather than a stack of generic
+            // midfielders. Iterates the same signing-plan helper the
+            // emergency free-agent pass uses, so the two paths can't
+            // disagree about which group is actually missing bodies.
+            if squad.len() < MIN_FIRST_TEAM_SQUAD {
+                let needs = FirstTeamSquadNeeds::for_club(club);
+                let mut emitted = 0u8;
+                // Keep generated-padding-per-tick at 3 to match the
+                // previous behaviour — the goal is gentle catch-up,
+                // not an avalanche of low-quality signings every
+                // weekly evaluation cycle.
+                let max_pad_requests = 3u8;
+                for slot in needs.signing_plan() {
+                    if emitted >= max_pad_requests {
                         break;
                     }
-                    let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
-                    if alloc <= 0.0 {
-                        break;
-                    }
-
-                    // Request generic squad padding
+                    // Padding allocates `budget_per_need * 0.3` so a
+                    // small club still leaves headroom for upgrades.
+                    // Free-agent fee is zero, but the same request
+                    // can also be filled by a cheap paid signing —
+                    // when budget is exhausted we still emit the
+                    // request with zero allocation so the FA matcher
+                    // and emergency pass can both react.
+                    let alloc =
+                        (budget_per_need * 0.3).min((available_budget - budget_used).max(0.0));
+                    let representative_pos =
+                        EmergencyGroupSlot::representative_position(slot.group);
                     requests.push(TransferRequest::new(
                         next_id,
-                        PlayerPositionType::MidfielderCenter, // Generic
+                        representative_pos,
                         TransferNeedPriority::Optional,
                         TransferNeedReason::SquadPadding,
                         avg_ability.saturating_sub(20),
                         avg_ability.saturating_sub(10),
-                        alloc,
+                        alloc.max(0.0),
                     ));
                     next_id += 1;
-                    budget_used += alloc;
+                    if alloc > 0.0 {
+                        budget_used += alloc;
+                    }
+                    emitted += 1;
                 }
             }
 
