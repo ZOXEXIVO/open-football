@@ -1,16 +1,19 @@
 use crate::Country;
+use crate::MatchRuntime;
 use crate::context::GlobalContext;
 use crate::continent::ContinentResult;
 use crate::continent::national::{NationalCompetitionConfig, NationalTeamCompetitions};
 use crate::continent::{
     ContinentalCompetitions, ContinentalRankings, ContinentalRegulations, EconomicZone,
 };
-use crate::country::CountryResult;
+use crate::country::{CountryPendingState, CountryResult};
 use crate::league::result::WorldSnapshot;
+use crate::r#match::{Match, MatchResult};
 use crate::utils::Logging;
-use log::debug;
-use rayon::iter::ParallelIterator;
-use rayon::prelude::IntoParallelRefMutIterator;
+use log::{debug, info};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::prelude::{IntoParallelRefIterator, IntoParallelRefMutIterator};
+use std::ops::Range;
 
 /// Reserved continent ids used to scope continental club competitions.
 /// UEFA competitions only run in Europe; Copa Libertadores only runs in
@@ -81,39 +84,89 @@ impl Continent {
         // `SimulatorData::simulate_with` and
         // `national_pipeline::simulate_world_national_competitions`) so
         // squads can include foreign-based players and stat updates can
-        // span continents. The continent's parallel pass is now country
-        // simulation only.
-        let country_results = self.simulate_countries(&ctx, world);
+        // span continents. The continent's parallel pass is country
+        // simulation only — split into three sub-phases so club-match
+        // play can fan out as one continent-wide dispatch.
+
+        // Build per-country GlobalContext once and reuse across the
+        // build and process passes. `with_country_and_names` clones
+        // each country's name generator (a few hundred KB on big
+        // catalogues), so building it twice per tick — once per phase
+        // — adds up over the world. One alloc per country per tick is
+        // unavoidable, two isn't.
+        let country_ctxs: Vec<GlobalContext<'_>> = self
+            .countries
+            .iter()
+            .map(|c| {
+                ctx.with_country_and_names(
+                    c.id,
+                    c.code.clone(),
+                    c.generator_data.people_names.clone(),
+                    c.season_dates(),
+                )
+            })
+            .collect();
+
+        // Phase A: parallel build. Each country prepares its leagues /
+        // cup schedules and hands back a Vec<Match> ready to play plus
+        // a CountryPendingState to resume with in Phase C.
+        let builds: Vec<(Vec<Match>, CountryPendingState)> = self
+            .countries
+            .par_iter_mut()
+            .zip(country_ctxs.par_iter())
+            .map(|(country, country_ctx)| country.simulate_build(country_ctx, world))
+            .collect();
+
+        // Phase B: drain all per-country matches into one continent
+        // batch and dispatch in a single call. With external workers
+        // this is the whole point of the split — a 30-match per-league
+        // batch becomes a 600-match per-continent batch, and the
+        // dispatcher's round-robin spreads it across the whole fleet
+        // instead of pinning each league to one worker.
+        let mut all_matches: Vec<Match> = Vec::new();
+        let mut pending_states: Vec<CountryPendingState> = Vec::with_capacity(builds.len());
+        let mut ranges: Vec<Range<usize>> = Vec::with_capacity(builds.len());
+        for (matches, pending) in builds {
+            let start = all_matches.len();
+            all_matches.extend(matches);
+            ranges.push(start..all_matches.len());
+            pending_states.push(pending);
+        }
+        let total = all_matches.len();
+        let all_results: Vec<MatchResult> = if total == 0 {
+            Vec::new()
+        } else {
+            info!(
+                "continent {}: dispatching {} matches in one batch",
+                continent_name, total
+            );
+            MatchRuntime::engine_pool().play(all_matches)
+        };
+        let per_country_results: Vec<Vec<MatchResult>> = ranges
+            .iter()
+            .map(|r| all_results[r.clone()].to_vec())
+            .collect();
+
+        // Phase C: parallel process. Each country routes its slice of
+        // results back to its leagues / cup, then runs the rest of the
+        // country tick (clubs, transfers, result fan-out).
+        let country_results: Vec<CountryResult> = self
+            .countries
+            .par_iter_mut()
+            .zip(country_ctxs.into_par_iter())
+            .zip(pending_states.into_par_iter())
+            .zip(per_country_results.into_par_iter())
+            .map(|(((country, country_ctx), pending), results)| {
+                let message = format!("simulate country: {}", &country.name);
+                Logging::estimate_result(
+                    || country.simulate_process(country_ctx, world, pending, results),
+                    &message,
+                )
+            })
+            .collect();
 
         debug!("Continent {} simulation complete", continent_name);
 
         ContinentResult::new(self.id, country_results, Vec::new())
-    }
-
-    fn simulate_countries(
-        &mut self,
-        ctx: &GlobalContext<'_>,
-        world: WorldSnapshot<'_>,
-    ) -> Vec<CountryResult> {
-        self.countries
-            .par_iter_mut()
-            .map(|country| {
-                let message = &format!("simulate country: {}", &country.name);
-                Logging::estimate_result(
-                    || {
-                        country.simulate(
-                            ctx.with_country_and_names(
-                                country.id,
-                                country.code.clone(),
-                                country.generator_data.people_names.clone(),
-                                country.season_dates(),
-                            ),
-                            world,
-                        )
-                    },
-                    message,
-                )
-            })
-            .collect()
     }
 }

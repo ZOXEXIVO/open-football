@@ -1,3 +1,4 @@
+use crate::MatchRuntime;
 use crate::club::academy::result::ClubAcademyResult;
 use crate::club::{BoardResult, ClubFinanceResult, PlayerCollectionResult};
 use crate::context::GlobalContext;
@@ -5,9 +6,11 @@ use crate::country::CountryResult;
 use crate::country::core::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
 use crate::league::LeagueCollection;
+use crate::league::LeaguePendingState;
 use crate::league::result::{
     CountryLookupIndex, CountryProcessCtx, DeferredGlobalOps, WorldSnapshot,
 };
+use crate::r#match::Match;
 use crate::r#match::MatchResult;
 use crate::transfers::market::TransferMarket;
 use crate::{Club, ClubResult, Player};
@@ -27,6 +30,26 @@ use crate::league::League;
 use crate::league::LeagueResult;
 use crate::league::LeagueTableResult;
 use std::collections::HashMap;
+
+/// State stashed between [`Country::simulate_build`] and
+/// [`Country::simulate_process`] for one tick. The build pass mutates
+/// the country's leagues and cup up to (and including) schedule
+/// regeneration, hands the assembled `Match` objects to the caller for
+/// a batched dispatch, and packages here whatever per-league /
+/// per-cup state the process pass needs to resume.
+pub struct CountryPendingState {
+    /// One slot per entry in `self.leagues.leagues`, in the same order.
+    /// `Some` when today produced league matches to play; `None` when
+    /// the league had no fixtures (its `LeagueResult` is already in
+    /// `immediate_results`).
+    pub leagues: Vec<Option<LeaguePendingState>>,
+    /// Cup pending state — `Some` when today produced cup matches.
+    pub cup: Option<LeaguePendingState>,
+    /// `LeagueResult`s that finalised during the build pass — leagues
+    /// without matches today, plus cups on a non-fixture day. Merged
+    /// with the post-process `LeagueResult`s in [`simulate_process`].
+    pub immediate_results: Vec<LeagueResult>,
+}
 
 #[derive(Clone)]
 pub struct Country {
@@ -225,37 +248,146 @@ impl Country {
             .unwrap_or_default()
     }
 
-    pub(crate) fn simulate(
+    /// Build (but do not play) today's matches across every league and
+    /// the domestic cup. Mutates each league's state up to (and
+    /// including) schedule regeneration, then hands the assembled
+    /// `Match` objects to the caller for a batched engine dispatch.
+    /// The returned [`CountryPendingState`] is the resume token for
+    /// [`simulate_process`].
+    ///
+    /// The caller — `Continent::simulate` — collects build outputs from
+    /// every country, drains them into one continent-wide batch, and
+    /// dispatches once. With external workers this turns N tiny
+    /// per-league round-trips into one big one that fans across the
+    /// fleet, which was the whole point of the split.
+    pub fn simulate_build(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        _world: WorldSnapshot<'_>,
+    ) -> (Vec<Match>, CountryPendingState) {
+        debug!(
+            "Building matchday for country: {} (Reputation: {})",
+            self.name, self.reputation
+        );
+
+        let teams_ids: Vec<(u32, Option<u32>)> = self
+            .clubs
+            .iter()
+            .flat_map(|c| &c.teams.teams)
+            .map(|c| (c.id, c.league_id))
+            .collect();
+
+        let mut all_matches: Vec<Match> = Vec::new();
+        let mut pending_leagues: Vec<Option<LeaguePendingState>> =
+            Vec::with_capacity(self.leagues.leagues.len());
+        let mut immediate_results: Vec<LeagueResult> = Vec::new();
+
+        for league in &mut self.leagues.leagues {
+            let league_team_ids: Vec<u32> = teams_ids
+                .iter()
+                .filter(|(_, league_id)| *league_id == Some(league.id))
+                .map(|(id, _)| *id)
+                .collect();
+            let league_ctx = ctx.with_league(
+                league.id,
+                league.slug.clone(),
+                &league_team_ids,
+                league.reputation,
+            );
+            let output = league.simulate_build(&self.clubs, &league_ctx);
+            all_matches.extend(output.matches);
+            pending_leagues.push(output.pending);
+            if let Some(r) = output.immediate {
+                immediate_results.push(r);
+            }
+        }
+
+        // Domestic cup. Runs alongside the league programme and joins
+        // the same continent dispatch batch. Disjoint field borrows: the
+        // cup is taken mutably while `self.clubs` is read immutably.
+        let mut cup_pending: Option<LeaguePendingState> = None;
+        let cup_ctx_args = self
+            .domestic_cup
+            .as_ref()
+            .map(|c| (c.league.id, c.league.slug.clone(), c.league.reputation));
+        if let Some((cup_id, cup_slug, cup_rep)) = cup_ctx_args {
+            let cup_ctx = ctx.with_league(cup_id, cup_slug, &[], cup_rep);
+            let cup = self.domestic_cup.as_mut().expect("cup checked above");
+            let output = cup.simulate_build(&self.clubs, &cup_ctx);
+            all_matches.extend(output.matches);
+            if let Some(p) = output.pending {
+                cup_pending = Some(p);
+            }
+            if let Some(r) = output.immediate {
+                immediate_results.push(r);
+            }
+        }
+
+        (
+            all_matches,
+            CountryPendingState {
+                leagues: pending_leagues,
+                cup: cup_pending,
+                immediate_results,
+            },
+        )
+    }
+
+    /// Resume one tick after the engine has played the country's slice
+    /// of the continent batch. Routes results to each league / cup,
+    /// then runs the rest of the country tick (club simulation,
+    /// transfer market, country-local result processing) exactly as
+    /// the legacy `simulate` did.
+    pub fn simulate_process(
         &mut self,
         ctx: GlobalContext<'_>,
         world: WorldSnapshot<'_>,
+        pending: CountryPendingState,
+        match_results: Vec<MatchResult>,
     ) -> CountryResult {
         let country_name = self.name.clone();
+        let current_date = ctx.simulation.date.date();
 
-        debug!(
-            "Simulating country: {} (Reputation: {})",
-            country_name, self.reputation
-        );
+        // Group results by league_id so each league/cup gets its own
+        // ordered slice.
+        let mut by_league: HashMap<u32, Vec<MatchResult>> = HashMap::new();
+        for mr in match_results {
+            by_league.entry(mr.league_id).or_default().push(mr);
+        }
 
-        // Phase 1: League Competitions
-        let mut league_results = self.leagues.simulate(&self.clubs, &ctx);
+        let mut league_results: Vec<LeagueResult> = pending.immediate_results;
 
-        // Phase 1a: Domestic cup. Runs alongside the league programme and
-        // appends its day's results to `league_results` so the same Phase
-        // 1b `process_local` fan-out records cup stats, morale, discipline
-        // and reputation — routed into the cup buckets because the inner
-        // league carries `is_cup = true`. Disjoint field borrows: the cup
-        // is read mutably while `clubs` is read immutably.
-        {
-            let clubs = &self.clubs;
-            if let Some(cup) = self.domestic_cup.as_mut() {
-                let cup_ctx = ctx.with_league(
-                    cup.league.id,
-                    cup.league.slug.clone(),
+        // Per-league post-match work. Pending vector is parallel to
+        // `self.leagues.leagues` (same length, same order).
+        let mut pending_iter = pending.leagues.into_iter();
+        for league in &mut self.leagues.leagues {
+            let slot = pending_iter.next().flatten();
+            if let Some(p) = slot {
+                let r = by_league.remove(&league.id).unwrap_or_default();
+                let league_ctx = ctx.with_league(
+                    league.id,
+                    league.slug.clone(),
                     &[],
-                    cup.league.reputation,
+                    league.reputation,
                 );
-                let cup_result = cup.simulate(clubs, &cup_ctx);
+                let lr =
+                    league.simulate_process(r, p, &self.clubs, &league_ctx, current_date);
+                league_results.push(lr);
+            }
+        }
+
+        // Cup post-match work.
+        if let Some(p) = pending.cup {
+            let cup_ctx_args = self
+                .domestic_cup
+                .as_ref()
+                .map(|c| (c.league.id, c.league.slug.clone(), c.league.reputation));
+            if let Some((cup_id, cup_slug, cup_rep)) = cup_ctx_args {
+                let cup_ctx = ctx.with_league(cup_id, cup_slug, &[], cup_rep);
+                let cup = self.domestic_cup.as_mut().expect("cup checked above");
+                let r = by_league.remove(&cup_id).unwrap_or_default();
+                let cup_result =
+                    cup.simulate_process(r, p, &self.clubs, &cup_ctx, current_date);
                 league_results.push(cup_result);
             }
         }
@@ -461,6 +593,26 @@ impl Country {
         debug!("Country {} simulation complete", country_name);
 
         country_result
+    }
+
+    /// Single-call wrapper for the build → engine → process flow. The
+    /// production path goes through `Continent::simulate`, which calls
+    /// the two halves directly so every country's matches join one
+    /// per-continent dispatch; this wrapper is kept for single-country
+    /// test setups that don't want to wire up a continent.
+    #[allow(dead_code)]
+    pub(crate) fn simulate(
+        &mut self,
+        ctx: GlobalContext<'_>,
+        world: WorldSnapshot<'_>,
+    ) -> CountryResult {
+        let (matches, pending) = self.simulate_build(&ctx, world);
+        let match_results = if matches.is_empty() {
+            Vec::new()
+        } else {
+            MatchRuntime::engine_pool().play(matches)
+        };
+        self.simulate_process(ctx, world, pending, match_results)
     }
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {

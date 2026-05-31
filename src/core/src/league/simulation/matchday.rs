@@ -76,18 +76,24 @@ impl League {
         }
     }
 
-    pub(in crate::league) fn play_scheduled_matches(
-        &mut self,
-        scheduled_matches: &mut [LeagueMatch],
+    /// Build (but do not play) the `Match` objects for today's fixtures.
+    /// Pure read of league state — leaves `self.dynamics` untouched, so
+    /// many leagues can be built up front and dispatched as one batch
+    /// later. `apply_matchday_results` is the matching half: it takes
+    /// the played results back, stamps them onto `scheduled_matches`
+    /// and updates the per-team momentum.
+    pub(in crate::league) fn build_matchday_matches(
+        &self,
+        scheduled_matches: &[LeagueMatch],
         clubs: &[Club],
         ctx: &GlobalContext<'_>,
         friendly: bool,
         knockout: bool,
-    ) -> Vec<MatchResult> {
+    ) -> Vec<Match> {
         let today = ctx.simulation.date.date();
         let is_cup = self.is_cup;
         let lookup = MatchdayLookup::build(clubs);
-        let matches: Vec<Match> = scheduled_matches
+        scheduled_matches
             .iter()
             .map(|scheduled_match| {
                 // Count upcoming competitive fixtures within 5 days for
@@ -117,22 +123,47 @@ impl League {
                     (home_upcoming, away_upcoming),
                 )
             })
-            .collect();
+            .collect()
+    }
 
-        let match_results = MatchRuntime::engine_pool().play(matches);
-
+    /// Stamp played results back onto `scheduled_matches` (paired by
+    /// index with the order returned from `build_matchday_matches`) and
+    /// bump each team's momentum. Run after the engine — local or
+    /// distributed — has returned the matches.
+    pub(in crate::league) fn apply_matchday_results(
+        &mut self,
+        scheduled_matches: &mut [LeagueMatch],
+        match_results: &[MatchResult],
+    ) {
         for (scheduled_match, result) in scheduled_matches.iter_mut().zip(match_results.iter()) {
             scheduled_match.result = Some(LeagueMatchResultResult::from_score(&result.score));
         }
-
-        for result in &match_results {
+        for result in match_results {
             self.dynamics.update_team_momentum_after_match(
                 result.home_team_id,
                 result.away_team_id,
                 result,
             );
         }
+    }
 
+    /// Backwards-compatible single-call wrapper. The production path
+    /// (`Country::simulate_build` + `Continent::simulate`) calls the
+    /// `build_matchday_matches` / `apply_matchday_results` halves
+    /// directly so a whole continent's matches dispatch in one batch.
+    /// Kept for tests and any future single-league call site.
+    #[allow(dead_code)]
+    pub(in crate::league) fn play_scheduled_matches(
+        &mut self,
+        scheduled_matches: &mut [LeagueMatch],
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+        friendly: bool,
+        knockout: bool,
+    ) -> Vec<MatchResult> {
+        let matches = self.build_matchday_matches(scheduled_matches, clubs, ctx, friendly, knockout);
+        let match_results = MatchRuntime::engine_pool().play(matches);
+        self.apply_matchday_results(scheduled_matches, &match_results);
         match_results
     }
 

@@ -13,13 +13,15 @@
 //! a progressively drawn single-leg bracket with byes for the top seeds.
 
 use crate::Club;
+use crate::MatchRuntime;
 use crate::TeamType;
 use crate::context::GlobalContext;
 use crate::league::schedule::cup;
 use crate::league::{
-    League, LeagueMatch, LeagueResult, LeagueTableResult, MatchStorage, Schedule, ScheduleItem,
-    ScheduleTour,
+    League, LeagueBuildOutput, LeagueMatch, LeaguePendingState, LeagueResult, LeagueTableResult,
+    MatchStorage, Schedule, ScheduleItem, ScheduleTour,
 };
+use crate::r#match::MatchResult;
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use log::debug;
 use std::collections::HashSet;
@@ -304,15 +306,17 @@ impl DomesticCup {
         self.league.schedule.tours.push(tour);
     }
 
-    /// Advance the cup one simulation day. Mirrors `League::simulate`'s
-    /// shape (regenerate at season start, play today's fixtures, return a
-    /// `LeagueResult`) but on a knockout bracket instead of a table.
-    ///
-    /// The returned `LeagueResult` carries the day's match results so the
-    /// caller's `process_local` pass runs the same per-player stat / morale
-    /// / discipline / reputation fan-out as for league games — and, because
-    /// the inner league is `is_cup = true`, those land in the cup buckets.
-    pub fn simulate(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) -> LeagueResult {
+    /// Build (but do not play) today's cup matches. Mirrors
+    /// [`League::simulate_build`] for the knockout side: regenerates the
+    /// bracket at season start, collects today's ties, and returns the
+    /// `Match` objects ready for a batched engine dispatch alongside a
+    /// `LeaguePendingState` so [`simulate_process`] can resume cup-side
+    /// bookkeeping once the engine returns the results.
+    pub fn simulate_build(
+        &mut self,
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+    ) -> LeagueBuildOutput {
         let current_date = ctx.simulation.date.date();
 
         let new_schedule = self.league.schedule.tours.is_empty()
@@ -328,21 +332,56 @@ impl DomesticCup {
         // builder can scale importance by stage. Computed from the seeded
         // field that round one was drawn from.
         let total_rounds = cup::total_rounds(Self::seeded_participants(clubs).len());
-        let mut scheduled = self.collect_today_matches(current_date, total_rounds);
+        let scheduled = self.collect_today_matches(current_date, total_rounds);
         if scheduled.is_empty() {
-            return LeagueResult::new(self.league.id, LeagueTableResult {});
+            return LeagueBuildOutput {
+                matches: Vec::new(),
+                pending: None,
+                immediate: Some(LeagueResult::new(self.league.id, LeagueTableResult {})),
+            };
         }
 
-        // Knockout: build via `Match::make_knockout` so a level score is
-        // settled by extra time / penalties.
-        let match_results =
-            self.league
-                .play_scheduled_matches(&mut scheduled, clubs, ctx, false, true);
+        // Knockout: build via the inner league's matchday builder with
+        // `knockout = true`, so a level score is settled by extra time
+        // and (if needed) penalties.
+        let matches = self
+            .league
+            .build_matchday_matches(&scheduled, clubs, ctx, false, true);
 
-        // Cup-side bookkeeping only — no standings table. Store results for
-        // the cup page / top scorers, and write them into the bracket so we
-        // can work out who advances. (The per-player stat fan-out happens in
-        // the caller's `process_local`.)
+        LeagueBuildOutput {
+            matches,
+            pending: Some(LeaguePendingState {
+                scheduled_matches: scheduled,
+                table_result: LeagueTableResult {},
+                new_season_started: false,
+            }),
+            immediate: None,
+        }
+    }
+
+    /// Apply played cup match results back onto the bracket: stamps each
+    /// score onto its schedule item, stores the result on the inner
+    /// league for the cup page and top-scorer tables, and draws the
+    /// next round if today closed one out. Per-player stat / morale /
+    /// discipline fan-out still happens via the caller's
+    /// `LeagueResult::process_local`.
+    pub fn simulate_process(
+        &mut self,
+        match_results: Vec<MatchResult>,
+        pending: LeaguePendingState,
+        clubs: &[Club],
+        _ctx: &GlobalContext<'_>,
+        current_date: NaiveDate,
+    ) -> LeagueResult {
+        let LeaguePendingState {
+            mut scheduled_matches,
+            ..
+        } = pending;
+
+        self.league
+            .apply_matchday_results(&mut scheduled_matches, &match_results);
+
+        // Cup-side bookkeeping only — no standings table.
         for mr in &match_results {
             self.league
                 .matches
@@ -355,6 +394,23 @@ impl DomesticCup {
         self.maybe_generate_next_round(clubs, current_date);
 
         LeagueResult::with_match_result(self.league.id, LeagueTableResult {}, match_results)
+    }
+
+    /// Backwards-compatible wrapper that runs build → engine → process
+    /// in one call. Production paths go through
+    /// `Country::simulate_build` so cup matches join the continent's
+    /// shared dispatch batch.
+    pub fn simulate(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) -> LeagueResult {
+        let current_date = ctx.simulation.date.date();
+        let output = self.simulate_build(clubs, ctx);
+        if let Some(immediate) = output.immediate {
+            return immediate;
+        }
+        let match_results = MatchRuntime::engine_pool().play(output.matches);
+        let pending = output
+            .pending
+            .expect("cup simulate_build with matches must produce a pending state");
+        self.simulate_process(match_results, pending, clubs, ctx, current_date)
     }
 
     /// The current edition's champion, if the bracket has resolved to a

@@ -4717,7 +4717,7 @@ a:active {
 .fm-workers-chip {
     margin-left: auto;
     display: inline-flex;
-    align-items: baseline;
+    align-items: center;
     gap: 6px;
     padding: 6px 12px;
     background: linear-gradient(160deg, #1f3a2c 0%, #16291f 100%);
@@ -4748,6 +4748,24 @@ a:active {
     font-variant-numeric: tabular-nums;
     line-height: 1;
     letter-spacing: -0.3px;
+    margin-right: 4px;
+}
+
+.fm-workers-chip-stack {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    line-height: 1;
+}
+
+.fm-workers-chip-sublabel {
+    font-size: 8.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    color: #6c8290;
+    line-height: 1;
 }
 
 .fm-workers-chip-label {
@@ -4756,6 +4774,7 @@ a:active {
     text-transform: uppercase;
     letter-spacing: 0.9px;
     color: #6c8290;
+    line-height: 1;
 }
 
 /* Tablets and small laptops — Machine claims its own full-width row

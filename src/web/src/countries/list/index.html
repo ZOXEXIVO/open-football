@@ -36,7 +36,10 @@
                         <a class="fm-workers-chip" href="/{{ lang }}/workers"
                            title="{{ workers_ready }}/{{ workers_count }} workers ready">
                             <span class="fm-workers-chip-count">{{ workers_ready }}</span>
-                            <span class="fm-workers-chip-label">workers</span>
+                            <span class="fm-workers-chip-stack">
+                                <span class="fm-workers-chip-sublabel">external</span>
+                                <span class="fm-workers-chip-label">workers</span>
+                            </span>
                         </a>
                         {% endif %}
                     </div>

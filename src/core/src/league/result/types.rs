@@ -1,6 +1,29 @@
-use crate::league::ScheduleItem;
-use crate::r#match::{GoalDetail, Score, TeamScore};
+use crate::league::{LeagueResult, LeagueTableResult, ScheduleItem};
+use crate::r#match::{GoalDetail, Match, Score, TeamScore};
 use chrono::NaiveDateTime;
+
+/// What `League::simulate_build` (and the cup equivalent) hand back so a
+/// caller can dispatch matches in one big batch later and then resume the
+/// per-league processing. Exactly one of `pending` (matches were built)
+/// or `immediate` (non-matchday — result was finalised during build) is
+/// `Some`; if both are `None`, no work happened today.
+pub struct LeagueBuildOutput {
+    pub matches: Vec<Match>,
+    pub pending: Option<LeaguePendingState>,
+    pub immediate: Option<LeagueResult>,
+}
+
+/// State stashed between the build and process halves of a single
+/// matchday. The build half mutates the league's table/schedule and
+/// produces `Match` objects; the process half receives the played
+/// `MatchResult`s and applies them against this state. Cups reuse this
+/// shape with `table_result = LeagueTableResult {}` and
+/// `new_season_started = false`.
+pub struct LeaguePendingState {
+    pub scheduled_matches: Vec<LeagueMatch>,
+    pub table_result: LeagueTableResult,
+    pub new_season_started: bool,
+}
 
 pub struct LeagueMatch {
     pub id: String,

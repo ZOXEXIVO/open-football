@@ -1,9 +1,11 @@
+use crate::MatchRuntime;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{
-    LeagueAwards, LeagueDynamics, LeagueMilestones, LeagueRegulations, LeagueResult,
-    LeagueStatistics, LeagueTable, LeagueTableRow, MatchStorage, PlayerOfTheWeekHistory, Schedule,
-    ScheduleItem,
+    LeagueAwards, LeagueBuildOutput, LeagueDynamics, LeagueMilestones, LeaguePendingState,
+    LeagueRegulations, LeagueResult, LeagueStatistics, LeagueTable, LeagueTableRow, MatchStorage,
+    PlayerOfTheWeekHistory, Schedule, ScheduleItem,
 };
+use crate::r#match::MatchResult;
 use crate::{Club, PlayerFieldPositionGroup, PlayerStatistics, Team};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
@@ -97,25 +99,37 @@ impl League {
         }
     }
 
-    pub fn simulate(&mut self, clubs: &[Club], ctx: GlobalContext<'_>) -> LeagueResult {
+    /// Prepare today's matchday but do not play it. Mutates the league's
+    /// dynamics / table / schedule up to (and including) schedule
+    /// regeneration, then either:
+    /// - returns a [`LeagueBuildOutput`] with `pending = Some(...)` and
+    ///   the `Match` objects ready for a batched engine dispatch, or
+    /// - runs the non-matchday work and returns `immediate = Some(LeagueResult)`.
+    ///
+    /// The matched second half is [`simulate_process`], which takes the
+    /// played [`MatchResult`]s and `LeaguePendingState` back and runs
+    /// `process_match_day_results`.
+    pub fn simulate_build(
+        &mut self,
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+    ) -> LeagueBuildOutput {
         let league_name = self.name.clone();
-        let current_date = ctx.simulation.date.date();
-
         debug!(
-            "⚽ Simulating league: {} (Reputation: {})",
+            "⚽ Building matchday for league: {} (Reputation: {})",
             league_name, self.reputation
         );
 
-        self.prepare_matchday(&ctx, clubs);
+        self.prepare_matchday(ctx, clubs);
 
-        let table_result = self.table.simulate(&ctx);
+        let table_result = self.table.simulate(ctx);
 
         let league_teams: Vec<u32> = clubs
             .iter()
             .flat_map(|c| c.teams.with_league(self.id))
             .collect();
 
-        let mut schedule_result = self.schedule.simulate(
+        let schedule_result = self.schedule.simulate(
             &self.settings,
             ctx.with_league(
                 self.id,
@@ -135,26 +149,76 @@ impl League {
         }
 
         if schedule_result.is_match_scheduled() {
-            let match_results = self.play_scheduled_matches(
-                &mut schedule_result.scheduled_matches,
+            let matches = self.build_matchday_matches(
+                &schedule_result.scheduled_matches,
                 clubs,
-                &ctx,
+                ctx,
                 self.friendly,
                 false,
             );
-
-            self.process_match_day_results(&match_results, clubs, &ctx, current_date);
-
-            let mut result = LeagueResult::with_match_result(self.id, table_result, match_results);
-            result.new_season_started = new_season_started;
-            return result;
+            return LeagueBuildOutput {
+                matches,
+                pending: Some(LeaguePendingState {
+                    scheduled_matches: schedule_result.scheduled_matches,
+                    table_result,
+                    new_season_started,
+                }),
+                immediate: None,
+            };
         }
 
-        self.process_non_matchday(clubs, &ctx);
-
+        self.process_non_matchday(clubs, ctx);
         let mut result = LeagueResult::new(self.id, table_result);
         result.new_season_started = new_season_started;
+        LeagueBuildOutput {
+            matches: Vec::new(),
+            pending: None,
+            immediate: Some(result),
+        }
+    }
+
+    /// Apply played match results onto a league's [`LeaguePendingState`]
+    /// returned from [`simulate_build`]. Stamps results onto the
+    /// scheduled fixtures, runs the per-match table / dynamics /
+    /// statistics / discipline fan-out, and yields the final
+    /// [`LeagueResult`] for the day.
+    pub fn simulate_process(
+        &mut self,
+        match_results: Vec<MatchResult>,
+        pending: LeaguePendingState,
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+        current_date: NaiveDate,
+    ) -> LeagueResult {
+        let LeaguePendingState {
+            mut scheduled_matches,
+            table_result,
+            new_season_started,
+        } = pending;
+
+        self.apply_matchday_results(&mut scheduled_matches, &match_results);
+        self.process_match_day_results(&match_results, clubs, ctx, current_date);
+
+        let mut result = LeagueResult::with_match_result(self.id, table_result, match_results);
+        result.new_season_started = new_season_started;
         result
+    }
+
+    /// Backwards-compatible wrapper that runs build → engine → process
+    /// in one call. Production paths (`Country::simulate_build` +
+    /// `Continent::simulate`) call the halves directly so a whole
+    /// continent's matches dispatch in one batch instead of per-league.
+    pub fn simulate(&mut self, clubs: &[Club], ctx: GlobalContext<'_>) -> LeagueResult {
+        let current_date = ctx.simulation.date.date();
+        let output = self.simulate_build(clubs, &ctx);
+        if let Some(immediate) = output.immediate {
+            return immediate;
+        }
+        let match_results = MatchRuntime::engine_pool().play(output.matches);
+        let pending = output
+            .pending
+            .expect("simulate_build with matches must produce a pending state");
+        self.simulate_process(match_results, pending, clubs, &ctx, current_date)
     }
 
     #[allow(dead_code)]
