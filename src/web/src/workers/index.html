@@ -45,19 +45,10 @@
         </div>
     </section>
 
-    {% if workers.is_empty() %}
-    <section class="fm-panel mt-3">
-        <div class="fm-workers-empty">
-            No workers configured. Add entries to <code>open-football.conf</code> next to the binary:
-            <pre>[[worker]]
-address = "127.0.0.1:18001"</pre>
-            Then start a worker process: <code>open_football --worker --worker-port=18001</code>
-        </div>
-    </section>
-    {% else %}
     <section class="fm-panel mt-3">
         <div class="fm-panel-head">
             <h3>Workers</h3>
+            <span class="fm-panel-count">{{ workers.len() }} host{% if workers.len() != 1 %}s{% endif %}</span>
         </div>
         <div class="fm-workers-table-wrap">
             <table class="fm-workers-table">
@@ -67,12 +58,13 @@ address = "127.0.0.1:18001"</pre>
                         <th>Host</th>
                         <th>Address</th>
                         <th>Version</th>
+                        <th>CPU</th>
                         <th class="fm-num">Threads</th>
                         <th class="fm-num">Batches</th>
                         <th class="fm-num">Matches</th>
                         <th class="fm-num">Failures</th>
                         <th class="fm-num">Last (ms)</th>
-                        <th>CPU</th>
+                        <th class="fm-num">Speed (mps)</th>
                         <th>Last error</th>
                     </tr>
                 </thead>
@@ -82,6 +74,7 @@ address = "127.0.0.1:18001"</pre>
                         <td>
                             <span class="fm-worker-badge fm-worker-badge-{{ w.status_label }}">
                                 {% if w.status_label == "ready" %}Ready
+                                {% else if w.status_label == "local" %}Local
                                 {% else if w.status_label == "version_mismatch" %}Version mismatch
                                 {% else if w.status_label == "unreachable" %}Unreachable
                                 {% else %}Connecting{% endif %}
@@ -97,14 +90,15 @@ address = "127.0.0.1:18001"</pre>
                         <td>
                             {% if w.version.is_empty() %}<span class="fm-muted">—</span>{% else %}v{{ w.version }}{% endif %}
                         </td>
-                        <td class="fm-num">{{ w.threads }}</td>
-                        <td class="fm-num">{{ w.batches_sent }}</td>
-                        <td class="fm-num">{{ w.matches_completed }}</td>
-                        <td class="fm-num{% if w.failures > 0 %} fm-num-bad{% endif %}">{{ w.failures }}</td>
-                        <td class="fm-num">{% if let Some(lat) = w.last_latency_ms %}{{ lat }}{% else %}—{% endif %}</td>
                         <td class="fm-worker-cpu">
                             {% if w.cpu_brand.is_empty() %}<span class="fm-muted">—</span>{% else %}{{ w.cpu_brand }}{% endif %}
                         </td>
+                        <td class="fm-num">{{ w.threads }}</td>
+                        <td class="fm-num">{% if w.status_label == "local" %}<span class="fm-muted">—</span>{% else %}{{ w.batches_sent }}{% endif %}</td>
+                        <td class="fm-num">{% if w.status_label == "local" %}<span class="fm-muted">—</span>{% else %}{{ w.matches_completed }}{% endif %}</td>
+                        <td class="fm-num{% if w.failures > 0 %} fm-num-bad{% endif %}">{% if w.status_label == "local" %}<span class="fm-muted">—</span>{% else %}{{ w.failures }}{% endif %}</td>
+                        <td class="fm-num">{% if let Some(lat) = w.last_latency_ms %}{{ lat }}{% else %}<span class="fm-muted">—</span>{% endif %}</td>
+                        <td class="fm-num">{% if let Some(mps) = w.throughput_mps %}{{ mps }}{% else %}<span class="fm-muted">—</span>{% endif %}</td>
                         <td class="fm-worker-error">
                             {% if let Some(err) = w.last_error %}<span class="fm-num-bad">{{ err }}</span>{% else %}<span class="fm-muted">—</span>{% endif %}
                         </td>
@@ -112,6 +106,16 @@ address = "127.0.0.1:18001"</pre>
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+    </section>
+
+    {% if no_remote_workers %}
+    <section class="fm-panel mt-3">
+        <div class="fm-workers-empty">
+            No remote workers configured. Add entries to <code>open-football.conf</code> next to the binary:
+            <pre>[[worker]]
+address = "127.0.0.1:18001"</pre>
+            Then start a worker process: <code>open_football --worker --worker-port=18001</code>
         </div>
     </section>
     {% endif %}

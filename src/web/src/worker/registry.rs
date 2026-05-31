@@ -65,11 +65,25 @@ pub struct WorkerStats {
     pub failures: u64,
     pub last_latency_ms: Option<u64>,
     pub last_error: Option<String>,
+    /// EWMA of `matches / latency_ms` observed on successful batches.
+    /// `None` until the worker has completed at least one batch — the
+    /// dispatcher's `build_plan` falls back to thread-count weighting
+    /// for unmeasured workers. α = 0.3 (see `update_throughput`).
+    pub throughput_mpms: Option<f64>,
 }
+
+/// EWMA smoothing factor for per-worker throughput. Low enough to ride
+/// out a single anomalous slow batch (network blip, contended host),
+/// high enough to reflect a genuine speed change within ~5 batches.
+const THROUGHPUT_ALPHA: f64 = 0.3;
 
 #[derive(Clone)]
 pub struct WorkerRegistry {
     inner: Arc<RwLock<Vec<Worker>>>,
+    /// Throughput estimate for the coordinator's own local rayon slot —
+    /// updated from the dispatcher every time a local chunk finishes.
+    /// Held separately because the local target isn't a `Worker`.
+    local_throughput_mpms: Arc<RwLock<Option<f64>>>,
     coordinator_version: &'static str,
 }
 
@@ -80,6 +94,7 @@ impl WorkerRegistry {
     pub fn empty() -> Self {
         WorkerRegistry {
             inner: Arc::new(RwLock::new(Vec::new())),
+            local_throughput_mpms: Arc::new(RwLock::new(None)),
             coordinator_version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -149,11 +164,37 @@ impl WorkerRegistry {
                 (WorkerStatus::Ready, Some(c)) => Some(ReadyWorker {
                     address: w.address.clone(),
                     threads: w.threads,
+                    throughput_mpms: w.stats.throughput_mpms,
                     connection: Arc::clone(c),
                 }),
                 _ => None,
             })
             .collect()
+    }
+
+    /// Snapshot of the local rayon slot's current throughput estimate —
+    /// `None` until the dispatcher has finished at least one local
+    /// chunk. The dispatcher reads this when building a plan so the
+    /// local slot is weighted against remote workers on the same
+    /// matches-per-ms scale.
+    pub async fn local_throughput(&self) -> Option<f64> {
+        *self.local_throughput_mpms.read().await
+    }
+
+    /// Update the local-slot throughput EWMA after a local chunk
+    /// finishes. Called from the dispatcher's `Target::Local` branch.
+    /// First sample seeds the value directly; subsequent samples smooth
+    /// with `THROUGHPUT_ALPHA` so a transient blip doesn't dominate.
+    pub async fn record_local_batch(&self, matches: usize, latency_ms: u64) {
+        if matches == 0 || latency_ms == 0 {
+            return;
+        }
+        let observed = matches as f64 / latency_ms as f64;
+        let mut guard = self.local_throughput_mpms.write().await;
+        *guard = Some(match *guard {
+            None => observed,
+            Some(prev) => THROUGHPUT_ALPHA * observed + (1.0 - THROUGHPUT_ALPHA) * prev,
+        });
     }
 
     pub async fn record_batch(
@@ -172,6 +213,15 @@ impl WorkerRegistry {
                     w.stats.matches_completed =
                         w.stats.matches_completed.saturating_add(matches as u64);
                     w.stats.last_error = None;
+                    if matches > 0 && latency_ms > 0 {
+                        let observed = matches as f64 / latency_ms as f64;
+                        w.stats.throughput_mpms = Some(match w.stats.throughput_mpms {
+                            None => observed,
+                            Some(prev) => {
+                                THROUGHPUT_ALPHA * observed + (1.0 - THROUGHPUT_ALPHA) * prev
+                            }
+                        });
+                    }
                 }
                 BatchOutcome::Failed(reason) => {
                     w.stats.failures = w.stats.failures.saturating_add(1);
@@ -363,10 +413,22 @@ pub struct WorkerSnapshot {
     pub stats: WorkerStats,
 }
 
+impl WorkerSnapshot {
+    /// Render-friendly matches-per-second from the EWMA throughput.
+    /// Returns `None` until the worker has completed at least one batch.
+    pub fn throughput_mps(&self) -> Option<f64> {
+        self.stats.throughput_mpms.map(|mpms| mpms * 1000.0)
+    }
+}
+
 #[derive(Clone)]
 pub struct ReadyWorker {
     pub address: String,
     pub threads: usize,
+    /// EWMA throughput from the registry — `None` until the worker has
+    /// completed at least one batch. The dispatcher's `build_plan`
+    /// falls back to a thread-count seed weight when this is `None`.
+    pub throughput_mpms: Option<f64>,
     pub connection: Arc<Mutex<TcpStream>>,
 }
 

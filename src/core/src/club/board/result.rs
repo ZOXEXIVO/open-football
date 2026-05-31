@@ -315,7 +315,7 @@ impl BoardResult {
         };
         if upgraded {
             club.finance.balance.push_cash_outflow(cost.max(0));
-            info!(
+            debug!(
                 "Board approved {:?} upgrade at {} (cost {})",
                 facility, club.name, cost
             );

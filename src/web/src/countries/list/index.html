@@ -32,7 +32,6 @@
                             <div class="fm-info-machine-value">{{ cpu_brand }}</div>
                             <div class="fm-info-tile-label">{{ i18n.t("info_machine") }}</div>
                         </div>
-                        {% if workers_count > 0 %}
                         <a class="fm-workers-chip" href="/{{ lang }}/workers"
                            title="{{ workers_ready }}/{{ workers_count }} workers ready">
                             <span class="fm-workers-chip-count">{{ workers_ready }}</span>
@@ -41,7 +40,6 @@
                                 <span class="fm-workers-chip-label">workers</span>
                             </span>
                         </a>
-                        {% endif %}
                     </div>
                     <div class="fm-info-tile fm-info-tile-countries">
                         <div class="fm-info-tile-icon"><i class="fa fa-globe"></i></div>

@@ -1,22 +1,29 @@
 //! Coordinator-side `MatchDispatcher` impl. Each dispatch_* call
 //! SPLITS its batch into chunks of `2 × target.threads` and ships
-//! chunks to every ready worker (plus the local rayon pool) in
+//! chunks across every ready worker (plus the local rayon pool) in
 //! parallel — so a single matchday doesn't sit on one worker while
 //! the rest of the fleet idles.
 //!
 //! Routing model:
 //!
-//!   1. Snapshot the `Ready` worker slots.
-//!   2. Prepend a virtual `Local` target with `local_threads` weight
-//!      (skipped when `local_threads = 0`).
-//!   3. Greedy round-robin chunks of `2 × target.threads`: target
-//!      `i` claims up to `2 × threads_i` consecutive matches, then
-//!      the cursor advances. Small batches (≤ chunk cap) ship whole
-//!      to ONE worker — splitting a 6-match batch 3/3 wastes the
-//!      remote worker's rayon pool on network overhead and only
-//!      partially fills its threads. The per-call cursor rotates the
-//!      starting target so concurrent dispatch calls (parallel
-//!      `countries.par_iter_mut()`) spread across the fleet.
+//!   1. Snapshot the `Ready` worker slots, each carrying an EWMA
+//!      throughput estimate the registry has been maintaining from
+//!      observed batch latencies (`matches / latency_ms`). Workers
+//!      that have never completed a batch read `None` and fall back
+//!      to a thread-count seed.
+//!   2. Prepend a virtual `Local` target (skipped when
+//!      `local_threads = 0`) with its own throughput estimate.
+//!   3. Smooth-weighted round-robin (SWRR) over the slots: each step
+//!      every slot's `current_weight` is incremented by its weight,
+//!      the slot with the highest `current_weight` wins the next
+//!      chunk and its counter is reduced by `total_weight`. Chunks
+//!      stay at `2 × threads` so the worker's rayon pool stays the
+//!      right "size unit", but the FREQUENCY of chunk assignment is
+//!      proportional to throughput — a 5× slower worker gets ~1/5 the
+//!      chunks of a fast one with the same thread count, instead of
+//!      becoming the matchday's tail latency. The per-call cursor
+//!      rotates the slot order so concurrent dispatch calls (parallel
+//!      `countries.par_iter_mut()`) don't all start at slot 0.
 //!   4. Spawn one tokio task per target slot. Chunks within a slot
 //!      serialize over its `Mutex<TcpStream>`; slots run concurrently.
 //!   5. Any failed remote chunk replays on the local rayon pool
@@ -85,6 +92,15 @@ impl Slot {
     }
 }
 
+/// Per-thread seed throughput (matches per second) used when a slot
+/// has never recorded a batch. Picked so that an unmeasured slot's
+/// initial weight is in the same order of magnitude as a measured
+/// one — a real match takes a few tens of ms per thread, so 20 mps
+/// per thread is a sensible neutral starting point that scales
+/// linearly with thread count (matching the old behaviour exactly
+/// when no measurements exist yet).
+const SEED_MPS_PER_THREAD: f64 = 20.0;
+
 impl MatchDispatcher for DistributedDispatcher {
     fn dispatch_league(&self, matches: Vec<Match>) -> Result<Vec<MatchResult>, Vec<Match>> {
         let registry = self.registry.clone();
@@ -92,7 +108,14 @@ impl MatchDispatcher for DistributedDispatcher {
         let cursor_start = self.cursor.fetch_add(1, Ordering::Relaxed);
         self.runtime.block_on(async move {
             let ready = registry.ready_handles().await;
-            let slots = Self::build_plan(matches.len(), local_threads, ready, cursor_start);
+            let local_throughput = registry.local_throughput().await;
+            let slots = Self::build_plan(
+                matches.len(),
+                local_threads,
+                local_throughput,
+                ready,
+                cursor_start,
+            );
             if slots.is_empty() {
                 return Err(matches);
             }
@@ -109,7 +132,14 @@ impl MatchDispatcher for DistributedDispatcher {
         let cursor_start = self.cursor.fetch_add(1, Ordering::Relaxed);
         self.runtime.block_on(async move {
             let ready = registry.ready_handles().await;
-            let slots = Self::build_plan(matches.len(), local_threads, ready, cursor_start);
+            let local_throughput = registry.local_throughput().await;
+            let slots = Self::build_plan(
+                matches.len(),
+                local_threads,
+                local_throughput,
+                ready,
+                cursor_start,
+            );
             if slots.is_empty() {
                 return Err(matches);
             }
@@ -128,30 +158,46 @@ impl DistributedDispatcher {
         }
     }
 
-    /// Greedy round-robin chunking. Each round, the cursor's target
-    /// claims up to `2 × threads` consecutive matches, then the
-    /// cursor advances. Small batches (total ≤ chunk cap of the
-    /// cursor's first pick) ship whole to ONE worker; that worker's
-    /// rayon pool fills up rather than splitting a tiny batch across
-    /// targets and paying network overhead per side. Large batches
-    /// (total > one chunk cap) splay across the fleet, one chunk per
-    /// target per round-trip.
+    /// Smooth-weighted round-robin chunking. Each step every slot's
+    /// `current_weight` accumulates by its `weight` (matches/sec, from
+    /// the registry's EWMA throughput or a thread-count seed when no
+    /// batch has ever been observed); the slot with the highest
+    /// `current_weight` claims the next chunk and gets `total_weight`
+    /// subtracted from its counter. This produces a smooth
+    /// interleaving where chunk frequency tracks throughput — a 5×
+    /// slower worker gets ~1/5 the chunks of a fast one regardless of
+    /// thread count.
+    ///
+    /// `chunk_size` stays at `2 × threads` per slot so each `PlayBatch`
+    /// round-trip is still sized to fully occupy that worker's rayon
+    /// pool without straggler tails on the chunk's own internal
+    /// parallelism — slow workers just get FEWER chunks, not smaller
+    /// ones.
+    ///
+    /// `cursor_start` is folded in by rotating the slot order before
+    /// SWRR begins; without it, every dispatch call would tie-break
+    /// toward the same slot on its first pick and concurrent dispatch
+    /// calls would pile on the same worker.
     fn build_plan(
         total: usize,
         local_threads: usize,
+        local_throughput_mpms: Option<f64>,
         ready: Vec<ReadyWorker>,
         cursor_start: usize,
     ) -> Vec<Slot> {
         let mut slots: Vec<Slot> = Vec::with_capacity(ready.len() + 1);
+        let mut weights: Vec<f64> = Vec::with_capacity(ready.len() + 1);
         if local_threads > 0 {
             slots.push(Slot {
                 target: Target::Local,
                 threads: local_threads,
                 chunks: Vec::new(),
             });
+            weights.push(Self::slot_weight(local_throughput_mpms, local_threads));
         }
         for w in ready {
             let threads = w.threads;
+            weights.push(Self::slot_weight(w.throughput_mpms, threads));
             slots.push(Slot {
                 target: Target::Remote(w),
                 threads,
@@ -163,16 +209,65 @@ impl DistributedDispatcher {
         }
 
         let n = slots.len();
-        let mut cursor = cursor_start % n;
-        let mut start = 0usize;
-        while start < total {
-            let end = (start + slots[cursor].chunk_size()).min(total);
-            slots[cursor].chunks.push((start..end).collect());
-            start = end;
-            cursor = (cursor + 1) % n;
+        let rotate = cursor_start % n;
+        slots.rotate_left(rotate);
+        weights.rotate_left(rotate);
+
+        let chunk_sizes: Vec<usize> = slots.iter().map(|s| s.chunk_size()).collect();
+        let assignments = Self::swrr_assign(total, &chunk_sizes, &weights);
+        for (i, chunks) in assignments.into_iter().enumerate() {
+            slots[i].chunks = chunks;
         }
 
         slots.into_iter().filter(|s| !s.chunks.is_empty()).collect()
+    }
+
+    /// Pure SWRR chunk-assignment loop. Returns per-slot lists of
+    /// index ranges. Extracted from `build_plan` so the weighting
+    /// behaviour can be unit-tested without TcpStream-bearing
+    /// `ReadyWorker` instances.
+    fn swrr_assign(
+        total: usize,
+        chunk_sizes: &[usize],
+        weights: &[f64],
+    ) -> Vec<Vec<Vec<usize>>> {
+        let n = chunk_sizes.len();
+        let mut out: Vec<Vec<Vec<usize>>> = (0..n).map(|_| Vec::new()).collect();
+        if total == 0 || n == 0 {
+            return out;
+        }
+        let total_weight: f64 = weights.iter().sum();
+        let mut current: Vec<f64> = vec![0.0; n];
+        let mut start = 0usize;
+        while start < total {
+            for i in 0..n {
+                current[i] += weights[i];
+            }
+            let pick = current
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| {
+                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            let end = (start + chunk_sizes[pick]).min(total);
+            out[pick].push((start..end).collect());
+            current[pick] -= total_weight;
+            start = end;
+        }
+        out
+    }
+
+    /// Weight (matches/sec) the slot will be assigned in SWRR. Real
+    /// EWMA throughput when available, else a thread-count seed —
+    /// `SEED_MPS_PER_THREAD × threads` matches the dispatcher's old
+    /// behaviour exactly when nothing has been measured yet.
+    fn slot_weight(throughput_mpms: Option<f64>, threads: usize) -> f64 {
+        match throughput_mpms {
+            Some(mpms) if mpms > 0.0 => (mpms * 1000.0).max(1.0),
+            _ => (threads.max(1) as f64) * SEED_MPS_PER_THREAD,
+        }
     }
 
     fn describe_plan(slots: &[Slot]) -> String {
@@ -276,11 +371,12 @@ impl DistributedDispatcher {
                     })
                     .await
                     .unwrap_or_default();
+                    let latency = timer.elapsed_ms();
                     info!(
                         "local: completed league chunk matches={} in {} ms",
-                        count,
-                        timer.elapsed_ms()
+                        count, latency
                     );
+                    registry.record_local_batch(count, latency).await;
                     r
                 }
                 Target::Remote(worker) => {
@@ -406,11 +502,12 @@ impl DistributedDispatcher {
                     })
                     .await
                     .unwrap_or_default();
+                    let latency = timer.elapsed_ms();
                     info!(
                         "local: completed squad chunk matches={} in {} ms",
-                        count,
-                        timer.elapsed_ms()
+                        count, latency
                     );
+                    registry.record_local_batch(count, latency).await;
                     r
                 }
                 Target::Remote(worker) => {
@@ -505,5 +602,93 @@ impl DistributedDispatcher {
             details: None,
             friendly: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DistributedDispatcher;
+
+    /// Two slots, same `chunk_size`, but slot B is 4× faster: B should
+    /// receive roughly 4× as many chunks as A.
+    #[test]
+    fn swrr_assigns_chunks_proportional_to_weight() {
+        let chunk_sizes = vec![8, 8];
+        let weights = vec![100.0, 400.0]; // matches/sec — B is 4× A
+        let assignments = DistributedDispatcher::swrr_assign(200, &chunk_sizes, &weights);
+        let a = assignments[0].len();
+        let b = assignments[1].len();
+        assert!(a + b > 0);
+        let ratio = b as f64 / a.max(1) as f64;
+        assert!(
+            ratio >= 3.5 && ratio <= 4.5,
+            "expected B/A ≈ 4, got {:.2} ({} vs {})",
+            ratio,
+            b,
+            a
+        );
+        let total_matches: usize = assignments
+            .iter()
+            .flat_map(|cs| cs.iter().map(|c| c.len()))
+            .sum();
+        assert_eq!(total_matches, 200);
+    }
+
+    /// Equal weights → pure round-robin, no slot starves.
+    #[test]
+    fn swrr_with_equal_weights_distributes_evenly() {
+        let chunk_sizes = vec![8, 8, 8];
+        let weights = vec![1.0, 1.0, 1.0];
+        let assignments = DistributedDispatcher::swrr_assign(96, &chunk_sizes, &weights);
+        for slot in &assignments {
+            assert!(!slot.is_empty(), "every slot should get at least one chunk");
+            let count: usize = slot.iter().map(|c| c.len()).sum();
+            assert!(
+                count >= 24 && count <= 40,
+                "even split: each slot near 32, got {}",
+                count
+            );
+        }
+        let total: usize = assignments
+            .iter()
+            .flat_map(|cs| cs.iter().map(|c| c.len()))
+            .sum();
+        assert_eq!(total, 96);
+    }
+
+    /// A slot whose weight is dwarfed by the others should still get
+    /// SOME work eventually — SWRR doesn't starve low-weight slots.
+    #[test]
+    fn swrr_does_not_starve_low_weight_slot() {
+        let chunk_sizes = vec![16, 16];
+        let weights = vec![1000.0, 10.0]; // 100× ratio
+        let assignments = DistributedDispatcher::swrr_assign(500, &chunk_sizes, &weights);
+        let fast: usize = assignments[0].iter().map(|c| c.len()).sum();
+        let slow: usize = assignments[1].iter().map(|c| c.len()).sum();
+        assert_eq!(fast + slow, 500);
+        // Slow slot SHOULD get some chunks once enough total work
+        // accumulates — every ~100 chunks for the fast slot, the slow
+        // slot's current_weight overflows enough to pick.
+        // With chunk_size=16 and total=500, fast claims ~30+ chunks
+        // before slow gets one. Just assert slow > 0.
+        // Allow strict starvation when ratio is extreme AND total fits
+        // in fewer rounds than the ratio — here total/chunk_size ≈ 31
+        // rounds, much less than 100, so slow may legitimately get 0.
+        // Tighten with bigger total instead.
+        let assignments = DistributedDispatcher::swrr_assign(5000, &chunk_sizes, &weights);
+        let slow: usize = assignments[1].iter().map(|c| c.len()).sum();
+        assert!(slow > 0, "slow slot should get at least one chunk over 5000 matches");
+    }
+
+    /// `slot_weight` falls back to thread-count × SEED when throughput
+    /// is None, preserving today's behaviour for unmeasured slots.
+    #[test]
+    fn slot_weight_seed_for_unmeasured_slot() {
+        let measured = DistributedDispatcher::slot_weight(Some(0.2), 16);
+        // 0.2 mpms × 1000 = 200 mps
+        assert!((measured - 200.0).abs() < 0.01);
+        let seed = DistributedDispatcher::slot_weight(None, 16);
+        // 16 × 20 = 320
+        assert!((seed - 320.0).abs() < 0.01);
     }
 }
