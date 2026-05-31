@@ -1,150 +1,180 @@
 /* latin-ext */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 300;
     font-display: swap;
-    src: url(/static/fonts/google_font_latin_ext.woff2) format('woff2');
-    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    src: url(/static/fonts/google_font_latin_ext.woff2) format("woff2");
+    unicode-range:
+        U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+        U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+        U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 /* latin */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 300;
     font-display: swap;
-    src: url(/static/fonts/google_font.woff2) format('woff2');
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    src: url(/static/fonts/google_font.woff2) format("woff2");
+    unicode-range:
+        U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+        U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+        U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 /* latin-ext */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url(/static/fonts/google_font_latin_ext.woff2) format('woff2');
-    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    src: url(/static/fonts/google_font_latin_ext.woff2) format("woff2");
+    unicode-range:
+        U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+        U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+        U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 /* latin */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url(/static/fonts/google_font.woff2) format('woff2');
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    src: url(/static/fonts/google_font.woff2) format("woff2");
+    unicode-range:
+        U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+        U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+        U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 /* latin-ext */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 500;
     font-display: swap;
-    src: url(/static/fonts/google_font_latin_ext.woff2) format('woff2');
-    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    src: url(/static/fonts/google_font_latin_ext.woff2) format("woff2");
+    unicode-range:
+        U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+        U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+        U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 /* latin */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 500;
     font-display: swap;
-    src: url(/static/fonts/google_font.woff2) format('woff2');
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    src: url(/static/fonts/google_font.woff2) format("woff2");
+    unicode-range:
+        U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+        U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+        U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 /* latin-ext */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 600;
     font-display: swap;
-    src: url(/static/fonts/google_font_latin_ext.woff2) format('woff2');
-    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    src: url(/static/fonts/google_font_latin_ext.woff2) format("woff2");
+    unicode-range:
+        U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+        U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+        U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 /* latin */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 600;
     font-display: swap;
-    src: url(/static/fonts/google_font.woff2) format('woff2');
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    src: url(/static/fonts/google_font.woff2) format("woff2");
+    unicode-range:
+        U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+        U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+        U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 /* latin-ext */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 700;
     font-display: swap;
-    src: url(/static/fonts/google_font_latin_ext.woff2) format('woff2');
-    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    src: url(/static/fonts/google_font_latin_ext.woff2) format("woff2");
+    unicode-range:
+        U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+        U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+        U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 /* latin */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 700;
     font-display: swap;
-    src: url(/static/fonts/google_font.woff2) format('woff2');
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    src: url(/static/fonts/google_font.woff2) format("woff2");
+    unicode-range:
+        U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+        U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+        U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 /* cyrillic */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 300;
     font-display: swap;
-    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    src: url(/static/fonts/google_font_cyrillic.woff2) format("woff2");
     unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
 }
 
 /* cyrillic */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    src: url(/static/fonts/google_font_cyrillic.woff2) format("woff2");
     unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
 }
 
 /* cyrillic */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 500;
     font-display: swap;
-    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    src: url(/static/fonts/google_font_cyrillic.woff2) format("woff2");
     unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
 }
 
 /* cyrillic */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 600;
     font-display: swap;
-    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    src: url(/static/fonts/google_font_cyrillic.woff2) format("woff2");
     unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
 }
 
 /* cyrillic */
 @font-face {
-    font-family: 'Outfit';
+    font-family: "Outfit";
     font-style: normal;
     font-weight: 700;
     font-display: swap;
-    src: url(/static/fonts/google_font_cyrillic.woff2) format('woff2');
+    src: url(/static/fonts/google_font_cyrillic.woff2) format("woff2");
     unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
 }
 
@@ -162,11 +192,14 @@ html {
 body {
     background-color: #1a2228;
     color: #d0d6dc;
-    font-family: 'Outfit', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-family: "Outfit", "Helvetica Neue", Helvetica, Arial, sans-serif;
     margin: 0;
 }
 
-a:link, a:visited, a:hover, a:active {
+a:link,
+a:visited,
+a:hover,
+a:active {
     text-decoration: none !important;
 }
 
@@ -222,7 +255,9 @@ a:link, a:visited, a:hover, a:active {
     color: #6e7b85;
     font-size: 14px;
     cursor: pointer;
-    transition: color 0.12s, background 0.12s;
+    transition:
+        color 0.12s,
+        background 0.12s;
 }
 
 .fm-sidebar-lang-toggle:hover {
@@ -266,7 +301,9 @@ a:link, a:visited, a:hover, a:active {
     color: #6e7b85;
     font-size: 14px;
     font-weight: 400;
-    transition: color 0.12s, background 0.12s;
+    transition:
+        color 0.12s,
+        background 0.12s;
     word-spacing: 0.15em;
     overflow: hidden;
 }
@@ -313,19 +350,17 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-nav-section li a.fm-nav-download {
-    margin: 4px 10px;
+    margin: 4px 2px;
     padding: 8px 14px;
-    color: #fff;
+    color: #14b8a6;
     font-weight: 600;
-    background: linear-gradient(57deg, #233e40 0%, #0a2224 100%);
-    border: 1px solid #193a3c;
-    border-radius: 3px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    background: none;
+    border: none;
 }
 
 .fm-nav-section li a.fm-nav-download i,
 .fm-nav-section li a.fm-nav-download span {
-    color: #fff;
+    color: #027b71;
 }
 
 /* Collapsible league list — show first 2, hide the rest behind a toggle */
@@ -351,7 +386,9 @@ a:link, a:visited, a:hover, a:active {
     background: transparent;
     color: #4a5663;
     cursor: pointer;
-    transition: color 0.12s, background 0.12s;
+    transition:
+        color 0.12s,
+        background 0.12s;
 }
 
 .fm-nav-collapsible .fm-nav-toggle button:hover {
@@ -595,7 +632,10 @@ a:link, a:visited, a:hover, a:active {
     border-bottom: 2px solid transparent;
     cursor: pointer;
     white-space: nowrap;
-    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    transition:
+        color 0.15s,
+        border-color 0.15s,
+        background 0.15s;
 }
 
 .fm-tab:hover {
@@ -689,7 +729,9 @@ a:link, a:visited, a:hover, a:active {
 .fm-season-select {
     appearance: none;
     -webkit-appearance: none;
-    background: #1a2530 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23546a78'/%3E%3C/svg%3E") no-repeat right 8px center;
+    background: #1a2530
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23546a78'/%3E%3C/svg%3E")
+        no-repeat right 8px center;
     border: 1px solid #263340;
     border-radius: 3px;
     color: #c8d6e0;
@@ -810,7 +852,7 @@ a:link, a:visited, a:hover, a:active {
     border-bottom: 1px solid #263340;
 }
 
-.fm-staff-attrs .fm-skill-col:nth-child(-n+3) {
+.fm-staff-attrs .fm-skill-col:nth-child(-n + 3) {
     border-bottom: 1px solid #263340;
 }
 
@@ -828,7 +870,8 @@ a:link, a:visited, a:hover, a:active {
     padding: 14px 16px;
 }
 
-.fm-pt-clubs, .fm-pt-clubs a {
+.fm-pt-clubs,
+.fm-pt-clubs a {
     color: #fff;
     font-size: 13px;
 }
@@ -887,7 +930,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-pt-badge-request {
-    background: #A71214;
+    background: #a71214;
     color: #fff;
 }
 
@@ -1061,7 +1104,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-badge-inj {
-    background: #A71214;
+    background: #a71214;
     color: #fff;
 }
 
@@ -1167,8 +1210,9 @@ a:link, a:visited, a:hover, a:active {
     left: 0;
     white-space: nowrap;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
-    box-shadow 0.25s ease;
+    transition:
+        transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+        box-shadow 0.25s ease;
 }
 
 .fm-badge-deck[data-count] .fm-badge:first-child {
@@ -1193,7 +1237,6 @@ a:link, a:visited, a:hover, a:active {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
-
 /* ============================================
    FM STARS
    ============================================ */
@@ -1214,7 +1257,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-stars .star::before {
-    content: '\2605';
+    content: "\2605";
 }
 
 .fm-stars .star.on {
@@ -1534,13 +1577,15 @@ a:link, a:visited, a:hover, a:active {
     min-width: 0;
 }
 
-.fx-home a, .fx-away a {
+.fx-home a,
+.fx-away a {
     color: #d8dee4;
     font-size: 15px;
     font-weight: 500;
 }
 
-.fx-home a:hover, .fx-away a:hover {
+.fx-home a:hover,
+.fx-away a:hover {
     color: #fff;
     text-decoration: underline !important;
 }
@@ -1579,7 +1624,7 @@ a:link, a:visited, a:hover, a:active {
     text-overflow: ellipsis;
 }
 
-.fx-scorer:nth-child(n+4) {
+.fx-scorer:nth-child(n + 4) {
     display: none;
 }
 
@@ -1596,8 +1641,16 @@ a:link, a:visited, a:hover, a:active {
     padding: 22px 24px;
     overflow: hidden;
     background:
-        radial-gradient(150% 130% at 100% 0%, rgba(74, 157, 91, 0.06), transparent 55%),
-        radial-gradient(120% 140% at 0% 0%, rgba(232, 193, 74, 0.13), transparent 46%);
+        radial-gradient(
+            150% 130% at 100% 0%,
+            rgba(74, 157, 91, 0.06),
+            transparent 55%
+        ),
+        radial-gradient(
+            120% 140% at 0% 0%,
+            rgba(232, 193, 74, 0.13),
+            transparent 46%
+        );
 }
 
 .fm-trophy-badge {
@@ -1609,7 +1662,10 @@ a:link, a:visited, a:hover, a:active {
     display: grid;
     place-items: center;
     background: radial-gradient(circle at 32% 26%, #3a3420, #1c2128);
-    box-shadow: inset 0 0 0 1px rgba(232, 193, 74, 0.45), inset 0 -6px 14px rgba(0, 0, 0, 0.5), 0 0 26px rgba(232, 193, 74, 0.14);
+    box-shadow:
+        inset 0 0 0 1px rgba(232, 193, 74, 0.45),
+        inset 0 -6px 14px rgba(0, 0, 0, 0.5),
+        0 0 26px rgba(232, 193, 74, 0.14);
 }
 
 .fm-trophy-badge i {
@@ -1620,7 +1676,9 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-trophy-badge.live {
     background: radial-gradient(circle at 32% 26%, #28323b, #1a2128);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), inset 0 -6px 14px rgba(0, 0, 0, 0.5);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+        inset 0 -6px 14px rgba(0, 0, 0, 0.5);
 }
 
 .fm-trophy-badge.live i {
@@ -1786,7 +1844,9 @@ a:link, a:visited, a:hover, a:active {
     border: 1px solid #283643;
     border-radius: 7px;
     overflow: hidden;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+    transition:
+        border-color 0.12s ease,
+        box-shadow 0.12s ease;
 }
 
 .fm-tie:hover {
@@ -1853,7 +1913,11 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-tie-row.winner {
-    background: linear-gradient(90deg, rgba(74, 157, 91, 0.16), rgba(74, 157, 91, 0.03));
+    background: linear-gradient(
+        90deg,
+        rgba(74, 157, 91, 0.16),
+        rgba(74, 157, 91, 0.03)
+    );
     box-shadow: inset 3px 0 0 #4a9d5b;
 }
 
@@ -2290,7 +2354,9 @@ a:link, a:visited, a:hover, a:active {
     border-radius: 4px;
     overflow: hidden;
     margin-bottom: 14px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    box-shadow:
+        0 2px 12px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 /* --- Banner: photo + identity --- */
@@ -2304,7 +2370,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-ph-banner::before {
-    content: '';
+    content: "";
     position: absolute;
     top: 0;
     right: 0;
@@ -2339,7 +2405,9 @@ a:link, a:visited, a:hover, a:active {
     justify-content: center;
     overflow: hidden;
     position: relative;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    box-shadow:
+        0 4px 16px rgba(0, 0, 0, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .fm-ph-watermark {
@@ -2448,7 +2516,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-ph-value {
-    font-size: 1.0em !important;
+    font-size: 1em !important;
 }
 
 .fm-ph-contracted {
@@ -2520,7 +2588,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-ph-age {
-    font-size: 1.0em;
+    font-size: 1em;
     color: #ffffff;
     font-weight: 500;
 }
@@ -2938,7 +3006,9 @@ a:link, a:visited, a:hover, a:active {
     border-radius: 4px;
     background: linear-gradient(180deg, #1b262e 0%, #18222a 100%);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.015);
-    transition: border-color 120ms ease, transform 120ms ease;
+    transition:
+        border-color 120ms ease,
+        transform 120ms ease;
 }
 
 .fm-evt-card:hover {
@@ -3188,10 +3258,14 @@ a:link, a:visited, a:hover, a:active {
 /* Big events bump the chip a notch — heavier border, soft outer glow so
    it reads from across the timeline without redesigning the chip body. */
 .fm-evt-big .fm-evt-chip-up {
-    box-shadow: 0 0 0 1px rgba(76, 175, 80, 0.18), 0 0 8px rgba(76, 175, 80, 0.18);
+    box-shadow:
+        0 0 0 1px rgba(76, 175, 80, 0.18),
+        0 0 8px rgba(76, 175, 80, 0.18);
 }
 .fm-evt-big .fm-evt-chip-down {
-    box-shadow: 0 0 0 1px rgba(229, 57, 53, 0.22), 0 0 8px rgba(229, 57, 53, 0.2);
+    box-shadow:
+        0 0 0 1px rgba(229, 57, 53, 0.22),
+        0 0 8px rgba(229, 57, 53, 0.2);
 }
 
 /* --- Valence variants --- */
@@ -3210,7 +3284,9 @@ a:link, a:visited, a:hover, a:active {
 }
 .fm-evt-positive .fm-evt-marker {
     background: #4caf50;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 0 4px rgba(76, 175, 80, 0.35);
+    box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.3),
+        0 0 4px rgba(76, 175, 80, 0.35);
 }
 
 /* Negative */
@@ -3219,7 +3295,9 @@ a:link, a:visited, a:hover, a:active {
 }
 .fm-evt-negative .fm-evt-marker {
     background: #e53935;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 0 4px rgba(229, 57, 53, 0.35);
+    box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.3),
+        0 0 4px rgba(229, 57, 53, 0.35);
 }
 
 /* --- Big events: career-visible moments --- */
@@ -3498,7 +3576,13 @@ a:link, a:visited, a:hover, a:active {
     width: 100%;
     margin: 0 auto;
     aspect-ratio: 0.58;
-    background: linear-gradient(180deg, #173017 0%, #1a3a1a 30%, #16321a 60%, #143014 100%);
+    background: linear-gradient(
+        180deg,
+        #173017 0%,
+        #1a3a1a 30%,
+        #16321a 60%,
+        #143014 100%
+    );
     border: 2px solid rgba(255, 255, 255, 0.12);
     border-radius: 3px;
     overflow: hidden;
@@ -3508,15 +3592,15 @@ a:link, a:visited, a:hover, a:active {
 /* Field stripe effect */
 
 .fp-field::before {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
     background: repeating-linear-gradient(
-            180deg,
-            transparent,
-            transparent 10%,
-            rgba(255, 255, 255, 0.015) 10%,
-            rgba(255, 255, 255, 0.015) 20%
+        180deg,
+        transparent,
+        transparent 10%,
+        rgba(255, 255, 255, 0.015) 10%,
+        rgba(255, 255, 255, 0.015) 20%
     );
     pointer-events: none;
 }
@@ -3597,13 +3681,17 @@ a:link, a:visited, a:hover, a:active {
 .fp-dot.fp-on {
     background: linear-gradient(145deg, #4aad5b, #3a8d4a);
     border-color: rgba(74, 157, 91, 0.5);
-    box-shadow: 0 0 8px rgba(74, 157, 91, 0.45), 0 0 3px rgba(74, 157, 91, 0.3);
+    box-shadow:
+        0 0 8px rgba(74, 157, 91, 0.45),
+        0 0 3px rgba(74, 157, 91, 0.3);
 }
 
 .fp-dot.fp-primary {
     background: linear-gradient(145deg, #68d44a, #4cb82e);
     border-color: rgba(240, 188, 4, 0.6);
-    box-shadow: 0 0 0 3px rgba(240, 188, 4, 0.55), 0 0 12px rgba(92, 191, 58, 0.5);
+    box-shadow:
+        0 0 0 3px rgba(240, 188, 4, 0.55),
+        0 0 12px rgba(92, 191, 58, 0.5);
 }
 
 .fp-dot:hover {
@@ -4064,7 +4152,9 @@ a:link, a:visited, a:hover, a:active {
     color: #5a666e;
     cursor: pointer;
     border-bottom: 2px solid transparent;
-    transition: color 0.15s, border-color 0.15s;
+    transition:
+        color 0.15s,
+        border-color 0.15s;
     font-family: inherit;
     text-transform: uppercase;
     letter-spacing: 0.4px;
@@ -4531,7 +4621,10 @@ a:link, a:visited, a:hover, a:active {
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.04) inset,
         0 1px 3px rgba(0, 0, 0, 0.18);
-    transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+    transition:
+        border-color 0.2s,
+        transform 0.15s,
+        box-shadow 0.2s;
     min-width: 0;
 }
 
@@ -4696,14 +4789,21 @@ a:link, a:visited, a:hover, a:active {
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.15) inset,
         0 1px 3px rgba(50, 140, 120, 0.25);
-    transition: color 0.25s, background 0.3s, border-color 0.3s, box-shadow 0.35s, transform 0.25s;
+    transition:
+        color 0.25s,
+        background 0.3s,
+        border-color 0.3s,
+        box-shadow 0.35s,
+        transform 0.25s;
     position: relative;
 }
 
 .fm-download-btn i {
     font-size: 10px;
     opacity: 0.8;
-    transition: opacity 0.25s, transform 0.3s;
+    transition:
+        opacity 0.25s,
+        transform 0.3s;
 }
 
 .fm-download-btn:hover {
@@ -4754,7 +4854,9 @@ a:link, a:visited, a:hover, a:active {
     border-radius: 3px;
     cursor: pointer;
     white-space: nowrap;
-    transition: background 0.15s, border-color 0.15s;
+    transition:
+        background 0.15s,
+        border-color 0.15s;
 }
 
 .fm-holiday-btn:hover {
@@ -4816,7 +4918,9 @@ a:link, a:visited, a:hover, a:active {
     font-size: 14px;
     font-weight: 400;
     break-inside: avoid;
-    transition: background 0.1s, color 0.1s;
+    transition:
+        background 0.1s,
+        color 0.1s;
     border-radius: 3px;
 }
 
@@ -4867,14 +4971,23 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-match-scoreboard::before {
-    content: '';
+    content: "";
     position: absolute;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: radial-gradient(ellipse 80% 50% at 20% 50%, rgba(0, 48, 125, 0.08) 0%, transparent 70%),
-    radial-gradient(ellipse 80% 50% at 80% 50%, rgba(179, 63, 0, 0.08) 0%, transparent 70%);
+    background:
+        radial-gradient(
+            ellipse 80% 50% at 20% 50%,
+            rgba(0, 48, 125, 0.08) 0%,
+            transparent 70%
+        ),
+        radial-gradient(
+            ellipse 80% 50% at 80% 50%,
+            rgba(179, 63, 0, 0.08) 0%,
+            transparent 70%
+        );
     pointer-events: none;
 }
 
@@ -4961,7 +5074,10 @@ a:link, a:visited, a:hover, a:active {
     font-weight: 600;
     color: rgba(255, 255, 255, 0.3);
     letter-spacing: 0.3px;
-    transition: color 0.15s, background 0.15s, border-color 0.15s;
+    transition:
+        color 0.15s,
+        background 0.15s,
+        border-color 0.15s;
 }
 
 .fm-sb-expander:hover {
@@ -5413,7 +5529,7 @@ a:link, a:visited, a:hover, a:active {
     left: 0;
     top: 0;
     height: 100%;
-    background: linear-gradient(90deg, #4CAF50 0%, #45a049 100%);
+    background: linear-gradient(90deg, #4caf50 0%, #45a049 100%);
     border-radius: 3px;
     pointer-events: none;
     transition: width 0.1s linear;
@@ -5477,7 +5593,8 @@ a:link, a:visited, a:hover, a:active {
 }
 
 @keyframes goal-pulse {
-    0%, 100% {
+    0%,
+    100% {
         transform: scale(1);
     }
     50% {
@@ -5491,7 +5608,7 @@ a:link, a:visited, a:hover, a:active {
     transform: translate(-50%, -50%);
     width: 24px;
     height: 24px;
-    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+    background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
     border: 3px solid #fff;
     border-radius: 50%;
     box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
@@ -5674,26 +5791,36 @@ a:link, a:visited, a:hover, a:active {
     width: 100%;
     aspect-ratio: 0.7;
     background: repeating-linear-gradient(
-            180deg,
-            #1e5a1e 0%,
-            #1e5a1e 9.09%,
-            #226222 9.09%,
-            #226222 18.18%
+        180deg,
+        #1e5a1e 0%,
+        #1e5a1e 9.09%,
+        #226222 9.09%,
+        #226222 18.18%
     );
     border: 2px solid rgba(255, 255, 255, 0.18);
     border-radius: 3px;
     overflow: hidden;
-    box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.3),
-    0 4px 20px rgba(0, 0, 0, 0.4);
+    box-shadow:
+        inset 0 0 60px rgba(0, 0, 0, 0.3),
+        0 4px 20px rgba(0, 0, 0, 0.4);
 }
 
 /* Subtle grain overlay */
 .fm-pitch-surface::before {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
-    background: radial-gradient(ellipse at 50% 0%, rgba(255, 255, 255, 0.04) 0%, transparent 60%),
-    radial-gradient(ellipse at 50% 100%, rgba(255, 255, 255, 0.04) 0%, transparent 60%);
+    background:
+        radial-gradient(
+            ellipse at 50% 0%,
+            rgba(255, 255, 255, 0.04) 0%,
+            transparent 60%
+        ),
+        radial-gradient(
+            ellipse at 50% 100%,
+            rgba(255, 255, 255, 0.04) 0%,
+            transparent 60%
+        );
     pointer-events: none;
     z-index: 0;
 }
@@ -5858,16 +5985,19 @@ a:link, a:visited, a:hover, a:active {
     border-radius: 50%;
     background: linear-gradient(145deg, #4ec95e, #38a848);
     border: 2px solid rgba(255, 255, 255, 0.7);
-    box-shadow: 0 0 10px rgba(74, 200, 90, 0.5),
-    0 0 4px rgba(74, 200, 90, 0.3),
-    0 2px 6px rgba(0, 0, 0, 0.4);
+    box-shadow:
+        0 0 10px rgba(74, 200, 90, 0.5),
+        0 0 4px rgba(74, 200, 90, 0.3),
+        0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 .fm-pitch-player-name {
     font-size: 10px;
     font-weight: 600;
     color: #fff;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 6px rgba(0, 0, 0, 0.5);
+    text-shadow:
+        0 1px 3px rgba(0, 0, 0, 0.8),
+        0 0 6px rgba(0, 0, 0, 0.5);
     white-space: nowrap;
     letter-spacing: 0.2px;
     max-width: 80px;
@@ -5880,9 +6010,10 @@ a:link, a:visited, a:hover, a:active {
 .fm-pitch-player.pos-gk .fm-pitch-player-dot {
     background: linear-gradient(145deg, #e8c830, #c8a820);
     border-color: rgba(255, 255, 255, 0.75);
-    box-shadow: 0 0 10px rgba(232, 200, 48, 0.5),
-    0 0 4px rgba(232, 200, 48, 0.3),
-    0 2px 6px rgba(0, 0, 0, 0.4);
+    box-shadow:
+        0 0 10px rgba(232, 200, 48, 0.5),
+        0 0 4px rgba(232, 200, 48, 0.3),
+        0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 /* --- Position placement (bottom = own goal, top = attacking) --- */
@@ -6067,7 +6198,7 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-menu-toggle span::before,
 .fm-menu-toggle span::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 0;
     width: 18px;
@@ -6572,7 +6703,6 @@ a:link, a:visited, a:hover, a:active {
         min-width: 100%;
     }
 
-
     .fm-history-table {
         min-width: 100%;
     }
@@ -6897,7 +7027,9 @@ a:link, a:visited, a:hover, a:active {
     padding: 4px 8px;
     font-size: 12px;
     border-radius: 3px;
-    transition: color 0.1s, background 0.1s;
+    transition:
+        color 0.1s,
+        background 0.1s;
 }
 
 .fm-watchlist-remove:hover {
@@ -7081,7 +7213,9 @@ a:link, a:visited, a:hover, a:active {
     color: #2a8636;
     cursor: pointer;
     font-size: 13px;
-    transition: background 0.15s, color 0.15s;
+    transition:
+        background 0.15s,
+        color 0.15s;
 }
 
 .fm-ai-add-btn:hover {
@@ -7101,7 +7235,9 @@ a:link, a:visited, a:hover, a:active {
     color: #a04040;
     cursor: pointer;
     font-size: 13px;
-    transition: background 0.15s, color 0.15s;
+    transition:
+        background 0.15s,
+        color 0.15s;
 }
 
 .fm-ai-remove-btn:hover {
@@ -7222,7 +7358,9 @@ a:link, a:visited, a:hover, a:active {
     border-bottom: 2px solid transparent;
     cursor: pointer;
     font-family: inherit;
-    transition: color 0.15s, background 0.15s;
+    transition:
+        color 0.15s,
+        background 0.15s;
 }
 
 /* Floating tooltip — rendered at body level so .fm-tabbar's overflow-x:auto
@@ -7242,7 +7380,9 @@ a:link, a:visited, a:hover, a:active {
     opacity: 0;
     pointer-events: none;
     transform: translate(-50%, 2px);
-    transition: opacity 0.12s ease-out, transform 0.12s ease-out;
+    transition:
+        opacity 0.12s ease-out,
+        transform 0.12s ease-out;
     z-index: 2000;
 }
 
@@ -7300,7 +7440,10 @@ a:link, a:visited, a:hover, a:active {
     cursor: pointer;
     white-space: nowrap;
     font-family: inherit;
-    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    transition:
+        color 0.15s,
+        border-color 0.15s,
+        background 0.15s;
 }
 
 .fm-tabbar-dropdown-toggle:hover,
@@ -7354,7 +7497,9 @@ a:link, a:visited, a:hover, a:active {
     text-align: left;
     cursor: pointer;
     font-family: inherit;
-    transition: color 0.15s, background 0.15s;
+    transition:
+        color 0.15s,
+        background 0.15s;
 }
 
 .fm-tabbar-dropdown-menu button:hover {
@@ -7521,7 +7666,9 @@ a:link, a:visited, a:hover, a:active {
     font-family: inherit;
     cursor: pointer;
     border: 1px solid #2a3640;
-    transition: background 0.15s, color 0.15s;
+    transition:
+        background 0.15s,
+        color 0.15s;
 }
 
 .fm-dlg-cancel {
@@ -7565,7 +7712,9 @@ a:link, a:visited, a:hover, a:active {
     background: #0f171d;
     border: 1px solid #2a3a47;
     border-radius: 6px;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition:
+        border-color 0.15s,
+        box-shadow 0.15s;
 }
 
 .fm-search-box:focus-within {
@@ -7615,7 +7764,9 @@ a:link, a:visited, a:hover, a:active {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.15s, color 0.15s;
+    transition:
+        background 0.15s,
+        color 0.15s;
 }
 
 .fm-search-clear:hover {
@@ -7825,7 +7976,9 @@ a:link, a:visited, a:hover, a:active {
     cursor: pointer;
     white-space: nowrap;
     text-decoration: none !important;
-    transition: color 0.15s, background 0.15s;
+    transition:
+        color 0.15s,
+        background 0.15s;
     font-family: inherit;
 }
 
@@ -8038,7 +8191,7 @@ a:link, a:visited, a:hover, a:active {
 .sc-badge-shadow {
     background: rgba(140, 110, 196, 0.16);
     color: #b89fe6;
-    border-color: rgba(140, 110, 196, 0.30);
+    border-color: rgba(140, 110, 196, 0.3);
 }
 
 .sc-badge-active {
@@ -8050,7 +8203,7 @@ a:link, a:visited, a:hover, a:active {
 .sc-badge-board-approved {
     background: rgba(74, 157, 91, 0.22);
     color: #8ddc99;
-    border-color: rgba(74, 157, 91, 0.40);
+    border-color: rgba(74, 157, 91, 0.4);
 }
 
 .sc-badge-board-vetoed {
@@ -8068,7 +8221,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .sc-badge-monitoring_status_paused {
-    background: rgba(150, 150, 150, 0.10);
+    background: rgba(150, 150, 150, 0.1);
     color: #a0a8b0;
     border-color: rgba(150, 150, 150, 0.22);
 }
@@ -8081,7 +8234,7 @@ a:link, a:visited, a:hover, a:active {
 
 .sc-badge-monitoring_status_shortlisted,
 .sc-badge-request_status_shortlisted {
-    background: rgba(74, 157, 91, 0.20);
+    background: rgba(74, 157, 91, 0.2);
     color: #8ddc99;
     border-color: rgba(74, 157, 91, 0.36);
 }
@@ -8115,7 +8268,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .sc-badge-recommendation_strong_buy {
-    background: rgba(74, 157, 91, 0.30);
+    background: rgba(74, 157, 91, 0.3);
     color: #9cebab;
     border-color: rgba(74, 157, 91, 0.55);
     font-weight: 700;
@@ -8141,7 +8294,7 @@ a:link, a:visited, a:hover, a:active {
 
 .sc-badge-decision_promote_to_shortlist,
 .sc-badge-decision_start_negotiation {
-    background: rgba(74, 157, 91, 0.20);
+    background: rgba(74, 157, 91, 0.2);
     color: #8ddc99;
     border-color: rgba(74, 157, 91, 0.36);
 }
@@ -8155,11 +8308,11 @@ a:link, a:visited, a:hover, a:active {
 .sc-badge-decision_ask_board_approval {
     background: rgba(70, 132, 196, 0.16);
     color: #93bce4;
-    border-color: rgba(70, 132, 196, 0.30);
+    border-color: rgba(70, 132, 196, 0.3);
 }
 
 .sc-badge-scout_vote_strong_approve {
-    background: rgba(74, 157, 91, 0.30);
+    background: rgba(74, 157, 91, 0.3);
     color: #9cebab;
     border-color: rgba(74, 157, 91, 0.55);
     font-weight: 700;
@@ -8172,7 +8325,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .sc-badge-scout_vote_monitor {
-    background: rgba(74, 157, 91, 0.10);
+    background: rgba(74, 157, 91, 0.1);
     color: #7fd28b;
     border-color: rgba(74, 157, 91, 0.22);
 }
@@ -8203,7 +8356,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .sc-badge-request_priority_optional {
-    background: rgba(150, 160, 170, 0.10);
+    background: rgba(150, 160, 170, 0.1);
     color: #a0aab4;
     border-color: rgba(150, 160, 170, 0.22);
 }
@@ -8218,7 +8371,11 @@ a:link, a:visited, a:hover, a:active {
 .sc-meeting {
     border-top: 1px solid #263340;
     padding: 12px 14px 14px;
-    background: linear-gradient(180deg, rgba(255,255,255,0.012) 0%, rgba(255,255,255,0) 100%);
+    background: linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.012) 0%,
+        rgba(255, 255, 255, 0) 100%
+    );
 }
 
 .sc-meeting:first-child {
@@ -8285,7 +8442,9 @@ a:link, a:visited, a:hover, a:active {
     font-weight: 500;
     border-radius: 11px;
     text-decoration: none;
-    transition: background 0.12s, border-color 0.12s;
+    transition:
+        background 0.12s,
+        border-color 0.12s;
 }
 
 .sc-pill:hover {
@@ -8585,22 +8744,27 @@ a:link, a:visited, a:hover, a:active {
     overflow: hidden;
     background: #1a2530;
     border: 2px solid rgba(255, 255, 255, 0.75);
-    box-shadow: 0 0 14px rgba(74, 200, 90, 0.5),
+    box-shadow:
+        0 0 14px rgba(74, 200, 90, 0.5),
         0 0 6px rgba(74, 200, 90, 0.3),
         0 3px 10px rgba(0, 0, 0, 0.5);
-    transition: transform 0.18s, box-shadow 0.18s;
+    transition:
+        transform 0.18s,
+        box-shadow 0.18s;
 }
 
 .fm-aw-pitch-player:hover .fm-aw-pitch-photo {
     transform: scale(1.08);
-    box-shadow: 0 0 20px rgba(74, 200, 90, 0.7),
+    box-shadow:
+        0 0 20px rgba(74, 200, 90, 0.7),
         0 0 6px rgba(74, 200, 90, 0.45),
         0 6px 14px rgba(0, 0, 0, 0.6);
 }
 
 .fm-aw-pitch-player.pos-gk .fm-aw-pitch-photo {
     border-color: rgba(255, 230, 130, 0.9);
-    box-shadow: 0 0 14px rgba(232, 200, 48, 0.55),
+    box-shadow:
+        0 0 14px rgba(232, 200, 48, 0.55),
         0 0 6px rgba(232, 200, 48, 0.3),
         0 3px 10px rgba(0, 0, 0, 0.5);
 }
@@ -8659,7 +8823,9 @@ a:link, a:visited, a:hover, a:active {
     font-weight: 700;
     color: #fff;
     letter-spacing: 0.2px;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.6);
+    text-shadow:
+        0 1px 3px rgba(0, 0, 0, 0.9),
+        0 0 8px rgba(0, 0, 0, 0.6);
 }
 
 .fm-aw-pitch-name:hover {
@@ -8678,7 +8844,9 @@ a:link, a:visited, a:hover, a:active {
     font-weight: 500;
     color: #d8dee5;
     letter-spacing: 0.2px;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.5);
+    text-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.9),
+        0 0 6px rgba(0, 0, 0, 0.5);
     white-space: nowrap;
     max-width: 154px;
     overflow: hidden;
@@ -8698,17 +8866,50 @@ a:link, a:visited, a:hover, a:active {
    Scoped to .fm-aw-totw-pitch so the same .fm-aw-pitch-player photo
    styling can be reused in tactics with the default tactics
    position bands. */
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-gk  { left: 50%; bottom: 7%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dl  { left: 12%; bottom: 28%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dcl { left: 36%; bottom: 28%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dcr { left: 64%; bottom: 28%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dr  { left: 88%; bottom: 28%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-ml  { left: 12%; bottom: 53%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-mcl { left: 36%; bottom: 53%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-mcr { left: 64%; bottom: 53%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-mr  { left: 88%; bottom: 53%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-stl { left: 36%; bottom: 77%; }
-.fm-aw-totw-pitch .fm-aw-pitch-player.pos-str { left: 64%; bottom: 77%; }
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-gk {
+    left: 50%;
+    bottom: 7%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dl {
+    left: 12%;
+    bottom: 28%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dcl {
+    left: 36%;
+    bottom: 28%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dcr {
+    left: 64%;
+    bottom: 28%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-dr {
+    left: 88%;
+    bottom: 28%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-ml {
+    left: 12%;
+    bottom: 53%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-mcl {
+    left: 36%;
+    bottom: 53%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-mcr {
+    left: 64%;
+    bottom: 53%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-mr {
+    left: 88%;
+    bottom: 53%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-stl {
+    left: 36%;
+    bottom: 77%;
+}
+.fm-aw-totw-pitch .fm-aw-pitch-player.pos-str {
+    left: 64%;
+    bottom: 77%;
+}
 
 /* Tactics pitch: same photo + font size and aspect (0.78, max 616)
    as the awards Team-of-the-Week so the field reads identically
@@ -9089,7 +9290,10 @@ a:link, a:visited, a:hover, a:active {
         0 1px 0 rgba(255, 255, 255, 0.04) inset,
         0 1px 3px rgba(0, 0, 0, 0.18);
     min-width: 0;
-    transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+    transition:
+        border-color 0.2s,
+        transform 0.15s,
+        box-shadow 0.2s;
 }
 
 .fm-perf-primary-tile:hover {
@@ -9517,7 +9721,8 @@ a:link, a:visited, a:hover, a:active {
     border: 1px solid #2a3a4a;
     border-left: 3px solid #c89a3c;
     border-radius: 6px;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.025),
         0 1px 2px rgba(0, 0, 0, 0.2);
     align-items: stretch;
 }
@@ -9541,7 +9746,8 @@ a:link, a:visited, a:hover, a:active {
     color: #2a1f0a;
     border-radius: 50%;
     background: linear-gradient(180deg, #e6b95a 0%, #c89a3c 100%);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.3),
         0 2px 6px rgba(0, 0, 0, 0.35);
     flex-shrink: 0;
 }
@@ -9617,10 +9823,18 @@ a:link, a:visited, a:hover, a:active {
     line-height: 1.2;
 }
 
-.fm-awards-hero-stat-weekly .fm-awards-hero-stat-icon { color: #7d92a3; }
-.fm-awards-hero-stat-monthly .fm-awards-hero-stat-icon { color: #d49a55; }
-.fm-awards-hero-stat-season .fm-awards-hero-stat-icon { color: #e6b95a; }
-.fm-awards-hero-stat-global .fm-awards-hero-stat-icon { color: #6fe0d0; }
+.fm-awards-hero-stat-weekly .fm-awards-hero-stat-icon {
+    color: #7d92a3;
+}
+.fm-awards-hero-stat-monthly .fm-awards-hero-stat-icon {
+    color: #d49a55;
+}
+.fm-awards-hero-stat-season .fm-awards-hero-stat-icon {
+    color: #e6b95a;
+}
+.fm-awards-hero-stat-global .fm-awards-hero-stat-icon {
+    color: #6fe0d0;
+}
 
 @media (max-width: 760px) {
     .fm-awards-hero {
@@ -9724,7 +9938,9 @@ a:link, a:visited, a:hover, a:active {
     border-radius: 4px;
     background: linear-gradient(180deg, #1b262e 0%, #18222a 100%);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.015);
-    transition: border-color 120ms ease, transform 120ms ease;
+    transition:
+        border-color 120ms ease,
+        transform 120ms ease;
     color: inherit;
     text-decoration: none;
 }
@@ -9750,7 +9966,8 @@ a.fm-award-card:hover {
     font-size: 18px;
     color: #1b262e;
     background: #5a6f80;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.18),
         0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
@@ -9867,7 +10084,11 @@ a.fm-award-card:hover {
     text-transform: uppercase;
     letter-spacing: 1.1px;
     color: #6c7d8a;
-    background: linear-gradient(180deg, rgba(34, 46, 56, 0.55) 0%, rgba(28, 38, 46, 0.25) 100%);
+    background: linear-gradient(
+        180deg,
+        rgba(34, 46, 56, 0.55) 0%,
+        rgba(28, 38, 46, 0.25) 100%
+    );
     border-bottom: 1px solid #1f2a36;
 }
 
@@ -9876,10 +10097,18 @@ a.fm-award-card:hover {
     opacity: 0.7;
 }
 
-.fm-awards-detail-group-weekly  .fm-awards-detail-group-label .fa { color: #7d92a3; }
-.fm-awards-detail-group-monthly .fm-awards-detail-group-label .fa { color: #d49a55; }
-.fm-awards-detail-group-season  .fm-awards-detail-group-label .fa { color: #e6b95a; }
-.fm-awards-detail-group-global  .fm-awards-detail-group-label .fa { color: #6fe0d0; }
+.fm-awards-detail-group-weekly .fm-awards-detail-group-label .fa {
+    color: #7d92a3;
+}
+.fm-awards-detail-group-monthly .fm-awards-detail-group-label .fa {
+    color: #d49a55;
+}
+.fm-awards-detail-group-season .fm-awards-detail-group-label .fa {
+    color: #e6b95a;
+}
+.fm-awards-detail-group-global .fm-awards-detail-group-label .fa {
+    color: #6fe0d0;
+}
 
 /* Compact card variant — roughly 3x smaller footprint than the default
    .fm-award-card. Used only inside the merged per-league detail panel;
@@ -9902,7 +10131,8 @@ a.fm-award-card:hover {
     width: 24px;
     height: 24px;
     font-size: 11px;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.15),
         0 1px 1px rgba(0, 0, 0, 0.2);
 }
 
@@ -10103,7 +10333,11 @@ a.fm-award-card:hover {
     height: 150px;
     display: flex;
     align-items: flex-end;
-    background: linear-gradient(180deg, transparent 0%, rgba(36, 49, 64, 0.4) 100%);
+    background: linear-gradient(
+        180deg,
+        transparent 0%,
+        rgba(36, 49, 64, 0.4) 100%
+    );
     border-radius: 3px 3px 0 0;
     /* `overflow: visible` so the count label above each bar isn't
        clipped horizontally on narrow bars or vertically on peak bars
@@ -10116,7 +10350,8 @@ a.fm-award-card:hover {
     width: 100%;
     min-height: 4px;
     border-radius: 3px 3px 0 0;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.2),
         0 0 8px rgba(0, 0, 0, 0.25);
     transition: filter 120ms ease;
 }
