@@ -245,7 +245,7 @@ impl SquadSelector {
         let mut available: Vec<&Player> = Vec::with_capacity(estimated);
         let mut available_ids: HashSet<u32> = HashSet::with_capacity(estimated);
         for &p in team.players.players().iter() {
-            if is_available(p, ctx.is_friendly)
+            if PlayerAvailability::is_available(p, ctx.is_friendly)
                 && (is_main_team || !p.is_force_match_selection)
                 && available_ids.insert(p.id)
             {
@@ -257,7 +257,7 @@ impl SquadSelector {
             if !is_main_team && rp.is_force_match_selection {
                 continue;
             }
-            if is_available(rp, ctx.is_friendly) && available_ids.insert(rp.id) {
+            if PlayerAvailability::is_available(rp, ctx.is_friendly) && available_ids.insert(rp.id) {
                 available.push(rp);
             }
         }
@@ -460,7 +460,7 @@ impl SquadSelector {
         let mut available: Vec<&Player> = Vec::with_capacity(estimated);
         let mut available_ids: HashSet<u32> = HashSet::with_capacity(estimated);
         for &p in team.players.players().iter() {
-            if is_available(p, ctx.is_friendly)
+            if PlayerAvailability::is_available(p, ctx.is_friendly)
                 && (is_main_team || !p.is_force_match_selection)
                 && available_ids.insert(p.id)
             {
@@ -476,7 +476,7 @@ impl SquadSelector {
                     if !is_main_team && rp.is_force_match_selection {
                         return false;
                     }
-                    is_available(rp, ctx.is_friendly) && !available_ids.contains(&rp.id)
+                    PlayerAvailability::is_available(rp, ctx.is_friendly) && !available_ids.contains(&rp.id)
                 })
                 .copied()
                 .collect();

@@ -8,49 +8,57 @@ pub const DEFAULT_BENCH_SIZE: usize = 7;
 /// Minimum condition to be physically able to play (15%).
 pub const HARD_CONDITION_FLOOR: u32 = 15;
 
-pub fn is_available(player: &Player, is_friendly: bool) -> bool {
-    if player.player_attributes.is_injured {
-        return false;
-    }
-    if player.statuses.is_on_international_duty() {
-        return false;
-    }
+pub struct PlayerAvailability;
 
-    if player.player_attributes.condition_percentage() < HARD_CONDITION_FLOOR {
-        return false;
-    }
-
-    if !is_friendly {
-        if player.player_attributes.is_banned {
+impl PlayerAvailability {
+    pub fn is_available(player: &Player, is_friendly: bool) -> bool {
+        if player.player_attributes.is_injured {
             return false;
         }
-    }
+        if player.statuses.is_on_international_duty() {
+            return false;
+        }
 
-    true
+        if player.player_attributes.condition_percentage() < HARD_CONDITION_FLOOR {
+            return false;
+        }
+
+        if !is_friendly {
+            if player.player_attributes.is_banned {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
-/// Keeper-fallback availability. When the normal [`is_available`] filter has
-/// excluded every goalkeeper on the roster, the selector would otherwise press
-/// an outfielder — whose goalkeeping skills default to zero — into goal. A
-/// low-condition keeper still saves far more, so the fallback re-admits keepers
-/// who are physically able to play even below [`HARD_CONDITION_FLOOR`]. It never
-/// re-admits one who is injured, away on international duty, or (in a
-/// competitive match) banned; the force-selection / non-Main-team pin stays with
-/// the caller.
-pub fn вщ (player: &Player, is_friendly: bool) -> bool {
-    if !player.positions.is_goalkeeper() {
-        return false;
+pub struct KeeperAvailability;
+
+impl KeeperAvailability {
+    /// Keeper-fallback availability. When the normal [`is_available`] filter has
+    /// excluded every goalkeeper on the roster, the selector would otherwise press
+    /// an outfielder — whose goalkeeping skills default to zero — into goal. A
+    /// low-condition keeper still saves far more, so the fallback re-admits keepers
+    /// who are physically able to play even below [`HARD_CONDITION_FLOOR`]. It never
+    /// re-admits one who is injured, away on international duty, or (in a
+    /// competitive match) banned; the force-selection / non-Main-team pin stays with
+    /// the caller.
+    pub fn is_fallback_available(player: &Player, is_friendly: bool) -> bool {
+        if !player.positions.is_goalkeeper() {
+            return false;
+        }
+        if player.player_attributes.is_injured {
+            return false;
+        }
+        if player.statuses.is_on_international_duty() {
+            return false;
+        }
+        if !is_friendly && player.player_attributes.is_banned {
+            return false;
+        }
+        true
     }
-    if player.player_attributes.is_injured {
-        return false;
-    }
-    if player.statuses.is_on_international_duty() {
-        return false;
-    }
-    if !is_friendly && player.player_attributes.is_banned {
-        return false;
-    }
-    true
 }
 
 pub fn is_adjacent_group(a: PlayerFieldPositionGroup, b: PlayerFieldPositionGroup) -> bool {
