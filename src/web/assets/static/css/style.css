@@ -4782,7 +4782,7 @@ a:active {
     text-transform: uppercase;
     text-decoration: none;
     color: #fff;
-    background: linear-gradient(160deg, #48b89e 0%, #3a9a80 100%);
+    background: linear-gradient(160deg, #306f60 0%, #027b71 100%);
     border: 1px solid #50c4a8;
     border-radius: 6px;
     white-space: nowrap;
@@ -4808,7 +4808,7 @@ a:active {
 
 .fm-download-btn:hover {
     color: #fff;
-    background: linear-gradient(160deg, #52c4a8 0%, #42a88c 100%);
+    background: linear-gradient(160deg, #306f60 0%, #027b71 100%);
     border-color: #5cd4b6;
     box-shadow:
         0 1px 0 rgba(255, 255, 255, 0.18) inset,
@@ -4824,7 +4824,7 @@ a:active {
 
 .fm-download-btn:active {
     transform: translateY(0);
-    background: linear-gradient(160deg, #40a890 0%, #358e76 100%);
+    background: linear-gradient(160deg, #306f60 0%, #027b71 100%);
     box-shadow:
         0 1px 2px rgba(0, 0, 0, 0.15) inset,
         0 1px 2px rgba(50, 140, 120, 0.2);
