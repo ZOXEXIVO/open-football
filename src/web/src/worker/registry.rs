@@ -363,6 +363,7 @@ pub struct WorkerSnapshot {
     pub stats: WorkerStats,
 }
 
+#[derive(Clone)]
 pub struct ReadyWorker {
     pub address: String,
     pub threads: usize,

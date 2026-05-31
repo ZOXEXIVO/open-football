@@ -1,47 +1,121 @@
-//! Coordinator-side `MatchDispatcher` impl. Routes match batches over
-//! the per-worker framed TCP connection set up by `WorkerRegistry`,
-//! while keeping the coordinator's own CPU in the rotation as a
-//! virtual "local" worker so the host doesn't sit idle while remote
-//! workers crunch.
+//! Coordinator-side `MatchDispatcher` impl. Each dispatch_* call
+//! SPLITS its batch into chunks of `2 × target.threads` and ships
+//! chunks to every ready worker (plus the local rayon pool) in
+//! parallel — so a single matchday doesn't sit on one worker while
+//! the rest of the fleet idles.
 //!
 //! Routing model:
 //!
 //!   1. Snapshot the `Ready` worker slots.
 //!   2. Prepend a virtual `Local` target with `local_threads` weight
-//!      (defaults to the coordinator's match-engine thread count).
-//!      Skipped when `local_threads = 0`.
-//!   3. Group league fixtures by `league_id` (single-league batches
-//!      are the common case — those are striped per-match across the
-//!      targets so all slots stay busy).
-//!   4. Weighted round-robin by thread count decides which target gets
-//!      which batch.
-//!   5. One task per remote slot drains its assigned work over its own
-//!      framed TCP connection. The local share runs on the local
-//!      rayon pool concurrently.
-//!   6. Any failed remote batch is re-played on the local pool before
-//!      returning, so callers never see a partial result.
+//!      (skipped when `local_threads = 0`).
+//!   3. Greedy round-robin chunks of `2 × target.threads`: target
+//!      `i` claims up to `2 × threads_i` consecutive matches, then
+//!      the cursor advances. Small batches (≤ chunk cap) ship whole
+//!      to ONE worker — splitting a 6-match batch 3/3 wastes the
+//!      remote worker's rayon pool on network overhead and only
+//!      partially fills its threads. The per-call cursor rotates the
+//!      starting target so concurrent dispatch calls (parallel
+//!      `countries.par_iter_mut()`) spread across the fleet.
+//!   4. Spawn one tokio task per target slot. Chunks within a slot
+//!      serialize over its `Mutex<TcpStream>`; slots run concurrently.
+//!   5. Any failed remote chunk replays on the local rayon pool
+//!      before returning, so callers never see a partial result.
+//!
+//! Local fallback: with no ready targets the dispatcher returns `Err`
+//! so the engine pool runs the rayon path on the unmodified input.
 
 use crate::worker::protocol::{MatchEnvelope, MatchOutcome, Request, Response};
 use crate::worker::registry::{BatchOutcome, LatencyTimer, ReadyWorker, WorkerRegistry};
 use crate::worker::transport::Frame;
 use crate::worker::wire::{LeagueMatchWire, SquadFixtureWire, SquadWire};
 use core::MatchRuntime;
-use core::r#match::{
-    FootballEngine, Match, MatchDispatcher, MatchResult, MatchResultRaw, MatchSquad, Score,
-};
+use core::r#match::{Match, MatchDispatcher, MatchResult, MatchResultRaw, MatchSquad, Score};
 use log::{info, warn};
-use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::runtime::Handle;
 
 pub struct DistributedDispatcher {
     registry: WorkerRegistry,
     runtime: Handle,
-    /// Number of threads to weight the local coordinator's share by.
-    /// `0` disables local processing entirely — every batch goes to a
-    /// remote worker (or the rayon-fallback path when no workers are
-    /// Ready).
+    /// `0` disables the coordinator's local share — every batch is
+    /// routed to a remote worker (or the rayon-fallback path when no
+    /// workers are Ready).
     local_threads: usize,
+    /// Rotates the round-robin's starting target per call. Small
+    /// batches (a few matches against many targets) would otherwise
+    /// always land on slot 0 first; the rotation spreads those across
+    /// concurrent dispatch calls.
+    cursor: AtomicUsize,
+}
+
+enum Target {
+    Local,
+    Remote(ReadyWorker),
+}
+
+impl Target {
+    fn label(&self) -> &str {
+        match self {
+            Target::Local => "local",
+            Target::Remote(w) => &w.address,
+        }
+    }
+}
+
+/// One target's slice of a dispatched batch: the per-chunk lists of
+/// input-vector indices to send. Chunks are sized at `2 × threads` so
+/// each remote `PlayBatch` round-trip carries an amount of work the
+/// worker's rayon pool can fully occupy without stragglers stalling a
+/// huge batch.
+struct Slot {
+    target: Target,
+    threads: usize,
+    chunks: Vec<Vec<usize>>,
+}
+
+impl Slot {
+    fn chunk_size(&self) -> usize {
+        self.threads.max(1) * 2
+    }
+
+    fn total(&self) -> usize {
+        self.chunks.iter().map(|c| c.len()).sum()
+    }
+}
+
+impl MatchDispatcher for DistributedDispatcher {
+    fn dispatch_league(&self, matches: Vec<Match>) -> Result<Vec<MatchResult>, Vec<Match>> {
+        let registry = self.registry.clone();
+        let local_threads = self.local_threads;
+        let cursor_start = self.cursor.fetch_add(1, Ordering::Relaxed);
+        self.runtime.block_on(async move {
+            let ready = registry.ready_handles().await;
+            let slots = Self::build_plan(matches.len(), local_threads, ready, cursor_start);
+            if slots.is_empty() {
+                return Err(matches);
+            }
+            Ok(Self::execute_league(matches, slots, registry).await)
+        })
+    }
+
+    fn dispatch_squads(
+        &self,
+        matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
+    ) -> Result<Vec<(usize, MatchResultRaw)>, Vec<(usize, MatchSquad, MatchSquad, bool)>> {
+        let registry = self.registry.clone();
+        let local_threads = self.local_threads;
+        let cursor_start = self.cursor.fetch_add(1, Ordering::Relaxed);
+        self.runtime.block_on(async move {
+            let ready = registry.ready_handles().await;
+            let slots = Self::build_plan(matches.len(), local_threads, ready, cursor_start);
+            if slots.is_empty() {
+                return Err(matches);
+            }
+            Ok(Self::execute_squads(matches, slots, registry).await)
+        })
+    }
 }
 
 impl DistributedDispatcher {
@@ -50,210 +124,123 @@ impl DistributedDispatcher {
             registry,
             runtime,
             local_threads,
-        }
-    }
-}
-
-/// A single routing target — either the coordinator's local rayon
-/// pool or one ready remote slot. Built fresh per dispatch call so
-/// the `Vec` is always non-empty when `dispatch_*` returns `Ok`.
-#[derive(Clone)]
-enum Target {
-    Local { threads: usize },
-    Remote(ReadyWorker),
-}
-
-impl Target {
-    fn threads(&self) -> usize {
-        match self {
-            Target::Local { threads } => *threads,
-            Target::Remote(w) => w.threads.max(1),
+            cursor: AtomicUsize::new(0),
         }
     }
 
-    fn label(&self) -> String {
-        match self {
-            Target::Local { threads } => format!("local ({} threads)", threads),
-            Target::Remote(w) => w.address.clone(),
-        }
-    }
-}
-
-impl MatchDispatcher for DistributedDispatcher {
-    fn dispatch_league(&self, matches: Vec<Match>) -> Result<Vec<MatchResult>, Vec<Match>> {
-        let targets = self.runtime.block_on(self.build_targets());
-        if targets.is_empty() {
-            return Err(matches);
-        }
-        let plan = Self::plan_league(&matches, &targets);
-        if plan.is_empty() {
-            return Err(matches);
-        }
-        let registry = self.registry.clone();
-        let outcomes = self.runtime.block_on(async move {
-            Self::execute_league(plan, matches, targets, registry).await
-        });
-        Ok(outcomes)
-    }
-
-    fn dispatch_squads(
-        &self,
-        matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
-    ) -> Result<Vec<(usize, MatchResultRaw)>, Vec<(usize, MatchSquad, MatchSquad, bool)>> {
-        let targets = self.runtime.block_on(self.build_targets());
-        if targets.is_empty() {
-            return Err(matches);
-        }
-        let registry = self.registry.clone();
-        let outcomes = self.runtime.block_on(async move {
-            Self::execute_squads(matches, targets, registry).await
-        });
-        Ok(outcomes)
-    }
-}
-
-/// Per-target assignment: list of input-vector indices that go to that
-/// target. Index `0` is always the Local target when `local_threads >
-/// 0`; remote slots follow in `ready_handles()` order.
-type LeaguePlan = Vec<Vec<usize>>;
-
-impl DistributedDispatcher {
-    async fn build_targets(&self) -> Vec<Target> {
-        let ready = self.registry.ready_handles().await;
-        let mut targets: Vec<Target> = Vec::with_capacity(ready.len() + 1);
-        if self.local_threads > 0 {
-            targets.push(Target::Local {
-                threads: self.local_threads,
+    /// Greedy round-robin chunking. Each round, the cursor's target
+    /// claims up to `2 × threads` consecutive matches, then the
+    /// cursor advances. Small batches (total ≤ chunk cap of the
+    /// cursor's first pick) ship whole to ONE worker; that worker's
+    /// rayon pool fills up rather than splitting a tiny batch across
+    /// targets and paying network overhead per side. Large batches
+    /// (total > one chunk cap) splay across the fleet, one chunk per
+    /// target per round-trip.
+    fn build_plan(
+        total: usize,
+        local_threads: usize,
+        ready: Vec<ReadyWorker>,
+        cursor_start: usize,
+    ) -> Vec<Slot> {
+        let mut slots: Vec<Slot> = Vec::with_capacity(ready.len() + 1);
+        if local_threads > 0 {
+            slots.push(Slot {
+                target: Target::Local,
+                threads: local_threads,
+                chunks: Vec::new(),
             });
         }
         for w in ready {
-            targets.push(Target::Remote(w));
+            let threads = w.threads;
+            slots.push(Slot {
+                target: Target::Remote(w),
+                threads,
+                chunks: Vec::new(),
+            });
         }
-        targets
-    }
-
-    /// Build a per-target assignment for a batch of league fixtures.
-    /// Single-league batches (the common case — one matchday in one
-    /// league per call) get matches interleaved across targets by
-    /// `weighted_round_robin` so all CPUs stay busy. Multi-league
-    /// batches keep each league together on one target (locality of
-    /// related post-match aggregation), with the league→target
-    /// assignment itself produced by `weighted_round_robin`.
-    fn plan_league(matches: &[Match], targets: &[Target]) -> LeaguePlan {
-        if targets.is_empty() {
+        if slots.is_empty() || total == 0 {
             return Vec::new();
         }
-        let mut groups: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-        for (i, m) in matches.iter().enumerate() {
-            groups.entry(m.league_id()).or_default().push(i);
+
+        let n = slots.len();
+        let mut cursor = cursor_start % n;
+        let mut start = 0usize;
+        while start < total {
+            let end = (start + slots[cursor].chunk_size()).min(total);
+            slots[cursor].chunks.push((start..end).collect());
+            start = end;
+            cursor = (cursor + 1) % n;
         }
-        let mut plan: LeaguePlan = vec![Vec::new(); targets.len()];
-        if groups.len() == 1 {
-            let (_lg, indices) = groups.into_iter().next().expect("one group");
-            let assignment = Self::weighted_round_robin(indices.len(), targets);
-            for (k, i) in indices.into_iter().enumerate() {
-                plan[assignment[k]].push(i);
-            }
-        } else {
-            let assignment = Self::weighted_round_robin(groups.len(), targets);
-            for (k, (_lg, indices)) in groups.into_iter().enumerate() {
-                plan[assignment[k]].extend(indices);
-            }
-        }
-        plan
+
+        slots.into_iter().filter(|s| !s.chunks.is_empty()).collect()
+    }
+
+    fn describe_plan(slots: &[Slot]) -> String {
+        slots
+            .iter()
+            .map(|s| format!("{}×{}/{}c", s.target.label(), s.total(), s.chunks.len()))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     async fn execute_league(
-        plan: LeaguePlan,
         matches: Vec<Match>,
-        targets: Vec<Target>,
+        slots: Vec<Slot>,
         registry: WorkerRegistry,
     ) -> Vec<MatchResult> {
         let total = matches.len();
-        // League id of the batch — used only for the dispatch log line
-        // when every input shares a league (the common case).
         let lg_label = matches
             .first()
             .map(|m| m.league_id().to_string())
             .unwrap_or_else(|| "?".to_string());
-        let all_same_league = matches.iter().all(|m| m.league_id().to_string() == lg_label);
-        if all_same_league {
-            info!(
-                "dispatch league={} matches={} targets={}",
-                lg_label,
-                total,
-                Self::describe_plan(&plan, &targets)
-            );
-        } else {
-            info!(
-                "dispatch matches={} multi-league targets={}",
-                total,
-                Self::describe_plan(&plan, &targets)
-            );
-        }
+        info!(
+            "dispatch league={} matches={} plan=[{}]",
+            lg_label,
+            total,
+            Self::describe_plan(&slots)
+        );
 
         let matches = Arc::new(matches);
-        let mut results: Vec<Option<MatchResult>> = (0..total).map(|_| None).collect();
-
-        let mut tasks = Vec::with_capacity(targets.len());
-        for (t_idx, indices) in plan.into_iter().enumerate() {
-            if indices.is_empty() {
-                continue;
-            }
-            let target = targets[t_idx].clone();
-            let matches_ref = Arc::clone(&matches);
+        let mut tasks = Vec::with_capacity(slots.len());
+        for slot in slots {
+            let matches = Arc::clone(&matches);
             let registry = registry.clone();
             tasks.push(tokio::spawn(async move {
-                match target {
-                    Target::Local { .. } => {
-                        Self::run_local_league_batch(indices, matches_ref).await
-                    }
-                    Target::Remote(worker) => {
-                        let payload: Vec<(usize, MatchEnvelope)> = indices
-                            .iter()
-                            .map(|&i| {
-                                let env = MatchEnvelope::League(LeagueMatchWire::from_match(
-                                    &matches_ref[i],
-                                ));
-                                (i, env)
-                            })
-                            .collect();
-                        Self::run_remote_league_batch(worker, registry, payload).await
-                    }
-                }
+                Self::run_league_slot(slot, matches, registry).await
             }));
         }
 
+        let mut results: Vec<Option<MatchResult>> = (0..total).map(|_| None).collect();
         for t in tasks {
             if let Ok(items) = t.await {
-                for (idx, outcome) in items {
-                    if let MatchOutcome::League(result) = outcome {
-                        if idx < results.len() {
-                            results[idx] = Some(result);
-                        }
+                for (i, r) in items {
+                    if i < results.len() {
+                        results[i] = Some(r);
                     }
                 }
             }
         }
 
+        // Defensive backfill — `play_remote_league` already replays
+        // failed chunks locally before returning, so the only way to
+        // reach here with a None is a tokio task that panicked outright.
         let mut originals: Vec<Option<Match>> = match Arc::try_unwrap(matches) {
             Ok(v) => v.into_iter().map(Some).collect(),
             Err(arc) => (*arc).iter().map(|m| Some(m.clone())).collect(),
         };
-
-        let mut missing = 0usize;
+        let mut backfilled = 0usize;
         for (i, slot) in results.iter_mut().enumerate() {
             if slot.is_none() {
                 if let Some(m) = originals[i].take() {
                     *slot = Some(m.play());
-                    missing += 1;
+                    backfilled += 1;
                 }
             }
         }
-        if missing > 0 {
-            info!(
-                "dispatch league={}: backfilled {} matches locally after remote failure",
-                lg_label, missing
+        if backfilled > 0 {
+            warn!(
+                "dispatch league={}: backfilled {} matches locally after slot task failure",
+                lg_label, backfilled
             );
         }
 
@@ -266,114 +253,93 @@ impl DistributedDispatcher {
                         "dispatcher: missing result for input index {} after backfill",
                         i
                     );
-                    placeholder_match_result()
+                    Self::placeholder_match_result()
                 })
             })
             .collect()
     }
 
-    async fn run_local_league_batch(
-        indices: Vec<usize>,
+    async fn run_league_slot(
+        slot: Slot,
         matches: Arc<Vec<Match>>,
-    ) -> Vec<(usize, MatchOutcome)> {
-        let count = indices.len();
-        let timer = LatencyTimer::start();
-        // Clone the specific subset for the blocking task so the Arc
-        // stays available for any sibling task that may still be
-        // borrowing. After all per-target tasks return, the outer
-        // `Arc::try_unwrap` reclaims the originals.
-        let subset: Vec<(usize, Match)> = indices
-            .iter()
-            .map(|&i| (i, matches[i].clone()))
-            .collect();
-        let result = tokio::task::spawn_blocking(move || {
-            let played: Vec<(usize, MatchResult)> = MatchRuntime::engine_pool()
-                .play_local(subset.iter().map(|(_, m)| m.clone()).collect())
-                .into_iter()
-                .zip(subset.iter().map(|(i, _)| *i))
-                .map(|(r, i)| (i, r))
-                .collect();
-            played
-        })
-        .await
-        .unwrap_or_default();
-        info!(
-            "local: completed league batch matches={} in {} ms",
-            count,
-            timer.elapsed_ms()
-        );
-        result
-            .into_iter()
-            .map(|(i, r)| (i, MatchOutcome::League(r)))
-            .collect()
+        registry: WorkerRegistry,
+    ) -> Vec<(usize, MatchResult)> {
+        let mut out: Vec<(usize, MatchResult)> = Vec::with_capacity(slot.total());
+        for indices in slot.chunks {
+            let chunk: Vec<Match> = indices.iter().map(|&i| matches[i].clone()).collect();
+            let count = chunk.len();
+            let results = match &slot.target {
+                Target::Local => {
+                    let timer = LatencyTimer::start();
+                    let r = tokio::task::spawn_blocking(move || {
+                        MatchRuntime::engine_pool().play_local(chunk)
+                    })
+                    .await
+                    .unwrap_or_default();
+                    info!(
+                        "local: completed league chunk matches={} in {} ms",
+                        count,
+                        timer.elapsed_ms()
+                    );
+                    r
+                }
+                Target::Remote(worker) => {
+                    Self::play_remote_league(worker, &registry, chunk).await
+                }
+            };
+            for (i, r) in indices.into_iter().zip(results) {
+                out.push((i, r));
+            }
+        }
+        out
     }
 
-    async fn run_remote_league_batch(
-        worker: ReadyWorker,
-        registry: WorkerRegistry,
-        payload: Vec<(usize, MatchEnvelope)>,
-    ) -> Vec<(usize, MatchOutcome)> {
-        let count = payload.len();
-        let (indices, envelopes): (Vec<usize>, Vec<MatchEnvelope>) = payload.into_iter().unzip();
+    async fn play_remote_league(
+        worker: &ReadyWorker,
+        registry: &WorkerRegistry,
+        matches: Vec<Match>,
+    ) -> Vec<MatchResult> {
+        let count = matches.len();
+        let envelopes: Vec<MatchEnvelope> = matches
+            .iter()
+            .map(|m| MatchEnvelope::League(LeagueMatchWire::from_match(m)))
+            .collect();
         let req = Request::PlayBatch { items: envelopes };
 
-        info!(
-            "remote {}: sending league batch matches={}",
-            worker.address, count
-        );
         let mut stream = worker.connection.lock().await;
         let timer = LatencyTimer::start();
-        if let Err(e) = Frame::write(&mut *stream, &req).await {
-            let reason = format!("send: {}", e);
-            warn!("remote {}: send failed — {}", worker.address, reason);
-            registry
-                .record_batch(
-                    &worker.address,
-                    count,
-                    timer.elapsed_ms(),
-                    BatchOutcome::Failed(reason),
-                )
-                .await;
-            return Vec::new();
-        }
-        let resp: Response = match Frame::read(&mut *stream).await {
-            Ok(r) => r,
-            Err(e) => {
-                let reason = format!("recv: {}", e);
-                warn!("remote {}: recv failed — {}", worker.address, reason);
-                registry
-                    .record_batch(
-                        &worker.address,
-                        count,
-                        timer.elapsed_ms(),
-                        BatchOutcome::Failed(reason),
-                    )
-                    .await;
-                return Vec::new();
-            }
+        let recv: std::io::Result<Response> = match Frame::write(&mut *stream, &req).await {
+            Ok(()) => Frame::read(&mut *stream).await,
+            Err(e) => Err(e),
         };
         drop(stream);
         let latency = timer.elapsed_ms();
 
-        match resp {
-            Response::PlayBatch { items } if items.len() == indices.len() => {
+        match recv {
+            Ok(Response::PlayBatch { items }) if items.len() == count => {
                 info!(
-                    "remote {}: completed league batch matches={} in {} ms",
+                    "remote {}: completed league chunk matches={} in {} ms",
                     worker.address, count, latency
                 );
                 registry
                     .record_batch(&worker.address, count, latency, BatchOutcome::Ok)
                     .await;
-                indices.into_iter().zip(items).collect()
+                items
+                    .into_iter()
+                    .filter_map(|o| match o {
+                        MatchOutcome::League(r) => Some(r),
+                        _ => None,
+                    })
+                    .collect()
             }
-            Response::PlayBatch { items } => {
-                let reason = format!(
-                    "result count mismatch (sent {}, got {})",
-                    indices.len(),
-                    items.len()
-                );
+            other => {
+                let reason = match other {
+                    Ok(Response::Error { reason }) => reason,
+                    Ok(_) => "unexpected response shape".to_string(),
+                    Err(e) => format!("io: {}", e),
+                };
                 warn!(
-                    "remote {}: {} — falling back to local",
+                    "remote {}: league chunk failed — {}; running locally",
                     worker.address, reason
                 );
                 registry
@@ -384,84 +350,36 @@ impl DistributedDispatcher {
                         BatchOutcome::Failed(reason),
                     )
                     .await;
-                Vec::new()
-            }
-            Response::Error { reason } => {
-                warn!("remote {}: error response — {}", worker.address, reason);
-                registry
-                    .record_batch(
-                        &worker.address,
-                        count,
-                        latency,
-                        BatchOutcome::Failed(reason),
-                    )
-                    .await;
-                Vec::new()
-            }
-            _ => {
-                registry
-                    .record_batch(
-                        &worker.address,
-                        count,
-                        latency,
-                        BatchOutcome::Failed("unexpected response".to_string()),
-                    )
-                    .await;
-                Vec::new()
+                tokio::task::spawn_blocking(move || MatchRuntime::engine_pool().play_local(matches))
+                    .await
+                    .unwrap_or_default()
             }
         }
     }
 
     async fn execute_squads(
         matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
-        targets: Vec<Target>,
+        slots: Vec<Slot>,
         registry: WorkerRegistry,
     ) -> Vec<(usize, MatchResultRaw)> {
         let total = matches.len();
         info!(
-            "dispatch squads matches={} targets={}",
+            "dispatch squads matches={} plan=[{}]",
             total,
-            targets
-                .iter()
-                .map(|t| t.label())
-                .collect::<Vec<_>>()
-                .join(", ")
+            Self::describe_plan(&slots)
         );
-        let assignment = Self::weighted_round_robin(matches.len(), &targets);
-        if assignment.is_empty() {
-            return matches
-                .into_iter()
-                .map(|(idx, home, away, ko)| {
-                    let r = FootballEngine::<840, 545>::play(home, away, false, false, ko);
-                    (idx, r)
-                })
-                .collect();
-        }
 
-        // Bucket the input by target.
-        let mut per_target: Vec<Vec<(usize, MatchSquad, MatchSquad, bool)>> =
-            (0..targets.len()).map(|_| Vec::new()).collect();
-        for (slot, (idx, home, away, ko)) in matches.into_iter().enumerate() {
-            per_target[assignment[slot]].push((idx, home, away, ko));
-        }
-
-        let mut tasks = Vec::with_capacity(targets.len());
-        for (t_idx, bucket) in per_target.into_iter().enumerate() {
-            if bucket.is_empty() {
-                continue;
-            }
-            let target = targets[t_idx].clone();
+        let matches = Arc::new(matches);
+        let mut tasks = Vec::with_capacity(slots.len());
+        for slot in slots {
+            let matches = Arc::clone(&matches);
             let registry = registry.clone();
             tasks.push(tokio::spawn(async move {
-                match target {
-                    Target::Local { .. } => Self::run_local_squad_batch(bucket).await,
-                    Target::Remote(worker) => {
-                        Self::run_remote_squad_batch(worker, registry, bucket).await
-                    }
-                }
+                Self::run_squad_slot(slot, matches, registry).await
             }));
         }
-        let mut out: Vec<(usize, MatchResultRaw)> = Vec::new();
+
+        let mut out: Vec<(usize, MatchResultRaw)> = Vec::with_capacity(total);
         for t in tasks {
             if let Ok(items) = t.await {
                 out.extend(items);
@@ -470,50 +388,62 @@ impl DistributedDispatcher {
         out
     }
 
-    async fn run_local_squad_batch(
-        bucket: Vec<(usize, MatchSquad, MatchSquad, bool)>,
+    async fn run_squad_slot(
+        slot: Slot,
+        matches: Arc<Vec<(usize, MatchSquad, MatchSquad, bool)>>,
+        registry: WorkerRegistry,
     ) -> Vec<(usize, MatchResultRaw)> {
-        let count = bucket.len();
-        let timer = LatencyTimer::start();
-        let result = tokio::task::spawn_blocking(move || {
-            MatchRuntime::engine_pool().play_squads_local(bucket)
-        })
-        .await
-        .unwrap_or_default();
-        info!(
-            "local: completed squad batch matches={} in {} ms",
-            count,
-            timer.elapsed_ms()
-        );
-        result
+        let mut out: Vec<(usize, MatchResultRaw)> = Vec::with_capacity(slot.total());
+        for indices in slot.chunks {
+            let chunk: Vec<(usize, MatchSquad, MatchSquad, bool)> =
+                indices.iter().map(|&i| matches[i].clone()).collect();
+            let count = chunk.len();
+            let part = match &slot.target {
+                Target::Local => {
+                    let timer = LatencyTimer::start();
+                    let r = tokio::task::spawn_blocking(move || {
+                        MatchRuntime::engine_pool().play_squads_local(chunk)
+                    })
+                    .await
+                    .unwrap_or_default();
+                    info!(
+                        "local: completed squad chunk matches={} in {} ms",
+                        count,
+                        timer.elapsed_ms()
+                    );
+                    r
+                }
+                Target::Remote(worker) => {
+                    Self::play_remote_squads(worker, &registry, chunk).await
+                }
+            };
+            out.extend(part);
+        }
+        out
     }
 
-    async fn run_remote_squad_batch(
-        worker: ReadyWorker,
-        registry: WorkerRegistry,
-        bucket: Vec<(usize, MatchSquad, MatchSquad, bool)>,
+    async fn play_remote_squads(
+        worker: &ReadyWorker,
+        registry: &WorkerRegistry,
+        matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
     ) -> Vec<(usize, MatchResultRaw)> {
-        let count = bucket.len();
-        let wires: Vec<SquadFixtureWire> = bucket
+        let count = matches.len();
+        let envelopes: Vec<MatchEnvelope> = matches
             .iter()
-            .map(|(idx, home, away, ko)| SquadFixtureWire {
-                idx: *idx,
-                is_knockout: *ko,
-                home: SquadWire::from_squad(home),
-                away: SquadWire::from_squad(away),
+            .map(|(idx, h, a, ko)| {
+                MatchEnvelope::Squad(SquadFixtureWire {
+                    idx: *idx,
+                    is_knockout: *ko,
+                    home: SquadWire::from_squad(h),
+                    away: SquadWire::from_squad(a),
+                })
             })
             .collect();
-        let envelopes: Vec<MatchEnvelope> = wires.into_iter().map(MatchEnvelope::Squad).collect();
         let req = Request::PlayBatch { items: envelopes };
 
-        info!(
-            "remote {}: sending squad batch matches={}",
-            worker.address, count
-        );
         let mut stream = worker.connection.lock().await;
         let timer = LatencyTimer::start();
-        let send = Frame::write(&mut *stream, &req).await;
-        let recv: std::io::Result<Response> = match send {
+        let recv: std::io::Result<Response> = match Frame::write(&mut *stream, &req).await {
             Ok(()) => Frame::read(&mut *stream).await,
             Err(e) => Err(e),
         };
@@ -523,7 +453,7 @@ impl DistributedDispatcher {
         match recv {
             Ok(Response::PlayBatch { items }) if items.len() == count => {
                 info!(
-                    "remote {}: completed squad batch matches={} in {} ms",
+                    "remote {}: completed squad chunk matches={} in {} ms",
                     worker.address, count, latency
                 );
                 registry
@@ -531,7 +461,7 @@ impl DistributedDispatcher {
                     .await;
                 items
                     .into_iter()
-                    .filter_map(|outcome| match outcome {
+                    .filter_map(|o| match o {
                         MatchOutcome::Squad { idx, result } => Some((idx, result)),
                         _ => None,
                     })
@@ -544,7 +474,7 @@ impl DistributedDispatcher {
                     Err(e) => format!("io: {}", e),
                 };
                 warn!(
-                    "remote {}: squad batch failed — {}; falling back to local",
+                    "remote {}: squad chunk failed — {}; running locally",
                     worker.address, reason
                 );
                 registry
@@ -556,14 +486,7 @@ impl DistributedDispatcher {
                     )
                     .await;
                 tokio::task::spawn_blocking(move || {
-                    bucket
-                        .into_iter()
-                        .map(|(idx, home, away, ko)| {
-                            let r =
-                                FootballEngine::<840, 545>::play(home, away, false, false, ko);
-                            (idx, r)
-                        })
-                        .collect::<Vec<_>>()
+                    MatchRuntime::engine_pool().play_squads_local(matches)
                 })
                 .await
                 .unwrap_or_default()
@@ -571,65 +494,16 @@ impl DistributedDispatcher {
         }
     }
 
-    /// Build a slot→target assignment of length `n` using weighted
-    /// round-robin that INTERLEAVES targets (not block-distributes
-    /// them). For thread counts [4,4] this produces [0,1,0,1,…] — 10
-    /// matches give 5+5. Uneven thread counts (e.g. [8,4,2]) produce
-    /// a fair interleaving where each target gets shares
-    /// proportional to its `threads()`.
-    fn weighted_round_robin(n: usize, targets: &[Target]) -> Vec<usize> {
-        if targets.is_empty() || n == 0 {
-            return Vec::new();
-        }
-        let mut counts = vec![0usize; targets.len()];
-        let mut plan = Vec::with_capacity(n);
-        for _ in 0..n {
-            let pick = (0..targets.len())
-                .min_by(|&a, &b| {
-                    let ta = targets[a].threads().max(1);
-                    let tb = targets[b].threads().max(1);
-                    let la = counts[a] * tb;
-                    let lb = counts[b] * ta;
-                    la.cmp(&lb).then(a.cmp(&b))
-                })
-                .expect("at least one target");
-            plan.push(pick);
-            counts[pick] += 1;
-        }
-        plan
-    }
-
-    fn describe_plan(plan: &LeaguePlan, targets: &[Target]) -> String {
-        let mut parts: Vec<String> = Vec::new();
-        for (i, indices) in plan.iter().enumerate() {
-            if indices.is_empty() {
-                continue;
-            }
-            parts.push(format!("{}×{}", targets[i].label(), indices.len()));
-        }
-        parts.join(", ")
-    }
-}
-
-fn placeholder_match_result() -> MatchResult {
-    MatchResult {
-        id: String::new(),
-        league_id: 0,
-        league_slug: String::new(),
-        home_team_id: 0,
-        away_team_id: 0,
-        score: Score::new(0, 0),
-        details: None,
-        friendly: false,
-    }
-}
-
-impl Clone for ReadyWorker {
-    fn clone(&self) -> Self {
-        ReadyWorker {
-            address: self.address.clone(),
-            threads: self.threads,
-            connection: Arc::clone(&self.connection),
+    fn placeholder_match_result() -> MatchResult {
+        MatchResult {
+            id: String::new(),
+            league_id: 0,
+            league_slug: String::new(),
+            home_team_id: 0,
+            away_team_id: 0,
+            score: Score::new(0, 0),
+            details: None,
+            friendly: false,
         }
     }
 }
