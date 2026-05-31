@@ -9,7 +9,7 @@ use crate::club::player::position_weights::{
     SKILL_COUNT,
 };
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerSkills {
     pub technical: Technical,
     pub mental: Mental,
@@ -236,7 +236,7 @@ impl PlayerSkills {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Technical {
     pub corners: f32,
     pub crossing: f32,
@@ -301,7 +301,7 @@ impl Technical {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Mental {
     pub aggression: f32,
     pub anticipation: f32,
@@ -365,7 +365,7 @@ impl Mental {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Physical {
     pub acceleration: f32,
     pub agility: f32,
@@ -416,7 +416,7 @@ impl Physical {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Goalkeeping {
     pub aerial_reach: f32,
     pub command_of_area: f32,

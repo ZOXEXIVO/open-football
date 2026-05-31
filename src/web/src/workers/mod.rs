@@ -1,0 +1,153 @@
+pub mod routes;
+
+use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::views::{self, MenuSection};
+use crate::worker::{WorkerSnapshot, WorkerStatus};
+use crate::{ApiResult, GameAppData, I18n};
+use askama::Template;
+use axum::extract::{Path, State};
+use axum::response::IntoResponse;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct WorkersPageRequest {
+    pub lang: String,
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "workers/index.html")]
+pub struct WorkersPageTemplate {
+    pub css_version: &'static str,
+    pub computer_name: &'static str,
+    pub cpu_brand: &'static str,
+    pub cores_count: usize,
+    pub i18n: I18n,
+    pub lang: String,
+    pub title: String,
+    pub sub_title_prefix: String,
+    pub sub_title_suffix: String,
+    pub sub_title: String,
+    pub sub_title_link: String,
+    pub sub_title_country_code: String,
+    pub header_color: String,
+    pub foreground_color: String,
+    pub menu_sections: Vec<MenuSection>,
+
+    pub total: usize,
+    pub ready: usize,
+    pub version_mismatch: usize,
+    pub unreachable: usize,
+    pub total_threads: usize,
+    pub total_batches: u64,
+    pub total_matches: u64,
+    pub total_failures: u64,
+
+    pub workers: Vec<WorkerRowDto>,
+}
+
+/// Render-friendly per-worker row. Mirrors `WorkerSnapshot` with the
+/// status flattened into a label + detail pair the template can drop
+/// into a chip without further branching.
+pub struct WorkerRowDto {
+    pub address: String,
+    pub computer_name: String,
+    pub cpu_brand: String,
+    pub threads: usize,
+    pub version: String,
+    pub status_label: &'static str,
+    pub status_detail: String,
+    pub batches_sent: u64,
+    pub matches_completed: u64,
+    pub failures: u64,
+    pub last_latency_ms: Option<u64>,
+    pub last_error: Option<String>,
+}
+
+impl WorkerRowDto {
+    fn from_snapshot(w: WorkerSnapshot) -> Self {
+        let (status_label, status_detail) = match &w.status {
+            WorkerStatus::Connecting => ("connecting", String::new()),
+            WorkerStatus::Ready => ("ready", String::new()),
+            WorkerStatus::VersionMismatch { worker_version } => {
+                ("version_mismatch", worker_version.clone())
+            }
+            WorkerStatus::Unreachable { reason } => ("unreachable", reason.clone()),
+        };
+        WorkerRowDto {
+            address: w.address,
+            computer_name: w.computer_name,
+            cpu_brand: w.cpu_brand,
+            threads: w.threads,
+            version: w.version,
+            status_label,
+            status_detail,
+            batches_sent: w.stats.batches_sent,
+            matches_completed: w.stats.matches_completed,
+            failures: w.stats.failures,
+            last_latency_ms: w.stats.last_latency_ms,
+            last_error: w.stats.last_error,
+        }
+    }
+}
+
+pub async fn workers_page_action(
+    State(state): State<GameAppData>,
+    Path(route_params): Path<WorkersPageRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let i18n = state.i18n.for_lang(&route_params.lang);
+    let current_path = format!("/{}/workers", &route_params.lang);
+    let menu_sections = views::search_menu(&i18n, &route_params.lang, &current_path);
+
+    let snapshot = state.workers.snapshot().await;
+
+    let total = snapshot.len();
+    let mut ready = 0usize;
+    let mut version_mismatch = 0usize;
+    let mut unreachable = 0usize;
+    let mut total_threads = 0usize;
+    let mut total_batches = 0u64;
+    let mut total_matches = 0u64;
+    let mut total_failures = 0u64;
+    for w in &snapshot {
+        match &w.status {
+            WorkerStatus::Ready => ready += 1,
+            WorkerStatus::VersionMismatch { .. } => version_mismatch += 1,
+            WorkerStatus::Unreachable { .. } => unreachable += 1,
+            WorkerStatus::Connecting => {}
+        }
+        total_threads += w.threads;
+        total_batches = total_batches.saturating_add(w.stats.batches_sent);
+        total_matches = total_matches.saturating_add(w.stats.matches_completed);
+        total_failures = total_failures.saturating_add(w.stats.failures);
+    }
+
+    let workers: Vec<WorkerRowDto> =
+        snapshot.into_iter().map(WorkerRowDto::from_snapshot).collect();
+
+    Ok(WorkersPageTemplate {
+        css_version: CSS_VERSION,
+        computer_name: &COMPUTER_NAME,
+        cpu_brand: &CPU_BRAND,
+        cores_count: *CPU_CORES,
+        i18n,
+        lang: route_params.lang.clone(),
+        title: "Workers".to_string(),
+        sub_title_prefix: String::new(),
+        sub_title_suffix: String::new(),
+        sub_title: String::new(),
+        sub_title_link: String::new(),
+        sub_title_country_code: String::new(),
+        header_color: String::new(),
+        foreground_color: String::new(),
+        menu_sections,
+        total,
+        ready,
+        version_mismatch,
+        unreachable,
+        total_threads,
+        total_batches,
+        total_matches,
+        total_failures,
+        workers,
+    })
+}

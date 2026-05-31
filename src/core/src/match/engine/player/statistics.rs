@@ -419,7 +419,7 @@ pub struct MatchPlayerStatisticsItem {
     pub is_auto_goal: bool,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum MatchStatisticType {
     Goal,
     Assist,

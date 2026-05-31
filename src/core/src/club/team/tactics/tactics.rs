@@ -1,15 +1,16 @@
 use crate::Team;
 use crate::club::{PersonBehaviourState, Player, PlayerPositionType, Staff};
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tactics {
     pub tactic_type: MatchTacticType,
     pub selected_reason: TacticSelectionReason,
     pub formation_strength: f32, // 0.0 to 1.0 indicating how well this formation suits the team
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TacticSelectionReason {
     CoachPreference,
     TeamComposition,
@@ -496,7 +497,7 @@ pub const TACTICS_POSITIONS: &[(MatchTacticType, [PlayerPositionType; 11])] = &[
     ),
 ];
 
-#[derive(Copy, Debug, Eq, PartialEq, PartialOrd, Clone, Hash)]
+#[derive(Copy, Debug, Eq, PartialEq, PartialOrd, Clone, Hash, Serialize, Deserialize)]
 pub enum MatchTacticType {
     T442,
     T433,

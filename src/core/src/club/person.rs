@@ -23,7 +23,7 @@ pub trait Person {
 /// big-match performance, discipline, and performance variance. They are
 /// not shown in match events directly but modulate nearly every player-side
 /// decision point in the simulator.
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersonAttributes {
     /// How quickly a player settles in a new club/country.
     pub adaptability: f32,

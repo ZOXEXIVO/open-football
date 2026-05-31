@@ -7,6 +7,14 @@ pub struct Settings {
     pub match_recordings: bool,
     pub match_threads: usize,
     pub match_store_threads: usize,
+    /// True when the binary was invoked with `--worker`. In that mode
+    /// the process skips DB load and the HTTP web UI and listens for
+    /// match-batch RPCs on `worker_port`.
+    pub worker_mode: bool,
+    pub worker_port: u16,
+    /// Path to the TOML workers list (coordinator-side). Defaults to
+    /// `./open-football.conf`. Ignored when `worker_mode == true`.
+    pub workers_config_path: String,
 }
 
 impl Settings {
@@ -41,11 +49,30 @@ impl Settings {
             .and_then(|v| v.parse().ok())
             .unwrap_or(4);
 
+        let worker_mode = args.iter().any(|arg| arg == "--worker");
+
+        let worker_port = args
+            .iter()
+            .find(|arg| arg.starts_with("--worker-port="))
+            .and_then(|arg| arg.strip_prefix("--worker-port="))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(18001);
+
+        let workers_config_path = args
+            .iter()
+            .find(|arg| arg.starts_with("--workers-config="))
+            .and_then(|arg| arg.strip_prefix("--workers-config="))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "open-football.conf".to_string());
+
         Settings {
             match_events,
             match_recordings,
             match_threads,
             match_store_threads,
+            worker_mode,
+            worker_port,
+            workers_config_path,
         }
     }
 
@@ -67,5 +94,10 @@ impl Settings {
             "Match engine: {} threads, store: {} threads",
             self.match_threads, self.match_store_threads
         );
+        if self.worker_mode {
+            info!("Worker mode on, listening port {}", self.worker_port);
+        } else {
+            info!("Workers config: {}", self.workers_config_path);
+        }
     }
 }

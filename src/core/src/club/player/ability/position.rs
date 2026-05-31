@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter, Result};
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Serialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Serialize, Deserialize)]
 pub enum PlayerPositionType {
     Goalkeeper,
     Sweeper,
@@ -507,7 +507,7 @@ mod tests {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum PlayerFieldPositionGroup {
     Goalkeeper,
     Defender,

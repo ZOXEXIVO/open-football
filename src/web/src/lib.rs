@@ -23,11 +23,17 @@ mod staff;
 mod teams;
 mod views;
 mod watchlist;
+pub mod worker;
+mod workers;
 
 pub use settings::Settings;
 
 pub use error::{ApiError, ApiResult};
 pub use i18n::{I18n, I18nManager};
+pub use worker::{
+    DistributedDispatcher, WorkerRegistry, WorkerServer, WorkerSnapshot, WorkerStatus,
+    WorkersConfig,
+};
 
 use crate::ai::registry::AiProviderRegistry;
 use crate::routes::ServerRoutes;
@@ -91,6 +97,9 @@ pub struct GameAppData {
     pub cancel_flag: Arc<AtomicBool>,
     pub i18n: Arc<I18nManager>,
     pub ai_registry: Arc<AiProviderRegistry>,
+    /// Live registry of distributed match workers. Always present;
+    /// empty when no `open-football.conf` was loaded.
+    pub workers: WorkerRegistry,
 }
 
 impl Clone for GameAppData {
@@ -102,6 +111,7 @@ impl Clone for GameAppData {
             cancel_flag: Arc::clone(&self.cancel_flag),
             i18n: Arc::clone(&self.i18n),
             ai_registry: Arc::clone(&self.ai_registry),
+            workers: self.workers.clone(),
         }
     }
 }

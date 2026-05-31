@@ -4,10 +4,11 @@ use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::squad::OmittedPlayer;
 use crate::r#match::{MatchSquad, ResultMatchPositionData};
 use crate::{MatchTacticType, PlayerFieldPositionGroup};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubstitutionInfo {
     pub team_id: u32,
     pub player_out_id: u32,
@@ -22,7 +23,7 @@ pub struct SubstitutionInfo {
 /// load — never the actual end-of-match energy. Post-match exertion
 /// feeds `final_match_energy` into a duration-scaled depletion model
 /// so the persisted condition reflects how empty the tank really got.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PlayerMatchPhysicalSnapshot {
     pub player_id: u32,
     /// Minutes spent on the pitch. Computed from `entry_match_time_ms`
@@ -43,7 +44,7 @@ pub struct PlayerMatchPhysicalSnapshot {
     pub high_intensity_load_hint: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerMatchEndStats {
     pub shots_on_target: u16,
     pub shots_total: u16,
@@ -121,7 +122,7 @@ pub struct PlayerMatchEndStats {
     pub zone_stats: ZoneStats,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PenaltyShootoutKick {
     pub team_id: u32,
     pub taker_id: u32,
@@ -131,10 +132,16 @@ pub struct PenaltyShootoutKick {
     pub sudden_death: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MatchResultRaw {
     pub score: Option<Score>,
 
+    /// Position-replay payload. NEVER serialised over the worker wire
+    /// — the bincode payload would balloon to many MB per match and the
+    /// recorder is only enabled for the local viewer anyway. On the
+    /// receive side an empty `ResultMatchPositionData::empty()` is
+    /// substituted in.
+    #[serde(skip, default = "ResultMatchPositionData::empty")]
     pub position_data: ResultMatchPositionData,
 
     pub left_team_players: FieldSquad,
@@ -260,7 +267,7 @@ impl MatchResultRaw {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldSquad {
     pub team_id: u32,
     pub main: Vec<u32>,
@@ -305,7 +312,7 @@ impl FieldSquad {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
     pub home_team: TeamScore,
     pub away_team: TeamScore,
@@ -381,6 +388,34 @@ impl Clone for TeamScore {
     }
 }
 
+/// Custom (de)serialization because `AtomicU8` is not serde-friendly.
+/// On the wire `TeamScore` is just `(team_id, score)`; the deserialised
+/// value carries the snapshot in a fresh atomic.
+impl serde::Serialize for TeamScore {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("TeamScore", 2)?;
+        s.serialize_field("team_id", &self.team_id)?;
+        s.serialize_field("score", &self.score.load(Ordering::Relaxed))?;
+        s.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for TeamScore {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Wire {
+            team_id: u32,
+            score: u8,
+        }
+        let w = Wire::deserialize(deserializer)?;
+        Ok(TeamScore {
+            team_id: w.team_id,
+            score: AtomicU8::new(w.score),
+        })
+    }
+}
+
 impl TeamScore {
     pub fn new(team_id: u32) -> Self {
         TeamScore {
@@ -421,7 +456,7 @@ impl PartialOrd for TeamScore {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoalDetail {
     pub player_id: u32,
     pub stat_type: MatchStatisticType,
@@ -457,7 +492,7 @@ impl Score {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchResult {
     pub id: String,
     pub league_id: u32,

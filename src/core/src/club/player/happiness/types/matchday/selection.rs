@@ -7,7 +7,7 @@
 /// Closed enum, mirrored by the renderer's i18n token list. Adding a
 /// new variant means adding a copy line in every locale and a renderer
 /// branch — fail loud at compile time rather than show the raw key.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MatchSelectionContext {
     /// Where in the matchday selection ladder the player ended up —
     /// dropped from XI to bench, left off the matchday squad entirely,
@@ -38,7 +38,7 @@ pub struct MatchSelectionContext {
 
 /// Bucket the selection decision falls into. Distinct from
 /// `SelectionOmissionReason` (the *why*) — this is the *what*.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SelectionDecisionScope {
     /// Named to the bench but never came on.
     UnusedSubstitute,
@@ -78,7 +78,7 @@ impl SelectionDecisionScope {
 /// into the "why" line. Multiple reasons can apply at once — the
 /// selector picks the dominant one (highest weight in the scoring
 /// breakdown).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SelectionOmissionReason {
     /// Chosen player was sharper / fresher.
     LowerMatchReadiness,
@@ -183,7 +183,7 @@ impl SelectionOmissionReason {
 /// slot. Stores ids and scores for tests / debugging plus the
 /// dominant scoring components so the renderer can produce a
 /// "stronger condition / sharper form" sentence rather than guessing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SelectionComparison {
     /// Player id that was selected for the slot the omitted player
     /// would naturally have filled.
@@ -207,7 +207,7 @@ pub struct SelectionComparison {
 /// engine's positional groupings — keeping it as a render-safe enum
 /// avoids dragging the full `PlayerPositionType` into the events
 /// module's i18n surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SelectionRole {
     Goalkeeper,
     CentreBack,
@@ -241,7 +241,7 @@ impl SelectionRole {
 /// selector picks the top few factors where the selected player beat
 /// the omitted player and packs them into `SelectionComparison` so
 /// the renderer doesn't have to expose raw f32 scores.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SelectionScoreFactor {
     PositionFit,
     PerceivedQuality,

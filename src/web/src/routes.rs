@@ -20,6 +20,7 @@ use crate::search::search_routes;
 use crate::staff::staff_routes;
 use crate::teams::team_routes;
 use crate::watchlist::watchlist_routes;
+use crate::workers::routes::workers_routes;
 use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::HeaderMap;
@@ -138,6 +139,7 @@ impl ServerRoutes {
             .merge(watchlist_routes())
             .merge(search_routes())
             .merge(ai_routes())
+            .merge(workers_routes())
             .fallback(default_handler)
             .layer(axum::middleware::from_fn(redirect_on_error))
     }

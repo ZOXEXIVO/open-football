@@ -4710,6 +4710,54 @@ a:active {
     white-space: nowrap;
 }
 
+/* Workers chip — sits at the right edge of the Machine tile, links
+   to the dedicated workers page. Hidden when no workers are
+   configured (template-side `{% if workers_count > 0 %}`). The count
+   is the prominent green readout. */
+.fm-workers-chip {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 6px 12px;
+    background: linear-gradient(160deg, #1f3a2c 0%, #16291f 100%);
+    border: 1px solid #2f6c4a;
+    border-radius: 6px;
+    text-decoration: none;
+    transition:
+        border-color 0.15s,
+        transform 0.15s,
+        box-shadow 0.2s;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.06) inset,
+        0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.fm-workers-chip:hover {
+    border-color: #57b07c;
+    transform: translateY(-1px);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.08) inset,
+        0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
+.fm-workers-chip-count {
+    font-size: 18px;
+    font-weight: 700;
+    color: #5bd28a;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    letter-spacing: -0.3px;
+}
+
+.fm-workers-chip-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    color: #6c8290;
+}
+
 /* Tablets and small laptops — Machine claims its own full-width row
    so the long CPU brand string never gets clipped. iPad mini portrait
    (768px) and landscape (1024px) both hit this band. */
@@ -10397,4 +10445,246 @@ a.fm-award-card:hover {
     font-weight: 600;
     letter-spacing: 0.3px;
     color: #51626d;
+}
+
+/* ============================================
+   DISTRIBUTED WORKERS PAGE
+   ============================================ */
+
+.fm-workers-page {
+    padding-bottom: 24px;
+}
+
+.fm-workers-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 8px;
+    padding: 12px 14px;
+}
+
+@media (max-width: 1100px) {
+    .fm-workers-summary-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+@media (max-width: 600px) {
+    .fm-workers-summary-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+.fm-workers-summary-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    background: linear-gradient(160deg, #243240 0%, #1d2832 100%);
+    border: 1px solid #2c3c4a;
+    border-radius: 6px;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.04) inset,
+        0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+.fm-workers-summary-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.4px;
+    line-height: 1.05;
+}
+
+.fm-workers-summary-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    color: #6c8290;
+}
+
+.fm-workers-summary-ok .fm-workers-summary-value {
+    color: #5bd28a;
+}
+
+.fm-workers-summary-warn .fm-workers-summary-value {
+    color: #e8c45a;
+}
+
+.fm-workers-summary-bad .fm-workers-summary-value {
+    color: #e87a7a;
+}
+
+.fm-workers-table-wrap {
+    padding: 12px 14px;
+    overflow-x: auto;
+}
+
+.fm-workers-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+}
+
+.fm-workers-table thead th {
+    text-align: left;
+    padding: 8px 10px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    color: #6c8290;
+    border-bottom: 1px solid #2c3c4a;
+    background: #1a2530;
+    white-space: nowrap;
+}
+
+.fm-workers-table thead th.fm-num {
+    text-align: right;
+}
+
+.fm-workers-table tbody td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #232f3a;
+    color: #c3d2dd;
+    vertical-align: top;
+}
+
+.fm-workers-table tbody td.fm-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.fm-workers-table tbody td.fm-num-bad,
+.fm-workers-table tbody td .fm-num-bad {
+    color: #e87a7a;
+}
+
+.fm-workers-table tbody tr.fm-worker-ready td:first-child {
+    border-left: 3px solid #57b07c;
+}
+
+.fm-workers-table tbody tr.fm-worker-version_mismatch td:first-child {
+    border-left: 3px solid #d8a738;
+}
+
+.fm-workers-table tbody tr.fm-worker-unreachable td:first-child {
+    border-left: 3px solid #c46666;
+}
+
+.fm-workers-table tbody tr.fm-worker-connecting td:first-child {
+    border-left: 3px solid #5a6b78;
+}
+
+.fm-worker-host,
+.fm-worker-addr {
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.fm-worker-addr {
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Consolas,
+        monospace;
+    font-size: 11.5px;
+}
+
+.fm-worker-cpu {
+    max-width: 240px;
+    color: #8a9caa;
+}
+
+.fm-worker-error {
+    max-width: 320px;
+    word-break: break-word;
+}
+
+.fm-worker-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.fm-worker-badge-ready {
+    background: rgba(91, 210, 138, 0.15);
+    color: #5bd28a;
+    border: 1px solid rgba(91, 210, 138, 0.35);
+}
+
+.fm-worker-badge-version_mismatch {
+    background: rgba(216, 167, 56, 0.15);
+    color: #e8c45a;
+    border: 1px solid rgba(216, 167, 56, 0.35);
+}
+
+.fm-worker-badge-unreachable {
+    background: rgba(232, 122, 122, 0.15);
+    color: #e87a7a;
+    border: 1px solid rgba(232, 122, 122, 0.35);
+}
+
+.fm-worker-badge-connecting {
+    background: rgba(120, 140, 155, 0.18);
+    color: #99adba;
+    border: 1px solid rgba(120, 140, 155, 0.3);
+}
+
+.fm-worker-status-detail {
+    margin-top: 4px;
+    font-size: 11px;
+    color: #8a9caa;
+}
+
+.fm-muted {
+    color: #51626d;
+}
+
+.fm-workers-empty {
+    padding: 24px;
+    color: #8a9caa;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.fm-workers-empty code {
+    padding: 1px 5px;
+    background: #1a2530;
+    border: 1px solid #2c3c4a;
+    border-radius: 3px;
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Consolas,
+        monospace;
+    font-size: 12px;
+    color: #c3d2dd;
+}
+
+.fm-workers-empty pre {
+    margin: 10px 0;
+    padding: 10px 14px;
+    background: #1a2530;
+    border: 1px solid #2c3c4a;
+    border-radius: 5px;
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Consolas,
+        monospace;
+    font-size: 12px;
+    color: #c3d2dd;
+    overflow-x: auto;
 }

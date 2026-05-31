@@ -2,6 +2,7 @@
 pub mod logs;
 
 pub mod calibration;
+pub mod dispatch;
 pub mod engine;
 
 pub mod game;
@@ -14,6 +15,7 @@ pub mod rules;
 pub mod squad;
 pub mod state;
 
+pub use dispatch::*;
 pub use engine::*;
 pub use game::*;
 pub use pool::*;

@@ -137,7 +137,7 @@ impl LateralLane {
 /// Defaults are zero — legacy callers and the in-engine paths that
 /// haven't been updated to record zones yet still produce sensible
 /// ratings, just without the zone-aware bumps.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ZoneStats {
     pub tackles_own_box: u16,
     pub tackles_own_six_yard: u16,

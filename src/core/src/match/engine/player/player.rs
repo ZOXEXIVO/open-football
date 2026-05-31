@@ -138,7 +138,7 @@ impl MatchPlayer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PlayerSide {
     Left,
     Right,
@@ -238,6 +238,65 @@ impl MatchPlayer {
             last_pressure_tick: 0,
             starting_condition: player.player_attributes.condition,
             starting_recovery_debt: player.load.recovery_debt,
+        }
+    }
+
+    /// Input-style constructor used by the distributed worker wire
+    /// layer to rebuild a `MatchPlayer` from the bincode payload. Takes
+    /// only the fields that meaningfully cross the network — engine
+    /// runtime state (memory, waypoints, in-state timers, statistics,
+    /// fatigue accumulator) is initialised to the same defaults
+    /// `from_player` uses at kickoff, so the rebuilt player is
+    /// indistinguishable from one freshly selected on the worker.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_inputs(
+        id: u32,
+        team_id: u32,
+        position: [f32; 3],
+        start_position: [f32; 3],
+        attributes: PersonAttributes,
+        player_attributes: PlayerAttributes,
+        skills: PlayerSkills,
+        tactical_position: PlayerPositionType,
+        side: Option<PlayerSide>,
+        traits: Vec<PlayerTrait>,
+        birth_date: NaiveDate,
+        is_force_match_selection: bool,
+        starting_condition: i16,
+        starting_recovery_debt: f32,
+        use_extended_state_logging: bool,
+    ) -> Self {
+        MatchPlayer {
+            id,
+            position: Vector3::new(position[0], position[1], position[2]),
+            start_position: Vector3::new(start_position[0], start_position[1], start_position[2]),
+            attributes,
+            team_id,
+            player_attributes,
+            skills,
+            velocity: Vector3::zeros(),
+            tactical_position: TacticalPositions::new(tactical_position, side),
+            side,
+            state: Self::default_state(tactical_position),
+            in_state_time: 0,
+            statistics: MatchPlayerStatistics::new(),
+            waypoint_manager: WaypointManager::new(),
+            use_extended_state_logging,
+            memory: PlayerMemory::new(),
+            fatigue_accumulator: 0.0,
+            cached_waypoints: Vec::new(),
+            traits,
+            yellow_cards: 0,
+            fouls_committed: 0,
+            is_sent_off: false,
+            tackle_cooldown: 0,
+            pending_shot_reason: None,
+            is_force_match_selection,
+            birth_date,
+            entry_match_time_ms: 0,
+            last_pressure_tick: 0,
+            starting_condition,
+            starting_recovery_debt,
         }
     }
 

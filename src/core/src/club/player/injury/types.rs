@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fmt::Result;
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InjurySeverity {
     Minor,
     Moderate,
@@ -9,7 +10,7 @@ pub enum InjurySeverity {
     Critical,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BodyPart {
     Hamstring = 1,
     Knee = 2,
@@ -49,7 +50,7 @@ impl BodyPart {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InjuryType {
     // Minor (3-10 days)
     Bruise,

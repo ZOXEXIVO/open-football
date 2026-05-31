@@ -54,6 +54,23 @@ impl Match {
         }
     }
 
+    /// Accessors for the private identity fields (used by the
+    /// distributed worker wire layer to flatten a Match across the
+    /// network). Internal mutation still flows through `make` /
+    /// `make_knockout`, so keeping the fields private elsewhere is
+    /// intentional.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn league_id(&self) -> u32 {
+        self.league_id
+    }
+
+    pub fn league_slug(&self) -> &str {
+        &self.league_slug
+    }
+
     pub fn play(self) -> MatchResult {
         let home_team_id = self.home_squad.team_id;
         let home_team_name = String::from(&self.home_squad.team_name);

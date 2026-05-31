@@ -2,6 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::views::MenuSection;
+use crate::worker::WorkerStatus;
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -39,6 +40,13 @@ pub struct CountryListTemplate {
     pub total_clubs: usize,
     pub total_players: usize,
     pub show_download: bool,
+    /// Total configured distributed match workers (regardless of
+    /// status). Drives the Machine-card badge that links to the
+    /// dedicated workers page; zero hides the badge entirely.
+    pub workers_count: usize,
+    /// Workers currently in `Ready` state — surfaced alongside the
+    /// total so the badge can read "3/4 ready" at a glance.
+    pub workers_ready: usize,
 }
 
 pub struct ContinentDto {
@@ -135,6 +143,13 @@ pub async fn country_list_action(
         .map(|h| h.starts_with("open-football.org") || h.starts_with("www.open-football.org"))
         .unwrap_or(false);
 
+    let workers_snapshot = state.workers.snapshot().await;
+    let workers_count = workers_snapshot.len();
+    let workers_ready = workers_snapshot
+        .iter()
+        .filter(|w| matches!(w.status, WorkerStatus::Ready))
+        .count();
+
     Ok(CountryListTemplate {
         css_version: CSS_VERSION,
         computer_name: &COMPUTER_NAME,
@@ -157,5 +172,7 @@ pub async fn country_list_action(
         total_clubs,
         total_players,
         show_download,
+        workers_count,
+        workers_ready,
     })
 }

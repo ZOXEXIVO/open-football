@@ -27,7 +27,7 @@ use crate::HappinessEventType;
 /// Output of the omissions builder — one entry per important
 /// omission. The simulator ultimately surfaces the carried context on
 /// the player's events feed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OmittedPlayer {
     pub player_id: u32,
     pub context: MatchSelectionContext,

@@ -1,8 +1,9 @@
 use crate::club::player::injury::InjuryType;
+use serde::{Deserialize, Serialize};
 
 pub const CONDITION_MAX_VALUE: i16 = 10000;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct PlayerAttributes {
     pub is_banned: bool,
     pub is_injured: bool,
