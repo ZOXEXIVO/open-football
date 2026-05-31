@@ -139,9 +139,26 @@ impl Team {
     fn validate_squad_selection(&self, squad_result: &PlayerSelectionResult, tactics: &Tactics) {
         let formation_positions = tactics.positions();
 
-        if squad_result.main_squad.len() != formation_positions.len() {
+        // A short XI is a real problem — the match engine will field an
+        // incomplete side — so log it loudly with enough context to trace the
+        // offending team. Never panic, though: a degraded squad is still better
+        // than aborting the whole simulation tick, and the selector has already
+        // exhausted its emergency fallbacks by this point.
+        if squad_result.main_squad.len() < formation_positions.len() {
+            let selected_ids: Vec<u32> = squad_result.main_squad.iter().map(|p| p.id).collect();
+            log::warn!(
+                "Squad too small for team {} ({}): selected {} players for {} formation positions; selected ids {:?}",
+                self.id,
+                self.name,
+                squad_result.main_squad.len(),
+                formation_positions.len(),
+                selected_ids
+            );
+        } else if squad_result.main_squad.len() != formation_positions.len() {
             log::debug!(
-                "Squad size mismatch: got {} players for {} positions",
+                "Squad size mismatch for team {} ({}): got {} players for {} positions",
+                self.id,
+                self.name,
                 squad_result.main_squad.len(),
                 formation_positions.len()
             );

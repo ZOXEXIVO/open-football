@@ -275,10 +275,12 @@ impl SquadSelector {
         let has_fit_keeper = available.iter().any(|p| p.positions.is_goalkeeper());
         if !has_fit_keeper {
             for p in team.players.players().iter().copied() {
-                if !p.positions.is_goalkeeper() {
-                    continue;
-                }
-                if p.player_attributes.is_banned && !ctx.is_friendly {
+                // Re-admit only keepers who can physically play. The shared
+                // helper skips injured / international-duty keepers and, in a
+                // competitive match, banned ones — a low condition is the only
+                // reason it relaxes. Force-selected players in non-Main squads
+                // stay dropped (the Main-team pin is honoured elsewhere).
+                if !KeeperAvailability::is_fallback_available(p, ctx.is_friendly) {
                     continue;
                 }
                 if !is_main_team && p.is_force_match_selection {

@@ -9,9 +9,22 @@ use super::cup_rotation::CupRotation;
 use super::helpers;
 use super::scoring::ScoringEngine;
 use super::{CupStage, DomesticCupContext, SelectionPolicy};
-use chrono::Utc;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+
+/// Minimum role fit (0..1) a substitute must clear to be chosen for a specific
+/// bench role when the pool has a surplus of options (see `select_substitutes`).
+const BENCH_ROLE_MIN_FIT_SURPLUS: f32 = 0.25;
+
+/// Cohesion local-swap pass tuning (see `apply_cohesion_swaps`). The pass flips
+/// a starter for a same-group bench option only when the swap concedes at most
+/// `MAX_BASE_GAP` of pure slot score, lifts cohesion by at least `MIN_GAIN`, and
+/// nets positive overall — across at most `MAX_PASSES` sweeps.
+const COHESION_SWAP_MAX_BASE_GAP: f32 = 0.75;
+const COHESION_SWAP_MIN_GAIN: f32 = 0.35;
+const COHESION_SWAP_MAX_PASSES: usize = 2;
+/// Minimum position fit (0..20 scale) a cohesion-swap candidate must clear.
+const COHESION_SWAP_MIN_POSITION_FIT: f32 = 12.0;
 
 /// Read-only scoring inputs every selector step needs, bundled so the call
 /// chain isn't a wall of positional arguments. All fields are borrows or small
@@ -92,7 +105,6 @@ impl SelectionScoringContext<'_> {
     ) -> Vec<MatchPlayer> {
         let mut squad: Vec<MatchPlayer> = Vec::with_capacity(helpers::DEFAULT_SQUAD_SIZE);
         let mut used_ids: Vec<u32> = Vec::new();
-        let mut selected_players: Vec<&Player> = Vec::new();
         let required = self.tactics.positions();
 
         // STEP 1: Goalkeeper. Fallback order:
@@ -123,7 +135,6 @@ impl SelectionScoringContext<'_> {
                 false,
             ));
             used_ids.push(gk.id);
-            selected_players.push(gk);
         } else {
             debug!("No goalkeeper found at all — picking any player as GK");
             if let Some(any) = helpers::pick_best_unused(available, &used_ids) {
@@ -134,7 +145,6 @@ impl SelectionScoringContext<'_> {
                     false,
                 ));
                 used_ids.push(any.id);
-                selected_players.push(any);
             }
         }
 
@@ -151,7 +161,6 @@ impl SelectionScoringContext<'_> {
         for (pos, player) in assignments {
             squad.push(MatchPlayer::from_player(team_id, player, pos, false));
             used_ids.push(player.id);
-            selected_players.push(player);
         }
 
         // STEP 3: Fill remaining slots with best available
@@ -220,6 +229,11 @@ impl SelectionScoringContext<'_> {
             debug!("Could only select {} of 11 starting players", squad.len());
         }
 
+        // STEP 4.5: Cohesion local-swap pass. The DP scores each slot on its
+        // own merit and can't see that a marginally lower-rated candidate would
+        // knit the unit together better — so flip only genuinely close calls.
+        self.apply_cohesion_swaps(team_id, &mut squad, &mut used_ids, available);
+
         // STEP 5: Domestic cup rotation target. The DP optimizer pushes back
         // toward the strongest XI when the cup opportunity bias isn't a wide
         // enough margin to flip an individual slot. In real football, a manager
@@ -232,6 +246,112 @@ impl SelectionScoringContext<'_> {
         }
 
         squad
+    }
+
+    /// Post-assignment cohesion swap pass. The DP scores each slot
+    /// independently, so a slightly lower-rated candidate that knits the unit
+    /// together better (a settled centre-back pairing, a fullback who trusts the
+    /// winger ahead of him) never gets the nod. This walks the assigned outfield
+    /// XI and flips only genuinely close calls: a same-group bench option with a
+    /// real position fit, at most `COHESION_SWAP_MAX_BASE_GAP` below the
+    /// incumbent on the pure slot score, whose cohesion with the rest of the
+    /// selected XI is at least `COHESION_SWAP_MIN_GAIN` higher and outweighs that
+    /// small quality loss. The goalkeeper and force-selected players are never
+    /// touched. Without relationship data every cohesion read is zero, so the
+    /// pass is a no-op — it only ever refines an already-settled squad.
+    fn apply_cohesion_swaps(
+        &self,
+        team_id: u32,
+        squad: &mut [MatchPlayer],
+        used_ids: &mut Vec<u32>,
+        available: &[&Player],
+    ) {
+        let player_by_id: HashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
+
+        for _ in 0..COHESION_SWAP_MAX_PASSES {
+            let mut swapped = false;
+
+            for idx in 0..squad.len() {
+                let slot = squad[idx].tactical_position.current_position;
+                if slot == PlayerPositionType::Goalkeeper {
+                    continue;
+                }
+                let Some(current) = player_by_id.get(&squad[idx].id).copied() else {
+                    continue;
+                };
+                // Never swap out a manager-pinned starter.
+                if self.engine.honor_force_selection && current.is_force_match_selection {
+                    continue;
+                }
+
+                let group = slot.position_group();
+
+                // The rest of the selected XI — the teammates cohesion is read
+                // against. Rebuilt each iteration so it reflects earlier swaps.
+                let others: Vec<&Player> = squad
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != idx)
+                    .filter_map(|(_, mp)| player_by_id.get(&mp.id).copied())
+                    .collect();
+
+                let current_base = self.starting_slot_score(current, slot, available);
+                let current_cohesion =
+                    self.engine.cohesion_bonus(current, &others, slot, group, None);
+
+                let used_set: HashSet<u32> = used_ids.iter().copied().collect();
+
+                // Best swap = the largest net gain among eligible candidates.
+                let mut best: Option<(&Player, f32)> = None;
+                for cand in available.iter().copied() {
+                    if used_set.contains(&cand.id) {
+                        continue;
+                    }
+                    if cand.positions.is_goalkeeper() {
+                        continue;
+                    }
+                    if cand.position().position_group() != group {
+                        continue;
+                    }
+                    if helpers::position_fit_score(cand, slot, group)
+                        < COHESION_SWAP_MIN_POSITION_FIT
+                    {
+                        continue;
+                    }
+                    let cand_base = self.starting_slot_score(cand, slot, available);
+                    let base_gap = current_base - cand_base;
+                    if base_gap > COHESION_SWAP_MAX_BASE_GAP {
+                        continue;
+                    }
+                    let cand_cohesion =
+                        self.engine.cohesion_bonus(cand, &others, slot, group, None);
+                    let cohesion_gain = cand_cohesion - current_cohesion;
+                    if cohesion_gain < COHESION_SWAP_MIN_GAIN {
+                        continue;
+                    }
+                    // The net gain after the conceded base score must be positive.
+                    let total_gain = cohesion_gain - base_gap;
+                    if total_gain <= 0.0 {
+                        continue;
+                    }
+                    if best.map(|(_, g)| total_gain > g).unwrap_or(true) {
+                        best = Some((cand, total_gain));
+                    }
+                }
+
+                if let Some((new_player, _)) = best {
+                    let old_id = squad[idx].id;
+                    used_ids.retain(|id| *id != old_id);
+                    used_ids.push(new_player.id);
+                    squad[idx] = MatchPlayer::from_player(team_id, new_player, slot, false);
+                    swapped = true;
+                }
+            }
+
+            if !swapped {
+                break;
+            }
+        }
     }
 
     /// Post-assignment safe-swap pass for early/quarter cup ties. Counts
@@ -399,9 +519,16 @@ impl SelectionScoringContext<'_> {
                 break;
             }
 
+            // With a surplus of bench options, restrict the role's pick to
+            // genuine fits up front, so a high-quality but ill-fitting player
+            // can't win the role's score and then be rejected — leaving the role
+            // uncovered when a worse-rated specialist was available. When the
+            // pool is thin, fall back to the best available so the bench fills.
+            let surplus = remaining.len() > helpers::DEFAULT_BENCH_SIZE;
             let best = remaining
                 .iter()
                 .filter(|p| !used_ids.contains(&p.id))
+                .filter(|p| !surplus || self.bench_role_fit(p, role) >= BENCH_ROLE_MIN_FIT_SURPLUS)
                 .max_by(|a, b| {
                     self.bench_role_score(a, role)
                         .partial_cmp(&self.bench_role_score(b, role))
@@ -410,11 +537,6 @@ impl SelectionScoringContext<'_> {
                 .copied();
 
             if let Some(player) = best {
-                if self.bench_role_fit(player, role) < 0.25
-                    && remaining.len() > helpers::DEFAULT_BENCH_SIZE
-                {
-                    continue;
-                }
                 let pos = helpers::best_tactical_position(player, self.tactics);
                 subs.push(MatchPlayer::from_player(team_id, player, pos, false));
                 used_ids.push(player.id);
@@ -907,7 +1029,7 @@ impl SelectionScoringContext<'_> {
         if cup_apps == 0 { weight } else { 0.0 }
     }
 
-    fn bench_role_fit(&self, player: &Player, role: BenchRole) -> f32 {
+    pub(crate) fn bench_role_fit(&self, player: &Player, role: BenchRole) -> f32 {
         let positions = player.positions.positions();
         let has = |pos: PlayerPositionType| positions.contains(&pos);
         let has_any = |targets: &[PlayerPositionType]| targets.iter().any(|&p| has(p));
@@ -1013,7 +1135,7 @@ impl SelectionScoringContext<'_> {
                 attacking.clamp(0.0, 1.0)
             }
             BenchRole::Prospect => {
-                let age = DateUtils::age(player.birth_date, Utc::now().date_naive());
+                let age = DateUtils::age(player.birth_date, self.date);
                 if age <= 19 {
                     1.0
                 } else if age <= 22 {
@@ -1120,7 +1242,7 @@ impl SelectionScoringContext<'_> {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum BenchRole {
+pub(crate) enum BenchRole {
     DefensiveCover,
     MidfieldControl,
     Creator,

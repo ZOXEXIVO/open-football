@@ -3,6 +3,7 @@ use crate::r#match::player::MatchPlayer;
 use crate::{Player, Staff, Tactics};
 
 use super::helpers;
+use super::helpers::KeeperAvailability;
 use std::cmp::Ordering;
 
 /// Select starting 11 with rotation priority (friendly/development matches).
@@ -16,7 +17,7 @@ pub(crate) fn select_rotation_starting_eleven(
     let mut used_ids: Vec<u32> = Vec::new();
     let required = tactics.positions();
 
-    if let Some(gk) = pick_rotation_goalkeeper(available, &used_ids) {
+    if let Some(gk) = RotationGoalkeeper::pick(available, &used_ids) {
         squad.push(MatchPlayer::from_player(
             team_id,
             gk,
@@ -115,7 +116,7 @@ pub(crate) fn select_rotation_substitutes(
     let mut subs: Vec<MatchPlayer> = Vec::with_capacity(helpers::DEFAULT_BENCH_SIZE);
     let mut used_ids: Vec<u32> = Vec::new();
 
-    if let Some(gk) = pick_rotation_goalkeeper(remaining, &used_ids) {
+    if let Some(gk) = RotationGoalkeeper::pick(remaining, &used_ids) {
         subs.push(MatchPlayer::from_player(
             team_id,
             gk,
@@ -198,20 +199,47 @@ fn rotation_overall_quality(player: &Player) -> f32 {
         + (player.player_attributes.current_ability as f32 / 200.0 * 20.0) * 0.25
 }
 
-fn pick_rotation_goalkeeper<'p>(available: &[&'p Player], used_ids: &[u32]) -> Option<&'p Player> {
-    available
-        .iter()
-        .filter(|p| !used_ids.contains(&p.id))
-        .filter(|p| p.positions.is_goalkeeper())
-        .filter(|p| p.player_attributes.condition_percentage() >= 20)
-        .max_by(|a, b| {
-            let ca = a.player_attributes.condition_percentage();
-            let cb = b.player_attributes.condition_percentage();
-            ca.cmp(&cb).then_with(|| {
-                a.player_attributes
-                    .days_since_last_match
-                    .cmp(&b.player_attributes.days_since_last_match)
-            })
-        })
-        .copied()
+/// Rotation goalkeeper selection, wrapped so the preferred-condition threshold
+/// and the tie-break order live with the picker.
+struct RotationGoalkeeper;
+
+impl RotationGoalkeeper {
+    /// Condition at or above which a real goalkeeper is the preferred rotation
+    /// pick. A keeper below this but still at [`helpers::HARD_CONDITION_FLOOR`]
+    /// is fielded over an emergency outfielder — a tired keeper saves far more
+    /// than an outfielder with zeroed goalkeeping skills.
+    const PREFERRED_CONDITION: u32 = 20;
+
+    /// Best available rotation keeper. Real, available keepers only — never an
+    /// injured / international-duty / banned one (a suspended keeper isn't
+    /// handed a rotation start), and never below the hard condition floor
+    /// (that's the emergency-outfielder line). Prefers a fresh keeper but fields
+    /// a 15-19% one over an outfielder. Tie-break: freshest condition, then most
+    /// rested, then highest current ability.
+    fn pick<'p>(available: &[&'p Player], used_ids: &[u32]) -> Option<&'p Player> {
+        let candidate = |min_condition: u32| -> Option<&'p Player> {
+            available
+                .iter()
+                .filter(|p| !used_ids.contains(&p.id))
+                .filter(|p| KeeperAvailability::is_fallback_available(p, false))
+                .filter(|p| p.player_attributes.condition_percentage() >= min_condition)
+                .max_by(|a, b| {
+                    a.player_attributes
+                        .condition_percentage()
+                        .cmp(&b.player_attributes.condition_percentage())
+                        .then_with(|| {
+                            a.player_attributes
+                                .days_since_last_match
+                                .cmp(&b.player_attributes.days_since_last_match)
+                        })
+                        .then_with(|| {
+                            a.player_attributes
+                                .current_ability
+                                .cmp(&b.player_attributes.current_ability)
+                        })
+                })
+                .copied()
+        };
+        candidate(Self::PREFERRED_CONDITION).or_else(|| candidate(helpers::HARD_CONDITION_FLOOR))
+    }
 }

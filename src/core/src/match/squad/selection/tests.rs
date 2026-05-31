@@ -2100,3 +2100,405 @@ fn no_backup_gk_available_keeps_existing_emergency_behavior() {
         "no keeper is invented when none is available"
     );
 }
+
+// ========== Keeper-availability fallback (competitive) ==========
+
+#[test]
+fn keeper_fallback_skips_injured_and_int_duty_keepers() {
+    // Every roster keeper is unavailable (one injured, one on international
+    // duty). The fallback must NOT press them back in — an outfielder takes the
+    // emergency keeper slot instead, and neither unavailable keeper appears.
+    let staff = generate_test_staff();
+    let date = Utc::now().date_naive();
+    let mut players = gk_outfield(3);
+    let mut injured = make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        3,
+        25,
+        0.0,
+    );
+    injured.player_attributes.is_injured = true;
+    let mut on_duty = make_cup_player(
+        2,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::FirstTeamRegular,
+        26,
+        3,
+        20,
+        0.0,
+    );
+    on_duty.statuses.add(date, PlayerStatusType::Int);
+    players.push(injured);
+    players.push(on_duty);
+    let team = cup_team(players);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+
+    assert_eq!(result.main_squad.len(), 11);
+    let all_ids: Vec<u32> = result
+        .main_squad
+        .iter()
+        .chain(result.substitutes.iter())
+        .map(|p| p.id)
+        .collect();
+    assert!(
+        !all_ids.contains(&1),
+        "an injured keeper must not be re-added by the fallback"
+    );
+    assert!(
+        !all_ids.contains(&2),
+        "an international-duty keeper must not be re-added by the fallback"
+    );
+    let gk = starting_goalkeeper_id(&result).expect("the XI still fields a keeper");
+    assert!(
+        gk >= 300,
+        "with no available keeper an outfielder takes the gloves, got id {gk}"
+    );
+}
+
+#[test]
+fn keeper_fallback_admits_low_condition_keeper_over_outfielder() {
+    // The only keeper is below the hard condition floor (12%). A real keeper —
+    // even a tired one — still belongs in goal over an outfielder, so the
+    // fallback re-admits him.
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(3);
+    let mut tired = make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        3,
+        25,
+        0.0,
+    );
+    tired.player_attributes.condition = 1200; // 12% — below HARD_CONDITION_FLOOR
+    players.push(tired);
+    let team = cup_team(players);
+
+    let result = SquadSelector::select_with_context(&team, &staff, &[], &league_ctx(0.7));
+
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(1),
+        "a low-condition real keeper starts over an outfielder"
+    );
+}
+
+// ========== Rotation goalkeeper selection ==========
+
+#[test]
+fn rotation_starts_low_condition_keeper_over_outfielder() {
+    // Rotation match, single keeper at 17% — below the rotation preferred
+    // condition (20) but at the hard floor (15). A real keeper still starts
+    // ahead of an emergency outfielder.
+    let staff = generate_test_staff();
+    let mut players = gk_outfield(4);
+    let mut keeper = make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        15,
+        PlayerSquadStatus::FirstTeamRegular,
+        24,
+        5,
+        5,
+        0.0,
+    );
+    keeper.player_attributes.condition = 1700; // 17%
+    players.push(keeper);
+    let team = cup_team(players);
+
+    let result = SquadSelector::select_for_rotation(&team, &staff);
+
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(1),
+        "a 17% real keeper starts over an outfielder in rotation"
+    );
+}
+
+#[test]
+fn rotation_skips_unavailable_keepers_for_real_keeper() {
+    // Injured / international-duty / banned keepers are never handed a rotation
+    // start; the one available keeper plays.
+    let staff = generate_test_staff();
+    let date = Utc::now().date_naive();
+    let mut players = gk_outfield(4);
+    let mut injured = make_cup_player(
+        1,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        3,
+        25,
+        0.0,
+    );
+    injured.player_attributes.is_injured = true;
+    let mut on_duty = make_cup_player(
+        2,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::FirstTeamRegular,
+        26,
+        3,
+        20,
+        0.0,
+    );
+    on_duty.statuses.add(date, PlayerStatusType::Int);
+    let mut banned = make_cup_player(
+        3,
+        PlayerPositionType::Goalkeeper,
+        16,
+        PlayerSquadStatus::FirstTeamRegular,
+        26,
+        3,
+        20,
+        0.0,
+    );
+    banned.player_attributes.is_banned = true;
+    let valid = make_cup_player(
+        4,
+        PlayerPositionType::Goalkeeper,
+        15,
+        PlayerSquadStatus::FirstTeamRegular,
+        24,
+        5,
+        10,
+        0.0,
+    );
+    players.push(injured);
+    players.push(on_duty);
+    players.push(banned);
+    players.push(valid);
+    let team = cup_team(players);
+
+    let result = SquadSelector::select_for_rotation(&team, &staff);
+
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(4),
+        "rotation fields the only available keeper, not an unavailable one or an outfielder"
+    );
+    let all_ids: Vec<u32> = result
+        .main_squad
+        .iter()
+        .chain(result.substitutes.iter())
+        .map(|p| p.id)
+        .collect();
+    assert!(!all_ids.contains(&1), "injured keeper not selected");
+    assert!(!all_ids.contains(&2), "international-duty keeper not selected");
+}
+
+// ========== Bench role coverage ==========
+
+#[test]
+fn bench_role_prefers_fit_specialist_over_high_quality_misfit() {
+    let staff = generate_test_staff();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let engine = ScoringEngine::from_staff(&staff);
+    let scx = gk_unit_ctx(&staff, &tactics, &engine);
+
+    // A high-CA forward wins the raw defensive-cover *score* (quality
+    // dominates) but has zero defensive-cover fit; a lower-CA centre-back fits.
+    // With a surplus of options the role must go to the fitting defender rather
+    // than being skipped entirely.
+    let forward = make_cup_player(
+        1,
+        PlayerPositionType::ForwardCenter,
+        18,
+        PlayerSquadStatus::FirstTeamRegular,
+        25,
+        5,
+        10,
+        100.0,
+    );
+    let defender = make_cup_player(
+        2,
+        PlayerPositionType::DefenderCenter,
+        14,
+        PlayerSquadStatus::FirstTeamRegular,
+        25,
+        5,
+        10,
+        100.0,
+    );
+    let mids: Vec<Player> = (0..6)
+        .map(|i| {
+            make_cup_player(
+                10 + i,
+                PlayerPositionType::MidfielderCenter,
+                13,
+                PlayerSquadStatus::FirstTeamRegular,
+                25,
+                5,
+                10,
+                100.0,
+            )
+        })
+        .collect();
+
+    let mut pool: Vec<&Player> = vec![&forward, &defender];
+    pool.extend(mids.iter());
+    assert!(
+        pool.len() > helpers::DEFAULT_BENCH_SIZE,
+        "the test needs a surplus to exercise the fit filter"
+    );
+
+    let subs = scx.select_substitutes(1, &pool);
+
+    assert!(
+        subs.iter().any(|s| s.id == 2),
+        "the fitting centre-back must be selected for defensive cover, not skipped for the high-CA misfit"
+    );
+}
+
+// ========== Prospect bench role uses the simulation date ==========
+
+#[test]
+fn prospect_bench_fit_uses_simulation_date() {
+    let staff = generate_test_staff();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let engine = ScoringEngine::from_staff(&staff);
+    // A simulation date far from any plausible wall-clock run date.
+    let sim_date = NaiveDate::from_ymd_opt(2045, 1, 1).unwrap();
+    let scx = super::competitive::SelectionScoringContext {
+        staff: &staff,
+        tactics: &tactics,
+        engine: &engine,
+        date: sim_date,
+        is_friendly: false,
+        match_importance: 0.3,
+        policy: SelectionPolicy::CupRotation,
+        cup: None,
+    };
+    // 22 on the simulation date (born 2023) → the 0.65 prospect tier. Against
+    // the wall clock he'd read as a small child (the 1.0 tier), so a wall-clock
+    // age check would score differently — proving the fit uses `self.date`.
+    let mut player = make_cup_player(
+        1,
+        PlayerPositionType::MidfielderCenter,
+        14,
+        PlayerSquadStatus::HotProspectForTheFuture,
+        0,
+        5,
+        3,
+        50.0,
+    );
+    player.birth_date = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
+    let fit = scx.bench_role_fit(&player, super::competitive::BenchRole::Prospect);
+    assert!(
+        (fit - 0.65).abs() < 1e-6,
+        "prospect fit should use the simulation date (22 → 0.65), got {fit}"
+    );
+}
+
+// ========== Post-assignment cohesion swap ==========
+
+/// One outfielder at every T442 slot (ids 1..=11, GK is id 1), all identical
+/// `level`, so the only contest the DP can't settle on merit is at DCR — where
+/// the test adds an equally-rated alternative with real back-line rapport.
+fn cohesion_t442_starters() -> Vec<Player> {
+    let slots = [
+        (1u32, PlayerPositionType::Goalkeeper),
+        (2, PlayerPositionType::DefenderLeft),
+        (3, PlayerPositionType::DefenderCenterLeft),
+        (4, PlayerPositionType::DefenderCenterRight),
+        (5, PlayerPositionType::DefenderRight),
+        (6, PlayerPositionType::MidfielderLeft),
+        (7, PlayerPositionType::MidfielderCenterLeft),
+        (8, PlayerPositionType::MidfielderCenterRight),
+        (9, PlayerPositionType::MidfielderRight),
+        (10, PlayerPositionType::ForwardLeft),
+        (11, PlayerPositionType::ForwardRight),
+    ];
+    slots
+        .iter()
+        .map(|(id, pos)| {
+            make_cup_player(*id, *pos, 15, PlayerSquadStatus::FirstTeamRegular, 27, 5, 15, 100.0)
+        })
+        .collect()
+}
+
+fn dcr_starter_id(xi: &[MatchPlayer]) -> Option<u32> {
+    xi.iter()
+        .find(|mp| mp.tactical_position.current_position == PlayerPositionType::DefenderCenterRight)
+        .map(|mp| mp.id)
+}
+
+#[test]
+fn cohesion_swap_prefers_close_candidate_with_better_unit_rapport() {
+    let staff = generate_test_staff();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let engine = ScoringEngine::from_staff(&staff);
+    let scx = gk_unit_ctx(&staff, &tactics, &engine);
+    let date = Utc::now().date_naive();
+
+    let starters = cohesion_t442_starters();
+    // The challenger is an exact clone of the DCR incumbent (id 4) — identical
+    // base slot score, so the swap turns purely on cohesion — but he has built
+    // real rapport with the rest of the back line and the keeper.
+    let mut challenger = starters[3].clone();
+    challenger.id = 12;
+    for mate in [1u32, 2, 3, 5] {
+        challenger.relations.update(mate, 100.0, date);
+    }
+
+    let mut available: Vec<&Player> = starters.iter().collect();
+    available.push(&challenger);
+
+    let xi = scx.select_starting_eleven(1, &available);
+
+    assert_eq!(
+        dcr_starter_id(&xi),
+        Some(12),
+        "the equally-rated candidate with better back-line cohesion should take the DCR slot"
+    );
+    assert!(
+        !xi.iter().any(|mp| mp.id == 4),
+        "the rapport-less incumbent is the one dropped"
+    );
+}
+
+#[test]
+fn cohesion_swap_never_drops_force_selected_starter() {
+    let staff = generate_test_staff();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let engine = ScoringEngine::from_staff(&staff);
+    let scx = gk_unit_ctx(&staff, &tactics, &engine);
+    let date = Utc::now().date_naive();
+
+    let mut starters = cohesion_t442_starters();
+    // Pin the DCR incumbent (id 4) to the XI.
+    starters[3].is_force_match_selection = true;
+
+    // The challenger has the better unit rapport and would otherwise be swapped
+    // in, but the incumbent is manager-pinned and must stay.
+    let mut challenger = starters[3].clone();
+    challenger.id = 12;
+    challenger.is_force_match_selection = false;
+    for mate in [1u32, 2, 3, 5] {
+        challenger.relations.update(mate, 100.0, date);
+    }
+
+    let mut available: Vec<&Player> = starters.iter().collect();
+    available.push(&challenger);
+
+    let xi = scx.select_starting_eleven(1, &available);
+
+    assert_eq!(
+        dcr_starter_id(&xi),
+        Some(4),
+        "a force-selected starter is never swapped out by the cohesion pass"
+    );
+    assert!(
+        !xi.iter().any(|mp| mp.id == 12),
+        "the cohesion candidate does not displace the pinned incumbent"
+    );
+}
