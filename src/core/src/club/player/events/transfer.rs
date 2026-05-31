@@ -86,6 +86,19 @@ impl Player {
     ) {
         let previous_salary = self.contract.as_ref().map(|c| c.salary);
         let desire_carry = self.snapshot_desire_carry();
+        // Source rep derived from the player's most recent senior club
+        // *before* `on_free_agent_signing` mutates the history rows. A
+        // released prospect coming off a small-club spell needs that
+        // recent rep so the source-aware dream-move gate can fire when
+        // they sign for a giant — without it every free-agent signing
+        // reads as zero source and fails closed. League rep isn't kept
+        // per-row here so the gate evaluates club-rep gap only for free
+        // agents; that matches the "either-axis" rule on
+        // [`Player::is_source_aware_step_up`].
+        let history_source_club_rep = self
+            .statistics_history
+            .last_known_senior_team_reputation()
+            .unwrap_or(0);
         self.on_free_agent_signing(to, date);
         self.reset_on_club_change();
         self.clear_free_agent_state();
@@ -99,8 +112,12 @@ impl Player {
             had_return_home_desire: desire_carry.return_home,
             had_european_desire: desire_carry.european,
             had_libertadores_desire: desire_carry.libertadores,
-            // Free-agent signing has no source club.
-            source_club_reputation: 0,
+            // Free-agent signing has no live source club; we anchor to
+            // the most recent senior club from career history so the
+            // source-aware dream-move gate stays meaningful. Unknown
+            // history still leaves both reps at 0, which the gate
+            // already fails closed for.
+            source_club_reputation: history_source_club_rep,
             source_league_reputation: 0,
             dest_position_depth_rank: None,
         });
@@ -559,4 +576,229 @@ fn release_clause_value(ability: u8, current_reputation: i16, scale: f32) -> u32
     let base = (ability as u32) * (ability as u32) * 4_000;
     let rep_boost = (current_reputation.max(0) as u32) * 8_000;
     ((base + rep_boost) as f32 * scale) as u32
+}
+
+#[cfg(test)]
+mod free_agent_source_aware_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::statistics::{
+        CurrentSeasonEntry, PlayerStatistics,
+    };
+    use crate::league::Season;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        HappinessEventType, PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    /// Fixtures for the free-agent source-aware dream-move tests.
+    /// Wrapped in a unit struct per project convention.
+    struct FreeAgentFixtures;
+
+    impl FreeAgentFixtures {
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn dest(rep: u16) -> TeamInfo {
+            TeamInfo {
+                name: "Dest".to_string(),
+                slug: "dest".to_string(),
+                reputation: rep,
+                league_name: String::new(),
+                league_slug: String::new(),
+            }
+        }
+
+        fn person(ambition: f32) -> PersonAttributes {
+            PersonAttributes {
+                adaptability: 10.0,
+                ambition,
+                controversy: 10.0,
+                loyalty: 10.0,
+                pressure: 10.0,
+                professionalism: 10.0,
+                sportsmanship: 10.0,
+                temperament: 10.0,
+                consistency: 10.0,
+                important_matches: 10.0,
+                dirtiness: 10.0,
+            }
+        }
+
+        fn player(age: u8, ambition: f32, world_rep: i16) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.world_reputation = world_rep;
+            attrs.current_reputation = world_rep;
+            attrs.current_ability = 130;
+            attrs.potential_ability = 140;
+            let today = Self::d(2026, 4, 26);
+            let birth = today
+                .checked_sub_signed(chrono::Duration::days(age as i64 * 365))
+                .unwrap();
+            PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("X".into(), "Y".into()))
+                .birth_date(birth)
+                .country_id(1)
+                .attributes(Self::person(ambition))
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Striker,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap()
+        }
+
+        /// Attach a single most-recent "released by club at reputation `rep`"
+        /// entry so the helper has a senior anchor to read off.
+        fn attach_released_from(player: &mut Player, rep: u16) {
+            let entry = CurrentSeasonEntry {
+                team_name: "previous".to_string(),
+                team_slug: "previous".to_string(),
+                team_reputation: rep,
+                league_name: String::new(),
+                league_slug: String::new(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: PlayerStatistics::default(),
+                joined_date: Self::d(2025, 8, 1),
+                departed_date: Some(Self::d(2026, 4, 1)),
+                seq_id: 1,
+            };
+            player.statistics_history.current.push(entry);
+        }
+
+        fn count(p: &Player, ev: HappinessEventType) -> usize {
+            p.happiness
+                .recent_events
+                .iter()
+                .filter(|e| e.event_type == ev)
+                .count()
+        }
+    }
+
+    /// A released small-club prospect (last senior rep ~1500) signing
+    /// for Real Madrid (dest rep ~9500) must clear the source-aware
+    /// gate via the history anchor and fire `DreamMove` on the next
+    /// transfer-shock tick. This is the case the original gate failed
+    /// closed for — free-agent source rep used to be zero.
+    #[test]
+    fn released_small_club_prospect_signs_real_madrid_emits_dream_move() {
+        let mut p = FreeAgentFixtures::player(22, 15.0, 2000);
+        FreeAgentFixtures::attach_released_from(&mut p, 1500);
+        let date = FreeAgentFixtures::d(2026, 6, 1);
+        p.complete_free_agent_signing(
+            &FreeAgentFixtures::dest(9500),
+            date,
+            42,
+            9500,
+            Some(80_000),
+        );
+        p.process_transfer_shock(date, 0.95, 9500, "es", None);
+        assert!(
+            FreeAgentFixtures::count(&p, HappinessEventType::DreamMove) >= 1,
+            "elite free-agent landing must fire DreamMove once history anchors the source rep"
+        );
+    }
+
+    /// A high-rep veteran free agent dropping into a mid-tier club is
+    /// NOT a dream move — the destination is below the elite gate AND
+    /// no source-aware step up exists.
+    #[test]
+    fn high_rep_veteran_free_agent_to_mid_tier_club_does_not_emit_dream_move() {
+        let mut p = FreeAgentFixtures::player(33, 12.0, 7500);
+        FreeAgentFixtures::attach_released_from(&mut p, 8000);
+        let date = FreeAgentFixtures::d(2026, 6, 1);
+        p.complete_free_agent_signing(
+            &FreeAgentFixtures::dest(4500),
+            date,
+            42,
+            4500,
+            Some(120_000),
+        );
+        p.process_transfer_shock(date, 0.45, 4500, "it", None);
+        assert_eq!(
+            FreeAgentFixtures::count(&p, HappinessEventType::DreamMove),
+            0,
+            "step-down free-agent landing must not fire DreamMove"
+        );
+    }
+
+    /// Free agent with NO career history (typical of generated players
+    /// fresh out of an academy and immediately released) must not
+    /// overfire — the helper returns None, the staged source rep stays
+    /// zero, and the source-aware gate fails closed.
+    #[test]
+    fn free_agent_with_unknown_history_does_not_overfire() {
+        let mut p = FreeAgentFixtures::player(22, 17.0, 2000);
+        // Deliberately no attach_released_from — empty history.
+        assert!(p.statistics_history.current.is_empty());
+        assert!(p.statistics_history.items.is_empty());
+        let date = FreeAgentFixtures::d(2026, 6, 1);
+        p.complete_free_agent_signing(
+            &FreeAgentFixtures::dest(9500),
+            date,
+            42,
+            9500,
+            Some(80_000),
+        );
+        let pending = p
+            .pending_signing
+            .as_ref()
+            .expect("pending signing staged");
+        assert_eq!(
+            pending.source_club_reputation, 0,
+            "unknown history must leave source rep at zero"
+        );
+        // Run the shock pipeline — the source-aware gate must keep
+        // silent because the source data is unknown.
+        p.process_transfer_shock(date, 0.95, 9500, "es", None);
+        assert_eq!(
+            FreeAgentFixtures::count(&p, HappinessEventType::DreamMove),
+            0,
+            "unknown free-agent history must not over-fire DreamMove"
+        );
+    }
+
+    /// Sanity check: the helper actually returns the rep stamped on a
+    /// frozen prior season too, not just the live `current` row.
+    #[test]
+    fn frozen_history_only_still_anchors_source_rep() {
+        use crate::club::player::statistics::PlayerStatisticsHistoryItem;
+        let mut p = FreeAgentFixtures::player(24, 14.0, 3000);
+        p.statistics_history
+            .items
+            .push(PlayerStatisticsHistoryItem {
+                season: Season::new(2024),
+                team_name: "previous".to_string(),
+                team_slug: "previous".to_string(),
+                team_reputation: 2_000,
+                league_name: String::new(),
+                league_slug: String::new(),
+                is_loan: false,
+                transfer_fee: None,
+                statistics: PlayerStatistics::default(),
+                seq_id: 7,
+            });
+        let date = FreeAgentFixtures::d(2026, 6, 1);
+        p.complete_free_agent_signing(
+            &FreeAgentFixtures::dest(9500),
+            date,
+            42,
+            9500,
+            Some(80_000),
+        );
+        let pending = p
+            .pending_signing
+            .as_ref()
+            .expect("pending signing staged");
+        assert_eq!(pending.source_club_reputation, 2_000);
+    }
 }

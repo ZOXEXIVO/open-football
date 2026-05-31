@@ -12,6 +12,13 @@ pub enum CareerDesireKind {
     /// Elite player wants to play for a genuine title challenger. Drives
     /// `WantsTitleChallenge`.
     TitleChallengeAmbition,
+    /// Sentimental move to a favourite/boyhood club that does not also
+    /// clear the source-aware DreamMove gates. Distinct from
+    /// `ReturnHomeAfterPoorAdaptation` because the player isn't escaping
+    /// a failed adaptation — they're answering a heritage pull. Drives
+    /// the `HomeReturnOpportunity` event when emitted by the favourite-
+    /// club permanent-signing branch.
+    FavoriteClubHomecoming,
 }
 
 impl CareerDesireKind {
@@ -24,6 +31,7 @@ impl CareerDesireKind {
             CareerDesireKind::CopaLibertadoresAmbition => "career_desire_kind_copa_libertadores",
             CareerDesireKind::StrongerSquadAmbition => "career_desire_kind_stronger_squad",
             CareerDesireKind::TitleChallengeAmbition => "career_desire_kind_title_challenge",
+            CareerDesireKind::FavoriteClubHomecoming => "career_desire_kind_favorite_club_homecoming",
         }
     }
 }

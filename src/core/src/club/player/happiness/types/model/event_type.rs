@@ -51,7 +51,16 @@ pub enum HappinessEventType {
     RoleMismatch,
     /// Signed for a club well above the player's expectations — an
     /// unambiguous step up (small-club talent joining Barça / Madrid).
+    /// Reserved for **permanent** moves whose destination club / league
+    /// reputation is materially above the source. Loans use
+    /// `DreamLoanOpportunity`; sentimental favourite-club moves that
+    /// don't pass the reputation gate use `HomeReturnOpportunity`.
     DreamMove,
+    /// High-profile loan to a club whose reputation dwarfs the parent
+    /// club — the "loan of a lifetime" framing without claiming a
+    /// career-defining move. Magnitude is intentionally lower than
+    /// `DreamMove` because loans are temporary.
+    DreamLoanOpportunity,
     /// New contract pays materially more than the previous deal — the
     /// positive counterpart to SalaryShock.
     SalaryBoost,

@@ -69,6 +69,18 @@ pub struct AdaptationConfig {
     /// is felt as a clear step up.
     pub dream_move_threshold: f32,
 
+    /// Minimum (dest - source) **club** reputation gap a permanent
+    /// transfer must clear for `DreamMove` to fire. Together with
+    /// `dream_move_source_league_gap` (either-axis), guards the dream
+    /// framing from regional / lateral moves where the player's own
+    /// reputation alone would otherwise satisfy the legacy gates.
+    pub dream_move_source_club_gap: u16,
+    /// Minimum (dest - source) **league** reputation gap a permanent
+    /// transfer must clear. Either-axis with
+    /// `dream_move_source_club_gap` — a Serie B → Premier League
+    /// move can fit even if the buying club is mid-table.
+    pub dream_move_source_league_gap: u16,
+
     /// Club reputation (0–10000) above which a signing carries elite prestige.
     pub elite_club_reputation: f32,
     /// Required gap between elite club reputation and the player's own
@@ -139,6 +151,9 @@ impl Default for AdaptationConfig {
             ambition_shock_floor: 10.0,
 
             dream_move_threshold: 1500.0,
+
+            dream_move_source_club_gap: 2000,
+            dream_move_source_league_gap: 1500,
 
             elite_club_reputation: 7500.0,
             elite_club_min_player_gap: 1500.0,
@@ -315,6 +330,9 @@ pub struct MoraleEventCatalog {
     pub salary_shock: f32,
     pub role_mismatch: f32,
     pub dream_move: f32,
+    /// Loan-of-a-lifetime base. Intentionally below `dream_move` —
+    /// even a loan to Real Madrid is temporary, not a career move.
+    pub dream_loan_opportunity: f32,
     pub salary_boost: f32,
     pub joining_elite: f32,
     // Lifecycle
@@ -511,6 +529,7 @@ impl Default for MoraleEventCatalog {
             salary_shock: -6.0,
             role_mismatch: -6.0,
             dream_move: 10.0,
+            dream_loan_opportunity: 6.0,
             salary_boost: 4.0,
             joining_elite: 6.0,
             contract_terminated: -3.0,
@@ -723,6 +742,7 @@ impl MoraleEventCatalog {
             SalaryShock => self.salary_shock,
             RoleMismatch => self.role_mismatch,
             DreamMove => self.dream_move,
+            DreamLoanOpportunity => self.dream_loan_opportunity,
             SalaryBoost => self.salary_boost,
             JoiningElite => self.joining_elite,
             ContractTerminated => self.contract_terminated,
@@ -1223,6 +1243,7 @@ mod tests {
             crate::HappinessEventType::LanguageProgress,
             crate::HappinessEventType::HomeReturnOpportunity,
             crate::HappinessEventType::ContinentalAmbitionSatisfied,
+            crate::HappinessEventType::DreamLoanOpportunity,
         ];
         for p in positives {
             assert!(cat.magnitude(p.clone()) > 0.0, "expected {:?} positive", p);

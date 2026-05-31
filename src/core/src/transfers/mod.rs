@@ -1,3 +1,4 @@
+pub mod country_pair_policy;
 pub mod market;
 pub mod negotiation;
 pub mod offer;
@@ -8,6 +9,7 @@ pub mod squad_needs;
 pub mod transfer;
 pub mod window;
 
+pub use country_pair_policy::*;
 pub use market::*;
 pub use negotiation::*;
 pub use offer::*;

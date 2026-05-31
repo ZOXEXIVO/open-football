@@ -47,6 +47,12 @@ pub enum TransferPlausibilityReason {
     #[allow(dead_code)]
     NoSportingUpside,
     LoanNotCredible,
+    /// Real-world country-pair friction closes this route on the
+    /// current sim date — see
+    /// [`crate::transfers::TransferRoutePolicy::is_blocked`]. The only
+    /// active rule today is Russia ↔ Ukraine from 2022-02-24 onwards;
+    /// the simulation refuses these moves at every stage.
+    CountryPairBlocked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -146,6 +152,11 @@ pub struct TransferPlausibilityInputs {
 
     pub same_country: bool,
     pub same_league_or_division: bool,
+    /// True when the (buyer-country, seller-country) pair is on the
+    /// real-world route block list for the current sim date. Populated
+    /// by the input builders. When set, [`TransferPlausibilityEvaluator::evaluate`]
+    /// short-circuits with `CountryPairBlocked` before any other gate.
+    pub country_pair_blocked: bool,
 
     pub buyer_transfer_budget: f64,
     pub buyer_wage_budget: u32,
@@ -328,6 +339,19 @@ impl TransferPlausibilityEvaluator {
     /// The evaluator is pure — no I/O, no randomness, fully deterministic
     /// from `inputs`.
     pub fn evaluate(inputs: &TransferPlausibilityInputs) -> TransferPlausibilityVerdict {
+        // Country-pair route closure (real-world political friction).
+        // Runs before any other gate — a closed route is closed
+        // regardless of how listed / unhappy / cheap the player is.
+        // Availability exemption does NOT unlock it; only an explicit
+        // manual override (web UI manual transfer staging) can move
+        // such a player, and even that is rejected at the execution
+        // chokepoint — see `country::result::transfers::execution`.
+        if inputs.country_pair_blocked {
+            return TransferPlausibilityVerdict::HardReject(
+                TransferPlausibilityReason::CountryPairBlocked,
+            );
+        }
+
         let importance = Self::player_importance(inputs);
         let drop = Self::sporting_drop(inputs);
         let exemption = inputs.availability_exemption();
@@ -473,6 +497,7 @@ pub(crate) struct BuyerPlausibilityContext {
     pub buyer_wage_budget: u32,
     pub buyer_total_wages: u32,
     pub buyer_country_id: u32,
+    pub buyer_country_code: String,
     pub buyer_league_id: Option<u32>,
 }
 
@@ -512,6 +537,7 @@ impl BuyerPlausibilityContext {
             buyer_wage_budget,
             buyer_total_wages,
             buyer_country_id: country.id,
+            buyer_country_code: country.code.clone(),
             buyer_league_id,
         }
     }
@@ -534,6 +560,7 @@ impl TransferPlausibilityBuilder {
         target: &PlayerSummary,
         is_loan: bool,
         is_unsolicited: bool,
+        date: NaiveDate,
     ) -> Option<TransferPlausibilityInputs> {
         let selling_club = country.clubs.iter().find(|c| c.id == target.club_id)?;
         let main_team = selling_club
@@ -564,6 +591,12 @@ impl TransferPlausibilityBuilder {
                 (Some(a), Some(b)) => a == b,
                 _ => false,
             };
+
+        let country_pair_blocked = crate::transfers::TransferRoutePolicy::is_blocked(
+            &target.country_code,
+            &buyer_ctx.buyer_country_code,
+            date,
+        );
 
         // Squad status / contract data — we may not have the full Player
         // here, so fall back to `NotYetSet` if unavailable. Status flags
@@ -624,6 +657,7 @@ impl TransferPlausibilityBuilder {
             release_clause_triggered: false,
             same_country,
             same_league_or_division,
+            country_pair_blocked,
             buyer_transfer_budget: buyer_ctx.buyer_transfer_budget,
             buyer_wage_budget: buyer_ctx.buyer_wage_budget,
             buyer_total_wages: buyer_ctx.buyer_total_wages,
@@ -639,8 +673,9 @@ impl TransferPlausibilityBuilder {
         target: &PlayerSummary,
         is_loan: bool,
         is_unsolicited: bool,
+        date: NaiveDate,
     ) -> Option<TransferPlausibilityVerdict> {
-        Self::from_summary(country, buyer_ctx, target, is_loan, is_unsolicited)
+        Self::from_summary(country, buyer_ctx, target, is_loan, is_unsolicited, date)
             .map(|i| TransferPlausibilityEvaluator::evaluate(&i))
     }
 
@@ -720,6 +755,12 @@ impl TransferPlausibilityBuilder {
             buyer_ctx.buyer_league_rep,
         );
 
+        // `from_clubs` operates on a single Country — buyer and seller
+        // both live there. Cross-country routes (the only ones the
+        // friction policy gates today) flow through `from_summary`
+        // exclusively, so this builder cannot trip the gate.
+        let country_pair_blocked = false;
+
         TransferPlausibilityInputs {
             buyer_rep: buyer_ctx.buyer_rep,
             seller_rep,
@@ -750,6 +791,7 @@ impl TransferPlausibilityBuilder {
             release_clause_triggered,
             same_country,
             same_league_or_division,
+            country_pair_blocked,
             buyer_transfer_budget: buyer_ctx.buyer_transfer_budget,
             buyer_wage_budget: buyer_ctx.buyer_wage_budget,
             buyer_total_wages: buyer_ctx.buyer_total_wages,
@@ -775,6 +817,7 @@ mod tests {
             player_home_rep: 5500,
             player_age: 26,
             position_group: PlayerFieldPositionGroup::Goalkeeper,
+            country_pair_blocked: false,
             is_listed: false,
             is_loan_listed: false,
             is_transfer_requested: false,
@@ -818,6 +861,26 @@ mod tests {
             "got {:?}",
             v
         );
+    }
+
+    #[test]
+    fn country_pair_block_short_circuits_before_other_gates() {
+        // A listed, unhappy, transfer-requested player who'd normally
+        // sail through every exemption is STILL blocked when the
+        // (buyer, seller) pair is on the route block list. The block
+        // wins over every soft exemption.
+        let mut inputs = base_inputs();
+        inputs.is_listed = true;
+        inputs.is_unhappy = true;
+        inputs.is_transfer_requested = true;
+        inputs.country_pair_blocked = true;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(matches!(
+            v,
+            TransferPlausibilityVerdict::HardReject(
+                TransferPlausibilityReason::CountryPairBlocked
+            )
+        ));
     }
 
     #[test]

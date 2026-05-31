@@ -1480,6 +1480,37 @@ impl PlayerStatisticsHistory {
         total
     }
 
+    /// Reputation of the most recent senior team the player has played
+    /// for, ignoring the now-inactive current spell. Looks at the
+    /// `current` slate first (the just-departed row carries the freshest
+    /// rep) and falls back to the highest-`seq_id` `items` row. Used by
+    /// the free-agent transfer-shock path to source-check a dream-move
+    /// gate that would otherwise read zero source rep and fail closed
+    /// for every released prospect.
+    ///
+    /// Returns `None` when the player has no prior senior history at
+    /// all (academy graduates with no senior appearances, generated
+    /// players with empty history). The caller treats `None` as
+    /// "unknown source, stay conservative" — i.e. dream-move gates
+    /// still fail closed in that case.
+    pub fn last_known_senior_team_reputation(&self) -> Option<u16> {
+        // Newest current entry by seq_id first — a just-released row
+        // sits there with a `departed_date` until the next season-end
+        // freeze flushes it into `items`.
+        let from_current = self
+            .current
+            .iter()
+            .max_by_key(|e| e.seq_id)
+            .map(|e| e.team_reputation);
+        if from_current.is_some() {
+            return from_current;
+        }
+        self.items
+            .iter()
+            .max_by_key(|i| i.seq_id)
+            .map(|i| i.team_reputation)
+    }
+
     /// Total competitive (league + cup) apps the player has logged for
     /// their current club across all spells: prior frozen seasons +
     /// current-season snapshot. `live_played` / `live_played_subs` come
@@ -1761,6 +1792,54 @@ mod club_career_apps_tests {
         let hist = PlayerStatisticsHistory::new();
         let apps = hist.current_club_career_apps(5, 2);
         assert_eq!(apps, 7);
+    }
+
+    /// Source-aware free-agent gate prerequisite: the helper must prefer
+    /// the freshest current-spell rep so a just-released prospect's last
+    /// club still anchors the dream-move gate.
+    #[test]
+    fn last_known_senior_team_reputation_prefers_current_over_items() {
+        let mut hist = PlayerStatisticsHistory::from_items(vec![frozen(
+            2024,
+            "small",
+            10,
+            0,
+        )]);
+        // Newest entry by seq_id, with `team_reputation` tagged to the
+        // freshest club — overrides the older 5000-rep historical row.
+        hist.current.push(CurrentSeasonEntry {
+            team_name: "small".to_string(),
+            team_slug: "small".to_string(),
+            team_reputation: 1_500,
+            league_name: String::new(),
+            league_slug: String::new(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            joined_date: d(2025, 8, 1),
+            departed_date: Some(d(2026, 5, 31)),
+            seq_id: 5,
+        });
+        assert_eq!(hist.last_known_senior_team_reputation(), Some(1_500));
+    }
+
+    /// Falls back to frozen items when the player has no current-season
+    /// rows yet (typical of free agents loaded with only prior seasons
+    /// on record).
+    #[test]
+    fn last_known_senior_team_reputation_falls_back_to_items() {
+        let hist = PlayerStatisticsHistory::from_items(vec![
+            frozen(2023, "early", 5, 0),
+            frozen(2024, "late", 12, 0),
+        ]);
+        assert!(hist.last_known_senior_team_reputation().is_some());
+    }
+
+    /// Empty history → no source anchor; the caller fails closed.
+    #[test]
+    fn last_known_senior_team_reputation_is_none_for_empty_history() {
+        let hist = PlayerStatisticsHistory::new();
+        assert_eq!(hist.last_known_senior_team_reputation(), None);
     }
 
     #[test]

@@ -404,11 +404,15 @@ impl Player {
         };
         let cfg = AdaptationConfig::default();
 
-        // Ambition / dream / elite-club reactions fire for loans too —
-        // being loaned to Real Madrid is still the move of your life, even
-        // if you're going back in a year. Loans pay at the borrowing club's
-        // loan wage (distinct from a full contract) so salary shock/boost
-        // is skipped for them; that lever is tuned for permanent moves.
+        // Ambition / elite-club reactions fire for loans too — being loaned
+        // to Real Madrid is still a real prestige moment, even if you're
+        // going back in a year. The *DreamMove* framing, by contrast, is
+        // reserved for **permanent** career-defining upward moves; loans
+        // get the dedicated `DreamLoanOpportunity` event instead so the
+        // "sealed the dream move of his career" copy never lands on a
+        // year-long borrow. Loans pay at the borrowing club's loan wage
+        // (distinct from a full contract) so salary shock/boost is skipped
+        // for them.
         let loan_damp = if pending.is_loan {
             cfg.loan_damp_factor
         } else {
@@ -422,18 +426,51 @@ impl Player {
         if !is_favorite_destination {
             self.emit_ambition_shock(club_rep_0_to_1, loan_damp);
         }
-        if is_favorite_destination {
-            // Signing for a childhood/legend club trumps the reputation-gap
-            // logic — fire DreamMove at full weight regardless of where the
-            // club sits on the prestige ladder. A player returning to boyhood
-            // club feels this even if it's a rep-drop move. Veterans get a
-            // softer boyhood-return event rather than a "dream move of his
-            // career" framing.
-            let mag = if self.age(now) >= 32 { 8.0 } else { 15.0 };
-            self.happiness
-                .add_event(HappinessEventType::DreamMove, mag * loan_damp);
+        // Source-aware classification. Loan-to-elite goes through the
+        // dedicated `DreamLoanOpportunity` framing; permanent-to-elite
+        // through `DreamMove`; favourite-club permanent moves prefer the
+        // sentimental `HomeReturnOpportunity` unless they ALSO clear the
+        // real dream-move gates. None of these branches double-emit.
+        let player_world_rep = self.player_attributes.world_reputation as f32;
+        let club_rep_abs = club_rep_0_to_1.clamp(0.0, 1.0) * 10000.0;
+        let source_aware_step_up = Self::is_source_aware_step_up(
+            club_rep_abs as u16,
+            league_reputation,
+            pending.source_club_reputation,
+            pending.source_league_reputation,
+        );
+        if pending.is_loan {
+            self.emit_dream_loan_opportunity(
+                club_rep_0_to_1,
+                player_world_rep,
+                source_aware_step_up,
+                loan_damp,
+                now,
+            );
+        } else if is_favorite_destination {
+            // Permanent favourite-club move: prefer the sentimental
+            // homecoming framing. Only upgrade to DreamMove when the
+            // numbers also justify it (real reputation step-up over the
+            // source club / league).
+            let real_dream =
+                source_aware_step_up && self.passes_dream_move_gates(club_rep_0_to_1, now);
+            if real_dream {
+                self.emit_dream_move_with_source(
+                    club_rep_0_to_1,
+                    source_aware_step_up,
+                    loan_damp,
+                    now,
+                );
+            } else {
+                self.emit_favourite_club_homecoming(now);
+            }
         } else {
-            self.emit_dream_move(club_rep_0_to_1, loan_damp, now);
+            self.emit_dream_move_with_source(
+                club_rep_0_to_1,
+                source_aware_step_up,
+                loan_damp,
+                now,
+            );
         }
         self.emit_joining_elite(club_rep_0_to_1, loan_damp);
 
@@ -491,8 +528,11 @@ impl Player {
         // they latch on top of the fresh state. Cooldowns prevent any
         // duplicate emission if process_transfer_shock fires twice for
         // the same signing (defensive guard — pending_signing is
-        // single-shot today).
-        self.emit_continental_satisfaction_on_signing(&pending, club_rep_0_to_1);
+        // single-shot today). The continental helper consults the
+        // UEFA-suspension policy — a top Russian club after 2022-02-28
+        // can't satisfy a "wants Europe" desire because the club itself
+        // can't enter Europe regardless of reputation.
+        self.emit_continental_satisfaction_on_signing(&pending, club_rep_0_to_1, country_code, now);
         self.emit_home_return_satisfaction_on_signing(&pending, country_code);
 
         // Transfer-environment realism: weak↔elite and star↔weak
@@ -518,6 +558,8 @@ impl Player {
         &mut self,
         pending: &PendingSigning,
         club_rep_0_to_1: f32,
+        country_code: &str,
+        now: NaiveDate,
     ) {
         if !(pending.had_european_desire || pending.had_libertadores_desire) {
             return;
@@ -526,6 +568,16 @@ impl Player {
         // is the floor for a credible "you got Europe" / "you got
         // Libertadores" moment. Below that the move's a step-up at most.
         if club_rep_0_to_1 < 0.55 {
+            return;
+        }
+        // Federation suspension: a club whose country is currently
+        // barred from UEFA can't satisfy a `WantsEuropeanCompetition`
+        // desire, no matter its reputation. The Libertadores branch is
+        // South-American so suspension doesn't apply, but the European
+        // one is gated specifically by the club's country.
+        if pending.had_european_desire
+            && crate::transfers::TransferRoutePolicy::is_uefa_suspended(country_code, now)
+        {
             return;
         }
         let cfg = HappinessConfig::default();
@@ -685,7 +737,38 @@ impl Player {
         );
     }
 
-    fn emit_dream_move(&mut self, club_rep_0_to_1: f32, damp: f32, now: NaiveDate) {
+    /// Source-aware step-up predicate: a permanent "dream" move requires
+    /// the destination to be **meaningfully** bigger than where the
+    /// player came from. Two-axis check — either the club rep jumps by
+    /// at least `dream_move_source_club_gap` (default 2000) or the
+    /// league rep jumps by `dream_move_source_league_gap` (default 1500).
+    /// Either gap is enough; both is gilding.
+    ///
+    /// A move with no source data (free agent, manual stage with zero
+    /// source rep) deliberately fails the gate — DreamMove should not
+    /// fire on a free-agent landing without independent evidence.
+    fn is_source_aware_step_up(
+        dest_club_rep: u16,
+        dest_league_rep: u16,
+        source_club_rep: u16,
+        source_league_rep: u16,
+    ) -> bool {
+        let cfg = AdaptationConfig::default();
+        if source_club_rep == 0 && source_league_rep == 0 {
+            return false;
+        }
+        let club_gap = (dest_club_rep as i32) - (source_club_rep as i32);
+        let league_gap = (dest_league_rep as i32) - (source_league_rep as i32);
+        club_gap >= cfg.dream_move_source_club_gap as i32
+            || league_gap >= cfg.dream_move_source_league_gap as i32
+    }
+
+    /// All non-source dream-move gates the legacy `emit_dream_move`
+    /// enforced: ambition surplus, player-world-rep margin, and the
+    /// age-band cutoffs. Pulled out so the favourite-club branch can
+    /// check whether a sentimental move ALSO qualifies as a real dream
+    /// move without firing the event itself.
+    fn passes_dream_move_gates(&self, club_rep_0_to_1: f32, now: NaiveDate) -> bool {
         let cfg = AdaptationConfig::default();
         let ambition = self.attributes.ambition;
         let expected_rep =
@@ -693,40 +776,157 @@ impl Player {
         let club_rep = club_rep_0_to_1 * 10000.0;
         let surplus = club_rep - expected_rep;
         if surplus < cfg.dream_move_threshold {
-            return;
+            return false;
         }
-
-        // Player-reputation gate. A "dream move" requires the new club to
-        // be meaningfully bigger than where the player has been. Pinsoglio
-        // (Juventus reserve, world_rep ~4500) joining Cittadella (rep ~3000)
-        // is a step DOWN, never a dream — even if his ambition is modest.
-        // Require the club to sit at least 1000 rep above the player's
-        // own world rep before the framing fits.
         let player_world_rep = self.player_attributes.world_reputation as f32;
         if club_rep <= player_world_rep + 1000.0 {
-            return;
+            return false;
         }
-
-        // Age gate. "Dream move of his career" doesn't fit a 32+ veteran —
-        // late-career moves are pragmatic, not dream-fulfilment. For 32+
-        // require an extra 1500 rep margin; over 35, suppress unless the
-        // destination is an outright elite club.
         let age = self.age(now);
         if age >= 32 && club_rep < player_world_rep + 2500.0 {
-            return;
+            return false;
         }
         if age >= 35 && club_rep < cfg.elite_club_reputation {
+            return false;
+        }
+        true
+    }
+
+    /// Permanent **DreamMove** with full source-awareness. Emits only
+    /// when both the legacy ambition / world-rep / age gates pass AND
+    /// the source club / league reputation gap is meaningful. Loans
+    /// must go through `emit_dream_loan_opportunity` instead.
+    fn emit_dream_move_with_source(
+        &mut self,
+        club_rep_0_to_1: f32,
+        source_aware_step_up: bool,
+        damp: f32,
+        now: NaiveDate,
+    ) {
+        if !source_aware_step_up {
             return;
         }
-
-        // Magnitude scales with how far above expectations the move is;
-        // ambitious players (high `ambition`) also feel it more strongly.
+        if !self.passes_dream_move_gates(club_rep_0_to_1, now) {
+            return;
+        }
+        let cfg = AdaptationConfig::default();
+        let ambition = self.attributes.ambition;
+        let expected_rep =
+            (ambition - cfg.ambition_dream_floor).max(0.0) * cfg.ambition_to_expected_rep_factor;
+        let club_rep = club_rep_0_to_1 * 10000.0;
+        let surplus = club_rep - expected_rep;
+        let age = self.age(now);
         let severity = (surplus / 6000.0).clamp(0.5, 2.0);
         let ambition_weight = (ambition / 20.0).clamp(0.4, 1.2);
         let age_dampen = if age >= 32 { 0.6 } else { 1.0 };
         self.happiness.add_event(
             HappinessEventType::DreamMove,
             10.0 * severity * ambition_weight * damp * age_dampen,
+        );
+    }
+
+    /// Loan equivalent of `emit_dream_move_with_source`. Fires only for
+    /// genuinely top-tier loan destinations — the borrowing club sits
+    /// at/above the elite-reputation floor AND meaningfully above the
+    /// parent club. Magnitude pulls from `dream_loan_opportunity` so
+    /// the lift stays smaller than a permanent dream move (it's still
+    /// a temporary borrow). Suppressed at 35+: late-career loans don't
+    /// fit the "opportunity" narrative.
+    ///
+    /// The emitted event carries a full `HappinessEventContext` so the
+    /// event page can explain why it fired: the destination is elite
+    /// (`JoinedEliteClub`), the parent ↔ destination reputation gap is
+    /// meaningful (`ReputationGap`), the player's own ambition tipped
+    /// the framing toward "opportunity" rather than "development loan"
+    /// (`HighAmbition` when applicable), and the temporary nature is
+    /// surfaced via the `SettlingInProgress` follow-up.
+    fn emit_dream_loan_opportunity(
+        &mut self,
+        club_rep_0_to_1: f32,
+        player_world_rep: f32,
+        source_aware_step_up: bool,
+        damp: f32,
+        now: NaiveDate,
+    ) {
+        let cfg = AdaptationConfig::default();
+        let club_rep = club_rep_0_to_1 * 10000.0;
+        // Borrowing club must be elite — otherwise it's an ordinary
+        // development loan, not a "loan of a lifetime".
+        if club_rep < cfg.elite_club_reputation {
+            return;
+        }
+        // Must also be a step up relative to where the player came from
+        // — a star at Juventus loaned to Real Madrid is one thing; a
+        // squad swap inside the same tier isn't.
+        if !source_aware_step_up {
+            return;
+        }
+        // Player-world-rep margin keeps the framing reserved for players
+        // for whom the move is genuinely a level up.
+        if club_rep <= player_world_rep + 1000.0 {
+            return;
+        }
+        // Age gate. Veterans go out on loan for minutes, not prestige.
+        let age = self.age(now);
+        if age >= 35 {
+            return;
+        }
+        let cat = HappinessConfig::default().catalog;
+        let base = cat.dream_loan_opportunity;
+        let ambition = self.attributes.ambition;
+        let ambition_weight = (ambition / 20.0).clamp(0.5, 1.2);
+        let age_dampen = if age >= 32 { 0.7 } else { 1.0 };
+        let mag = base * ambition_weight * damp * age_dampen;
+
+        let mut ev_ctx = HappinessEventContext::new(
+            HappinessEventCause::ReputationAdmiration,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_evidence(HappinessEventEvidence::JoinedEliteClub)
+        .with_evidence(HappinessEventEvidence::ReputationGap)
+        .with_follow_up(HappinessEventFollowUp::SettlingInProgress);
+        if ambition >= 14.0 {
+            ev_ctx = ev_ctx.with_evidence(HappinessEventEvidence::HighAmbition);
+        }
+        self.happiness.add_event_with_context(
+            HappinessEventType::DreamLoanOpportunity,
+            mag,
+            None,
+            ev_ctx,
+        );
+    }
+
+    /// Sentimental homecoming event for a permanent move to a favourite
+    /// club that does NOT clear the source-aware dream-move gates. Tagged
+    /// with the dedicated `FavoriteClubHomecoming` desire kind — the
+    /// player isn't escaping a failed adaptation, they're answering a
+    /// heritage pull, so the framing must not borrow the
+    /// `ReturnHomeAfterPoorAdaptation` flavour. The event itself stays
+    /// `HomeReturnOpportunity` so the existing follow-up / "likely to
+    /// settle" wiring keeps working; only the context kind changes so
+    /// the renderer can pick favourite-specific copy.
+    fn emit_favourite_club_homecoming(&mut self, now: NaiveDate) {
+        let cfg = HappinessConfig::default();
+        let base = cfg.catalog.home_return_opportunity;
+        // Veterans get the same softer signal — boyhood return is
+        // already a settling moment, not a fresh ambition lift.
+        let mag = if self.age(now) >= 32 { base * 0.7 } else { base };
+        let desire_ctx = CareerDesireEventContext::new(CareerDesireKind::FavoriteClubHomecoming)
+            .with_evidence(CareerDesireEvidence::HomeOrFavouriteLink);
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::SupporterIdentification,
+            HappinessEventSeverity::from_magnitude(mag),
+            HappinessEventScope::Personal,
+        )
+        .with_career_desire_context(desire_ctx)
+        .with_follow_up(HappinessEventFollowUp::LikelyToSettle);
+        self.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::HomeReturnOpportunity,
+            mag,
+            None,
+            happiness_ctx,
+            120,
         );
     }
 
@@ -2464,34 +2664,73 @@ mod dream_move_gating_tests {
             .count()
     }
 
+    fn dream_loan_count(p: &Player) -> usize {
+        p.happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::DreamLoanOpportunity)
+            .count()
+    }
+
+    fn home_return_count(p: &Player) -> usize {
+        p.happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::HomeReturnOpportunity)
+            .count()
+    }
+
+    /// Helper that exercises the source-aware permanent emit pathway —
+    /// `passes_dream_move_gates` + `is_source_aware_step_up`.
+    fn try_emit_dream_move_with_source(
+        p: &mut Player,
+        dest_club_rep_0_to_1: f32,
+        dest_league_rep: u16,
+        source_club_rep: u16,
+        source_league_rep: u16,
+        now: NaiveDate,
+    ) {
+        let dest_club_abs = (dest_club_rep_0_to_1 * 10000.0) as u16;
+        let step_up = Player::is_source_aware_step_up(
+            dest_club_abs,
+            dest_league_rep,
+            source_club_rep,
+            source_league_rep,
+        );
+        p.emit_dream_move_with_source(dest_club_rep_0_to_1, step_up, 1.0, now);
+    }
+
     #[test]
     fn pinsoglio_to_cittadella_does_not_fire_dream_move() {
         // 36yo high-rep keeper from Juventus (world_rep ~4500) joining
-        // Cittadella (rep ~3000 → 0.30 normalised). Should NOT fire.
+        // Cittadella (rep ~3000 → 0.30 normalised). Source-aware: from
+        // Juventus (club rep 9000, Serie A 8500) → Cittadella (3000, 5000)
+        // is a STEP DOWN, gate fails immediately.
         let mut p = player(36, 10.0, 4500);
         let now = d(2026, 4, 26);
-        p.emit_dream_move(0.30, 1.0, now);
+        try_emit_dream_move_with_source(&mut p, 0.30, 5000, 9000, 8500, now);
         assert_eq!(dream_count(&p), 0);
     }
 
     #[test]
     fn step_down_at_any_age_does_not_fire_dream_move() {
         // 25yo player with world_rep 6000 joining a club at rep 4000.
+        // Source club bigger than destination — source-aware gate fails.
         let mut p = player(25, 12.0, 6000);
         let now = d(2026, 4, 26);
-        p.emit_dream_move(0.40, 1.0, now);
+        try_emit_dream_move_with_source(&mut p, 0.40, 5000, 6500, 6000, now);
         assert_eq!(dream_count(&p), 0);
     }
 
     #[test]
     fn young_prospect_to_top_club_fires_dream_move() {
-        // 22yo with modest world_rep 2000 joining a top club (rep 8500).
-        // Ambition 10 keeps expected_rep at ~4000 — surplus is well above
-        // the dream_move_threshold and the rep gate (club > player + 1000)
-        // is comfortably met.
+        // 22yo with modest world_rep 2000 at a small club (rep 1500,
+        // tier-3 league rep 2500) joining a top club (rep 8500, Premier
+        // League ~9500). Source-aware gap is huge on both axes; legacy
+        // gates also pass.
         let mut p = player(22, 10.0, 2000);
         let now = d(2026, 4, 26);
-        p.emit_dream_move(0.85, 1.0, now);
+        try_emit_dream_move_with_source(&mut p, 0.85, 9500, 1500, 2500, now);
         assert_eq!(dream_count(&p), 1);
     }
 
@@ -2501,12 +2740,12 @@ mod dream_move_gating_tests {
         // 32+ requires 2500+ gap, so this should NOT fire.
         let mut p = player(33, 12.0, 5000);
         let now = d(2026, 4, 26);
-        p.emit_dream_move(0.60, 1.0, now);
+        try_emit_dream_move_with_source(&mut p, 0.60, 6000, 3500, 4000, now);
         assert_eq!(dream_count(&p), 0);
 
         // Same player to a clearly elite club: world_rep 5000, club 8000.
         let mut p2 = player(33, 12.0, 5000);
-        p2.emit_dream_move(0.80, 1.0, now);
+        try_emit_dream_move_with_source(&mut p2, 0.80, 8000, 3500, 4000, now);
         assert_eq!(dream_count(&p2), 1);
     }
 
@@ -2516,13 +2755,165 @@ mod dream_move_gating_tests {
         // not elite (< 7500). 35+ gate should suppress.
         let mut p = player(36, 12.0, 3000);
         let now = d(2026, 4, 26);
-        p.emit_dream_move(0.60, 1.0, now);
+        try_emit_dream_move_with_source(&mut p, 0.60, 6000, 2500, 3000, now);
         assert_eq!(dream_count(&p), 0);
 
         // Same player to genuinely elite club (rep 8500). Fires.
         let mut p2 = player(36, 12.0, 3000);
-        p2.emit_dream_move(0.85, 1.0, now);
+        try_emit_dream_move_with_source(&mut p2, 0.85, 9500, 2500, 3000, now);
         assert_eq!(dream_count(&p2), 1);
+    }
+
+    // ── Source-aware gate ──────────────────────────────────────────
+
+    #[test]
+    fn source_aware_step_up_requires_meaningful_gap() {
+        // Both gaps under the threshold — fails.
+        assert!(!Player::is_source_aware_step_up(5500, 6000, 4500, 5500));
+        // Club gap clears (2000) — passes.
+        assert!(Player::is_source_aware_step_up(6500, 6000, 4500, 5500));
+        // League gap clears (1500), club gap doesn't — passes (either-axis).
+        assert!(Player::is_source_aware_step_up(5500, 7000, 4500, 5500));
+        // Zero source data (free agent, untagged) — fails.
+        assert!(!Player::is_source_aware_step_up(9500, 9500, 0, 0));
+    }
+
+    #[test]
+    fn spartak_to_dynamo_kyiv_is_not_a_dream_move() {
+        // Lateral RU↔UA loan-or-permanent: Spartak Moscow (club ~7000,
+        // RPL ~6500) ↔ Dynamo Kyiv (club ~6500, UPL ~5500). Source
+        // bigger than destination — even a young Spartak prospect on
+        // ambition 14 must NOT see this as a dream move.
+        let mut p = player(20, 14.0, 4500);
+        let now = d(2026, 4, 26);
+        try_emit_dream_move_with_source(&mut p, 0.65, 5500, 7000, 6500, now);
+        assert_eq!(dream_count(&p), 0);
+    }
+
+    // ── Loan-specific behaviour ────────────────────────────────────
+
+    #[test]
+    fn ordinary_loan_does_not_fire_dream_move() {
+        // 19yo prospect from a small club loaned to a mid-table side.
+        // Even with high ambition, the LOAN path must never emit
+        // DreamMove — that copy is reserved for permanent moves.
+        let mut p = player(19, 16.0, 1500);
+        let now = d(2026, 4, 26);
+        // Direct dream-move path is gated by source-aware step-up,
+        // but the loan branch in process_transfer_shock skips it
+        // entirely — confirm via the loan helper.
+        p.emit_dream_loan_opportunity(0.55, 1500.0, true, 0.7, now);
+        assert_eq!(dream_count(&p), 0);
+        // Non-elite destination — loan event also doesn't fire.
+        assert_eq!(dream_loan_count(&p), 0);
+    }
+
+    #[test]
+    fn loan_to_elite_club_fires_dream_loan_opportunity() {
+        // 19yo prospect at a small club, loaned to Real Madrid (club
+        // rep ~9500). Source-aware gap is large, destination is elite,
+        // player is young — the dedicated loan event fires.
+        let mut p = player(19, 14.0, 1500);
+        let now = d(2026, 4, 26);
+        let step_up = Player::is_source_aware_step_up(9500, 9500, 1500, 2500);
+        p.emit_dream_loan_opportunity(0.95, 1500.0, step_up, 0.7, now);
+        assert_eq!(dream_count(&p), 0);
+        assert_eq!(dream_loan_count(&p), 1);
+    }
+
+    #[test]
+    fn veteran_loan_does_not_fire_dream_loan_opportunity() {
+        // 35+ players go out on loan for minutes, not prestige —
+        // the "opportunity" framing doesn't fit.
+        let mut p = player(36, 14.0, 4000);
+        let now = d(2026, 4, 26);
+        let step_up = Player::is_source_aware_step_up(9500, 9500, 4000, 5000);
+        p.emit_dream_loan_opportunity(0.95, 4000.0, step_up, 0.7, now);
+        assert_eq!(dream_loan_count(&p), 0);
+    }
+
+    // ── Favourite-club handling ───────────────────────────────────
+
+    #[test]
+    fn favourite_club_loan_never_emits_dream_move() {
+        // Loan landing at a favourite club: caller in
+        // `process_transfer_shock` ALWAYS routes loans through
+        // `emit_dream_loan_opportunity`, never through the dream-move
+        // branch. Validate by exercising both helpers and confirming
+        // neither writes a DreamMove for the loan profile.
+        let mut p = player(20, 14.0, 3000);
+        let now = d(2026, 4, 26);
+        // Source-aware step-up but loan path:
+        let step_up = Player::is_source_aware_step_up(9500, 9500, 3500, 4500);
+        p.emit_dream_loan_opportunity(0.95, 3000.0, step_up, 0.7, now);
+        assert_eq!(dream_count(&p), 0);
+    }
+
+    #[test]
+    fn favourite_club_permanent_without_step_up_emits_homecoming() {
+        // Permanent move to a favourite club whose reputation is lower
+        // than where the player came from. Source-aware gate fails →
+        // DreamMove suppressed → sentimental HomeReturnOpportunity
+        // fires instead.
+        let mut p = player(28, 12.0, 6000);
+        let now = d(2026, 4, 26);
+        let step_up = Player::is_source_aware_step_up(5500, 5500, 8000, 8500);
+        // Branch logic mirrored from process_transfer_shock:
+        if step_up && p.passes_dream_move_gates(0.55, now) {
+            p.emit_dream_move_with_source(0.55, step_up, 1.0, now);
+        } else {
+            p.emit_favourite_club_homecoming(now);
+        }
+        assert_eq!(dream_count(&p), 0);
+        assert_eq!(home_return_count(&p), 1);
+    }
+
+    #[test]
+    fn favourite_club_permanent_with_real_step_up_still_emits_dream_move() {
+        // Boyhood club happens to also be a clear step-up: small-club
+        // talent rejoining a now-grown favourite. DreamMove DOES fire
+        // because the move ALSO passes the real gates.
+        let mut p = player(22, 14.0, 2000);
+        let now = d(2026, 4, 26);
+        let step_up = Player::is_source_aware_step_up(9000, 9500, 2000, 2500);
+        if step_up && p.passes_dream_move_gates(0.90, now) {
+            p.emit_dream_move_with_source(0.90, step_up, 1.0, now);
+        } else {
+            p.emit_favourite_club_homecoming(now);
+        }
+        assert_eq!(dream_count(&p), 1);
+        assert_eq!(home_return_count(&p), 0);
+    }
+
+    /// Polish guard: a favourite-club move outside the home country and
+    /// outside any failed-adaptation context must still emit the
+    /// homecoming event, AND its CareerDesireEventContext must carry
+    /// the dedicated `FavoriteClubHomecoming` kind — not the
+    /// `ReturnHomeAfterPoorAdaptation` flavour the field reused before
+    /// the polish pass.
+    #[test]
+    fn favourite_club_homecoming_uses_dedicated_desire_kind() {
+        use crate::CareerDesireKind;
+        let mut p = player(25, 12.0, 5000);
+        let now = d(2026, 4, 26);
+        p.emit_favourite_club_homecoming(now);
+        assert_eq!(home_return_count(&p), 1);
+        let ev = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::HomeReturnOpportunity)
+            .expect("event present");
+        let kind = ev
+            .context
+            .as_ref()
+            .and_then(|c| c.career_desire_context.as_ref())
+            .map(|cd| cd.kind);
+        assert_eq!(
+            kind,
+            Some(CareerDesireKind::FavoriteClubHomecoming),
+            "favourite-club move must not borrow the poor-adaptation flavour"
+        );
     }
 }
 
@@ -3024,5 +3415,84 @@ mod transfer_environment_tests {
             flavor.event_type,
             HappinessEventType::RolePathBlockedAtEliteClub
         );
+    }
+
+    // ── Full process_transfer_shock pipeline (Spartak ↔ Dynamo Kyiv,
+    //    elite-club loan, favourite-club permanent) ──────────────────
+
+    #[test]
+    fn spartak_loan_to_dynamo_kyiv_never_fires_dream_move() {
+        // 19yo Spartak Moscow prospect (ambition 14, world rep 3500)
+        // loaned to Dynamo Kyiv. Source reps: club 7000, RPL 6500.
+        // Dest reps: club 0.65 → 6500, UPL 5500. Lateral cross-country
+        // move — DreamMove must NOT fire, and the dedicated
+        // DreamLoanOpportunity must also be silent (dest is not
+        // elite-tier).
+        let mut p = player_with(19, 14.0, 3500, 3500, 130, 12.0, 12.0, 10.0);
+        let now = d(2026, 4, 26);
+        let pend = pending(/* dest */ 200, 1_000_000.0, /* loan */ true, 7000, 6500, Some(2));
+        p.pending_signing = Some(pend);
+        p.process_transfer_shock(now, 0.65, 5500, "ua", None);
+        assert_eq!(count(&p, HappinessEventType::DreamMove), 0);
+        assert_eq!(count(&p, HappinessEventType::DreamLoanOpportunity), 0);
+    }
+
+    #[test]
+    fn permanent_small_club_to_real_madrid_fires_dream_move() {
+        // 22yo at a small club (source club 1500, league 2500) joining
+        // Real Madrid (dest 0.95 → 9500, league 9500). Source-aware
+        // gap is huge — DreamMove fires, DreamLoanOpportunity stays
+        // silent on a permanent move.
+        let mut p = player_with(22, 14.0, 2000, 2000, 130, 12.0, 12.0, 10.0);
+        let now = d(2026, 4, 26);
+        let pend = pending(
+            /* dest */ 200,
+            30_000_000.0,
+            /* loan */ false,
+            1500,
+            2500,
+            Some(2),
+        );
+        p.pending_signing = Some(pend);
+        p.process_transfer_shock(now, 0.95, 9500, "es", None);
+        assert_eq!(count(&p, HappinessEventType::DreamMove), 1);
+        assert_eq!(count(&p, HappinessEventType::DreamLoanOpportunity), 0);
+    }
+
+    #[test]
+    fn loan_small_club_to_real_madrid_fires_dream_loan_opportunity() {
+        // Same young prospect, but on LOAN to Real Madrid. The dream
+        // move framing is suppressed; the dedicated loan event fires
+        // instead with its smaller magnitude.
+        let mut p = player_with(20, 14.0, 2000, 2000, 130, 12.0, 12.0, 10.0);
+        let now = d(2026, 4, 26);
+        let pend = pending(
+            /* dest */ 200,
+            0.0,
+            /* loan */ true,
+            1500,
+            2500,
+            Some(4),
+        );
+        p.pending_signing = Some(pend);
+        p.process_transfer_shock(now, 0.95, 9500, "es", None);
+        assert_eq!(count(&p, HappinessEventType::DreamMove), 0);
+        assert_eq!(count(&p, HappinessEventType::DreamLoanOpportunity), 1);
+    }
+
+    #[test]
+    fn favourite_club_loan_does_not_emit_dream_move() {
+        // Favourite-club LOAN. Even with the favourite flag set, the
+        // loan path skips the DreamMove framing entirely.
+        let mut p = player_with(20, 14.0, 3000, 3000, 130, 12.0, 12.0, 10.0);
+        p.favorite_clubs.push(200);
+        let now = d(2026, 4, 26);
+        let pend = pending(/* dest */ 200, 0.0, /* loan */ true, 6000, 6500, Some(2));
+        p.pending_signing = Some(pend);
+        // Mid-tier destination — even the loan-opportunity event
+        // should stay silent (not elite).
+        p.process_transfer_shock(now, 0.55, 5500, "es", None);
+        assert_eq!(count(&p, HappinessEventType::DreamMove), 0);
+        assert_eq!(count(&p, HappinessEventType::DreamLoanOpportunity), 0);
     }
 }

@@ -927,6 +927,7 @@ impl PipelineProcessor {
                             p,
                             false,
                             true,
+                            date,
                         )
                     {
                         return false;

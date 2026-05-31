@@ -68,6 +68,13 @@ pub struct TransferDesireContext {
     pub destination_is_favourite: bool,
     /// True if the club country == player nationality country.
     pub club_in_home_country: bool,
+    /// True when the player's current club country is currently barred
+    /// from UEFA competitions (Russia after 2022-02-28). When set, the
+    /// European-ambition detector must NOT let its elite-club shortcut
+    /// suppress the desire mood — a top Russian club CAN'T offer
+    /// continental football regardless of reputation, so its ambitious
+    /// stars are legitimately frustrated.
+    pub country_uefa_suspended: bool,
 }
 
 impl TransferDesireContext {
@@ -114,6 +121,14 @@ impl TransferDesireContext {
 
         let club_in_home_country = club_country_id != 0 && club_country_id == player.country_id;
 
+        // UEFA-suspension flag (Russia after 2022-02-28). Treated as a
+        // first-class continental ban so the elite-reputation shortcut
+        // cannot paper over a real federation suspension.
+        let country_uefa_suspended = crate::transfers::TransferRoutePolicy::is_uefa_suspended(
+            &country_code,
+            gc.simulation.date.date(),
+        );
+
         // Continental-access picture — see
         // [`ContinentalPathHeuristic::is_on_path`] for the realism rules.
         // Live continental-cup state (current participant / qualified for
@@ -121,7 +136,9 @@ impl TransferDesireContext {
         // default to "unknown"; the reputation-based elite floors carry the
         // realism and keep elite European clubs (Real Madrid, Bayern, …)
         // off the "wants Europe" path. The season-position fallback only
-        // kicks in once the table is meaningful.
+        // kicks in once the table is meaningful. UEFA-suspended countries
+        // feed `continental_ban` so a top Russian club is treated as
+        // banned regardless of reputation.
         let continental_access = ContinentalAccessContext {
             current_continental_competition: None,
             qualified_for_next_continental_competition: None,
@@ -132,7 +149,7 @@ impl TransferDesireContext {
             league_size,
             season_progress,
             club_continent_id,
-            continental_ban: false,
+            continental_ban: country_uefa_suspended,
         };
         let has_continental_path_hint = ContinentalPathHeuristic::from_access(&continental_access)
             .is_on_path(&continental_access);
@@ -169,6 +186,7 @@ impl TransferDesireContext {
             same_language_or_nationality_teammates,
             destination_is_favourite,
             club_in_home_country,
+            country_uefa_suspended,
         }
     }
 }
@@ -2114,5 +2132,62 @@ mod career_desire_tests {
             found,
             "expected EuropeanCompetitionOpportunity evidence on the staged event"
         );
+    }
+
+    // ── UEFA suspension (Russia) ────────────────────────────────
+
+    #[test]
+    fn russian_elite_club_does_not_suppress_european_desire() {
+        // Spartak Moscow at elite reputation: pre-suspension the
+        // elite-club shortcut would mark it "on path" and suppress the
+        // ambition mood. With the country flagged as UEFA-suspended,
+        // the shortcut must NOT fire — an ambitious top-tier player
+        // there is legitimately frustrated.
+        let today = d(2026, 5, 1);
+        let mut p = build(26, 17.0, 12.0, 10.0, 12.0, 1, 150, 5500, 60, today);
+        let mut ctx = TransferDesireContext::default();
+        ctx.country_code = "ru".to_string();
+        ctx.club_continent_id = 1;
+        ctx.player_nationality_continent_id = 1;
+        ctx.league_reputation = 7000;
+        // Elite reputation that WOULD trip the suppression off-the-bat.
+        ctx.club_reputation = 0.85;
+        ctx.main_league_tier = 1;
+        // The from_global wiring would set this from the policy;
+        // emulate that here.
+        ctx.country_uefa_suspended = true;
+        ctx.continental_path_known_absent = true;
+        ctx.has_continental_path_hint = false;
+        let fired = p.detect_continental_competition_desire(today, &ctx);
+        assert!(
+            fired,
+            "ambitious player at UEFA-suspended Russian elite club must voice desire"
+        );
+        assert_eq!(
+            count_event(&p, HappinessEventType::WantsEuropeanCompetition),
+            1
+        );
+    }
+
+    #[test]
+    fn uefa_suspension_flows_through_continental_access() {
+        // Cross-check: ContinentalAccessContext treats the suspension
+        // as a continental ban, so the path heuristic refuses to mark
+        // the club as on-path regardless of reputation. Mirrors what
+        // `from_global` builds on every weekly tick.
+        let access = ContinentalAccessContext {
+            club_reputation: 0.90,
+            league_reputation: 7000,
+            main_league_tier: 1,
+            league_position: 1,
+            league_size: 16,
+            season_progress: 0.5,
+            club_continent_id: 1,
+            continental_ban: true, // UEFA suspension
+            ..Default::default()
+        };
+        let on_path = ContinentalPathHeuristic::from_access(&access).is_on_path(&access);
+        assert!(!on_path, "suspended club must NOT register as on-path");
+        assert!(access.path_known_absent());
     }
 }

@@ -4,6 +4,7 @@ use crate::club::player::calculators::WageCalculator;
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
 use crate::simulator::SimulatorData;
+use crate::transfers::TransferRoutePolicy;
 use crate::transfers::market::{ClauseTrigger, TransferMarket};
 use crate::transfers::offer::TransferClause;
 use crate::transfers::pipeline::PipelineProcessor;
@@ -80,6 +81,45 @@ pub(crate) fn execute_transfer(
             .unwrap_or(false);
         if already_on_loan {
             debug!("Blocked re-loan: player {} is already on loan", player_id);
+            return false;
+        }
+    }
+
+    // Country-pair route policy: this is the final chokepoint every AI
+    // and stale-negotiation path flows through, so a closed route
+    // (Russia ↔ Ukraine from 2022-02-24 onwards) is refused here even
+    // if a prior gate let the transfer reach DeferredTransfer staging.
+    // Domestic moves resolve into the same code path with
+    // `selling_country_id == buying_country_id`, but the route policy
+    // is symmetric and only matches cross-country pairs, so the
+    // domestic case is automatically inert.
+    if selling_country_id != buying_country_id {
+        let selling_country_code = data
+            .country(selling_country_id)
+            .map(|c| c.code.clone())
+            .unwrap_or_default();
+        let buying_country_code = data
+            .country(buying_country_id)
+            .map(|c| c.code.clone())
+            .unwrap_or_default();
+        if !selling_country_code.is_empty()
+            && !buying_country_code.is_empty()
+            && TransferRoutePolicy::is_blocked(
+                &selling_country_code,
+                &buying_country_code,
+                date,
+            )
+        {
+            debug!(
+                "Blocked by country-pair route policy: player {} from country {} ({}) to country {} ({}) on {} (is_loan={})",
+                player_id,
+                selling_country_id,
+                selling_country_code,
+                buying_country_id,
+                buying_country_code,
+                date,
+                is_loan
+            );
             return false;
         }
     }
@@ -1350,5 +1390,333 @@ impl TransferClauseScheduler {
                 | TransferClause::LoanObligationToBuy(_) => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod country_pair_execution_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::transfers::offer::PersonalTermsOffer;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
+        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, Team, TeamCollection, TeamReputation, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    /// Fixture builder for the cross-country route-block tests. Grouped on
+    /// a unit struct rather than free functions to follow the project's
+    /// "no global helpers" convention.
+    struct CountryPairFixtures;
+
+    impl CountryPairFixtures {
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn player(id: u32, country_id: u32) -> crate::Player {
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Test".to_string(), format!("P{id}")))
+                .birth_date(Self::d(2005, 1, 1))
+                .country_id(country_id)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Striker,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap()
+        }
+
+        fn training_schedule() -> TrainingSchedule {
+            TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            )
+        }
+
+        fn team(
+            id: u32,
+            club_id: u32,
+            name: &str,
+            slug: &str,
+            league_id: u32,
+            players: Vec<crate::Player>,
+        ) -> Team {
+            Team::builder()
+                .id(id)
+                .league_id(Some(league_id))
+                .club_id(club_id)
+                .name(name.to_string())
+                .slug(slug.to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(2000, 2000, 4000))
+                .training_schedule(Self::training_schedule())
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, name: &str, main_team: Team) -> Club {
+            Club::new(
+                id,
+                name.to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![main_team]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn league(id: u32, slug: &str) -> League {
+            League::new(
+                id,
+                "L".to_string(),
+                slug.to_string(),
+                1,
+                5500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                },
+                false,
+            )
+        }
+
+        fn country(id: u32, code: &str, slug: &str, league_id: u32, clubs: Vec<Club>) -> Country {
+            Country::builder()
+                .id(id)
+                .code(code.to_string())
+                .slug(slug.to_string())
+                .name(slug.to_string())
+                .continent_id(1)
+                .reputation(5500)
+                .leagues(LeagueCollection::new(vec![Self::league(league_id, slug)]))
+                .clubs(clubs)
+                .build()
+                .unwrap()
+        }
+
+        /// Build a minimal two-country world: RU (Spartak, player 200) and
+        /// UA (Dynamo Kyiv, no players). Returns `(data, transfer)` where
+        /// the transfer represents Spartak loaning the prospect to Dynamo
+        /// Kyiv. Caller can flip `is_loan` and the source/destination ids.
+        fn ru_to_ua_world(date: NaiveDate) -> (SimulatorData, DeferredTransfer) {
+            let spartak_player = Self::player(200, 100);
+            let spartak_main = Self::team(11, 100, "Spartak Moscow", "spartak", 10, vec![spartak_player]);
+            let spartak = Self::club(100, "Spartak Moscow", spartak_main);
+            let ru = Self::country(1, "ru", "russia", 10, vec![spartak]);
+
+            let dynamo_main = Self::team(21, 200, "Dynamo Kyiv", "dynamo-kyiv", 20, Vec::new());
+            let dynamo = Self::club(200, "Dynamo Kyiv", dynamo_main);
+            let ua = Self::country(2, "ua", "ukraine", 20, vec![dynamo]);
+
+            let continent = Continent::new(1, "Europe".to_string(), vec![ru, ua], Vec::new());
+            let data = SimulatorData::new(
+                date.and_hms_opt(12, 0, 0).unwrap(),
+                vec![continent],
+                GlobalCompetitions::new(Vec::new()),
+            );
+
+            let transfer = DeferredTransfer {
+                player_id: 200,
+                selling_country_id: 1,
+                selling_club_id: 100,
+                buying_country_id: 2,
+                buying_club_id: 200,
+                fee: 0.0,
+                is_loan: true,
+                has_option_to_buy: false,
+                agreed_annual_wage: Some(100_000),
+                buying_league_reputation: 5500,
+                sell_on_percentage: None,
+                loan_future_fee: None,
+                personal_terms: None as Option<PersonalTermsOffer>,
+                offer_clauses: Vec::new(),
+            };
+            (data, transfer)
+        }
+    }
+
+    /// Original report regression. A 19yo Spartak Moscow prospect loaned
+    /// to Dynamo Kyiv after the 2022 cutoff must NOT complete: the
+    /// execution chokepoint refuses cross-country RU↔UA on or after
+    /// 2022-02-24, no matter how clean the staged DeferredTransfer is.
+    /// The player stays at Spartak; the DreamMove framing therefore
+    /// never reaches `process_transfer_shock` either, because no signing
+    /// is staged.
+    #[test]
+    fn spartak_loan_to_dynamo_kyiv_after_2022_does_not_complete() {
+        let date = CountryPairFixtures::d(2026, 3, 1);
+        let (mut data, transfer) = CountryPairFixtures::ru_to_ua_world(date);
+        let success = execute_transfer(&mut data, &transfer, date);
+        assert!(!success, "RU→UA loan must be refused after the 2022 cutoff");
+
+        // Player stays at Spartak Moscow.
+        let ru = data.country(1).expect("RU country present");
+        let spartak = ru.clubs.iter().find(|c| c.id == 100).expect("Spartak");
+        assert!(
+            spartak.teams.contains_player(200),
+            "blocked loan must leave the player on Spartak's roster"
+        );
+
+        // Player must not have arrived in Ukraine.
+        let ua = data.country(2).expect("UA country present");
+        let dynamo = ua.clubs.iter().find(|c| c.id == 200).expect("Dynamo");
+        for team in &dynamo.teams.teams {
+            assert!(
+                !team.players.players.iter().any(|p| p.id == 200),
+                "Dynamo Kyiv must not receive the loaned prospect"
+            );
+        }
+
+        // Spartak's finances must not have been credited with the loan
+        // fee — the move was refused before any money changed hands.
+        assert_eq!(
+            spartak.finance.balance.balance, 1_000_000,
+            "refused loan must not credit the selling club"
+        );
+    }
+
+    /// Permanent counterpart: a permanent transfer over the same route
+    /// after the cutoff must also be refused, with the player staying
+    /// at the selling club and the destination roster untouched.
+    #[test]
+    fn permanent_ru_to_ua_transfer_after_2022_does_not_complete() {
+        let date = CountryPairFixtures::d(2026, 3, 1);
+        let (mut data, mut transfer) = CountryPairFixtures::ru_to_ua_world(date);
+        transfer.is_loan = false;
+        transfer.fee = 5_000_000.0;
+        let success = execute_transfer(&mut data, &transfer, date);
+        assert!(
+            !success,
+            "RU→UA permanent transfer must be refused after the 2022 cutoff"
+        );
+
+        let ru = data.country(1).unwrap();
+        let spartak = ru.clubs.iter().find(|c| c.id == 100).unwrap();
+        assert!(
+            spartak.teams.contains_player(200),
+            "blocked permanent transfer must leave the player on the source roster"
+        );
+    }
+
+    /// Symmetric variant: UA→RU is also refused after the cutoff.
+    #[test]
+    fn ua_to_ru_loan_after_2022_does_not_complete() {
+        let date = CountryPairFixtures::d(2026, 3, 1);
+        let (mut data, mut transfer) = CountryPairFixtures::ru_to_ua_world(date);
+        // Flip the direction so the source player sits in UA. The
+        // fixture doesn't put a player in Dynamo's squad — synthesise
+        // the inverse transfer by swapping ids only after seeding a
+        // player into Dynamo's roster.
+        let ua_player = CountryPairFixtures::player(201, 200);
+        if let Some(country) = data.country_mut(2) {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == 200) {
+                if let Some(team) = club.teams.teams.first_mut() {
+                    team.players.add(ua_player);
+                }
+            }
+        }
+        transfer.player_id = 201;
+        transfer.selling_country_id = 2;
+        transfer.selling_club_id = 200;
+        transfer.buying_country_id = 1;
+        transfer.buying_club_id = 100;
+        let success = execute_transfer(&mut data, &transfer, date);
+        assert!(
+            !success,
+            "UA→RU loan must be refused after the 2022 cutoff (symmetric)"
+        );
+    }
+
+    /// Pre-cutoff: the route is open, so a clean DeferredTransfer goes
+    /// through and the player ends up at the destination. Guards the
+    /// no-historical-regression intent — the policy is date-gated.
+    #[test]
+    fn ru_to_ua_loan_before_2022_completes() {
+        let date = CountryPairFixtures::d(2021, 6, 1);
+        let (mut data, transfer) = CountryPairFixtures::ru_to_ua_world(date);
+        let success = execute_transfer(&mut data, &transfer, date);
+        assert!(
+            success,
+            "RU→UA loan must complete on a pre-2022 simulation date"
+        );
+
+        // Player should now live in Ukraine.
+        let ua = data.country(2).unwrap();
+        let dynamo = ua.clubs.iter().find(|c| c.id == 200).unwrap();
+        let arrived = dynamo
+            .teams
+            .teams
+            .iter()
+            .any(|t| t.players.players.iter().any(|p| p.id == 200));
+        assert!(arrived, "pre-cutoff loan must place the player at Dynamo");
+    }
+
+    /// Pre-cutoff permanent counterpart for the same reason.
+    #[test]
+    fn ru_to_ua_permanent_before_2022_completes() {
+        let date = CountryPairFixtures::d(2021, 6, 1);
+        let (mut data, mut transfer) = CountryPairFixtures::ru_to_ua_world(date);
+        transfer.is_loan = false;
+        transfer.fee = 3_000_000.0;
+        let success = execute_transfer(&mut data, &transfer, date);
+        assert!(
+            success,
+            "RU→UA permanent transfer must complete on a pre-2022 simulation date"
+        );
+
+        let ua = data.country(2).unwrap();
+        let dynamo = ua.clubs.iter().find(|c| c.id == 200).unwrap();
+        assert!(
+            dynamo
+                .teams
+                .teams
+                .iter()
+                .any(|t| t.players.players.iter().any(|p| p.id == 200)),
+            "pre-cutoff transfer must place the player at the destination"
+        );
+    }
+
+    /// Non-RU/UA cross-country routes are untouched by the policy at any
+    /// date — only the configured RU↔UA pair is closed.
+    #[test]
+    fn other_cross_country_routes_remain_open_after_2022_cutoff() {
+        // Reuse the world but flip the buyer to a country with code "es"
+        // (not on the block list). Building a fresh world with Spain
+        // would duplicate fixtures; mutating the existing UA country's
+        // code to a non-blocked value keeps the test compact and proves
+        // the gate predicates on country code only.
+        let date = CountryPairFixtures::d(2026, 3, 1);
+        let (mut data, transfer) = CountryPairFixtures::ru_to_ua_world(date);
+        if let Some(country) = data.country_mut(2) {
+            country.code = "es".to_string();
+        }
+        let success = execute_transfer(&mut data, &transfer, date);
+        assert!(
+            success,
+            "non-RU/UA cross-country route must complete regardless of the cutoff date"
+        );
     }
 }

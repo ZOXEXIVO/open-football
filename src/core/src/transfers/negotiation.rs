@@ -25,6 +25,11 @@ pub enum NegotiationRejectionReason {
     SalaryDemandsUnmet,
     MedicalFailed,
     WindowClosed,
+    /// The simulation refuses this cross-country move because the buyer
+    /// and seller countries sit on the
+    /// [`crate::transfers::TransferRoutePolicy`] route block list on the
+    /// current sim date (today: Russia ↔ Ukraine after 2022-02-24).
+    CountryPairRouteBlocked,
 }
 
 #[derive(Debug, PartialEq, Clone)]

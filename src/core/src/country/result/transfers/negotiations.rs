@@ -12,6 +12,7 @@ use crate::club::player::events::transfer_social::{
 use crate::country::result::CountryResult;
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferListingStatus;
+use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason, TransferNegotiation};
@@ -977,6 +978,33 @@ impl CountryResult {
         deferred: &mut Vec<DeferredTransfer>,
     ) {
         let is_foreign = neg_data.selling_country_id.is_some();
+
+        // Cross-country route policy: the plausibility evaluator does not
+        // run on cross-country negotiations (it operates inside one
+        // country's clubs), so a Russia ↔ Ukraine bid that survived the
+        // earlier scouting/shortlist filters can still arrive here. Refuse
+        // it before the medical roll so a stale negotiation, restored save,
+        // or alternate creation path can't complete a closed route.
+        if is_foreign
+            && TransferRoutePolicy::is_blocked(
+                &neg_data.selling_country_code,
+                &country.code,
+                date,
+            )
+        {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation.reject_with_reason(
+                    NegotiationRejectionReason::CountryPairRouteBlocked,
+                );
+            }
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                false,
+            );
+            return;
+        }
 
         // Verify the player is still at the selling club (domestic) or not
         // already claimed by another deferred transfer (foreign)

@@ -301,6 +301,12 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             // see HappinessEventType docs). Removed from is_big_event
             // until a real registration-window emitter exists.
             // ── Contract / transfer drama ────────────────────
+            // `DreamLoanOpportunity` is deliberately NOT here: a
+            // year-long borrow lands in the same emotional register as
+            // a high-profile move *for the season*, but it doesn't
+            // reshape the player's career the way a permanent
+            // `DreamMove` does. Keep it ambient so the headline feed
+            // is reserved for moments worth remembering in retirement.
             | HappinessEventType::ContractRenewal
             | HappinessEventType::ContractTerminated
             | HappinessEventType::DreamMove
@@ -405,6 +411,7 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::SalaryShock => "event_salary_shock",
         HappinessEventType::RoleMismatch => "event_role_mismatch",
         HappinessEventType::DreamMove => "event_dream_move",
+        HappinessEventType::DreamLoanOpportunity => "event_dream_loan_opportunity",
         HappinessEventType::SalaryBoost => "event_salary_boost",
         HappinessEventType::JoiningElite => "event_joining_elite",
         HappinessEventType::ContractTerminated => "event_contract_terminated",
@@ -2275,6 +2282,7 @@ impl CareerDesireRender {
             K::CopaLibertadoresAmbition => "copa_libertadores",
             K::StrongerSquadAmbition => "stronger_squad",
             K::TitleChallengeAmbition => "title_challenge",
+            K::FavoriteClubHomecoming => "favorite_club_homecoming",
         }
     }
 }
@@ -4361,6 +4369,7 @@ mod tests {
             "event_fan_expectation_burden",
             "event_step_down_embarrassment",
             "event_loan_level_mismatch",
+            "event_dream_loan_opportunity",
             "reason_ev_joined_elite_club",
             "reason_ev_below_squad_standard",
             "reason_ev_above_squad_standard",
@@ -4413,6 +4422,7 @@ mod tests {
             "event_fan_expectation_burden",
             "event_step_down_embarrassment",
             "event_loan_level_mismatch",
+            "event_dream_loan_opportunity",
             // new evidence sentence keys
             "reason_ev_joined_elite_club",
             "reason_ev_below_squad_standard",
