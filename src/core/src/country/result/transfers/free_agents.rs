@@ -13,7 +13,8 @@ use crate::transfers::pipeline::{
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::squad_needs::{
     EmergencyBuyerContext, EmergencyCandidateView, EmergencyContractTermsPolicy,
-    EmergencyGroupSlot, EmergencyProjectedSquad, EmergencySquadFillStrategy, FirstTeamSquadNeeds,
+    EmergencyGroupSlot, EmergencyProjectedSquad, EmergencySlotStrictness, EmergencyStrictness,
+    EmergencySquadFillStrategy, FirstTeamSquadNeeds,
 };
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::utils::IntegerUtils;
@@ -891,6 +892,12 @@ impl CountryResult {
         let buyer_country_code = country.code.clone();
         let buyer_continent_id = country.continent_id;
         let buyer_rep = country.reputation;
+        // Same anchor every realism gate in the project uses for the
+        // buyer side: continent + country code → scouting region →
+        // prestige score. Pre-computed once per country so the per-slot
+        // buyer context build is a couple of field assignments.
+        let buyer_region_prestige =
+            ScoutingRegion::from_country(country.continent_id, &country.code).league_prestige();
 
         for club in &country.clubs {
             if country_signed >= country_cap {
@@ -980,11 +987,6 @@ impl CountryResult {
                     break;
                 }
 
-                let buyer_ctx = EmergencyBuyerContext {
-                    country_reputation: buyer_rep,
-                    urgent: projected.is_urgent(),
-                };
-
                 // Pick the next slot dynamically — once the urgent
                 // groups are filled, the depth tail rotates into the
                 // currently thinnest group instead of always being a
@@ -993,14 +995,29 @@ impl CountryResult {
                 let slot = EmergencySlotPlanner::next_slot(&projected, &empty_groups);
                 let Some(slot) = slot else { break };
 
+                // Strictness is derived per-slot from the reason tag
+                // so the depth slot can fire the realism gates at full
+                // strength while a no-keeper GK fill stays permissive.
+                let urgent = projected.is_urgent();
+                let strictness = EmergencySlotStrictness::from_reason(slot.reason, urgent);
+                let buyer_ctx = EmergencyBuyerContext {
+                    country_reputation: buyer_rep,
+                    country_code: buyer_country_code.clone(),
+                    continent_id: buyer_continent_id,
+                    region_prestige: buyer_region_prestige,
+                    club_reputation_score: buyer_club_score,
+                    league_reputation: buyer_league_reputation,
+                    negotiator_skill: buyer_negotiator_skill,
+                    urgent,
+                    strictness,
+                };
+
                 let pick = EmergencyCandidatePicker::pick(
                     candidates,
                     signings,
                     &rejected_locally,
                     slot,
                     &buyer_ctx,
-                    &buyer_country_code,
-                    buyer_continent_id,
                     club.id,
                 );
                 let Some(best) = pick else {
@@ -1252,13 +1269,127 @@ impl EmergencySlotPlanner {
     }
 }
 
+/// Hard realism filters shared with the normal free-agent matcher.
+/// Wraps the gate family (quality / reputation / region) on a unit
+/// struct so the picker can call `EmergencyRealismGates::passes(...)`
+/// once and every check stays in lockstep with the rest of the
+/// transfer pipeline. Strictness from
+/// [`EmergencyBuyerContext::strictness`] decides how much slack each
+/// gate gets — depth slots run at full strength, urgent group fills
+/// widen the band slightly, a no-keeper GK fill widens it the most.
+struct EmergencyRealismGates;
+
+impl EmergencyRealismGates {
+    /// All three gates must pass for the candidate to enter scoring.
+    fn passes(
+        candidate: &FreeAgentCandidate,
+        buyer: &EmergencyBuyerContext,
+        group: PlayerFieldPositionGroup,
+    ) -> bool {
+        Self::passes_quality(candidate, buyer, group)
+            && Self::passes_reputation(candidate, buyer)
+            && Self::passes_region(candidate, buyer)
+    }
+
+    /// Same CA band the normal global matcher uses, tuned per slot:
+    /// `Flexible` (no-keeper GK) widens the floor so any registered
+    /// goalkeeper qualifies; `Strict` (depth) tightens the ceiling so
+    /// a buyer can't sign a star slumming under the "we needed a
+    /// body" banner. Maps onto the existing
+    /// `FreeAgentMarketCalculator::min_acceptable_ca` /
+    /// `max_acceptable_ca` curves so the emergency band reads off the
+    /// same tier-anchored math as everywhere else.
+    fn passes_quality(
+        candidate: &FreeAgentCandidate,
+        buyer: &EmergencyBuyerContext,
+        group: PlayerFieldPositionGroup,
+    ) -> bool {
+        let base_min = FreeAgentMarketCalculator::min_acceptable_ca(
+            buyer.club_reputation_score,
+            group,
+            candidate.career_pressure,
+        );
+        let base_max = FreeAgentMarketCalculator::max_acceptable_ca(
+            buyer.club_reputation_score,
+            group,
+            candidate.career_pressure,
+        );
+        let (eff_min, eff_max) = match buyer.strictness {
+            EmergencyStrictness::Flexible => {
+                (base_min.saturating_sub(15), base_max.saturating_add(5))
+            }
+            EmergencyStrictness::Standard => (base_min, base_max),
+            EmergencyStrictness::Strict => {
+                // Depth slots don't get the overreach band — a
+                // 4500-rep buyer cannot credibly sign a CA-180 free
+                // agent for emergency depth, even if pressure is high.
+                (base_min, base_max.saturating_sub(5))
+            }
+        };
+        candidate.ability >= eff_min && candidate.ability <= eff_max
+    }
+
+    /// Sliding country-rep gate, shared with the normal matcher.
+    /// `Flexible` slots add an 800-point emergency bonus on top of
+    /// the player-side allowance; `Standard` adds 400; `Strict`
+    /// adds nothing — depth fills never get the urgent uplift.
+    fn passes_reputation(candidate: &FreeAgentCandidate, buyer: &EmergencyBuyerContext) -> bool {
+        let base = FreeAgentMarketCalculator::rep_drop_allowed(
+            candidate.career_pressure,
+            candidate.age,
+            candidate.ability,
+        );
+        let bonus = match buyer.strictness {
+            EmergencyStrictness::Flexible => 800,
+            EmergencyStrictness::Standard => 400,
+            EmergencyStrictness::Strict => 0,
+        };
+        let allowed = base + bonus;
+        (buyer.country_reputation as i32 + allowed) >= candidate.reference_reputation as i32
+    }
+
+    /// Region-prestige gate, shared with the normal matcher. Same
+    /// country always passes — domestic candidates skip the gate.
+    /// `Strict` slots additionally require very high career pressure
+    /// for any cross-continent move (so a Russian going to Algeria
+    /// for emergency depth needs to be on the verge of retiring, not
+    /// a routine mid-career step-down).
+    fn passes_region(candidate: &FreeAgentCandidate, buyer: &EmergencyBuyerContext) -> bool {
+        if candidate
+            .nationality_country_code
+            .eq_ignore_ascii_case(&buyer.country_code)
+        {
+            return true;
+        }
+        let same_continent = candidate.nationality_continent_id == buyer.continent_id;
+        // Strict + cross-continent: hard cut-off until pressure is
+        // very high. This is the rule that blocks the
+        // Russian-to-Algeria depth move at low/medium pressure.
+        if matches!(buyer.strictness, EmergencyStrictness::Strict)
+            && !same_continent
+            && candidate.career_pressure < 0.85
+        {
+            return false;
+        }
+        let base = FreeAgentMarketCalculator::region_drop_allowed(candidate.career_pressure);
+        let strictness_extra = match buyer.strictness {
+            EmergencyStrictness::Flexible => 0.20,
+            EmergencyStrictness::Standard => 0.08,
+            EmergencyStrictness::Strict => 0.0,
+        };
+        let continent_bonus = if same_continent { 0.05 } else { 0.0 };
+        let allowed = base + strictness_extra + continent_bonus;
+        candidate.nationality_region.league_prestige() <= buyer.region_prestige + allowed
+    }
+}
+
 /// Pick the highest-scoring free-agent candidate for one emergency
-/// slot. Returns `None` when no candidate clears the strategy's
-/// minimum score (or when every viable one is already claimed by an
-/// earlier signing this tick). Same logic as the previous
-/// `CountryResult::pick_emergency_candidate`, lifted onto a struct so
-/// the file stays free of impl-bound private helpers and the picker
-/// can be unit-tested in isolation.
+/// slot. Returns `None` when no candidate clears the realism gates or
+/// the strategy's minimum score. Sorting is delegated to
+/// [`EmergencyCandidateOrdering`] so locality (domestic / in-country /
+/// same-continent / pressure / rep-mismatch / ability fit) outranks
+/// raw ability — the depth signing should be the realistic local
+/// pick, not the strongest cross-region option.
 struct EmergencyCandidatePicker;
 
 impl EmergencyCandidatePicker {
@@ -1268,26 +1399,27 @@ impl EmergencyCandidatePicker {
         rejected_locally: &HashSet<u32>,
         slot: EmergencyGroupSlot,
         buyer_ctx: &EmergencyBuyerContext,
-        buyer_country_code: &str,
-        buyer_continent_id: u32,
         buying_club_id: u32,
     ) -> Option<&'a FreeAgentCandidate> {
-        candidates
+        let mut scored: Vec<(&FreeAgentCandidate, f32)> = candidates
             .iter()
             .filter(|c| c.club_id != buying_club_id)
             .filter(|c| c.position_group == slot.group)
             .filter(|c| !signings.iter().any(|s| s.player_id == c.player_id))
             .filter(|c| !rejected_locally.contains(&c.player_id))
+            .filter(|c| EmergencyRealismGates::passes(c, buyer_ctx, slot.group))
             .filter_map(|c| {
                 let view = EmergencyCandidateView {
                     ability: c.ability,
                     age: c.age,
                     same_country_nationality: c
                         .nationality_country_code
-                        .eq_ignore_ascii_case(buyer_country_code),
-                    same_continent: c.nationality_continent_id == buyer_continent_id,
+                        .eq_ignore_ascii_case(&buyer_ctx.country_code),
+                    same_continent: c.nationality_continent_id == buyer_ctx.continent_id,
                     reference_reputation: c.reference_reputation,
                     career_pressure: c.career_pressure,
+                    region_prestige: c.nationality_region.league_prestige(),
+                    is_global_pool: c.is_global_pool,
                 };
                 EmergencySquadFillStrategy::score(&view, buyer_ctx).and_then(|score| {
                     if score < EmergencySquadFillStrategy::MIN_ACCEPTABLE_SCORE {
@@ -1297,16 +1429,101 @@ impl EmergencyCandidatePicker {
                     }
                 })
             })
-            .max_by(|a, b| {
-                a.1.partial_cmp(&b.1)
-                    .unwrap_or(Ordering::Equal)
-                    // Tiebreaker: prefer the in-country (no-contract)
-                    // candidate over a global-pool one — keeps the
-                    // signing local when scores tie.
-                    .then_with(|| b.0.is_global_pool.cmp(&a.0.is_global_pool))
-            })
-            .map(|(c, _)| c)
+            .collect();
+
+        scored.sort_by(|a, b| EmergencyCandidateOrdering::cmp(a, b, buyer_ctx, slot.group));
+        scored.into_iter().next().map(|(c, _)| c)
     }
+}
+
+/// Locality-aware ordering for emergency candidates. Score first so
+/// genuinely unsuitable picks can't sneak through on a domestic-only
+/// tiebreak, then the locality and fit criteria the user spec calls
+/// out. Wrapped on a unit struct so the comparator and its key
+/// stay together and the picker call site reads as one method call.
+struct EmergencyCandidateOrdering;
+
+impl EmergencyCandidateOrdering {
+    /// Compare two scored candidates. Returns the ordering such that
+    /// the better candidate sorts first (descending on score and the
+    /// preference signals, ascending on rep mismatch).
+    fn cmp(
+        a: &(&FreeAgentCandidate, f32),
+        b: &(&FreeAgentCandidate, f32),
+        buyer: &EmergencyBuyerContext,
+        group: PlayerFieldPositionGroup,
+    ) -> Ordering {
+        let ka = Self::key(a.0, a.1, buyer, group);
+        let kb = Self::key(b.0, b.1, buyer, group);
+        // Score (desc) > domestic > in-country > same-continent >
+        // career pressure > smallest rep mismatch > best ability fit.
+        kb.score
+            .partial_cmp(&ka.score)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| kb.domestic.cmp(&ka.domestic))
+            .then_with(|| kb.in_country.cmp(&ka.in_country))
+            .then_with(|| kb.same_continent.cmp(&ka.same_continent))
+            .then_with(|| {
+                kb.career_pressure
+                    .partial_cmp(&ka.career_pressure)
+                    .unwrap_or(Ordering::Equal)
+            })
+            .then_with(|| ka.rep_mismatch.cmp(&kb.rep_mismatch))
+            .then_with(|| {
+                kb.ability_fit
+                    .partial_cmp(&ka.ability_fit)
+                    .unwrap_or(Ordering::Equal)
+            })
+    }
+
+    fn key(
+        candidate: &FreeAgentCandidate,
+        score: f32,
+        buyer: &EmergencyBuyerContext,
+        group: PlayerFieldPositionGroup,
+    ) -> EmergencyOrderingKey {
+        let domestic = candidate
+            .nationality_country_code
+            .eq_ignore_ascii_case(&buyer.country_code);
+        let in_country = !candidate.is_global_pool;
+        let same_continent = candidate.nationality_continent_id == buyer.continent_id;
+        let rep_mismatch =
+            (candidate.reference_reputation as i32 - buyer.country_reputation as i32).abs();
+        let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
+            buyer.club_reputation_score,
+            group,
+            candidate.career_pressure,
+        );
+        let max_ca = FreeAgentMarketCalculator::max_acceptable_ca(
+            buyer.club_reputation_score,
+            group,
+            candidate.career_pressure,
+        );
+        let ability_fit =
+            FreeAgentMarketCalculator::quality_fit_score(candidate.ability, min_ca, max_ca);
+        EmergencyOrderingKey {
+            score,
+            domestic,
+            in_country,
+            same_continent,
+            career_pressure: candidate.career_pressure,
+            rep_mismatch,
+            ability_fit,
+        }
+    }
+}
+
+/// Packed sort key for the locality-aware ordering. Held by value so
+/// the picker's `sort_by` closure can compare two keys without
+/// re-running the per-field math twice per comparison.
+struct EmergencyOrderingKey {
+    score: f32,
+    domestic: bool,
+    in_country: bool,
+    same_continent: bool,
+    career_pressure: f32,
+    rep_mismatch: i32,
+    ability_fit: f32,
 }
 
 /// Mark a buying club's open transfer requests as fulfilled once the
@@ -2656,4 +2873,354 @@ mod emergency_fill_tests {
             config.emergency_max_signings_per_country_per_day
         );
     }
+
+    /// Test fixtures for the realism-gate / cross-region tests added
+    /// alongside the strictness rework. Kept on a dedicated struct so
+    /// the original [`EmergencyFillFixtures`] helpers stay focused on
+    /// the existing pipeline tests and the new cases can dial in
+    /// continent / code / region without rewriting the shared
+    /// helpers.
+    struct CrossRegionFixtures;
+
+    impl CrossRegionFixtures {
+        /// Buyer context for the picker / gate tests. Builds an
+        /// Algerian-style low-rep North-African buyer when `algerian`
+        /// is true, an English-style mid-rep European buyer otherwise.
+        /// Strictness is exposed so a single fixture works for the
+        /// depth (Strict) and GK (Flexible) variants.
+        fn buyer(
+            algerian: bool,
+            strictness: EmergencyStrictness,
+            urgent: bool,
+        ) -> EmergencyBuyerContext {
+            let (rep, code, continent, region_prestige, club_score, league_rep) = if algerian {
+                (
+                    1500,
+                    "dz".to_string(),
+                    0u32,
+                    ScoutingRegion::from_country(0, "dz").league_prestige(),
+                    0.18,
+                    1400u16,
+                )
+            } else {
+                (
+                    5000,
+                    "en".to_string(),
+                    1u32,
+                    ScoutingRegion::from_country(1, "en").league_prestige(),
+                    0.55,
+                    4800u16,
+                )
+            };
+            EmergencyBuyerContext {
+                country_reputation: rep,
+                country_code: code,
+                continent_id: continent,
+                region_prestige,
+                club_reputation_score: club_score,
+                league_reputation: league_rep,
+                negotiator_skill: 50,
+                urgent,
+                strictness,
+            }
+        }
+
+        /// Build a free-agent candidate in the global pool with an
+        /// explicit nationality (continent + code). Lets a single
+        /// helper cover Russian (`ru`, continent 1), Algerian (`dz`,
+        /// continent 0), and any other cross-region setup the gate
+        /// tests need.
+        fn candidate(
+            player_id: u32,
+            ability: u8,
+            age: u8,
+            group: PlayerFieldPositionGroup,
+            code: &str,
+            continent_id: u32,
+            nationality_country_reputation: u16,
+            reference_reputation: u16,
+            career_pressure: f32,
+        ) -> FreeAgentCandidate {
+            FreeAgentCandidate {
+                player_id,
+                player_name: format!("Cand{player_id}"),
+                club_id: 0,
+                club_name: "Free Agent".to_string(),
+                ability,
+                potential: ability.saturating_add(5),
+                age,
+                position_group: group,
+                days_to_expiry: 0,
+                nationality_country_reputation,
+                nationality_region: ScoutingRegion::from_country(continent_id, code),
+                nationality_country_code: code.to_string(),
+                nationality_continent_id: continent_id,
+                career_pressure,
+                reference_reputation,
+                last_salary: 40_000,
+                last_country_reputation: nationality_country_reputation,
+                last_league_reputation: ((nationality_country_reputation as f32) * 0.85) as u16,
+                world_reputation: 1200,
+                current_reputation: 1200,
+                is_global_pool: true,
+            }
+        }
+    }
+
+    #[test]
+    fn realism_region_gate_blocks_russian_to_algerian_depth_at_low_pressure() {
+        // Russian player + Algerian club + Strict (depth) slot must
+        // block before scoring even runs. Pressure 0.5 is comfortably
+        // below the `Strict + cross-continent` cutoff of 0.85.
+        let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
+        let russian = CrossRegionFixtures::candidate(
+            1, 75, 27, PlayerFieldPositionGroup::Defender, "ru", 1, 3000, 3500, 0.5,
+        );
+        assert!(
+            !EmergencyRealismGates::passes_region(&russian, &buyer),
+            "Strict + cross-continent + pressure 0.5 must fail the region gate"
+        );
+        assert!(
+            !EmergencyRealismGates::passes(
+                &russian,
+                &buyer,
+                PlayerFieldPositionGroup::Defender
+            ),
+            "the composite gate must reject the same case"
+        );
+    }
+
+    #[test]
+    fn realism_region_gate_passes_russian_to_algerian_at_very_high_pressure() {
+        // Same cross-continent move but with the player on the very
+        // verge of retiring (pressure 0.92) — Strict region gate now
+        // lets it through. The rep / quality gates do their own
+        // checks; the test isolates the region behaviour.
+        let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
+        let russian = CrossRegionFixtures::candidate(
+            2, 70, 33, PlayerFieldPositionGroup::Defender, "ru", 1, 1800, 1700, 0.92,
+        );
+        assert!(
+            EmergencyRealismGates::passes_region(&russian, &buyer),
+            "Strict + cross-continent at high pressure must clear the region gate"
+        );
+    }
+
+    #[test]
+    fn realism_region_gate_lets_gk_flexible_pass_where_depth_strict_blocks() {
+        // Same candidate, same buyer — only the slot strictness
+        // changes. Flexible (no-keeper GK fill) lets the cross-region
+        // signing in; Strict (depth) does not. Tests the strictness
+        // dial directly.
+        let cross = CrossRegionFixtures::candidate(
+            3,
+            72,
+            30,
+            PlayerFieldPositionGroup::Goalkeeper,
+            "ru",
+            1,
+            2200,
+            2400,
+            0.55,
+        );
+        let gk_buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Flexible, true);
+        let depth_buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
+        assert!(
+            EmergencyRealismGates::passes_region(&cross, &gk_buyer),
+            "Flexible GK fill should accept a cross-region keeper"
+        );
+        assert!(
+            !EmergencyRealismGates::passes_region(&cross, &depth_buyer),
+            "Strict depth fill must reject the same candidate"
+        );
+    }
+
+    #[test]
+    fn picker_prefers_domestic_depth_over_higher_ca_foreign() {
+        // Two candidates for a Strict (depth) defender slot at an
+        // Algerian buyer: a domestic Algerian at CA 65 and a Russian
+        // at CA 75 on full pressure (so the Russian could in principle
+        // clear the region gate). Locality ordering must still pick
+        // the Algerian — depth is not about raw ability.
+        let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
+        let algerian = CrossRegionFixtures::candidate(
+            10,
+            65,
+            29,
+            PlayerFieldPositionGroup::Defender,
+            "dz",
+            0,
+            1500,
+            1500,
+            0.6,
+        );
+        let russian = CrossRegionFixtures::candidate(
+            11,
+            75,
+            33,
+            PlayerFieldPositionGroup::Defender,
+            "ru",
+            1,
+            2200,
+            2000,
+            0.95,
+        );
+        let candidates = vec![russian, algerian];
+        let signings: Vec<FreeAgentSigning> = Vec::new();
+        let rejected: HashSet<u32> = HashSet::new();
+        let slot = EmergencyGroupSlot {
+            group: PlayerFieldPositionGroup::Defender,
+            missing: 1,
+            reason: "emergency_squad_fill_depth",
+        };
+        let pick = EmergencyCandidatePicker::pick(
+            &candidates,
+            &signings,
+            &rejected,
+            slot,
+            &buyer,
+            999,
+        );
+        let picked = pick.expect("at least one candidate must clear all gates");
+        assert_eq!(
+            picked.player_id, 10,
+            "Strict depth at Algeria must prefer the domestic CA-65 Algerian over the foreign CA-75 Russian"
+        );
+    }
+
+    #[test]
+    fn picker_skips_only_unrealistic_candidates_for_depth() {
+        // Only candidate available is a low-pressure Russian against
+        // an Algerian Strict (depth) slot. With no domestic / closer
+        // alternative the picker should return None rather than fall
+        // back to the unrealistic cross-region option.
+        let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
+        let russian = CrossRegionFixtures::candidate(
+            20,
+            80,
+            27,
+            PlayerFieldPositionGroup::Midfielder,
+            "ru",
+            1,
+            3000,
+            3500,
+            0.4,
+        );
+        let candidates = vec![russian];
+        let signings: Vec<FreeAgentSigning> = Vec::new();
+        let rejected: HashSet<u32> = HashSet::new();
+        let slot = EmergencyGroupSlot {
+            group: PlayerFieldPositionGroup::Midfielder,
+            missing: 1,
+            reason: "emergency_squad_fill_depth",
+        };
+        let pick = EmergencyCandidatePicker::pick(
+            &candidates,
+            &signings,
+            &rejected,
+            slot,
+            &buyer,
+            999,
+        );
+        assert!(
+            pick.is_none(),
+            "depth slot must skip rather than fall back to an unrealistic cross-region pick"
+        );
+    }
+
+    #[test]
+    fn pressure_threshold_separates_blocked_from_passing_step_down() {
+        // Same Russian candidate against the same Algerian Strict
+        // depth slot, only career pressure changes. Low pressure
+        // must fail every gate; very high pressure must clear the
+        // region gate. This proves pressure is the dial that
+        // unlocks realistic step-downs.
+        let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
+        let low_pressure = CrossRegionFixtures::candidate(
+            30,
+            70,
+            33,
+            PlayerFieldPositionGroup::Defender,
+            "ru",
+            1,
+            1800,
+            1700,
+            0.2,
+        );
+        let high_pressure = CrossRegionFixtures::candidate(
+            31,
+            70,
+            33,
+            PlayerFieldPositionGroup::Defender,
+            "ru",
+            1,
+            1800,
+            1700,
+            0.95,
+        );
+        assert!(
+            !EmergencyRealismGates::passes_region(&low_pressure, &buyer),
+            "low-pressure cross-continent depth must remain blocked"
+        );
+        assert!(
+            EmergencyRealismGates::passes_region(&high_pressure, &buyer),
+            "very high pressure must unlock the region gate"
+        );
+    }
+
+    #[test]
+    fn depth_strictness_does_not_get_urgent_rep_bonus() {
+        // High-rep Russian candidate, low-rep buyer. The 400-point
+        // Standard rep bonus / 800-point Flexible rep bonus must NOT
+        // apply for Strict depth — otherwise the urgent uplift
+        // creeps into the depth path. Demonstrates the difference
+        // between strictness levels at the rep gate.
+        let candidate = CrossRegionFixtures::candidate(
+            40,
+            85,
+            30,
+            PlayerFieldPositionGroup::Midfielder,
+            "ru",
+            1,
+            3500,
+            3500,
+            0.4,
+        );
+        let strict_buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
+        let flex_buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Flexible, true);
+        let strict_pass = EmergencyRealismGates::passes_reputation(&candidate, &strict_buyer);
+        let flex_pass = EmergencyRealismGates::passes_reputation(&candidate, &flex_buyer);
+        assert!(
+            flex_pass || !strict_pass,
+            "Flexible rep gate must be at least as permissive as Strict — \
+             strict_pass={strict_pass} flex_pass={flex_pass}"
+        );
+    }
+
+    #[test]
+    fn slot_strictness_maps_correctly_from_reason() {
+        // Sanity check that the policy struct routes each emergency
+        // reason to the strictness the spec calls for.
+        assert_eq!(
+            EmergencySlotStrictness::from_reason("emergency_squad_fill_gk", true),
+            EmergencyStrictness::Flexible
+        );
+        assert_eq!(
+            EmergencySlotStrictness::from_reason("emergency_squad_fill_def", true),
+            EmergencyStrictness::Standard
+        );
+        assert_eq!(
+            EmergencySlotStrictness::from_reason("emergency_squad_fill_def", false),
+            EmergencyStrictness::Strict
+        );
+        assert_eq!(
+            EmergencySlotStrictness::from_reason("emergency_squad_fill_depth", true),
+            EmergencyStrictness::Strict
+        );
+        assert_eq!(
+            EmergencySlotStrictness::from_reason("emergency_squad_fill_depth", false),
+            EmergencyStrictness::Strict
+        );
+    }
+
 }

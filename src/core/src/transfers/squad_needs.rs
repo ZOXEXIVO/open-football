@@ -198,6 +198,55 @@ impl FirstTeamSquadNeeds {
     }
 }
 
+/// How strict the realism gates should be for a given emergency slot.
+/// Drives both the score-side weighting (in [`EmergencySquadFillStrategy`])
+/// and the hard-filter gates in the picker.
+///
+/// `Strict` is the default for depth fills: the matcher must use the
+/// same realism filters as the normal global free-agent path, no
+/// bypass for cross-region moves. `Standard` covers urgent
+/// position-fills (squad below 11) — the club really needs the body,
+/// so the gates widen a little. `Flexible` is reserved for the GK
+/// slot when the squad literally has no keeper; even there the rep
+/// and region gates still fire, just with the largest slack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmergencyStrictness {
+    /// Most permissive — only used for a no-keeper GK fill.
+    Flexible,
+    /// Moderate — squad below 11 missing an outfield group.
+    Standard,
+    /// Tightest — depth fills and non-urgent group fills.
+    Strict,
+}
+
+/// Maps an emergency slot's reason tag + the buyer's urgent flag to a
+/// [`EmergencyStrictness`] level. Wrapped on a unit struct so the
+/// reason→strictness policy lives in one place and is easy to unit-test.
+pub struct EmergencySlotStrictness;
+
+impl EmergencySlotStrictness {
+    /// Look up the strictness for a slot's reason string. Unknown
+    /// reasons fall through to [`EmergencyStrictness::Strict`] — better
+    /// to err on the side of realism than to let a stray reason slip
+    /// past the gates.
+    pub fn from_reason(reason: &str, urgent: bool) -> EmergencyStrictness {
+        match reason {
+            "emergency_squad_fill_gk" => EmergencyStrictness::Flexible,
+            "emergency_squad_fill_def"
+            | "emergency_squad_fill_mid"
+            | "emergency_squad_fill_fwd" => {
+                if urgent {
+                    EmergencyStrictness::Standard
+                } else {
+                    EmergencyStrictness::Strict
+                }
+            }
+            "emergency_squad_fill_depth" => EmergencyStrictness::Strict,
+            _ => EmergencyStrictness::Strict,
+        }
+    }
+}
+
 /// Inputs the emergency-fill scoring function reads from each
 /// candidate. Built once at the call site from the existing free-agent
 /// snapshot so the score fn stays pure (no Player / SimulatorData
@@ -219,20 +268,62 @@ pub struct EmergencyCandidateView {
     /// (they'd reject anyway; no point wasting an emergency slot).
     pub reference_reputation: u16,
     pub career_pressure: f32,
+    /// Prestige of the candidate's nationality region — same number
+    /// the normal free-agent matcher feeds into the region-drop gate.
+    /// Surfaced on the view so a score-time tiebreak can prefer
+    /// candidates from regions close to the buyer's own.
+    pub region_prestige: f32,
+    /// True when the candidate sits in the global free-agent pool
+    /// (`sim.free_agents`) rather than as an expiring contract at a
+    /// local club. Used both by the score (slight preference for the
+    /// in-country option on ties) and by callers tracking pool state.
+    pub is_global_pool: bool,
 }
 
 /// Scoring inputs that describe the buying club's emergency context.
 /// Kept on a struct so the scoring fn signature stays sane and the
 /// individual signals are obvious at the call site.
-#[derive(Debug, Clone, Copy)]
+///
+/// Carries enough buyer detail to drive the realism gates that the
+/// emergency pass shares with the normal global free-agent matcher
+/// (reputation, region, club tier, league rep, negotiator skill) as
+/// well as the per-slot [`EmergencyStrictness`] derived from the
+/// slot's reason tag.
+#[derive(Debug, Clone)]
 pub struct EmergencyBuyerContext {
     /// Country reputation (0..10000). Drives the rep-drop tolerance —
     /// a low-rep club shouldn't sign a high-rep player even in an
     /// emergency because the player will refuse the offer anyway.
     pub country_reputation: u16,
+    /// ISO-style buying country code (e.g. "en", "dz"). Used by the
+    /// realism gates to recognise domestic candidates and to read
+    /// the buyer's [`crate::transfers::scouting_region::ScoutingRegion`].
+    pub country_code: String,
+    /// Continent id of the buying country (0..5). Drives the
+    /// "same continent" relaxation in the region-prestige gate.
+    pub continent_id: u32,
+    /// Prestige score for the buyer's scouting region — same value
+    /// the normal global matcher uses in its region-drop gate.
+    pub region_prestige: f32,
+    /// Buyer club's reputation as a 0..1 score, the same tier anchor
+    /// every CA-band gate in the project uses
+    /// (`PipelineProcessor::tier_*_score`).
+    pub club_reputation_score: f32,
+    /// Buyer's primary league reputation (0..10000). Feeds the wage
+    /// expectation curve used during the acceptance roll.
+    pub league_reputation: u16,
+    /// Negotiator skill on a 0..100 scale — see the existing
+    /// `man_management × 5` mapping in
+    /// [`crate::country::result::transfers`].
+    pub negotiator_skill: u8,
     /// True when the squad is below 11 — relaxes every quality and
     /// reputation gate so the club can actually field a side.
     pub urgent: bool,
+    /// Strictness for the slot currently being filled. Set per-slot
+    /// from [`EmergencySlotStrictness::from_reason`] so the depth
+    /// slot can apply the realism filters at full strength while the
+    /// GK slot relaxes them.
+    pub strictness: EmergencyStrictness,
 }
 
 /// Pure scoring helper for the emergency free-agent pass. Two-phase
@@ -364,12 +455,32 @@ impl EmergencySquadFillStrategy {
         // when the squad is urgent (a domestic player can join
         // overnight with no foreign-quota friction). Same-continent
         // is a softer fallback worth a bit more for urgent clubs too.
+        // Strict slots (depth fills, non-urgent group fills) reward
+        // domestic candidates more aggressively and strip the
+        // cross-continent fallback because realistic depth signings
+        // overwhelmingly come from the local market — that's the
+        // whole point of the `Strict` mode.
         let domestic_score = if candidate.same_country_nationality {
-            if buyer.urgent { 22.0 } else { 18.0 }
+            match buyer.strictness {
+                EmergencyStrictness::Strict => 26.0,
+                EmergencyStrictness::Standard => {
+                    if buyer.urgent { 22.0 } else { 18.0 }
+                }
+                EmergencyStrictness::Flexible => 22.0,
+            }
         } else if candidate.same_continent {
-            if buyer.urgent { 11.0 } else { 8.0 }
+            match buyer.strictness {
+                EmergencyStrictness::Strict => 4.0,
+                EmergencyStrictness::Standard => {
+                    if buyer.urgent { 11.0 } else { 8.0 }
+                }
+                EmergencyStrictness::Flexible => 11.0,
+            }
         } else {
-            2.0
+            match buyer.strictness {
+                EmergencyStrictness::Strict => 0.0,
+                _ => 2.0,
+            }
         };
 
         // Career pressure — a free agent who's been on the market a
@@ -599,7 +710,14 @@ mod tests {
         fn buyer(rep: u16, urgent: bool) -> EmergencyBuyerContext {
             EmergencyBuyerContext {
                 country_reputation: rep,
+                country_code: "en".to_string(),
+                continent_id: 1,
+                region_prestige: 1.0,
+                club_reputation_score: (rep as f32 / 10_000.0).clamp(0.0, 1.0),
+                league_reputation: rep,
+                negotiator_skill: 50,
                 urgent,
+                strictness: EmergencyStrictness::Standard,
             }
         }
 
@@ -617,6 +735,8 @@ mod tests {
                 same_continent: same_country,
                 reference_reputation: ref_rep,
                 career_pressure: pressure,
+                region_prestige: if same_country { 1.0 } else { 0.5 },
+                is_global_pool: true,
             }
         }
     }
