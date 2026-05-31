@@ -1,5 +1,6 @@
 use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::negotiation::NegotiationPhase;
+use crate::transfers::offer::{PersonalTermsOffer, TransferClause};
 use crate::{Club, Country, Player, PlayerPositionType};
 
 #[allow(dead_code)]
@@ -89,6 +90,12 @@ pub(crate) struct NegotiationData {
     pub(crate) sell_on_percentage: Option<f32>,
     /// Loan option/obligation fee and whether it is mandatory.
     pub(crate) loan_future_fee: Option<(u32, bool)>,
+    /// Structured personal-terms package the buyer has staged on the
+    /// current offer. Carried through resolution so PersonalTerms can
+    /// score against signing bonus / agent fee / role promise, and so
+    /// `resolve_medical` can include the full package in the deferred
+    /// transfer for execution to install.
+    pub(crate) personal_terms: Option<PersonalTermsOffer>,
 }
 
 /// A completed negotiation that needs execution at SimulatorData level.
@@ -113,6 +120,20 @@ pub struct DeferredTransfer {
     pub(crate) sell_on_percentage: Option<f32>,
     /// Loan option/obligation fee and whether it is mandatory.
     pub(crate) loan_future_fee: Option<(u32, bool)>,
+    /// Structured personal terms agreed during the negotiation —
+    /// signing bonus, agent fee, release clause, squad-status promise.
+    /// Execution honours these instead of inventing defaults so the
+    /// player ends up with the deal the AI actually agreed to.
+    pub(crate) personal_terms: Option<PersonalTermsOffer>,
+    /// Snapshot of the buyer's offer clauses — drives the scheduling
+    /// of installments, performance add-ons (appearances/goals), and
+    /// promotion bonuses at execution time. `sell_on_percentage` and
+    /// `loan_future_fee` above are already extracted; this carries the
+    /// rest (installments, appearance fees, goal bonuses, promotion
+    /// bonus) so the execution layer can write them into the buying
+    /// market's `pending_clauses` queue without re-reading the
+    /// negotiation (which is about to be dropped).
+    pub(crate) offer_clauses: Vec<TransferClause>,
 }
 
 pub(crate) fn can_club_accept_player(club: &Club) -> bool {

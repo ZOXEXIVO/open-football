@@ -146,7 +146,7 @@ impl PipelineProcessor {
     pub fn evaluate_squads(country: &mut Country, date: NaiveDate) {
         let is_window_start = Self::is_window_start(date);
         let should_evaluate = is_window_start || Self::should_evaluate(date);
-        let window_mgr = TransferWindowManager::new();
+        let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
 
         // Pass 1: Collect evaluations (immutable reads)

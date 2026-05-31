@@ -18,8 +18,10 @@ use crate::club::player::contract::contract::{
 };
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::player::{Player, SellOnObligation};
+use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus};
 use crate::{
     ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerStatusType,
+    PlayerSquadStatus,
 };
 
 impl Player {
@@ -37,11 +39,12 @@ impl Player {
         self.reset_on_club_change();
         // No more market-state to track once they're under contract.
         self.clear_free_agent_state();
-        self.install_permanent_contract(
+        self.install_permanent_contract_with_terms(
             t.date,
             t.to.reputation,
             t.buying_league_reputation,
             t.agreed_wage,
+            t.personal_terms.as_ref(),
         );
         self.plan = Some(PlayerPlan::from_signing(self.age(t.date), t.fee, t.date));
         if let Some(pct) = t.record_sell_on {
@@ -267,30 +270,123 @@ impl Player {
         buying_league_reputation: u16,
         agreed_wage: Option<u32>,
     ) {
+        self.install_permanent_contract_with_terms(
+            date,
+            buying_club_reputation,
+            buying_league_reputation,
+            agreed_wage,
+            None,
+        );
+    }
+
+    /// Variant of [`Self::install_permanent_contract`] that honours an
+    /// agreed [`PersonalTermsOffer`]. When `personal_terms` is `Some`,
+    /// each populated field overrides the corresponding compute-from-
+    /// context default:
+    ///
+    ///   - `contract_years` → contract length (replaces age band)
+    ///   - `annual_wage` → salary (replaces calculator output)
+    ///   - `signing_bonus` → adds a `SigningBonus` contract bonus on top
+    ///     of any bonus the profile package would already install
+    ///   - `release_clause_fee` → writes a `MinimumFeeRelease` clause
+    ///   - `squad_status_promise` → sets the contract's `squad_status`
+    ///     so the role promise sticks (Day 1 squad role)
+    ///
+    /// Unset fields fall through to the existing defaults — this
+    /// preserves behaviour for manual UI moves and tests that don't
+    /// stage a structured terms package.
+    pub fn install_permanent_contract_with_terms(
+        &mut self,
+        date: NaiveDate,
+        buying_club_reputation: u16,
+        buying_league_reputation: u16,
+        agreed_wage: Option<u32>,
+        personal_terms: Option<&PersonalTermsOffer>,
+    ) {
         let age = self.age(date);
-        let years = if age < 24 {
-            5
-        } else if age < 28 {
-            4
-        } else if age < 32 {
-            3
-        } else {
-            2
-        };
+        let years = personal_terms
+            .and_then(|t| t.contract_years)
+            .unwrap_or_else(|| {
+                if age < 24 {
+                    5
+                } else if age < 28 {
+                    4
+                } else if age < 32 {
+                    3
+                } else {
+                    2
+                }
+            });
         let expiry = date
-            .checked_add_signed(Duration::days(years * 365))
+            .checked_add_signed(Duration::days(years as i64 * 365))
             .unwrap_or(date);
-        let salary = agreed_wage.unwrap_or_else(|| {
-            let club_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
-            WageCalculator::expected_annual_wage(self, age, club_score, buying_league_reputation)
-        });
-        let mut contract = PlayerClubContract::new(salary, expiry);
+
+        // Resolved wage: structured terms beat the loose `agreed_wage`
+        // argument; both beat the calculator fallback.
+        let resolved_wage = personal_terms
+            .and_then(|t| t.annual_wage)
+            .or(agreed_wage)
+            .unwrap_or_else(|| {
+                let club_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
+                WageCalculator::expected_annual_wage(
+                    self,
+                    age,
+                    club_score,
+                    buying_league_reputation,
+                )
+            });
+        let mut contract = PlayerClubContract::new(resolved_wage, expiry);
+
         // Install a profile-appropriate set of bonuses + clauses so
         // transfer-completed contracts feel like the same market as
         // renewals. Without this every transfer signs a bare
         // salary/years deal and never pays a goal/clean-sheet/loyalty
         // bonus.
         install_transfer_package(&mut contract, self, age, buying_club_reputation);
+
+        // Honour the staged personal-terms additions.
+        if let Some(terms) = personal_terms {
+            // Signing bonus stacks: if the profile already wrote one,
+            // the explicit personal-terms amount replaces it so the
+            // negotiated number sticks.
+            if let Some(amount) = terms.signing_bonus {
+                contract
+                    .bonuses
+                    .retain(|b| !matches!(b.bonus_type, ContractBonusType::SigningBonus));
+                contract.bonuses.push(ContractBonus::new(
+                    amount as i32,
+                    ContractBonusType::SigningBonus,
+                ));
+            }
+            // Release clause replaces any auto-installed one (the
+            // negotiation explicitly settled on this number).
+            if let Some(fee) = terms.release_clause_fee {
+                contract
+                    .clauses
+                    .retain(|c| !matches!(c.bonus_type, ContractClauseType::MinimumFeeRelease));
+                contract.clauses.push(ContractClause::new(
+                    fee as i32,
+                    ContractClauseType::MinimumFeeRelease,
+                ));
+            }
+            // Role promise — written onto the contract as Day-1 squad
+            // status. Without this the player walks in as `NotYetSet`
+            // and the next role-fit tick may downgrade them despite
+            // the buyer's promise.
+            if let Some(promise) = terms.squad_status_promise {
+                contract.squad_status = match promise {
+                    PromisedSquadStatus::KeyPlayer => PlayerSquadStatus::KeyPlayer,
+                    PromisedSquadStatus::FirstTeamRegular => PlayerSquadStatus::FirstTeamRegular,
+                    PromisedSquadStatus::FirstTeamSquadRotation => {
+                        PlayerSquadStatus::FirstTeamSquadRotation
+                    }
+                    PromisedSquadStatus::HotProspectForTheFuture => {
+                        PlayerSquadStatus::HotProspectForTheFuture
+                    }
+                };
+            }
+        }
+
         // Anchor international-cap baseline so any cap bonus added to
         // this fresh contract pays only on FUTURE caps, not on the
         // ones the player accumulated before the transfer.

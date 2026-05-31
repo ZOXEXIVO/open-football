@@ -40,7 +40,7 @@ impl CountryResult {
     ) {
         let mut listings_to_add: Vec<PendingListing> = Vec::new();
         let price_level = country.settings.pricing.price_level;
-        let window_mgr = TransferWindowManager::new();
+        let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
 
         for club in &country.clubs {

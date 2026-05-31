@@ -4,6 +4,7 @@ pub(crate) mod free_agent_market_calc;
 mod free_agents;
 mod listings;
 mod negotiations;
+mod settlement;
 pub(crate) mod types;
 
 use super::CountryResult;
@@ -16,6 +17,7 @@ use config::TransferConfig;
 use free_agents::{GlobalFreeAgentSigning, execute_global_free_agent_signing};
 pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents};
 use log::debug;
+use settlement::TransferClauseSettler;
 use types::DeferredTransfer;
 use types::TransferActivitySummary;
 
@@ -88,7 +90,7 @@ impl CountryResult {
     ) -> DeferredTransferOps {
         let country_id = country.id;
         let mut summary = TransferActivitySummary::new();
-        let window_manager = TransferWindowManager::new();
+        let window_manager = TransferWindowManager::for_country(country, current_date);
         let window_open = window_manager.is_window_open(country_id, current_date);
         let config = TransferConfig::default();
 
@@ -121,6 +123,13 @@ impl CountryResult {
         for (buying_club_id, player_id) in expired {
             PipelineProcessor::on_negotiation_resolved(country, buying_club_id, player_id, false);
         }
+
+        // Settle any installment tranches that came due today and any
+        // performance / promotion add-ons whose triggers have just
+        // fired. The settler routes cash buyer → seller (or buyer →
+        // beneficiary for sell-on) so the deal's deferred cost
+        // actually lands on the books over time.
+        TransferClauseSettler::settle_due(country, current_date);
 
         // Free agents and contract expirations. Returns deferred
         // signings sourced from the global pool (`data.free_agents`),
@@ -247,7 +256,10 @@ impl CountryResult {
     ) -> TransferActivitySummary {
         let mut summary = TransferActivitySummary::new();
 
-        let window_manager = TransferWindowManager::new();
+        let window_manager = data
+            .country(country_id)
+            .map(|c| TransferWindowManager::for_country(c, current_date))
+            .unwrap_or_else(TransferWindowManager::new);
         let window_open = window_manager.is_window_open(country_id, current_date);
         // Single source of truth for tunable knobs (probability tiers,
         // squad caps, default contract terms). One day we'll thread a
@@ -327,6 +339,12 @@ impl CountryResult {
                     false,
                 );
             }
+
+            // Daily clause settlement — installment tranches that
+            // came due today, performance/promotion add-ons whose
+            // triggers have crossed. Keeps the legacy path aligned
+            // with the parallel Phase-A path above.
+            TransferClauseSettler::settle_due(country, current_date);
 
             // Free agents and contract expirations. Returns deferred
             // signings sourced from the global pool (`sim.free_agents`),

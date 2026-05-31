@@ -650,6 +650,13 @@ impl CountryResult {
                 buying_league_reputation,
                 sell_on_percentage: None,
                 loan_future_fee: None,
+                // Free-agent in-country signings flow through a
+                // bespoke matcher that doesn't stage personal terms
+                // — the wage/role decision lives elsewhere.
+                personal_terms: None,
+                // Free-agent signings carry no transfer-fee clauses
+                // (no fee, no sell-on, no installments).
+                offer_clauses: Vec::new(),
             };
             let executed =
                 super::execution::execute_transfer_within_country(country, &deferred, date);

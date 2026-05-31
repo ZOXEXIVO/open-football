@@ -72,7 +72,7 @@ impl PipelineProcessor {
         let mut actions: Vec<NegotiationAction> = Vec::new();
         let mut plausibility_rejected: Vec<PlausibilityReject> = Vec::new();
         let price_level = country.settings.pricing.price_level;
-        let window_mgr = TransferWindowManager::new();
+        let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
 
         for club in &country.clubs {
@@ -1187,8 +1187,12 @@ impl PipelineProcessor {
             if player.is_on_loan() {
                 continue;
             }
-            let sell_window =
-                TransferWindowManager::new().current_window_dates(sell_country_id, date);
+            // Use the selling-side country reference (already in scope as
+            // `sell_country`) so its country-specific calendar is honoured
+            // — the buyer-side window doesn't apply when the player sits
+            // in a different country's market.
+            let sell_window = TransferWindowManager::for_country(sell_country, date)
+                .current_window_dates(sell_country_id, date);
             if player.is_transfer_protected(date, sell_window) {
                 continue;
             }

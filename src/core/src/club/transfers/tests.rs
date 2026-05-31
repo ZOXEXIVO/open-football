@@ -209,7 +209,7 @@ fn develop_and_sell_attaches_sell_on_for_young_high_upside() {
         "develop-and-sell club should attach sell-on clause"
     );
     // Young prospect → 5-year contract for resale-value protection.
-    assert_eq!(offer.contract_length, Some(5));
+    assert_eq!(offer.contract_length_years, Some(5));
 }
 
 #[test]
@@ -247,7 +247,7 @@ fn loan_focused_club_skips_long_contract_under_loan_approach() {
 
     // Loan path: strategy returns the single-year placeholder
     // and leaves loan-specific clauses to the pipeline.
-    assert_eq!(offer.contract_length, Some(1));
+    assert_eq!(offer.contract_length_years, Some(1));
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn older_player_gets_shorter_contract_and_appearance_clause() {
     let offer = s.calculate_initial_offer_with_context(&player, &asking, &ctx);
 
     // 32yo → short contract.
-    assert_eq!(offer.contract_length, Some(1));
+    assert_eq!(offer.contract_length_years, Some(1));
     assert!(
         find_clause(&offer, "appearance").is_some(),
         "veteran should get an appearance-fee clause"

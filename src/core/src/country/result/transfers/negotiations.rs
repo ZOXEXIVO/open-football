@@ -14,7 +14,7 @@ use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::TransferListingOrigin;
-use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
+use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason, TransferNegotiation};
 use crate::transfers::offer::TransferClause;
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::pipeline::plausibility::{
@@ -37,13 +37,14 @@ impl CountryResult {
         let mut deferred: Vec<DeferredTransfer> = Vec::new();
         let country_id = country.id;
 
-        let ready_to_resolve: Vec<u32> = country
-            .transfer_market
-            .negotiations
-            .values()
-            .filter(|n| n.is_phase_ready(date))
-            .map(|n| n.id)
-            .collect();
+        // When multiple buyers have bids in flight for the same player,
+        // the seller picks the strongest one first — best total
+        // potential, cleanest payment structure, most credible buyer.
+        // Sorting the ready-list best-first means the realistic bid
+        // resolves before the also-rans, which mirrors a seller
+        // explicitly comparing offers instead of accepting whatever
+        // hits Medical first.
+        let ready_to_resolve: Vec<u32> = SellerBidOrdering::order(country, date);
 
         for neg_id in ready_to_resolve {
             let neg_data = match country.transfer_market.negotiations.get(&neg_id) {
@@ -144,6 +145,7 @@ impl CountryResult {
                         loan_future_fee: n.current_offer.loan_future_fee().map(
                             |(fee, obligation)| (fee.amount.max(0.0).round() as u32, obligation),
                         ),
+                        personal_terms: n.current_offer.personal_terms.clone(),
                     }
                 }
                 None => continue,
@@ -277,7 +279,7 @@ impl CountryResult {
         // they bought this player with a plan and won't sell immediately.
         // Check domestic players only (foreign players aren't in this country).
         if neg_data.selling_country_id.is_none() {
-            let window_mgr = TransferWindowManager::new();
+            let window_mgr = TransferWindowManager::for_country(country, date);
             let current_window = window_mgr.current_window_dates(country.id, date);
             if let Some(player) = find_player_in_country(country, neg_data.player_id) {
                 if player.is_transfer_protected(date, current_window) {
@@ -390,6 +392,28 @@ impl CountryResult {
             chance += 15.0;
         } else if rep_diff < -0.2 {
             chance -= 10.0;
+        }
+
+        // Competition bonus: when several buyers are bidding for the
+        // same player the seller has leverage and is more inclined to
+        // engage with the leading offer. Read once off the market.
+        // Each extra rival lifts the chance by +5, capped to avoid
+        // freebie acceptances at insulting bids.
+        let competing_bids = country
+            .transfer_market
+            .negotiations
+            .values()
+            .filter(|n| {
+                n.player_id == neg_data.player_id
+                    && n.id != neg_id
+                    && matches!(
+                        n.status,
+                        NegotiationStatus::Pending | NegotiationStatus::Countered
+                    )
+            })
+            .count() as f32;
+        if competing_bids > 0.0 {
+            chance += (competing_bids * 5.0).min(15.0);
         }
 
         // Rivalry friction: seller reluctant to strengthen a rival. Softened
@@ -520,7 +544,7 @@ impl CountryResult {
             }
         }
 
-        let urgency = Self::deadline_urgency(country.id, date) as f64;
+        let urgency = Self::deadline_urgency_for(country, date) as f64;
         if urgency > 0.0 && importance < 0.75 {
             seller_reservation -= urgency * 0.10;
         }
@@ -654,8 +678,10 @@ impl CountryResult {
         }
 
         // End-of-window pressure: players prefer a signed deal over an
-        // expired negotiation that drops them back into limbo.
-        chance += Self::deadline_urgency(country.id, date) * 15.0;
+        // expired negotiation that drops them back into limbo. Country-
+        // aware variant honours non-European calendars (MLS, Argentine,
+        // Russian) when computing the deadline.
+        chance += Self::deadline_urgency_for(country, date) * 15.0;
 
         if neg_data.player_is_available {
             chance += 10.0;
@@ -1045,6 +1071,21 @@ impl CountryResult {
 
                 // All execution is deferred to SimulatorData level
                 let selling_country_id = neg_data.selling_country_id.unwrap_or(country_id);
+                // Reconcile the staged annual wage with the structured
+                // personal-terms package: the package's wage is the
+                // authoritative one if present (negotiated explicitly),
+                // otherwise we fall back to the loose `offered_salary`.
+                let agreed_annual_wage = neg_data
+                    .personal_terms
+                    .as_ref()
+                    .and_then(|t| t.annual_wage)
+                    .or(neg_data.offered_annual_wage);
+                let offer_clauses = country
+                    .transfer_market
+                    .negotiations
+                    .get(&neg_id)
+                    .map(|n| n.current_offer.clauses.clone())
+                    .unwrap_or_default();
                 deferred.push(DeferredTransfer {
                     player_id: neg_data.player_id,
                     selling_country_id,
@@ -1054,10 +1095,12 @@ impl CountryResult {
                     fee: neg_data.offer_amount,
                     is_loan: neg_data.is_loan,
                     has_option_to_buy: neg_data.has_option_to_buy,
-                    agreed_annual_wage: neg_data.offered_annual_wage,
+                    agreed_annual_wage,
                     buying_league_reputation: neg_data.buying_league_reputation,
                     sell_on_percentage: neg_data.sell_on_percentage,
                     loan_future_fee: neg_data.loan_future_fee,
+                    personal_terms: neg_data.personal_terms.clone(),
+                    offer_clauses,
                 });
 
                 PipelineProcessor::on_negotiation_resolved(
@@ -1261,12 +1304,34 @@ impl CountryResult {
         TransferPlausibilityEvaluator::player_importance(&inputs)
     }
 
+    /// Country-aware variant of [`Self::deadline_urgency`]. Reads the
+    /// country code to pick the right calendar so e.g. an MLS-style or
+    /// southern-hemisphere window's deadline registers correctly.
+    /// Callers in the country-result transfer flow have a `&Country` in
+    /// scope and prefer this.
+    pub(crate) fn deadline_urgency_for(country: &Country, date: NaiveDate) -> f32 {
+        let mgr = TransferWindowManager::for_country(country, date);
+        Self::deadline_urgency_from_manager(&mgr, country.id, date)
+    }
+
     /// How close are we to the transfer window slamming shut? 0 when at
     /// least two weeks remain; ramps linearly to 1.0 on deadline day.
     /// Used to push both sides toward a deal instead of letting stale
-    /// negotiations age into the expiry rejection.
+    /// negotiations age into the expiry rejection. Falls back to default
+    /// European windows when only the id is known. The country-aware
+    /// variant `deadline_urgency_for` is preferred when a `&Country`
+    /// reference is in scope.
+    #[allow(dead_code)]
     pub(crate) fn deadline_urgency(country_id: u32, date: NaiveDate) -> f32 {
         let mgr = TransferWindowManager::new();
+        Self::deadline_urgency_from_manager(&mgr, country_id, date)
+    }
+
+    fn deadline_urgency_from_manager(
+        mgr: &TransferWindowManager,
+        country_id: u32,
+        date: NaiveDate,
+    ) -> f32 {
         let (_, end) = match mgr.current_window_dates(country_id, date) {
             Some(w) => w,
             None => return 0.0,
@@ -1278,6 +1343,78 @@ impl CountryResult {
             1.0
         } else {
             1.0 - (days_left as f32 - 1.0) / 13.0
+        }
+    }
+}
+
+/// Builds the order in which the seller resolves multiple competing
+/// bids. When two clubs both bid for the same player and both reach a
+/// phase-ready point on the same tick, the seller doesn't accept
+/// whichever bid hits Medical first — they compare and pick. Ordering
+/// the ready-list best-first inside `resolve_pending_negotiations` gives
+/// the leading bid the first opportunity to advance; the runner-up only
+/// gets a chance if the leader fails its own roll. The losing bid is
+/// then auto-cancelled by `complete_transfer` when the leader closes.
+pub struct SellerBidOrdering;
+
+impl SellerBidOrdering {
+    /// Return ready-to-resolve negotiation ids sorted so that the
+    /// seller's preferred bid resolves first within each (player_id)
+    /// group. Across players the original order is preserved.
+    pub fn order(country: &Country, date: NaiveDate) -> Vec<u32> {
+        let mut entries: Vec<(u32, u32, f64)> = country
+            .transfer_market
+            .negotiations
+            .values()
+            .filter(|n| n.is_phase_ready(date))
+            .map(|n| (n.id, n.player_id, SellerBidValuation::score(n)))
+            .collect();
+        // Stable-sort by (player_id ASC, score DESC) — within a group,
+        // best bid first; outside a group, order preserved.
+        entries.sort_by(|a, b| {
+            a.1.cmp(&b.1)
+                .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        entries.into_iter().map(|(id, _, _)| id).collect()
+    }
+}
+
+/// Score a single competing bid from the seller's perspective. Higher
+/// = more attractive. The formula blends:
+///   * **Guaranteed cash** — base fee, weighted at 60%.
+///   * **Total potential** — base + clause expected value, at 30%.
+///   * **Buyer credibility** — reputation premium (a richer buyer is
+///     less likely to renege on installments), at 10%.
+/// Loans get a small flat score because they only ever generate the
+/// loan fee — they shouldn't outrank a clean permanent bid for the
+/// same player.
+pub struct SellerBidValuation;
+
+impl SellerBidValuation {
+    pub fn score(negotiation: &TransferNegotiation) -> f64 {
+        let offer = &negotiation.current_offer;
+        let base = offer.base_fee.amount.max(0.0);
+        let total = offer.total_potential_value().max(0.0);
+        let buyer_rep_factor = 1.0 + (negotiation.buying_club_reputation as f64).clamp(0.0, 1.0) * 0.15;
+
+        // Up-front discount: heavy installment plans get a small
+        // haircut because the seller carries time-value risk.
+        let has_installments = offer
+            .clauses
+            .iter()
+            .any(|c| matches!(c, TransferClause::Installments(_, _)));
+        let upfront_factor = if has_installments { 0.92 } else { 1.0 };
+
+        let raw = 0.60 * base + 0.30 * total;
+        let scored = raw * upfront_factor * buyer_rep_factor;
+        if negotiation.is_loan {
+            // Loan offers can't outrank a permanent for the same
+            // player — scale down so a healthy loan still ranks
+            // above a derisory permanent bid but a credible
+            // permanent bid wins comfortably.
+            scored * 0.35
+        } else {
+            scored
         }
     }
 }
@@ -1365,5 +1502,66 @@ mod deadline_urgency_tests {
         let c = CountryResult::deadline_urgency(1, d(2025, 8, 30));
         assert!(a < b);
         assert!(b < c);
+    }
+}
+
+#[cfg(test)]
+mod seller_bid_valuation_tests {
+    use super::*;
+    use crate::shared::{Currency, CurrencyValue};
+    use crate::transfers::negotiation::TransferNegotiation;
+    use crate::transfers::offer::{TransferClause, TransferOffer};
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn money(amount: f64) -> CurrencyValue {
+        CurrencyValue {
+            amount,
+            currency: Currency::Usd,
+        }
+    }
+
+    fn negotiation(amount: f64, is_loan: bool, has_installments: bool) -> TransferNegotiation {
+        let mut offer = TransferOffer::new(money(amount), 99, d(2026, 7, 1));
+        if has_installments {
+            offer = offer.with_clause(TransferClause::Installments(money(amount * 0.5), 3));
+        }
+        let mut n = TransferNegotiation::new(1, 10, 0, 1, 2, offer, d(2026, 7, 1), 0.5, 0.5, 24, 0.5);
+        n.is_loan = is_loan;
+        n
+    }
+
+    #[test]
+    fn higher_base_fee_scores_higher() {
+        let lo = negotiation(2_000_000.0, false, false);
+        let hi = negotiation(5_000_000.0, false, false);
+        assert!(SellerBidValuation::score(&hi) > SellerBidValuation::score(&lo));
+    }
+
+    #[test]
+    fn installment_heavy_bid_loses_to_clean_upfront_at_same_headline() {
+        // Same headline fee but one is paid in installments → seller
+        // prefers the upfront one even though headline is identical.
+        let upfront = negotiation(5_000_000.0, false, false);
+        let in_install = negotiation(5_000_000.0, false, true);
+        assert!(
+            SellerBidValuation::score(&upfront) > SellerBidValuation::score(&in_install),
+            "upfront should outrank installment-heavy at equal fee"
+        );
+    }
+
+    #[test]
+    fn loan_bid_never_outranks_credible_permanent_for_same_player() {
+        let loan = negotiation(5_000_000.0, true, false);
+        let permanent = negotiation(4_000_000.0, false, false);
+        // Smaller permanent fee still beats larger loan because loans
+        // get the loan-flag haircut — sellers prefer the actual sale.
+        assert!(
+            SellerBidValuation::score(&permanent) > SellerBidValuation::score(&loan),
+            "permanent bid should outrank a loan bid for the same player"
+        );
     }
 }

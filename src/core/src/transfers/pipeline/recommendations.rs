@@ -232,7 +232,7 @@ impl PipelineProcessor {
 
         let is_january = Self::is_january_window(date);
         let price_level = country.settings.pricing.price_level;
-        let window_mgr = TransferWindowManager::new();
+        let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
 
         // Pass 1: Build player snapshots across all clubs

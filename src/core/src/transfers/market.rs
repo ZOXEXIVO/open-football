@@ -3,7 +3,7 @@ use crate::transfers::negotiation::{NegotiationStatus, TransferNegotiation};
 use crate::transfers::offer::TransferOffer;
 use crate::transfers::{CompletedTransfer, TransferType};
 use chrono::Duration;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -13,6 +13,71 @@ pub struct TransferMarket {
     pub transfer_window_open: bool,
     pub transfer_history: Vec<CompletedTransfer>,
     pub next_negotiation_id: u32,
+    /// Pending obligations from clauses on completed transfers —
+    /// installment payments, performance add-ons (appearances, goals,
+    /// promotion), and triggerable bonuses that pay out *after* the
+    /// player has moved. Resolved daily via [`Self::settle_due_clauses`]
+    /// at country tick time. Empty for clubs that haven't bought
+    /// anyone with installment-style deals.
+    pub pending_clauses: Vec<PendingTransferClause>,
+}
+
+/// A future financial obligation arising from a clause that fires
+/// *after* a player's transfer is complete: a tranche payment, a
+/// performance bonus, a promotion top-up. Stored on the buying
+/// country's `TransferMarket` (where the buyer lives) so the daily
+/// settlement walk only touches the country whose club owes money.
+///
+/// The trigger model is intentionally simple — each clause carries the
+/// information needed to resolve it without re-reading the original
+/// `TransferClause` enum. Resolving an installment is a date check;
+/// resolving an appearance / goal / promotion bonus is a counter check
+/// the caller threads in.
+#[derive(Debug, Clone)]
+pub struct PendingTransferClause {
+    /// Unique id within this market — used for cancellation / debug.
+    pub id: u32,
+    /// Buying club that owes the future payment.
+    pub buying_club_id: u32,
+    /// Selling club that receives the payment. Same club id is used
+    /// even for installments owed back to the seller: the routing logic
+    /// lives in `settle_due_clauses` which credits whichever side the
+    /// clause names.
+    pub selling_club_id: u32,
+    /// Player the obligation tracks. Used by performance triggers to
+    /// look up appearances/goals.
+    pub player_id: u32,
+    /// What the obligation pays for.
+    pub trigger: ClauseTrigger,
+    /// Per-fire payment amount. Total cost over time = `amount × max_fires`.
+    pub amount: f64,
+    /// Maximum number of times this clause can pay out before being
+    /// retired. Installments cap at the agreed tranche count; one-off
+    /// bonuses cap at 1.
+    pub max_fires: u8,
+    /// How many times the clause has fired so far.
+    pub fires_so_far: u8,
+    /// Last calendar date on which the clause can still fire. When `None`
+    /// the clause has no end date — the `max_fires` cap retires it.
+    pub expires_on: Option<NaiveDate>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ClauseTrigger {
+    /// Fire on a specific calendar date. The settler compares
+    /// `today >= scheduled_date` and `fires_so_far < max_fires`.
+    Installment { scheduled_date: NaiveDate },
+    /// Fire when the player crosses `target_appearances` total at the
+    /// buying club. The settler reads the player's appearance counter
+    /// at the buying club and compares.
+    AppearanceMilestone { target_appearances: u32 },
+    /// Fire when the player crosses `target_goals` total at the buying
+    /// club.
+    GoalMilestone { target_goals: u32 },
+    /// Fire when the buying club gets promoted out of its current
+    /// league tier. The settler reads the buying club's league position
+    /// at end-of-season.
+    Promotion,
 }
 
 #[derive(Debug, Clone)]
@@ -135,7 +200,205 @@ impl TransferMarket {
             transfer_window_open: false,
             transfer_history: Vec::new(),
             next_negotiation_id: 1,
+            pending_clauses: Vec::new(),
         }
+    }
+
+    /// Schedule installment tranches for a permanent transfer fee.
+    /// `years` tranches are scheduled one calendar year apart, starting
+    /// `1 year` after `start_date`. The total over the schedule equals
+    /// `amount` (the *deferred* portion of the headline fee — callers
+    /// should subtract the upfront portion before calling).
+    pub fn schedule_installments(
+        &mut self,
+        buying_club_id: u32,
+        selling_club_id: u32,
+        player_id: u32,
+        amount: f64,
+        years: u8,
+        start_date: NaiveDate,
+    ) {
+        if years == 0 || amount <= 0.0 {
+            return;
+        }
+        let per_tranche = amount / years as f64;
+        let id = self.next_pending_clause_id();
+        let mut next_id = id;
+        for i in 1..=years as i32 {
+            let target_year = start_date.year() + i;
+            let scheduled_date = start_date
+                .with_year(target_year)
+                .unwrap_or_else(|| {
+                    start_date
+                        .checked_add_signed(Duration::days(365 * i as i64))
+                        .unwrap_or(start_date)
+                });
+            self.pending_clauses.push(PendingTransferClause {
+                id: next_id,
+                buying_club_id,
+                selling_club_id,
+                player_id,
+                trigger: ClauseTrigger::Installment { scheduled_date },
+                amount: per_tranche,
+                max_fires: 1,
+                fires_so_far: 0,
+                expires_on: None,
+            });
+            next_id += 1;
+        }
+    }
+
+    /// Schedule a performance-bonus add-on (appearance/goal milestone)
+    /// that fires when the player crosses `threshold` of the named
+    /// counter at the buying club. `expires_on` lets the buyer cap the
+    /// obligation by a date (e.g. end-of-contract); pass `None` for
+    /// open-ended obligations.
+    pub fn schedule_performance_addon(
+        &mut self,
+        buying_club_id: u32,
+        selling_club_id: u32,
+        player_id: u32,
+        trigger: ClauseTrigger,
+        amount: f64,
+        expires_on: Option<NaiveDate>,
+    ) {
+        if amount <= 0.0 {
+            return;
+        }
+        // Performance add-ons fire at most once each — they reward a
+        // single milestone crossing.
+        let id = self.next_pending_clause_id();
+        self.pending_clauses.push(PendingTransferClause {
+            id,
+            buying_club_id,
+            selling_club_id,
+            player_id,
+            trigger,
+            amount,
+            max_fires: 1,
+            fires_so_far: 0,
+            expires_on,
+        });
+    }
+
+    /// Drain pending clauses whose calendar trigger has now passed.
+    /// Returns the list of due installments so the caller can route
+    /// the money through the buying/selling club finances (the market
+    /// doesn't hold club references). Drops fully-fired and expired
+    /// clauses from the queue as a side effect.
+    ///
+    /// Performance triggers (appearances/goals/promotion) are NOT
+    /// settled here — those need counters that live outside the
+    /// market and are handled by [`Self::resolve_performance_clauses`].
+    pub fn drain_due_installments(&mut self, today: NaiveDate) -> Vec<PendingTransferClause> {
+        let mut due: Vec<PendingTransferClause> = Vec::new();
+        let mut keep: Vec<PendingTransferClause> = Vec::with_capacity(self.pending_clauses.len());
+        for mut clause in self.pending_clauses.drain(..) {
+            // Drop expired entries silently — the player may have left
+            // the buying club before the milestone could be reached.
+            if let Some(deadline) = clause.expires_on {
+                if today > deadline {
+                    continue;
+                }
+            }
+            if let ClauseTrigger::Installment { scheduled_date } = clause.trigger {
+                if clause.fires_so_far < clause.max_fires && today >= scheduled_date {
+                    clause.fires_so_far = clause.fires_so_far.saturating_add(1);
+                    due.push(clause);
+                    continue;
+                }
+            }
+            keep.push(clause);
+        }
+        self.pending_clauses = keep;
+        due
+    }
+
+    /// Settle performance-triggered add-ons that have crossed their
+    /// threshold given the latest counters. Caller supplies a closure
+    /// that resolves the player's appearances/goals at the buying club
+    /// (the market doesn't carry that state). Returns the list of
+    /// triggered clauses so the caller can route the payouts.
+    pub fn resolve_performance_clauses<F, G>(
+        &mut self,
+        today: NaiveDate,
+        mut appearance_count: F,
+        mut goal_count: G,
+    ) -> Vec<PendingTransferClause>
+    where
+        F: FnMut(u32, u32) -> Option<u32>, // (player_id, buying_club_id) -> apps
+        G: FnMut(u32, u32) -> Option<u32>, // (player_id, buying_club_id) -> goals
+    {
+        let mut fired: Vec<PendingTransferClause> = Vec::new();
+        let mut keep: Vec<PendingTransferClause> = Vec::with_capacity(self.pending_clauses.len());
+        for mut clause in self.pending_clauses.drain(..) {
+            if let Some(deadline) = clause.expires_on {
+                if today > deadline {
+                    continue;
+                }
+            }
+            let crosses_threshold = match clause.trigger {
+                ClauseTrigger::AppearanceMilestone { target_appearances } => {
+                    appearance_count(clause.player_id, clause.buying_club_id)
+                        .map(|apps| apps >= target_appearances)
+                        .unwrap_or(false)
+                }
+                ClauseTrigger::GoalMilestone { target_goals } => {
+                    goal_count(clause.player_id, clause.buying_club_id)
+                        .map(|goals| goals >= target_goals)
+                        .unwrap_or(false)
+                }
+                _ => false,
+            };
+            if crosses_threshold && clause.fires_so_far < clause.max_fires {
+                clause.fires_so_far = clause.fires_so_far.saturating_add(1);
+                fired.push(clause);
+                continue;
+            }
+            keep.push(clause);
+        }
+        self.pending_clauses = keep;
+        fired
+    }
+
+    /// Trigger promotion add-ons when the buying club has been promoted
+    /// — the caller passes in the set of club ids that won promotion at
+    /// season end. Cheap O(N) walk over pending clauses; clubs not in
+    /// the promoted set leave their clauses untouched.
+    pub fn resolve_promotion_clauses(
+        &mut self,
+        today: NaiveDate,
+        promoted_clubs: &[u32],
+    ) -> Vec<PendingTransferClause> {
+        let mut fired: Vec<PendingTransferClause> = Vec::new();
+        let mut keep: Vec<PendingTransferClause> = Vec::with_capacity(self.pending_clauses.len());
+        for mut clause in self.pending_clauses.drain(..) {
+            if let Some(deadline) = clause.expires_on {
+                if today > deadline {
+                    continue;
+                }
+            }
+            if matches!(clause.trigger, ClauseTrigger::Promotion)
+                && clause.fires_so_far < clause.max_fires
+                && promoted_clubs.contains(&clause.buying_club_id)
+            {
+                clause.fires_so_far = clause.fires_so_far.saturating_add(1);
+                fired.push(clause);
+                continue;
+            }
+            keep.push(clause);
+        }
+        self.pending_clauses = keep;
+        fired
+    }
+
+    fn next_pending_clause_id(&self) -> u32 {
+        self.pending_clauses
+            .iter()
+            .map(|c| c.id)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(1)
     }
 
     pub fn add_listing(&mut self, listing: TransferListing) {
@@ -260,11 +523,20 @@ impl TransferMarket {
             let player_id = negotiation.player_id;
 
             // Use negotiation's is_loan flag (not listing type) since a buying club
-            // may approach a Transfer-listed player as a loan or vice versa
+            // may approach a Transfer-listed player as a loan or vice versa.
+            //
+            // For loans, use the explicit `loan_duration_months` field —
+            // the legacy code accidentally reused `contract_length` (which
+            // documents itself as YEARS for permanent deals) and treated
+            // it as months, producing a 30-day loan end for "1 year".
+            // Falling back to ~6 months keeps the market-history record
+            // sensible when no explicit duration is staged; the parent
+            // contract's `loan_to_club_id` end date is computed separately
+            // off the parent league's season calendar in `execution.rs`.
             let transfer_type = if negotiation.is_loan {
                 let loan_end = negotiation
                     .current_offer
-                    .contract_length
+                    .loan_duration_months
                     .map(|months| {
                         current_date
                             .checked_add_signed(Duration::days(months as i64 * 30))

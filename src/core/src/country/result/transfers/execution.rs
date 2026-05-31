@@ -4,6 +4,8 @@ use crate::club::player::calculators::WageCalculator;
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
 use crate::simulator::SimulatorData;
+use crate::transfers::market::{ClauseTrigger, TransferMarket};
+use crate::transfers::offer::TransferClause;
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::{Country, Player, PlayerClubContract, TeamInfo, TeamType};
 use chrono::Duration;
@@ -261,6 +263,7 @@ pub(crate) fn execute_transfer_within_country(
             buying_league_reputation: transfer.buying_league_reputation,
             selling_league_reputation,
             record_sell_on: transfer.sell_on_percentage,
+            personal_terms: transfer.personal_terms.clone(),
         });
 
         for obligation in &obligations {
@@ -291,6 +294,16 @@ pub(crate) fn execute_transfer_within_country(
             buying_club
                 .finance
                 .register_transfer_purchase(fee, DEFAULT_AMORTIZATION_YEARS);
+            // Agent fee — separate one-off cost on top of the headline
+            // fee, paid in cash at signing. Honoured only when the
+            // structured personal-terms package agreed one.
+            if let Some(terms) = transfer.personal_terms.as_ref() {
+                if let Some(amount) = terms.agent_fee {
+                    if amount > 0 {
+                        buying_club.finance.add_transfer_income(-(amount as f64));
+                    }
+                }
+            }
             if !buying_club.teams.teams.is_empty() {
                 buying_club.teams.teams[0].players.add(player);
             }
@@ -361,6 +374,13 @@ pub(crate) fn execute_transfer_within_country(
                 .loan_out_candidates
                 .retain(|c| c.player_id != player_id);
         }
+        // Schedule any installment / performance / promotion clauses
+        // so the buyer pays the seller over time as the events fire.
+        TransferClauseScheduler::schedule_for_transfer(
+            &mut country.transfer_market,
+            transfer,
+            date,
+        );
 
         debug!(
             "Transfer completed: player {} from club {} to club {} for {}",
@@ -759,6 +779,7 @@ fn execute_transfer_across_countries(
         buying_league_reputation: transfer.buying_league_reputation,
         selling_league_reputation,
         record_sell_on: transfer.sell_on_percentage,
+        personal_terms: transfer.personal_terms.clone(),
     });
 
     let arrival_country_id = player.country_id;
@@ -773,6 +794,15 @@ fn execute_transfer_across_countries(
         buying_club
             .finance
             .register_transfer_purchase(fee, DEFAULT_AMORTIZATION_YEARS);
+        // Mirror the within-country agent fee deduction: cash-out at
+        // signing when the personal-terms package committed one.
+        if let Some(terms) = transfer.personal_terms.as_ref() {
+            if let Some(amount) = terms.agent_fee {
+                if amount > 0 {
+                    buying_club.finance.add_transfer_income(-(amount as f64));
+                }
+            }
+        }
         if !buying_club.teams.teams.is_empty() {
             buying_club.teams.teams[0].players.add(player);
         }
@@ -839,6 +869,19 @@ fn execute_transfer_across_countries(
         }
         credit_club_globally(data, obligation.beneficiary_club_id, payout);
         credit_club_globally(data, selling_club_id, -payout);
+    }
+
+    // Schedule future clauses on the BUYER's country market (where the
+    // daily settlement walk runs against the buyer's club). Cross-
+    // country sells still route payouts via `credit_club_globally`
+    // when the time comes, so the seller's country doesn't matter for
+    // bookkeeping — only the buyer's does.
+    if let Some(buying_country) = data.country_mut(buying_country_id) {
+        TransferClauseScheduler::schedule_for_transfer(
+            &mut buying_country.transfer_market,
+            transfer,
+            date,
+        );
     }
 
     debug!(
@@ -1202,4 +1245,110 @@ fn compute_loan_end(league_id: Option<u32>, country: &Country, date: NaiveDate) 
             };
             NaiveDate::from_ymd_opt(year, 5, 31).unwrap_or(date)
         })
+}
+
+/// Translates the offer's clause snapshot on a finalized transfer into
+/// `PendingTransferClause` entries on the buying country's market. The
+/// market settlement walk then resolves them daily (installments / date
+/// triggers) or at end-of-season events (appearances / goals /
+/// promotion). Loans don't pay installments — the loan-fee is a single
+/// cash transfer, and any future-fee option/obligation is already
+/// recorded on the contract; this scheduler is a no-op for them.
+pub(crate) struct TransferClauseScheduler;
+
+impl TransferClauseScheduler {
+    pub(crate) fn schedule_for_transfer(
+        market: &mut TransferMarket,
+        transfer: &DeferredTransfer,
+        date: NaiveDate,
+    ) {
+        if transfer.is_loan {
+            return;
+        }
+        let buyer = transfer.buying_club_id;
+        let seller = transfer.selling_club_id;
+        let player = transfer.player_id;
+
+        for clause in &transfer.offer_clauses {
+            match clause {
+                TransferClause::Installments(amount, years) => {
+                    let deferred = amount.amount.max(0.0);
+                    if deferred <= 0.0 || *years == 0 {
+                        continue;
+                    }
+                    market.schedule_installments(buyer, seller, player, deferred, *years, date);
+                }
+                TransferClause::AppearanceFee(amount, target) => {
+                    let payout = amount.amount.max(0.0);
+                    if payout <= 0.0 || *target == 0 {
+                        continue;
+                    }
+                    market.schedule_performance_addon(
+                        buyer,
+                        seller,
+                        player,
+                        ClauseTrigger::AppearanceMilestone {
+                            target_appearances: *target,
+                        },
+                        payout,
+                        // Performance add-ons fall away after 4 seasons
+                        // — long enough for realistic milestones, short
+                        // enough to keep the queue from accumulating
+                        // forever on players who never quite reach the
+                        // threshold.
+                        Some(
+                            date.checked_add_signed(Duration::days(365 * 4))
+                                .unwrap_or(date),
+                        ),
+                    );
+                }
+                TransferClause::GoalBonus(amount, target) => {
+                    let payout = amount.amount.max(0.0);
+                    if payout <= 0.0 || *target == 0 {
+                        continue;
+                    }
+                    market.schedule_performance_addon(
+                        buyer,
+                        seller,
+                        player,
+                        ClauseTrigger::GoalMilestone {
+                            target_goals: *target,
+                        },
+                        payout,
+                        Some(
+                            date.checked_add_signed(Duration::days(365 * 4))
+                                .unwrap_or(date),
+                        ),
+                    );
+                }
+                TransferClause::PromotionBonus(amount) => {
+                    let payout = amount.amount.max(0.0);
+                    if payout <= 0.0 {
+                        continue;
+                    }
+                    market.schedule_performance_addon(
+                        buyer,
+                        seller,
+                        player,
+                        ClauseTrigger::Promotion,
+                        payout,
+                        // Promotion bonus expires after one season —
+                        // it only pays for the *next* promotion the
+                        // buying club achieves, not a future one years
+                        // down the line.
+                        Some(
+                            date.checked_add_signed(Duration::days(400))
+                                .unwrap_or(date),
+                        ),
+                    );
+                }
+                // Sell-on / loan-option/obligation are already routed
+                // via dedicated fields on DeferredTransfer and don't
+                // belong in the pending-clauses queue.
+                TransferClause::SellOnClause(_)
+                | TransferClause::LoanOptionToBuy(_)
+                | TransferClause::LoanObligationToBuy(_) => {}
+            }
+        }
+    }
 }

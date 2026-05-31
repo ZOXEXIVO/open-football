@@ -8,6 +8,7 @@ use chrono::NaiveDate;
 use crate::TeamInfo;
 use crate::club::PlayerClubContract;
 use crate::r#match::PlayerMatchEndStats;
+use crate::transfers::offer::PersonalTermsOffer;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MatchParticipation {
@@ -80,6 +81,15 @@ pub struct TransferCompletion<'a> {
     /// Sell-on percentage pledged by the buyer to the current seller. Added
     /// to `player.sell_on_obligations` so the next sale pays the seller out.
     pub record_sell_on: Option<f32>,
+    /// Structured personal-terms package agreed during the AI flow —
+    /// signing bonus, agent fee, release clause, contract years,
+    /// promised role. When `Some`, execution installs the exact deal
+    /// that was negotiated. When `None`, falls back to compute-from-
+    /// context defaults for legacy callers (manual UI moves, free-
+    /// agent in-country signings, tests). All fields inside are
+    /// individually `Option` so a partial package is honoured field-
+    /// by-field.
+    pub personal_terms: Option<PersonalTermsOffer>,
 }
 
 pub struct LoanCompletion<'a> {

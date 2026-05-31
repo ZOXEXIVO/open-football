@@ -11,6 +11,7 @@ use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
     ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
+    Team,
 };
 
 // Loans fund short-term development or rotation minutes. Players older
@@ -391,6 +392,10 @@ impl PipelineProcessor {
                 _ => {}
             }
 
+            // Loans run for a season — set the explicit duration field
+            // (months) rather than the permanent-contract years field so
+            // the market history doesn't double-encode "1" as both 1 year
+            // and 1 month.
             let offer = TransferOffer {
                 base_fee: CurrencyValue {
                     amount: action.offer_amount,
@@ -398,7 +403,9 @@ impl PipelineProcessor {
                 },
                 clauses,
                 salary_contribution: None,
-                contract_length: Some(1),
+                contract_length_years: None,
+                loan_duration_months: Some(10),
+                personal_terms: None,
                 offering_club_id: action.club_id,
                 offered_date: date,
             };
@@ -559,6 +566,12 @@ impl PipelineProcessor {
             // for the same position (e.g. FormationGap + DepthCover for GK)
             let mut scanned_position_groups: Vec<PlayerFieldPositionGroup> = Vec::new();
 
+            // Borrower-side depth snapshot — the same gate the
+            // domestic scan uses to avoid loaning into an already-full
+            // position. Building it once here keeps the filter inside
+            // `foreign_loans.iter()` cheap.
+            let borrower_position_depth = BorrowerPositionDepth::snapshot(team);
+
             for request in unfulfilled {
                 if scans >= max_scans {
                     break;
@@ -603,6 +616,14 @@ impl PipelineProcessor {
                                 );
                                 scout_regions.contains(&player_region)
                             }
+                            // Borrower-depth gate: if the borrower's
+                            // squad is already full at this position
+                            // group, accept only when the incoming
+                            // player is clearly better than what's
+                            // already there. Mirrors the domestic
+                            // `should_skip_loan` shape so we don't
+                            // import a 4th mid-tier GK on top of three.
+                            && borrower_position_depth.has_room_for(p.position_group, p.skill_ability)
                     })
                     .max_by_key(|p| p.skill_ability)
                 {
@@ -679,11 +700,16 @@ impl PipelineProcessor {
             // Use a reasonable estimate for selling club rep
             let selling_rep = (action.player.skill_ability as f32 / 200.0).clamp(0.1, 0.9);
 
+            // Same as the domestic loan path — explicit months-side
+            // duration so the market history record matches the actual
+            // loan length.
             let offer = TransferOffer {
                 base_fee: asking_price,
                 clauses: Vec::new(),
                 salary_contribution: None,
-                contract_length: Some(1),
+                contract_length_years: None,
+                loan_duration_months: Some(10),
+                personal_terms: None,
                 offering_club_id: action.club_id,
                 offered_date: date,
             };
@@ -805,5 +831,60 @@ impl PipelineProcessor {
                 }
             }
         }
+    }
+}
+
+/// Snapshot of the borrowing club's position-group depth — count of
+/// players + best ability per group. Used by the loan scans so the
+/// borrower doesn't pile a fourth mid-tier player onto a position
+/// that's already three deep with comparable quality. Mirrors the
+/// `position_depth` shape inside `scan_loan_market`, factored out so
+/// the foreign-scan path can reuse the same realism gate.
+struct BorrowerPositionDepth {
+    rows: [(PlayerFieldPositionGroup, usize, usize, u8); 4],
+}
+
+impl BorrowerPositionDepth {
+    fn snapshot(team: &Team) -> Self {
+        let groups = [
+            (PlayerFieldPositionGroup::Goalkeeper, 3usize),
+            (PlayerFieldPositionGroup::Defender, 8),
+            (PlayerFieldPositionGroup::Midfielder, 8),
+            (PlayerFieldPositionGroup::Forward, 6),
+        ];
+        let mut rows = [
+            (PlayerFieldPositionGroup::Goalkeeper, 0usize, 3usize, 0u8),
+            (PlayerFieldPositionGroup::Defender, 0, 8, 0),
+            (PlayerFieldPositionGroup::Midfielder, 0, 8, 0),
+            (PlayerFieldPositionGroup::Forward, 0, 6, 0),
+        ];
+        for (i, (group, max)) in groups.iter().enumerate() {
+            let (count, best) = team
+                .players
+                .iter()
+                .filter(|p| p.position().position_group() == *group)
+                .map(|p| p.player_attributes.current_ability)
+                .fold((0usize, 0u8), |(c, b), a| (c + 1, b.max(a)));
+            rows[i] = (*group, count, *max, best);
+        }
+        BorrowerPositionDepth { rows }
+    }
+
+    /// True when adding a loan player at `group` makes sense — either
+    /// there's room (count < max) or the incoming player is clearly
+    /// stronger than the existing best in that group.
+    fn has_room_for(&self, group: PlayerFieldPositionGroup, candidate_ability: u8) -> bool {
+        for (g, count, max, best) in &self.rows {
+            if *g == group {
+                if *count < *max {
+                    return true;
+                }
+                // Group is full — only accept if the incoming player
+                // would clearly upgrade the position (≥10 CA over the
+                // current best).
+                return candidate_ability >= best.saturating_add(10);
+            }
+        }
+        true
     }
 }

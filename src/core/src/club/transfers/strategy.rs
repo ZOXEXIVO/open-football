@@ -1,6 +1,9 @@
 use crate::club::board::{ClubVision, FinancialStance, SigningPreference, VisionYouthFocus};
+use crate::club::player::calculators::WageCalculator;
 use crate::shared::{Currency, CurrencyValue};
-use crate::transfers::offer::{TransferClause, TransferOffer};
+use crate::transfers::offer::{
+    PersonalTermsOffer, PromisedSquadStatus, TransferClause, TransferOffer,
+};
 use crate::transfers::pipeline::{
     BoardRecruitmentDossier, TransferApproach, TransferNeedPriority, TransferNeedReason,
     TransferRequest,
@@ -811,7 +814,16 @@ impl ClubTransferStrategy {
             1
         };
 
-        offer.with_contract_length(contract_years)
+        // Build the structured personal-terms package so execution can
+        // honour the buyer's actual commitment. Loans skip the package
+        // — the borrower keeps the player on the parent contract; only
+        // the wage-split is set later by the execution layer.
+        let mut offer = offer.with_contract_length(contract_years);
+        if !ctx.is_loan() {
+            let terms = PersonalTermsPackager::build(self, player, &ctx, contract_years, age);
+            offer = offer.with_personal_terms(terms);
+        }
+        offer
     }
 
     // ---- Selling side ---------------------------------------
@@ -1083,5 +1095,151 @@ impl ContractTiming {
             months -= 1;
         }
         months.max(0)
+    }
+}
+
+// ============================================================
+// Personal-terms packaging — builds the [`PersonalTermsOffer`]
+// from a recruitment context. Lives on its own struct so callers
+// see a discoverable API and the packaging policy is unit-testable.
+// ============================================================
+
+/// Build a [`PersonalTermsOffer`] for a permanent signing. Reads the
+/// buyer's negotiation/recruitment policy plus the player profile so
+/// the resulting package matches the rest of the offer in tone:
+///
+///   - **Wage**: `WageCalculator::expected_annual_wage` anchored on
+///     the buyer's tier; clamped by the buyer's wage-discipline so
+///     austerity / conservative stances offer slightly less.
+///   - **Signing bonus**: scales with the buyer's
+///     `addon_preference` and the player's star quality.
+///   - **Agent fee**: percentage of base fee for ambitious buyers
+///     chasing top targets; zero for austerity sides.
+///   - **Release clause**: only attached when the player has clear
+///     market value and the buyer has the bargaining position to
+///     accept one (or when the personal-terms policy demands it).
+///   - **Squad role promise**: derived from the request reason and
+///     the player's ability vs the buyer's tier.
+pub struct PersonalTermsPackager;
+
+impl PersonalTermsPackager {
+    pub fn build(
+        strategy: &ClubTransferStrategy,
+        player: &Player,
+        ctx: &TransferStrategyContext,
+        contract_years: u8,
+        age: u8,
+    ) -> PersonalTermsOffer {
+        let wage =
+            WageCalculator::expected_annual_wage(player, age, ctx.buyer_reputation_score, ctx.league_reputation);
+        let wage_discount = match strategy.recruitment.financial_stance {
+            FinancialStance::Austerity => 0.88,
+            FinancialStance::Conservative => 0.95,
+            FinancialStance::Balanced => 1.00,
+            FinancialStance::Ambitious => 1.06,
+        };
+        let annual_wage = ((wage as f32) * wage_discount).round() as u32;
+
+        let ca = player.player_attributes.current_ability;
+        let star = ca >= 150 || player.player_attributes.world_reputation >= 6000;
+        let prospect = age <= 23
+            && player.player_attributes.potential_ability as i16 - ca as i16 >= 15;
+
+        // Signing bonus: 0–35% of annual wage depending on star quality
+        // and the buyer's addon preference. Cash-poor buyers don't pay
+        // them; ambitious buyers stretch.
+        let signing_bonus = if ctx.buying_club_balance < 0 {
+            0
+        } else {
+            let pct: f32 = if star {
+                0.30 + 0.20 * strategy.negotiation.addon_preference
+            } else if prospect {
+                0.10
+            } else {
+                0.05
+            };
+            ((annual_wage as f32) * pct.clamp(0.0, 0.40)).round() as u32
+        };
+
+        // Agent fee: scales with base fee — typical real-world packages
+        // are 5–10% of the transfer fee for big moves.
+        let agent_fee = if strategy.recruitment.financial_stance == FinancialStance::Austerity {
+            0
+        } else {
+            let base_fee = ctx.allocated_budget.max(0.0);
+            let pct = if star { 0.08 } else { 0.04 };
+            (base_fee * pct).round() as u32
+        };
+
+        // Squad-role promise: drawn from the transfer request reason +
+        // player ability. Critical formation gaps imply a starter
+        // promise; cheap reinforcements get rotation; prospects come
+        // in as hot-prospect.
+        let role_promise = Self::squad_status_promise(strategy, player, ctx, prospect, star);
+
+        // Release clause: an ambitious buyer chasing a star pays the
+        // headline number but commits to a release tag so the seller
+        // can re-extract them at a premium later. Defensive/austerity
+        // buyers omit. Cap at 3.5× the base fee.
+        let release_clause_fee = if star && strategy.negotiation.max_overpay_ratio >= 1.5 {
+            let base_fee = ctx.allocated_budget.max(0.0);
+            Some((base_fee * 3.5).round() as u32)
+        } else {
+            None
+        };
+
+        PersonalTermsOffer {
+            annual_wage: Some(annual_wage),
+            signing_bonus: if signing_bonus > 0 {
+                Some(signing_bonus)
+            } else {
+                None
+            },
+            agent_fee: if agent_fee > 0 { Some(agent_fee) } else { None },
+            contract_years: Some(contract_years),
+            squad_status_promise: role_promise,
+            release_clause_fee,
+        }
+    }
+
+    fn squad_status_promise(
+        strategy: &ClubTransferStrategy,
+        _player: &Player,
+        ctx: &TransferStrategyContext,
+        prospect: bool,
+        star: bool,
+    ) -> Option<PromisedSquadStatus> {
+        if star {
+            return Some(PromisedSquadStatus::KeyPlayer);
+        }
+        if let Some(req) = ctx.request {
+            return Some(match req.reason {
+                TransferNeedReason::FormationGap | TransferNeedReason::QualityUpgrade => {
+                    PromisedSquadStatus::FirstTeamRegular
+                }
+                TransferNeedReason::DepthCover | TransferNeedReason::SquadPadding => {
+                    PromisedSquadStatus::FirstTeamSquadRotation
+                }
+                TransferNeedReason::DevelopmentSigning => {
+                    PromisedSquadStatus::HotProspectForTheFuture
+                }
+                TransferNeedReason::ExperiencedHead => PromisedSquadStatus::FirstTeamRegular,
+                TransferNeedReason::SuccessionPlanning => PromisedSquadStatus::FirstTeamRegular,
+                _ => PromisedSquadStatus::FirstTeamSquadRotation,
+            });
+        }
+        if prospect {
+            return Some(PromisedSquadStatus::HotProspectForTheFuture);
+        }
+        // Without a request to anchor the promise, default by tier —
+        // ambitious buyers offer regular roles, others rotation.
+        if matches!(
+            strategy.recruitment.financial_stance,
+            FinancialStance::Ambitious
+        ) {
+            Some(PromisedSquadStatus::FirstTeamRegular)
+        } else {
+            Some(PromisedSquadStatus::FirstTeamSquadRotation)
+        }
     }
 }
