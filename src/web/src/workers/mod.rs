@@ -36,8 +36,6 @@ pub struct WorkersPageTemplate {
 
     pub total: usize,
     pub ready: usize,
-    pub version_mismatch: usize,
-    pub unreachable: usize,
     pub total_threads: usize,
     pub total_batches: u64,
     pub total_matches: u64,
@@ -139,18 +137,13 @@ pub async fn workers_page_action(
 
     let total = snapshot.len();
     let mut ready = 0usize;
-    let mut version_mismatch = 0usize;
-    let mut unreachable = 0usize;
     let mut total_threads = 0usize;
     let mut total_batches = 0u64;
     let mut total_matches = 0u64;
     let mut total_failures = 0u64;
     for w in &snapshot {
-        match &w.status {
-            WorkerStatus::Ready => ready += 1,
-            WorkerStatus::VersionMismatch { .. } => version_mismatch += 1,
-            WorkerStatus::Unreachable { .. } => unreachable += 1,
-            WorkerStatus::Connecting => {}
+        if matches!(w.status, WorkerStatus::Ready) {
+            ready += 1;
         }
         total_threads += w.threads;
         total_batches = total_batches.saturating_add(w.stats.batches_sent);
@@ -184,8 +177,6 @@ pub async fn workers_page_action(
         menu_sections,
         total,
         ready,
-        version_mismatch,
-        unreachable,
         total_threads,
         total_batches,
         total_matches,

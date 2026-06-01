@@ -1,5 +1,4 @@
 use crate::Country;
-use crate::MatchRuntime;
 use crate::context::GlobalContext;
 use crate::continent::ContinentResult;
 use crate::continent::national::{NationalCompetitionConfig, NationalTeamCompetitions};
@@ -10,7 +9,7 @@ use crate::country::{CountryPendingState, CountryResult};
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
 use crate::utils::Logging;
-use log::{debug, info};
+use log::debug;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rayon::prelude::{IntoParallelRefIterator, IntoParallelRefMutIterator};
 use std::ops::Range;
@@ -33,6 +32,34 @@ pub struct Continent {
     pub regulations: ContinentalRegulations,
     pub economic_zone: EconomicZone,
     pub national_team_competitions: NationalTeamCompetitions,
+}
+
+/// Resume state stashed between [`Continent::simulate`] and
+/// [`Continent::process_results`]. Holds the per-country
+/// `GlobalContext`s (cloned with their name generators) and the
+/// pending states so the process pass doesn't rebuild them, plus the
+/// index ranges that map each country's slice inside the continent's
+/// flattened match batch.
+pub struct ContinentBuildState<'gc> {
+    pub country_ctxs: Vec<GlobalContext<'gc>>,
+    pub country_pending: Vec<CountryPendingState>,
+    /// Per-country range over the continent's flattened match batch.
+    /// `country_ranges[i]` is the slice of the build's `matches` that
+    /// belongs to `countries[i]`.
+    pub country_ranges: Vec<Range<usize>>,
+}
+
+/// Per-continent output of [`Continent::simulate`]. Only the build
+/// has happened — every `Match` is `Match::make`-d but unplayed. The
+/// simulator collects every continent's `ContinentBuildOutput` into a
+/// single `WorldMatchdayResult`, whose `process` then flattens every
+/// continent's matches into ONE global batch and dispatches via the
+/// engine pool exactly once per tick.
+pub struct ContinentBuildOutput<'gc> {
+    pub continent_id: u32,
+    pub continent_name: String,
+    pub matches: Vec<Match>,
+    pub state: ContinentBuildState<'gc>,
 }
 
 impl Continent {
@@ -66,27 +93,38 @@ impl Continent {
         self.id == CONTINENT_SOUTH_AMERICA_ID || self.name == "South America"
     }
 
-    pub fn simulate(
+    /// Build-only matchday simulation. Walks every country in
+    /// parallel, has each one call [`Country::simulate_build`] to
+    /// emit today's `Match::make` objects (league fixtures + cup
+    /// ties) and a resume token, and packages the lot into a single
+    /// [`ContinentBuildOutput`].
+    ///
+    /// NO `engine_pool().play(..)` runs here. Match dispatch is the
+    /// responsibility of [`WorldMatchdayResult::process`][crate::WorldMatchdayResult::process]:
+    /// the simulator collects every continent's `ContinentBuildOutput`,
+    /// flattens every continent's matches into one global Vec, and
+    /// dispatches as a single collection. The distributed worker
+    /// fleet then sees one fan-out per tick instead of one per
+    /// continent — small continents stop dispatching half-empty
+    /// batches, big continents stop pinning slow workers.
+    pub fn simulate<'gc>(
         &mut self,
-        ctx: GlobalContext<'_>,
+        ctx: GlobalContext<'gc>,
         world: WorldSnapshot<'_>,
-    ) -> ContinentResult {
+    ) -> ContinentBuildOutput<'gc> {
         let continent_name = self.name.clone();
-
         debug!(
-            "Simulating continent: {} ({} countries)",
+            "Building matchday for continent: {} ({} countries)",
             continent_name,
             self.countries.len()
         );
 
         // National-team competition matches and the related call-up /
-        // release flow now run at the world level (see
+        // release flow run at the world level (see
         // `SimulatorData::simulate_with` and
         // `national_pipeline::simulate_world_national_competitions`) so
         // squads can include foreign-based players and stat updates can
-        // span continents. The continent's parallel pass is country
-        // simulation only — split into three sub-phases so club-match
-        // play can fan out as one continent-wide dispatch.
+        // span continents.
 
         // Build per-country GlobalContext once and reuse across the
         // build and process passes. `with_country_and_names` clones
@@ -94,7 +132,7 @@ impl Continent {
         // catalogues), so building it twice per tick — once per phase
         // — adds up over the world. One alloc per country per tick is
         // unavoidable, two isn't.
-        let country_ctxs: Vec<GlobalContext<'_>> = self
+        let country_ctxs: Vec<GlobalContext<'gc>> = self
             .countries
             .iter()
             .map(|c| {
@@ -107,9 +145,10 @@ impl Continent {
             })
             .collect();
 
-        // Phase A: parallel build. Each country prepares its leagues /
-        // cup schedules and hands back a Vec<Match> ready to play plus
-        // a CountryPendingState to resume with in Phase C.
+        // Parallel build across this continent's countries. Each call
+        // prepares its leagues / cup schedules and hands back a
+        // Vec<Match> ready to play plus a CountryPendingState to
+        // resume with in the process pass.
         let builds: Vec<(Vec<Match>, CountryPendingState)> = self
             .countries
             .par_iter_mut()
@@ -117,44 +156,60 @@ impl Continent {
             .map(|(country, country_ctx)| country.simulate_build(country_ctx, world))
             .collect();
 
-        // Phase B: drain all per-country matches into one continent
-        // batch and dispatch in a single call. With external workers
-        // this is the whole point of the split — a 30-match per-league
-        // batch becomes a 600-match per-continent batch, and the
-        // dispatcher's round-robin spreads it across the whole fleet
-        // instead of pinning each league to one worker.
-        let mut all_matches: Vec<Match> = Vec::new();
-        let mut pending_states: Vec<CountryPendingState> = Vec::with_capacity(builds.len());
-        let mut ranges: Vec<Range<usize>> = Vec::with_capacity(builds.len());
-        for (matches, pending) in builds {
-            let start = all_matches.len();
-            all_matches.extend(matches);
-            ranges.push(start..all_matches.len());
-            pending_states.push(pending);
+        // Flatten per-country matches into one continent-local batch
+        // with parallel range bookkeeping so the simulator's global
+        // dispatch can slice results back per country without
+        // re-grouping.
+        let mut matches: Vec<Match> = Vec::new();
+        let mut country_pending: Vec<CountryPendingState> = Vec::with_capacity(builds.len());
+        let mut country_ranges: Vec<Range<usize>> = Vec::with_capacity(builds.len());
+        for (m, p) in builds {
+            let start = matches.len();
+            matches.extend(m);
+            country_ranges.push(start..matches.len());
+            country_pending.push(p);
         }
-        let total = all_matches.len();
-        let all_results: Vec<MatchResult> = if total == 0 {
-            Vec::new()
-        } else {
-            info!(
-                "continent {}: dispatching {} matches in one batch",
-                continent_name, total
-            );
-            MatchRuntime::engine_pool().play(all_matches)
-        };
-        let per_country_results: Vec<Vec<MatchResult>> = ranges
+
+        ContinentBuildOutput {
+            continent_id: self.id,
+            continent_name,
+            matches,
+            state: ContinentBuildState {
+                country_ctxs,
+                country_pending,
+                country_ranges,
+            },
+        }
+    }
+
+    /// Post-dispatch per-country fan-out. Called from
+    /// [`WorldMatchdayResult::process`][crate::WorldMatchdayResult::process]
+    /// after the GLOBAL engine batch returns — `results` is this
+    /// continent's slice of the global Vec, in build order. Routes
+    /// every match result back to its league / cup, then runs the
+    /// rest of each country tick (clubs, transfers, country-local
+    /// result fan-out) in parallel across countries.
+    pub fn process_results<'gc>(
+        &mut self,
+        world: WorldSnapshot<'_>,
+        state: ContinentBuildState<'gc>,
+        results: Vec<MatchResult>,
+    ) -> ContinentResult {
+        let continent_name = self.name.clone();
+
+        // Split the continent's result vec back into per-country
+        // slices using the ranges captured during the build pass.
+        let per_country_results: Vec<Vec<MatchResult>> = state
+            .country_ranges
             .iter()
-            .map(|r| all_results[r.clone()].to_vec())
+            .map(|r| results[r.clone()].to_vec())
             .collect();
 
-        // Phase C: parallel process. Each country routes its slice of
-        // results back to its leagues / cup, then runs the rest of the
-        // country tick (clubs, transfers, result fan-out).
         let country_results: Vec<CountryResult> = self
             .countries
             .par_iter_mut()
-            .zip(country_ctxs.into_par_iter())
-            .zip(pending_states.into_par_iter())
+            .zip(state.country_ctxs.into_par_iter())
+            .zip(state.country_pending.into_par_iter())
             .zip(per_country_results.into_par_iter())
             .map(|(((country, country_ctx), pending), results)| {
                 let message = format!("simulate country: {}", &country.name);
@@ -166,7 +221,6 @@ impl Continent {
             .collect();
 
         debug!("Continent {} simulation complete", continent_name);
-
         ContinentResult::new(self.id, country_results, Vec::new())
     }
 }

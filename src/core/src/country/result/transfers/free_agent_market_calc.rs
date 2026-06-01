@@ -63,6 +63,34 @@ impl FreeAgentMarketCalculator {
         0.10 + 0.55 * cp
     }
 
+    /// Hard cross-continent gate. A free agent stepping down across
+    /// continent boundaries into a markedly less prestigious region
+    /// — Russian → Algerian, Brazilian → Vietnamese — is unrealistic
+    /// at routine career pressure even when the sliding
+    /// `region_drop_allowed` gate alone would let it through. Returns
+    /// `true` when the move should be blocked. `min_pressure_to_cross`
+    /// is the pressure floor below which the gate fires; pass `0.85`
+    /// for non-urgent paths (normal matcher, Strict emergency depth),
+    /// `0.75` for urgent group fills, and skip the call entirely for
+    /// no-keeper desperation slots where any registered player is
+    /// preferable to an empty position.
+    pub fn cross_continent_blocked(
+        same_continent: bool,
+        player_region_prestige: f32,
+        buyer_region_prestige: f32,
+        career_pressure: f32,
+        min_pressure_to_cross: f32,
+    ) -> bool {
+        if same_continent {
+            return false;
+        }
+        let drop = player_region_prestige - buyer_region_prestige;
+        if drop <= 0.10 {
+            return false;
+        }
+        career_pressure < min_pressure_to_cross
+    }
+
     /// Minimum CA the buyer will sign at this tier, slackened by the
     /// player's career pressure. Very pressured players will be
     /// considered well below the buyer's nominal starter standard.
@@ -347,6 +375,42 @@ mod tests {
         let low = FreeAgentMarketCalculator::region_drop_allowed(0.0);
         let high = FreeAgentMarketCalculator::region_drop_allowed(1.0);
         assert!(high > low + 0.40);
+    }
+
+    #[test]
+    fn cross_continent_blocks_russian_to_algerian_at_low_pressure() {
+        // EasternEurope prestige 0.50 → NorthAfrica prestige 0.25,
+        // cross-continent, mid pressure. Must block.
+        assert!(FreeAgentMarketCalculator::cross_continent_blocked(
+            false, 0.50, 0.25, 0.4, 0.85,
+        ));
+    }
+
+    #[test]
+    fn cross_continent_passes_russian_to_algerian_at_very_high_pressure() {
+        // Same step-down but the player is on the verge of retiring
+        // — gate unlocks.
+        assert!(!FreeAgentMarketCalculator::cross_continent_blocked(
+            false, 0.50, 0.25, 0.90, 0.85,
+        ));
+    }
+
+    #[test]
+    fn cross_continent_allows_small_drop() {
+        // EasternEurope 0.50 → MiddleEastEurope 0.40 is only a 0.10
+        // step. Cross-continent but small drop — always allowed.
+        assert!(!FreeAgentMarketCalculator::cross_continent_blocked(
+            false, 0.50, 0.40, 0.0, 0.85,
+        ));
+    }
+
+    #[test]
+    fn cross_continent_does_not_block_same_continent() {
+        // Big prestige drop but same continent (e.g. WesternEurope
+        // 1.00 → EasternEurope 0.50) — gate stays silent.
+        assert!(!FreeAgentMarketCalculator::cross_continent_blocked(
+            true, 1.00, 0.50, 0.0, 0.85,
+        ));
     }
 
     #[test]

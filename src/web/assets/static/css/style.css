@@ -10475,6 +10475,14 @@ a.fm-award-card:hover {
     padding-right: 0px;
 }
 
+/* Top-level panels on the workers page get more breathing room than
+   the default mt-3 utility gives — the page is dense and benefits from
+   clearer separation between the summary, the setup card, and the
+   workers table. Overrides mt-3 only for direct children of the page. */
+.fm-workers-page > .mt-3 {
+    margin-top: 22px;
+}
+
 .fm-workers-summary-grid {
     display: grid;
     grid-template-columns: repeat(8, 1fr);
@@ -10704,6 +10712,112 @@ a.fm-award-card:hover {
     margin: 10px 0;
     padding: 10px 14px;
     background: #1a2530;
+    border: 1px solid #2c3c4a;
+    border-radius: 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #c3d2dd;
+    overflow-x: auto;
+}
+
+.fm-workers-setup {
+    /* details element needs explicit overrides — UA defaults override
+       the fm-panel border-radius/overflow rules otherwise. */
+    padding: 0;
+}
+
+.fm-workers-setup-head {
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: background 120ms ease;
+}
+
+.fm-workers-setup-head::-webkit-details-marker {
+    display: none;
+}
+
+.fm-workers-setup-head:hover {
+    background: linear-gradient(180deg, #253341 0%, #1f2c34 100%);
+}
+
+.fm-workers-setup-head .fm-panel-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.fm-workers-setup-hint {
+    color: #4e5a63;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+
+.fm-workers-setup-chevron {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    line-height: 13px;
+    text-align: center;
+    color: #6a8190;
+    font-size: 14px;
+    font-weight: 700;
+    transition: transform 160ms ease, color 160ms ease;
+}
+
+.fm-workers-setup[open] .fm-workers-setup-chevron {
+    transform: rotate(90deg);
+    color: #4a9d5b;
+}
+
+.fm-workers-setup[open] .fm-workers-setup-hint {
+    color: #4a9d5b;
+}
+
+.fm-workers-setup-body {
+    padding: 16px 18px 18px;
+    color: #8a9caa;
+    font-size: 13px;
+    line-height: 1.55;
+    border-top: 1px solid #263340;
+    background: #1a242c;
+    animation: fm-workers-setup-reveal 180ms ease both;
+}
+
+@keyframes fm-workers-setup-reveal {
+    from {
+        opacity: 0;
+        transform: translateY(-2px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.fm-workers-setup-lead {
+    margin: 0;
+}
+
+.fm-workers-setup-lead + .fm-workers-setup-lead {
+    margin-top: 10px;
+}
+
+.fm-workers-setup-body code {
+    padding: 1px 5px;
+    background: #131c22;
+    border: 1px solid #2c3c4a;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #c3d2dd;
+}
+
+.fm-workers-setup-body pre {
+    margin: 10px 0;
+    padding: 10px 14px;
+    background: #131c22;
     border: 1px solid #2c3c4a;
     border-radius: 5px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

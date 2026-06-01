@@ -185,11 +185,21 @@ impl WorkerRegistry {
     /// finishes. Called from the dispatcher's `Target::Local` branch.
     /// First sample seeds the value directly; subsequent samples smooth
     /// with `THROUGHPUT_ALPHA` so a transient blip doesn't dominate.
-    pub async fn record_local_batch(&self, matches: usize, latency_ms: u64) {
-        if matches == 0 || latency_ms == 0 {
+    ///
+    /// Takes a `Duration` rather than an integer ms because a hot
+    /// rayon pool routinely finishes a chunk in under 1 ms; flooring
+    /// to whole milliseconds would zero out the sample and the
+    /// `latency == 0` guard would then suppress the recording forever
+    /// — that's why the workers page showed `—` for the local row.
+    pub async fn record_local_batch(&self, matches: usize, latency: Duration) {
+        if matches == 0 {
             return;
         }
-        let observed = matches as f64 / latency_ms as f64;
+        let latency_ms = latency.as_secs_f64() * 1_000.0;
+        if latency_ms <= 0.0 {
+            return;
+        }
+        let observed = matches as f64 / latency_ms;
         let mut guard = self.local_throughput_mpms.write().await;
         *guard = Some(match *guard {
             None => observed,
@@ -444,6 +454,9 @@ pub struct LatencyTimer(Instant);
 impl LatencyTimer {
     pub fn start() -> Self {
         LatencyTimer(Instant::now())
+    }
+    pub fn elapsed(&self) -> Duration {
+        self.0.elapsed()
     }
     pub fn elapsed_ms(&self) -> u64 {
         self.0.elapsed().as_millis() as u64

@@ -148,10 +148,12 @@ impl League {
     }
 
     /// Backwards-compatible single-call wrapper. The production path
-    /// (`Country::simulate_build` + `Continent::simulate`) calls the
+    /// (`Country::simulate_build` + `Continent::simulate_build` +
+    /// `FootballSimulator::simulate_with`) calls the
     /// `build_matchday_matches` / `apply_matchday_results` halves
-    /// directly so a whole continent's matches dispatch in one batch.
-    /// Kept for tests and any future single-league call site.
+    /// directly so the world's matches dispatch in ONE global batch
+    /// per tick. Kept for tests and any future single-league call
+    /// site.
     #[allow(dead_code)]
     pub(in crate::league) fn play_scheduled_matches(
         &mut self,

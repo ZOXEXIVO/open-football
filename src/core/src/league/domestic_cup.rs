@@ -398,8 +398,8 @@ impl DomesticCup {
 
     /// Backwards-compatible wrapper that runs build → engine → process
     /// in one call. Production paths go through
-    /// `Country::simulate_build` so cup matches join the continent's
-    /// shared dispatch batch.
+    /// `Country::simulate_build` so cup matches join the world's
+    /// single global dispatch batch via `WorldMatchdayResult::process`.
     pub fn simulate(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) -> LeagueResult {
         let current_date = ctx.simulation.date.date();
         let output = self.simulate_build(clubs, ctx);

@@ -39,6 +39,7 @@ use crate::worker::wire::{LeagueMatchWire, SquadFixtureWire, SquadWire};
 use core::MatchRuntime;
 use core::r#match::{Match, MatchDispatcher, MatchResult, MatchResultRaw, MatchSquad, Score};
 use log::{info, warn};
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::runtime::Handle;
@@ -106,7 +107,7 @@ impl MatchDispatcher for DistributedDispatcher {
         let registry = self.registry.clone();
         let local_threads = self.local_threads;
         let cursor_start = self.cursor.fetch_add(1, Ordering::Relaxed);
-        self.runtime.block_on(async move {
+        self.run_blocking(async move {
             let ready = registry.ready_handles().await;
             let local_throughput = registry.local_throughput().await;
             let slots = Self::build_plan(
@@ -130,7 +131,7 @@ impl MatchDispatcher for DistributedDispatcher {
         let registry = self.registry.clone();
         let local_threads = self.local_threads;
         let cursor_start = self.cursor.fetch_add(1, Ordering::Relaxed);
-        self.runtime.block_on(async move {
+        self.run_blocking(async move {
             let ready = registry.ready_handles().await;
             let local_throughput = registry.local_throughput().await;
             let slots = Self::build_plan(
@@ -155,6 +156,29 @@ impl DistributedDispatcher {
             runtime,
             local_threads,
             cursor: AtomicUsize::new(0),
+        }
+    }
+
+    /// Bridge sync→async without nested-runtime panics. The dispatcher
+    /// is reached from sync code that is itself often running under an
+    /// outer `Handle::block_on` (e.g. the simulator runs inside
+    /// `spawn_blocking` + `handle.block_on(simulate())`). On that
+    /// thread the runtime context is already active, so a second
+    /// `block_on` panics with "Cannot start a runtime from within a
+    /// runtime". `block_in_place` tells the multi-thread runtime to
+    /// hand this thread's other work off to a sibling worker, after
+    /// which we can drive a fresh `block_on` safely. When no runtime
+    /// is current (e.g. a test calling `MatchPool::play` directly with
+    /// no DistributedDispatcher installed but a hand-built one), fall
+    /// back to plain `block_on`.
+    fn run_blocking<F>(&self, fut: F) -> F::Output
+    where
+        F: Future,
+    {
+        if Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| self.runtime.block_on(fut))
+        } else {
+            self.runtime.block_on(fut)
         }
     }
 
@@ -185,6 +209,19 @@ impl DistributedDispatcher {
         ready: Vec<ReadyWorker>,
         cursor_start: usize,
     ) -> Vec<Slot> {
+        // Fast path: the whole batch fits in one local chunk
+        // (`2 × local_threads` is the local slot's `chunk_size`). Skip
+        // every remote slot — the network/serialization round-trip
+        // costs more than the local pool would take to play these
+        // matches. Cuts tail latency on idle days, late-stage knockout
+        // rounds, and the last few stragglers of any matchday.
+        if local_threads > 0 && total > 0 && total <= local_threads * 2 {
+            return vec![Slot {
+                target: Target::Local,
+                threads: local_threads,
+                chunks: vec![(0..total).collect()],
+            }];
+        }
         let mut slots: Vec<Slot> = Vec::with_capacity(ready.len() + 1);
         let mut weights: Vec<f64> = Vec::with_capacity(ready.len() + 1);
         if local_threads > 0 {
@@ -273,7 +310,7 @@ impl DistributedDispatcher {
     fn describe_plan(slots: &[Slot]) -> String {
         slots
             .iter()
-            .map(|s| format!("{}×{}/{}c", s.target.label(), s.total(), s.chunks.len()))
+            .map(|s| format!("{}×{} matches/{} chunks", s.target.label(), s.total(), s.chunks.len()))
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -371,12 +408,13 @@ impl DistributedDispatcher {
                     })
                     .await
                     .unwrap_or_default();
-                    let latency = timer.elapsed_ms();
+                    let elapsed = timer.elapsed();
                     info!(
                         "local: completed league chunk matches={} in {} ms",
-                        count, latency
+                        count,
+                        elapsed.as_millis()
                     );
-                    registry.record_local_batch(count, latency).await;
+                    registry.record_local_batch(count, elapsed).await;
                     r
                 }
                 Target::Remote(worker) => {
@@ -502,12 +540,13 @@ impl DistributedDispatcher {
                     })
                     .await
                     .unwrap_or_default();
-                    let latency = timer.elapsed_ms();
+                    let elapsed = timer.elapsed();
                     info!(
                         "local: completed squad chunk matches={} in {} ms",
-                        count, latency
+                        count,
+                        elapsed.as_millis()
                     );
-                    registry.record_local_batch(count, latency).await;
+                    registry.record_local_batch(count, elapsed).await;
                     r
                 }
                 Target::Remote(worker) => {

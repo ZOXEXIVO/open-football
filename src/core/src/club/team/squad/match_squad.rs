@@ -146,7 +146,7 @@ impl Team {
         // exhausted its emergency fallbacks by this point.
         if squad_result.main_squad.len() < formation_positions.len() {
             let selected_ids: Vec<u32> = squad_result.main_squad.iter().map(|p| p.id).collect();
-            log::warn!(
+            log::debug!(
                 "Squad too small for team {} ({}): selected {} players for {} formation positions; selected ids {:?}",
                 self.id,
                 self.name,

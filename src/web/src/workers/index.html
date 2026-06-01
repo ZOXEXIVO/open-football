@@ -1,71 +1,78 @@
 {% extends "layout.html" %}
 
-{% block html_title %}Workers | {{ i18n.t("site_name") }}{% endblock %}
+{% block html_title %}{{ i18n.t("workers_title") }} | {{ i18n.t("site_name") }}{% endblock %}
 
 {% block content %}
 <div class="fm-page fm-workers-page">
     <section class="fm-panel">
         <div class="fm-panel-head">
-            <h3>Distributed Match Workers</h3>
-            <span class="fm-panel-count">{{ ready }}/{{ total }} ready</span>
+            <h3>{{ i18n.t("workers_total_match_workers") }}</h3>
+            <span class="fm-panel-count">{{ ready }}/{{ total }} {{ i18n.t("workers_ready_label") }}</span>
         </div>
         <div class="fm-workers-summary-grid">
             <div class="fm-workers-summary-tile">
-                <div class="fm-workers-summary-value">{{ total }}</div>
-                <div class="fm-workers-summary-label">Configured</div>
-            </div>
-            <div class="fm-workers-summary-tile fm-workers-summary-ok">
-                <div class="fm-workers-summary-value">{{ ready }}</div>
-                <div class="fm-workers-summary-label">Ready</div>
-            </div>
-            <div class="fm-workers-summary-tile fm-workers-summary-warn">
-                <div class="fm-workers-summary-value">{{ version_mismatch }}</div>
-                <div class="fm-workers-summary-label">Version mismatch</div>
-            </div>
-            <div class="fm-workers-summary-tile fm-workers-summary-bad">
-                <div class="fm-workers-summary-value">{{ unreachable }}</div>
-                <div class="fm-workers-summary-label">Unreachable</div>
-            </div>
-            <div class="fm-workers-summary-tile">
                 <div class="fm-workers-summary-value">{{ total_threads }}</div>
-                <div class="fm-workers-summary-label">Total threads</div>
+                <div class="fm-workers-summary-label">{{ i18n.t("workers_total_threads") }}</div>
             </div>
             <div class="fm-workers-summary-tile">
                 <div class="fm-workers-summary-value">{{ total_batches }}</div>
-                <div class="fm-workers-summary-label">Batches sent</div>
+                <div class="fm-workers-summary-label">{{ i18n.t("workers_batches_sent") }}</div>
             </div>
             <div class="fm-workers-summary-tile">
                 <div class="fm-workers-summary-value">{{ total_matches }}</div>
-                <div class="fm-workers-summary-label">Matches done</div>
+                <div class="fm-workers-summary-label">{{ i18n.t("workers_matches_done") }}</div>
             </div>
             <div class="fm-workers-summary-tile fm-workers-summary-bad">
                 <div class="fm-workers-summary-value">{{ total_failures }}</div>
-                <div class="fm-workers-summary-label">Failures</div>
+                <div class="fm-workers-summary-label">{{ i18n.t("workers_failures") }}</div>
             </div>
         </div>
     </section>
 
+    {% if no_remote_workers %}
+    <details class="fm-panel fm-workers-setup mt-3">
+        <summary class="fm-panel-head fm-workers-setup-head">
+            <h3>{{ i18n.t("workers_remote_setup_title") }}</h3>
+            <span class="fm-panel-count">
+                <span class="fm-workers-setup-hint">{{ i18n.t("workers_remote_setup_none") }}</span>
+                <span class="fm-workers-setup-chevron" aria-hidden="true">›</span>
+            </span>
+        </summary>
+        <div class="fm-workers-setup-body">
+            <p class="fm-workers-setup-lead">
+                {{ i18n.t("workers_remote_setup_lead_1") }} <code>open-football.conf</code> {{ i18n.t("workers_remote_setup_lead_1_suffix") }}
+            </p>
+            <pre>[[worker]]
+address = "127.0.0.1:18001"</pre>
+            <p class="fm-workers-setup-lead">
+                {{ i18n.t("workers_remote_setup_lead_2") }}
+                <code>open_football --worker --worker-port=18001</code>
+            </p>
+        </div>
+    </details>
+    {% endif %}
+
     <section class="fm-panel mt-3">
         <div class="fm-panel-head">
-            <h3>Workers</h3>
-            <span class="fm-panel-count">{{ workers.len() }} host{% if workers.len() != 1 %}s{% endif %}</span>
+            <h3>{{ i18n.t("workers_table_title") }}</h3>
+            <span class="fm-panel-count">{{ workers.len() }} {% if workers.len() == 1 %}{{ i18n.t("workers_host_singular") }}{% else %}{{ i18n.t("workers_host_plural") }}{% endif %}</span>
         </div>
         <div class="fm-workers-table-wrap">
             <table class="fm-workers-table">
                 <thead>
                     <tr>
-                        <th>Status</th>
-                        <th>Host</th>
-                        <th>Address</th>
-                        <th>Version</th>
-                        <th>CPU</th>
-                        <th class="fm-num">Threads</th>
-                        <th class="fm-num">Batches</th>
-                        <th class="fm-num">Matches</th>
-                        <th class="fm-num">Failures</th>
-                        <th class="fm-num">Last (ms)</th>
-                        <th class="fm-num">Speed (mps)</th>
-                        <th>Last error</th>
+                        <th>{{ i18n.t("workers_th_status") }}</th>
+                        <th>{{ i18n.t("workers_th_host") }}</th>
+                        <th>{{ i18n.t("workers_th_address") }}</th>
+                        <th>{{ i18n.t("workers_th_version") }}</th>
+                        <th>{{ i18n.t("workers_th_cpu") }}</th>
+                        <th class="fm-num">{{ i18n.t("workers_th_threads") }}</th>
+                        <th class="fm-num">{{ i18n.t("workers_th_batches") }}</th>
+                        <th class="fm-num">{{ i18n.t("workers_th_matches") }}</th>
+                        <th class="fm-num">{{ i18n.t("workers_failures") }}</th>
+                        <th class="fm-num">{{ i18n.t("workers_th_last_ms") }}</th>
+                        <th class="fm-num">{{ i18n.t("workers_th_speed_mps") }}</th>
+                        <th>{{ i18n.t("workers_th_last_error") }}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -73,11 +80,11 @@
                     <tr class="fm-worker-row fm-worker-{{ w.status_label }}">
                         <td>
                             <span class="fm-worker-badge fm-worker-badge-{{ w.status_label }}">
-                                {% if w.status_label == "ready" %}Ready
-                                {% else if w.status_label == "local" %}Local
-                                {% else if w.status_label == "version_mismatch" %}Version mismatch
-                                {% else if w.status_label == "unreachable" %}Unreachable
-                                {% else %}Connecting{% endif %}
+                                {% if w.status_label == "ready" %}{{ i18n.t("workers_status_ready") }}
+                                {% else if w.status_label == "local" %}{{ i18n.t("workers_status_local") }}
+                                {% else if w.status_label == "version_mismatch" %}{{ i18n.t("workers_status_version_mismatch") }}
+                                {% else if w.status_label == "unreachable" %}{{ i18n.t("workers_status_unreachable") }}
+                                {% else %}{{ i18n.t("workers_status_connecting") }}{% endif %}
                             </span>
                             {% if !w.status_detail.is_empty() %}
                             <div class="fm-worker-status-detail">{{ w.status_detail }}</div>
@@ -108,16 +115,5 @@
             </table>
         </div>
     </section>
-
-    {% if no_remote_workers %}
-    <section class="fm-panel mt-3">
-        <div class="fm-workers-empty">
-            No remote workers configured. Add entries to <code>open-football.conf</code> next to the binary:
-            <pre>[[worker]]
-address = "127.0.0.1:18001"</pre>
-            Then start a worker process: <code>open_football --worker --worker-port=18001</code>
-        </div>
-    </section>
-    {% endif %}
 </div>
 {% endblock %}

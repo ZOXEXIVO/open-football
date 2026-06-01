@@ -255,11 +255,14 @@ impl Country {
     /// The returned [`CountryPendingState`] is the resume token for
     /// [`simulate_process`].
     ///
-    /// The caller — `Continent::simulate` — collects build outputs from
-    /// every country, drains them into one continent-wide batch, and
-    /// dispatches once. With external workers this turns N tiny
-    /// per-league round-trips into one big one that fans across the
-    /// fleet, which was the whole point of the split.
+    /// The caller — `Continent::simulate` — collects build outputs
+    /// from every country into a `ContinentBuildOutput`, then the
+    /// simulator aggregates every continent's `ContinentBuildOutput`
+    /// into ONE `WorldMatchdayResult` and dispatches via
+    /// `engine_pool().play(..)` exactly once per tick. With external
+    /// workers this turns N tiny per-league round-trips into a single
+    /// world-wide batch that fans across the entire fleet — the whole
+    /// point of the split.
     pub fn simulate_build(
         &mut self,
         ctx: &GlobalContext<'_>,
@@ -595,11 +598,13 @@ impl Country {
         country_result
     }
 
-    /// Single-call wrapper for the build → engine → process flow. The
-    /// production path goes through `Continent::simulate`, which calls
-    /// the two halves directly so every country's matches join one
-    /// per-continent dispatch; this wrapper is kept for single-country
-    /// test setups that don't want to wire up a continent.
+    /// Single-call wrapper for the build → engine → process flow.
+    /// Test-only: the production path goes through
+    /// `Continent::simulate` (build-only) +
+    /// `WorldMatchdayResult::process` (single global dispatch). This
+    /// wrapper short-circuits both so a single-country test setup
+    /// doesn't have to wire up a continent and the world matchday
+    /// result.
     #[allow(dead_code)]
     pub(crate) fn simulate(
         &mut self,

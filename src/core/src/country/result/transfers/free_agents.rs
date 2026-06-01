@@ -520,6 +520,22 @@ impl CountryResult {
                         if buyer_anchor < c.reference_reputation as i32 {
                             return false;
                         }
+                        // Hard cross-continent gate. The sliding gate
+                        // below opens at modest pressure (cp ≈ 0.27
+                        // is enough for EE → NA), which lets a Russian
+                        // global-pool free agent step into Algeria on
+                        // a routine tick — not realistic. Mirrors the
+                        // Strict emergency-depth cut-off so the normal
+                        // request-driven path doesn't bypass it.
+                        if FreeAgentMarketCalculator::cross_continent_blocked(
+                            c.nationality_continent_id == country.continent_id,
+                            c.nationality_region.league_prestige(),
+                            buyer_region_prestige,
+                            c.career_pressure,
+                            0.85,
+                        ) {
+                            return false;
+                        }
                         // Sliding region-prestige gate. At pressure 0
                         // this collapses to the legacy 0.20 threshold;
                         // at pressure 1.0 it widens to 0.65.
@@ -1350,10 +1366,15 @@ impl EmergencyRealismGates {
 
     /// Region-prestige gate, shared with the normal matcher. Same
     /// country always passes — domestic candidates skip the gate.
-    /// `Strict` slots additionally require very high career pressure
-    /// for any cross-continent move (so a Russian going to Algeria
-    /// for emergency depth needs to be on the verge of retiring, not
-    /// a routine mid-career step-down).
+    /// Every strictness level fires the hard cross-continent guard,
+    /// only the pressure floor differs: `Strict` 0.85, `Standard` 0.75,
+    /// `Flexible` 0.65. The Flexible (no-keeper GK fill) floor is the
+    /// softest carve-out we allow — a Russian veteran can land at a
+    /// Cameroonian club when he is well past his peak and the team
+    /// has no other keeper, but a routine mid-career Russian moving
+    /// to West Africa for an emergency GK slot stays blocked. The
+    /// previous "empty net beats any keeper" carve-out let routine
+    /// step-downs through and was reported as unrealistic.
     fn passes_region(candidate: &FreeAgentCandidate, buyer: &EmergencyBuyerContext) -> bool {
         if candidate
             .nationality_country_code
@@ -1362,12 +1383,19 @@ impl EmergencyRealismGates {
             return true;
         }
         let same_continent = candidate.nationality_continent_id == buyer.continent_id;
-        // Strict + cross-continent: hard cut-off until pressure is
-        // very high. This is the rule that blocks the
-        // Russian-to-Algeria depth move at low/medium pressure.
-        if matches!(buyer.strictness, EmergencyStrictness::Strict)
-            && !same_continent
-            && candidate.career_pressure < 0.85
+        let cross_continent_min_pressure = match buyer.strictness {
+            EmergencyStrictness::Strict => Some(0.85),
+            EmergencyStrictness::Standard => Some(0.75),
+            EmergencyStrictness::Flexible => Some(0.65),
+        };
+        if let Some(min_pressure) = cross_continent_min_pressure
+            && FreeAgentMarketCalculator::cross_continent_blocked(
+                same_continent,
+                candidate.nationality_region.league_prestige(),
+                buyer.region_prestige,
+                candidate.career_pressure,
+                min_pressure,
+            )
         {
             return false;
         }
@@ -3009,9 +3037,10 @@ mod emergency_fill_tests {
     #[test]
     fn realism_region_gate_lets_gk_flexible_pass_where_depth_strict_blocks() {
         // Same candidate, same buyer — only the slot strictness
-        // changes. Flexible (no-keeper GK fill) lets the cross-region
-        // signing in; Strict (depth) does not. Tests the strictness
-        // dial directly.
+        // changes. Flexible (no-keeper GK fill) now requires a 0.65
+        // pressure floor, so the test runs at 0.70: well past Flexible
+        // but below Strict's 0.85 floor. Tests the strictness dial
+        // directly without leaning on the old "any pressure" carve-out.
         let cross = CrossRegionFixtures::candidate(
             3,
             72,
@@ -3021,17 +3050,88 @@ mod emergency_fill_tests {
             1,
             2200,
             2400,
-            0.55,
+            0.70,
         );
         let gk_buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Flexible, true);
         let depth_buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Strict, false);
         assert!(
             EmergencyRealismGates::passes_region(&cross, &gk_buyer),
-            "Flexible GK fill should accept a cross-region keeper"
+            "Flexible GK fill should accept a cross-region keeper past its 0.65 floor"
         );
         assert!(
             !EmergencyRealismGates::passes_region(&cross, &depth_buyer),
             "Strict depth fill must reject the same candidate"
+        );
+    }
+
+    #[test]
+    fn realism_region_gate_blocks_russian_to_african_gk_at_routine_pressure() {
+        // Regression: a Russian free-agent keeper was signing for a
+        // Cameroonian club via `emergency_squad_fill_gk` (Flexible
+        // strictness) at routine career pressure. The Flexible floor
+        // of 0.65 must block the move; only a player well past peak
+        // is allowed to cross continents into a markedly weaker region
+        // even for a no-keeper slot.
+        let cameroonian_buyer = EmergencyBuyerContext {
+            country_reputation: 1100,
+            country_code: "cm".to_string(),
+            continent_id: 0,
+            region_prestige: ScoutingRegion::from_country(0, "cm").league_prestige(),
+            club_reputation_score: 0.14,
+            league_reputation: 1000,
+            negotiator_skill: 50,
+            urgent: true,
+            strictness: EmergencyStrictness::Flexible,
+        };
+        let russian_gk = CrossRegionFixtures::candidate(
+            60,
+            70,
+            28,
+            PlayerFieldPositionGroup::Goalkeeper,
+            "ru",
+            1,
+            2200,
+            2200,
+            0.45,
+        );
+        assert!(
+            !EmergencyRealismGates::passes_region(&russian_gk, &cameroonian_buyer),
+            "Flexible GK fill + Russian → Cameroon at routine pressure must remain blocked"
+        );
+    }
+
+    #[test]
+    fn realism_region_gate_passes_russian_to_african_gk_at_high_pressure() {
+        // Same Russian → Cameroonian GK case as the blocking test
+        // above, but at 0.78 — comfortably above the Flexible floor
+        // of 0.65 and the Standard floor of 0.75. A near-retirement
+        // veteran landing a desperation no-keeper slot is the
+        // realistic carve-out the dial is meant to allow.
+        let cameroonian_buyer = EmergencyBuyerContext {
+            country_reputation: 1100,
+            country_code: "cm".to_string(),
+            continent_id: 0,
+            region_prestige: ScoutingRegion::from_country(0, "cm").league_prestige(),
+            club_reputation_score: 0.14,
+            league_reputation: 1000,
+            negotiator_skill: 50,
+            urgent: true,
+            strictness: EmergencyStrictness::Flexible,
+        };
+        let russian_gk = CrossRegionFixtures::candidate(
+            61,
+            68,
+            34,
+            PlayerFieldPositionGroup::Goalkeeper,
+            "ru",
+            1,
+            1600,
+            1500,
+            0.78,
+        );
+        assert!(
+            EmergencyRealismGates::passes_region(&russian_gk, &cameroonian_buyer),
+            "Flexible GK fill at high pressure must clear the region gate"
         );
     }
 
@@ -3194,6 +3294,37 @@ mod emergency_fill_tests {
             flex_pass || !strict_pass,
             "Flexible rep gate must be at least as permissive as Strict — \
              strict_pass={strict_pass} flex_pass={flex_pass}"
+        );
+    }
+
+    #[test]
+    fn realism_region_gate_blocks_russian_to_algerian_standard_at_low_pressure() {
+        // Standard slot (urgent sub-11 outfield fill) now also fires
+        // the hard cross-continent guard. Same Russian → Algerian
+        // case as the Strict test, but at the Standard pressure
+        // floor (0.75) instead of 0.85.
+        let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Standard, true);
+        let russian = CrossRegionFixtures::candidate(
+            50, 75, 27, PlayerFieldPositionGroup::Defender, "ru", 1, 3000, 3500, 0.5,
+        );
+        assert!(
+            !EmergencyRealismGates::passes_region(&russian, &buyer),
+            "Standard urgent fill + cross-continent + pressure 0.5 must still fail the region gate"
+        );
+    }
+
+    #[test]
+    fn realism_region_gate_passes_russian_to_algerian_standard_at_high_pressure() {
+        // The Standard floor is 0.75 — at 0.80 the Russian veteran
+        // can land in Algeria for an urgent group fill, mirroring
+        // the Strict path's "verge of retiring" carve-out.
+        let buyer = CrossRegionFixtures::buyer(true, EmergencyStrictness::Standard, true);
+        let russian = CrossRegionFixtures::candidate(
+            51, 70, 33, PlayerFieldPositionGroup::Defender, "ru", 1, 1800, 1700, 0.80,
+        );
+        assert!(
+            EmergencyRealismGates::passes_region(&russian, &buyer),
+            "Standard slot at very high pressure must clear the region gate"
         );
     }
 

@@ -206,8 +206,9 @@ impl League {
 
     /// Backwards-compatible wrapper that runs build → engine → process
     /// in one call. Production paths (`Country::simulate_build` +
-    /// `Continent::simulate`) call the halves directly so a whole
-    /// continent's matches dispatch in one batch instead of per-league.
+    /// `Continent::simulate` + `WorldMatchdayResult::process`) call
+    /// the halves directly so the world's matches dispatch in ONE
+    /// global batch per tick instead of one per league.
     pub fn simulate(&mut self, clubs: &[Club], ctx: GlobalContext<'_>) -> LeagueResult {
         let current_date = ctx.simulation.date.date();
         let output = self.simulate_build(clubs, &ctx);

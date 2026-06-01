@@ -33,11 +33,11 @@
                             <div class="fm-info-tile-label">{{ i18n.t("info_machine") }}</div>
                         </div>
                         <a class="fm-workers-chip" href="/{{ lang }}/workers"
-                           title="{{ workers_ready }}/{{ workers_count }} workers ready">
+                           title="{{ workers_ready }}/{{ workers_count }} {{ i18n.t("workers_chip_tooltip_suffix") }}">
                             <span class="fm-workers-chip-count">{{ workers_ready }}</span>
                             <span class="fm-workers-chip-stack">
-                                <span class="fm-workers-chip-sublabel">external</span>
-                                <span class="fm-workers-chip-label">workers</span>
+                                <span class="fm-workers-chip-sublabel">{{ i18n.t("workers_chip_external") }}</span>
+                                <span class="fm-workers-chip-label">{{ i18n.t("workers_chip_workers") }}</span>
                             </span>
                         </a>
                     </div>

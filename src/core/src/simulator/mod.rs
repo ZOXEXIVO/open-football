@@ -2,21 +2,24 @@ mod awards;
 mod country_info;
 mod data;
 mod loan_wages;
+mod matchday;
 mod result;
 mod seeding;
 
 pub use country_info::CountryInfo;
 pub use data::SimulatorData;
+pub use matchday::WorldMatchdayResult;
 pub use result::{SimulationResult, WorldWorkloadCounts};
 
 use crate::MatchRuntime;
-use crate::ai::{AiBatchProcessor, PendingAiRequest};
+use crate::ai::AiBatchProcessor;
 use crate::club::ai::apply_ai_responses;
 use crate::club::board::manager_market;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::config::SimulatorConfig;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::ContinentAwardOutcome;
+use crate::continent::ContinentBuildOutput;
 use crate::continent::ContinentResult;
 use crate::continent::national::world as national_world;
 use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
@@ -125,20 +128,36 @@ impl FootballSimulator {
         // (club_id, player_id, …) so Phase B mutations (contracts,
         // morale, etc.) are safely visible to Phase C.
 
-        // Phase A: simulate all continents in parallel. Each call mutates
-        // its own continent and stages AI requests on its returned
-        // `ContinentResult.pending_ai_requests` — no shared state across
-        // workers.
+        // Phase A: matchday simulation in two clearly separated halves.
         //
-        // A panic inside one continent must not kill the whole tick — a
-        // single buggy state machine or malformed save row would otherwise
-        // unwind the Rayon pool and dump the player's save. `AssertUnwindSafe`
-        // is sound here because the closure mutates only its own continent
-        // (no shared `&mut` state) and doesn't hold any locks; the Rayon
-        // worker doesn't carry poisoned state across iterations. Panic is
-        // surfaced via the `PANICKED_CONTINENTS` counter and a structured
-        // log line; surviving continents still advance. Per-tick count
-        // is recovered as the delta on the atomic since map closures
+        //   A1 — parallel BUILD across continents. Each call to
+        //        `Continent::simulate` ONLY produces `Match::make`
+        //        objects and adds its `ContinentBuildOutput` to the
+        //        per-tick `WorldMatchdayResult`. No engine dispatch
+        //        happens during simulate.
+        //   A2 — `WorldMatchdayResult::process` is the ROOT-LEVEL
+        //        accumulator. It flattens every continent's matches
+        //        into one collection, calls
+        //        `MatchRuntime::engine_pool().play(..)` exactly once,
+        //        and fans the results back through each continent's
+        //        post-match pass (parallel across continents). The
+        //        DistributedDispatcher sees a single global batch
+        //        spanning the entire world — workers stay saturated
+        //        for the whole matchday instead of being fanned out
+        //        once per continent (small continents used to
+        //        dispatch half-empty batches; big ones used to pin
+        //        slow workers as the matchday's tail latency).
+        //
+        // A panic inside one continent must not kill the whole tick —
+        // a single buggy state machine or malformed save row would
+        // otherwise unwind the Rayon pool and dump the player's save.
+        // `AssertUnwindSafe` is sound here because the closure mutates
+        // only its own continent (no shared `&mut` state) and doesn't
+        // hold any locks; the Rayon worker doesn't carry poisoned
+        // state across iterations. Panic is surfaced via the
+        // `PANICKED_CONTINENTS` counter and a structured log line;
+        // surviving continents still advance. Per-tick count is
+        // recovered as the delta on the atomic since map closures
         // running in parallel can't share a `&mut u32`.
         let panicks_before = ContinentPanicMetrics::total();
         // Build the read-only world snapshot once, before the parallel
@@ -167,29 +186,48 @@ impl FootballSimulator {
             world_pool: &world_pool,
             global_free_agents: &global_fa_snapshot,
         };
-        let mut results: Vec<ContinentResult> = {
+        let mut world_matchday: WorldMatchdayResult<'_> = {
             let _g = perf.scope(PerfPhase::ParallelContinents);
-            data
+
+            // A1: parallel build. Each `Continent::simulate` returns a
+            // `ContinentBuildOutput` carrying its `Match::make`
+            // objects and a resume token. A panic substitutes `None`
+            // so the slot's index alignment with `data.continents`
+            // survives — A2 then skips its dispatch slot and emits an
+            // empty `ContinentResult`.
+            let builds: Vec<Option<ContinentBuildOutput<'_>>> = data
                 .continents
                 .par_iter_mut()
                 .map(|continent| {
                     let cid = continent.id;
                     let name = continent.name.clone();
                     let ctx_ref = &ctx;
-                    panic::catch_unwind(AssertUnwindSafe(|| {
+                    match panic::catch_unwind(AssertUnwindSafe(|| {
                         continent.simulate(ctx_ref.with_continent(cid), world)
-                    }))
-                    .unwrap_or_else(|payload| {
-                        ContinentPanicMetrics::record();
-                        let msg = panic_message(&payload);
-                        log::error!(
-                            "event=continent_panic continent_id={} continent_name={:?} message={:?} tick_action=continue_with_empty_result",
-                            cid, name, msg
-                        );
-                        ContinentResult::new(cid, Vec::new(), Vec::new())
-                    })
+                    })) {
+                        Ok(output) => Some(output),
+                        Err(payload) => {
+                            ContinentPanicMetrics::record();
+                            let msg = panic_message(&payload);
+                            log::error!(
+                                "event=continent_simulate_panic continent_id={} continent_name={:?} message={:?} tick_action=continue_with_empty_result",
+                                cid, name, msg
+                            );
+                            None
+                        }
+                    }
                 })
-                .collect()
+                .collect();
+
+            // Wrap every continent's build into the single root-level
+            // result. From here on the tick operates on `world_matchday`
+            // rather than open-coded Vec<Option<ContinentBuildOutput>>.
+            let mut wm = WorldMatchdayResult::from_builds(builds);
+
+            // A2: root-level dispatch + per-continent fan-out. Single
+            // `engine_pool().play(..)` call across the entire world.
+            wm.process(&mut data.continents, world);
+            wm
         };
         result.panicked_continents = (ContinentPanicMetrics::total() - panicks_before) as u32;
 
@@ -197,12 +235,7 @@ impl FootballSimulator {
         // batch-execute them. Lock-free — every request travelled up the
         // result chain owned by exactly one worker. The tick waits for
         // the batch to finish — no timeout, no dropped responses.
-        let mut all_requests: Vec<PendingAiRequest> = Vec::new();
-        for cr in &mut results {
-            if !cr.pending_ai_requests.is_empty() {
-                all_requests.append(&mut cr.pending_ai_requests);
-            }
-        }
+        let all_requests = world_matchday.drain_ai_requests();
         if !all_requests.is_empty() {
             perf.record_ai_batch_active();
             let _g = perf.scope(PerfPhase::AiBatch);
@@ -269,17 +302,10 @@ impl FootballSimulator {
             // once per signing. We aggregate every signed id first,
             // then walk the world once in parallel via
             // `cleanup_player_transfer_interest_batch`.
-            let all_signed_ids: Vec<u32> = results
-                .iter()
-                .flat_map(|cr| cr.countries.iter())
-                .filter_map(|country_r| country_r.deferred_transfer_ops.as_ref())
-                .flat_map(|ops| ops.domestic_signed_ids.iter().copied())
-                .collect();
+            let all_signed_ids = world_matchday.collect_domestic_signed_ids();
             PipelineProcessor::cleanup_player_transfer_interest_batch(data, &all_signed_ids);
 
-            for continent_result in results {
-                continent_result.process(data, &mut result);
-            }
+            world_matchday.drain_into(data, &mut result);
         }
         data.daily_world_player_pool = None;
         data.daily_global_free_agents = None;
