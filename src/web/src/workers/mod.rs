@@ -64,16 +64,16 @@ pub struct WorkerRowDto {
     pub failures: u64,
     pub last_latency_ms: Option<u64>,
     /// Pretty-printed matches-per-second EWMA from the registry,
-    /// rounded for display. `None` until the worker has completed at
-    /// least one batch — the dispatcher seeds it from thread count
-    /// for that first dispatch.
-    pub throughput_mps: Option<u64>,
+    /// formatted with one decimal place. `None` until the worker has
+    /// completed at least one batch — the dispatcher seeds it from
+    /// thread count for that first dispatch.
+    pub throughput_mps: Option<String>,
     pub last_error: Option<String>,
 }
 
 impl WorkerRowDto {
     fn from_snapshot(w: WorkerSnapshot) -> Self {
-        let throughput_mps = w.throughput_mps().map(|v| v.round() as u64);
+        let throughput_mps = w.throughput_mps().map(|v| format!("{:.1}", v));
         let (status_label, status_detail) = match &w.status {
             WorkerStatus::Connecting => ("connecting", String::new()),
             WorkerStatus::Ready => ("ready", String::new()),
@@ -105,7 +105,7 @@ impl WorkerRowDto {
     /// remote workers. Per-batch counters (batches/matches/failures
     /// /last_latency) aren't tracked for the local slot, only its
     /// EWMA throughput is.
-    fn local_row(throughput_mps: Option<u64>) -> Self {
+    fn local_row(throughput_mps: Option<String>) -> Self {
         WorkerRowDto {
             address: "in-process".to_string(),
             computer_name: COMPUTER_NAME.clone(),
@@ -151,7 +151,7 @@ pub async fn workers_page_action(
         total_failures = total_failures.saturating_add(w.stats.failures);
     }
 
-    let local_throughput_mps = local_throughput_mpms.map(|m| (m * 1000.0).round() as u64);
+    let local_throughput_mps = local_throughput_mpms.map(|m| format!("{:.1}", m * 1000.0));
     let local_row = WorkerRowDto::local_row(local_throughput_mps);
     total_threads += local_row.threads;
 

@@ -10472,7 +10472,15 @@ a.fm-award-card:hover {
 
 .fm-workers-page {
     padding-bottom: 24px;
-    padding-right: 0px;
+}
+
+/* The workers page is short (a summary panel + one table) and never
+   needs the vertical document scrollbar. The global `scrollbar-gutter:
+   stable` on <html> still reserves a ~15px strip on the right edge,
+   which made the Process button look indented from the viewport edge.
+   Drop the reservation for this page so the header sits flush right. */
+html:has(.fm-workers-page) {
+    scrollbar-gutter: auto;
 }
 
 /* Top-level panels on the workers page get more breathing room than
@@ -10576,7 +10584,7 @@ a.fm-award-card:hover {
     padding: 8px 10px;
     border-bottom: 1px solid #232f3a;
     color: #c3d2dd;
-    vertical-align: top;
+    vertical-align: middle;
 }
 
 .fm-workers-table tbody td.fm-num {
@@ -10763,7 +10771,9 @@ a.fm-award-card:hover {
     color: #6a8190;
     font-size: 14px;
     font-weight: 700;
-    transition: transform 160ms ease, color 160ms ease;
+    transition:
+        transform 160ms ease,
+        color 160ms ease;
 }
 
 .fm-workers-setup[open] .fm-workers-setup-chevron {
