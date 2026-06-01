@@ -217,7 +217,7 @@ a:active {
     flex-direction: column;
     border-right: 1px solid #1f2a32;
     flex: 0 0 16%;
-    max-width: 13%;
+    max-width: 15%;
 }
 
 .fm-sidebar-scroll {
