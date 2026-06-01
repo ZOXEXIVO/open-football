@@ -62,6 +62,16 @@ pub struct PlayerHappiness {
     /// …the ones the player was left out of the matchday squad entirely
     /// (still available — not injured / suspended).
     pub left_out_since_join: u16,
+
+    /// Cumulative morale weight of poor-match criticism that was
+    /// suppressed by the visible-row cooldown but is still wearing the
+    /// player down. Always non-positive. Decays gently each weekly
+    /// tick (see [`Self::decay_events`]) so a player on a sustained
+    /// bad run keeps soaking damage even when the history shows only
+    /// the first "Manager criticised performance" headline, while a
+    /// player who recovers form sees the pressure fade. Summed into
+    /// the morale recalculation as a hidden form-pressure factor.
+    pub hidden_form_pressure: f32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -118,6 +128,21 @@ pub struct HappinessEvent {
 }
 
 impl PlayerHappiness {
+    /// Maximum visible `ConflictWithTeammate` rows a single player can
+    /// accrue in one processing tick across ALL emitters (behaviour
+    /// pass, controversy roll, mentorship friction, training friction,
+    /// match-day post-incident reactions). Real dressing rooms surface
+    /// one or two big incidents per day, not five. The cap is enforced
+    /// via [`Self::try_add_partner_context_with_same_tick_budget`] so
+    /// every emitter consumes the same shared budget regardless of run
+    /// order.
+    pub const MAX_CONFLICT_WITH_TEAMMATE_PER_TICK: u8 = 2;
+    /// Maximum visible `TeammateBonding` rows per player per tick. A
+    /// touch higher than the conflict cap — bonding events are softer
+    /// signals and a sociable player on a winning streak realistically
+    /// hits a handful of "got on well with X today" moments.
+    pub const MAX_TEAMMATE_BONDING_PER_TICK: u8 = 3;
+
     pub fn new() -> Self {
         let cfg = HappinessConfig::default();
         PlayerHappiness {
@@ -136,6 +161,7 @@ impl PlayerHappiness {
             sub_apps_since_join: 0,
             unused_bench_since_join: 0,
             left_out_since_join: 0,
+            hidden_form_pressure: 0.0,
         }
     }
 
@@ -195,8 +221,33 @@ impl PlayerHappiness {
             .map(|e| e.magnitude * cfg.event_decay(e.days_ago))
             .sum();
 
-        self.morale =
-            cfg.clamp_morale(cfg.default_morale + core_factor_sum + derived_sum + event_sum);
+        // Hidden form pressure: poor-match criticism that was throttled
+        // out of the visible feed but is still wearing the player down.
+        // Clamped to the same -10..0 band the visible `recent_discipline`
+        // factor uses, so suppression never produces a bigger sting than
+        // an emitted event would have.
+        let hidden_pressure = self.hidden_form_pressure.clamp(-10.0, 0.0);
+
+        self.morale = cfg.clamp_morale(
+            cfg.default_morale + core_factor_sum + derived_sum + event_sum + hidden_pressure,
+        );
+    }
+
+    /// Record a suppressed poor-match criticism into the hidden
+    /// form-pressure accumulator. `magnitude` is the negative morale
+    /// delta the visible event would have applied; we add a fraction
+    /// (matching the legacy `adjust_morale(mag * 0.5)` semantics) so the
+    /// player keeps absorbing pressure even when their history feed
+    /// only shows the first headline. Clamped to the floor so a
+    /// sustained slump can't push morale arbitrarily low.
+    pub fn accumulate_hidden_form_pressure(&mut self, magnitude: f32) {
+        // Only negative magnitudes feed pressure — a clamped positive
+        // input would otherwise reduce earlier-accrued damage on its
+        // own.
+        if magnitude >= 0.0 {
+            return;
+        }
+        self.hidden_form_pressure = (self.hidden_form_pressure + magnitude * 0.5).clamp(-10.0, 0.0);
     }
 
     pub fn adjust_morale(&mut self, delta: f32) {
@@ -216,6 +267,16 @@ impl PlayerHappiness {
             self.recent_events
                 .sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
             self.recent_events.truncate(cfg.recent_events_cap);
+        }
+
+        // Hidden form pressure fades a touch faster than the headline
+        // event-magnitude decay so a player on a long quiet streak
+        // doesn't keep absorbing suppressed criticism indefinitely.
+        // Snap to zero once the residual is below the renderer's
+        // noise floor.
+        self.hidden_form_pressure *= 0.85;
+        if self.hidden_form_pressure.abs() < 0.05 {
+            self.hidden_form_pressure = 0.0;
         }
     }
 
@@ -275,6 +336,46 @@ impl PlayerHappiness {
         }
         self.add_event_full(event_type, magnitude, partner_player_id, Some(context));
         true
+    }
+
+    /// One-call wrapper for partner events that need both a shared
+    /// same-tick visible budget AND the standard per-partner cooldown.
+    /// Checks happen in a specific order — the cheapest reject first:
+    ///
+    ///   1. **Same-tick budget**: if `same_tick_event_count(type)` has
+    ///      already hit `max_same_tick`, refuse. Lets every emitter
+    ///      (behaviour pass, controversy, mentorship, training) share
+    ///      a single visible-row budget regardless of run order — the
+    ///      first to land claims a slot, later ones bounce off.
+    ///   2. **Partner cooldown**: standard per-`(type, partner_id)`
+    ///      gate via `has_recent_event_with_partner` so a chronic
+    ///      friction pair doesn't refire its row every weekly tick.
+    ///   3. **Emit**: push the event.
+    ///
+    /// Returns `true` only if the event was actually pushed. Both gate
+    /// rejects return `false` so callers can short-circuit any
+    /// post-emit bookkeeping. The underlying relation update should
+    /// always happen at the call site BEFORE this is called — the
+    /// helper governs the *visible row*, not the drift.
+    pub fn try_add_partner_context_with_same_tick_budget(
+        &mut self,
+        event_type: HappinessEventType,
+        magnitude: f32,
+        partner_player_id: u32,
+        context: HappinessEventContext,
+        partner_cooldown_days: u16,
+        max_same_tick: u8,
+    ) -> bool {
+        if self.same_tick_event_count(&event_type) >= max_same_tick as usize {
+            return false;
+        }
+        self.add_event_with_partner_context_and_cooldown(
+            event_type,
+            magnitude,
+            partner_player_id,
+            context,
+            partner_cooldown_days,
+        )
     }
 
     /// Cooldown-gated, partner-aware counterpart of
@@ -370,6 +471,47 @@ impl PlayerHappiness {
         })
     }
 
+    /// Count visible events of this type recorded in the current
+    /// processing tick (i.e. `days_ago == 0`). Use this as a soft
+    /// cross-emitter budget: controversy / mentorship / training
+    /// friction / behaviour-pass relationship rows all push to the same
+    /// history; without a shared budget a young player on a noisy day
+    /// can pick up six "ConflictWithTeammate" rows that each came from
+    /// a different subsystem. Cheap O(n) scan — `recent_events` is
+    /// bounded.
+    pub fn same_tick_event_count(&self, event_type: &HappinessEventType) -> usize {
+        self.recent_events
+            .iter()
+            .filter(|e| e.event_type == *event_type && e.days_ago == 0)
+            .count()
+    }
+
+    /// Has a `ManagerCriticism` event with this specific criticism
+    /// reason been emitted within `days`? Drives the reason-aware
+    /// cooldown gate in [`Player::on_match_played`] — a fresh sub-6.3
+    /// rating for the same reason inside the window is suppressed, but
+    /// a materially different reason (e.g. red-card `PublicComplaint`
+    /// after a string of `PoorPressing` rows) is still allowed
+    /// through. Events without a `manager_interaction_context` or
+    /// without a populated `criticism_reason` never match — they're
+    /// counted as "reason unknown" and don't block the new event.
+    pub fn has_recent_manager_criticism_with_reason(
+        &self,
+        reason: crate::ManagerCriticismReason,
+        days: u16,
+    ) -> bool {
+        self.recent_events.iter().any(|e| {
+            if e.event_type != HappinessEventType::ManagerCriticism || e.days_ago > days {
+                return false;
+            }
+            e.context
+                .as_ref()
+                .and_then(|c| c.manager_interaction_context.as_ref())
+                .and_then(|m| m.criticism_reason)
+                == Some(reason)
+        })
+    }
+
     /// Add an event only if no event of this type was emitted in the
     /// last `cooldown_days`. Returns `true` if the event was recorded.
     /// Centralised cooldown gate so emit sites don't reimplement the
@@ -460,6 +602,7 @@ impl PlayerHappiness {
         self.sub_apps_since_join = 0;
         self.unused_bench_since_join = 0;
         self.left_out_since_join = 0;
+        self.hidden_form_pressure = 0.0;
     }
 
     /// Backward compatible: morale >= happy_threshold means happy.

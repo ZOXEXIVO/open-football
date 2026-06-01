@@ -22,6 +22,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::club::person::Person;
 use crate::club::player::language::Language;
 use crate::club::player::traits::PlayerTrait;
+use crate::PlayerHappiness;
 use crate::club::{
     ChangeType, HappinessEventType, MentorshipType, Player, PlayerStatusType, RelationshipChange,
 };
@@ -337,23 +338,27 @@ impl MentorshipProcessor {
                     .with_evidence(HappinessEventEvidence::MentorInfluence)
                     .with_evidence(HappinessEventEvidence::RepeatedIncident)
                     .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk)
-                    .with_teammate_conflict_context(
-                        TeammateConflictContext::new(
-                            TeammateConflictReason::LeadershipChallenge,
-                            ConflictLocation::TrainingGround,
-                        ),
-                    );
+                    .with_teammate_conflict_context(TeammateConflictContext::new(
+                        TeammateConflictReason::LeadershipChallenge,
+                        ConflictLocation::TrainingGround,
+                    ));
                     if let Some((level, trust, friendship, prof)) = snapshot {
                         ctx = ctx
                             .with_relationship_levels(level, level)
                             .with_relationship_axes(trust, friendship, prof);
                     }
-                    mentee.happiness.add_event_with_context(
-                        HappinessEventType::ConflictWithTeammate,
-                        mag,
-                        Some(mentor_ids[i]),
-                        ctx,
-                    );
+                    // 30-day partner cooldown + shared same-tick
+                    // conflict budget via the central helper.
+                    mentee
+                        .happiness
+                        .try_add_partner_context_with_same_tick_budget(
+                            HappinessEventType::ConflictWithTeammate,
+                            mag,
+                            mentor_ids[i],
+                            ctx,
+                            30,
+                            PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
+                        );
                 }
             } else {
                 // Healthy mentoring — drift personality and bond.
@@ -364,7 +369,12 @@ impl MentorshipProcessor {
                     ChangeType::MentorshipBond,
                     date,
                 );
-                // Partner-tagged event — tier 75+ is meaningful enough to log.
+                // Partner-tagged event — tier 75+ is meaningful enough
+                // to log. Routes through the central budget+cooldown
+                // helper so repeated healthy mentorship can't spam the
+                // bonding feed, and so the row shares the same-tick
+                // bonding ceiling with the behaviour-pass and
+                // training-friction emitters.
                 if *compat >= 75.0 {
                     let mag = 0.6;
                     let snapshot = mentee
@@ -383,12 +393,16 @@ impl MentorshipProcessor {
                             .with_relationship_levels(level, level)
                             .with_relationship_axes(trust, friendship, prof);
                     }
-                    mentee.happiness.add_event_with_context(
-                        HappinessEventType::TeammateBonding,
-                        mag,
-                        Some(mentor_ids[i]),
-                        ctx,
-                    );
+                    mentee
+                        .happiness
+                        .try_add_partner_context_with_same_tick_budget(
+                            HappinessEventType::TeammateBonding,
+                            mag,
+                            mentor_ids[i],
+                            ctx,
+                            30,
+                            PlayerHappiness::MAX_TEAMMATE_BONDING_PER_TICK,
+                        );
                 }
             }
             mentee.statuses.add(date, PlayerStatusType::Tut);
@@ -471,3 +485,285 @@ impl MentorshipProcessor {
 // re-export. Re-exporting here so this file stays self-contained.
 #[allow(dead_code)]
 type _RelationshipChangeAlias = RelationshipChange;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::personality::language::PlayerLanguage;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        HappinessEventScope, HappinessEventSeverity, HappinessEventType, PersonAttributes,
+        PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+    };
+
+    /// Fixture factory for the mentorship tests. Kept behind a named
+    /// struct so the file holds no bare free helpers.
+    struct Fixtures;
+
+    impl Fixtures {
+        fn date(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        /// Personality block tuned so a player built from it is neither
+        /// `bad_mentor` (prof < 8 || controversy > 16) nor a hot-head.
+        fn calm_pro() -> PersonAttributes {
+            PersonAttributes {
+                adaptability: 14.0,
+                ambition: 12.0,
+                controversy: 5.0,
+                loyalty: 12.0,
+                pressure: 12.0,
+                professionalism: 16.0,
+                sportsmanship: 14.0,
+                temperament: 14.0,
+                consistency: 14.0,
+                important_matches: 12.0,
+                dirtiness: 5.0,
+            }
+        }
+
+        fn build(
+            id: u32,
+            birth: NaiveDate,
+            person: PersonAttributes,
+            leadership: f32,
+            determination: f32,
+            teamwork: f32,
+        ) -> Player {
+            let mut skills = PlayerSkills::default();
+            skills.mental.leadership = leadership;
+            skills.mental.determination = determination;
+            skills.mental.teamwork = teamwork;
+            let mut p = PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".into(), id.to_string()))
+                .birth_date(birth)
+                .country_id(1)
+                .attributes(person)
+                .skills(skills)
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap();
+            // Shared native language so MentorshipScorer::compatibility
+            // grants the +15 language bonus.
+            p.languages.push(PlayerLanguage::native(
+                crate::club::player::personality::language::Language::English,
+            ));
+            p
+        }
+
+        /// Veteran mentor — professional, calm, leadership-strong.
+        fn mentor(id: u32, today: NaiveDate) -> Player {
+            Self::build(
+                id,
+                today
+                    .checked_sub_signed(chrono::Duration::days(365 * 32))
+                    .unwrap_or(today),
+                Self::calm_pro(),
+                17.0,
+                15.0,
+                14.0,
+            )
+        }
+
+        /// Young mentee — low prof so the mentor lift is steep and the
+        /// compatibility bonus for "low-prof mentee + high-prof mentor"
+        /// kicks in.
+        fn mentee(id: u32, today: NaiveDate) -> Player {
+            let mut weak = Self::calm_pro();
+            weak.professionalism = 9.0;
+            weak.ambition = 12.0;
+            Self::build(
+                id,
+                today
+                    .checked_sub_signed(chrono::Duration::days(365 * 19))
+                    .unwrap_or(today),
+                weak,
+                7.0,
+                12.0,
+                10.0,
+            )
+        }
+
+        fn count_bonding(p: &Player, partner: u32) -> usize {
+            p.happiness
+                .recent_events
+                .iter()
+                .filter(|e| {
+                    e.event_type == HappinessEventType::TeammateBonding
+                        && e.partner_player_id == Some(partner)
+                })
+                .count()
+        }
+
+        fn count_conflicts(p: &Player) -> usize {
+            p.happiness
+                .recent_events
+                .iter()
+                .filter(|e| e.event_type == HappinessEventType::ConflictWithTeammate)
+                .count()
+        }
+
+        /// Pre-seed a same-tick `TeammateBonding` row so the shared
+        /// budget on the mentee already has prior occupancy when the
+        /// healthy mentorship path tries to push its own row.
+        fn seed_same_tick_bonding(player: &mut Player, partner: u32) {
+            let ctx = HappinessEventContext::new(
+                HappinessEventCause::TrainingPartnership,
+                HappinessEventSeverity::Minor,
+                HappinessEventScope::TrainingGround,
+            );
+            player.happiness.add_event_with_context(
+                HappinessEventType::TeammateBonding,
+                0.6,
+                Some(partner),
+                ctx,
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_healthy_mentorship_does_not_spam_bonding_rows() {
+        // 30 weekly mentorship ticks with the same healthy pair must
+        // produce at most one visible TeammateBonding row: the 30-day
+        // per-partner cooldown on the central emit helper holds even
+        // when Tut is cleared between ticks (without the cooldown the
+        // helper would emit ~30 rows, all `days_ago == 0` because no
+        // decay runs in the test).
+        let start = Fixtures::date(2026, 1, 1);
+        let mentor_id = 1u32;
+        let mentee_id = 2u32;
+        let mut players = vec![
+            Fixtures::mentor(mentor_id, start),
+            Fixtures::mentee(mentee_id, start),
+        ];
+
+        for week in 0..30 {
+            let day = start
+                .checked_add_signed(chrono::Duration::days(week * 7))
+                .unwrap();
+            for p in players.iter_mut() {
+                p.statuses.remove(PlayerStatusType::Tut);
+                p.statuses.remove(PlayerStatusType::Lrn);
+            }
+            MentorshipProcessor::process(&mut players, day, 15);
+        }
+
+        let mentee = players.iter().find(|p| p.id == mentee_id).unwrap();
+        assert!(
+            Fixtures::count_bonding(mentee, mentor_id) <= 1,
+            "partner cooldown must collapse repeated healthy mentorship to one visible row (got {})",
+            Fixtures::count_bonding(mentee, mentor_id)
+        );
+    }
+
+    #[test]
+    fn mentorship_bonding_respects_same_tick_budget() {
+        // Pre-seed the bonding budget so the central same-tick helper
+        // is already at cap when mentorship runs. The healthy path
+        // would otherwise emit a TeammateBonding row for this pair —
+        // it must refuse because the budget is full.
+        let start = Fixtures::date(2026, 1, 1);
+        let mentor_id = 1u32;
+        let mentee_id = 2u32;
+        let mut players = vec![
+            Fixtures::mentor(mentor_id, start),
+            Fixtures::mentee(mentee_id, start),
+        ];
+
+        if let Some(mentee) = players.iter_mut().find(|p| p.id == mentee_id) {
+            for partner in [97u32, 98, 99] {
+                Fixtures::seed_same_tick_bonding(mentee, partner);
+            }
+        }
+
+        MentorshipProcessor::process(&mut players, start, 15);
+
+        let mentee = players.iter().find(|p| p.id == mentee_id).unwrap();
+        assert_eq!(
+            Fixtures::count_bonding(mentee, mentor_id),
+            0,
+            "mentorship bonding must defer when the same-tick budget is full"
+        );
+        // The pre-existing bonding rows remain — the budget caps
+        // additions, it doesn't evict.
+        let total_bonding = mentee
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::TeammateBonding)
+            .count();
+        assert_eq!(total_bonding, 3);
+    }
+
+    #[test]
+    fn mentorship_negative_conflict_respects_same_tick_budget() {
+        // Two same-tick conflict rows are already on the mentee's
+        // feed. A bad-mentor pair with prior friction would normally
+        // emit a third ConflictWithTeammate row on the healthy path's
+        // alternate branch — the central budget must refuse it.
+        let start = Fixtures::date(2026, 1, 1);
+        let mentor_id = 1u32;
+        let mentee_id = 2u32;
+
+        // Toxic mentor: low prof flips `bad_mentor` true; everything
+        // else stays calm so the pair still scores above the
+        // compatibility floor.
+        let mut toxic = Fixtures::calm_pro();
+        toxic.professionalism = 5.0;
+        let mentor = Fixtures::build(
+            mentor_id,
+            start.checked_sub_signed(chrono::Duration::days(365 * 32)).unwrap(),
+            toxic,
+            17.0,
+            15.0,
+            14.0,
+        );
+        let mut mentee = Fixtures::mentee(mentee_id, start);
+
+        // Recent friction: pre-seed a partner-tagged conflict so the
+        // negative-mentorship branch escalates to the visible
+        // ConflictWithTeammate row.
+        let friction_ctx = HappinessEventContext::new(
+            HappinessEventCause::LeadershipDispute,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::TrainingGround,
+        );
+        mentee.happiness.add_event_with_context(
+            HappinessEventType::ConflictWithTeammate,
+            -1.0,
+            Some(mentor_id),
+            friction_ctx.clone(),
+        );
+        // Fill the rest of the same-tick conflict budget with rows
+        // tagged to other partners so the helper sees the cap is hit.
+        for partner in [98u32, 99] {
+            mentee.happiness.add_event_with_context(
+                HappinessEventType::ConflictWithTeammate,
+                -1.0,
+                Some(partner),
+                friction_ctx.clone(),
+            );
+        }
+        let before = Fixtures::count_conflicts(&mentee);
+        assert!(before >= 2, "test setup should fill the same-tick budget");
+
+        let mut players = vec![mentor, mentee];
+        MentorshipProcessor::process(&mut players, start, 15);
+
+        let mentee = players.iter().find(|p| p.id == mentee_id).unwrap();
+        assert_eq!(
+            Fixtures::count_conflicts(mentee),
+            before,
+            "mentorship must not push a third visible conflict row when the same-tick budget is full"
+        );
+    }
+}

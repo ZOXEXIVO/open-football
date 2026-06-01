@@ -10,10 +10,11 @@ use crate::{
     HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope,
     HappinessEventSeverity, HappinessEventType, LoanEventContext, LoanEventKind,
     ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic, Player,
-    PlayerAcceptance, PlayerPositionType, PlayerSquadStatus, PlayerStatusType, PromiseKind,
-    RelationshipChange, TeammateConflictContext, TeammateConflictReason,
+    PlayerAcceptance, PlayerHappiness, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
+    PromiseKind, RelationshipChange, TeammateConflictContext, TeammateConflictReason,
 };
 use chrono::{Duration, NaiveDate};
+use std::cmp::Ordering;
 
 pub struct TeamBehaviourResult {
     pub players: PlayerBehaviourResult,
@@ -332,6 +333,19 @@ impl PlayerBehaviourResult {
     pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         let sim_date = data.date().date();
 
+        // Two-pass design. Pass 1 applies every relation update and
+        // builds a visible-event candidate per pair that crossed the
+        // magnitude threshold; pass 2 ranks the candidates per player
+        // by severity (|applied| desc, pre-incident relation tier,
+        // partner id) and pushes them through the shared same-tick
+        // budget helper. The relation drift always lands — only the
+        // headline row is gated. The per-tick caps and the 45-day
+        // per-partner cooldown live on `PlayerHappiness`; the helper
+        // observes both.
+        const PARTNER_EVENT_COOLDOWN_DAYS: u16 = 45;
+
+        let mut candidates: Vec<EmitCandidate> = Vec::with_capacity(self.relationship_result.len());
+
         for relationship_result in &self.relationship_result {
             // Look up partner-side personality / squad info BEFORE we take
             // a `&mut` on `from_player`. Used for SamePosition /
@@ -344,119 +358,219 @@ impl PlayerBehaviourResult {
                 .and_then(|p| p.contract.as_ref())
                 .map(|c| c.squad_status.clone());
 
-            if let Some(player_to_modify) = data.player_mut(relationship_result.from_player_id) {
-                // Snapshot the relation BEFORE applying the update —
-                // earlier versions of this code read it AFTER, so
-                // `relationship_level_before` was actually post-update.
-                // Default to a neutral relation when no prior record
-                // exists (first-ever interaction with this teammate).
-                let prior = PairRelationSnapshot::capture(player_to_modify, partner_id);
-                let snapshot_before = prior.unwrap_or_else(PairRelationSnapshot::neutral);
-                let had_prior_relation = prior.is_some();
+            let Some(player_to_modify) = data.player_mut(relationship_result.from_player_id)
+            else {
+                continue;
+            };
 
-                player_to_modify.relations.update_with_type(
-                    partner_id,
-                    relationship_result.relationship_change,
-                    relationship_result.change_type.clone(),
-                    sim_date,
-                );
+            // Snapshot the relation BEFORE applying the update —
+            // earlier versions of this code read it AFTER, so
+            // `relationship_level_before` was actually post-update.
+            // Default to a neutral relation when no prior record
+            // exists (first-ever interaction with this teammate).
+            let prior = PairRelationSnapshot::capture(player_to_modify, partner_id);
+            let snapshot_before = prior.unwrap_or_else(PairRelationSnapshot::neutral);
+            let had_prior_relation = prior.is_some();
 
-                // Snapshot AFTER so the renderer can speak about trend
-                // direction without recomputing the delta.
-                let level_after = player_to_modify
-                    .relations
-                    .get_player(partner_id)
-                    .map(|r| r.level)
-                    .unwrap_or(snapshot_before.level);
+            player_to_modify.relations.update_with_type(
+                partner_id,
+                relationship_result.relationship_change,
+                relationship_result.change_type.clone(),
+                sim_date,
+            );
 
-                // Generate teammate relationship events visible in
-                // player history. The raw `relationship_change` doesn't
-                // reflect what `PlayerRelation::apply_change` actually
-                // applies — PersonalConflict, MatchCooperation,
-                // ConflictResolution and others multiply the magnitude
-                // internally. Compare the *applied* magnitude against
-                // the threshold so a raw -0.20 PersonalConflict
-                // (≈-0.60 applied) actually surfaces.
-                let applied = applied_level_magnitude(
-                    relationship_result.relationship_change,
+            // Snapshot AFTER so the renderer can speak about trend
+            // direction without recomputing the delta.
+            let level_after = player_to_modify
+                .relations
+                .get_player(partner_id)
+                .map(|r| r.level)
+                .unwrap_or(snapshot_before.level);
+
+            // The raw `relationship_change` doesn't reflect what
+            // `PlayerRelation::apply_change` actually applies —
+            // PersonalConflict, MatchCooperation, ConflictResolution
+            // and others multiply internally. Compare the *applied*
+            // magnitude so a raw -0.20 PersonalConflict (≈-0.60
+            // applied) actually surfaces.
+            let applied = applied_level_magnitude(
+                relationship_result.relationship_change,
+                &relationship_result.change_type,
+            );
+
+            // Below the visibility threshold — relation drift already
+            // landed, nothing more to do.
+            if applied.abs() <= 0.5 {
+                continue;
+            }
+
+            // Evidence from the pre-update snapshot — the true
+            // "before the incident" state the user wants explained.
+            let evidence = PairEventContextBuilder::build_evidence(
+                &relationship_result.change_type,
+                snapshot_before,
+                had_prior_relation,
+                player_to_modify,
+                partner_position.as_ref(),
+                partner_squad_status,
+                sim_date,
+            );
+
+            if applied > 0.5 {
+                let magnitude = 1.0;
+                let context = PairEventContextBuilder::bonding_context(
                     &relationship_result.change_type,
-                );
-                // 45-day per-partner cooldown so a chronic friction
-                // pair (or a long-running bonding pair) doesn't spam
-                // history with one event per weekly tick.
-                const PARTNER_EVENT_COOLDOWN_DAYS: u16 = 45;
-
-                // Evidence from the pre-update snapshot — the true
-                // "before the incident" state the user wants explained.
-                let evidence = PairEventContextBuilder::build_evidence(
-                    &relationship_result.change_type,
+                    magnitude,
                     snapshot_before,
-                    had_prior_relation,
-                    player_to_modify,
-                    partner_position.as_ref(),
-                    partner_squad_status,
-                    sim_date,
+                    level_after,
+                    &evidence,
                 );
+                candidates.push(EmitCandidate {
+                    from_id: relationship_result.from_player_id,
+                    partner_id,
+                    kind: HappinessEventType::TeammateBonding,
+                    magnitude,
+                    applied_abs: applied.abs(),
+                    level_before: snapshot_before.level,
+                    context,
+                });
+            } else {
+                // applied < -0.5
+                let magnitude = -1.5;
+                let mut conflict_evidence = evidence;
+                // RepeatedIncident: a recent conflict with this same
+                // partner promotes the incident from a one-off to a
+                // chronic concern in the dressing-room.
+                let recent_count = player_to_modify
+                    .happiness
+                    .recent_events
+                    .iter()
+                    .filter(|e| {
+                        e.event_type == HappinessEventType::ConflictWithTeammate
+                            && e.partner_player_id == Some(partner_id)
+                            && e.days_ago <= 90
+                    })
+                    .count();
+                if recent_count >= 1
+                    && !conflict_evidence.contains(&HappinessEventEvidence::RepeatedIncident)
+                {
+                    conflict_evidence.push(HappinessEventEvidence::RepeatedIncident);
+                }
+                let context = PairEventContextBuilder::conflict_context(
+                    &relationship_result.change_type,
+                    magnitude,
+                    snapshot_before,
+                    level_after,
+                    &conflict_evidence,
+                );
+                candidates.push(EmitCandidate {
+                    from_id: relationship_result.from_player_id,
+                    partner_id,
+                    kind: HappinessEventType::ConflictWithTeammate,
+                    magnitude,
+                    applied_abs: applied.abs(),
+                    level_before: snapshot_before.level,
+                    context,
+                });
+            }
+        }
 
-                if applied > 0.5 {
-                    let magnitude = 1.0;
-                    let context = PairEventContextBuilder::bonding_context(
-                        &relationship_result.change_type,
-                        magnitude,
-                        snapshot_before,
-                        level_after,
-                        &evidence,
-                    );
-                    player_to_modify
-                        .happiness
-                        .add_event_with_partner_context_and_cooldown(
-                            HappinessEventType::TeammateBonding,
-                            magnitude,
-                            partner_id,
-                            context,
-                            PARTNER_EVENT_COOLDOWN_DAYS,
-                        );
-                } else if applied < -0.5 {
-                    let magnitude = -1.5;
-                    let mut conflict_evidence = evidence.clone();
-                    // RepeatedIncident: a recent conflict with this
-                    // same partner promotes the incident from a one-off
-                    // to a chronic concern in the dressing-room.
-                    let recent_count = player_to_modify
-                        .happiness
-                        .recent_events
-                        .iter()
-                        .filter(|e| {
-                            e.event_type == HappinessEventType::ConflictWithTeammate
-                                && e.partner_player_id == Some(partner_id)
-                                && e.days_ago <= 90
-                        })
-                        .count();
-                    if recent_count >= 1
-                        && !conflict_evidence.contains(&HappinessEventEvidence::RepeatedIncident)
-                    {
-                        conflict_evidence.push(HappinessEventEvidence::RepeatedIncident);
-                    }
+        // Pass 2 — rank per player and push through the shared
+        // same-tick budget helper. The helper reads
+        // `same_tick_event_count` on each call, so events any earlier
+        // emitter (controversy, mentorship, training, match-day
+        // post-incident) already added in this tick consume budget
+        // here too — no local counters needed.
+        candidates.sort_by_key(|c| c.from_id);
+        let mut i = 0;
+        while i < candidates.len() {
+            let from_id = candidates[i].from_id;
+            let block_end = candidates[i..]
+                .iter()
+                .position(|c| c.from_id != from_id)
+                .map(|p| i + p)
+                .unwrap_or(candidates.len());
 
-                    let context = PairEventContextBuilder::conflict_context(
-                        &relationship_result.change_type,
-                        magnitude,
-                        snapshot_before,
-                        level_after,
-                        &conflict_evidence,
-                    );
-                    player_to_modify
+            let mut block: Vec<EmitCandidate> = candidates[i..block_end].to_vec();
+            block.sort_by(EmitCandidate::rank);
+
+            if let Some(player) = data.player_mut(from_id) {
+                for cand in block {
+                    let max_same_tick = match cand.kind {
+                        HappinessEventType::ConflictWithTeammate => {
+                            PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK
+                        }
+                        _ => PlayerHappiness::MAX_TEAMMATE_BONDING_PER_TICK,
+                    };
+                    player
                         .happiness
-                        .add_event_with_partner_context_and_cooldown(
-                            HappinessEventType::ConflictWithTeammate,
-                            magnitude,
-                            partner_id,
-                            context,
+                        .try_add_partner_context_with_same_tick_budget(
+                            cand.kind,
+                            cand.magnitude,
+                            cand.partner_id,
+                            cand.context,
                             PARTNER_EVENT_COOLDOWN_DAYS,
+                            max_same_tick,
                         );
                 }
             }
+            i = block_end;
         }
+    }
+}
+
+
+/// A pre-built visible-event candidate produced by the first pass of
+/// [`PlayerBehaviourResult::process`]. The relation update has already
+/// landed when this is created; the second pass decides whether the
+/// row actually surfaces in the player's history feed based on
+/// severity ranking and the per-partner cooldown.
+#[derive(Clone)]
+struct EmitCandidate {
+    from_id: u32,
+    partner_id: u32,
+    kind: HappinessEventType,
+    magnitude: f32,
+    /// Absolute applied-level magnitude. Used as the primary ranking
+    /// key — bigger stories first.
+    applied_abs: f32,
+    /// Pre-incident relation level. Conflict ranking prefers strained
+    /// partners (lower wins), bonding ranking prefers strong existing
+    /// bonds (higher wins).
+    level_before: f32,
+    context: HappinessEventContext,
+}
+
+impl EmitCandidate {
+    /// Severity ranking comparator. Conflicts sort before bondings so
+    /// the second pass walks them in deterministic groups; inside a
+    /// group: larger applied magnitude first, then for conflicts the
+    /// already-strained partner wins (lower `level_before`) and for
+    /// bondings the strongest existing bond wins (higher
+    /// `level_before`), with `partner_id` as a stable tie-break.
+    fn rank(a: &Self, b: &Self) -> Ordering {
+        let kind_rank = |k: &HappinessEventType| -> u8 {
+            match k {
+                HappinessEventType::ConflictWithTeammate => 0,
+                _ => 1,
+            }
+        };
+        kind_rank(&a.kind).cmp(&kind_rank(&b.kind)).then_with(|| {
+            b.applied_abs
+                .partial_cmp(&a.applied_abs)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| match a.kind {
+                    HappinessEventType::ConflictWithTeammate => a
+                        .level_before
+                        .partial_cmp(&b.level_before)
+                        .unwrap_or(Ordering::Equal),
+                    _ => b
+                        .level_before
+                        .partial_cmp(&a.level_before)
+                        .unwrap_or(Ordering::Equal),
+                })
+                .then_with(|| a.partner_id.cmp(&b.partner_id))
+        })
     }
 }
 
@@ -1104,5 +1218,313 @@ mod cause_mapping_tests {
             );
             assert!(positive, "{:?} produced negative cause {:?}", ct, cause);
         }
+    }
+}
+
+#[cfg(test)]
+mod severity_cap_tests {
+    //! Slim-harness tests for [`PlayerBehaviourResult::process`].
+    use super::*;
+    use crate::Staff;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::league::League;
+    use crate::league::result::LeagueProcessAccess;
+    use crate::shared::fullname::FullName;
+    use crate::shared::indexes::SimulatorDataIndexes;
+    use crate::simulator::CountryInfo;
+    use crate::{
+        Club, ConflictLocation, Country, HappinessEventCause, HappinessEventSeverity,
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, Team, TeammateConflictContext, TeammateConflictReason,
+    };
+    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+    use std::collections::HashMap;
+
+    /// Slim harness that implements only the [`LeagueProcessAccess`]
+    /// methods [`PlayerBehaviourResult::process`] actually calls:
+    /// `date`, `player`, and `player_mut`. Every other accessor
+    /// panics via `unreachable!` — if a future change in `process`
+    /// starts touching them the failing test points right at the new
+    /// requirement.
+    struct StubData {
+        now: NaiveDateTime,
+        players: Vec<Player>,
+        country_info: HashMap<u32, CountryInfo>,
+    }
+
+    impl StubData {
+        fn new(now: NaiveDateTime, players: Vec<Player>) -> Self {
+            Self {
+                now,
+                players,
+                country_info: HashMap::new(),
+            }
+        }
+        fn find(&self, id: u32) -> Option<usize> {
+            self.players.iter().position(|p| p.id == id)
+        }
+    }
+
+    impl LeagueProcessAccess for StubData {
+        fn date(&self) -> NaiveDateTime {
+            self.now
+        }
+        fn indexes(&self) -> Option<&SimulatorDataIndexes> {
+            None
+        }
+        fn country_info(&self) -> &HashMap<u32, CountryInfo> {
+            &self.country_info
+        }
+        fn country(&self, _id: u32) -> Option<&Country> {
+            None
+        }
+        fn country_mut(&mut self, _id: u32) -> Option<&mut Country> {
+            None
+        }
+        fn country_by_club(&self, _club_id: u32) -> Option<&Country> {
+            None
+        }
+        fn league(&self, _id: u32) -> Option<&League> {
+            None
+        }
+        fn league_mut(&mut self, _id: u32) -> Option<&mut League> {
+            None
+        }
+        fn club(&self, _id: u32) -> Option<&Club> {
+            None
+        }
+        fn club_mut(&mut self, _id: u32) -> Option<&mut Club> {
+            None
+        }
+        fn team(&self, _id: u32) -> Option<&Team> {
+            None
+        }
+        fn team_mut(&mut self, _id: u32) -> Option<&mut Team> {
+            None
+        }
+        fn player(&self, id: u32) -> Option<&Player> {
+            self.find(id).map(|i| &self.players[i])
+        }
+        fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
+            self.find(id).map(move |i| &mut self.players[i])
+        }
+        fn admit_free_agent_staff(&mut self, _staff: Staff) {
+            unreachable!()
+        }
+        fn queue_manager_appointment(&mut self, _club_id: u32) {
+            unreachable!()
+        }
+        fn random_player_mut(&mut self) -> Option<&mut Player> {
+            unreachable!()
+        }
+    }
+
+    /// Per-test fixtures grouped under a struct so the file has no
+    /// free helpers (the project keeps even test scaffolding behind a
+    /// named type).
+    struct Fixtures;
+
+    impl Fixtures {
+        fn date(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn midnight(y: i32, m: u32, day: u32) -> NaiveDateTime {
+            NaiveDateTime::new(Self::date(y, m, day), NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+        }
+
+        fn person() -> PersonAttributes {
+            PersonAttributes {
+                adaptability: 12.0,
+                ambition: 12.0,
+                controversy: 5.0,
+                loyalty: 10.0,
+                pressure: 12.0,
+                professionalism: 12.0,
+                sportsmanship: 12.0,
+                temperament: 12.0,
+                consistency: 12.0,
+                important_matches: 12.0,
+                dirtiness: 5.0,
+            }
+        }
+
+        fn player(id: u32) -> Player {
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".into(), id.to_string()))
+                .birth_date(Self::date(2000, 1, 1))
+                .country_id(1)
+                .attributes(Self::person())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap()
+        }
+
+        fn count_conflicts(p: &Player) -> usize {
+            p.happiness
+                .recent_events
+                .iter()
+                .filter(|e| e.event_type == HappinessEventType::ConflictWithTeammate)
+                .count()
+        }
+
+        /// Push a `ConflictWithTeammate` event onto a player as if a
+        /// direct emitter (controversy / mentorship / training) had
+        /// already run earlier in the same tick — `days_ago == 0` so
+        /// the shared budget sees it.
+        fn seed_same_tick_conflict(player: &mut Player, partner: u32) {
+            let ctx = HappinessEventContext::new(
+                HappinessEventCause::PersonalityClash,
+                HappinessEventSeverity::Moderate,
+                HappinessEventScope::DressingRoom,
+            )
+            .with_teammate_conflict_context(TeammateConflictContext::new(
+                TeammateConflictReason::PersonalityClash,
+                ConflictLocation::DressingRoom,
+            ));
+            player.happiness.add_event_with_context(
+                HappinessEventType::ConflictWithTeammate,
+                -1.5,
+                Some(partner),
+                ctx,
+            );
+        }
+    }
+
+    #[test]
+    fn personality_conflict_swarm_caps_visible_rows_but_updates_all_relations() {
+        let now = Fixtures::midnight(2026, 6, 1);
+        let mut players: Vec<Player> = (1..=10).map(Fixtures::player).collect();
+        for p in &mut players[1..] {
+            p.attributes.controversy = 18.0;
+        }
+        let mut data = StubData::new(now, players);
+
+        let mut result = PlayerBehaviourResult::new();
+        for partner in 2..=10u32 {
+            result.relationship_result.push(PlayerRelationshipChangeResult {
+                from_player_id: 1,
+                to_player_id: partner,
+                relationship_change: -0.4,
+                change_type: ChangeType::PersonalConflict,
+            });
+        }
+        result.process(&mut data);
+
+        let p1 = data.player(1).unwrap();
+        assert!(Fixtures::count_conflicts(p1) <= 2);
+        for partner in 2..=10u32 {
+            let level = p1.relations.get_player(partner).unwrap().level;
+            assert!(level < 0.0, "partner {} level was {}", partner, level);
+        }
+    }
+
+    #[test]
+    fn relationship_conflict_cap_picks_strongest_candidates() {
+        let now = Fixtures::midnight(2026, 6, 1);
+        let mut players: Vec<Player> = (1..=6).map(Fixtures::player).collect();
+        if let Some(p1) = players.iter_mut().find(|p| p.id == 1) {
+            p1.relations
+                .update_with_type(5, -0.5, ChangeType::PersonalConflict, now.date());
+        }
+        let mut data = StubData::new(now, players);
+
+        let mut result = PlayerBehaviourResult::new();
+        // Iteration-order trap: weak conflicts first, strong last.
+        // The ranker must still pick the strong pair.
+        for (partner, mag) in [(2u32, -0.20), (3, -0.20), (4, -0.20), (5, -0.50), (6, -0.50)] {
+            result.relationship_result.push(PlayerRelationshipChangeResult {
+                from_player_id: 1,
+                to_player_id: partner,
+                relationship_change: mag,
+                change_type: ChangeType::PersonalConflict,
+            });
+        }
+        result.process(&mut data);
+
+        let p1 = data.player(1).unwrap();
+        let visible: Vec<u32> = p1
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::ConflictWithTeammate)
+            .filter_map(|e| e.partner_player_id)
+            .collect();
+        assert_eq!(visible.len(), 2);
+        assert!(visible.contains(&5) && visible.contains(&6), "got {:?}", visible);
+    }
+
+    #[test]
+    fn pre_seeded_same_tick_conflicts_block_further_visible_rows_but_relations_still_update() {
+        // Two direct-emitter ConflictWithTeammate rows are already on
+        // the feed when the behaviour pass runs. The shared
+        // same-tick budget is full, so the behaviour pass must add
+        // ZERO visible rows — but the underlying relation drift must
+        // still land for every candidate.
+        let now = Fixtures::midnight(2026, 6, 1);
+        let mut players: Vec<Player> = (1..=6).map(Fixtures::player).collect();
+        Fixtures::seed_same_tick_conflict(&mut players[0], 2);
+        Fixtures::seed_same_tick_conflict(&mut players[0], 3);
+        let mut data = StubData::new(now, players);
+
+        let mut result = PlayerBehaviourResult::new();
+        for partner in [4u32, 5, 6] {
+            result.relationship_result.push(PlayerRelationshipChangeResult {
+                from_player_id: 1,
+                to_player_id: partner,
+                relationship_change: -0.5,
+                change_type: ChangeType::PersonalConflict,
+            });
+        }
+        result.process(&mut data);
+
+        let p1 = data.player(1).unwrap();
+        assert_eq!(
+            Fixtures::count_conflicts(p1),
+            2,
+            "behaviour pass must respect the pre-existing same-tick budget"
+        );
+        for partner in [4u32, 5, 6] {
+            let rel = p1.relations.get_player(partner).expect("relation must exist");
+            assert!(
+                rel.level < 0.0,
+                "relation drift must land even when the visible row is capped: partner {} level {}",
+                partner,
+                rel.level
+            );
+        }
+    }
+
+    #[test]
+    fn direct_conflict_emitters_do_not_bypass_same_day_spam_limit() {
+        let now = Fixtures::midnight(2026, 6, 1);
+        let players: Vec<Player> = (1..=4).map(Fixtures::player).collect();
+        let mut data = StubData::new(now, players);
+
+        let mut result = PlayerBehaviourResult::new();
+        for partner in [2u32, 3] {
+            result.relationship_result.push(PlayerRelationshipChangeResult {
+                from_player_id: 1,
+                to_player_id: partner,
+                relationship_change: -0.5,
+                change_type: ChangeType::PersonalConflict,
+            });
+        }
+        result.process(&mut data);
+
+        let p1 = data.player_mut(1).unwrap();
+        assert_eq!(Fixtures::count_conflicts(p1), 2);
+        let already_today = p1
+            .happiness
+            .same_tick_event_count(&HappinessEventType::ConflictWithTeammate);
+        assert!(already_today >= 2);
     }
 }

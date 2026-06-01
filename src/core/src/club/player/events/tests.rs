@@ -5195,3 +5195,100 @@ fn unused_substitute_does_not_contaminate_average() {
         "zero-minute / zero-rating record must be rejected"
     );
 }
+
+// ── ManagerCriticism reason-aware cooldown ──────────────────
+
+/// Build a poor-but-not-catastrophic post-match outcome that lands the
+/// rating in the 5.5..6.3 band — the band where the manager-criticism
+/// branch fires. Tunes the personality so the picked reason is
+/// deterministic: with `teamwork = 5.0` the branch resolves to
+/// `MissedAssignment` (the second arm in the `if/else if` chain that
+/// follows the red-card guard).
+fn weak_player_with_missed_assignment_profile() -> Player {
+    let mut p = build_player(PlayerPositionType::MidfielderCenter, PersonAttributes::default());
+    p.skills.mental.work_rate = 15.0; // avoid PoorPressing arm
+    p.skills.mental.teamwork = 5.0; // selects MissedAssignment
+    p.attributes.professionalism = 14.0;
+    p
+}
+
+#[test]
+fn manager_criticism_duplicate_low_rating_is_cooldown_gated() {
+    // Same criticism reason inside the 14-day window must collapse
+    // to a single visible row even if the player has four more
+    // sub-6.3 outings in the same fortnight.
+    let mut p = weak_player_with_missed_assignment_profile();
+    let s = stats(6.0, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
+    let o = outcome(
+        &s,
+        6.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        1,
+        MatchParticipation::Starter,
+    );
+    for _ in 0..5 {
+        p.on_match_played(&o);
+    }
+    assert_eq!(
+        count_events(&p, &HappinessEventType::ManagerCriticism),
+        1,
+        "same criticism reason must collapse to one visible row"
+    );
+    // The cumulative pressure must still bite — the suppressed events
+    // feed the hidden form-pressure accumulator so morale degrades
+    // even though the history feed only shows the first row.
+    assert!(
+        p.happiness.hidden_form_pressure < 0.0,
+        "suppressed criticism must accumulate hidden form pressure (was {})",
+        p.happiness.hidden_form_pressure
+    );
+}
+
+#[test]
+fn manager_criticism_distinct_reason_is_pinned() {
+    // A low-rating run followed by a red-card incident must still
+    // surface the new "PublicComplaint" criticism — the reason-aware
+    // cooldown only suppresses the SAME reason. Pinning this so a
+    // future tuning pass that switches back to a per-type cooldown
+    // is caught here.
+    let mut p = weak_player_with_missed_assignment_profile();
+    let s = stats(6.0, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
+    let o = outcome(
+        &s,
+        6.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        1,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(count_events(&p, &HappinessEventType::ManagerCriticism), 1);
+
+    // Now a red card on a still-sub-6.3 outing — same player, same
+    // window, but a materially different criticism (PublicComplaint).
+    let s_red = stats(6.0, 0, 0, 1, PlayerFieldPositionGroup::Midfielder);
+    let o_red = outcome(
+        &s_red,
+        6.0,
+        false,
+        false,
+        false,
+        false,
+        1,
+        1,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o_red);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::ManagerCriticism),
+        2,
+        "distinct criticism reason inside the 14-day window must still fire"
+    );
+}

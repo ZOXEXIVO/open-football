@@ -544,6 +544,13 @@ fn upgrade_contract_if_youth(player: &mut Player, date: NaiveDate, main_team: &T
             .unwrap_or(date);
         let club_rep = main_team.reputation.world;
         let salary = super::graduation_salary(player.player_attributes.current_ability, club_rep);
-        player.contract = Some(PlayerClubContract::new(salary, expiration));
+        let mut upgraded = PlayerClubContract::new(salary, expiration);
+        // Anchor the new senior contract to today so the wage-envy
+        // grace window correctly treats a freshly graduated youngster
+        // as "just signed" — otherwise the monthly audit fires
+        // SalaryGapNoticed on a player who only just earned a senior
+        // wage in the first place.
+        upgraded.started = Some(date);
+        player.contract = Some(upgraded);
     }
 }

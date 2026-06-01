@@ -1,8 +1,11 @@
 use crate::club::player::language::Language;
 use crate::club::player::training::result::PlayerTrainingResult;
 use crate::{
-    ChangeType, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerTraining,
-    RelationshipChange, Staff, Team, TeamTrainingResult,
+    ChangeType, ConflictLocation, HappinessEventCause, HappinessEventContext,
+    HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType, Player, PlayerFieldPositionGroup, PlayerHappiness, PlayerPositionType,
+    PlayerTraining, RelationshipChange, Staff, Team, TeamTrainingResult, TeammateConflictContext,
+    TeammateConflictReason,
 };
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Weekday};
@@ -321,12 +324,6 @@ impl TeamTraining {
         training_results: &TeamTrainingResult,
         sim_date: NaiveDate,
     ) {
-        use crate::{
-            ConflictLocation, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
-            HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
-            HappinessEventType, TeammateConflictContext, TeammateConflictReason,
-        };
-
         // Index morale changes by player id so we don't iterate the result
         // vector once per pair.
         let mut morale_change: HashMap<u32, f32> =
@@ -568,12 +565,13 @@ impl TeamTraining {
                     }
                     player
                         .happiness
-                        .add_event_with_partner_context_and_cooldown(
+                        .try_add_partner_context_with_same_tick_budget(
                             HappinessEventType::TeammateBonding,
                             mag,
                             eff.to,
                             ctx,
                             PAIR_COOLDOWN_DAYS,
+                            PlayerHappiness::MAX_TEAMMATE_BONDING_PER_TICK,
                         );
                 } else {
                     let mag = -0.8;
@@ -584,12 +582,10 @@ impl TeamTraining {
                     )
                     .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
                     .with_follow_up(HappinessEventFollowUp::LikelyToSettle)
-                    .with_teammate_conflict_context(
-                        TeammateConflictContext::new(
-                            TeammateConflictReason::TrainingStandards,
-                            ConflictLocation::TrainingGround,
-                        ),
-                    );
+                    .with_teammate_conflict_context(TeammateConflictContext::new(
+                        TeammateConflictReason::TrainingStandards,
+                        ConflictLocation::TrainingGround,
+                    ));
                     if let Some((level, trust, friendship, prof)) = snapshot {
                         ctx = ctx
                             .with_relationship_levels(level, level)
@@ -606,12 +602,13 @@ impl TeamTraining {
                     }
                     player
                         .happiness
-                        .add_event_with_partner_context_and_cooldown(
+                        .try_add_partner_context_with_same_tick_budget(
                             HappinessEventType::ConflictWithTeammate,
                             mag,
                             eff.to,
                             ctx,
                             PAIR_COOLDOWN_DAYS,
+                            PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
                         );
                 }
             }

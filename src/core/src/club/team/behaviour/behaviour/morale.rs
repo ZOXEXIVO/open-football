@@ -3,6 +3,7 @@
 //! the periodic peer-wage envy sweep.
 
 use super::TeamBehaviour;
+use crate::PlayerHappiness;
 use crate::club::person::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::contract::stalemate::{AffordabilityInput, ContractStalemate};
@@ -621,23 +622,30 @@ impl TeamBehaviour {
                     )
                     .with_evidence_iter(victim_evidence.iter().copied())
                     .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk)
-                    .with_teammate_conflict_context(
-                        TeammateConflictContext::new(
-                            TeammateConflictReason::PersonalityClash,
-                            ConflictLocation::DressingRoom,
-                        ),
-                    );
+                    .with_teammate_conflict_context(TeammateConflictContext::new(
+                        TeammateConflictReason::PersonalityClash,
+                        ConflictLocation::DressingRoom,
+                    ));
                     if let Some((level, trust, friendship, prof)) = snapshot {
                         conflict_ctx = conflict_ctx
                             .with_relationship_levels(level, level)
                             .with_relationship_axes(trust, friendship, prof);
                     }
-                    victim.happiness.add_event_with_context(
-                        HappinessEventType::ConflictWithTeammate,
-                        -2.0,
-                        Some(offender_id),
-                        conflict_ctx,
-                    );
+                    // Shared same-tick budget + 45-day partner
+                    // cooldown via the central helper, so the
+                    // controversy emit can't quietly leapfrog the
+                    // behaviour-pass cap or refire on a recurring
+                    // offender/victim pair.
+                    victim
+                        .happiness
+                        .try_add_partner_context_with_same_tick_budget(
+                            HappinessEventType::ConflictWithTeammate,
+                            -2.0,
+                            offender_id,
+                            conflict_ctx,
+                            45,
+                            PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
+                        );
                 }
             }
         }
@@ -713,6 +721,50 @@ impl TeamBehaviour {
             if player.player_attributes.current_ability < 100
                 && player.player_attributes.world_reputation < 3000
             {
+                continue;
+            }
+            // Just-signed grace window: a player who agreed their wage
+            // in the last 90 days cannot credibly resent the squad's
+            // pay structure — they negotiated their slot in it. A
+            // youth-team graduate signing his first senior deal was
+            // previously getting an "Unsettled by squad wage
+            // hierarchy" event in the same month as the contract.
+            //
+            // For contracts without a stored start date (older save
+            // files, certain generator-produced contracts), fall back
+            // to the player's most recent transfer date — every
+            // signing path that mutates the senior contract also
+            // populates `last_transfer_date`. If both are missing the
+            // contract is treated as long-installed (the legacy
+            // behaviour), which is the safe default since the
+            // appearance gate below still keeps fresh graduates out.
+            let contract_age_days = contract
+                .started
+                .or(player.last_transfer_date)
+                .map(|d| (today - d).num_days())
+                .unwrap_or(i64::MAX);
+            if contract_age_days < 90 {
+                continue;
+            }
+            // Matchday-inclusion gate: even after grace, a player
+            // needs a genuine track record at the club before the
+            // squad-wide wage hierarchy becomes a personal grievance.
+            // Requires ≥8 eligible matches the club has played since
+            // the player joined AND ≥3 matchday inclusions
+            // (started / sub appearance / named to the bench — being
+            // travelled-with counts as "the manager saw fit to take
+            // me to the game"). Hot prospects who haven't been
+            // included yet, or established players whose first weeks
+            // fell across an international break, aren't candidates
+            // for this morale signal yet.
+            let opp = player.playing_time_opportunity(today);
+            if opp.eligible_official_matches_since_join < 8 {
+                continue;
+            }
+            let matchday_inclusion = opp.player_starts_since_join
+                + opp.player_sub_apps_since_join
+                + opp.player_unused_bench_since_join;
+            if matchday_inclusion < 3 {
                 continue;
             }
             let group = player.position().position_group();
@@ -1367,6 +1419,84 @@ mod tests {
             count(&players.players[0], HappinessEventType::WantsTitleChallenge),
             0,
             "a top-four side is a realistic title challenge — no grievance"
+        );
+    }
+
+    // ── SalaryGapNoticed grace + appearance gate ────────────────
+
+    /// Build a squad that pairs a single starter earning a fraction of
+    /// the top wage (gap easily satisfies the 60% threshold) with a
+    /// top-earning star at the same position group. The starter's
+    /// match-opportunity counters are saturated so the appearance gate
+    /// passes — every test then varies only the grace state we want
+    /// to exercise.
+    fn build_wage_envy_pair(starter_contract_started: Option<NaiveDate>) -> Vec<Player> {
+        let birth = NaiveDate::from_ymd_opt(2002, 1, 1).unwrap();
+        let mut starter = build_player(1, birth, 130, 5_000, 12.0);
+        let mut starter_contract = PlayerClubContract::new(
+            20_000,
+            NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+        );
+        starter_contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
+        starter_contract.started = starter_contract_started;
+        starter.contract = Some(starter_contract);
+        starter.happiness.eligible_official_matches_since_join = 12;
+        starter.happiness.starts_since_join = 6;
+
+        let star = with_contract(
+            build_player(2, birth, 160, 8_000, 14.0),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        // Override the star wage so the ratio gap clearly trips the
+        // 60% threshold (20k / 200k = 0.10).
+        let mut star = star;
+        if let Some(c) = star.contract.as_mut() {
+            c.salary = 200_000;
+        }
+        vec![starter, star]
+    }
+
+    #[test]
+    fn new_contract_skips_periodic_wage_envy_until_grace_expires() {
+        let today = first_of_month(2026, 6);
+        // Contract signed 30 days ago — inside the 90-day grace.
+        let fresh_squad = build_wage_envy_pair(Some(today - chrono::Duration::days(30)));
+        let mut players = PlayerCollection::new(fresh_squad);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a contract started 30 days ago must sit inside the grace window"
+        );
+
+        // Same setup, but the contract is now 120 days old — outside
+        // grace, appearance gate already satisfied, so the envy
+        // signal should fire.
+        let aged_squad = build_wage_envy_pair(Some(today - chrono::Duration::days(120)));
+        let mut players = PlayerCollection::new(aged_squad);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            1,
+            "an established player on a 120-day-old contract should notice the gap"
+        );
+    }
+
+    #[test]
+    fn wage_envy_requires_minimum_appearance_track_record() {
+        let today = first_of_month(2026, 6);
+        // Contract well outside grace, but the starter has not played
+        // enough eligible matches yet — the appearance gate must
+        // suppress the audit.
+        let mut squad = build_wage_envy_pair(Some(today - chrono::Duration::days(200)));
+        squad[0].happiness.eligible_official_matches_since_join = 3;
+        squad[0].happiness.starts_since_join = 1;
+        let mut players = PlayerCollection::new(squad);
+        TeamBehaviour::process_periodic_wage_envy(&mut players, &month_ctx(today));
+        assert_eq!(
+            count(&players.players[0], HappinessEventType::SalaryGapNoticed),
+            0,
+            "a fresh arrival with only 3 eligible matches must not yet resent the wage hierarchy"
         );
     }
 }

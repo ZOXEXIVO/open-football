@@ -353,6 +353,14 @@ impl Player {
                 )
             });
         let mut contract = PlayerClubContract::new(resolved_wage, expiry);
+        // Stamp the contract with its real start date so the wage-envy
+        // grace window, yearly-rise anniversary, and loyalty-bonus
+        // anchors all reason from the move date. Without this, the
+        // monthly wage audit treats a fresh transfer as "ancient
+        // contract" and a youth-graduation salary as outside the grace
+        // window — both fire SalaryGapNoticed within weeks of the
+        // signing.
+        contract.started = Some(date);
 
         // Install a profile-appropriate set of bonuses + clauses so
         // transfer-completed contracts feel like the same market as

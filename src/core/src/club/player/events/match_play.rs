@@ -398,14 +398,17 @@ impl Player {
                 let recent_mgr_criticism = self.happiness.recent_events.iter().any(|e| {
                     e.event_type == HappinessEventType::ManagerCriticism && e.days_ago <= 30
                 });
-                // Concrete reason picked from the most readable signal in the
-                // post-match outcome. Pressing breakdowns dominate when the
-                // engine flagged the player for it; otherwise fall back to a
-                // general performance / discipline reading.
+                // Concrete football reason picked from the post-match
+                // outcome. Computed independently of whether earlier
+                // criticism is on file — the reason is the stable
+                // identity the cooldown gate keys on, while
+                // `recent_mgr_criticism` only escalates tone /
+                // follow-up below. Conflating "repeated incident" into
+                // the reason itself would silently bypass the
+                // reason-aware cooldown the next match (a new reason
+                // would appear to fire from the gate's perspective).
                 let reason = if o.stats.red_cards > 0 {
                     ManagerCriticismReason::PublicComplaint
-                } else if recent_mgr_criticism {
-                    ManagerCriticismReason::RepeatedIncident
                 } else if self.skills.mental.work_rate <= 8.0 {
                     ManagerCriticismReason::PoorPressing
                 } else if self.skills.mental.teamwork <= 8.0 {
@@ -450,12 +453,34 @@ impl Player {
                 } else {
                     HappinessEventFollowUp::ManagerInterventionRisk
                 });
-                self.happiness.add_event_with_context(
-                    HappinessEventType::ManagerCriticism,
-                    mag,
-                    None,
-                    happiness_ctx,
-                );
+                // Reason-aware 14-day cooldown — only the SAME criticism
+                // reason inside the window is throttled. A poor-form
+                // stretch that earned a "PoorPressing" row will let a
+                // subsequent red-card "PublicComplaint" through, since
+                // they're materially different manager talks. The
+                // suppressed magnitude still wears the player down via
+                // a durable hidden form-pressure accumulator (read in
+                // `recalculate_morale`); we don't push to
+                // `adjust_morale` directly because the next weekly
+                // recalculation rebuilds morale from factors + events
+                // and would silently drop a transient nudge.
+                let blocked_by_reason = self
+                    .happiness
+                    .has_recent_manager_criticism_with_reason(reason, 14);
+                let emitted = if blocked_by_reason {
+                    false
+                } else {
+                    self.happiness.add_event_with_context(
+                        HappinessEventType::ManagerCriticism,
+                        mag,
+                        None,
+                        happiness_ctx,
+                    );
+                    true
+                };
+                if !emitted {
+                    self.happiness.accumulate_hidden_form_pressure(mag);
+                }
             } else if o.effective_rating >= 7.5 {
                 let mag = 1.5 + (o.effective_rating - 7.5).clamp(0.0, 2.5);
                 let event_ctx = MatchSupportContextBuilder::manager_encouragement(self, o, mag);
