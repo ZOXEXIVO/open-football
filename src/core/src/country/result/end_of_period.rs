@@ -1195,10 +1195,13 @@ impl CountryResult {
         country.clubs.par_iter_mut().for_each(|club| {
             let balance = club.finance.balance.balance;
             if balance > 0 {
-                // 1% return on positive balance, capped at 2M per year.
-                // Prevents infinite wealth compounding — clubs can't earn
-                // meaningful interest on $500M+ balances.
-                let interest = ((balance as f64 * 0.01) as i64).min(2_000_000);
+                // 0.5% annual return on positive balance, capped at
+                // $500K. Football clubs don't park cash in high-yield
+                // instruments — corporate treasury rates are modest and
+                // tax eats most of it. The earlier 1%/$2M cap was
+                // generous enough to compound into already-wealthy
+                // sides' growth and feed the broader rocket pattern.
+                let interest = ((balance as f64 * 0.005) as i64).min(500_000);
                 club.finance.balance.push_income(interest);
             } else if balance < 0 {
                 // 5% penalty on negative balance (debt interest)

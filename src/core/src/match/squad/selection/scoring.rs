@@ -525,15 +525,14 @@ impl ScoringEngine {
     /// Pairwise chemistry bonus (-1.2..+1.0). Sharper position-proximity
     /// weights so a CB-CB pair (1.0) clearly outweighs a striker-fullback
     /// pair (0.15) — defensive units feel rapport more than far-flung ones.
-    /// Captain proximity adds a small stabiliser; deep-disliked teammates
-    /// in the same unit floor the score so the manager sees the friction.
+    /// Deep-disliked teammates in the same unit floor the score so the
+    /// manager sees the friction.
     pub fn cohesion_bonus(
         &self,
         player: &Player,
         selected_players: &[&Player],
         slot_position: PlayerPositionType,
         slot_group: PlayerFieldPositionGroup,
-        captain_id: Option<u32>,
     ) -> f32 {
         if selected_players.is_empty() {
             return 0.0;
@@ -543,7 +542,6 @@ impl ScoringEngine {
         let mut total = 0.0f32;
         let mut weight_sum = 0.0f32;
         let mut worst_same_unit_rel: Option<f32> = None;
-        let mut captain_stabiliser = 0.0f32;
 
         let player_pos = player.position();
 
@@ -579,24 +577,17 @@ impl ScoringEngine {
                 });
             }
 
-            // Captain stabiliser: a leader in the XI lifts every teammate's
-            // cohesion a touch — only fires for high-leadership captains.
-            if Some(teammate.id) == captain_id && teammate.skills.mental.leadership >= 14.0 {
-                captain_stabiliser = 0.2;
-            }
-
             total += rel_quality * proximity_weight;
             weight_sum += proximity_weight;
         }
 
         if weight_sum == 0.0 {
-            return captain_stabiliser;
+            return 0.0;
         }
 
         let avg = total / weight_sum;
         let scale = 1.0 + p.conservatism * 0.3;
         let mut score = (avg * scale * 2.0).clamp(-1.2, 1.0);
-        score += captain_stabiliser;
 
         // Floor for severe same-unit dislike — even if every other pair is
         // cordial, two CBs at -50 should pull at least -0.4.
@@ -690,7 +681,7 @@ impl ScoringEngine {
 
         b.training_impression = (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
 
-        b.cohesion = self.cohesion_bonus(player, selected_players, slot_position, slot_group, None);
+        b.cohesion = self.cohesion_bonus(player, selected_players, slot_position, slot_group);
 
         b.squad_status = self.squad_status_bonus(player);
         b.force_selection = self.force_selection_bonus(player);

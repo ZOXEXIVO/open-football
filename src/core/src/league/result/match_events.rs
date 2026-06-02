@@ -763,7 +763,7 @@ impl LeagueResult {
                 .main
                 .iter()
                 .filter_map(|id| data.player(*id))
-                .map(LeadershipCandidate::from_player)
+                .map(|p| LeadershipCandidate::from_player_at(p, now))
                 .collect();
             let team_captain_id =
                 MatchdayLeadership::resolve(persistent_captain, persistent_vice, &xi_candidates)

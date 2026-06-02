@@ -62,11 +62,16 @@ fn league_tier_of(ctx: &GlobalContext<'_>, _league_id: Option<u32>) -> u8 {
 }
 
 fn league_tier_multiplier(tier: u8) -> f64 {
+    // Smoothed so a promotion isn't a 3.5x TV windfall overnight. The
+    // old 0.28 step from tier-2 to tier-1 turned a Championship-style
+    // promotion into an instant revenue shock that compounded with the
+    // reputation tier-hop into runaway balance growth. Real broadcast
+    // ladders gap by ~2x between tiers, not 3-5x.
     match tier {
         1 => 1.00,
-        2 => 0.28,
-        3 => 0.10,
-        _ => 0.04,
+        2 => 0.45,
+        3 => 0.20,
+        _ => 0.08,
     }
 }
 
@@ -240,25 +245,32 @@ impl Club {
             * 5_000;
         self.finance.balance.push_expense_facilities(facility_cost);
 
-        // 7. Operating overhead: administration, taxes, community, infrastructure
-        let balance = self.finance.balance.balance;
-        if balance > 1_000_000 {
-            let balance_overhead = (balance as f64 * 0.003) as i64;
-            let tier_overhead: i64 = if let Some(team) = main_team {
-                match team.reputation.level() {
-                    ReputationLevel::Elite => 500_000,
-                    ReputationLevel::Continental => 200_000,
-                    ReputationLevel::National => 80_000,
-                    ReputationLevel::Regional => 30_000,
-                    ReputationLevel::Local => 10_000,
-                    ReputationLevel::Amateur => 3_000,
-                }
-            } else {
-                0
-            };
-            self.finance
-                .balance
-                .push_expense_facilities(balance_overhead + tier_overhead);
+        // 7. Operating overhead: administration, taxes, community,
+        // marketing, infrastructure. Modelled as a fraction of monthly
+        // revenue (the way real-world football clubs' SG&A actually
+        // scales) plus a reputation-tier fixed-cost floor for the
+        // institutional infrastructure that doesn't shrink in a lean
+        // year. The earlier `balance × 0.3%` tax was a wealth check
+        // that barely bit at $20M+ balances ($60K/mo on a $3M/mo
+        // revenue stream), so income outpaced expenses and balances
+        // compounded into rocket-shape growth across the board.
+        let monthly_income = self.finance.balance.income;
+        let revenue_overhead = ((monthly_income.max(0) as f64) * 0.15) as i64;
+        let tier_overhead: i64 = if let Some(team) = main_team {
+            match team.reputation.level() {
+                ReputationLevel::Elite => 800_000,
+                ReputationLevel::Continental => 350_000,
+                ReputationLevel::National => 140_000,
+                ReputationLevel::Regional => 50_000,
+                ReputationLevel::Local => 15_000,
+                ReputationLevel::Amateur => 5_000,
+            }
+        } else {
+            0
+        };
+        let overhead = revenue_overhead + tier_overhead;
+        if overhead > 0 {
+            self.finance.balance.push_expense_facilities(overhead);
         }
 
         // 8. Debt interest: only when the club is genuinely in the red.
@@ -480,9 +492,15 @@ mod helpers_tests {
     #[test]
     fn league_tier_mult_decays_below_top_flight() {
         assert_eq!(league_tier_multiplier(1), 1.00);
-        assert!((league_tier_multiplier(2) - 0.28).abs() < 1e-6);
-        assert!((league_tier_multiplier(3) - 0.10).abs() < 1e-6);
-        assert!((league_tier_multiplier(4) - 0.04).abs() < 1e-6);
+        assert!((league_tier_multiplier(2) - 0.45).abs() < 1e-6);
+        assert!((league_tier_multiplier(3) - 0.20).abs() < 1e-6);
+        assert!((league_tier_multiplier(4) - 0.08).abs() < 1e-6);
+        // Each step down is roughly 2x, not 3-5x — promotion shouldn't
+        // be a TV windfall on its own; the reputation tier-hop alone
+        // does most of the lifting.
+        assert!(league_tier_multiplier(1) > league_tier_multiplier(2));
+        assert!(league_tier_multiplier(2) > league_tier_multiplier(3));
+        assert!(league_tier_multiplier(3) > league_tier_multiplier(4));
     }
 
     #[test]

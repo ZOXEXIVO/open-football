@@ -227,15 +227,19 @@ impl NationalTeam {
         self.elo_rating = (self.elo_rating as i16 + change).clamp(500, 2500) as u16;
     }
 
-    /// Build a MatchSquad from the called-up squad + generated players
-    pub fn build_match_squad(&self, clubs: &[Club]) -> MatchSquad {
+    /// Build a MatchSquad from the called-up squad + generated players.
+    /// `date` drives the matchday-armband age read.
+    pub fn build_match_squad(&self, clubs: &[Club], date: NaiveDate) -> MatchSquad {
         let club_refs: Vec<&Club> = clubs.iter().collect();
-        self.build_match_squad_from_refs(&club_refs)
+        self.build_match_squad_from_refs(&club_refs, date)
     }
 
     /// Build a MatchSquad searching across all provided clubs (including foreign).
-    /// This variant accepts refs so the caller can collect clubs from multiple countries.
-    pub fn build_match_squad_from_refs(&self, clubs: &[&Club]) -> MatchSquad {
+    /// This variant accepts refs so the caller can collect clubs from multiple
+    /// countries. `date` is plumbed through to the matchday-armband resolver so
+    /// the senior leader is picked against the player's age at kickoff rather
+    /// than a guessed "now".
+    pub fn build_match_squad_from_refs(&self, clubs: &[&Club], date: NaiveDate) -> MatchSquad {
         let team_id = self.country_id;
         let team_name = self.country_name.clone();
 
@@ -395,7 +399,7 @@ impl NationalTeam {
         // National teams carry no persistent captaincy hierarchy, so the
         // armband goes to the best leader in the selected XI.
         let (captain_id, vice_captain_id) =
-            MatchdayLeadership::from_match_squad(None, None, &main_squad);
+            MatchdayLeadership::from_match_squad_at(None, None, &main_squad, date);
 
         MatchSquad {
             team_id,
@@ -492,9 +496,11 @@ impl NationalTeam {
             .collect();
 
         // Synthetic opponents have no persistent hierarchy either; pick the
-        // best leader from the generated XI for the armband.
+        // best leader from the generated XI for the armband. `now` is the
+        // anchor every synthetic player's birth date was generated against,
+        // so age reads here line up with how the squad was built.
         let (captain_id, vice_captain_id) =
-            MatchdayLeadership::from_match_squad(None, None, &main_squad);
+            MatchdayLeadership::from_match_squad_at(None, None, &main_squad, now);
 
         MatchSquad {
             team_id,

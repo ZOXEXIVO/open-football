@@ -84,7 +84,7 @@ pub fn build_world_match_squad_for_level(
         .collect();
 
     let country = country_lookup(continents, country_id)?;
-    Some(team_for_level(country, level).build_match_squad_from_refs(&all_clubs))
+    Some(team_for_level(country, level).build_match_squad_from_refs(&all_clubs, date))
 }
 
 /// Pick the national team at `level` from a country.

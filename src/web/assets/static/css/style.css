@@ -299,7 +299,7 @@ a:active {
     gap: 10px;
     padding: 8px 16px;
     color: #6e7b85;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 400;
     transition:
         color 0.12s,
@@ -452,7 +452,7 @@ a:active {
 
 .fm-header-title h1 {
     margin: 0;
-    font-size: 20px;
+    font-size: 23px;
     font-weight: 700;
     color: #1e272d;
     letter-spacing: -0.2px;
@@ -621,10 +621,11 @@ a:active {
 }
 
 .fm-tab {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
     padding: 12px 18px;
-    font-size: 10px;
-    font-weight: 600;
+    font-size: 11px;
+    font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.6px;
     line-height: 1;
@@ -873,7 +874,7 @@ a:active {
 .fm-pt-clubs,
 .fm-pt-clubs a {
     color: #fff;
-    font-size: 13px;
+    font-size: 15px;
 }
 
 .fm-pt-status-grid {
@@ -890,14 +891,14 @@ a:active {
 
 .fm-pt-label {
     color: #7a868e;
-    font-size: 12px;
+    font-size: 15px;
     min-width: 100px;
     flex-shrink: 0;
 }
 
 .fm-pt-value {
     color: #d0d6dc;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 500;
     display: flex;
     flex-wrap: wrap;
@@ -1097,7 +1098,7 @@ a:active {
 .fm-badge {
     display: inline-block;
     padding: 2px 8px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     border-radius: 3px;
     letter-spacing: 0.3px;
@@ -1468,8 +1469,8 @@ a:active {
 
 .fm-standings .st-club a {
     color: #d8dee4;
-    font-weight: 500;
-    font-size: 13px;
+    font-weight: 400;
+    font-size: 16px;
 }
 
 .fm-standings .st-club a:hover {
@@ -1580,8 +1581,8 @@ a:active {
 .fx-home a,
 .fx-away a {
     color: #d8dee4;
-    font-size: 15px;
-    font-weight: 500;
+    font-size: 16px;
+    font-weight: 400;
 }
 
 .fx-home a:hover,
@@ -2140,7 +2141,7 @@ a:active {
 
 .fm-squad tbody td {
     padding: 8px 10px;
-    font-size: 13px;
+    font-size: 16px;
     color: #b0bac2;
     vertical-align: middle;
 }
@@ -2164,7 +2165,7 @@ a:active {
 }
 
 .fm-squad .sq-name a {
-    font-weight: 500;
+    font-weight: 400;
 }
 
 .fm-squad .sq-pos {
@@ -2471,6 +2472,7 @@ a:active {
     scrollbar-width: none;
     -ms-overflow-style: none;
     width: 100%;
+    font-size: 17px;
 }
 
 .fm-ph-id-cols::-webkit-scrollbar {
@@ -2484,7 +2486,7 @@ a:active {
     border-right: 1px solid #263340;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
 }
 
 .fm-ph-id-col:first-child {
@@ -2497,7 +2499,7 @@ a:active {
 }
 
 .fm-ph-id-col:first-child .fm-ph-meta .fm-detail-value {
-    font-size: 13px;
+    font-size: 15px;
     color: #686b6e;
 }
 
@@ -2506,13 +2508,18 @@ a:active {
 }
 
 .fm-ph-contract .fm-detail-value {
-    font-size: 0.8em;
+    font-size: 0.9em;
     color: #686868;
 }
 
 .fm-ph-contract .fm-salary {
     color: #fff;
     margin-right: 6px;
+}
+
+.fm-ph-contract .fm-squad-status {
+    color: #686868;
+    font-weight: 500;
 }
 
 .fm-ph-value {
@@ -2570,7 +2577,7 @@ a:active {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-top: 2px;
+    margin-top: 0;
 }
 
 .fm-ph-nat {
@@ -2590,7 +2597,7 @@ a:active {
 .fm-ph-age {
     font-size: 1em;
     color: #ffffff;
-    font-weight: 500;
+    font-weight: 300;
 }
 
 .fm-ph-born {
@@ -2669,9 +2676,9 @@ a:active {
 }
 
 .fm-detail-label {
-    font-size: 11px;
+    font-size: 15px;
     color: #546a78;
-    font-weight: 600;
+    font-weight: 400;
     white-space: nowrap;
     margin-right: 12px;
     flex-shrink: 0;
@@ -2679,9 +2686,9 @@ a:active {
 }
 
 .fm-detail-value {
-    font-size: 0.9em;
+    font-size: 1em;
     color: #686b6e;
-    font-weight: 500;
+    font-weight: 400;
     text-align: right;
     min-width: 0;
 }
@@ -3067,7 +3074,7 @@ a:active {
 
 .fm-evt-headline {
     margin: 0;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 500;
     line-height: 1.4;
     color: #d8dde2;
@@ -3156,7 +3163,7 @@ a:active {
 .fm-evt-label {
     margin: 0;
     align-self: center;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1.4px;
@@ -3165,8 +3172,8 @@ a:active {
 
 .fm-evt-value {
     margin: 0;
-    font-size: 12px;
-    line-height: 1.45;
+    font-size: 14px;
+    line-height: 1.1;
     color: #b8c0c8;
 }
 
@@ -3315,7 +3322,7 @@ a:active {
 .fm-evt-big .fm-evt-headline {
     font-weight: 700;
     color: #e7ecf1;
-    font-size: 13.5px;
+    font-size: 15px;
 }
 
 .fm-evt-big.fm-evt-positive {
@@ -3923,7 +3930,7 @@ a:active {
 
 .fm-skills td {
     padding: 3px 4px;
-    font-size: 12px;
+    font-size: 14px;
 }
 
 .fm-skills td:first-child {
@@ -4072,7 +4079,7 @@ a:active {
 
 .fm-stats tbody td {
     padding: 9px 8px;
-    font-size: 13px;
+    font-size: 15px;
     color: #a8b6c0;
     text-align: center;
     border-bottom: 1px solid rgba(255, 255, 255, 0.025);
@@ -4081,7 +4088,7 @@ a:active {
 .fm-stats tbody td:first-child {
     text-align: left;
     padding-left: 14px;
-    font-weight: 600;
+    font-weight: 400;
     color: #c0ccd6;
 }
 
@@ -4295,7 +4302,7 @@ a:active {
    rather than a fully-painted strip. */
 .fm-history-table .fm-history-breakdown-row > td {
     color: #c0ccd6;
-    font-size: 11px;
+    font-size: 13px;
     border-top: 1px solid transparent;
     border-bottom: 1px solid transparent;
 }
@@ -4309,7 +4316,7 @@ a:active {
 
 .fm-history-table .fm-history-breakdown-row > td.sq-league {
     color: #e1e7ec;
-    font-weight: 600;
+    font-weight: 400;
 }
 
 /* Subtle 3px rounding on the bottom-left of the panel's last row.
@@ -4982,7 +4989,7 @@ a:active {
     gap: 8px;
     padding: 8px 14px;
     color: #b0bac2;
-    font-size: 14px;
+    font-size: 17px;
     font-weight: 400;
     break-inside: avoid;
     transition:
@@ -5001,8 +5008,8 @@ a:active {
     gap: 10px;
     padding: 10px 14px;
     color: #d8dee4;
-    font-size: 15px;
-    font-weight: 500;
+    font-size: 17px;
+    font-weight: 400;
     border-bottom: 1px solid rgba(255, 255, 255, 0.025);
     transition: background 0.1s;
 }
@@ -6628,7 +6635,7 @@ a:active {
         left: 0;
         bottom: 0;
         height: auto !important;
-        width: 240px !important;
+        width: 270px !important;
         max-width: 80vw;
         z-index: 1050;
         transform: translateX(-100%);

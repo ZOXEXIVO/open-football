@@ -2,13 +2,16 @@ use crate::club::team::MatchdayLeadership;
 use crate::r#match::squad::PlayerSelectionResult;
 use crate::r#match::{MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
 use crate::{Player, Tactics, TacticsSelector, Team};
+use chrono::NaiveDate;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
 impl Team {
     /// Get match squad using rotation — prioritizes players who haven't played recently.
     /// Used for friendly/development leagues where all players need game time.
-    pub fn get_rotation_match_squad(&self) -> MatchSquad {
+    /// `date` drives the matchday-armband age read (a 20-year-old shouldn't
+    /// captain over a 28-year-old even on a rotated rotation/development XI).
+    pub fn get_rotation_match_squad_at(&self, date: NaiveDate) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
 
         let squad_result = SquadSelector::select_for_rotation(self, head_coach);
@@ -21,10 +24,11 @@ impl Team {
 
         self.validate_squad_selection(&squad_result, &final_tactics);
 
-        let (captain_id, vice_captain_id) = MatchdayLeadership::from_match_squad(
+        let (captain_id, vice_captain_id) = MatchdayLeadership::from_match_squad_at(
             self.captain_id,
             self.vice_captain_id,
             &squad_result.main_squad,
+            date,
         );
 
         MatchSquad {
@@ -61,10 +65,11 @@ impl Team {
 
         self.validate_squad_selection(&squad_result, &final_tactics);
 
-        let (captain_id, vice_captain_id) = MatchdayLeadership::from_match_squad(
+        let (captain_id, vice_captain_id) = MatchdayLeadership::from_match_squad_at(
             self.captain_id,
             self.vice_captain_id,
             &squad_result.main_squad,
+            ctx.date,
         );
 
         MatchSquad {
@@ -116,10 +121,11 @@ impl Team {
         // Step 5: Validate squad selection
         self.validate_squad_selection(&squad_result, &final_tactics);
 
-        let (captain_id, vice_captain_id) = MatchdayLeadership::from_match_squad(
+        let (captain_id, vice_captain_id) = MatchdayLeadership::from_match_squad_at(
             self.captain_id,
             self.vice_captain_id,
             &squad_result.main_squad,
+            ctx.date,
         );
 
         MatchSquad {
@@ -180,7 +186,7 @@ impl Team {
         }
     }
 
-    // Matchday captaincy now lives in `MatchdayLeadership::from_match_squad`,
+    // Matchday captaincy now lives in `MatchdayLeadership::from_match_squad_at`,
     // which resolves the armband over the *selected* XI (honouring the
     // persistent club hierarchy on `Team.captain_id` / `vice_captain_id`)
     // rather than scanning the whole roster. See `squad_life/matchday_leadership.rs`.

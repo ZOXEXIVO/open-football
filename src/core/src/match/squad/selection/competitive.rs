@@ -297,7 +297,7 @@ impl SelectionScoringContext<'_> {
 
                 let current_base = self.starting_slot_score(current, slot, available);
                 let current_cohesion =
-                    self.engine.cohesion_bonus(current, &others, slot, group, None);
+                    self.engine.cohesion_bonus(current, &others, slot, group);
 
                 let used_set: HashSet<u32> = used_ids.iter().copied().collect();
 
@@ -324,7 +324,7 @@ impl SelectionScoringContext<'_> {
                         continue;
                     }
                     let cand_cohesion =
-                        self.engine.cohesion_bonus(cand, &others, slot, group, None);
+                        self.engine.cohesion_bonus(cand, &others, slot, group);
                     let cohesion_gain = cand_cohesion - current_cohesion;
                     if cohesion_gain < COHESION_SWAP_MIN_GAIN {
                         continue;

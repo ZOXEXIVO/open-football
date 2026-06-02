@@ -105,7 +105,14 @@ impl ClubFinances {
 
         self.history.add(date, self.balance.clone());
         self.balance.clear();
-        self.home_matches_this_month = 0;
+        // NOTE: home_matches_this_month is intentionally NOT reset here.
+        // `Club::process_monthly_finances` runs AFTER `start_new_month` in
+        // the same month-beginning tick and needs to read the counter
+        // accumulated through the just-ended month to compute matchday
+        // revenue. `take_home_match_count` is the right place to drain
+        // the counter, and it already does. Clearing here meant
+        // process_monthly_finances always saw zero matches and matchday
+        // income silently rounded to $0 for every club, every month.
     }
 
     /// Average monthly player wages charged across the trailing window of

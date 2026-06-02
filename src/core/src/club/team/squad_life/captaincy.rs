@@ -913,17 +913,38 @@ mod tests {
             .unwrap()
     }
 
-    fn xi_candidate(id: u32, leadership: f32) -> LeadershipCandidate {
-        LeadershipCandidate {
-            id,
-            leadership,
-            teamwork: 12.0,
-            determination: 12.0,
-            composure: 12.0,
-            professionalism: 12.0,
-            loyalty: 12.0,
-            reputation: 3000.0,
-            experience: 0.0,
+    /// Matchday-armband test fixtures. Wrapped in a unit struct so the
+    /// captaincy tests share one named home for their XI helpers rather
+    /// than leaking a free fn into the module namespace.
+    struct MatchdayFixture;
+
+    impl MatchdayFixture {
+        /// Neutral XI candidate parked at the peak age band (28) so the
+        /// armband fallback's age curve and penalty bands don't muddy
+        /// attribute-driven assertions.
+        fn xi_candidate(id: u32, leadership: f32) -> LeadershipCandidate {
+            LeadershipCandidate {
+                id,
+                age: 28,
+                position: PlayerPositionType::MidfielderCenter,
+                leadership,
+                teamwork: 12.0,
+                determination: 12.0,
+                composure: 12.0,
+                professionalism: 12.0,
+                loyalty: 12.0,
+                pressure: 12.0,
+                consistency: 12.0,
+                important_matches: 12.0,
+                temperament: 12.0,
+                sportsmanship: 12.0,
+                dirtiness: 6.0,
+                controversy: 6.0,
+                reputation: 3000.0,
+                experience: 0.0,
+                condition_pct: 100.0,
+                jadedness: 0.0,
+            }
         }
     }
 
@@ -1019,7 +1040,10 @@ mod tests {
         assert_eq!(team.vice_captain_id, Some(2));
 
         // Official captain (1) is benched — only 2 and 3 are in the XI.
-        let xi = vec![xi_candidate(2, 14.0), xi_candidate(3, 12.0)];
+        let xi = vec![
+            MatchdayFixture::xi_candidate(2, 14.0),
+            MatchdayFixture::xi_candidate(3, 12.0),
+        ];
         let armband = MatchdayLeadership::resolve(team.captain_id, team.vice_captain_id, &xi);
         assert_eq!(armband.captain_id, Some(2));
     }

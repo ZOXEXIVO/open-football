@@ -774,12 +774,13 @@ mod captaincy_tests {
         let removed_before = count_all(&team, &HappinessEventType::CaptaincyRemoved);
 
         // On-field pool EXCLUDING the official captain (he was benched).
+        let resolve_date = d(2026, 7, 1);
         let xi: Vec<LeadershipCandidate> = team
             .players
             .players
             .iter()
             .filter(|p| p.id != official)
-            .map(LeadershipCandidate::from_player)
+            .map(|p| LeadershipCandidate::from_player_at(p, resolve_date))
             .collect();
         let armband = MatchdayLeadership::resolve(team.captain_id, team.vice_captain_id, &xi);
 
