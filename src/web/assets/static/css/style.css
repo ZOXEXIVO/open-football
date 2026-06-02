@@ -299,7 +299,7 @@ a:active {
     gap: 10px;
     padding: 8px 16px;
     color: #6e7b85;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 400;
     transition:
         color 0.12s,
@@ -6881,6 +6881,10 @@ a:active {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .fm-skills td {
+        font-size: 13px;
     }
 
     .fm-skills-grid .fm-skills td:last-child {
