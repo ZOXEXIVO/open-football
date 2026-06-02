@@ -1470,7 +1470,7 @@ a:active {
 .fm-standings .st-club a {
     color: #d8dee4;
     font-weight: 400;
-    font-size: 16px;
+    font-size: 15px;
 }
 
 .fm-standings .st-club a:hover {
@@ -2141,7 +2141,7 @@ a:active {
 
 .fm-squad tbody td {
     padding: 8px 10px;
-    font-size: 16px;
+    font-size: 15px;
     color: #b0bac2;
     vertical-align: middle;
 }
@@ -4989,7 +4989,7 @@ a:active {
     gap: 8px;
     padding: 8px 14px;
     color: #b0bac2;
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 400;
     break-inside: avoid;
     transition:
