@@ -2495,7 +2495,7 @@ a:active {
 
 .fm-ph-id-col:nth-child(2) {
     flex: 0 0 40%;
-    min-width: 400px;
+    min-width: 300px;
 }
 
 .fm-ph-id-col:first-child .fm-ph-meta .fm-detail-value {
