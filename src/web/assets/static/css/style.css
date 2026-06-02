@@ -1469,7 +1469,7 @@ a:active {
 
 .fm-standings .st-club a {
     color: #d8dee4;
-    font-weight: 400;
+    font-weight: 500;
     font-size: 16px;
 }
 
@@ -2165,7 +2165,7 @@ a:active {
 }
 
 .fm-squad .sq-name a {
-    font-weight: 400;
+    font-weight: 500;
 }
 
 .fm-squad .sq-pos {
@@ -4997,7 +4997,7 @@ a:active {
     padding: 8px 14px;
     color: #b0bac2;
     font-size: 16px;
-    font-weight: 400;
+    font-weight: 500;
     break-inside: avoid;
     transition:
         background 0.1s,
@@ -5016,7 +5016,7 @@ a:active {
     padding: 10px 14px;
     color: #d8dee4;
     font-size: 16px;
-    font-weight: 400;
+    font-weight: 500;
     border-bottom: 1px solid rgba(255, 255, 255, 0.025);
     transition: background 0.1s;
 }
