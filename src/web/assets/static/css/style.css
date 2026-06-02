@@ -2165,7 +2165,7 @@ a:active {
 }
 
 .fm-squad .sq-name a {
-    font-weight: 500;
+    font-weight: 400;
 }
 
 .fm-squad .sq-pos {
@@ -4989,7 +4989,7 @@ a:active {
     gap: 8px;
     padding: 8px 14px;
     color: #b0bac2;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 400;
     break-inside: avoid;
     transition:
