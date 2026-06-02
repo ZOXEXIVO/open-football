@@ -624,7 +624,7 @@ a:active {
     display: inline-flex;
     align-items: center;
     padding: 12px 18px;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.6px;
@@ -5008,7 +5008,7 @@ a:active {
     gap: 10px;
     padding: 10px 14px;
     color: #d8dee4;
-    font-size: 17px;
+    font-size: 15px;
     font-weight: 400;
     border-bottom: 1px solid rgba(255, 255, 255, 0.025);
     transition: background 0.1s;
