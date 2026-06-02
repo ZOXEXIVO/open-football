@@ -6660,7 +6660,11 @@ a:active {
     }
 
     .fm-header-title h1 {
-        font-size: 17px;
+        font-size: 23px;
+    }
+
+    .fm-header-sub {
+        font-size: 15px;
     }
 
     .fm-date {
@@ -6799,7 +6803,7 @@ a:active {
     }
 
     .fm-squad .sq-name a {
-        font-size: 15px;
+        font-size: 14px;
     }
 
     /* Transfers page: stack side-by-side panels */
@@ -6982,11 +6986,15 @@ a:active {
     }
 
     .fm-header-title h1 {
-        font-size: 14px;
+        font-size: 23px;
     }
 
     .fm-header-sub {
-        font-size: 11px;
+        font-size: 15px;
+    }
+
+    .fm-header-sub {
+        font-size: 13px;
     }
 
     .fm-header-actions {
