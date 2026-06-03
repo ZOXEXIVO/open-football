@@ -111,7 +111,6 @@ pub struct PlayerDebugDto {
 pub struct PlayerViewModel {
     pub id: u32,
     pub contract: Option<PlayerContractDto>,
-    pub birth_date: String,
     pub age: u8,
     pub team_slug: String,
     pub team_name: String,
@@ -379,7 +378,6 @@ pub async fn player_get_action(
         let player_vm = PlayerViewModel {
             id: player.id,
             contract,
-            birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
             age: player.age(now),
             team_slug: main_team_slug,
             team_name: main_team_name,
@@ -509,7 +507,6 @@ pub async fn player_get_action(
     let player_vm = PlayerViewModel {
         id: player.id,
         contract: None,
-        birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
         age: player.age(now),
         team_slug: String::new(),
         team_name: String::new(),

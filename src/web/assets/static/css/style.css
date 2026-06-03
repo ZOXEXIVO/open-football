@@ -2490,7 +2490,7 @@ a:active {
 }
 
 .fm-ph-id-col.basic {
-    flex: 0 0 28%;
+    flex: 0 0 20%;
 }
 
 .fm-ph-id-col.contract {
@@ -2499,7 +2499,7 @@ a:active {
 }
 
 .fm-ph-id-col.potential {
-    flex: 0 0 30%;
+    flex: 0 0 40%;
 }
 
 .fm-ph-id-col:first-child {

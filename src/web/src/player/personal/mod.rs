@@ -121,6 +121,7 @@ pub struct ReputationDto {
 }
 
 pub struct PlayerInfoDto {
+    pub birth_date: String,
     pub preferred_foot: String,
     pub leadership: u8,
     pub determination: u8,
@@ -451,6 +452,7 @@ fn get_player_info(player: &Player, i18n: &I18n) -> PlayerInfoDto {
         .collect();
 
     PlayerInfoDto {
+        birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
         preferred_foot: preferred_foot.to_string(),
         leadership,
         determination,
