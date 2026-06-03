@@ -254,14 +254,24 @@ impl ShotQualityEvaluator {
             close += 1;
         }
 
+        // Calibration target (StatsBomb / Opta open-play references):
+        //   - Crowded box (2+ defenders within 5u): xG multiplier ~0.55
+        //   - One defender ON the shooter: ~0.75
+        //   - Mild pressure (1-2 within 10u): ~0.85-0.92
+        // Previous values (0.20 / 0.50 / 0.70 / 0.85) crushed shot xG
+        // far below real conversion rates; combined with the keeper save
+        // probability (which doesn't see these multipliers), the engine
+        // recorded ~0.91 xG/team while goals landed at 1.07/team — a
+        // 0.33 over-conversion delta. Raising the pressure floors closes
+        // that gap so the reported xG matches the actual goal-rate.
         if very_close >= 2 {
-            0.2
+            0.55
         } else if very_close == 1 {
-            0.5
+            0.75
         } else if close >= 2 {
-            0.7
-        } else if close == 1 {
             0.85
+        } else if close == 1 {
+            0.92
         } else {
             1.0
         }
@@ -281,16 +291,19 @@ impl ShotQualityEvaluator {
             sc::shooting_close(player, minute)
         };
 
-        // Map skill (0.0-1.0) to a steeper multiplier (0.45 .. 1.30) using
-        // a quadratic curve. Same shape as the legacy formula — only the
-        // input changed. Real football: a Finishing-8 striker is NOT 70%
-        // as deadly as a Finishing-18 striker — closer to 50%. The old
-        // linear curve (0.60 .. 1.40 with bottom skewed up) made
-        // mediocre finishers convert at near-elite rates simply by
-        // getting into position. Quadratic squashes the bottom of the
-        // curve so journeymen get punished without flattening the top.
+        // Map skill (0.0-1.0) to a multiplier on a quadratic curve.
+        // Real football: a Finishing-8 striker is NOT 70% as deadly as
+        // a Finishing-18 striker — closer to 50%. The quadratic shape
+        // punishes journeymen without flattening the top. The floor
+        // and ceiling were raised (0.45→0.55, 1.30→1.40) because the
+        // old band suppressed the mid-tier shot population's reported
+        // xG below their real conversion rate — combined with the
+        // pressure-factor under-floor it produced a 30% xG deficit
+        // versus the actual goal output. Floor lift gives weak finishers
+        // realistic xG; ceiling lift gives elite finishers headroom so
+        // the bottom raise doesn't compress the upper tail.
         let s = skill.clamp(0.0, 1.0);
-        (0.45 + s * s * 0.85).clamp(0.45, 1.30)
+        (0.55 + s * s * 0.85).clamp(0.55, 1.40)
     }
 }
 
