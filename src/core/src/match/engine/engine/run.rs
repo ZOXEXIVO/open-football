@@ -244,8 +244,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             let minutes = player.minutes_played_at(context.total_match_time);
             let mut stats = player.to_match_end_stats(minutes);
-            stats.match_rating =
-                RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
+            let raw = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
+            stats.match_rating = raw;
+            stats.raw_match_rating = raw;
 
             result.player_stats.insert(player.id, stats);
 
@@ -275,8 +276,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 (away_goals, home_goals)
             };
 
-            stats.match_rating =
-                RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
+            let raw = RatingContext::new(&stats, player_team_goals, opponent_goals).calculate();
+            stats.match_rating = raw;
+            stats.raw_match_rating = raw;
 
             result.player_stats.insert(player_id, stats);
         }

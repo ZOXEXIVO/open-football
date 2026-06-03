@@ -14,7 +14,7 @@
             </div>
             <div class="fm-ph-identity">
                 <div class="fm-ph-id-cols">
-                    <div class="fm-ph-id-col">
+                    <div class="fm-ph-id-col basic">
                         <div class="fm-ph-name-row">
                             <a href="/{{ lang }}/countries/{{ player.country_slug }}" class="fm-ph-flag">
                                 <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
@@ -35,7 +35,7 @@
                         </div>
                         {% endif %}
                     </div>
-                    <div class="fm-ph-id-col">
+                    <div class="fm-ph-id-col contract">
                         {% if let Some(loan) = player.loan_status %}
                         <div class="fm-ph-loan">
                             {% if loan.is_loan_in %}
@@ -73,7 +73,7 @@
                         </div>
                         {% endif %}
                     </div>
-                    <div class="fm-ph-id-col">
+                    <div class="fm-ph-id-col potential">
                         <div class="fm-ph-rating-item">
                             <span class="fm-ph-rlabel">{{ i18n.t("condition") }}</span>
                             <div class="fm-cond">

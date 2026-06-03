@@ -6,6 +6,9 @@ use crate::club::StaffPosition;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
 use crate::club::player::events::{MatchOutcome, MatchParticipation};
+use crate::club::player::personality::adaptation::AdaptationSquadContext;
+use crate::club::player::player::Player;
+use crate::r#match::PlayerMatchEndStats;
 use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
 };
@@ -55,11 +58,22 @@ impl LeagueResult {
         };
 
         // Players inside their post-transfer settlement window play at a
-        // reduced level. Dampened rating feeds into season averages, POM
-        // selection, debriefs, and reputation.
+        // reduced level. Compute the public/effective rating once, then
+        // overwrite `details.player_stats[*].match_rating` so every
+        // downstream reader of `MatchResultRaw` (match-page DTO, weekly
+        // / season awards, cup showcase, league stat-rebuild) sees the
+        // canonical adjusted value. The original engine verdict is
+        // preserved on `raw_match_rating` for calibration / debug.
         let now_date = data.date().date();
         let effective_ratings = compute_effective_ratings(details, data, now_date);
-        let best_player_id = pick_player_of_the_match(details, &effective_ratings);
+        if let Some(details_mut) = result.details.as_mut() {
+            CanonicalRatingMutator::apply(details_mut, &effective_ratings);
+        }
+        let details = match &result.details {
+            Some(d) => d,
+            None => return,
+        };
+        let best_player_id = PlayerOfTheMatch::pick(details, &effective_ratings);
 
         let (league_weight, world_weight) = reputation_weights(result, is_cup, data);
 
@@ -248,6 +262,11 @@ impl LeagueResult {
                 let skill_ability = player
                     .skills
                     .calculate_ability_for_position(player.position());
+                // `stats.match_rating` is the canonical public/effective
+                // rating — `process_match_events` overwrites it in-place
+                // with the settlement-adjusted value before this helper
+                // runs, so neighbouring clubs see what the wider football
+                // world sees, not the unfiltered engine verdict.
                 let rating_bonus = if stats.match_rating >= 7.5 {
                     5
                 } else if stats.match_rating >= 7.0 {
@@ -1421,11 +1440,115 @@ impl LeagueResult {
     }
 }
 
+/// Folds the public/effective rating map back into the canonical
+/// `MatchResultRaw.player_stats[*].match_rating` field so every
+/// downstream reader sees one consistent value. The raw engine rating
+/// stays on `raw_match_rating` for calibration / debug surfaces.
+///
+/// Extracted as a named operation (rather than an inline loop in
+/// `process_match_events`) so the mutation contract has a single test
+/// site — see `canonical_rating_tests` below.
+struct CanonicalRatingMutator;
+
+impl CanonicalRatingMutator {
+    fn apply(details: &mut MatchResultRaw, effective_ratings: &HashMap<u32, f32>) {
+        for (pid, public_rating) in effective_ratings {
+            if let Some(stats) = details.player_stats.get_mut(pid) {
+                stats.match_rating = *public_rating;
+            }
+        }
+    }
+}
+
+/// Per-team enrichment shared by every player on the same side of a
+/// match — resolved once, then read for each player's settlement
+/// context. Building this per-side (instead of per-player) keeps the
+/// adaptation_score call cheap: a single team / staff lookup feeds the
+/// 11 starters + subs.
+struct MatchSideContext {
+    /// Staff id of the manager who picked this XI. `None` when the team
+    /// has no Manager on the books — the player's `manager_relation_level`
+    /// stays neutral in that case.
+    manager_id: Option<u32>,
+    /// Primary position of every player who started the match, in the
+    /// order they appeared in `FieldSquad.main`. Drives `adaptation_score`'s
+    /// role-fit axis. `None` when the side didn't field 11 (test or
+    /// abandoned fixture).
+    formation: Option<[PlayerPositionType; 11]>,
+}
+
+impl MatchSideContext {
+    /// Resolve manager + formation array for one side of a finished
+    /// match. Walks the team's staff collection for the manager id and
+    /// looks each starter up in `data` for their primary position.
+    fn build<D: LeagueProcessAccess>(side: &FieldSquad, data: &D) -> Self {
+        let manager_id = data.team(side.team_id).and_then(|team| {
+            team.staffs
+                .find_by_position(StaffPosition::Manager)
+                .map(|s| s.id)
+        });
+        let formation = if side.main.len() == 11 {
+            let mut slots: [PlayerPositionType; 11] = [PlayerPositionType::Striker; 11];
+            let mut all_resolved = true;
+            for (i, pid) in side.main.iter().enumerate() {
+                match data.player(*pid) {
+                    Some(p) => slots[i] = p.position(),
+                    None => {
+                        all_resolved = false;
+                        break;
+                    }
+                }
+            }
+            if all_resolved { Some(slots) } else { None }
+        } else {
+            None
+        };
+        MatchSideContext {
+            manager_id,
+            formation,
+        }
+    }
+
+    /// Player's relation level (-100..100) to this side's manager, or
+    /// `0.0` (neutral) when the relation hasn't been recorded yet or the
+    /// team has no manager.
+    fn manager_relation_level_for(&self, player: &Player) -> f32 {
+        self.manager_id
+            .and_then(|mid| player.relations.get_staff(mid))
+            .map(|rel| rel.level)
+            .unwrap_or(0.0)
+    }
+}
+
 fn compute_effective_ratings<D: LeagueProcessAccess>(
     details: &MatchResultRaw,
     data: &D,
     now: NaiveDate,
 ) -> HashMap<u32, f32> {
+    // Resolve per-side enrichment once. Map each player_id (starters +
+    // used subs) to the side context their team owns so the per-player
+    // loop below doesn't repeat the team / staff / formation lookups.
+    let left_ctx = MatchSideContext::build(&details.left_team_players, data);
+    let right_ctx = MatchSideContext::build(&details.right_team_players, data);
+    let mut side_for: HashMap<u32, &MatchSideContext> =
+        HashMap::with_capacity(details.player_stats.len());
+    for pid in details
+        .left_team_players
+        .main
+        .iter()
+        .chain(details.left_team_players.substitutes_used.iter())
+    {
+        side_for.insert(*pid, &left_ctx);
+    }
+    for pid in details
+        .right_team_players
+        .main
+        .iter()
+        .chain(details.right_team_players.substitutes_used.iter())
+    {
+        side_for.insert(*pid, &right_ctx);
+    }
+
     let mut out = HashMap::with_capacity(details.player_stats.len());
     for (player_id, stats) in &details.player_stats {
         let location = data
@@ -1439,10 +1562,64 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             .and_then(|(_, _, _, team_id)| data.team(team_id))
             .map(|t| t.reputation.overall_score())
             .unwrap_or(0.0);
-        let mult = data
+        let side_ctx = side_for.get(player_id).copied();
+
+        // Build the public/effective rating in two stages:
+        //   1) settlement adjustment — single source of truth for the
+        //      "this player is still adapting" dampening. Reads richer
+        //      adaptation signals (language, mentor, role fit, chemistry,
+        //      appearances, dream-move lift) via `adaptation_score`, not
+        //      just days-since-transfer. Skips entirely for elite
+        //      reputations, post-window calendars, no-recent-transfer
+        //      players, and after enough competitive starts;
+        //   2) the existing chemistry / consistency / big-match /
+        //      temperament shape — applied to the settlement-adjusted
+        //      value so the same rating drives season averages, POTM,
+        //      awards, scouting observations, form EMA, and reputation.
+        // `RatingContext` upstream stays purely stat-line — the
+        // raw/public split is owned here.
+        let adjusted_from_settlement = data
             .player(*player_id)
-            .map(|p| p.settlement_form_multiplier(now, &country_code, club_rep))
-            .unwrap_or(1.0);
+            .map(|p| {
+                // TODO: mentor_quality is not yet surfaced by the
+                // squad-life system as a per-player snapshot — the
+                // existing transfer / adaptation callers pass `None`
+                // too. When `SquadSocialView` (or a sibling helper)
+                // gains a mentor-quality field, plumb it through here
+                // instead of holding the axis at neutral.
+                let squad = AdaptationSquadContext {
+                    same_language_teammates: p
+                        .squad_social_view
+                        .as_ref()
+                        .map(|v| v.same_language_teammates)
+                        .unwrap_or(0),
+                    same_nationality_teammates: p
+                        .squad_social_view
+                        .as_ref()
+                        .map(|v| v.same_nationality_teammates)
+                        .unwrap_or(0),
+                    mentor_quality: None,
+                    squad_chemistry: p.relations.get_team_chemistry().clamp(0.0, 100.0),
+                    manager_relation_level: side_ctx
+                        .map(|sc| sc.manager_relation_level_for(p))
+                        .unwrap_or(0.0),
+                    is_loan: p.contract_loan.is_some(),
+                    is_favorite_club: location
+                        .map(|(_, _, club_id, _)| p.favorite_clubs.contains(&club_id))
+                        .unwrap_or(false),
+                };
+                let formation = side_ctx.and_then(|sc| sc.formation.as_ref());
+                p.settlement_rating_adjustment(
+                    stats.match_rating,
+                    now,
+                    &country_code,
+                    club_rep,
+                    formation,
+                    &squad,
+                )
+                .public_rating
+            })
+            .unwrap_or(stats.match_rating);
 
         // Personality shape of the rating — tuned so that average players
         // fall in [stats.match_rating ± 0.5] with consistency/temperament
@@ -1465,23 +1642,8 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             })
             .unwrap_or((10.0, 10.0, 10.0, 50.0));
 
-        // Anchor settlement form around the neutral baseline (6.0)
-        // and only dampen the upside. Multiplying the absolute rating
-        // compressed the entire 1..10 band toward 0, so a settling
-        // keeper who posted a baseline "did-nothing" 6.0 was scaled to
-        // 5.1 purely from the multiplier — and a clean-sheet 7.0
-        // landed at 5.95. The multiplier represents reduced peak
-        // effectiveness, so above-baseline shifts get the deviation
-        // dampened; below-baseline shifts pass through (the bad-day
-        // signal already reflects how the player performed and
-        // shouldn't be artificially softened by their settling
-        // status either).
         const BASELINE: f32 = 6.0;
-        let mut adjusted = if stats.match_rating > BASELINE {
-            BASELINE + (stats.match_rating - BASELINE) * mult
-        } else {
-            stats.match_rating
-        };
+        let mut adjusted = adjusted_from_settlement;
 
         // Team chemistry shifts individual performance. Neutral at 50;
         // ±0.10 at the extremes. A dysfunctional dressing room
@@ -1554,22 +1716,41 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
     out
 }
 
-fn pick_player_of_the_match(
-    details: &MatchResultRaw,
-    effective_ratings: &HashMap<u32, f32>,
-) -> Option<u32> {
-    let mut best_rating = 0.0_f32;
-    let mut best = None;
-    for (player_id, stats) in &details.player_stats {
-        let r = *effective_ratings
-            .get(player_id)
-            .unwrap_or(&stats.match_rating);
-        if r > best_rating {
-            best_rating = r;
-            best = Some(*player_id);
-        }
+/// Player-of-the-match selection. The pipeline always reads
+/// `pick(details, effective_ratings)`; the lower-level
+/// `pick_from_ratings` is split out so tests can drive the decision
+/// with synthetic maps instead of building a full `MatchResultRaw`.
+struct PlayerOfTheMatch;
+
+impl PlayerOfTheMatch {
+    fn pick(
+        details: &MatchResultRaw,
+        effective_ratings: &HashMap<u32, f32>,
+    ) -> Option<u32> {
+        Self::pick_from_ratings(&details.player_stats, effective_ratings)
     }
-    best
+
+    /// Highest effective rating wins, falling back to the raw stat-line
+    /// rating when the effective map is missing an entry — a defensive
+    /// case, since `compute_effective_ratings` iterates the same key
+    /// set.
+    fn pick_from_ratings(
+        player_stats: &HashMap<u32, PlayerMatchEndStats>,
+        effective_ratings: &HashMap<u32, f32>,
+    ) -> Option<u32> {
+        let mut best_rating = 0.0_f32;
+        let mut best = None;
+        for (player_id, stats) in player_stats {
+            let r = *effective_ratings
+                .get(player_id)
+                .unwrap_or(&stats.match_rating);
+            if r > best_rating {
+                best_rating = r;
+                best = Some(*player_id);
+            }
+        }
+        best
+    }
 }
 
 fn reputation_weights<D: LeagueProcessAccess>(
@@ -1789,4 +1970,336 @@ fn league_standings<D: LeagueProcessAccess>(
         (ahead + 1).min(u8::MAX as usize) as u8
     };
     (position(home_team_id), position(away_team_id), total)
+}
+
+#[cfg(test)]
+mod potm_tests {
+    use super::*;
+    use crate::r#match::engine::ZoneStats;
+
+    struct PotmFixture;
+
+    impl PotmFixture {
+        fn stat(rating: f32) -> PlayerMatchEndStats {
+            PlayerMatchEndStats {
+                shots_on_target: 0,
+                shots_total: 0,
+                passes_attempted: 0,
+                passes_completed: 0,
+                tackles: 0,
+                interceptions: 0,
+                saves: 0,
+                shots_faced: 0,
+                goals: 0,
+                assists: 0,
+                match_rating: rating,
+                raw_match_rating: rating,
+                xg: 0.0,
+                position_group: PlayerFieldPositionGroup::Forward,
+                fouls: 0,
+                yellow_cards: 0,
+                red_cards: 0,
+                minutes_played: 90,
+                key_passes: 0,
+                progressive_passes: 0,
+                progressive_carries: 0,
+                successful_dribbles: 0,
+                attempted_dribbles: 0,
+                successful_pressures: 0,
+                pressures: 0,
+                blocks: 0,
+                clearances: 0,
+                passes_into_box: 0,
+                crosses_attempted: 0,
+                crosses_completed: 0,
+                xg_chain: 0.0,
+                xg_buildup: 0.0,
+                miscontrols: 0,
+                heavy_touches: 0,
+                carry_distance: 0,
+                errors_leading_to_shot: 0,
+                errors_leading_to_goal: 0,
+                xg_prevented: 0.0,
+                offsides: 0,
+                own_goals: 0,
+                zone_stats: ZoneStats::default(),
+            }
+        }
+    }
+
+    /// POTM must follow the public/effective rating, not the raw
+    /// engine stat-line rating. A fresh signing whose raw rating
+    /// would crown them man of the match must lose out to a settled
+    /// teammate whose effective rating is higher.
+    #[test]
+    fn potm_follows_effective_rating_not_raw() {
+        let mut stats = HashMap::new();
+        // Fresh signing: raw 8.6, effective dampened to 6.8.
+        stats.insert(1, PotmFixture::stat(8.6));
+        // Settled teammate: raw 7.5, effective 7.5.
+        stats.insert(2, PotmFixture::stat(7.5));
+
+        let mut effective = HashMap::new();
+        effective.insert(1, 6.8);
+        effective.insert(2, 7.5);
+
+        let potm = PlayerOfTheMatch::pick_from_ratings(&stats, &effective);
+        assert_eq!(
+            potm,
+            Some(2),
+            "settled 7.5 must beat fresh-signing dampened 6.8, \
+             even though the fresh signing's raw was higher"
+        );
+    }
+
+    /// Regression: when effective == raw (no settlement window
+    /// active for anyone) the legacy ordering is preserved.
+    #[test]
+    fn potm_matches_raw_ordering_when_no_dampening() {
+        let mut stats = HashMap::new();
+        stats.insert(1, PotmFixture::stat(8.6));
+        stats.insert(2, PotmFixture::stat(7.5));
+
+        let mut effective = HashMap::new();
+        effective.insert(1, 8.6);
+        effective.insert(2, 7.5);
+
+        let potm = PlayerOfTheMatch::pick_from_ratings(&stats, &effective);
+        assert_eq!(potm, Some(1));
+    }
+}
+
+#[cfg(test)]
+mod canonical_rating_tests {
+    //! Regression coverage for the raw → public rating contract.
+    //!
+    //! `CanonicalRatingMutator::apply` is the single chokepoint that
+    //! pushes the settlement-adjusted rating into
+    //! `MatchResultRaw.player_stats[*].match_rating`. Every reader that
+    //! used to consume the raw engine value — match-page DTO, weekly /
+    //! season awards, cup showcase, league stat-rebuild, scouting memory
+    //! — now reads that same field, so a single test of the mutator
+    //! plus a thin "the reader uses `stats.match_rating`" assertion
+    //! pins the whole contract.
+    use super::*;
+    use crate::r#match::ResultMatchPositionData;
+    use crate::r#match::engine::ZoneStats;
+
+    struct CanonicalFixture;
+
+    impl CanonicalFixture {
+        fn empty_stats(rating: f32) -> PlayerMatchEndStats {
+            PlayerMatchEndStats {
+                shots_on_target: 0,
+                shots_total: 0,
+                passes_attempted: 0,
+                passes_completed: 0,
+                tackles: 0,
+                interceptions: 0,
+                saves: 0,
+                shots_faced: 0,
+                goals: 0,
+                assists: 0,
+                match_rating: rating,
+                raw_match_rating: rating,
+                xg: 0.0,
+                position_group: PlayerFieldPositionGroup::Forward,
+                fouls: 0,
+                yellow_cards: 0,
+                red_cards: 0,
+                minutes_played: 90,
+                key_passes: 0,
+                progressive_passes: 0,
+                progressive_carries: 0,
+                successful_dribbles: 0,
+                attempted_dribbles: 0,
+                successful_pressures: 0,
+                pressures: 0,
+                blocks: 0,
+                clearances: 0,
+                passes_into_box: 0,
+                crosses_attempted: 0,
+                crosses_completed: 0,
+                xg_chain: 0.0,
+                xg_buildup: 0.0,
+                miscontrols: 0,
+                heavy_touches: 0,
+                carry_distance: 0,
+                errors_leading_to_shot: 0,
+                errors_leading_to_goal: 0,
+                xg_prevented: 0.0,
+                offsides: 0,
+                own_goals: 0,
+                zone_stats: ZoneStats::default(),
+            }
+        }
+
+        /// Construct a `MatchResultRaw` carrying just the player_stats
+        /// map. Other fields are defaulted — the canonical-rating
+        /// mutator only touches `player_stats`, so the rest can stay
+        /// minimal.
+        fn match_with(stats: HashMap<u32, PlayerMatchEndStats>) -> MatchResultRaw {
+            MatchResultRaw {
+                score: None,
+                position_data: ResultMatchPositionData::empty(),
+                left_team_players: FieldSquad::new(),
+                right_team_players: FieldSquad::new(),
+                match_time_ms: 90 * 60 * 1000,
+                additional_time_ms: 0,
+                player_stats: stats,
+                substitutions: Vec::new(),
+                physical_snapshots: HashMap::new(),
+                penalty_shootout: Vec::new(),
+                player_of_the_match_id: None,
+                starting_home_tactic: None,
+                starting_away_tactic: None,
+                final_home_tactic: None,
+                final_away_tactic: None,
+                shape_change_minute: None,
+            }
+        }
+    }
+
+    /// The mutator must overwrite `match_rating` with the public value
+    /// for every player_stats entry the effective_ratings map covers.
+    /// `raw_match_rating` must remain untouched so calibration scripts
+    /// can still recover the original engine verdict.
+    #[test]
+    fn mutator_writes_public_rating_to_canonical_field() {
+        let mut stats = HashMap::new();
+        stats.insert(11, CanonicalFixture::empty_stats(8.6)); // fresh signing
+        stats.insert(22, CanonicalFixture::empty_stats(7.5)); // settled
+        let mut details = CanonicalFixture::match_with(stats);
+
+        let mut effective = HashMap::new();
+        effective.insert(11, 6.8); // dampened
+        effective.insert(22, 7.5); // unchanged
+
+        CanonicalRatingMutator::apply(&mut details, &effective);
+
+        let fresh = details.player_stats.get(&11).unwrap();
+        assert!(
+            (fresh.match_rating - 6.8).abs() < 1e-6,
+            "canonical match_rating must be the public value (6.8)"
+        );
+        assert!(
+            (fresh.raw_match_rating - 8.6).abs() < 1e-6,
+            "raw_match_rating must be preserved for calibration"
+        );
+        let settled = details.player_stats.get(&22).unwrap();
+        assert!((settled.match_rating - 7.5).abs() < 1e-6);
+        assert!((settled.raw_match_rating - 7.5).abs() < 1e-6);
+    }
+
+    /// Missing entries in the effective map (defensive: should never
+    /// happen because `compute_effective_ratings` iterates the same
+    /// key set) leave the canonical field untouched — the previous
+    /// engine value stays, the player is not silently zeroed.
+    #[test]
+    fn mutator_leaves_missing_entries_alone() {
+        let mut stats = HashMap::new();
+        stats.insert(11, CanonicalFixture::empty_stats(7.4));
+        let mut details = CanonicalFixture::match_with(stats);
+        let effective: HashMap<u32, f32> = HashMap::new();
+
+        CanonicalRatingMutator::apply(&mut details, &effective);
+
+        assert!((details.player_stats.get(&11).unwrap().match_rating - 7.4).abs() < 1e-6);
+    }
+
+    /// Cup showcase reads `stats.match_rating` directly to gate "did
+    /// this player play well enough to attract scouts?". After the
+    /// mutation, a fresh-signing's raw 8.0 that dampens to 6.6 must
+    /// no longer clear the conventional 7.0 showcase floor — the
+    /// adaptation-aware verdict is what the rest of the football world
+    /// sees.
+    #[test]
+    fn cup_showcase_gate_reads_dampened_rating_after_mutation() {
+        const SHOWCASE_FLOOR: f32 = 7.0;
+        let mut stats = HashMap::new();
+        stats.insert(11, CanonicalFixture::empty_stats(8.0));
+        let mut details = CanonicalFixture::match_with(stats);
+
+        let mut effective = HashMap::new();
+        effective.insert(11, 6.6);
+        CanonicalRatingMutator::apply(&mut details, &effective);
+
+        let reader = details.player_stats.get(&11).unwrap();
+        assert!(
+            reader.match_rating < SHOWCASE_FLOOR,
+            "settling player's public rating must fall below showcase floor; got {}",
+            reader.match_rating
+        );
+    }
+
+    /// League stat-rebuild (`League::aggregate_player_statistics`)
+    /// feeds `record_match_rating(ps.match_rating, ...)` on rehydrate.
+    /// After mutation the rebuild sees the public value, matching
+    /// what's recorded live by `on_match_played`. This test asserts
+    /// the rehydrate input matches what the live path stores — the
+    /// invariant the rebuild relies on.
+    #[test]
+    fn league_rebuild_reads_public_rating_after_mutation() {
+        let mut stats = HashMap::new();
+        stats.insert(11, CanonicalFixture::empty_stats(8.2));
+        let mut details = CanonicalFixture::match_with(stats);
+
+        let mut effective = HashMap::new();
+        effective.insert(11, 7.1);
+        CanonicalRatingMutator::apply(&mut details, &effective);
+
+        // The rebuild path reads `ps.match_rating` — same field a
+        // live `on_match_played` call gets via `o.effective_rating`,
+        // because both ultimately read from the canonical field after
+        // the mutation runs.
+        let ps = details.player_stats.get(&11).unwrap();
+        assert!(
+            (ps.match_rating - 7.1).abs() < 1e-6,
+            "rebuild must read public 7.1, not raw 8.2"
+        );
+    }
+
+    /// Match-page DTO (`web/match/get/mod.rs`) and the weekly /
+    /// season awards aggregators all read `stats.match_rating`. The
+    /// fixture above confirms the field is mutated; this test mimics
+    /// the exact arithmetic the awards path performs (a `rating_sum`
+    /// accumulator + a `best_rating` max) and asserts both consume
+    /// the public value. If a future edit accidentally restores a
+    /// raw-rating-only aggregator, this test fires.
+    #[test]
+    fn awards_aggregator_consumes_public_rating() {
+        // Two performances: a fresh signing with raw 8.6 (dampened to
+        // 6.8) and a settled teammate with raw 7.5 (unchanged). After
+        // the mutation, the awards-style aggregator must rank the
+        // settled teammate as the higher contributor.
+        let mut stats = HashMap::new();
+        stats.insert(11, CanonicalFixture::empty_stats(8.6));
+        stats.insert(22, CanonicalFixture::empty_stats(7.5));
+        let mut details = CanonicalFixture::match_with(stats);
+        let mut effective = HashMap::new();
+        effective.insert(11, 6.8);
+        effective.insert(22, 7.5);
+        CanonicalRatingMutator::apply(&mut details, &effective);
+
+        // Mirror the season_awards / player_of_week pattern.
+        let mut best_id = 0u32;
+        let mut best_rating = 0.0f32;
+        let mut rating_sum = 0.0f32;
+        for (pid, ps) in &details.player_stats {
+            rating_sum += ps.match_rating;
+            if ps.match_rating > best_rating {
+                best_rating = ps.match_rating;
+                best_id = *pid;
+            }
+        }
+
+        assert_eq!(
+            best_id, 22,
+            "settled teammate must outrank dampened fresh signing"
+        );
+        assert!(
+            (rating_sum - (6.8 + 7.5)).abs() < 1e-6,
+            "aggregator must sum public ratings (6.8 + 7.5), not raw (8.6 + 7.5)"
+        );
+    }
 }

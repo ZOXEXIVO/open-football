@@ -201,19 +201,20 @@ impl Player {
         }
 
         // Minutes-weighted rolling average — a 10-minute cameo no
-        // longer counts the same as a 90-minute start. We record the
-        // *raw* `stats.match_rating` (the engine's on-pitch verdict)
-        // rather than `effective_rating` (the settlement / chemistry /
-        // consistency / big-match adjusted value) so the season
-        // average a user sees on the player overview agrees with
-        // every per-match rating shown in the match panels. The
-        // effective_rating still drives the contextual events
-        // downstream (POM selection, manager talks, fan reactions,
-        // reputation deltas) — that's where the adjusted value
-        // belongs.
+        // longer counts the same as a 90-minute start. We feed the
+        // ledger the *effective* (post-settlement, post-personality)
+        // rating so the season average, awards, POTM, scouting
+        // observations, form EMA, and reputation deltas all read the
+        // same number. The raw engine rating stays on `stats` for
+        // diagnostics / calibration but is no longer the public face
+        // of "how the player did" — otherwise a fresh signing could
+        // farm a high season average from raw 8s while every
+        // downstream consumer of `effective_rating` saw the dampened
+        // value, leaving the user staring at two different numbers
+        // for the same match.
         let is_starter = matches!(o.participation, MatchParticipation::Starter);
         s.record_match_rating(
-            o.stats.match_rating,
+            o.effective_rating,
             o.stats.minutes_played as u16,
             is_starter,
         );

@@ -318,6 +318,7 @@ impl MatchPlayer {
             goals: self.statistics.goals_count(),
             assists: self.statistics.assists_count(),
             match_rating: 0.0,
+            raw_match_rating: 0.0,
             xg: self.memory.xg_total,
             position_group: self.tactical_position.current_position.position_group(),
             fouls: self.fouls_committed as u16,

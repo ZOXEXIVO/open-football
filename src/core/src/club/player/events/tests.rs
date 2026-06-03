@@ -65,6 +65,7 @@ fn stats(
         goals,
         assists,
         match_rating: rating,
+        raw_match_rating: rating,
         xg: 0.0,
         position_group: group,
         fouls: 0,
@@ -5914,3 +5915,72 @@ mod relationship_arc {
         assert_eq!(inner.focal_player_id, Some(7));
     }
 }
+
+// ── on_match_played records the public/effective rating ──────────
+//
+// The settlement-rating contract: every visible rating surface
+// (season average, form EMA, awards) reads the **effective** rating
+// — not the raw stat-line value. Regression coverage so a future
+// edit can't quietly re-introduce the split where averages showed
+// raw 8s while morale events used the dampened number.
+
+#[test]
+fn on_match_played_records_effective_rating_into_season_average() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    // Raw 8.0 from the engine, but the public/effective rating that
+    // the league pipeline computed for this player is 7.0 (a fresh
+    // signing inside the settlement window). The ledger must follow
+    // the effective rating.
+    let s = stats(8.0, 1, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        7.0,
+        /* is_friendly */ false,
+        /* is_cup */ false,
+        /* is_motm */ false,
+        /* is_derby */ false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+
+    let avg = p.statistics.average_rating_raw();
+    assert!(
+        (avg - 7.0).abs() < 0.02,
+        "season average must track effective_rating (7.0), got {} \
+         (would be ~8.0 if the raw value leaked through)",
+        avg
+    );
+}
+
+#[test]
+fn on_match_played_form_and_average_agree_under_effective_rating() {
+    // Three matches at effective=7.2 (raw=8.0): season average and
+    // form EMA should both settle near 7.2, never 8.0. Confirms the
+    // averaging surface uses the same number the form EMA does.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(8.0, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    for _ in 0..3 {
+        let o = outcome(
+            &s,
+            7.2,
+            false,
+            false,
+            false,
+            false,
+            1,
+            0,
+            MatchParticipation::Starter,
+        );
+        p.on_match_played(&o);
+    }
+
+    let avg = p.statistics.average_rating_raw();
+    assert!(
+        (avg - 7.2).abs() < 0.05,
+        "average should sit near effective 7.2, got {}",
+        avg
+    );
+}
+

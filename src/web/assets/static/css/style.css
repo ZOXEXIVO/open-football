@@ -2481,7 +2481,6 @@ a:active {
 }
 
 .fm-ph-id-col {
-    flex: 0 0 33.333%;
     min-width: 200px;
     padding: 4px 18px;
     border-right: 1px solid #263340;
@@ -2490,13 +2489,21 @@ a:active {
     gap: 3px;
 }
 
-.fm-ph-id-col:first-child {
-    padding-left: 0;
+.fm-ph-id-col.basic {
+    flex: 0 0 28%;
 }
 
-.fm-ph-id-col:nth-child(2) {
-    flex: 0 0 40%;
-    min-width: 300px;
+.fm-ph-id-col.contract {
+    flex: 1 1 auto;
+    min-width: 350px;
+}
+
+.fm-ph-id-col.potential {
+    flex: 0 0 30%;
+}
+
+.fm-ph-id-col:first-child {
+    padding-left: 0;
 }
 
 .fm-ph-id-col:first-child .fm-ph-meta .fm-detail-value {
@@ -6763,6 +6770,15 @@ a:active {
         gap: 6px 24px;
     }
 
+    .fm-ph-name-row .fm-ph-sep,
+    .fm-ph-name-row .fm-ph-born {
+        display: none;
+    }
+
+    .fm-ph-id-col.basic {
+        min-width: 190px;
+    }
+
     /* Wide tables: horizontal scroll via wrapper-less approach.
        display:grid ensures .fm-panel-head stretches to the widest child (the table)
        so the gradient background covers the full scrollable width. */
@@ -6989,6 +7005,10 @@ a:active {
 }
 
 @media (max-width: 575.98px) {
+    .fm-ph-id-col.basic {
+        min-width: 190px;
+    }
+
     .fm-header {
         min-height: 52px;
         padding-left: 0;

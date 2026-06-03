@@ -104,6 +104,43 @@ pub struct AdaptationSquadContext {
 /// it per save, route through the config instead.
 pub const SETTLEMENT_WINDOW_DAYS: i64 = 84;
 
+/// Why a settlement adjustment skipped or passed through. Carried back to
+/// callers (and tests) so the bypass branch is observable instead of
+/// silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettlementBypassReason {
+    /// Raw rating already at or below the 6.0 baseline — bad days are
+    /// real and never softened by settling status.
+    BelowBaseline,
+    /// Player has no `last_transfer_date` (long-tenured, academy
+    /// graduate, intra-club move). Adaptation has nothing to do.
+    NoRecentTransfer,
+    /// Days since transfer ≥ [`SETTLEMENT_WINDOW_DAYS`].
+    PastSettlementWindow,
+    /// Elite / top-reputation player — the move doesn't meaningfully
+    /// affect their on-pitch ceiling.
+    EliteReputation,
+    /// Enough competitive appearances since the move that the player has
+    /// demonstrably settled regardless of calendar days.
+    EnoughAppearances,
+}
+
+/// Outcome of [`Player::settlement_rating_adjustment`]. Carries both the
+/// raw engine rating (kept for diagnostics / calibration) and the public
+/// rating that downstream UI / awards / averages should use.
+#[derive(Debug, Clone, Copy)]
+pub struct SettlementRatingAdjustment {
+    pub raw_rating: f32,
+    pub public_rating: f32,
+    /// Effective multiplier applied to the (raw - 6.0) above-baseline
+    /// component. `1.0` means pass-through (either bypass branch or
+    /// fully-settled).
+    pub multiplier: f32,
+    /// `None` when the adaptation multiplier actually fired; `Some(_)`
+    /// when one of the bypass branches handled the rating.
+    pub bypass_reason: Option<SettlementBypassReason>,
+}
+
 /// Context left on the player by transfer execution. Consumed the next
 /// time the player simulates — that's where shock events, role-fit checks
 /// and the implicit playing-time promise are emitted. Keeping this as
@@ -210,6 +247,167 @@ impl Player {
         } else {
             base.clamp(0.78, 1.02)
         }
+    }
+
+    /// Build the public/effective rating for a single match by dampening
+    /// the above-baseline portion of the engine's stat-line rating during
+    /// the post-transfer settlement window. Anchored at the neutral 6.0
+    /// baseline:
+    ///
+    /// ```text
+    ///   public = 6.0 + (raw - 6.0) * mult,  raw > 6.0
+    ///   public = raw,                       raw ≤ 6.0
+    /// ```
+    ///
+    /// Below-baseline ratings always pass through — a bad day at a new
+    /// club is still a bad day, and softening it would let settling
+    /// status mask poor performances. The multiplier itself is derived
+    /// from [`Player::adaptation_score`] (richer than days-since-transfer
+    /// alone) via [`Player::settlement_form_multiplier_from_adaptation`].
+    ///
+    /// Bypass branches (all return `multiplier = 1.0`):
+    ///   * the raw rating is at or below baseline;
+    ///   * no recent transfer (`last_transfer_date == None`) — long-tenured
+    ///     players and intra-club youth/main reassignments fall here;
+    ///   * past [`SETTLEMENT_WINDOW_DAYS`] since the move;
+    ///   * elite-reputation veteran whose ceiling isn't reset by a move;
+    ///   * ≥8 competitive starts since joining — appearances trump the
+    ///     calendar.
+    ///
+    /// Output is clamped to the rating band by the caller; this helper
+    /// returns the anchored value directly so tests can read the exact
+    /// multiplier × deviation.
+    pub fn settlement_rating_adjustment(
+        &self,
+        raw_rating: f32,
+        now: NaiveDate,
+        country_code: &str,
+        club_rep_0_to_1: f32,
+        formation: Option<&[PlayerPositionType; 11]>,
+        squad: &AdaptationSquadContext,
+    ) -> SettlementRatingAdjustment {
+        const BASELINE: f32 = 6.0;
+
+        // Below-baseline passes through. Bad games are bad games.
+        if raw_rating <= BASELINE {
+            return SettlementRatingAdjustment {
+                raw_rating,
+                public_rating: raw_rating,
+                multiplier: 1.0,
+                bypass_reason: Some(SettlementBypassReason::BelowBaseline),
+            };
+        }
+
+        let days = self.days_since_transfer(now);
+        match days {
+            None => {
+                return SettlementRatingAdjustment {
+                    raw_rating,
+                    public_rating: raw_rating,
+                    multiplier: 1.0,
+                    bypass_reason: Some(SettlementBypassReason::NoRecentTransfer),
+                };
+            }
+            Some(d) if d >= SETTLEMENT_WINDOW_DAYS => {
+                return SettlementRatingAdjustment {
+                    raw_rating,
+                    public_rating: raw_rating,
+                    multiplier: 1.0,
+                    bypass_reason: Some(SettlementBypassReason::PastSettlementWindow),
+                };
+            }
+            _ => {}
+        }
+
+        // Elite bypass — a world-class player's on-pitch ceiling doesn't
+        // need a settling-in period. Two routes in:
+        //   * very top of the game (Ballon-d'Or-tier reputation + ability)
+        //     — Mbappé to Real Madrid doesn't post 6.4 for two months;
+        //   * elite-adaptable + locally-fluent — a high-adaptability star
+        //     who already speaks the language slots in without the dip.
+        // The signals are read off the player only, so the helper stays
+        // self-contained for tests.
+        if self.is_elite_settlement_bypass(country_code) {
+            return SettlementRatingAdjustment {
+                raw_rating,
+                public_rating: raw_rating,
+                multiplier: 1.0,
+                bypass_reason: Some(SettlementBypassReason::EliteReputation),
+            };
+        }
+
+        // Appearance acceleration — the spec asks for the first 3-8
+        // competitive appearances to matter more than raw calendar days.
+        // Weight competitive involvement so a starter accrues trust
+        // faster than a sub: every start counts 1.0, every sub
+        // appearance 0.5. An 8-start spell clears the gate at once; a
+        // pure-sub spell needs ~16 cameos to reach the same bar — which
+        // matches the football intuition that nine 90-minute starts
+        // demonstrate "settled" more clearly than nine 10-minute
+        // cameos. `adaptation_score` already lifts +20 across the
+        // first 5 apps + 5 starts; this gate is the upper end of the
+        // band.
+        const APPEARANCE_BYPASS_WEIGHT: f32 = 8.0;
+        const SUB_APP_WEIGHT: f32 = 0.5;
+        let starts = self.statistics.played as f32;
+        let sub_apps = self.statistics.played_subs as f32;
+        let weighted_involvement = starts + sub_apps * SUB_APP_WEIGHT;
+        if weighted_involvement >= APPEARANCE_BYPASS_WEIGHT {
+            return SettlementRatingAdjustment {
+                raw_rating,
+                public_rating: raw_rating,
+                multiplier: 1.0,
+                bypass_reason: Some(SettlementBypassReason::EnoughAppearances),
+            };
+        }
+
+        // Active settling window: read the richer adaptation signal and
+        // map it through the existing tiered multiplier. Cap at 1.0 here
+        // — a dream-move lift inflating the public match rating is the
+        // wrong contract; that lift already shows up in morale events.
+        let score = self.adaptation_score(now, country_code, club_rep_0_to_1, formation, squad);
+        let mut mult = self.settlement_form_multiplier_from_adaptation(score, false);
+        if mult > 1.0 {
+            mult = 1.0;
+        }
+        let public_rating = BASELINE + (raw_rating - BASELINE) * mult;
+        SettlementRatingAdjustment {
+            raw_rating,
+            public_rating,
+            multiplier: mult,
+            bypass_reason: None,
+        }
+    }
+
+    /// True when the player is in the "top of the game" band that skips
+    /// the settlement dampening entirely. Self-contained read of
+    /// reputation / ability / adaptability / local-language — never
+    /// touches the squad or environment so it's safe to call from any
+    /// call site that already has a `&Player`.
+    fn is_elite_settlement_bypass(&self, country_code: &str) -> bool {
+        let world_rep = self.player_attributes.world_reputation;
+        let current_ability = self.player_attributes.current_ability;
+        let adaptability = self.attributes.adaptability;
+        let intl_apps = self.player_attributes.international_apps;
+
+        // Ballon-d'Or-tier: top reputation AND top current ability. The
+        // AND is deliberate — a young high-rep prospect (high reputation
+        // from hype) with average current ability is still settling.
+        if world_rep >= 8500 && current_ability >= 170 {
+            return true;
+        }
+        // Established international with elite adaptability speaking the
+        // local language — these players genuinely don't experience the
+        // dip. International apps as a proxy for "has played under
+        // pressure abroad before" without overlapping the elite gate.
+        if self.speaks_local_language(country_code)
+            && adaptability >= 16.0
+            && current_ability >= 150
+            && intl_apps >= 20
+        {
+            return true;
+        }
+        false
     }
 
     /// Derived 0..100 adaptation score. Read by:
@@ -3494,5 +3692,423 @@ mod transfer_environment_tests {
         p.process_transfer_shock(now, 0.55, 5500, "es", None);
         assert_eq!(count(&p, HappinessEventType::DreamMove), 0);
         assert_eq!(count(&p, HappinessEventType::DreamLoanOpportunity), 0);
+    }
+}
+
+#[cfg(test)]
+mod settlement_rating_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::language::PlayerLanguage;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
+    };
+
+    /// Synthetic player blueprint — the few attributes that drive the
+    /// settlement-rating decision (age, adaptability, reputation,
+    /// ability, international caps, languages spoken). Everything else
+    /// is held at neutral defaults via `SettlementFixture`.
+    struct PlayerSpec {
+        age: u8,
+        adaptability: f32,
+        world_rep: i16,
+        ca: u8,
+        intl_apps: u16,
+        languages: Vec<PlayerLanguage>,
+    }
+
+    impl PlayerSpec {
+        fn average_foreigner() -> Self {
+            PlayerSpec {
+                age: 24,
+                adaptability: 10.0,
+                world_rep: 4000,
+                ca: 140,
+                intl_apps: 5,
+                languages: Vec::new(),
+            }
+        }
+
+        fn elite_world_star() -> Self {
+            PlayerSpec {
+                age: 27,
+                adaptability: 18.0,
+                world_rep: 9500,
+                ca: 185,
+                intl_apps: 80,
+                languages: Vec::new(),
+            }
+        }
+
+        fn isolated_foreigner() -> Self {
+            PlayerSpec {
+                age: 22,
+                adaptability: 5.0,
+                world_rep: 3000,
+                ca: 130,
+                intl_apps: 2,
+                languages: Vec::new(),
+            }
+        }
+    }
+
+    /// Test fixture builder. Holds the synthetic "today" and exposes
+    /// every helper the rating tests need so the test bodies read as
+    /// thin orchestration of the helper API.
+    struct SettlementFixture;
+
+    impl SettlementFixture {
+        fn today() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 4, 26).unwrap()
+        }
+
+        fn date(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn empty_squad() -> AdaptationSquadContext {
+            AdaptationSquadContext::default()
+        }
+
+        fn build(spec: &PlayerSpec) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.world_reputation = spec.world_rep;
+            attrs.current_reputation = spec.world_rep;
+            attrs.current_ability = spec.ca;
+            attrs.potential_ability = spec.ca;
+            attrs.international_apps = spec.intl_apps;
+            let person = PersonAttributes {
+                adaptability: spec.adaptability,
+                ambition: 12.0,
+                controversy: 10.0,
+                loyalty: 10.0,
+                pressure: 10.0,
+                professionalism: 12.0,
+                sportsmanship: 10.0,
+                temperament: 10.0,
+                consistency: 10.0,
+                important_matches: 10.0,
+                dirtiness: 10.0,
+            };
+            let birth = Self::today()
+                .checked_sub_signed(chrono::Duration::days(spec.age as i64 * 365))
+                .unwrap();
+            let mut p = PlayerBuilder::new()
+                .id(42)
+                .full_name(FullName::new("Test".into(), "Player".into()))
+                .birth_date(birth)
+                .country_id(1)
+                .attributes(person)
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Striker,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap();
+            p.languages = spec.languages.clone();
+            p
+        }
+    }
+
+    /// (1) A fresh, average foreign signing on day 0 posts raw 8.0:
+    /// the public rating must be meaningfully dampened but stay above
+    /// the neutral 6.0 baseline. The adaptation system shouldn't erase
+    /// a great game, only soften how the outside world reads it.
+    #[test]
+    fn fresh_foreign_signing_day_zero_dampens_above_baseline() {
+        let mut p = SettlementFixture::build(&PlayerSpec::average_foreigner());
+        let signing = SettlementFixture::today();
+        p.last_transfer_date = Some(signing);
+
+        let adj = p.settlement_rating_adjustment(
+            8.0,
+            signing,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+
+        assert!(adj.bypass_reason.is_none(), "active settlement expected");
+        assert!(adj.multiplier < 1.0, "should dampen; got {}", adj.multiplier);
+        assert!(
+            adj.public_rating < 8.0 - 0.15,
+            "public rating should be noticeably below raw 8.0; got {}",
+            adj.public_rating
+        );
+        assert!(
+            adj.public_rating > 6.0,
+            "public rating must stay above baseline; got {}",
+            adj.public_rating
+        );
+    }
+
+    /// (2) After the full settlement window the same player passes
+    /// through unchanged — the dampening must be finite and recover.
+    #[test]
+    fn after_settlement_window_passes_through() {
+        let mut p = SettlementFixture::build(&PlayerSpec::average_foreigner());
+        let signing = SettlementFixture::date(2026, 1, 1);
+        p.last_transfer_date = Some(signing);
+        let now = signing + chrono::Duration::days(SETTLEMENT_WINDOW_DAYS);
+
+        let adj = p.settlement_rating_adjustment(
+            8.0,
+            now,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+
+        assert_eq!(
+            adj.bypass_reason,
+            Some(SettlementBypassReason::PastSettlementWindow)
+        );
+        assert!((adj.public_rating - 8.0).abs() < 1e-6);
+        assert!((adj.multiplier - 1.0).abs() < 1e-6);
+    }
+
+    /// (3) Elite world star on day 0 — the public match rating must
+    /// not be dampened. Top-tier players slot in immediately; the dip
+    /// the spec asks for is reserved for average and below players.
+    #[test]
+    fn elite_player_bypasses_dampening_day_zero() {
+        let mut p = SettlementFixture::build(&PlayerSpec::elite_world_star());
+        let signing = SettlementFixture::today();
+        p.last_transfer_date = Some(signing);
+
+        let adj = p.settlement_rating_adjustment(
+            8.5,
+            signing,
+            "es",
+            0.95,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+
+        assert_eq!(
+            adj.bypass_reason,
+            Some(SettlementBypassReason::EliteReputation)
+        );
+        assert!((adj.public_rating - 8.5).abs() < 1e-6);
+    }
+
+    /// (4) Low-adaptability foreign player with no social support
+    /// gets a *stronger* penalty than the average foreigner reference
+    /// case — the richer adaptation signal must actually move the
+    /// needle on top of days-since-transfer.
+    #[test]
+    fn low_adaptability_dampens_more_than_average() {
+        let signing = SettlementFixture::today();
+
+        let mut avg = SettlementFixture::build(&PlayerSpec::average_foreigner());
+        avg.last_transfer_date = Some(signing);
+        let avg_adj = avg.settlement_rating_adjustment(
+            8.0,
+            signing,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+
+        let mut bad = SettlementFixture::build(&PlayerSpec::isolated_foreigner());
+        bad.last_transfer_date = Some(signing);
+        let bad_adj = bad.settlement_rating_adjustment(
+            8.0,
+            signing,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+
+        assert!(
+            bad_adj.multiplier < avg_adj.multiplier,
+            "isolated low-adapt signing should dampen MORE than average — \
+             bad={} avg={}",
+            bad_adj.multiplier,
+            avg_adj.multiplier
+        );
+        assert!(bad_adj.public_rating < avg_adj.public_rating);
+    }
+
+    /// (5) A poor raw rating (5.4) must NEVER be softened by the
+    /// settlement multiplier — bad days at a new club are still bad
+    /// days. This is the asymmetric-dampening invariant.
+    #[test]
+    fn below_baseline_rating_is_never_softened() {
+        let mut p = SettlementFixture::build(&PlayerSpec::isolated_foreigner());
+        let signing = SettlementFixture::today();
+        p.last_transfer_date = Some(signing);
+
+        let adj = p.settlement_rating_adjustment(
+            5.4,
+            signing,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+
+        assert_eq!(
+            adj.bypass_reason,
+            Some(SettlementBypassReason::BelowBaseline)
+        );
+        assert!((adj.public_rating - 5.4).abs() < 1e-6);
+        assert!((adj.multiplier - 1.0).abs() < 1e-6);
+    }
+
+    /// (6) No `last_transfer_date` (long-tenured player / academy
+    /// graduate / intra-club youth-to-main move) bypasses entirely.
+    /// Confirms the intra-club-move invariant: those code paths don't
+    /// touch `last_transfer_date`, so they fall in this branch
+    /// naturally.
+    #[test]
+    fn no_recent_transfer_bypasses() {
+        let p = SettlementFixture::build(&PlayerSpec::average_foreigner());
+        // No last_transfer_date set.
+        let adj = p.settlement_rating_adjustment(
+            7.5,
+            SettlementFixture::today(),
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+
+        assert_eq!(
+            adj.bypass_reason,
+            Some(SettlementBypassReason::NoRecentTransfer)
+        );
+        assert!((adj.public_rating - 7.5).abs() < 1e-6);
+    }
+
+    /// (7) Appearance acceleration — once a player has 8+ competitive
+    /// starts at the new club they've demonstrably settled, regardless
+    /// of how far through the calendar window they are. The spec asks
+    /// for the first 3-8 appearances to matter more than days.
+    #[test]
+    fn enough_appearances_bypasses_within_window() {
+        let mut p = SettlementFixture::build(&PlayerSpec::average_foreigner());
+        let signing = SettlementFixture::today();
+        p.last_transfer_date = Some(signing);
+        // 8 starts — clears the gate even on day 7 inside the window.
+        p.statistics.played = 8;
+        let now = signing + chrono::Duration::days(7);
+
+        let adj = p.settlement_rating_adjustment(
+            8.0,
+            now,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+
+        assert_eq!(
+            adj.bypass_reason,
+            Some(SettlementBypassReason::EnoughAppearances)
+        );
+        assert!((adj.public_rating - 8.0).abs() < 1e-6);
+    }
+
+    /// (8) Weighted involvement — 8 sub appearances are NOT enough to
+    /// trip the appearance bypass on their own (8 cameos × 0.5 = 4.0,
+    /// below the 8.0 threshold), but 8 starts ARE. Confirms the
+    /// "starters settle faster than cameo-only subs" rule the spec
+    /// asks for.
+    #[test]
+    fn sub_apps_accelerate_less_than_starts() {
+        let signing = SettlementFixture::today();
+
+        let mut starter = SettlementFixture::build(&PlayerSpec::average_foreigner());
+        starter.last_transfer_date = Some(signing);
+        starter.statistics.played = 8;
+        starter.statistics.played_subs = 0;
+        let starter_adj = starter.settlement_rating_adjustment(
+            8.0,
+            signing,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+        assert_eq!(
+            starter_adj.bypass_reason,
+            Some(SettlementBypassReason::EnoughAppearances),
+            "8 starts must trip appearance bypass"
+        );
+
+        let mut sub_only = SettlementFixture::build(&PlayerSpec::average_foreigner());
+        sub_only.last_transfer_date = Some(signing);
+        sub_only.statistics.played = 0;
+        sub_only.statistics.played_subs = 8;
+        let sub_adj = sub_only.settlement_rating_adjustment(
+            8.0,
+            signing,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+        assert!(
+            sub_adj.bypass_reason != Some(SettlementBypassReason::EnoughAppearances),
+            "8 sub apps alone (worth 4.0 weighted) must not trip the gate"
+        );
+        // Still dampens — bypass is "settled", not "below baseline".
+        assert!(
+            sub_adj.public_rating < starter_adj.public_rating,
+            "sub-only spell should still see settlement dampening; starter does not"
+        );
+    }
+
+    /// (9) Crossover point — 4 starts + 8 sub apps (= 4 + 4 = 8.0)
+    /// trips the bypass; 4 starts + 7 sub apps (= 4 + 3.5 = 7.5) does
+    /// not. Pins the weighted formula to a concrete boundary so future
+    /// edits notice if they shift it.
+    #[test]
+    fn weighted_appearance_threshold_crossover() {
+        let signing = SettlementFixture::today();
+
+        let mut at_threshold = SettlementFixture::build(&PlayerSpec::average_foreigner());
+        at_threshold.last_transfer_date = Some(signing);
+        at_threshold.statistics.played = 4;
+        at_threshold.statistics.played_subs = 8;
+        let adj_at = at_threshold.settlement_rating_adjustment(
+            8.0,
+            signing,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+        assert_eq!(
+            adj_at.bypass_reason,
+            Some(SettlementBypassReason::EnoughAppearances)
+        );
+
+        let mut just_under = SettlementFixture::build(&PlayerSpec::average_foreigner());
+        just_under.last_transfer_date = Some(signing);
+        just_under.statistics.played = 4;
+        just_under.statistics.played_subs = 7;
+        let adj_under = just_under.settlement_rating_adjustment(
+            8.0,
+            signing,
+            "es",
+            0.45,
+            None,
+            &SettlementFixture::empty_squad(),
+        );
+        assert!(
+            adj_under.bypass_reason != Some(SettlementBypassReason::EnoughAppearances),
+            "4 starts + 7 sub apps = 7.5 must stay just under the 8.0 bar"
+        );
     }
 }

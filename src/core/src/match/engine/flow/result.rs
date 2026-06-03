@@ -82,7 +82,24 @@ pub struct PlayerMatchEndStats {
     pub shots_faced: u16,
     pub goals: u16,
     pub assists: u16,
+    /// Public/effective match rating. This is the value every downstream
+    /// reader (match page DTO, awards, scouting showcase, league stat
+    /// rebuild, season averages) consumes. The engine writes the pure
+    /// stat-line value here at first; the league pipeline then overwrites
+    /// it with the settlement-adjusted public rating in
+    /// `process_match_events` so there's a single canonical field across
+    /// the codebase. The original engine rating is preserved on
+    /// `raw_match_rating` for diagnostics / calibration scripts.
     pub match_rating: f32,
+    /// Pure stat-line rating produced by `RatingContext::calculate()`,
+    /// frozen before settlement / chemistry / personality adjustments
+    /// rewrite `match_rating`. Kept reachable for calibration tests and
+    /// debug surfaces that need the unfiltered engine verdict. Defaults
+    /// to `0.0` when deserialised from a save written before this field
+    /// existed — readers should treat `0.0` as "raw rating not recorded
+    /// separately" and fall back to `match_rating`.
+    #[serde(default)]
+    pub raw_match_rating: f32,
     /// Sum of expected goals from this player's shots in this match.
     pub xg: f32,
     /// Player's position group for position-aware rating calculation.

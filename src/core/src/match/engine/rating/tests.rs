@@ -25,6 +25,7 @@ fn make_stats(
         saves,
         shots_faced: 0,
         match_rating: 0.0,
+        raw_match_rating: 0.0,
         xg,
         position_group,
         fouls: 0,

@@ -371,6 +371,7 @@ mod tests {
             goals: 0,
             assists: 0,
             match_rating: 6.0,
+            raw_match_rating: 6.0,
             xg: 0.0,
             position_group: PlayerFieldPositionGroup::Midfielder,
             fouls: 0,
