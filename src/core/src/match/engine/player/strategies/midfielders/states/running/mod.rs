@@ -134,11 +134,19 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // has hogged (>6 attempts) this falls through to the
                 // willingness roll like everyone else, so it can't be abused.
                 let sp = ctx.player().shooting().shot_profile();
+                // Lowered xG bar from 0.12 → 0.085. A midfielder arriving
+                // centrally with a clear sight of goal in standard range
+                // (≤52u, edge of box) at xG ~0.10 is a quintessential
+                // box-to-box chance — the previous bar of 0.12 made the
+                // tier near-unreachable, leaving midfielders dependent on
+                // the forward-tuned willingness roll. Effect on goal
+                // distribution: MID share lifts from ~10% toward the
+                // realistic ~30% without touching forward behaviour.
                 let clear_good = distance_to_goal <= STANDARD_SHOOTING_DISTANCE
                     && coach.shooting_reluctance() < 0.5
                     && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
-                    && sp.expected_xg(distance_to_goal, true) >= 0.12;
+                    && sp.expected_xg(distance_to_goal, true) >= 0.085;
                 if clear_good && ctx.memory().shots_taken <= 6 {
                     #[cfg(feature = "match-logs")]
                     {

@@ -237,7 +237,14 @@ impl ShotQualityEvaluator {
                 }
             }
 
-            0.85 // Default GK present factor
+            // Default GK-present factor — lifted from 0.85. The engine's
+            // average on-target→goal rate is ~29% (real ~30%, so actual
+            // conversion is calibrated), but the reported xG/team was
+            // ~0.89 vs the realistic ~1.3 baseline because every shot
+            // multiplied through this generic GK-present floor. 0.92
+            // matches Opta's reference: an "ordinary" defensive setup
+            // damps xG by ~8%, not 15%.
+            0.92
         } else {
             1.5 // No GK spotted - open goal
         }
