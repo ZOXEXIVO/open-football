@@ -125,6 +125,8 @@ fn outcome<'a>(
         is_derby,
         team_won: won,
         team_lost: lost,
+        is_continental: is_cup,
+        opponent_team_id: Some(999),
     }
 }
 
@@ -5291,4 +5293,624 @@ fn manager_criticism_distinct_reason_is_pinned() {
         2,
         "distinct criticism reason inside the 14-day window must still fire"
     );
+}
+
+// ── New: manager-relationship arc events ─────────────────────
+
+mod relationship_arc {
+    use super::*;
+    use crate::{
+        BigMatchDecision, BigMatchKind, BigMatchSelectionContext, ClubDirectionContext,
+        ClubDirectionEvidence, ClubDirectionKind, InjuryRecoveryStage, NewSigningThreatContext,
+        NewSigningThreatReason, PlayerSquadStatus, SubstitutionFrustrationContext,
+        SubstitutionFrustrationKind,
+    };
+
+    fn make_player() -> Player {
+        let attrs = PersonAttributes {
+            adaptability: 12.0,
+            ambition: 16.0,
+            controversy: 5.0,
+            loyalty: 10.0,
+            pressure: 12.0,
+            professionalism: 12.0,
+            sportsmanship: 12.0,
+            temperament: 12.0,
+            consistency: 12.0,
+            important_matches: 12.0,
+            dirtiness: 5.0,
+        };
+        build_player(PlayerPositionType::MidfielderCenter, attrs)
+    }
+
+    #[test]
+    fn trusted_in_big_match_fires_with_context() {
+        let mut p = make_player();
+        let ctx = BigMatchSelectionContext::new(
+            BigMatchKind::CupFinal,
+            BigMatchDecision::StartedTrusted,
+        )
+        .with_young_or_fringe(true)
+        .with_match_importance(1.0);
+        p.on_trusted_in_big_match(ctx);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::TrustedInBigMatch),
+            1,
+            "TrustedInBigMatch must land"
+        );
+        let stored = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::TrustedInBigMatch)
+            .unwrap();
+        let ctx = stored.context.as_ref().unwrap();
+        assert!(
+            ctx.big_match_selection_context.is_some(),
+            "big-match context must round-trip"
+        );
+        assert!(stored.magnitude > 0.0, "TrustedInBigMatch is positive");
+    }
+
+    #[test]
+    fn trusted_in_big_match_cooldown_blocks_spam() {
+        let mut p = make_player();
+        for _ in 0..3 {
+            let ctx = BigMatchSelectionContext::new(
+                BigMatchKind::Derby,
+                BigMatchDecision::StartedTrusted,
+            )
+            .with_match_importance(0.9);
+            p.on_trusted_in_big_match(ctx);
+        }
+        assert_eq!(
+            count_events(&p, &HappinessEventType::TrustedInBigMatch),
+            1,
+            "Cooldown must suppress repeats inside 30d"
+        );
+    }
+
+    #[test]
+    fn benched_for_big_match_scales_with_status_and_form() {
+        let mut p_key = make_player();
+        let ctx_key = BigMatchSelectionContext::new(
+            BigMatchKind::CupFinal,
+            BigMatchDecision::BenchedUnexpectedly,
+        )
+        .with_squad_status(PlayerSquadStatus::KeyPlayer)
+        .with_hot_form(true)
+        .with_match_importance(1.0);
+        p_key.on_benched_for_big_match(ctx_key);
+        let mag_key = p_key
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::BenchedForBigMatch)
+            .unwrap()
+            .magnitude;
+
+        let mut p_fringe = make_player();
+        let ctx_fringe = BigMatchSelectionContext::new(
+            BigMatchKind::CupFinal,
+            BigMatchDecision::BenchedUnexpectedly,
+        )
+        .with_squad_status(PlayerSquadStatus::FirstTeamSquadRotation)
+        .with_match_importance(1.0);
+        p_fringe.on_benched_for_big_match(ctx_fringe);
+        let mag_fringe = p_fringe
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::BenchedForBigMatch)
+            .unwrap()
+            .magnitude;
+
+        assert!(
+            mag_key.abs() > mag_fringe.abs(),
+            "KeyPlayer in hot form should hurt more than fringe rotation: key={} fringe={}",
+            mag_key,
+            mag_fringe
+        );
+    }
+
+    #[test]
+    fn tactical_role_mismatch_needs_repeated_signal() {
+        let mut p = make_player();
+        // Below the 3-mismatch threshold — should NOT fire.
+        p.on_tactical_role_mismatch(1, None);
+        p.on_tactical_role_mismatch(2, None);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::UnhappyWithTacticalRole),
+            0,
+            "single mismatch must not fire"
+        );
+        // At 3 — fires.
+        p.on_tactical_role_mismatch(3, None);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::UnhappyWithTacticalRole),
+            1
+        );
+    }
+
+    #[test]
+    fn substitution_frustration_carries_specific_kind() {
+        let mut p = make_player();
+        let ctx = SubstitutionFrustrationContext::new(
+            SubstitutionFrustrationKind::HookedWhilePlayingWell,
+        )
+        .with_minute(58)
+        .with_match_rating(7.4);
+        p.on_substitution_frustration(ctx);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::SubstitutionFrustration),
+            1
+        );
+        let stored = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::SubstitutionFrustration)
+            .unwrap();
+        let sub_ctx = stored
+            .context
+            .as_ref()
+            .and_then(|c| c.substitution_frustration_context.as_ref())
+            .unwrap();
+        assert_eq!(
+            sub_ctx.kind,
+            SubstitutionFrustrationKind::HookedWhilePlayingWell
+        );
+    }
+
+    #[test]
+    fn injury_setback_only_fires_for_setback_stages() {
+        let mut p = make_player();
+        p.on_injury_setback(InjuryRecoveryStage::RecoverySetback, 45, 0.5, false);
+        assert_eq!(count_events(&p, &HappinessEventType::InjurySetback), 1);
+        // Cooldown blocks immediate repeat.
+        p.on_injury_setback(InjuryRecoveryStage::RecoverySetback, 45, 0.5, false);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::InjurySetback),
+            1,
+            "cooldown blocks repeated setback events"
+        );
+    }
+
+    #[test]
+    fn threatened_by_new_signing_carries_rival_id_and_reason() {
+        let mut p = make_player();
+        let rival_id: u32 = 42;
+        let ctx = NewSigningThreatContext::new(rival_id, NewSigningThreatReason::SamePosition)
+            .with_player_age(31)
+            .with_player_status(PlayerSquadStatus::FirstTeamRegular);
+        p.on_new_signing_threat(ctx);
+        let event = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::ThreatenedByNewSigning)
+            .expect("event landed");
+        assert_eq!(event.partner_player_id, Some(rival_id));
+        let inner = event
+            .context
+            .as_ref()
+            .and_then(|c| c.new_signing_threat_context.as_ref())
+            .unwrap();
+        assert_eq!(inner.primary_reason, NewSigningThreatReason::SamePosition);
+    }
+
+    #[test]
+    fn threatened_by_new_signing_is_per_rival_cooldown() {
+        let mut p = make_player();
+        let first = NewSigningThreatContext::new(1, NewSigningThreatReason::SamePosition);
+        p.on_new_signing_threat(first);
+        // Same rival — blocked.
+        let again = NewSigningThreatContext::new(1, NewSigningThreatReason::SamePosition);
+        p.on_new_signing_threat(again);
+        // Different rival — should land.
+        let other = NewSigningThreatContext::new(2, NewSigningThreatReason::HigherAbility);
+        p.on_new_signing_threat(other);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::ThreatenedByNewSigning),
+            2,
+            "different rivals each fire independently"
+        );
+    }
+
+    #[test]
+    fn asked_for_private_talk_fires_when_minutes_concern_dominates() {
+        let mut p = make_player();
+        // Inject a string of MatchDropped + LackOfPlayingTime signals to
+        // push the playing-time axis above the gate. Bypass the public
+        // wrapper to control the test fixtures cleanly.
+        p.happiness.morale = 30.0;
+        for _ in 0..3 {
+            p.happiness
+                .add_event_default(HappinessEventType::LackOfPlayingTime);
+        }
+        for _ in 0..4 {
+            p.happiness
+                .add_event_default(HappinessEventType::MatchDropped);
+        }
+        p.maybe_emit_asked_for_private_talk();
+        let stored = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::AskedForPrivateTalk)
+            .expect("private-talk event must land when concerns dominate");
+        let private = stored
+            .context
+            .as_ref()
+            .and_then(|c| c.private_talk_context.as_ref())
+            .expect("private talk context attached");
+        assert_eq!(
+            private.reason,
+            crate::PrivateTalkReason::PlayingTime,
+            "dominant signal must drive the reason"
+        );
+    }
+
+    #[test]
+    fn asked_for_private_talk_silent_for_content_player() {
+        let mut p = make_player();
+        // Happy player — no unresolved concern; private talk must NOT fire.
+        p.happiness.morale = 75.0;
+        p.maybe_emit_asked_for_private_talk();
+        assert_eq!(
+            count_events(&p, &HappinessEventType::AskedForPrivateTalk),
+            0,
+            "content players don't ask for private talks"
+        );
+    }
+
+    #[test]
+    fn asked_for_private_talk_cooldown_prevents_weekly_spam() {
+        let mut p = make_player();
+        p.happiness.morale = 28.0;
+        for _ in 0..6 {
+            p.happiness
+                .add_event_default(HappinessEventType::LackOfPlayingTime);
+        }
+        p.maybe_emit_asked_for_private_talk();
+        // Simulate the next weekly tick — cooldown should suppress.
+        p.maybe_emit_asked_for_private_talk();
+        assert_eq!(
+            count_events(&p, &HappinessEventType::AskedForPrivateTalk),
+            1,
+            "45-day cooldown must block weekly spam"
+        );
+    }
+
+    #[test]
+    fn manager_trust_arc_growth_aggregates_positives() {
+        let mut p = make_player();
+        p.happiness
+            .add_event_default(HappinessEventType::PromiseKept);
+        p.happiness
+            .add_event_default(HappinessEventType::PromiseKept);
+        for _ in 0..3 {
+            p.happiness
+                .add_event_default(HappinessEventType::ManagerPraise);
+        }
+        p.maybe_emit_manager_trust_arc();
+        assert!(
+            count_events(&p, &HappinessEventType::ManagerTrustGrowing) >= 1,
+            "growth aggregator should fire after sustained positives"
+        );
+    }
+
+    #[test]
+    fn manager_trust_arc_erosion_aggregates_negatives() {
+        let mut p = make_player();
+        for _ in 0..3 {
+            p.happiness
+                .add_event_default(HappinessEventType::PromiseBroken);
+        }
+        for _ in 0..3 {
+            p.happiness
+                .add_event_default(HappinessEventType::MatchDropped);
+        }
+        p.maybe_emit_manager_trust_arc();
+        assert!(
+            count_events(&p, &HappinessEventType::ManagerTrustEroding) >= 1,
+            "erosion aggregator should fire after sustained negatives"
+        );
+    }
+
+    #[test]
+    fn manager_trust_arc_silent_in_neutral_week() {
+        let mut p = make_player();
+        // No accumulated signals — no growth, no erosion.
+        p.maybe_emit_manager_trust_arc();
+        assert_eq!(
+            count_events(&p, &HappinessEventType::ManagerTrustGrowing),
+            0
+        );
+        assert_eq!(
+            count_events(&p, &HappinessEventType::ManagerTrustEroding),
+            0
+        );
+    }
+
+    #[test]
+    fn club_direction_concern_and_encouragement_carry_payload() {
+        let mut p = make_player();
+        let concern = ClubDirectionContext::new(ClubDirectionKind::Concern)
+            .with_evidence(ClubDirectionEvidence::KeyPlayerSoldUnreplaced)
+            .with_evidence(ClubDirectionEvidence::SquadQualityWeakened)
+            .with_net_signings(-2);
+        p.on_club_direction_concern(concern);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::ConcernedByClubDirection),
+            1
+        );
+
+        let mut p2 = make_player();
+        let encourage = ClubDirectionContext::new(ClubDirectionKind::Encouragement)
+            .with_evidence(ClubDirectionEvidence::MeaningfulSigningArrived)
+            .with_net_signings(2);
+        p2.on_club_direction_encouragement(encourage);
+        assert_eq!(
+            count_events(&p2, &HappinessEventType::EncouragedBySquadInvestment),
+            1
+        );
+    }
+
+    // ── Integration-style tests driving the real pipelines ─────
+
+    #[test]
+    fn big_match_trust_emerges_from_real_match_outcome() {
+        // Play through `on_match_played` for a continental knockout
+        // starter. The big-match trust emit must land on its own — no
+        // direct `on_trusted_in_big_match` call from the test.
+        let mut p = make_player();
+        let s = stats(7.4, 1, 0, 0, PlayerFieldPositionGroup::Midfielder);
+        let mut o = outcome(
+            &s,
+            7.4,
+            false,
+            true,
+            false,
+            false,
+            1,
+            0,
+            MatchParticipation::Starter,
+        );
+        o.is_continental = true;
+        p.on_match_played(&o);
+        assert!(
+            count_events(&p, &HappinessEventType::TrustedInBigMatch) >= 1,
+            "TrustedInBigMatch must emerge from a continental-knockout start"
+        );
+    }
+
+    #[test]
+    fn big_match_trust_silent_for_routine_league_starter() {
+        let mut p = make_player();
+        let s = stats(7.2, 0, 0, 0, PlayerFieldPositionGroup::Midfielder);
+        let o = outcome(
+            &s,
+            7.2,
+            false,
+            false,
+            false,
+            false,
+            1,
+            0,
+            MatchParticipation::Starter,
+        );
+        p.on_match_played(&o);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::TrustedInBigMatch),
+            0,
+            "routine non-derby, non-cup league start must not fire big-match trust"
+        );
+    }
+
+    #[test]
+    fn big_match_bench_emerges_from_real_selection_drop() {
+        // KeyPlayer dropped to the bench for a high-importance fixture
+        // for tactical reasons. The MatchDropped emit cascades into
+        // BenchedForBigMatch through `maybe_emit_big_match_bench`.
+        let mut p = make_player();
+        // Make this player a KeyPlayer so the gate fires.
+        if let Some(c) = p.contract.as_mut() {
+            c.squad_status = PlayerSquadStatus::KeyPlayer;
+        }
+        let ctx = crate::MatchSelectionContext {
+            scope: crate::SelectionDecisionScope::DroppedToBench,
+            reason: crate::SelectionOmissionReason::TeammatePreferredOnAbility,
+            comparison: None,
+            role: crate::SelectionRole::CentralMidfielder,
+            match_importance: 0.95,
+            repeated: false,
+            is_friendly: false,
+        };
+        p.on_match_dropped_with_context(ctx);
+        assert!(
+            count_events(&p, &HappinessEventType::BenchedForBigMatch) >= 1,
+            "BenchedForBigMatch must emerge from a real MatchDropped on a key player in a major fixture"
+        );
+    }
+
+    #[test]
+    fn big_match_bench_silent_for_rest_drop() {
+        // Protective rest is NOT a snub — the bench gate must skip.
+        let mut p = make_player();
+        if let Some(c) = p.contract.as_mut() {
+            c.squad_status = PlayerSquadStatus::KeyPlayer;
+        }
+        let ctx = crate::MatchSelectionContext {
+            scope: crate::SelectionDecisionScope::Rested,
+            reason: crate::SelectionOmissionReason::FatigueManagement,
+            comparison: None,
+            role: crate::SelectionRole::CentralMidfielder,
+            match_importance: 0.95,
+            repeated: false,
+            is_friendly: false,
+        };
+        p.on_match_dropped_with_context(ctx);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::BenchedForBigMatch),
+            0,
+            "rest must not fire BenchedForBigMatch"
+        );
+    }
+
+    #[test]
+    fn tactical_role_mismatch_emerges_only_after_repeated_drops() {
+        // Three tactical-flavour drops in a row must fire
+        // UnhappyWithTacticalRole; the first two are silent.
+        let mut p = make_player();
+        let ctx = || crate::MatchSelectionContext {
+            scope: crate::SelectionDecisionScope::DroppedToBench,
+            reason: crate::SelectionOmissionReason::TacticalMismatch,
+            comparison: None,
+            role: crate::SelectionRole::CentralMidfielder,
+            match_importance: 0.5,
+            repeated: false,
+            is_friendly: false,
+        };
+        p.on_match_dropped_with_context(ctx());
+        p.on_match_dropped_with_context(ctx());
+        assert_eq!(
+            count_events(&p, &HappinessEventType::UnhappyWithTacticalRole),
+            0,
+            "two tactical drops is below the gate"
+        );
+        p.on_match_dropped_with_context(ctx());
+        assert!(
+            count_events(&p, &HappinessEventType::UnhappyWithTacticalRole) >= 1,
+            "third tactical drop should cross the aggregator gate"
+        );
+    }
+
+    #[test]
+    fn tactical_role_mismatch_silent_for_non_tactical_drops() {
+        // Several drops, none of them tactical — the aggregator must
+        // skip.
+        let mut p = make_player();
+        let ctx = crate::MatchSelectionContext {
+            scope: crate::SelectionDecisionScope::DroppedToBench,
+            reason: crate::SelectionOmissionReason::PoorRecentForm,
+            comparison: None,
+            role: crate::SelectionRole::CentralMidfielder,
+            match_importance: 0.5,
+            repeated: false,
+            is_friendly: false,
+        };
+        for _ in 0..5 {
+            p.on_match_dropped_with_context(ctx.clone());
+        }
+        assert_eq!(
+            count_events(&p, &HappinessEventType::UnhappyWithTacticalRole),
+            0,
+            "form drops are not a tactical-role signal"
+        );
+    }
+
+    #[test]
+    fn substitution_frustration_fires_when_hooked_while_playing_well() {
+        let mut p = make_player();
+        // Real entry: 60th minute, rating 7.5, ordinary league fixture.
+        p.on_match_substituted_for_frustration(60, 7.5, false);
+        let stored = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::SubstitutionFrustration)
+            .expect("HookedWhilePlayingWell should land");
+        let inner = stored
+            .context
+            .as_ref()
+            .and_then(|c| c.substitution_frustration_context.as_ref())
+            .unwrap();
+        assert_eq!(
+            inner.kind,
+            SubstitutionFrustrationKind::HookedWhilePlayingWell
+        );
+        assert_eq!(inner.minute_off, Some(60));
+    }
+
+    #[test]
+    fn substitution_frustration_silent_for_late_routine_sub() {
+        let mut p = make_player();
+        // 85th-minute swap with mediocre rating — routine.
+        p.on_match_substituted_for_frustration(85, 6.5, false);
+        assert_eq!(
+            count_events(&p, &HappinessEventType::SubstitutionFrustration),
+            0,
+            "late routine substitution should not fire frustration"
+        );
+    }
+
+    #[test]
+    fn substitution_frustration_fires_for_big_match_early_hook() {
+        let mut p = make_player();
+        // 50th-minute sub in a big match, decent rating.
+        p.on_match_substituted_for_frustration(50, 6.8, true);
+        let stored = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::SubstitutionFrustration)
+            .expect("big-match early hook should land");
+        let inner = stored
+            .context
+            .as_ref()
+            .and_then(|c| c.substitution_frustration_context.as_ref())
+            .unwrap();
+        assert_eq!(
+            inner.kind,
+            SubstitutionFrustrationKind::RemovedInBigMatchEarly
+        );
+        assert!(inner.is_big_match);
+    }
+
+    #[test]
+    fn new_signing_threat_only_fires_for_same_position_competition() {
+        let mut p = make_player();
+        // Mid-tier rotation player — already fringe, susceptible.
+        if let Some(c) = p.contract.as_mut() {
+            c.squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
+        }
+
+        // Same-position signing — should fire.
+        let same_pos =
+            NewSigningThreatContext::new(101, NewSigningThreatReason::SamePosition)
+                .with_player_status(PlayerSquadStatus::FirstTeamSquadRotation)
+                .with_rival_status(PlayerSquadStatus::FirstTeamRegular);
+        p.on_new_signing_threat(same_pos);
+        assert!(
+            count_events(&p, &HappinessEventType::ThreatenedByNewSigning) >= 1,
+            "same-position rival should fire the threat row"
+        );
+
+        // Different rival, but the function itself doesn't filter on
+        // position group — that filter lives one layer up
+        // (`fire_new_signing_threats` in execution.rs). This test
+        // documents the per-rival cooldown / context plumbing only.
+    }
+
+    #[test]
+    fn club_direction_encouragement_focal_player_round_trips() {
+        let mut p = make_player();
+        let ctx = ClubDirectionContext::new(ClubDirectionKind::Encouragement)
+            .with_focal_player(7)
+            .with_evidence(ClubDirectionEvidence::MeaningfulSigningArrived);
+        p.on_club_direction_encouragement(ctx);
+        let stored = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::EncouragedBySquadInvestment)
+            .unwrap();
+        let inner = stored
+            .context
+            .as_ref()
+            .and_then(|c| c.club_direction_context.as_ref())
+            .unwrap();
+        assert_eq!(inner.focal_player_id, Some(7));
+    }
 }

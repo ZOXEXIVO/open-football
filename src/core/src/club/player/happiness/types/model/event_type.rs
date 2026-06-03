@@ -451,4 +451,69 @@ pub enum HappinessEventType {
     /// transfer request. Sits between `ContractOffer` and
     /// `TransferBidRejected` in severity.
     ContractTalksStalled,
+    /// Player offer was formally rejected by the player / agent. Carries
+    /// a `ContractEventContext` whose `kind` is `RejectedLowStatusOffer`
+    /// or related, plus evidence for the reason (wage / length / role /
+    /// release clause / ambition). Bigger than `ContractTalksStalled`
+    /// because the decision has been made — the deal is dead, not paused.
+    RejectedContractOffer,
+
+    // ── Manager-relationship arc & match-trust ───────────────────
+    /// Player formally asked the manager for a private conversation
+    /// about a serious concern — role, minutes, contract, transfer
+    /// status, captaincy / status, or a tactical role he can no longer
+    /// stomach. Rare and cooldowned; never emitted for every weekly
+    /// unhappy player. Carries a `ManagerInteractionEventContext` whose
+    /// topic + tone hint the underlying driver.
+    AskedForPrivateTalk,
+    /// Ambitious or senior player worried about where the club is
+    /// heading: key sales unreplaced, weakened squad, persistent
+    /// underperformance, board direction. Distinct from
+    /// `WantsStrongerSquad` (squad-strength pressure) — this is a
+    /// broader club-direction concern. Cooldowned.
+    ConcernedByClubDirection,
+    /// Counterpart of `ConcernedByClubDirection` — board invested in a
+    /// meaningful signing or visibly upgraded squad quality. Bigger lift
+    /// for ambitious players and those who had previously asked for a
+    /// stronger squad.
+    EncouragedBySquadInvestment,
+    /// Player repeatedly deployed in an unsuitable position / role or
+    /// inside a team system with no natural fit for him. Distinct from
+    /// `RoleMismatch` (a long-running formation/system mismatch) — this
+    /// is tactical / matchday-usage frustration.
+    UnhappyWithTacticalRole,
+    /// Manager picked the player for a high-pressure fixture (derby,
+    /// cup final, title-race decider, promotion / relegation play-off,
+    /// continental knockout). Bigger lift for young / fringe / form-
+    /// recovering players. Cooldowned to keep stars from spamming this
+    /// every big night.
+    TrustedInBigMatch,
+    /// Established starter / key player dropped for a major fixture
+    /// when he was expected to start. Not emitted for injury,
+    /// suspension, rest, or low-importance rotation.
+    BenchedForBigMatch,
+    /// Repeated early substitutions, removal while playing well, or
+    /// pulled off in a big match before expected. Suppressed for
+    /// injury, fatigue, tactical red-card response, or normal late
+    /// substitutions. Cooldowned.
+    SubstitutionFrustration,
+    /// Reinjury, recovery delay, failed fitness test, or recurring
+    /// injury concern. Distinct from `InjuryReturn` (positive). Carries
+    /// an `InjuryRecoveryEventContext` whose `stage` is
+    /// `RecoverySetback` or `InjuryRecurrenceConcern`.
+    InjurySetback,
+    /// New signing directly competes for the player's position / status
+    /// / minutes. Stronger for older / fringe players and those already
+    /// lacking minutes. Suppressed when the signing plays an unrelated
+    /// position.
+    ThreatenedByNewSigning,
+    /// Repeated selections, public backing, improved role, or big-match
+    /// trust signal the manager relationship is improving. Low-frequency
+    /// positive aggregate of small good signs.
+    ManagerTrustGrowing,
+    /// Repeated benching, criticism, broken promises, tactical mismatch,
+    /// or loss of role signal the manager relationship is worsening. An
+    /// aggregate so repeated `MatchDropped` rows don't each fire their
+    /// own. Cooldowned.
+    ManagerTrustEroding,
 }

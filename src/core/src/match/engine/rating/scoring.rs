@@ -9,24 +9,38 @@ use super::{RatingContext, sat, signed_sat};
 use crate::PlayerFieldPositionGroup;
 
 impl<'a> RatingContext<'a> {
-    /// Direct goal-event impact: goals scored + clinical (over-xG) +
-    /// decisive (the goal won the match). Saturates so a hat-trick is
-    /// rewarded but not 3× a single goal.
+    /// Direct decisive-event impact: goals + assists + clinical (over-xG)
+    /// + decisive (the contribution won the match). Saturates so a
+    /// hat-trick or multi-assist game is rewarded but not 3× a single
+    /// event.
+    ///
+    /// Assists live here (not in creation()) because they are the same
+    /// kind of decisive moment a goal is — punditry treats them as the
+    /// primary creator's output. Routing the credit through the
+    /// `scoring` profile weight makes the per-position dial coherent:
+    /// the same dial that pays a striker for finishing pays a
+    /// midfielder for setting one up.
     pub(super) fn scoring_event(&self) -> f32 {
         let s = self.stats;
-        if s.goals == 0 {
+        let g = s.goals as f32;
+        let a = s.assists as f32;
+        if g <= 0.0 && a <= 0.0 {
             return 0.0;
         }
-        let g = s.goals as f32;
         // sat(1, 1.6) ≈ 0.46; sat(2) ≈ 0.71; sat(3) ≈ 0.85.
-        let raw = sat(g, 1.6) * 2.55;
+        let goal_raw = sat(g, 1.6) * 2.55;
+        // Assists ≈ 55% of a goal — decisive but not as decisive as
+        // putting it in.
+        let assist_raw = sat(a, 1.6) * 1.40;
+        let raw = goal_raw + assist_raw;
 
         // Clinical-finisher bonus: goals beyond xG → premium for
         // converting tougher chances or being lethal in front of goal.
         let over = (g - s.xg).max(0.0);
         let clinical = sat(over, 1.0) * 0.15;
 
-        // Decisive-goal nudge — the goal mattered to the scoreline.
+        // Decisive-event nudge — the goal or assist mattered to the
+        // scoreline.
         let decisive = if self.team_goals > self.opponent_goals {
             0.08
         } else {
@@ -39,19 +53,38 @@ impl<'a> RatingContext<'a> {
     /// Shooting threat: xG generated, shots on target, with a wasted-
     /// xG penalty for high-quality chances missed and a shot-spam
     /// penalty for high-volume low-quality attempts.
+    ///
+    /// Forwards face a stricter calibration on the negative side: the
+    /// wasted-xG threshold drops to 0.40 and the per-unit drag is
+    /// heavier, and the no-SOT spam drag is heavier too. A forward
+    /// who shoots without threatening the goal is observably failing
+    /// at their primary role.
     pub(super) fn shooting(&self) -> f32 {
         let s = self.stats;
         if s.shots_total == 0 && s.xg <= 0.0 {
             return 0.0;
         }
 
+        let is_forward = self.pos == PlayerFieldPositionGroup::Forward;
+
         let xg_value = sat(s.xg, 1.8) * 0.30;
         let sot_value = sat(s.shots_on_target as f32, 2.5) * 0.22;
         let mut shooting = xg_value + sot_value;
 
         // Wasted high xG: created premium chances, scored nothing.
-        if s.goals == 0 && s.xg > 0.6 {
-            shooting -= sat(s.xg - 0.6, 1.2) * 0.55;
+        // Forwards: lower threshold (0.40) + heavier coefficient — a
+        // striker squandering decent chances is the canonical bad
+        // forward shift. Other positions: a stray 0.6+ xG miss still
+        // drags, but proportionally to how unusual it is.
+        if s.goals == 0 {
+            let (threshold, coef) = if is_forward {
+                (0.40, 0.90)
+            } else {
+                (0.60, 0.55)
+            };
+            if s.xg > threshold {
+                shooting -= sat(s.xg - threshold, 1.2) * coef;
+            }
         }
 
         // Shot accuracy band — small lift for hitting the target.
@@ -68,35 +101,43 @@ impl<'a> RatingContext<'a> {
         if s.shots_total >= 3 {
             let xg_per_shot = s.xg / s.shots_total as f32;
             if xg_per_shot < 0.10 {
-                shooting -= sat(s.shots_total as f32 - 2.0, 4.0) * 0.45;
+                let spam_coef = if is_forward { 0.60 } else { 0.45 };
+                shooting -= sat(s.shots_total as f32 - 2.0, 4.0) * spam_coef;
             }
         }
 
         // No-goal, no-SOT spammer: drag scales with raw shot volume
-        // even when xG is small — a low-skill forward hammering speculative
-        // off-target attempts looks busy on `shots_total` but produced
-        // nothing the keeper had to deal with.
+        // even when xG is small — a low-skill forward hammering
+        // speculative off-target attempts looks busy on `shots_total`
+        // but produced nothing the keeper had to deal with. Heavier on
+        // forwards.
         if s.goals == 0 && s.shots_on_target == 0 && s.shots_total >= 2 {
-            shooting -= sat(s.shots_total as f32 - 1.0, 3.0) * 0.30;
+            let nosot_coef = if is_forward { 0.50 } else { 0.30 };
+            shooting -= sat(s.shots_total as f32 - 1.0, 3.0) * nosot_coef;
         }
 
         shooting
     }
 
-    /// Chance creation: assists, key passes, passes/carries into the
-    /// box, completed crosses, xG buildup, zone-aware lane bonuses.
+    /// Chance creation: key passes, passes/carries into the box,
+    /// completed crosses, xG buildup, zone-aware lane bonuses.
+    ///
+    /// Assists deliberately do NOT live here — they are routed through
+    /// [`Self::scoring_event`] alongside goals, so the same `scoring`
+    /// profile weight drives all decisive attacking events. This keeps
+    /// the per-position dial coherent (a striker's assist pays through
+    /// the same channel as a goal) and prevents the creation soft-cap
+    /// from accidentally suppressing assist credit.
     ///
     /// Coefficients are deliberately modest — a real "good creator"
-    /// (3 KP + 3 box entries + 4 progressive) lands routine ~0.65,
+    /// (3 KP + 3 box entries + 4 progressive) lands routine ~0.6,
     /// not the inflated ~1.1 that drove ordinary playmakers to 7.4
-    /// on routine alone. Assist event itself still pays well; the
-    /// surrounding chain-building creates the lift, but doesn't take
-    /// the player into the elite band without a goal-contribution.
+    /// on routine alone. The surrounding chain-building creates the
+    /// lift, but doesn't take the player into the elite band without
+    /// a goal contribution.
     pub(super) fn creation(&self) -> f32 {
         let s = self.stats;
         let z = s.zone_stats;
-
-        let assists = sat(s.assists as f32, 1.6) * 1.10;
 
         let key = sat(s.key_passes as f32, 3.5) * 0.42;
 
@@ -130,7 +171,7 @@ impl<'a> RatingContext<'a> {
             7.0,
         ) * 0.08;
 
-        assists + key + box_entries + cross_credit - cross_penalty
+        key + box_entries + cross_credit - cross_penalty
             + xg_chain
             + lanes
             + into_final_third
@@ -222,5 +263,89 @@ impl<'a> RatingContext<'a> {
         // low-first-touch players visibly drop, gentle enough that one
         // mishit doesn't define the match.
         -sat(m + h, 5.0) * 0.85
+    }
+
+    /// Forward role expectation drag — applied at the rating layer
+    /// (alongside the team-result context and discipline deltas) for a
+    /// forward who played meaningful minutes without producing a goal
+    /// or an assist. Returns a non-positive value; outside the gate it
+    /// returns 0 so other positions are unaffected.
+    ///
+    /// Pure stat-line read, smooth saturation. Two components:
+    ///
+    /// 1. **Lack-of-impact penalty** — a forward's primary job is
+    ///    decisive attacking output. Without G/A we look for the
+    ///    secondary footprint that real punditry rewards: shots on
+    ///    target, xG generated, key passes, passes into the box,
+    ///    successful dribbles. When that footprint is small, the
+    ///    forward visibly hasn't done their job.
+    ///
+    /// 2. **Wasted high-xG penalty** — a forward who racked up clear
+    ///    chances and converted none is the signature failed-striker
+    ///    shift. This stacks with the wasted-xG drag inside
+    ///    [`Self::shooting`]: that drag bites the *shooting* component
+    ///    on its own scale; this one bites the *role expectation* on
+    ///    the rating's scale.
+    ///
+    /// Calibration target (pure stat-line, no ability read):
+    /// - anonymous forward (0/0/0/0 attacking evidence, 90 min): ≈ −0.85
+    /// - creative no-G/A forward (3 KP + 3 PB + 3 drib, xG buildup):
+    ///   ≈ −0.30 (only partly saturated — the creative line doesn't
+    ///   substitute for a goal contribution)
+    /// - wasteful high-xG no-goal striker (xG 2.5, 2 SOT): ≈ −0.50
+    pub(super) fn attacking_role_expectation(&self) -> f32 {
+        if self.pos != PlayerFieldPositionGroup::Forward {
+            return 0.0;
+        }
+        let s = self.stats;
+        if s.goals > 0 || s.assists > 0 {
+            return 0.0;
+        }
+        let minutes = s.minutes_played;
+        if minutes < 30 {
+            return 0.0;
+        }
+        // Time-on-pitch factor — full strength from 90 minutes, ramps in
+        // smoothly from 30. A short cameo with no G/A isn't a failed
+        // shift; an 80-minute starter without a touch on goal is.
+        let minute_factor = ((minutes as f32 - 30.0) / 60.0).clamp(0.0, 1.0);
+
+        let sot = s.shots_on_target as f32;
+        let xg = s.xg.max(0.0);
+        let kp = s.key_passes as f32;
+        let pbox = s.passes_into_box as f32;
+        let dribs = s.successful_dribbles as f32;
+
+        // Goal-threat evidence — what punditry calls "looked like
+        // scoring": SOT and meaningful xG. These are the strongest
+        // markers of a forward actually attempting their job.
+        let threat = sot * 0.7 + xg * 1.0;
+        // Creative evidence — secondary forward output. Lower weight
+        // than threat, but not zero: a forward who repeatedly broke
+        // the line for teammates has done something.
+        let creative = kp * 0.5 + pbox * 0.3 + dribs * 0.3;
+        // Combined footprint, with creative work counted at ~70% of
+        // direct threat.
+        let footprint = threat + creative * 0.7;
+
+        // Penalty saturates around footprint = 4.5 (e.g. ≥2 SOT + real
+        // xG + a busy creative line). Below that, the gap drives the
+        // penalty. Threshold raised + coefficient lifted so a moderate
+        // creative/shooting line without a goal contribution still
+        // reads as "didn't deliver on the primary role" — the previous
+        // calibration let near-Strong-tier forwards escape the drag at
+        // footprint ≥ 3 and inflated 20-match season averages to ~6.9.
+        let shortfall = (4.5 - footprint).max(0.0);
+        let lack_penalty = -sat(shortfall, 4.0) * 0.80;
+
+        // Wasted big-chance drag: scored 0 from xG > 0.7 worth of
+        // chances. The classic missed-sitter forward shift.
+        let wasted = if xg > 0.7 {
+            -sat(xg - 0.7, 1.2) * 0.45
+        } else {
+            0.0
+        };
+
+        (lack_penalty + wasted) * minute_factor
     }
 }

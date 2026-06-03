@@ -88,6 +88,11 @@ impl LeagueResult {
             } else {
                 (away_goals, home_goals)
             };
+            let opponent_team_id = if side.team_id == home_team_id {
+                Some(away_team_id)
+            } else {
+                Some(home_team_id)
+            };
             let (team_won, team_lost) = (scored > conceded, scored < conceded);
             dispatch_match_outcomes(
                 side,
@@ -105,6 +110,8 @@ impl LeagueResult {
                 is_derby,
                 team_won,
                 team_lost,
+                is_continental_cup,
+                opponent_team_id,
             );
         }
 
@@ -1477,12 +1484,18 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
         };
 
         // Team chemistry shifts individual performance. Neutral at 50;
-        // ±2.5% of baseline rating at the extremes. Not huge — the lion's
-        // share of a performance is on the player — but a dysfunctional
-        // dressing room measurably drags everyone down and a tight squad
-        // gets a small lift.
-        let chem_shift = ((chemistry - 50.0) / 50.0).clamp(-1.0, 1.0) * 0.15;
-        adjusted += chem_shift;
+        // ±0.10 at the extremes. A dysfunctional dressing room
+        // measurably drags everyone down; a tight squad gives a small
+        // lift, but only when the player already produced enough on the
+        // pitch to earn it. Asymmetric: positive chem only adds *above*
+        // baseline, so chemistry alone can't lift a goalless routine
+        // shift into the good-rating band over a 20-match average.
+        let raw_chem_shift = ((chemistry - 50.0) / 50.0).clamp(-1.0, 1.0) * 0.10;
+        adjusted += if raw_chem_shift > 0.0 && adjusted <= BASELINE {
+            0.0
+        } else {
+            raw_chem_shift
+        };
 
         // Consistency drives match-to-match volatility. A high-consistency
         // player drifts LESS from their stat-derived rating; a low-
@@ -1518,12 +1531,20 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
             adjusted -= drop;
         }
 
-        // Big-match personality: small baseline lift in cup fixtures for
-        // high `important_matches`. The caller passes these ratings into
-        // the MatchOutcome that already knows is_cup — but we can't see
+        // Big-match personality: small baseline lift for high
+        // `important_matches`. The caller passes these ratings into the
+        // MatchOutcome that already knows is_cup — but we can't see
         // that here, so the effect is modest and always-on as a proxy.
+        // Heavily reduced from the previous ±0.15 because it stacked on
+        // every match for high-rated players, inflating season averages
+        // independently of actual performance. The negative side keeps
+        // its bite (low-importance players still drift downward).
         if big_match >= 15.0 {
-            adjusted += 0.15;
+            // Only lift above baseline so the always-on proxy can't
+            // ride routine into a good rating.
+            if adjusted > BASELINE {
+                adjusted += 0.05;
+            }
         } else if big_match <= 5.0 {
             adjusted -= 0.1;
         }
@@ -1593,6 +1614,8 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     is_derby: bool,
     team_won: bool,
     team_lost: bool,
+    is_continental: bool,
+    opponent_team_id: Option<u32>,
 ) {
     let starter_ids: Vec<u32> = side.main.iter().copied().collect();
     let sub_ids: Vec<u32> = side.substitutes_used.iter().copied().collect();
@@ -1629,7 +1652,69 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 is_derby,
                 team_won,
                 team_lost,
+                is_continental,
+                opponent_team_id,
             });
+        }
+    }
+
+    // Substitution-frustration pass. Walk the match's recorded
+    // substitutions and fire `SubstitutionFrustration` for players who
+    // were hooked under conditions that read as a snub — playing well,
+    // pulled early in a big match, or repeatedly hooked across recent
+    // weeks. Critical-injury and youth-protection passes are filtered
+    // out via the `reason` field stamped on the SubstitutionInfo.
+    if !is_friendly {
+        let big_match_kind = MatchOutcome {
+            stats: details
+                .player_stats
+                .values()
+                .next()
+                .expect("at least one player featured"),
+            effective_rating: 0.0,
+            participation: MatchParticipation::Starter,
+            is_friendly,
+            is_cup,
+            competition_slug,
+            is_motm: false,
+            team_goals_for: team_scored,
+            team_goals_against: team_conceded,
+            league_weight,
+            world_weight,
+            is_derby,
+            team_won,
+            team_lost,
+            is_continental,
+            opponent_team_id,
+        }
+        .big_match_kind();
+
+        for sub in &details.substitutions {
+            if sub.team_id != side.team_id {
+                continue;
+            }
+            // Only discretionary swaps qualify — injury / youth
+            // protection are never a frustration trigger.
+            if !matches!(
+                sub.reason,
+                crate::r#match::engine::flow::result::SubstitutionReason::Discretionary
+            ) {
+                continue;
+            }
+            let pid = sub.player_out_id;
+            let minute = (sub.match_time_ms / 60_000) as u8;
+            let rating_when_off = effective_ratings
+                .get(&pid)
+                .copied()
+                .or_else(|| details.player_stats.get(&pid).map(|s| s.match_rating))
+                .unwrap_or(6.5);
+            if let Some(player) = data.player_mut(pid) {
+                player.on_match_substituted_for_frustration(
+                    minute,
+                    rating_when_off,
+                    big_match_kind.is_some(),
+                );
+            }
         }
     }
 

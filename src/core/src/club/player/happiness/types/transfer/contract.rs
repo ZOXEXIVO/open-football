@@ -18,6 +18,11 @@ pub enum ContractEventKind {
     /// contract. Distinct from the softer `AgentPushingForBetterTerms`
     /// so the renderer can frame the exit-path demand specifically.
     ReleaseClauseDemanded,
+    /// Player formally rejected the club's offered contract. Distinct
+    /// from `RejectedLowStatusOffer` (which keys on a specific status
+    /// downgrade) — this is the generic rejected-the-deal verdict,
+    /// regardless of reason. The reason rides on the evidence list.
+    OfferRejectedByPlayer,
 }
 
 impl ContractEventKind {
@@ -36,6 +41,7 @@ impl ContractEventKind {
             ContractEventKind::AcceptedReducedRoleContract => "contract_kind_accepted_reduced_role",
             ContractEventKind::RejectedLowStatusOffer => "contract_kind_rejected_low_status",
             ContractEventKind::ReleaseClauseDemanded => "contract_kind_release_clause_demanded",
+            ContractEventKind::OfferRejectedByPlayer => "contract_kind_offer_rejected_by_player",
         }
     }
 }
@@ -60,6 +66,20 @@ pub enum ContractEventEvidence {
     RoleExpectationGap,
     /// Dispute over the length of the offered contract.
     ContractLengthDispute,
+    /// Player rejected the deal specifically over wage (insufficient
+    /// vs market / peers).
+    RejectedOverWage,
+    /// Player rejected the deal specifically over offered role / status.
+    RejectedOverRole,
+    /// Player rejected the deal specifically over the missing release
+    /// clause (the player asked for one but the club refused).
+    RejectedOverReleaseClause,
+    /// Player rejected the deal over its length (too short for security,
+    /// or too long when wanting to keep options open).
+    RejectedOverLength,
+    /// Player rejected the deal over ambition / project mismatch — the
+    /// club's direction doesn't match what he wants from his career.
+    RejectedOverAmbition,
 }
 
 impl ContractEventEvidence {
@@ -91,6 +111,15 @@ impl ContractEventEvidence {
             ContractEventEvidence::RoleExpectationGap => "contract_evidence_role_expectation_gap",
             ContractEventEvidence::ContractLengthDispute => {
                 "contract_evidence_contract_length_dispute"
+            }
+            ContractEventEvidence::RejectedOverWage => "contract_evidence_rejected_over_wage",
+            ContractEventEvidence::RejectedOverRole => "contract_evidence_rejected_over_role",
+            ContractEventEvidence::RejectedOverReleaseClause => {
+                "contract_evidence_rejected_over_release_clause"
+            }
+            ContractEventEvidence::RejectedOverLength => "contract_evidence_rejected_over_length",
+            ContractEventEvidence::RejectedOverAmbition => {
+                "contract_evidence_rejected_over_ambition"
             }
         }
     }

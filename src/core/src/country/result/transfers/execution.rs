@@ -8,7 +8,7 @@ use crate::transfers::TransferRoutePolicy;
 use crate::transfers::market::{ClauseTrigger, TransferMarket};
 use crate::transfers::offer::TransferClause;
 use crate::transfers::pipeline::PipelineProcessor;
-use crate::{Country, Player, PlayerClubContract, TeamInfo, TeamType};
+use crate::{Country, Player, PlayerClubContract, PlayerSquadStatus, TeamInfo, TeamType};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
@@ -27,6 +27,211 @@ struct DepartingPlayerInfo {
     age: u8,
     country_id: u32,
     high_reputation: bool,
+}
+
+/// Snapshot of the post-transfer profile of an arriving player. Used by
+/// the new-signing-threat pass on the buying club's existing roster so
+/// the cross-country and within-country paths share one detection /
+/// emit shape.
+#[derive(Debug, Clone)]
+struct ArrivalThreatProfile {
+    player_id: u32,
+    position_group: crate::PlayerFieldPositionGroup,
+    ability: u8,
+    age: u8,
+    squad_status: PlayerSquadStatus,
+    wage: u32,
+}
+
+impl ArrivalThreatProfile {
+    fn from_player(player: &Player, date: NaiveDate) -> Self {
+        Self {
+            player_id: player.id,
+            position_group: player.position().position_group(),
+            ability: player.player_attributes.current_ability,
+            age: player.age(date),
+            squad_status: player
+                .contract
+                .as_ref()
+                .map(|c| c.squad_status.clone())
+                .unwrap_or(PlayerSquadStatus::FirstTeamRegular),
+            wage: player.contract.as_ref().map(|c| c.salary).unwrap_or(0),
+        }
+    }
+}
+
+/// Walk the buying club's roster and fire `ThreatenedByNewSigning` for
+/// every same-position existing player who reads the new arrival as
+/// direct competition. Gated to avoid noise — only same positional
+/// group AND at least one sharp threat axis (status overlap, ability
+/// bump, wage shock, fringe status) qualifies.
+fn fire_new_signing_threats(buying_club: &mut crate::Club, arrival: &ArrivalThreatProfile, date: NaiveDate) {
+    for team in &mut buying_club.teams.teams {
+        for existing in team.players.iter_mut() {
+            if existing.id == arrival.player_id {
+                continue;
+            }
+            let existing_group = existing.position().position_group();
+            if existing_group != arrival.position_group {
+                continue;
+            }
+            let existing_status = existing
+                .contract
+                .as_ref()
+                .map(|c| c.squad_status.clone())
+                .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+            let existing_age = existing.age(date);
+            let existing_ability = existing.player_attributes.current_ability;
+            let existing_wage = existing.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+
+            let mut reasons: Vec<crate::NewSigningThreatReason> = Vec::new();
+            reasons.push(crate::NewSigningThreatReason::SamePosition);
+            if existing_status == arrival.squad_status {
+                reasons.push(crate::NewSigningThreatReason::SimilarSquadStatus);
+            }
+            if arrival.ability as i32 >= existing_ability as i32 + 8 {
+                reasons.push(crate::NewSigningThreatReason::HigherAbility);
+            }
+            if existing_wage > 0 && arrival.wage as f32 >= (existing_wage as f32) * 1.40 {
+                reasons.push(crate::NewSigningThreatReason::LargerWageDeal);
+            }
+            if arrival.age + 3 <= existing_age {
+                reasons.push(crate::NewSigningThreatReason::YoungerAndHighPotential);
+            }
+            if matches!(
+                existing_status,
+                PlayerSquadStatus::FirstTeamSquadRotation
+                    | PlayerSquadStatus::MainBackupPlayer
+                    | PlayerSquadStatus::DecentYoungster
+            ) {
+                reasons.push(crate::NewSigningThreatReason::AlreadyFringe);
+            }
+
+            let sharp = reasons.iter().any(|r| {
+                matches!(
+                    r,
+                    crate::NewSigningThreatReason::SimilarSquadStatus
+                        | crate::NewSigningThreatReason::HigherAbility
+                        | crate::NewSigningThreatReason::LargerWageDeal
+                        | crate::NewSigningThreatReason::YoungerAndHighPotential
+                        | crate::NewSigningThreatReason::AlreadyFringe
+                )
+            });
+            if !sharp {
+                continue;
+            }
+            let primary = reasons
+                .iter()
+                .find(|r| !matches!(r, crate::NewSigningThreatReason::SamePosition))
+                .copied()
+                .unwrap_or(crate::NewSigningThreatReason::SamePosition);
+            let mut ctx = crate::NewSigningThreatContext::new(arrival.player_id, primary)
+                .with_player_status(existing_status.clone())
+                .with_rival_status(arrival.squad_status.clone())
+                .with_player_age(existing_age)
+                .with_rival_age(arrival.age);
+            for r in reasons.iter().skip(1) {
+                ctx = ctx.with_reason(*r);
+            }
+            existing.on_new_signing_threat(ctx);
+        }
+    }
+}
+
+/// Fire `EncouragedBySquadInvestment` on ambitious / senior teammates
+/// after a high-quality arrival. Treats CA ≥ 145 or a club-record fee
+/// as "meaningful" enough to count — a fringe depth signing doesn't
+/// fire the row. Cooldown on the emit path keeps the same window from
+/// double-firing if several quality arrivals land in a few days.
+fn fire_squad_investment_signal(
+    buying_club: &mut crate::Club,
+    arrival: &ArrivalThreatProfile,
+    fee: f64,
+) {
+    let meaningful = arrival.ability >= 145 || fee >= 30_000_000.0;
+    if !meaningful {
+        return;
+    }
+    let evidence = if fee >= 50_000_000.0 {
+        crate::ClubDirectionEvidence::BoardInvestmentVisible
+    } else {
+        crate::ClubDirectionEvidence::MeaningfulSigningArrived
+    };
+    for team in &mut buying_club.teams.teams {
+        for existing in team.players.iter_mut() {
+            if existing.id == arrival.player_id {
+                continue;
+            }
+            // Filter to players who actually care about squad direction
+            // — ambitious or senior pros. Bench fillers don't read the
+            // window like a Key Player does.
+            let status = existing
+                .contract
+                .as_ref()
+                .map(|c| c.squad_status.clone())
+                .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+            let cares = existing.attributes.ambition >= 14.0
+                || matches!(
+                    status,
+                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                );
+            if !cares {
+                continue;
+            }
+            let mut ctx =
+                crate::ClubDirectionContext::new(crate::ClubDirectionKind::Encouragement)
+                    .with_focal_player(arrival.player_id)
+                    .with_evidence(evidence);
+            if existing.attributes.ambition >= 15.0 {
+                ctx = ctx.with_evidence(crate::ClubDirectionEvidence::HighAmbition);
+            }
+            if matches!(status, PlayerSquadStatus::KeyPlayer) {
+                ctx = ctx.with_evidence(crate::ClubDirectionEvidence::HighInfluence);
+            }
+            existing.on_club_direction_encouragement(ctx);
+        }
+    }
+}
+
+/// Fire `ConcernedByClubDirection` on ambitious / senior teammates
+/// after a meaningful departure. Caller flags the departing player as
+/// "important" (key player / high reputation) before invoking — depth
+/// sales never qualify. Cooldown 120d.
+fn fire_squad_concern_signal(selling_club: &mut crate::Club, departing: &DepartingPlayerInfo) {
+    if !departing.high_reputation {
+        return;
+    }
+    for team in &mut selling_club.teams.teams {
+        for existing in team.players.iter_mut() {
+            if existing.id == departing.id {
+                continue;
+            }
+            let status = existing
+                .contract
+                .as_ref()
+                .map(|c| c.squad_status.clone())
+                .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
+            let cares = existing.attributes.ambition >= 14.0
+                || matches!(
+                    status,
+                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
+                );
+            if !cares {
+                continue;
+            }
+            let mut ctx = crate::ClubDirectionContext::new(crate::ClubDirectionKind::Concern)
+                .with_focal_player(departing.id)
+                .with_evidence(crate::ClubDirectionEvidence::KeyPlayerSoldUnreplaced)
+                .with_evidence(crate::ClubDirectionEvidence::SquadQualityWeakened);
+            if existing.attributes.ambition >= 15.0 {
+                ctx = ctx.with_evidence(crate::ClubDirectionEvidence::HighAmbition);
+            }
+            if matches!(status, PlayerSquadStatus::KeyPlayer) {
+                ctx = ctx.with_evidence(crate::ClubDirectionEvidence::HighInfluence);
+            }
+            existing.on_club_direction_concern(ctx);
+        }
+    }
 }
 
 /// True if the country's primary language(s) are met at functional fluency
@@ -249,6 +454,11 @@ pub(crate) fn execute_transfer_within_country(
                     }
                 }
             }
+            // Squad-direction concern: a high-reputation player leaving
+            // the squad reads as a worrying signal for ambitious /
+            // senior teammates. Cooldowned 120d so a fire-sale doesn't
+            // emit a row per outgoing player.
+            fire_squad_concern_signal(selling_club, info);
         }
     }
 
@@ -328,6 +538,11 @@ pub(crate) fn execute_transfer_within_country(
         let arrival_country_id = player.country_id;
         let club_country_id = country.id;
         let club_country_code = country.code.clone();
+        // Snapshot the arrival's positional / status / wage profile so
+        // the post-move `ThreatenedByNewSigning` pass can compare each
+        // existing teammate without needing a second &mut on the new
+        // arrival's row (which still lives inside the same Vec).
+        let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             // Cash leaves immediately, P&L spread across DEFAULT_AMORTIZATION_YEARS.
@@ -403,6 +618,16 @@ pub(crate) fn execute_transfer_within_country(
                     }
                 }
             }
+
+            // Direct-competition pass: any existing player in the same
+            // positional group AND a sharp threat axis (status overlap,
+            // ability bump, wage shock, fringe status) hears the
+            // signing as competition. Shared with the cross-country
+            // path via `fire_new_signing_threats`.
+            fire_new_signing_threats(buying_club, &arrival_threat, date);
+            // Squad-investment signal: ambitious / senior teammates
+            // feel encouraged when a high-quality signing lands.
+            fire_squad_investment_signal(buying_club, &arrival_threat, fee);
         }
 
         country
@@ -781,6 +1006,7 @@ fn execute_transfer_across_countries(
                         }
                     }
                 }
+                fire_squad_concern_signal(selling_club, info);
             }
         }
     }
@@ -825,6 +1051,8 @@ fn execute_transfer_across_countries(
     let arrival_country_id = player.country_id;
     let buying_country_code = buying_country.code.clone();
     let buying_country_id_local = buying_country.id;
+    // Capture profile before `players.add(player)` moves ownership in.
+    let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
 
     if let Some(buying_club) = buying_country
         .clubs
@@ -896,6 +1124,12 @@ fn execute_transfer_across_countries(
                 }
             }
         }
+
+        // Direct-competition pass — same emit shape as the within-
+        // country path; the existing teammates feel the threat from
+        // the new arrival's positional / status / wage profile.
+        fire_new_signing_threats(buying_club, &arrival_threat, date);
+        fire_squad_investment_signal(buying_club, &arrival_threat, fee);
     }
 
     // Settle obligations across countries: locate each beneficiary globally

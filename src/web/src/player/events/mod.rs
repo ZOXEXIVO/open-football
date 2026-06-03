@@ -535,6 +535,18 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::LoanRecallRequested => "event_loan_recall_requested",
         HappinessEventType::ReleaseClauseDemanded => "event_release_clause_demanded",
         HappinessEventType::ContractTalksStalled => "event_contract_talks_stalled",
+        HappinessEventType::RejectedContractOffer => "event_rejected_contract_offer",
+        HappinessEventType::AskedForPrivateTalk => "event_asked_for_private_talk",
+        HappinessEventType::ConcernedByClubDirection => "event_concerned_by_club_direction",
+        HappinessEventType::EncouragedBySquadInvestment => "event_encouraged_by_squad_investment",
+        HappinessEventType::UnhappyWithTacticalRole => "event_unhappy_with_tactical_role",
+        HappinessEventType::TrustedInBigMatch => "event_trusted_in_big_match",
+        HappinessEventType::BenchedForBigMatch => "event_benched_for_big_match",
+        HappinessEventType::SubstitutionFrustration => "event_substitution_frustration",
+        HappinessEventType::InjurySetback => "event_injury_setback",
+        HappinessEventType::ThreatenedByNewSigning => "event_threatened_by_new_signing",
+        HappinessEventType::ManagerTrustGrowing => "event_manager_trust_growing",
+        HappinessEventType::ManagerTrustEroding => "event_manager_trust_eroding",
     }
 }
 
@@ -778,6 +790,21 @@ impl EventContextRenderer {
         }
         if let Some(rc) = ctx.regulation_context.as_ref() {
             return RegulationRender::reason_sentence(rc, i18n);
+        }
+        if let Some(pt) = ctx.private_talk_context.as_ref() {
+            return PrivateTalkRender::reason_sentence(pt, i18n);
+        }
+        if let Some(cd) = ctx.club_direction_context.as_ref() {
+            return ClubDirectionRender::reason_sentence(cd, i18n);
+        }
+        if let Some(bm) = ctx.big_match_selection_context.as_ref() {
+            return BigMatchRender::reason_sentence(bm, i18n);
+        }
+        if let Some(sf) = ctx.substitution_frustration_context.as_ref() {
+            return SubFrustrationRender::reason_sentence(sf, i18n);
+        }
+        if let Some(ns) = ctx.new_signing_threat_context.as_ref() {
+            return NewSigningThreatRender::reason_sentence(ns, i18n);
         }
         let cause_key = format!("reason_main_{}", Self::cause_token(ctx));
         let main = i18n.t(&cause_key);
@@ -1809,6 +1836,7 @@ impl ContractRender {
                 | HappinessEventType::SalaryGapNoticed
                 | HappinessEventType::ReleaseClauseDemanded
                 | HappinessEventType::ContractTalksStalled
+                | HappinessEventType::RejectedContractOffer
         )
     }
 
@@ -1825,10 +1853,42 @@ impl ContractRender {
     pub fn reason_sentence(ctx: &ContractEventContext, i18n: &I18n) -> Option<String> {
         let key = format!("contract_reason_{}", Self::kind_token(ctx));
         let main = i18n.t(&key);
-        if main == key {
-            return None;
+        let mut parts: Vec<String> = Vec::new();
+        if main != key {
+            parts.push(main.to_string());
         }
-        Some(main.to_string())
+        // For rejected offers, surface the dominant evidence atom so
+        // the row reads "He turned down the club's offer. The wage was
+        // below his expectations." instead of a single generic line.
+        if matches!(
+            ctx.kind,
+            core::ContractEventKind::OfferRejectedByPlayer
+                | core::ContractEventKind::TalksStalled
+                | core::ContractEventKind::ReleaseClauseDemanded
+        ) {
+            let preferred = [
+                core::ContractEventEvidence::RejectedOverWage,
+                core::ContractEventEvidence::RejectedOverRole,
+                core::ContractEventEvidence::RejectedOverReleaseClause,
+                core::ContractEventEvidence::RejectedOverAmbition,
+                core::ContractEventEvidence::RejectedOverLength,
+            ];
+            for atom in preferred {
+                if ctx.evidence.contains(&atom) {
+                    let k = atom.as_i18n_key();
+                    let raw = i18n.t(k);
+                    if raw != k {
+                        parts.push(raw.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" "))
+        }
     }
 
     fn kind_token(ctx: &ContractEventContext) -> &'static str {
@@ -1847,6 +1907,7 @@ impl ContractRender {
             K::AcceptedReducedRoleContract => "accepted_reduced_role",
             K::RejectedLowStatusOffer => "rejected_low_status",
             K::ReleaseClauseDemanded => "release_clause_demanded",
+            K::OfferRejectedByPlayer => "offer_rejected_by_player",
         }
     }
 }
@@ -1855,7 +1916,10 @@ struct InjuryRecoveryRender;
 
 impl InjuryRecoveryRender {
     pub fn handles(event_type: &HappinessEventType) -> bool {
-        matches!(event_type, HappinessEventType::InjuryReturn)
+        matches!(
+            event_type,
+            HappinessEventType::InjuryReturn | HappinessEventType::InjurySetback
+        )
     }
 
     pub fn headline(ctx: &InjuryRecoveryEventContext, i18n: &I18n) -> String {
@@ -2576,6 +2640,269 @@ impl RegulationRender {
     }
 }
 
+/// Look up a translated piece of copy or return `None` when the locale
+/// only has the fallback key. Drives the "skip-the-detail-if-missing"
+/// pattern used by every render struct in this module.
+fn translated<'a>(i18n: &'a I18n, key: &'a str) -> Option<&'a str> {
+    let raw = i18n.t(key);
+    if raw == key { None } else { Some(raw) }
+}
+
+struct PrivateTalkRender;
+
+impl PrivateTalkRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(event_type, HappinessEventType::AskedForPrivateTalk)
+    }
+
+    pub fn headline(_ctx: &core::PrivateTalkRequestContext, i18n: &I18n) -> String {
+        i18n.t("event_asked_for_private_talk").to_string()
+    }
+
+    /// Compose `<reason>. <trust-mood>` so the row reads "He is unhappy
+    /// about his playing time. Manager trust is low." rather than the
+    /// generic single-sentence form. Trust is bucketed coarsely so the
+    /// rendered phrase is stable across float drift; missing trust /
+    /// missing translation keys are skipped silently.
+    pub fn reason_sentence(
+        ctx: &core::PrivateTalkRequestContext,
+        i18n: &I18n,
+    ) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(raw) = translated(i18n, ctx.reason.as_i18n_key()) {
+            parts.push(raw.to_string());
+        }
+        if let Some(trust) = ctx.trust_in_manager {
+            let bucket_key = if trust <= -2.0 {
+                "private_talk_trust_low"
+            } else if trust >= 2.0 {
+                "private_talk_trust_high"
+            } else {
+                "private_talk_trust_mid"
+            };
+            if let Some(raw) = translated(i18n, bucket_key) {
+                parts.push(raw.to_string());
+            }
+        }
+        if ctx.repeated_request {
+            if let Some(raw) = translated(i18n, "private_talk_repeat_note") {
+                parts.push(raw.to_string());
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(parts.join(" "))
+    }
+}
+
+struct ClubDirectionRender;
+
+impl ClubDirectionRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::ConcernedByClubDirection
+                | HappinessEventType::EncouragedBySquadInvestment
+        )
+    }
+
+    pub fn headline(ctx: &core::ClubDirectionContext, i18n: &I18n) -> String {
+        i18n.t(ctx.kind.as_i18n_key()).to_string()
+    }
+
+    /// Surface up to two evidence sentences plus an optional net-
+    /// signings hint. Pulls in the focal-player name when the
+    /// renderer's resolver can find them (linked via partner-id in the
+    /// renderer dispatch — keep the helper free of SimulatorData
+    /// lookups so the contract / API stays narrow).
+    pub fn reason_sentence(ctx: &core::ClubDirectionContext, i18n: &I18n) -> Option<String> {
+        let mut sentences: Vec<String> = Vec::new();
+        let mut picked = 0;
+        for ev in &ctx.evidence {
+            if picked >= 2 {
+                break;
+            }
+            if let Some(raw) = translated(i18n, ev.as_i18n_key()) {
+                sentences.push(raw.to_string());
+                picked += 1;
+            }
+        }
+        if let Some(net) = ctx.net_signings_window {
+            let key = if net >= 2 {
+                "club_direction_net_signings_strong"
+            } else if net <= -2 {
+                "club_direction_net_signings_negative"
+            } else {
+                "club_direction_net_signings_flat"
+            };
+            if let Some(raw) = translated(i18n, key) {
+                sentences.push(raw.to_string());
+            }
+        }
+        if sentences.is_empty() {
+            return None;
+        }
+        Some(sentences.join(" "))
+    }
+}
+
+struct BigMatchRender;
+
+impl BigMatchRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(
+            event_type,
+            HappinessEventType::TrustedInBigMatch | HappinessEventType::BenchedForBigMatch
+        )
+    }
+
+    pub fn headline(
+        event_type: &HappinessEventType,
+        _ctx: &core::BigMatchSelectionContext,
+        i18n: &I18n,
+    ) -> String {
+        i18n.t(event_type_to_i18n_key(event_type)).to_string()
+    }
+
+    /// `<decision> <fixture-fragment>` followed by an optional
+    /// captaincy / form / status amplifier. Each fragment is skipped
+    /// silently if the locale doesn't carry the key — the row
+    /// degrades to whatever pieces are translated.
+    pub fn reason_sentence(
+        ctx: &core::BigMatchSelectionContext,
+        i18n: &I18n,
+    ) -> Option<String> {
+        let decision = translated(i18n, ctx.decision.as_i18n_key());
+        let kind = translated(i18n, ctx.kind.as_i18n_key());
+        let mut parts: Vec<String> = Vec::new();
+        match (decision, kind) {
+            (Some(d), Some(k)) => parts.push(format!("{} {}", d, k)),
+            (Some(d), None) => parts.push(d.to_string()),
+            (None, Some(k)) => parts.push(k.to_string()),
+            _ => {}
+        }
+        if ctx.was_captain {
+            if let Some(raw) = translated(i18n, "big_match_amplifier_captain") {
+                parts.push(raw.to_string());
+            }
+        }
+        if ctx.recent_hot_form
+            && matches!(ctx.decision, core::BigMatchDecision::BenchedUnexpectedly)
+        {
+            if let Some(raw) = translated(i18n, "big_match_amplifier_hot_form_dropped") {
+                parts.push(raw.to_string());
+            }
+        }
+        if ctx.is_young_or_fringe
+            && matches!(ctx.decision, core::BigMatchDecision::StartedTrusted)
+        {
+            if let Some(raw) = translated(i18n, "big_match_amplifier_young_or_fringe") {
+                parts.push(raw.to_string());
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(parts.join(" "))
+    }
+}
+
+struct SubFrustrationRender;
+
+impl SubFrustrationRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(event_type, HappinessEventType::SubstitutionFrustration)
+    }
+
+    pub fn headline(_ctx: &core::SubstitutionFrustrationContext, i18n: &I18n) -> String {
+        i18n.t("event_substitution_frustration").to_string()
+    }
+
+    /// `<kind sentence> + <minute & rating fragment>`. Numeric fields
+    /// (minute, rating) flow into a translated template if available;
+    /// otherwise fall back to a concise locale-agnostic numeric form.
+    pub fn reason_sentence(
+        ctx: &core::SubstitutionFrustrationContext,
+        i18n: &I18n,
+    ) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(raw) = translated(i18n, ctx.kind.as_i18n_key()) {
+            parts.push(raw.to_string());
+        }
+        match (ctx.minute_off, ctx.match_rating_at_sub) {
+            (Some(min), Some(rating)) => {
+                let template = i18n.t("sub_frustration_detail_minute_rating");
+                if template != "sub_frustration_detail_minute_rating" {
+                    parts.push(
+                        template
+                            .replace("{min}", &min.to_string())
+                            .replace("{rating}", &format!("{:.1}", rating)),
+                    );
+                } else {
+                    parts.push(format!("({}' — {:.1})", min, rating));
+                }
+            }
+            (Some(min), None) => {
+                let template = i18n.t("sub_frustration_detail_minute_only");
+                if template != "sub_frustration_detail_minute_only" {
+                    parts.push(template.replace("{min}", &min.to_string()));
+                } else {
+                    parts.push(format!("({}')", min));
+                }
+            }
+            _ => {}
+        }
+        if ctx.recent_early_hooks >= 3 {
+            if let Some(raw) = translated(i18n, "sub_frustration_repeat_note") {
+                parts.push(raw.to_string());
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(parts.join(" "))
+    }
+}
+
+struct NewSigningThreatRender;
+
+impl NewSigningThreatRender {
+    pub fn handles(event_type: &HappinessEventType) -> bool {
+        matches!(event_type, HappinessEventType::ThreatenedByNewSigning)
+    }
+
+    pub fn headline(_ctx: &core::NewSigningThreatContext, i18n: &I18n) -> String {
+        i18n.t("event_threatened_by_new_signing").to_string()
+    }
+
+    /// `<primary reason>` followed by a secondary reason from the
+    /// `all_reasons` list when it adds information (status overlap +
+    /// younger / wage shock together makes for a better detail row
+    /// than a single sentence). At most two reason sentences emitted.
+    pub fn reason_sentence(
+        ctx: &core::NewSigningThreatContext,
+        i18n: &I18n,
+    ) -> Option<String> {
+        let mut sentences: Vec<String> = Vec::new();
+        if let Some(raw) = translated(i18n, ctx.primary_reason.as_i18n_key()) {
+            sentences.push(raw.to_string());
+        }
+        for extra in ctx.all_reasons.iter().filter(|r| **r != ctx.primary_reason) {
+            if sentences.len() >= 2 {
+                break;
+            }
+            if let Some(raw) = translated(i18n, extra.as_i18n_key()) {
+                sentences.push(raw.to_string());
+            }
+        }
+        if sentences.is_empty() {
+            return None;
+        }
+        Some(sentences.join(" "))
+    }
+}
+
 /// Single-entry dispatch for context-aware headlines. Replaces the long
 /// if/else chain in `build_events` — adding a new renderer is one new
 /// branch in [`HeadlineDispatcher::try_render`], and the order of
@@ -2707,6 +3034,31 @@ impl<'a> HeadlineDispatcher<'a> {
         if RegulationRender::handles(ev) {
             if let Some(rc) = ctx.regulation_context.as_ref() {
                 return Some((RegulationRender::headline(rc, self.i18n), false));
+            }
+        }
+        if PrivateTalkRender::handles(ev) {
+            if let Some(pt) = ctx.private_talk_context.as_ref() {
+                return Some((PrivateTalkRender::headline(pt, self.i18n), false));
+            }
+        }
+        if ClubDirectionRender::handles(ev) {
+            if let Some(cd) = ctx.club_direction_context.as_ref() {
+                return Some((ClubDirectionRender::headline(cd, self.i18n), false));
+            }
+        }
+        if BigMatchRender::handles(ev) {
+            if let Some(bm) = ctx.big_match_selection_context.as_ref() {
+                return Some((BigMatchRender::headline(ev, bm, self.i18n), false));
+            }
+        }
+        if SubFrustrationRender::handles(ev) {
+            if let Some(sf) = ctx.substitution_frustration_context.as_ref() {
+                return Some((SubFrustrationRender::headline(sf, self.i18n), false));
+            }
+        }
+        if NewSigningThreatRender::handles(ev) {
+            if let Some(nt) = ctx.new_signing_threat_context.as_ref() {
+                return Some((NewSigningThreatRender::headline(nt, self.i18n), false));
             }
         }
         None
@@ -4398,6 +4750,220 @@ mod tests {
                     key
                 );
             }
+        }
+    }
+
+    #[test]
+    fn new_relationship_arc_keys_present_in_every_locale() {
+        // Locale audit: the same key set we expect in en.json must also
+        // be present in every shipped locale. Missing entries cause the
+        // renderer to surface the raw key — the per-locale fallback
+        // catches some of these but a partial translation file
+        // (zh.json missing key X while en has it) would still render
+        // the raw token to a user on Chinese.
+        const KEYS: &[&str] = &[
+            // Event headlines
+            "event_rejected_contract_offer",
+            "event_asked_for_private_talk",
+            "event_concerned_by_club_direction",
+            "event_encouraged_by_squad_investment",
+            "event_unhappy_with_tactical_role",
+            "event_trusted_in_big_match",
+            "event_benched_for_big_match",
+            "event_substitution_frustration",
+            "event_injury_setback",
+            "event_threatened_by_new_signing",
+            "event_manager_trust_growing",
+            "event_manager_trust_eroding",
+            // PrivateTalk reasons
+            "private_talk_reason_playing_time",
+            "private_talk_reason_contract",
+            "private_talk_reason_transfer_status",
+            "private_talk_reason_captaincy_or_status",
+            "private_talk_reason_tactical_role",
+            "private_talk_reason_manager_relationship",
+            // ClubDirection kinds + evidence
+            "club_direction_kind_concern",
+            "club_direction_kind_encouragement",
+            "club_direction_evidence_key_player_sold",
+            "club_direction_evidence_squad_weakened",
+            "club_direction_evidence_meaningful_signing",
+            "club_direction_evidence_board_investment",
+            "club_direction_evidence_high_ambition",
+            // BigMatch kinds + decisions + amplifiers
+            "big_match_kind_derby",
+            "big_match_kind_cup_final",
+            "big_match_kind_continental_knockout",
+            "big_match_decision_started_trusted",
+            "big_match_decision_benched",
+            "big_match_amplifier_captain",
+            "big_match_amplifier_hot_form_dropped",
+            "big_match_amplifier_young_or_fringe",
+            // Substitution frustration flavours + amplifiers
+            "sub_frustration_kind_repeated_early",
+            "sub_frustration_kind_hooked_while_playing_well",
+            "sub_frustration_kind_removed_big_match",
+            "sub_frustration_detail_minute_rating",
+            "sub_frustration_detail_minute_only",
+            "sub_frustration_repeat_note",
+            // New-signing threat flavours
+            "new_signing_threat_same_position",
+            "new_signing_threat_similar_status",
+            "new_signing_threat_higher_ability",
+            "new_signing_threat_larger_wage",
+            "new_signing_threat_younger",
+            "new_signing_threat_already_fringe",
+            // RejectedContractOffer evidence / kind
+            "contract_kind_offer_rejected_by_player",
+            "contract_evidence_rejected_over_wage",
+            "contract_evidence_rejected_over_role",
+            "contract_evidence_rejected_over_release_clause",
+            "contract_evidence_rejected_over_length",
+            "contract_evidence_rejected_over_ambition",
+            // Private talk trust amplifiers
+            "private_talk_trust_low",
+            "private_talk_trust_mid",
+            "private_talk_trust_high",
+            "private_talk_repeat_note",
+            // Club direction net-signings amplifiers
+            "club_direction_net_signings_strong",
+            "club_direction_net_signings_negative",
+            "club_direction_net_signings_flat",
+        ];
+        let locales: &[(&str, &[u8])] = &[
+            ("en", include_bytes!("../../../assets/i18n/en.json")),
+            ("de", include_bytes!("../../../assets/i18n/de.json")),
+            ("es", include_bytes!("../../../assets/i18n/es.json")),
+            ("fr", include_bytes!("../../../assets/i18n/fr.json")),
+            ("ja", include_bytes!("../../../assets/i18n/ja.json")),
+            ("pt", include_bytes!("../../../assets/i18n/pt.json")),
+            ("ru", include_bytes!("../../../assets/i18n/ru.json")),
+            ("tr", include_bytes!("../../../assets/i18n/tr.json")),
+            ("zh", include_bytes!("../../../assets/i18n/zh.json")),
+        ];
+        for (locale, bytes) in locales {
+            let raw = std::str::from_utf8(bytes).unwrap();
+            for key in KEYS {
+                assert!(
+                    raw.contains(key),
+                    "{}.json missing required relationship-arc key {}",
+                    locale,
+                    key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn new_relationship_arc_event_keys_present_in_en_locale() {
+        // Locale audit: every new manager-relationship / contract /
+        // big-match event must resolve to a real headline plus the
+        // specialized-context reason / evidence sentences. Missing
+        // entries cause the renderer to surface the raw key.
+        let bytes = include_bytes!("../../../assets/i18n/en.json");
+        let raw = std::str::from_utf8(bytes).unwrap();
+        for key in [
+            // Event headline keys
+            "event_rejected_contract_offer",
+            "event_asked_for_private_talk",
+            "event_concerned_by_club_direction",
+            "event_encouraged_by_squad_investment",
+            "event_unhappy_with_tactical_role",
+            "event_trusted_in_big_match",
+            "event_benched_for_big_match",
+            "event_substitution_frustration",
+            "event_injury_setback",
+            "event_threatened_by_new_signing",
+            "event_manager_trust_growing",
+            "event_manager_trust_eroding",
+            // PrivateTalk reasons
+            "private_talk_reason_playing_time",
+            "private_talk_reason_contract",
+            "private_talk_reason_transfer_status",
+            "private_talk_reason_captaincy_or_status",
+            "private_talk_reason_tactical_role",
+            "private_talk_reason_manager_relationship",
+            // ClubDirection kinds + evidence
+            "club_direction_kind_concern",
+            "club_direction_kind_encouragement",
+            "club_direction_evidence_key_player_sold",
+            "club_direction_evidence_squad_weakened",
+            "club_direction_evidence_poor_league_form",
+            "club_direction_evidence_ambition_gap",
+            "club_direction_evidence_meaningful_signing",
+            "club_direction_evidence_multiple_signings",
+            "club_direction_evidence_board_investment",
+            "club_direction_evidence_player_involved",
+            "club_direction_evidence_high_ambition",
+            "club_direction_evidence_high_influence",
+            // BigMatch kinds + decisions
+            "big_match_kind_derby",
+            "big_match_kind_cup_final",
+            "big_match_kind_title_decider",
+            "big_match_kind_promotion_decider",
+            "big_match_kind_relegation_decider",
+            "big_match_kind_continental_knockout",
+            "big_match_kind_national_cup_late",
+            "big_match_decision_started_trusted",
+            "big_match_decision_benched",
+            // Substitution frustration flavours
+            "sub_frustration_kind_repeated_early",
+            "sub_frustration_kind_hooked_while_playing_well",
+            "sub_frustration_kind_removed_big_match",
+            "sub_frustration_kind_tactical_swap",
+            // New-signing threat flavours
+            "new_signing_threat_same_position",
+            "new_signing_threat_similar_status",
+            "new_signing_threat_higher_ability",
+            "new_signing_threat_larger_wage",
+            "new_signing_threat_younger",
+            "new_signing_threat_already_fringe",
+            // RejectedContractOffer evidence / kind
+            "contract_kind_offer_rejected_by_player",
+            "contract_evidence_rejected_over_wage",
+            "contract_evidence_rejected_over_role",
+            "contract_evidence_rejected_over_release_clause",
+            "contract_evidence_rejected_over_length",
+            "contract_evidence_rejected_over_ambition",
+        ] {
+            assert!(
+                raw.contains(key),
+                "en.json missing required relationship-arc key {}",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn new_event_types_map_to_distinct_i18n_keys() {
+        // Every new HappinessEventType variant must produce a unique,
+        // non-empty i18n key — otherwise two different events would
+        // render with the same headline.
+        let new_events = [
+            HappinessEventType::RejectedContractOffer,
+            HappinessEventType::AskedForPrivateTalk,
+            HappinessEventType::ConcernedByClubDirection,
+            HappinessEventType::EncouragedBySquadInvestment,
+            HappinessEventType::UnhappyWithTacticalRole,
+            HappinessEventType::TrustedInBigMatch,
+            HappinessEventType::BenchedForBigMatch,
+            HappinessEventType::SubstitutionFrustration,
+            HappinessEventType::InjurySetback,
+            HappinessEventType::ThreatenedByNewSigning,
+            HappinessEventType::ManagerTrustGrowing,
+            HappinessEventType::ManagerTrustEroding,
+        ];
+        let mut keys: Vec<&'static str> =
+            new_events.iter().map(event_type_to_i18n_key).collect();
+        keys.sort();
+        let dedup_len = {
+            let mut k = keys.clone();
+            k.dedup();
+            k.len()
+        };
+        assert_eq!(keys.len(), dedup_len, "i18n keys must be unique");
+        for k in keys {
+            assert!(k.starts_with("event_"), "key {} should follow naming", k);
         }
     }
 

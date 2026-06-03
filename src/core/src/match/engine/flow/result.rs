@@ -14,6 +14,29 @@ pub struct SubstitutionInfo {
     pub player_out_id: u32,
     pub player_in_id: u32,
     pub match_time_ms: u64,
+    /// Why the substitution fired. Defaulted to `Discretionary` for
+    /// backward compatibility with callers that don't yet tag the
+    /// pass that produced the sub. Drives the morale-side
+    /// `SubstitutionFrustration` gate: critical injury / youth
+    /// protection / fatigue rotation never qualify as frustration.
+    #[serde(default)]
+    pub reason: SubstitutionReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SubstitutionReason {
+    /// Forced injury swap (in-match condition collapse / rolled injury).
+    /// Never a frustration trigger.
+    CriticalInjury,
+    /// Under-17 condition / jadedness guard. Protective, not punitive.
+    YouthProtection,
+    /// Discretionary scored-pair swap (tactical / fatigue / development).
+    /// The frustration-event detector inspects rating + minute to decide
+    /// whether the player was hooked while playing well or pulled early
+    /// in a big match — vs a routine 75th-minute fatigue swap that the
+    /// player shrugs off.
+    #[default]
+    Discretionary,
 }
 
 /// Final physical state of a player at the moment they left the pitch

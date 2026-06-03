@@ -83,6 +83,37 @@ impl<'a> RatingContext<'a> {
                 return EvidenceTier::GkPassenger;
             }
 
+            // Forward-specific ladder: routine creative or dribbling
+            // volume isn't enough to promote a goalless forward into
+            // Strong. The bar is "direct goal threat plus a real
+            // creative or dribbling footprint" — SOT≥2 combined with
+            // KP+PB≥3 or drib≥3. Anything less caps at Modest, and a
+            // completely flat attacking line drops to Passenger.
+            //
+            // This is the upstream half of the spec's "creative
+            // forward without G/A doesn't look like a good performer":
+            // the cap is tighter than the generic Strong cap and the
+            // context_credit_factor damping below halves the
+            // team-result lift.
+            if self.pos == PlayerFieldPositionGroup::Forward {
+                let kp_pb = (s.key_passes + s.passes_into_box) as u32;
+                let drib = s.successful_dribbles as u32;
+                let sot = s.shots_on_target as u32;
+                let attacking_strong = sot >= 2 && (kp_pb >= 3 || drib >= 3);
+                if attacking_strong {
+                    return EvidenceTier::Strong;
+                }
+                let attacking_modest = sot >= 1
+                    || kp_pb >= 2
+                    || drib >= 2
+                    || s.xg >= 0.4
+                    || s.crosses_completed >= 2;
+                if attacking_modest {
+                    return EvidenceTier::Modest;
+                }
+                return EvidenceTier::Passenger;
+            }
+
             let big_def = zone_impact + (s.saves as u32) / 2;
             if zone_impact >= 2
                 || creative_strong >= 2
@@ -124,15 +155,35 @@ impl<'a> RatingContext<'a> {
             EvidenceTier::OneGoalLowVolume => soft_cap(positive_delta, 1.6, 0.45),
             EvidenceTier::QuietCameo => soft_cap(positive_delta, 0.7, 0.25),
             EvidenceTier::Strong => soft_cap(positive_delta, 1.3, 0.40),
-            EvidenceTier::Modest => soft_cap(positive_delta, 0.95, 0.30),
+            EvidenceTier::Modest => {
+                // Forwards in the Modest tier cap tighter: a goalless
+                // forward whose footprint hits the modest gate (1 SOT
+                // or 2 KP/PB or 2 dribbles or xG≥0.4) should not stack
+                // routine positives all the way to +0.95, or season
+                // averages drift to ~6.9 over 20 games of no-G/A
+                // routine work. Non-forwards keep the original cap so
+                // a destroyer midfielder's defensive line still rates
+                // above 7.0 when warranted.
+                let cap = if self.pos == PlayerFieldPositionGroup::Forward {
+                    0.65
+                } else {
+                    0.95
+                };
+                soft_cap(positive_delta, cap, 0.30)
+            }
             // Tightened: passenger routine volume alone is severely
             // bounded. The engagement penalty + context damping handle
             // the rest of the "showed up, did nothing" signal.
             EvidenceTier::Passenger => soft_cap(positive_delta, 0.20, 0.15),
             EvidenceTier::AnonymousStarter => soft_cap(positive_delta, 1.1, 0.25),
-            EvidenceTier::GkBusy => soft_cap(positive_delta, 1.7, 0.40),
-            EvidenceTier::GkModest => soft_cap(positive_delta, 1.05, 0.35),
-            EvidenceTier::GkPassenger => soft_cap(positive_delta, 0.70, 0.25),
+            // GK caps tightened: the engine emits 0.5 conceded/game and
+            // 60% CS rates outside the elite leagues, which combined with
+            // a +1.05 GkModest cap and the unconditional clean-sheet
+            // bonus piled second-tier keepers into a 7.2-7.4 season-avg
+            // band that should be reserved for genuinely elite GKs.
+            EvidenceTier::GkBusy => soft_cap(positive_delta, 1.30, 0.35),
+            EvidenceTier::GkModest => soft_cap(positive_delta, 0.75, 0.30),
+            EvidenceTier::GkPassenger => soft_cap(positive_delta, 0.50, 0.20),
             EvidenceTier::Uncapped => positive_delta,
         }
     }
@@ -142,13 +193,28 @@ impl<'a> RatingContext<'a> {
     /// they were *on* the winning side but didn't contribute to the
     /// win. Real punditry distinguishes "rode the team's wave" from
     /// "earned the result"; this is the smallest stat-line proxy.
+    ///
+    /// Forwards get an additional damping when they have no G/A.
+    /// The spec's principle: a striker who wasn't part of any goal
+    /// has little claim on the team-result lift, regardless of how
+    /// the rest of the side performed. The damping is asymmetric
+    /// (positive context only) — being on the losing side still
+    /// hits a goalless forward at full strength.
     pub(super) fn context_credit_factor(&self, tier: EvidenceTier) -> f32 {
-        match tier {
+        let base = match tier {
             EvidenceTier::Passenger
             | EvidenceTier::AnonymousStarter
             | EvidenceTier::GkPassenger => 0.50,
             _ => 1.0,
+        };
+        if self.pos == PlayerFieldPositionGroup::Forward
+            && self.stats.goals == 0
+            && self.stats.assists == 0
+            && self.stats.minutes_played >= 30
+        {
+            return base * 0.20;
         }
+        base
     }
 
     /// Engagement penalty for low-touch starters. Pure stat-line

@@ -56,11 +56,10 @@ impl PlayerStatCompetitionKind {
     }
 
     /// True when entries of this kind contribute to career history rows.
-    /// League stints are the spine of a player's career; continental cups
-    /// fold into the season's League row. Domestic cups and friendlies
-    /// are deliberately excluded.
+    /// League stints are the spine of a player's career; competitive cups
+    /// fold into the season's League row. Friendlies stay overview-only.
     pub fn counts_toward_career_history(self) -> bool {
-        matches!(self, Self::League | Self::ContinentalCup)
+        !matches!(self, Self::Friendly)
     }
 }
 

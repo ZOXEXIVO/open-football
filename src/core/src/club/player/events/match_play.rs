@@ -37,6 +37,11 @@ impl Player {
         }
         self.record_match_events(o);
         self.record_match_reputation(o);
+        // After the routine post-match bookkeeping, see if this fixture
+        // also clears the dedicated "big match" trust bar — derby / cup
+        // final / continental knockout starters get the dedicated
+        // `TrustedInBigMatch` row on top of the regular debrief.
+        self.maybe_emit_big_match_trust(o);
     }
 
     /// Named to a squad but never got off the bench. Synthesises a
@@ -101,6 +106,10 @@ impl Player {
         if let Some(fu) = follow_up {
             event_ctx = event_ctx.with_follow_up(fu);
         }
+        // Clone before move: the tactical-role / big-match detectors
+        // below need the same metadata the renderer just took ownership
+        // of, and the borrow checker doesn't let us read after move.
+        let snapshot = ctx.clone();
         event_ctx = event_ctx.with_selection_context(ctx);
 
         self.happiness.add_event_with_context(
@@ -119,6 +128,20 @@ impl Player {
         }
 
         self.evaluate_role_transition();
+
+        // Two follow-on emits keyed off the same selection snapshot:
+        //
+        // * Tactical-role frustration aggregator — a player whose recent
+        //   drop history is loaded with "no natural role" / "tactical
+        //   mismatch" omissions hears it as a system problem, not a one-
+        //   off snub. Gated to `>= 3` recent same-flavour drops by the
+        //   helper so casual rotation never trips it.
+        // * Big-match bench — derby / cup final / continental knockout
+        //   omission of an expected starter. Gated by the helper on
+        //   match importance, scope, and protective reasons (rest /
+        //   returning from injury are not "benched", they're protected).
+        self.maybe_emit_tactical_role_mismatch(&snapshot);
+        self.maybe_emit_big_match_bench(&snapshot);
     }
 
     fn record_match_appearance(&mut self, o: &MatchOutcome<'_>) {

@@ -392,6 +392,14 @@ impl Player {
         }
         // If gave_up_on_salary: keep last_salary_negotiation but don't request improvements
 
+        // Manager-relationship arc aggregator + private-talk request.
+        // Run after factors but before the unhappy status flag so a
+        // brand-new ManagerTrustEroding row can also drag the unhappy
+        // verdict in the same tick. Each has its own cooldown so the
+        // weekly tick produces at most one of these rows per player.
+        self.maybe_emit_manager_trust_arc();
+        self.maybe_emit_asked_for_private_talk();
+
         // Set Unh status if morale < 35. Recovery back to "normal" happens
         // when morale climbs above 50 — OR when morale is above 40 and the
         // player is clearly getting the match minutes they expect (the

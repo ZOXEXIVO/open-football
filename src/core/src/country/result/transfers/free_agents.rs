@@ -2495,6 +2495,13 @@ mod emergency_fill_tests {
 
     #[test]
     fn urgent_club_reaches_eleven_in_one_tick_with_plausible_pool() {
+        // Pin the shared sim RNG so the per-candidate acceptance roll
+        // sequence is deterministic — otherwise this test is at the
+        // mercy of whatever earlier tests in the suite drained from
+        // the thread-local stream, and one or two unlucky rejects
+        // tip the signings count under the 11 floor.
+        crate::utils::random::engine::RandomEngine::set_seed(0xE11E_C7AB_u64);
+
         // Empty squad + plenty of plausible candidates → adaptive cap
         // lifts to the playable-size floor. The signing budget is
         // capped by the country-wide cap, but with 20 of room and a

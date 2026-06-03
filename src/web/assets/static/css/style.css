@@ -299,7 +299,7 @@ a:active {
     gap: 10px;
     padding: 8px 16px;
     color: #6e7b85;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 400;
     transition:
         color 0.12s,
@@ -353,6 +353,7 @@ a:active {
     margin: 4px 2px;
     padding: 8px 14px;
     color: #14b8a6;
+    font-size: 15px;
     font-weight: 600;
     background: none;
     border: none;
@@ -2531,6 +2532,7 @@ a:active {
 
 .fm-ph-value {
     font-size: 1em !important;
+    font-weight: 300;
 }
 
 .fm-ph-contracted {
@@ -4086,7 +4088,7 @@ a:active {
 
 .fm-stats tbody td {
     padding: 9px 8px;
-    font-size: 15px;
+    font-size: 14px;
     color: #a8b6c0;
     text-align: center;
     border-bottom: 1px solid rgba(255, 255, 255, 0.025);
@@ -4203,7 +4205,7 @@ a:active {
 }
 
 .fm-history-table thead th.sq-stat {
-    width: 6em;
+    width: 7em;
 }
 
 .fm-history-table td.sq-nat {

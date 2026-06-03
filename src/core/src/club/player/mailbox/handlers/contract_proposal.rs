@@ -138,6 +138,7 @@ impl ProcessContractHandler {
                 min_acceptable_years,
                 RejectionReason::ShortContract,
             );
+            Self::emit_rejected_contract_offer(player, &proposal, RejectionReason::ShortContract);
             log_rejection(player, &proposal, now);
             return;
         }
@@ -158,6 +159,11 @@ impl ProcessContractHandler {
                     &proposal,
                     now,
                     min_acceptable_years,
+                    RejectionReason::StatusBelowExpectation,
+                );
+                Self::emit_rejected_contract_offer(
+                    player,
+                    &proposal,
                     RejectionReason::StatusBelowExpectation,
                 );
                 log_rejection(player, &proposal, now);
@@ -256,6 +262,11 @@ impl ProcessContractHandler {
                             min_acceptable_years,
                             RejectionReason::LowSalary,
                         );
+                        Self::emit_rejected_contract_offer(
+                            player,
+                            &proposal,
+                            RejectionReason::LowSalary,
+                        );
                         log_rejection(player, &proposal, now);
                         return;
                     }
@@ -268,6 +279,11 @@ impl ProcessContractHandler {
                             &proposal,
                             now,
                             min_acceptable_years,
+                            RejectionReason::LowSalary,
+                        );
+                        Self::emit_rejected_contract_offer(
+                            player,
+                            &proposal,
                             RejectionReason::LowSalary,
                         );
                         log_rejection(player, &proposal, now);
@@ -347,6 +363,7 @@ impl ProcessContractHandler {
                                 .map(|v| v as u64);
                             Self::maybe_emit_release_clause_demanded(player, now, demanded);
                         }
+                        Self::emit_rejected_contract_offer(player, &proposal, reason);
                         log_rejection(player, &proposal, now);
                     }
                 } else {
@@ -393,6 +410,11 @@ impl ProcessContractHandler {
                             min_acceptable_years,
                             RejectionReason::LowSalary,
                         );
+                        Self::emit_rejected_contract_offer(
+                            player,
+                            &proposal,
+                            RejectionReason::LowSalary,
+                        );
                         log_rejection(player, &proposal, now);
                     }
                 }
@@ -431,21 +453,105 @@ impl ProcessContractHandler {
                     accept_and_clear(player, proposal, now);
                 } else {
                     result.contract.contract_rejected = true;
-                    record_counter_offer(
-                        player,
-                        &proposal,
-                        now,
-                        min_acceptable_years,
-                        if !meets_floor {
-                            RejectionReason::LowSalary
-                        } else {
-                            RejectionReason::AmbitionMismatch
-                        },
-                    );
+                    let reason = if !meets_floor {
+                        RejectionReason::LowSalary
+                    } else {
+                        RejectionReason::AmbitionMismatch
+                    };
+                    record_counter_offer(player, &proposal, now, min_acceptable_years, reason);
+                    Self::emit_rejected_contract_offer(player, &proposal, reason);
                     log_rejection(player, &proposal, now);
                 }
             }
         }
+    }
+
+    /// Emit a visible [`RejectedContractOffer`] event after the player /
+    /// agent turned down a proposal. The morale hit lives here rather
+    /// than at every reject branch above so the cause-evidence wiring
+    /// stays in one place. Cooldowned so a club that re-offers the same
+    /// week doesn't double-fire the event.
+    ///
+    /// [`RejectedContractOffer`]: HappinessEventType::RejectedContractOffer
+    fn emit_rejected_contract_offer(
+        player: &mut Player,
+        proposal: &PlayerContractProposal,
+        reason: RejectionReason,
+    ) {
+        // Don't restate the same rejection in a tight window — the club
+        // hasn't had a chance to come back with a meaningfully different
+        // offer yet.
+        if player
+            .happiness
+            .has_recent_event(&HappinessEventType::RejectedContractOffer, 21)
+        {
+            return;
+        }
+        let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+        let wage_ratio = if current_salary > 0 {
+            proposal.salary as f32 / current_salary as f32
+        } else {
+            1.0
+        };
+
+        let evidence = match reason {
+            RejectionReason::LowSalary | RejectionReason::NoSweetener => {
+                ContractEventEvidence::RejectedOverWage
+            }
+            RejectionReason::StatusBelowExpectation => {
+                ContractEventEvidence::RejectedOverRole
+            }
+            RejectionReason::NoReleaseClause => ContractEventEvidence::RejectedOverReleaseClause,
+            RejectionReason::ShortContract => ContractEventEvidence::RejectedOverLength,
+            RejectionReason::AmbitionMismatch => ContractEventEvidence::RejectedOverAmbition,
+        };
+
+        let mut cctx = ContractEventContext::new(ContractEventKind::OfferRejectedByPlayer)
+            .with_wage_vs_previous(wage_ratio)
+            .with_years_remaining(proposal.years)
+            .with_evidence(evidence);
+        if player.attributes.ambition >= 14.0 {
+            cctx = cctx.with_evidence(ContractEventEvidence::HighAmbition);
+        }
+        if player.attributes.loyalty <= 7.0 {
+            cctx = cctx.with_evidence(ContractEventEvidence::LowLoyalty);
+        }
+        let has_other_interest = player.statuses.get().iter().any(|s| {
+            matches!(
+                s,
+                PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid
+            )
+        });
+        if has_other_interest {
+            cctx = cctx.with_evidence(ContractEventEvidence::HasOtherInterest);
+        }
+
+        // Magnitude scales by the dominant reason — ambition / role
+        // rejections sting more than a wage haggle.
+        let base = HappinessConfig::default()
+            .catalog
+            .magnitude(HappinessEventType::RejectedContractOffer);
+        let reason_mul = match reason {
+            RejectionReason::AmbitionMismatch | RejectionReason::StatusBelowExpectation => 1.25,
+            RejectionReason::NoReleaseClause => 1.10,
+            RejectionReason::ShortContract => 0.85,
+            _ => 1.0,
+        };
+        let magnitude = base * reason_mul;
+
+        let happiness_ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            HappinessEventScope::Boardroom,
+        )
+        .with_contract_context(cctx);
+        player.happiness.add_event_with_context_and_cooldown(
+            HappinessEventType::RejectedContractOffer,
+            magnitude,
+            None,
+            happiness_ctx,
+            21,
+        );
     }
 
     /// Promote a private "no release clause" rejection into a visible,
@@ -698,5 +804,72 @@ mod tests {
         ProcessContractHandler::maybe_emit_release_clause_demanded(&mut p, now, Some(20_000_000));
         ProcessContractHandler::maybe_emit_release_clause_demanded(&mut p, now, Some(20_000_000));
         assert_eq!(count_demanded(&p), 1, "90-day cooldown blocks the repeat");
+    }
+
+    fn rejected_count(player: &Player) -> usize {
+        player
+            .happiness
+            .recent_events
+            .iter()
+            .filter(|e| e.event_type == HappinessEventType::RejectedContractOffer)
+            .count()
+    }
+
+    fn make_proposal(salary: u32, years: u8) -> PlayerContractProposal {
+        PlayerContractProposal::basic(salary, years, 10, 0, 0, None)
+    }
+
+    #[test]
+    fn rejected_contract_offer_records_reason_evidence() {
+        let mut p = build(15.0, 10.0, 5_000);
+        let proposal = make_proposal(50_000, 2);
+        ProcessContractHandler::emit_rejected_contract_offer(
+            &mut p,
+            &proposal,
+            RejectionReason::AmbitionMismatch,
+        );
+        assert_eq!(rejected_count(&p), 1);
+        let stored = p
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::RejectedContractOffer)
+            .unwrap();
+        let cc = stored
+            .context
+            .as_ref()
+            .and_then(|c| c.contract_context.as_ref())
+            .expect("contract context attached");
+        assert!(matches!(
+            cc.kind,
+            crate::ContractEventKind::OfferRejectedByPlayer
+        ));
+        assert!(
+            cc.evidence
+                .contains(&crate::ContractEventEvidence::RejectedOverAmbition),
+            "rejection reason must surface as evidence: {:?}",
+            cc.evidence
+        );
+    }
+
+    #[test]
+    fn rejected_contract_offer_cooldown_prevents_double_fire() {
+        let mut p = build(15.0, 10.0, 5_000);
+        let proposal = make_proposal(50_000, 2);
+        ProcessContractHandler::emit_rejected_contract_offer(
+            &mut p,
+            &proposal,
+            RejectionReason::LowSalary,
+        );
+        ProcessContractHandler::emit_rejected_contract_offer(
+            &mut p,
+            &proposal,
+            RejectionReason::LowSalary,
+        );
+        assert_eq!(
+            rejected_count(&p),
+            1,
+            "21-day cooldown blocks a same-week refire"
+        );
     }
 }

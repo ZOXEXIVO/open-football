@@ -48,6 +48,13 @@ pub struct MatchOutcome<'a> {
     pub team_won: bool,
     /// Did this player's team lose the match?
     pub team_lost: bool,
+    /// True when this is a continental competition match (UCL, UEL,
+    /// Conference, Libertadores). Lets the events feed promote a
+    /// regular cup tie into a "knockout" headline only when continental.
+    pub is_continental: bool,
+    /// Opponent team id, when known. Used by the relationship-arc
+    /// emit path to name the rival in the headline / detail row.
+    pub opponent_team_id: Option<u32>,
 }
 
 impl<'a> MatchOutcome<'a> {
@@ -58,6 +65,43 @@ impl<'a> MatchOutcome<'a> {
     pub fn goal_margin(&self) -> i8 {
         let g = self.team_goals_for as i16 - self.team_goals_against as i16;
         g.clamp(i8::MIN as i16, i8::MAX as i16) as i8
+    }
+
+    /// Classify this fixture as one of the dedicated "big match" kinds,
+    /// or `None` for a routine league game. The render-side
+    /// `BigMatchKind` enum is the closed catalog of headline-worthy
+    /// fixtures; emit sites use this to decide whether to fire
+    /// `TrustedInBigMatch` / `BenchedForBigMatch`. We deliberately don't
+    /// promote a plain domestic cup round-1 tie to "big" — only the
+    /// late-stage / final / continental cases qualify.
+    pub fn big_match_kind(&self) -> Option<crate::BigMatchKind> {
+        use crate::BigMatchKind;
+        // Friendlies never qualify as "big" — pre-season minutes don't
+        // carry the same psychological weight.
+        if self.is_friendly {
+            return None;
+        }
+        if self.is_continental && self.is_cup {
+            // Continental cups in this sim are always knockout-flavoured
+            // once we reach the dedicated competition IDs (group stage
+            // ties already feature on the badge so trust still applies).
+            return Some(BigMatchKind::ContinentalKnockout);
+        }
+        if self.is_derby {
+            return Some(BigMatchKind::Derby);
+        }
+        // Domestic cup ties below the continental tier — we only promote
+        // them to "big" once the slug carries the conventional
+        // late-round marker. Most generators name the bracket cup
+        // straightforwardly enough that the slug check covers the
+        // realistic case without dragging the full bracket through.
+        if self.is_cup {
+            let slug = self.competition_slug.to_ascii_lowercase();
+            if slug.contains("final") || slug.contains("semi") || slug.contains("quarter") {
+                return Some(BigMatchKind::NationalCupSemiOrLater);
+            }
+        }
+        None
     }
 }
 

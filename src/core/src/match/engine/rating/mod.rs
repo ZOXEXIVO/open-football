@@ -202,12 +202,17 @@ impl Profile {
                 goalkeeping: 0.0,
             },
             PlayerFieldPositionGroup::Forward => Profile {
+                // Forward weights skew hard toward decisive output:
+                // goals / assists / direct goal threat. Routine creation,
+                // progression, retention, and defensive work register but
+                // can't carry a forward into the good-rating band on
+                // their own — that's the spec's role expectation.
                 scoring: 1.00,
-                shooting: 1.10,
-                creation: 0.95,
-                progression: 0.75,
-                retention: 0.55,
-                defensive: 0.35,
+                shooting: 1.05,
+                creation: 0.60,
+                progression: 0.45,
+                retention: 0.30,
+                defensive: 0.20,
                 goalkeeping: 0.0,
             },
         }
@@ -336,6 +341,11 @@ impl<'a> RatingContext<'a> {
         ) {
             rating += self.engagement_penalty();
         }
+        // Forward role-expectation drag: a forward who played meaningful
+        // minutes without G/A and without enough goal threat / creative
+        // footprint hasn't done their primary job. Pure stat-line read,
+        // smooth penalty (no hard cap), self-zero outside the gate.
+        rating += self.attacking_role_expectation();
 
         rating.clamp(RATING_MIN, RATING_MAX)
     }

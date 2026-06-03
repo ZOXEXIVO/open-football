@@ -223,6 +223,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 player_out_id: sub_record.player_out_id,
                 player_in_id: sub_record.player_in_id,
                 match_time_ms: sub_record.match_time,
+                reason: sub_record.reason,
             });
         }
 

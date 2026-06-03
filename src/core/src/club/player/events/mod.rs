@@ -24,6 +24,7 @@
 
 pub mod career;
 pub mod discipline;
+pub mod manager_relationship;
 pub mod match_exertion;
 pub mod match_play;
 pub mod role;
@@ -31,6 +32,8 @@ pub mod scaling;
 pub mod transfer;
 pub mod transfer_social;
 pub mod types;
+
+pub use manager_relationship::BigMatchClassifier;
 
 pub use career::{
     AwardReputationInput, AwardReputationKind, AwardTimelineEntry, PlayerAwardsCount,

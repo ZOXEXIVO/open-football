@@ -142,10 +142,22 @@ impl Player {
                     BodyPart::from_u8(self.player_attributes.last_injury_body_part)
                 {
                     let injury = Self::injury_for_body_part(body_part);
+                    let new_recovery_days = injury.recovery_days();
                     self.player_attributes.set_injury(injury);
                     self.statuses.remove(PlayerStatusType::Lmp);
                     self.statuses.add(now, PlayerStatusType::Inj);
                     result.injury_occurred = Some(injury);
+                    // Reinjury during recovery — fire the dedicated
+                    // `InjurySetback` event. We treat it as
+                    // `RecurrenceConcern` because the same body part
+                    // broke down twice, the player and the staff have
+                    // a real recurring-injury story now.
+                    self.on_injury_setback(
+                        InjuryRecoveryStage::InjuryRecurrenceConcern,
+                        new_recovery_days,
+                        self.skills.physical.match_readiness,
+                        true,
+                    );
                     return;
                 }
             }

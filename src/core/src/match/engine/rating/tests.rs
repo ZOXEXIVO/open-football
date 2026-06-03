@@ -207,14 +207,14 @@ fn two_goals_can_reach_eight_but_not_nine_without_all_round_volume() {
 
 #[test]
 fn creative_no_goal_forward_outrates_passive_baseline() {
-    // A creator-shape forward without a goal (3 KP + 3 box entries
-    // + 3 successful dribbles + 4 progressive carries) lands in
-    // the upper 6s under the new evidence-based calibration —
-    // observable creative work without a finishing event sits
-    // between "ordinary" (6.0-6.9) and "good performer" (7.0-7.4)
-    // rather than auto-claiming the latter on routine alone. We
-    // pin the relative ordering (creative > passive baseline) and
-    // a tight band that prevents an unrelated regression.
+    // A creator-shape forward without a goal or assist (3 KP + 3 box
+    // entries + 3 successful dribbles + 4 progressive carries) lands
+    // in the mid-sixes under the role-expectation calibration —
+    // creative work without a finishing event puts a forward above
+    // an anonymous teammate, but never into the "good performer"
+    // band. The seven-tier ladder + context damping + role
+    // expectation all push together. We pin the relative ordering
+    // (creative > passive) and a band that prevents inflation regressions.
     let mut fwd = make_stats(
         0,
         0,
@@ -258,8 +258,8 @@ fn creative_no_goal_forward_outrates_passive_baseline() {
         base_r
     );
     assert!(
-        r >= 6.7 && r < 7.4,
-        "creative forward rated {} — should land 6.7..7.4 (top of ordinary / lower good)",
+        r >= 6.0 && r < 6.8,
+        "creative forward rated {} — should land 6.0..6.8 (mid sixes; no G/A means no good-performer band)",
         r
     );
 }
@@ -1604,6 +1604,12 @@ fn engagement_penalty_position_floors_calibrated() {
     // expected to touch the ball more than defenders, defenders more
     // than forwards. Verify a 27-touch / 90-min line falls below the
     // MID floor (penalty fires) but not the DEF or FWD floors.
+    //
+    // Assert the engagement-penalty term directly — the combined
+    // rating also folds in the forward role-expectation drag, which
+    // is a separate signal (a goalless forward with zero attacking
+    // footprint IS more penalised overall than a goalless DEF, even
+    // when their touch volume sits above the FWD engagement floor).
     let mut mid = make_stats(
         0,
         0,
@@ -1628,25 +1634,25 @@ fn engagement_penalty_position_floors_calibrated() {
         s.position_group = PlayerFieldPositionGroup::Forward;
         s
     };
-    let mid_r = RatingContext::new(&mid, 1, 1).calculate();
-    let def_r = RatingContext::new(&def, 1, 1).calculate();
-    let fwd_r = RatingContext::new(&fwd, 1, 1).calculate();
-    // MID floor 0.50 vs 0.30 actual → significant penalty
+    let mid_pen = RatingContext::new(&mid, 1, 1).engagement_penalty();
+    let def_pen = RatingContext::new(&def, 1, 1).engagement_penalty();
+    let fwd_pen = RatingContext::new(&fwd, 1, 1).engagement_penalty();
+    // MID floor 0.50 vs 0.30 actual → significant penalty (more negative)
     // DEF floor 0.40 vs 0.30 actual → small penalty
-    // FWD floor 0.30 vs 0.30 actual → at floor, no penalty
+    // FWD floor 0.30 vs 0.30 actual → at floor, no penalty (zero)
     assert!(
-        mid_r < def_r,
-        "MID ({}) should be more penalised than DEF ({}) at \
+        mid_pen < def_pen,
+        "MID engagement penalty ({}) should be more negative than DEF ({}) at \
              0.30 touches/min — higher position-typical floor",
-        mid_r,
-        def_r
+        mid_pen,
+        def_pen
     );
     assert!(
-        def_r < fwd_r,
-        "DEF ({}) should be more penalised than FWD ({}) at \
+        def_pen < fwd_pen,
+        "DEF engagement penalty ({}) should be more negative than FWD ({}) at \
              0.30 touches/min — DEF floor 0.40, FWD floor 0.30",
-        def_r,
-        fwd_r
+        def_pen,
+        fwd_pen
     );
 }
 
@@ -1698,6 +1704,596 @@ fn engagement_penalty_skips_short_cameos() {
     );
 }
 
+// ===========================================================
+// Role-based rating expectations (spec rebalance).
+//
+// These pin the natural calibration target: a forward without
+// G/A can't ride routine volume into the good-rating band, but
+// a GK/DEF/MID can still earn a good rating on role-specific
+// stat-line evidence. All checks are pure stat-line reads.
+// ===========================================================
+
+// ─── Forwards ───────────────────────────────────────────────
+
+#[test]
+fn forward_no_goal_no_assist_with_routine_volume_stays_below_6_5() {
+    // 90 min, no G/A, modest shooting, light dribbling + pressing.
+    // The forward did *something* — but none of it threatened the
+    // goal. Spec target: naturally below 6.5 (no hard cap).
+    let mut s = make_stats(
+        0,
+        0,
+        25,
+        19,
+        1,
+        3,
+        0,
+        0,
+        0,
+        0.3,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    s.successful_dribbles = 2;
+    s.attempted_dribbles = 4;
+    s.successful_pressures = 2;
+    s.pressures = 6;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r < 6.5,
+        "routine no-G/A FWD rated {} — primary role unfulfilled, must stay below 6.5",
+        r
+    );
+}
+
+#[test]
+fn creative_forward_no_goal_no_assist_stays_around_mid_sixes() {
+    // A creative forward without G/A — repeatedly broke the line
+    // for teammates but didn't put anything in or set up a goal.
+    // Above an anonymous forward, well below a good-performer rating.
+    let mut s = make_stats(
+        0,
+        0,
+        35,
+        28,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.6,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    s.key_passes = 3;
+    s.passes_into_box = 3;
+    s.successful_dribbles = 3;
+    s.attempted_dribbles = 4;
+    s.progressive_carries = 4;
+    s.xg_buildup = 0.4;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r >= 6.0 && r <= 6.8,
+        "creative no-G/A FWD rated {} — should land in the mid-sixes",
+        r
+    );
+}
+
+#[test]
+fn pressing_forward_no_goal_no_assist_does_not_clear_good_rating() {
+    // High-press forward: lots of pressing volume + a couple of
+    // ground duels won, but zero goal threat and no creative
+    // footprint. Defensive work helps slightly; it cannot carry a
+    // forward into a good rating.
+    let mut s = make_stats(
+        0,
+        0,
+        22,
+        17,
+        0,
+        0,
+        1,
+        2,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    s.successful_pressures = 8;
+    s.pressures = 18;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r < 7.0,
+        "pressing-only FWD rated {} — defensive volume cannot carry a forward past 7.0 without G/A",
+        r
+    );
+}
+
+#[test]
+fn wasteful_high_xg_forward_is_penalized() {
+    // 6 shots / 2 SOT / 2.5 xG / 0 goals — the canonical "missed
+    // sitter" shift. Strong wasted-xG drag in shooting() AND in
+    // attacking_role_expectation() should pull this well below
+    // 6.5 even though the forward looked busy on the shot board.
+    let mut s = make_stats(
+        0,
+        0,
+        20,
+        15,
+        2,
+        6,
+        0,
+        0,
+        0,
+        2.5,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r < 6.5,
+        "wasteful high-xG FWD rated {} — must be visibly penalised, never neutral or above",
+        r
+    );
+}
+
+#[test]
+fn one_goal_forward_clears_seven() {
+    // Low-volume forward with a single goal — the decisive moment
+    // must clear 7.0 naturally, even when the supporting line is
+    // thin. The role-expectation gate is off (goals > 0).
+    let mut s = make_stats(
+        1,
+        0,
+        15,
+        11,
+        1,
+        2,
+        0,
+        0,
+        0,
+        0.4,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r > 7.0,
+        "one-goal FWD rated {} — decisive output must clear 7.0",
+        r
+    );
+}
+
+#[test]
+fn assist_forward_with_creative_context_clears_seven() {
+    // No goal, one assist, surrounding creative line (2 KP + 2
+    // box entries + 2 successful dribbles + 2 progressive carries).
+    // The assist is the decisive event; the creative line confirms
+    // it. Spec: a goal *or* assist makes the forward a good
+    // performer.
+    let mut s = make_stats(
+        0,
+        1,
+        25,
+        20,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.key_passes = 2;
+    s.passes_into_box = 2;
+    s.successful_dribbles = 2;
+    s.attempted_dribbles = 3;
+    s.progressive_carries = 2;
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r > 7.0,
+        "assist + creative FWD rated {} — decisive output must clear 7.0",
+        r
+    );
+}
+
+#[test]
+fn two_goal_forward_can_reach_eight() {
+    // Clinical two-goal striker — modest shot volume, both on
+    // target, scored both from ~0.9 xG. The TwoGoals tier and
+    // clinical bonus combine naturally to reach 8.0+.
+    let mut s = make_stats(
+        2,
+        0,
+        18,
+        14,
+        2,
+        2,
+        0,
+        0,
+        0,
+        0.9,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 2, 0).calculate();
+    assert!(
+        r >= 8.0,
+        "two-goal FWD rated {} — clinical brace must reach 8.0",
+        r
+    );
+}
+
+// ─── Goalkeepers ────────────────────────────────────────────
+
+#[test]
+fn quiet_clean_sheet_gk_not_overrewarded() {
+    // 1 save off 1 shot faced, clean sheet, win. A keeper who
+    // basically wasn't tested gets the bookkeeping clean-sheet
+    // bonus but no save / xG-prevented credit to speak of.
+    let gk = make_gk(1, 1);
+    let r = RatingContext::new(&gk, 1, 0).calculate();
+    assert!(
+        r >= 6.0 && r < 7.2,
+        "quiet CS GK rated {} — should sit around the high-six band, not the good-performer band",
+        r
+    );
+}
+
+#[test]
+fn busy_clean_sheet_gk_rates_well() {
+    // 6 saves off 6 shots, clean sheet. Real keeper performance
+    // with workload absorbed + xG-prevented + save% lift.
+    let busy = make_gk(6, 6);
+    let r = RatingContext::new(&busy, 1, 0).calculate();
+    assert!(
+        r >= 7.2,
+        "busy CS GK rated {} — should comfortably exceed 7.2",
+        r
+    );
+}
+
+#[test]
+fn gk_with_many_saves_while_conceding_outscores_no_save_gk() {
+    // Two keepers each concede 3. The busy one made 5 saves off
+    // 8 shots; the inactive one made 0 off 3. Concede-blame is
+    // the same; the save / save% / workload signal differentiates.
+    let busy = make_gk(5, 8);
+    let inactive = make_gk(0, 3);
+    let busy_r = RatingContext::new(&busy, 0, 3).calculate();
+    let inactive_r = RatingContext::new(&inactive, 0, 3).calculate();
+    assert!(
+        busy_r > inactive_r + 0.6,
+        "busy 3-shipping GK ({}) must clearly outrate inactive 3-shipping GK ({})",
+        busy_r,
+        inactive_r
+    );
+}
+
+#[test]
+fn gk_error_to_goal_drops_rating_hard() {
+    // A defining failure moment lands at full strength regardless
+    // of minutes — an error-to-goal must pull the rating down by
+    // more than a full point.
+    let mut clean = make_gk(2, 3);
+    clean.minutes_played = 90;
+    let mut bad = clean.clone();
+    bad.errors_leading_to_goal = 1;
+    let clean_r = RatingContext::new(&clean, 1, 0).calculate();
+    let bad_r = RatingContext::new(&bad, 1, 1).calculate();
+    assert!(
+        clean_r - bad_r > 1.2,
+        "GK error-to-goal must drop hard: clean {} → err {}",
+        clean_r,
+        bad_r
+    );
+}
+
+// ─── Defenders ──────────────────────────────────────────────
+
+#[test]
+fn anonymous_clean_sheet_defender_stays_mid_six() {
+    // CB with realistic passing volume (35 passes) on a clean sheet
+    // but zero defensive activity. Clean sheet alone, with no
+    // defensive evidence behind it, sits at the bottom of the
+    // mid-sixes — the team got the shutout, not this player.
+    let mut s = make_stats(
+        0,
+        0,
+        35,
+        29,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Defender,
+    );
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r >= 6.0 && r < 6.7,
+        "anonymous CS DEF rated {} — should sit in the mid-sixes, never reach the good band",
+        r
+    );
+}
+
+#[test]
+fn ordinary_defender_without_clean_sheet_stays_low_six() {
+    // Routine defender shift in a 1-1 draw — 2 tackles, 1
+    // interception, 3 clearances. No own-box impact, no clean
+    // sheet, no win. Lands in the low-to-mid sixes.
+    let mut s = make_stats(
+        0,
+        0,
+        38,
+        35,
+        0,
+        0,
+        2,
+        1,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Defender,
+    );
+    s.clearances = 3;
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 1).calculate();
+    assert!(
+        r >= 6.0 && r <= 6.6,
+        "ordinary DEF in draw rated {} — should sit 6.0..6.6",
+        r
+    );
+}
+
+#[test]
+fn defender_with_major_box_interventions_can_clear_seven() {
+    // Heavy own-box workload: tackles + blocks + clearances inside
+    // the danger zone. Real stat-line evidence of a back-line shift
+    // that earned the result. Should comfortably clear 7.0.
+    let mut s = make_stats(
+        0,
+        0,
+        30,
+        24,
+        0,
+        0,
+        4,
+        4,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Defender,
+    );
+    s.clearances = 5;
+    s.blocks = 3;
+    s.zone_stats.tackles_own_box = 2;
+    s.zone_stats.blocks_own_box = 2;
+    s.zone_stats.clearances_own_box = 2;
+    s.zone_stats.clearances_own_six_yard = 1;
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r > 7.0,
+        "major-box-intervention DEF rated {} — high-danger work must clear 7.0",
+        r
+    );
+}
+
+#[test]
+fn busy_routine_defender_without_big_moments_not_overrewarded() {
+    // Busy routine CB on a clean-sheet win: 6/4 tackles+ints, 7
+    // clearances, 4 successful pressures. No zone events, no
+    // creative output. Spec: routine work doesn't auto-claim the
+    // good-rating band.
+    let mut s = make_stats(
+        0,
+        0,
+        30,
+        25,
+        0,
+        0,
+        6,
+        4,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Defender,
+    );
+    s.clearances = 7;
+    s.blocks = 2;
+    s.successful_pressures = 4;
+    s.pressures = 10;
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r < 7.3,
+        "busy routine DEF rated {} — no big moments must keep this below 7.3",
+        r
+    );
+}
+
+// ─── Midfielders ────────────────────────────────────────────
+
+#[test]
+fn safe_recycler_without_progression_stays_below_6_5() {
+    // High-completion midfielder with no progression, no key passes,
+    // no defensive footprint. The passenger gate + retention cap
+    // keep this below 6.5 even on a clean-sheet win.
+    let mut s = make_stats(
+        0,
+        0,
+        60,
+        57,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r < 6.5,
+        "safe recycler rated {} — pass% alone must not clear 6.5",
+        r
+    );
+}
+
+#[test]
+fn ordinary_midfielder_stays_mid_six() {
+    // Spec stat line: 35/42 passes (~83%), 1 progressive pass,
+    // 1 tackle, 1 interception, no decisive event. 1-1 draw.
+    let mut s = make_stats(
+        0,
+        0,
+        42,
+        35,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.progressive_passes = 1;
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 1).calculate();
+    assert!(
+        r >= 6.0 && r <= 6.7,
+        "ordinary MID rated {} — should sit in the mid-sixes",
+        r
+    );
+}
+
+#[test]
+fn good_creator_without_assist_can_reach_high_sixes() {
+    // Creator without assist: 3 KP + 2 box entries + 5 progressive
+    // passes + xG buildup. The Strong tier + creative footprint
+    // lift this into the high-sixes / low-sevens — no decisive
+    // event makes it a *good* performer, never *great*.
+    let mut s = make_stats(
+        0,
+        0,
+        50,
+        42,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.key_passes = 3;
+    s.passes_into_box = 2;
+    s.progressive_passes = 5;
+    s.progressive_carries = 2;
+    s.xg_buildup = 0.4;
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r >= 6.7 && r <= 7.4,
+        "good creator MID rated {} — should land high-six / low-seven",
+        r
+    );
+}
+
+#[test]
+fn decisive_playmaker_with_assist_clears_seven_role() {
+    // An assist + surrounding creative footprint. The decisive
+    // event clears the good-performer threshold.
+    let mut s = make_stats(
+        0,
+        1,
+        50,
+        42,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.key_passes = 2;
+    s.passes_into_box = 1;
+    s.progressive_passes = 2;
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r > 7.0,
+        "decisive playmaker rated {} — assist + creation must clear 7.0",
+        r
+    );
+}
+
+#[test]
+fn defensive_midfielder_with_major_work_can_clear_seven() {
+    // Ball-winning + progression — destroyer profile. Real
+    // defensive evidence in a winning side lifts naturally past
+    // the good-performer threshold.
+    let mut s = make_stats(
+        0,
+        0,
+        45,
+        38,
+        0,
+        0,
+        5,
+        5,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.successful_pressures = 6;
+    s.pressures = 12;
+    s.blocks = 2;
+    s.progressive_passes = 5;
+    s.progressive_carries = 3;
+    s.carry_distance = 1400;
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r > 7.0,
+        "destroyer MID rated {} — ball-winning + progression must clear 7.0",
+        r
+    );
+}
+
+#[test]
+fn losing_routine_midfielder_not_overrewarded() {
+    // 0-2 defeat, routine line: 50/42 passes, 2 progressive, 2/2
+    // tackles+ints, modest pressing. No decisive event. The loss
+    // drag + lack of decisive evidence keep this below 6.8.
+    let mut s = make_stats(
+        0,
+        0,
+        50,
+        42,
+        0,
+        0,
+        2,
+        2,
+        0,
+        0.0,
+        PlayerFieldPositionGroup::Midfielder,
+    );
+    s.progressive_passes = 2;
+    s.successful_pressures = 3;
+    s.pressures = 8;
+    s.minutes_played = 90;
+    let r = RatingContext::new(&s, 0, 2).calculate();
+    assert!(
+        r < 6.8,
+        "losing routine MID rated {} — defeat + no decisive output should keep this sub-6.8",
+        r
+    );
+}
+
 #[test]
 fn passenger_context_credit_halved_but_loss_drag_full() {
     // A passenger should not get the full win bonus (didn't earn
@@ -1730,5 +2326,139 @@ fn passenger_context_credit_halved_but_loss_drag_full() {
              negative context unchanged)",
         loss_drag,
         win_lift
+    );
+}
+
+// ===========================================================
+// Season-average regression — a 20-match goalless-forward shift
+// must not drift above ~6.6 even on a winning team. This pins
+// the symptom that drove the recent calibration: forwards with
+// modest-but-not-decisive lines averaging 6.9 over many games.
+// ===========================================================
+
+#[test]
+fn goalless_forward_modest_line_winning_season_averages_in_mid_sixes() {
+    // Repeat shift: 25/19 passes, 1 SOT off 2 shots, xG 0.3, two
+    // dribbles, one tackle / interception. Forward sits in the
+    // Modest evidence tier (xG ≥ 0.4 doesn't trigger; 1 SOT does).
+    // Always a 1-0 win — best-case for routine accumulation.
+    let mut s = make_stats(
+        0,
+        0,
+        25,
+        19,
+        1,
+        2,
+        1,
+        1,
+        0,
+        0.3,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    s.successful_dribbles = 2;
+    s.attempted_dribbles = 3;
+    s.successful_pressures = 2;
+    s.pressures = 5;
+    let r = RatingContext::new(&s, 1, 0).calculate();
+    assert!(
+        r < 6.6,
+        "goalless modest-line FWD rated {} on a 1-0 win — over 20 such \
+             shifts the season average must not drift above 6.6, or the \
+             primary-role expectation is being underweighted",
+        r
+    );
+}
+
+// ─── GK calibration regression — second-tier "robot" symptom ───
+//
+// Pichienko (Serie B, 26 apps, 0.46 conceded/game, 16 CS) and
+// Casanova (Argentine Primera, 13 apps, 0.46 conceded/game, 10 CS)
+// were averaging 7.11-7.37 over full seasons — the unconditional
+// +0.30 CS bonus stacked on GkModest's +1.05 routine cap.
+
+#[test]
+fn moderate_workload_clean_sheet_gk_stays_under_seven_two() {
+    // 3 saves, 4 shots faced, clean sheet, win. Typical "did the job"
+    // GK shift — enough saves to qualify for the modest CS bonus,
+    // not enough to clear the busy bar. Should land around 7.0,
+    // not 7.3+.
+    let mut gk = make_gk(3, 4);
+    gk.minutes_played = 90;
+    let r = RatingContext::new(&gk, 1, 0).calculate();
+    assert!(
+        r < 7.2,
+        "moderate-workload CS GK rated {} — average shutout shifts \
+             must stay below 7.2 so season averages don't drift past 7.0",
+        r
+    );
+}
+
+#[test]
+fn quiet_clean_sheet_gk_stays_in_high_six_band() {
+    // 1 save / 2 shots faced, clean sheet, win. Quiet shutout: the
+    // back four did the work. The bookkeeping CS bonus only — not
+    // the full +0.30 — so a season of such matches averages well
+    // below 7.0.
+    let mut gk = make_gk(1, 2);
+    gk.minutes_played = 90;
+    let r = RatingContext::new(&gk, 1, 0).calculate();
+    assert!(
+        r < 7.0,
+        "quiet CS GK rated {} — back-four-protected shutouts must not \
+             cross 7.0 or every second-tier keeper averages 7.2+",
+        r
+    );
+}
+
+#[test]
+fn busy_clean_sheet_gk_still_rewards_real_work() {
+    // 5 saves, 7 shots faced, clean sheet, win. Earned the CS — the
+    // full bonus + busy-GK routine cap should comfortably clear 7.2.
+    let mut gk = make_gk(5, 7);
+    gk.minutes_played = 90;
+    let r = RatingContext::new(&gk, 1, 0).calculate();
+    assert!(
+        r > 7.1,
+        "busy CS GK rated {} — a 5-save shutout must remain a clearly \
+             good rating after the GK tier rebalance",
+        r
+    );
+}
+
+#[test]
+fn goalless_forward_near_strong_line_winning_season_averages_below_six_eight() {
+    // Near-Strong-tier shift: 2 SOT, xG 0.5, 2 KP, 1 box pass, 2
+    // dribbles, light defensive work, a clean-sheet win. Previously
+    // this stat-line could pile up routine positives to +0.95 and
+    // pick up the full team-result lift, drifting season averages
+    // for top-club goalless forwards into 6.9+. Pin it firmly in
+    // the high-sixes ceiling — still a decent shift, not a good one.
+    let mut s = make_stats(
+        0,
+        0,
+        30,
+        25,
+        2,
+        3,
+        1,
+        2,
+        0,
+        0.5,
+        PlayerFieldPositionGroup::Forward,
+    );
+    s.minutes_played = 90;
+    s.key_passes = 2;
+    s.passes_into_box = 1;
+    s.successful_dribbles = 2;
+    s.attempted_dribbles = 3;
+    s.progressive_passes = 2;
+    s.progressive_carries = 2;
+    let r = RatingContext::new(&s, 2, 0).calculate();
+    assert!(
+        r < 6.8,
+        "goalless near-Strong FWD rated {} on a 2-0 win — busy routine \
+             without a goal contribution must stay below 6.8",
+        r
     );
 }

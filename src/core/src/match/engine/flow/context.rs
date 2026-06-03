@@ -70,6 +70,10 @@ pub struct SubstitutionRecord {
     pub player_out_id: u32,
     pub player_in_id: u32,
     pub match_time: u64,
+    /// Reason the swap fired. Stamped at the call-site so post-match
+    /// emit logic can distinguish protective swaps (injury / youth)
+    /// from discretionary tactical hooks.
+    pub reason: crate::r#match::engine::flow::result::SubstitutionReason,
 }
 
 pub struct MatchContext {
@@ -507,12 +511,14 @@ impl MatchContext {
         player_out_id: u32,
         player_in_id: u32,
         match_time: u64,
+        reason: crate::r#match::engine::flow::result::SubstitutionReason,
     ) {
         self.substitutions.push(SubstitutionRecord {
             team_id,
             player_out_id,
             player_in_id,
             match_time,
+            reason,
         });
     }
 

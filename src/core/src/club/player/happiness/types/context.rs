@@ -1,11 +1,13 @@
 use super::{
-    CareerDesireEventContext, CareerStageEventContext, ContractEventContext,
-    InjuryRecoveryEventContext, LeadershipEventContext, LifeSimulationDesireContext,
-    LoanEventContext, ManagerInteractionEventContext, MatchPerformanceEventContext,
-    MatchSelectionContext, MediaFanEventContext, NationalTeamEventContext,
-    PersonalAdaptationEventContext, RecognitionEventContext, RegulationEventContext,
-    RoleStatusEventContext, SeasonOutcomeContext, SupportEventContext, TeammateConflictContext,
-    TrainingEventContext, TransferInterestContext, TrophyEventContext,
+    BigMatchSelectionContext, CareerDesireEventContext, CareerStageEventContext,
+    ClubDirectionContext, ContractEventContext, InjuryRecoveryEventContext, LeadershipEventContext,
+    LifeSimulationDesireContext, LoanEventContext, ManagerInteractionEventContext,
+    MatchPerformanceEventContext, MatchSelectionContext, MediaFanEventContext,
+    NationalTeamEventContext, NewSigningThreatContext, PersonalAdaptationEventContext,
+    PrivateTalkRequestContext, RecognitionEventContext, RegulationEventContext,
+    RoleStatusEventContext, SeasonOutcomeContext, SubstitutionFrustrationContext,
+    SupportEventContext, TeammateConflictContext, TrainingEventContext, TransferInterestContext,
+    TrophyEventContext,
 };
 use crate::ChangeType;
 
@@ -611,6 +613,27 @@ pub struct HappinessEventContext {
     /// sites (`TrophyWon`, `DomesticCupWon`) so the renderer can name
     /// the silverware and the player's role in winning it.
     pub trophy_context: Option<TrophyEventContext>,
+    /// Private-talk request payload — drives the `AskedForPrivateTalk`
+    /// rendering. Carries the dominant concern (role / minutes / contract
+    /// / transfer / tactical / manager relationship) plus current
+    /// manager trust.
+    pub private_talk_context: Option<PrivateTalkRequestContext>,
+    /// Club-direction payload — drives `ConcernedByClubDirection` and
+    /// `EncouragedBySquadInvestment`. Both events share the payload; the
+    /// `kind` field flips polarity.
+    pub club_direction_context: Option<ClubDirectionContext>,
+    /// Big-match selection payload — drives `TrustedInBigMatch` and
+    /// `BenchedForBigMatch`. The `decision` field flips polarity.
+    pub big_match_selection_context: Option<BigMatchSelectionContext>,
+    /// Substitution-frustration payload — drives
+    /// `SubstitutionFrustration` rendering with the dominant flavour
+    /// (early-hook / hooked-while-playing-well / pulled-early-in-big-
+    /// match / tactical-swap).
+    pub substitution_frustration_context: Option<SubstitutionFrustrationContext>,
+    /// New-signing competition payload — drives
+    /// `ThreatenedByNewSigning` with the rival's identity and the
+    /// dominant threat reason.
+    pub new_signing_threat_context: Option<NewSigningThreatContext>,
 }
 
 impl HappinessEventContext {
@@ -653,6 +676,11 @@ impl HappinessEventContext {
             regulation_context: None,
             life_simulation_desire_context: None,
             trophy_context: None,
+            private_talk_context: None,
+            club_direction_context: None,
+            big_match_selection_context: None,
+            substitution_frustration_context: None,
+            new_signing_threat_context: None,
         }
     }
 
@@ -825,76 +853,75 @@ impl HappinessEventContext {
         self
     }
 
+    pub fn with_private_talk_context(mut self, ctx: PrivateTalkRequestContext) -> Self {
+        self.private_talk_context = Some(ctx);
+        self
+    }
+
+    pub fn with_club_direction_context(mut self, ctx: ClubDirectionContext) -> Self {
+        self.club_direction_context = Some(ctx);
+        self
+    }
+
+    pub fn with_big_match_selection_context(mut self, ctx: BigMatchSelectionContext) -> Self {
+        self.big_match_selection_context = Some(ctx);
+        self
+    }
+
+    pub fn with_substitution_frustration_context(
+        mut self,
+        ctx: SubstitutionFrustrationContext,
+    ) -> Self {
+        self.substitution_frustration_context = Some(ctx);
+        self
+    }
+
+    pub fn with_new_signing_threat_context(mut self, ctx: NewSigningThreatContext) -> Self {
+        self.new_signing_threat_context = Some(ctx);
+        self
+    }
+
     /// Returns the number of specialized payload contexts attached to
     /// this event. Specialized payloads are mutually exclusive at the
     /// modelling level — an event is *either* a selection event, *or*
     /// a transfer-interest event, etc. — so this should never exceed 1.
     /// Used by tests as a soft invariant on emit-site code.
+    ///
+    /// Single linear listing of every specialized payload — easy to
+    /// grep and check against the field set when a new payload is
+    /// added. Every `*_context: Option<…>` on this struct MUST be
+    /// listed here; the unit test
+    /// `specialized_payload_count_covers_every_field` confirms it.
     pub fn specialized_payload_count(&self) -> usize {
-        let mut n = 0;
-        if self.selection_context.is_some() {
-            n += 1;
-        }
-        if self.support_context.is_some() {
-            n += 1;
-        }
-        if self.transfer_interest_context.is_some() {
-            n += 1;
-        }
-        if self.training_context.is_some() {
-            n += 1;
-        }
-        if self.manager_interaction_context.is_some() {
-            n += 1;
-        }
-        if self.teammate_conflict_context.is_some() {
-            n += 1;
-        }
-        if self.contract_context.is_some() {
-            n += 1;
-        }
-        if self.injury_context.is_some() {
-            n += 1;
-        }
-        if self.match_performance_context.is_some() {
-            n += 1;
-        }
-        if self.role_status_context.is_some() {
-            n += 1;
-        }
-        if self.national_team_context.is_some() {
-            n += 1;
-        }
-        if self.leadership_context.is_some() {
-            n += 1;
-        }
-        if self.media_fan_context.is_some() {
-            n += 1;
-        }
-        if self.personal_adaptation_context.is_some() {
-            n += 1;
-        }
-        if self.career_desire_context.is_some() {
-            n += 1;
-        }
-        if self.career_stage_context.is_some() {
-            n += 1;
-        }
-        if self.loan_context.is_some() {
-            n += 1;
-        }
-        if self.recognition_context.is_some() {
-            n += 1;
-        }
-        if self.season_outcome_context.is_some() {
-            n += 1;
-        }
-        if self.regulation_context.is_some() {
-            n += 1;
-        }
-        if self.trophy_context.is_some() {
-            n += 1;
-        }
-        n
+        let presence = [
+            self.selection_context.is_some(),
+            self.support_context.is_some(),
+            self.transfer_interest_context.is_some(),
+            self.training_context.is_some(),
+            self.manager_interaction_context.is_some(),
+            self.teammate_conflict_context.is_some(),
+            self.contract_context.is_some(),
+            self.injury_context.is_some(),
+            self.match_performance_context.is_some(),
+            self.role_status_context.is_some(),
+            self.national_team_context.is_some(),
+            self.leadership_context.is_some(),
+            self.media_fan_context.is_some(),
+            self.personal_adaptation_context.is_some(),
+            self.career_desire_context.is_some(),
+            self.career_stage_context.is_some(),
+            self.loan_context.is_some(),
+            self.recognition_context.is_some(),
+            self.season_outcome_context.is_some(),
+            self.regulation_context.is_some(),
+            self.life_simulation_desire_context.is_some(),
+            self.trophy_context.is_some(),
+            self.private_talk_context.is_some(),
+            self.club_direction_context.is_some(),
+            self.big_match_selection_context.is_some(),
+            self.substitution_frustration_context.is_some(),
+            self.new_signing_threat_context.is_some(),
+        ];
+        presence.into_iter().filter(|p| *p).count()
     }
 }

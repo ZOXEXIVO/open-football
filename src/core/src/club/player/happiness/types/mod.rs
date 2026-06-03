@@ -23,6 +23,136 @@ pub use transfer::*;
 mod tests {
     use super::*;
 
+    /// Total number of specialized payload `Option<…>` fields on
+    /// [`HappinessEventContext`]. Kept in lockstep with the struct
+    /// definition. If you add or remove a `*_context` field, update
+    /// this constant AND the audit test below so the counter stays
+    /// honest.
+    const SPECIALIZED_PAYLOAD_FIELD_COUNT: usize = 27;
+
+    #[test]
+    fn specialized_payload_count_covers_every_field() {
+        // Build a single context with every specialized payload
+        // attached. The counter must equal the field constant — any
+        // mismatch means a payload was added to the struct without
+        // updating `specialized_payload_count`, and the renderer
+        // dispatch / cooldown audits would silently miss it.
+        //
+        // We intentionally bypass `add_event_full`'s debug_assert by
+        // calling the constructor directly and `with_*` builders;
+        // this is a structural audit, not an emit-site check.
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::Other,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::Personal,
+        )
+        .with_selection_context(MatchSelectionContext {
+            scope: SelectionDecisionScope::DroppedToBench,
+            reason: SelectionOmissionReason::PoorRecentForm,
+            comparison: None,
+            role: SelectionRole::Other,
+            match_importance: 0.5,
+            repeated: false,
+            is_friendly: false,
+        })
+        .with_support_context(SupportEventContext::new(
+            SupportSource::Manager,
+            SupportSetting::PostMatch,
+            SupportTrigger::HighRating,
+        ))
+        .with_transfer_interest_context(TransferInterestContext::new(
+            TransferInterestStage::ConcreteInterest,
+            TransferInterestSource::NationalPress,
+            TransferInterestKind::StepUp,
+            TransferInterestReaction::Flattered,
+        ))
+        .with_training_context(TrainingEventContext::new(
+            TrainingEventReason::RoutineGoodSession,
+            7.0,
+            6.5,
+        ))
+        .with_manager_interaction_context(ManagerInteractionEventContext::new(
+            ManagerInteractionTopic::Performance,
+            ManagerInteractionTone::Honest,
+            PlayerAcceptance::Accepted,
+        ))
+        .with_teammate_conflict_context(TeammateConflictContext::new(
+            TeammateConflictReason::TrainingStandards,
+            ConflictLocation::TrainingGround,
+        ))
+        .with_contract_context(ContractEventContext::new(
+            ContractEventKind::OfferReceived,
+        ))
+        .with_injury_context(InjuryRecoveryEventContext::new(
+            InjuryRecoveryStage::ReturnedToFullTraining,
+            30,
+            0.8,
+        ))
+        .with_match_performance_context(MatchPerformanceEventContext::new(
+            MatchPerformanceKind::ChangedGameFromBench,
+        ))
+        .with_role_status_context(RoleStatusEventContext::new(
+            RoleStatusKind::EstablishedStarter,
+        ))
+        .with_national_team_context(NationalTeamEventContext::new(
+            NationalTeamEventKind::FirstCallup,
+        ))
+        .with_leadership_context(LeadershipEventContext::new(
+            LeadershipEventKind::LeadershipEmergence,
+        ))
+        .with_media_fan_context(MediaFanEventContext::new(
+            MediaFanEventKind::SocialMediaCriticism,
+            MediaFanSource::SocialMedia,
+        ))
+        .with_personal_adaptation_context(PersonalAdaptationEventContext::new(
+            PersonalAdaptationKind::SettlingIntoSquad,
+            14,
+        ))
+        .with_career_desire_context(CareerDesireEventContext::new(
+            CareerDesireKind::EuropeanCompetitionAmbition,
+        ))
+        .with_career_stage_context(CareerStageEventContext::new(
+            CareerStageEventKind::RetirementConsidering,
+        ))
+        .with_loan_context(LoanEventContext::new(LoanEventKind::LoanRecallRequested))
+        .with_recognition_context(RecognitionEventContext::new(
+            RecognitionEventKind::PlayerOfTheWeek,
+        ))
+        .with_season_outcome_context(SeasonOutcomeContext::new(SeasonOutcomeKind::Relegated))
+        .with_regulation_context(RegulationEventContext::new(
+            RegulationOutcomeKind::Omitted,
+            RegulationSlotKind::NonEuQuota,
+        ))
+        .with_life_simulation_desire_context(LifeSimulationDesireContext::new(
+            LifeSimulationDesireKind::FamilyUnsettledAbroad,
+            LifeSimulationSeverity::Moderate,
+        ))
+        .with_trophy_context(TrophyEventContext::new(TrophyKind::ContinentalCup))
+        .with_private_talk_context(PrivateTalkRequestContext::new(
+            PrivateTalkReason::PlayingTime,
+        ))
+        .with_club_direction_context(ClubDirectionContext::new(ClubDirectionKind::Concern))
+        .with_big_match_selection_context(BigMatchSelectionContext::new(
+            BigMatchKind::Derby,
+            BigMatchDecision::StartedTrusted,
+        ))
+        .with_substitution_frustration_context(SubstitutionFrustrationContext::new(
+            SubstitutionFrustrationKind::RepeatedEarlyHook,
+        ))
+        .with_new_signing_threat_context(NewSigningThreatContext::new(
+            7,
+            NewSigningThreatReason::SamePosition,
+        ));
+
+        assert_eq!(
+            ctx.specialized_payload_count(),
+            SPECIALIZED_PAYLOAD_FIELD_COUNT,
+            "specialized_payload_count must count every Option<*Context> field; \
+             if you added a payload, list it in the function AND bump \
+             SPECIALIZED_PAYLOAD_FIELD_COUNT"
+        );
+    }
+
     #[test]
     fn fresh_context_carries_no_specialized_payload() {
         let ctx = HappinessEventContext::new(

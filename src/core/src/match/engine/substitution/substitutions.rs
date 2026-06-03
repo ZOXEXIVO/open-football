@@ -183,6 +183,7 @@ pub fn process_substitutions(
                     team_id,
                     *player_out_id,
                     player_in_id,
+                    crate::r#match::engine::flow::result::SubstitutionReason::CriticalInjury,
                 ) {
                     subs_made += 1;
                 }
@@ -212,6 +213,7 @@ pub fn process_substitutions(
                     team_id,
                     *player_out_id,
                     player_in_id,
+                    crate::r#match::engine::flow::result::SubstitutionReason::YouthProtection,
                 ) {
                     subs_made += 1;
                 }
@@ -292,8 +294,14 @@ pub fn process_substitutions(
 
             match chosen {
                 Some((out_id, in_id)) => {
-                    if !Substitutions::execute_substitution(field, context, team_id, out_id, in_id)
-                    {
+                    if !Substitutions::execute_substitution(
+                        field,
+                        context,
+                        team_id,
+                        out_id,
+                        in_id,
+                        crate::r#match::engine::flow::result::SubstitutionReason::Discretionary,
+                    ) {
                         break;
                     }
                     subs_made += 1;
@@ -392,6 +400,7 @@ impl Substitutions {
         team_id: u32,
         player_out_id: u32,
         player_in_id: u32,
+        reason: crate::r#match::engine::flow::result::SubstitutionReason,
     ) -> bool {
         // Save subbed-out player's stats before they're replaced. Minutes
         // are computed from the player's entry tick so a 60th-minute sub-
@@ -453,6 +462,7 @@ impl Substitutions {
             player_out_id,
             player_in_id,
             context.total_match_time,
+            reason,
         );
         context.record_stoppage_time(30_000);
         context.players.remove_player(player_out_id);

@@ -444,7 +444,7 @@ impl PlayerStatisticsProjection {
 
     /// Project the ledger into History rows, grouped by
     /// `(season_start_year, team_slug, league_slug)`. League and
-    /// ContinentalCup entries fold into the same row; DomesticCup and
+    /// ContinentalCup and DomesticCup entries fold into the same row;
     /// Friendly entries are excluded by [`counts_toward_career_history`].
     ///
     /// Grouping deliberately ignores the spell's loan flag — a match
@@ -463,10 +463,10 @@ impl PlayerStatisticsProjection {
         live: &PlayerLiveStatsInput<'_>,
         current_date: NaiveDate,
     ) -> Vec<PlayerHistoryRow> {
-        // History never sources from the records-based domestic cup —
-        // the in-house ledger is the only allowed source for career
-        // rows, and per the centralised policy only continental cups
-        // fold in.
+        // History never sources from the records-based domestic cup
+        // override. The in-house ledger is the only allowed source for
+        // career rows so domestic cups are counted from exactly one
+        // source.
         let ledger = Self::build_ledger(history, live, None, current_date);
 
         // (season, team, league) → row. HashMap is fine for grouping;
@@ -905,8 +905,38 @@ impl PlayerStatisticsProjection {
                 return slice.competition_name.clone();
             }
         }
-        slug.to_string()
+        // Last-resort fallback: a ledger entry from a previous spell
+        // whose cup isn't part of the current club's live data and
+        // isn't this country's configured domestic cup. Without a
+        // matching name source, present the slug in Title Case so the
+        // page reads "Copa Paraguay" instead of leaking the raw
+        // kebab-case "copa-paraguay" identifier.
+        titlecase_slug(slug)
     }
+}
+
+/// Convert a kebab-case competition slug into a presentable Title Case
+/// display string. Pure string transformation — no locale awareness —
+/// since this only runs when every other name source has missed and
+/// we'd otherwise leak the raw slug to the page.
+fn titlecase_slug(slug: &str) -> String {
+    if slug.is_empty() {
+        return String::new();
+    }
+    slug.split('-')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    let rest: String = chars.collect();
+                    format!("{}{}", first.to_uppercase(), rest)
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn league_anchor_for(
@@ -1407,7 +1437,7 @@ mod tests {
     }
 
     #[test]
-    fn history_excludes_domestic_cup_and_friendly() {
+    fn history_includes_domestic_cup_but_excludes_friendly() {
         let mut hist = PlayerStatisticsHistory::new();
         hist.current
             .push(current_entry("juventus", d(2026, 8, 1), None));
@@ -1428,9 +1458,9 @@ mod tests {
 
         let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2026, 10, 1));
         assert_eq!(rows.len(), 1);
-        // 10 league only — neither friendly nor domestic cup folded.
-        assert_eq!(rows[0].statistics.played, 10);
-        assert_eq!(rows[0].statistics.goals, 2);
+        // League + domestic cup; friendly remains overview-only.
+        assert_eq!(rows[0].statistics.played, 14);
+        assert_eq!(rows[0].statistics.goals, 3);
     }
 
     #[test]
@@ -1779,7 +1809,7 @@ mod tests {
             .find(|r| r.season.start_year == 2026 && r.team_slug == "pari")
             .expect("Pari row missing");
         assert!(pari_row.is_loan, "row label inherits is_loan from League entry");
-        assert_eq!(pari_row.statistics.played, 9);
+        assert_eq!(pari_row.statistics.played, 10);
 
         let breakdowns =
             PlayerStatisticsProjection::player_history_breakdowns(&hist, &live, d(2026, 12, 15));
@@ -2669,8 +2699,8 @@ mod tests {
 //
 //   - non-League entries do NOT use `is_loan` as a grouping key
 //   - League entries are the only source of row is_loan / transfer_fee
-//   - Friendly + DomesticCup never contribute to career totals
-//   - ContinentalCup contributes exactly once (folded into the row's League)
+//   - Friendly never contributes to career totals
+//   - Competitive cups contribute exactly once (folded into the row's League)
 //   - breakdown order is League → ContinentalCup → DomesticCup → Friendly,
 //     stable within a kind
 //   - every visible history row has a matching breakdown (no drift)
@@ -2797,7 +2827,7 @@ mod projection_invariants_tests {
     }
 
     #[test]
-    fn friendly_and_domestic_cup_never_contribute_to_career_totals() {
+    fn domestic_cup_contributes_to_career_totals_but_friendly_does_not() {
         let info = team("inter", "serie-a");
         let mut hist = PlayerStatisticsHistory::new();
         hist.append_to_ledger(
@@ -2815,8 +2845,11 @@ mod projection_invariants_tests {
         let live = empty_live(&empty);
         let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2027, 9, 1));
         let totals = PlayerStatisticsProjection::player_history_totals(&rows);
-        assert_eq!(totals.played, 30, "Friendly + DomesticCup excluded from totals");
-        assert_eq!(totals.goals, 8);
+        assert_eq!(
+            totals.played, 34,
+            "DomesticCup included; Friendly excluded from totals"
+        );
+        assert_eq!(totals.goals, 9);
     }
 
     #[test]
@@ -3054,5 +3087,37 @@ mod projection_invariants_tests {
                 key
             );
         }
+    }
+
+    #[test]
+    fn titlecase_slug_handles_kebab_competition_slugs() {
+        // Real cases pulled from generated databases: when a ledger
+        // entry references a previous-country cup that doesn't appear
+        // in the player's current spell, the projection now Title-
+        // Cases the slug rather than leaking "copa-paraguay" verbatim.
+        assert_eq!(super::titlecase_slug("copa-paraguay"), "Copa Paraguay");
+        assert_eq!(super::titlecase_slug("fa-cup"), "Fa Cup");
+        assert_eq!(super::titlecase_slug("dfb-pokal"), "Dfb Pokal");
+        assert_eq!(super::titlecase_slug("league"), "League");
+        assert_eq!(super::titlecase_slug(""), "");
+        // Stray double-dash shouldn't introduce a blank fragment.
+        assert_eq!(super::titlecase_slug("copa--del--rey"), "Copa Del Rey");
+    }
+
+    #[test]
+    fn resolve_cup_name_falls_back_to_titlecase_for_unknown_slug() {
+        let live_league = stats(0, 0);
+        let live_friendly = stats(0, 0);
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        // Neither the live cup slice nor the domestic-cup override
+        // mention `copa-paraguay`, so the resolver must Title-case
+        // the slug rather than echoing the raw kebab string.
+        let name = PlayerStatisticsProjection::resolve_cup_name("copa-paraguay", &live, None);
+        assert_eq!(name, "Copa Paraguay");
     }
 }

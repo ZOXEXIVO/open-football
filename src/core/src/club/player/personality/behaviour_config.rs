@@ -488,6 +488,22 @@ pub struct MoraleEventCatalog {
     // ── Contract negotiation tension ─────────────────────────────
     pub release_clause_demanded: f32,
     pub contract_talks_stalled: f32,
+    /// Player formally rejected the offered contract. Bigger sting than
+    /// `contract_talks_stalled` because the deal is dead, not paused.
+    pub rejected_contract_offer: f32,
+
+    // ── Manager-relationship arc & match-trust ───────────────────
+    pub asked_for_private_talk: f32,
+    pub concerned_by_club_direction: f32,
+    pub encouraged_by_squad_investment: f32,
+    pub unhappy_with_tactical_role: f32,
+    pub trusted_in_big_match: f32,
+    pub benched_for_big_match: f32,
+    pub substitution_frustration: f32,
+    pub injury_setback: f32,
+    pub threatened_by_new_signing: f32,
+    pub manager_trust_growing: f32,
+    pub manager_trust_eroding: f32,
 }
 
 impl Default for MoraleEventCatalog {
@@ -702,6 +718,29 @@ impl Default for MoraleEventCatalog {
             // Contract tension.
             release_clause_demanded: -2.0,
             contract_talks_stalled: -3.0,
+            // Hard rejection sits a step above stalled talks — the deal
+            // is dead, not paused. Magnitude scales further at the emit
+            // site (wage gap / status / loyalty).
+            rejected_contract_offer: -4.5,
+            // Manager-relationship arc & match-trust band.
+            // `asked_for_private_talk` is a request, not a verdict — the
+            // morale hit is light; the renderer makes it feel weighty.
+            asked_for_private_talk: -2.5,
+            concerned_by_club_direction: -4.0,
+            encouraged_by_squad_investment: 3.5,
+            // Tactical-role frustration is chronic; sits a notch below
+            // `role_mismatch` because the formation gate (structural)
+            // already covers the full no-slot case.
+            unhappy_with_tactical_role: -4.0,
+            trusted_in_big_match: 4.5,
+            benched_for_big_match: -5.5,
+            substitution_frustration: -2.5,
+            // Setback during a recovery — fresh wound on top of the
+            // existing layoff. Bigger than a routine drop.
+            injury_setback: -4.5,
+            threatened_by_new_signing: -3.0,
+            manager_trust_growing: 3.5,
+            manager_trust_eroding: -4.0,
         }
     }
 }
@@ -860,6 +899,18 @@ impl MoraleEventCatalog {
             LoanRecallRequested => self.loan_recall_requested,
             ReleaseClauseDemanded => self.release_clause_demanded,
             ContractTalksStalled => self.contract_talks_stalled,
+            RejectedContractOffer => self.rejected_contract_offer,
+            AskedForPrivateTalk => self.asked_for_private_talk,
+            ConcernedByClubDirection => self.concerned_by_club_direction,
+            EncouragedBySquadInvestment => self.encouraged_by_squad_investment,
+            UnhappyWithTacticalRole => self.unhappy_with_tactical_role,
+            TrustedInBigMatch => self.trusted_in_big_match,
+            BenchedForBigMatch => self.benched_for_big_match,
+            SubstitutionFrustration => self.substitution_frustration,
+            InjurySetback => self.injury_setback,
+            ThreatenedByNewSigning => self.threatened_by_new_signing,
+            ManagerTrustGrowing => self.manager_trust_growing,
+            ManagerTrustEroding => self.manager_trust_eroding,
         }
     }
 }

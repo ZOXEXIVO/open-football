@@ -33,7 +33,27 @@ impl<'a> RatingContext<'a> {
             return 0.0;
         }
         match self.pos {
-            PlayerFieldPositionGroup::Goalkeeper => 0.30,
+            PlayerFieldPositionGroup::Goalkeeper => {
+                // Tiered like the defender bonus: evidence-based, not
+                // unconditional. A keeper who made real interventions
+                // (saves, command claims, xG prevented) gets full credit;
+                // a quiet shutout that the defence handled gets the
+                // bookkeeping bonus only. The previous flat +0.30 stacked
+                // on top of GkModest's already generous routine cap and
+                // collapsed second-tier keepers into the elite band.
+                let s = self.stats;
+                let z = s.zone_stats;
+                let saves = s.saves;
+                let command = z.gk_command_actions;
+                let xg_prev = s.xg_prevented;
+                if saves >= 4 || command >= 2 || xg_prev > 0.5 {
+                    0.30
+                } else if saves >= 2 || command >= 1 || xg_prev > 0.0 {
+                    0.18
+                } else {
+                    0.10
+                }
+            }
             PlayerFieldPositionGroup::Defender => {
                 let z = self.stats.zone_stats;
                 let high_value = (z.tackles_own_box
